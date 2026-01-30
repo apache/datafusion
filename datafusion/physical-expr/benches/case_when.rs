@@ -566,6 +566,9 @@ fn benchmark_divide_by_zero_protection(c: &mut Criterion, batch_size: usize) {
         let divisor_col = col("divisor", &batch.schema()).unwrap();
         let divisor_copy_col = col("divisor_copy", &batch.schema()).unwrap();
 
+        // DivideByZeroProtection: WHEN condition checks `divisor_col > 0` and division
+        // uses `divisor_col` as divisor. Since the checked column matches the divisor,
+        // this triggers the DivideByZeroProtection optimization.
         group.bench_function(
             format!(
                 "{} rows, {}% zeros: DivideByZeroProtection",
@@ -591,6 +594,9 @@ fn benchmark_divide_by_zero_protection(c: &mut Criterion, batch_size: usize) {
             },
         );
 
+        // ExpressionOrExpression: WHEN condition checks `divisor_copy_col > 0` but
+        // division uses `divisor_col` as divisor. Since the checked column does NOT
+        // match the divisor, this falls back to ExpressionOrExpression evaluation.
         group.bench_function(
             format!(
                 "{} rows, {}% zeros: ExpressionOrExpression",

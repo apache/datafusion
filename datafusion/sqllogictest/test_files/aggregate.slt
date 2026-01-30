@@ -2029,11 +2029,12 @@ statement ok
 INSERT INTO t1 VALUES (TRUE);
 
 # ISSUE: https://github.com/apache/datafusion/issues/12716
-# This test verifies that approx_percentile_cont_with_weight does not panic when given 'NaN' and returns 'inf'
+# This test verifies that approx_percentile_cont_with_weight does not panic when given 'NaN'
+# With weight=0, the data point does not contribute, so result is NULL
 query R
 SELECT approx_percentile_cont_with_weight(0, 0) WITHIN GROUP (ORDER BY 'NaN'::DOUBLE) FROM t1 WHERE t1.v1;
 ----
-Infinity
+NULL
 
 statement ok
 DROP TABLE t1;
@@ -2352,21 +2353,21 @@ e 115
 query TI
 SELECT c1, approx_percentile_cont_with_weight(c2, 0.95) WITHIN GROUP (ORDER BY c3) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
-a 74
+a 65
 b 68
-c 123
-d 124
-e 115
+c 122
+d 123
+e 110
 
 # approx_percentile_cont_with_weight with centroids
 query TI
 SELECT c1, approx_percentile_cont_with_weight(c2, 0.95, 200) WITHIN GROUP (ORDER BY c3) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
-a 74
+a 65
 b 68
-c 123
-d 124
-e 115
+c 122
+d 123
+e 110
 
 # csv_query_sum_crossjoin
 query TTI
