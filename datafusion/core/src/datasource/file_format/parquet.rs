@@ -130,7 +130,9 @@ mod tests {
     use datafusion_common::test_util::batches_to_string;
     use datafusion_common::{Result, ScalarValue};
     use datafusion_datasource::file_format::FileFormat;
-    use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
+    use datafusion_datasource::file_sink_config::{
+        FileOutputMode, FileSink, FileSinkConfig,
+    };
     use datafusion_datasource::{ListingTableUrl, PartitionedFile};
     use datafusion_datasource_parquet::{
         ParquetFormat, ParquetFormatFactory, ParquetSink,
@@ -815,7 +817,7 @@ mod tests {
             .schema()
             .fields()
             .iter()
-            .map(|f| format!("{}: {:?}", f.name(), f.data_type()))
+            .map(|f| format!("{}: {}", f.name(), f.data_type()))
             .collect();
         let y = x.join("\n");
         assert_eq!(expected, y);
@@ -841,7 +843,7 @@ mod tests {
              double_col: Float64\n\
              date_string_col: Binary\n\
              string_col: Binary\n\
-             timestamp_col: Timestamp(Nanosecond, None)";
+             timestamp_col: Timestamp(ns)";
         _run_read_alltypes_plain_parquet(ForceViews::No, no_views).await?;
 
         let with_views = "id: Int32\n\
@@ -854,7 +856,7 @@ mod tests {
              double_col: Float64\n\
              date_string_col: BinaryView\n\
              string_col: BinaryView\n\
-             timestamp_col: Timestamp(Nanosecond, None)";
+             timestamp_col: Timestamp(ns)";
         _run_read_alltypes_plain_parquet(ForceViews::Yes, with_views).await?;
 
         Ok(())
@@ -1547,6 +1549,7 @@ mod tests {
             insert_op: InsertOp::Overwrite,
             keep_partition_by_columns: false,
             file_extension: "parquet".into(),
+            file_output_mode: FileOutputMode::Automatic,
         };
         let parquet_sink = Arc::new(ParquetSink::new(
             file_sink_config,
@@ -1638,6 +1641,7 @@ mod tests {
             insert_op: InsertOp::Overwrite,
             keep_partition_by_columns: false,
             file_extension: "parquet".into(),
+            file_output_mode: FileOutputMode::Automatic,
         };
         let parquet_sink = Arc::new(ParquetSink::new(
             file_sink_config,
@@ -1728,6 +1732,7 @@ mod tests {
                 insert_op: InsertOp::Overwrite,
                 keep_partition_by_columns: false,
                 file_extension: "parquet".into(),
+                file_output_mode: FileOutputMode::Automatic,
             };
             let parquet_sink = Arc::new(ParquetSink::new(
                 file_sink_config,

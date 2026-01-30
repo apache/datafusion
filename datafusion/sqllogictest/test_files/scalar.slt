@@ -1993,10 +1993,10 @@ query TT
 EXPLAIN SELECT letter, letter = LEFT(letter2, 1) FROM simple_string;
 ----
 logical_plan
-01)Projection: simple_string.letter, simple_string.letter = CAST(left(simple_string.letter2, Int64(1)) AS Utf8View)
+01)Projection: simple_string.letter, simple_string.letter = left(simple_string.letter2, Int64(1))
 02)--TableScan: simple_string projection=[letter, letter2]
 physical_plan
-01)ProjectionExec: expr=[letter@0 as letter, letter@0 = CAST(left(letter2@1, 1) AS Utf8View) as simple_string.letter = left(simple_string.letter2,Int64(1))]
+01)ProjectionExec: expr=[letter@0 as letter, letter@0 = left(letter2@1, 1) as simple_string.letter = left(simple_string.letter2,Int64(1))]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TB
@@ -2010,8 +2010,8 @@ D false
 # test string_temporal_coercion
 query BBBBBBBBBB
 select
-  arrow_cast(to_timestamp('2020-01-01 01:01:11.1234567890Z'), 'Timestamp(Second, None)') == '2020-01-01T01:01:11',
-  arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Second, None)') == arrow_cast('2020-01-02T01:01:11', 'LargeUtf8'),
+  arrow_cast(to_timestamp('2020-01-01 01:01:11.1234567890Z'), 'Timestamp(s)') == '2020-01-01T01:01:11',
+  arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(s)') == arrow_cast('2020-01-02T01:01:11', 'LargeUtf8'),
   arrow_cast(to_timestamp('2020-01-03 01:01:11.1234567890Z'), 'Time32(Second)') == '01:01:11',
   arrow_cast(to_timestamp('2020-01-04 01:01:11.1234567890Z'), 'Time32(Second)') == arrow_cast('01:01:11', 'LargeUtf8'),
   arrow_cast(to_timestamp('2020-01-05 01:01:11.1234567890Z'), 'Time64(Microsecond)') == '01:01:11.123456',

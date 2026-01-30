@@ -1260,7 +1260,7 @@ dependencies = [
  "num-traits",
  "serde",
  "wasm-bindgen",
- "windows-link 0.2.1",
+ "windows-link",
 ]
 
 [[package]]
@@ -1695,7 +1695,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion"
-version = "52.0.0"
+version = "52.1.0"
 dependencies = [
  "arrow",
  "arrow-schema",
@@ -1744,7 +1744,7 @@ dependencies = [
  "itertools 0.14.0",
  "liblzma",
  "log",
- "nix",
+ "nix 0.31.1",
  "object_store",
  "parking_lot",
  "parquet",
@@ -1769,7 +1769,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-benchmarks"
-version = "52.0.0"
+version = "52.1.0"
 dependencies = [
  "arrow",
  "clap",
@@ -1794,7 +1794,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-catalog"
-version = "52.0.0"
+version = "52.1.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -1817,7 +1817,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-catalog-listing"
-version = "52.0.0"
+version = "52.1.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -1839,7 +1839,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-cli"
-version = "52.0.0"
+version = "52.1.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -1870,7 +1870,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-common"
-version = "52.0.0"
+version = "52.1.0"
 dependencies = [
  "ahash",
  "apache-avro",
@@ -1898,7 +1898,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-common-runtime"
-version = "52.0.0"
+version = "52.1.0"
 dependencies = [
  "futures",
  "log",
@@ -1907,7 +1907,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-datasource"
-version = "52.0.0"
+version = "52.1.0"
 dependencies = [
  "arrow",
  "async-compression",
@@ -1942,7 +1942,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-datasource-arrow"
-version = "52.0.0"
+version = "52.1.0"
 dependencies = [
  "arrow",
  "arrow-ipc",
@@ -1965,7 +1965,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-datasource-avro"
-version = "52.0.0"
+version = "52.1.0"
 dependencies = [
  "apache-avro",
  "arrow",
@@ -1984,7 +1984,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-datasource-csv"
-version = "52.0.0"
+version = "52.1.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2005,7 +2005,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-datasource-json"
-version = "52.0.0"
+version = "52.1.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2025,7 +2025,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-datasource-parquet"
-version = "52.0.0"
+version = "52.1.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2057,11 +2057,11 @@ dependencies = [
 
 [[package]]
 name = "datafusion-doc"
-version = "52.0.0"
+version = "52.1.0"
 
 [[package]]
 name = "datafusion-examples"
-version = "52.0.0"
+version = "52.1.0"
 dependencies = [
  "arrow",
  "arrow-flight",
@@ -2081,10 +2081,11 @@ dependencies = [
  "insta",
  "log",
  "mimalloc",
- "nix",
+ "nix 0.31.1",
  "object_store",
  "prost",
  "rand 0.9.2",
+ "serde",
  "serde_json",
  "strum",
  "strum_macros",
@@ -2100,7 +2101,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-execution"
-version = "52.0.0"
+version = "52.1.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2122,7 +2123,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-expr"
-version = "52.0.0"
+version = "52.1.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2146,7 +2147,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-expr-common"
-version = "52.0.0"
+version = "52.1.0"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -2157,7 +2158,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-ffi"
-version = "52.0.0"
+version = "52.1.0"
 dependencies = [
  "abi_stable",
  "arrow",
@@ -2191,7 +2192,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions"
-version = "52.0.0"
+version = "52.1.0"
 dependencies = [
  "arrow",
  "arrow-buffer",
@@ -2224,7 +2225,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-aggregate"
-version = "52.0.0"
+version = "52.1.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -2245,7 +2246,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-aggregate-common"
-version = "52.0.0"
+version = "52.1.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -2258,7 +2259,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-nested"
-version = "52.0.0"
+version = "52.1.0"
 dependencies = [
  "arrow",
  "arrow-ord",
@@ -2281,7 +2282,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-table"
-version = "52.0.0"
+version = "52.1.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2295,7 +2296,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-window"
-version = "52.0.0"
+version = "52.1.0"
 dependencies = [
  "arrow",
  "criterion",
@@ -2312,7 +2313,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-window-common"
-version = "52.0.0"
+version = "52.1.0"
 dependencies = [
  "datafusion-common",
  "datafusion-physical-expr-common",
@@ -2320,7 +2321,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-macros"
-version = "52.0.0"
+version = "52.1.0"
 dependencies = [
  "datafusion-doc",
  "quote",
@@ -2329,7 +2330,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-optimizer"
-version = "52.0.0"
+version = "52.1.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2356,7 +2357,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-expr"
-version = "52.0.0"
+version = "52.1.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -2383,7 +2384,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-expr-adapter"
-version = "52.0.0"
+version = "52.1.0"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -2396,7 +2397,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-expr-common"
-version = "52.0.0"
+version = "52.1.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -2411,7 +2412,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-optimizer"
-version = "52.0.0"
+version = "52.1.0"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -2431,7 +2432,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-plan"
-version = "52.0.0"
+version = "52.1.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -2468,7 +2469,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-proto"
-version = "52.0.0"
+version = "52.1.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2505,7 +2506,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-proto-common"
-version = "52.0.0"
+version = "52.1.0"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -2517,7 +2518,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-pruning"
-version = "52.0.0"
+version = "52.1.0"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -2535,7 +2536,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-session"
-version = "52.0.0"
+version = "52.1.0"
 dependencies = [
  "async-trait",
  "datafusion-common",
@@ -2547,13 +2548,14 @@ dependencies = [
 
 [[package]]
 name = "datafusion-spark"
-version = "52.0.0"
+version = "52.1.0"
 dependencies = [
  "arrow",
  "bigdecimal",
  "chrono",
  "crc32fast",
  "criterion",
+ "datafusion",
  "datafusion-catalog",
  "datafusion-common",
  "datafusion-execution",
@@ -2565,12 +2567,13 @@ dependencies = [
  "percent-encoding",
  "rand 0.9.2",
  "sha1",
+ "sha2",
  "url",
 ]
 
 [[package]]
 name = "datafusion-sql"
-version = "52.0.0"
+version = "52.1.0"
 dependencies = [
  "arrow",
  "bigdecimal",
@@ -2596,7 +2599,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-sqllogictest"
-version = "52.0.0"
+version = "52.1.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2627,7 +2630,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-substrait"
-version = "52.0.0"
+version = "52.1.0"
 dependencies = [
  "async-recursion",
  "async-trait",
@@ -2649,7 +2652,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-wasmtest"
-version = "52.0.0"
+version = "52.1.0"
 dependencies = [
  "bytes",
  "chrono",
@@ -4058,6 +4061,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "nix"
+version = "0.31.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "225e7cfe711e0ba79a68baeddb2982723e4235247aefce1482f2f16c27865b66"
+dependencies = [
+ "bitflags",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
+]
+
+[[package]]
 name = "ntapi"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4302,7 +4317,7 @@ dependencies = [
  "libc",
  "redox_syscall 0.5.18",
  "smallvec",
- "windows-link 0.2.1",
+ "windows-link",
 ]
 
 [[package]]
@@ -4815,9 +4830,9 @@ dependencies = [
 
 [[package]]
 name = "quote"
-version = "1.0.43"
+version = "1.0.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc74d9a594b72ae6656596548f56f667211f8a97b3d4c3d467150794690dc40a"
+checksum = "21b2ebcf727b7760c461f091f9f0f539b77b8e87f2fd88131e7f1b433b3cece4"
 dependencies = [
  "proc-macro2",
 ]
@@ -5259,7 +5274,7 @@ dependencies = [
  "libc",
  "log",
  "memchr",
- "nix",
+ "nix 0.30.1",
  "radix_trie",
  "unicode-segmentation",
  "unicode-width 0.2.2",
@@ -5854,9 +5869,9 @@ dependencies = [
 
 [[package]]
 name = "sysinfo"
-version = "0.37.2"
+version = "0.38.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "16607d5caffd1c07ce073528f9ed972d88db15dd44023fa57142963be3feb11f"
+checksum = "fe840c5b1afe259a5657392a4dbb74473a14c8db999c3ec2f4ae812e028a94da"
 dependencies = [
  "libc",
  "memchr",
@@ -6530,9 +6545,9 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
 name = "uuid"
-version = "1.19.0"
+version = "1.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e2e054861b4bd027cd373e18e8d8d8e6548085000e41290d95ce0c373a654b4a"
+checksum = "ee48d38b119b0cd71fe4141b30f5ba9c7c5d9f4e7a3a8b4a674e4b6ef789976f"
 dependencies = [
  "getrandom 0.3.4",
  "js-sys",
@@ -6794,47 +6809,46 @@ checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
 
 [[package]]
 name = "windows"
-version = "0.61.3"
+version = "0.62.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9babd3a767a4c1aef6900409f85f5d53ce2544ccdfaa86dad48c91782c6d6893"
+checksum = "527fadee13e0c05939a6a05d5bd6eec6cd2e3dbd648b9f8e447c6518133d8580"
 dependencies = [
  "windows-collections",
  "windows-core",
  "windows-future",
- "windows-link 0.1.3",
  "windows-numerics",
 ]
 
 [[package]]
 name = "windows-collections"
-version = "0.2.0"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3beeceb5e5cfd9eb1d76b381630e82c4241ccd0d27f1a39ed41b2760b255c5e8"
+checksum = "23b2d95af1a8a14a3c7367e1ed4fc9c20e0a26e79551b1454d72583c97cc6610"
 dependencies = [
  "windows-core",
 ]
 
 [[package]]
 name = "windows-core"
-version = "0.61.2"
+version = "0.62.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c0fdd3ddb90610c7638aa2b3a3ab2904fb9e5cdbecc643ddb3647212781c4ae3"
+checksum = "b8e83a14d34d0623b51dce9581199302a221863196a1dde71a7663a4c2be9deb"
 dependencies = [
  "windows-implement",
  "windows-interface",
- "windows-link 0.1.3",
+ "windows-link",
  "windows-result",
  "windows-strings",
 ]
 
 [[package]]
 name = "windows-future"
-version = "0.2.1"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc6a41e98427b19fe4b73c550f060b59fa592d7d686537eebf9385621bfbad8e"
+checksum = "e1d6f90251fe18a279739e78025bd6ddc52a7e22f921070ccdc67dde84c605cb"
 dependencies = [
  "windows-core",
- "windows-link 0.1.3",
+ "windows-link",
  "windows-threading",
 ]
 
@@ -6862,42 +6876,36 @@ dependencies = [
 
 [[package]]
 name = "windows-link"
-version = "0.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5e6ad25900d524eaabdbbb96d20b4311e1e7ae1699af4fb28c17ae66c80d798a"
-
-[[package]]
-name = "windows-link"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
 
 [[package]]
 name = "windows-numerics"
-version = "0.2.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9150af68066c4c5c07ddc0ce30421554771e528bde427614c61038bc2c92c2b1"
+checksum = "6e2e40844ac143cdb44aead537bbf727de9b044e107a0f1220392177d15b0f26"
 dependencies = [
  "windows-core",
- "windows-link 0.1.3",
+ "windows-link",
 ]
 
 [[package]]
 name = "windows-result"
-version = "0.3.4"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "56f42bd332cc6c8eac5af113fc0c1fd6a8fd2aa08a0119358686e5160d0586c6"
+checksum = "7781fa89eaf60850ac3d2da7af8e5242a5ea78d1a11c49bf2910bb5a73853eb5"
 dependencies = [
- "windows-link 0.1.3",
+ "windows-link",
 ]
 
 [[package]]
 name = "windows-strings"
-version = "0.4.2"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "56e6c93f3a0c3b36176cb1327a4958a0353d5d166c2a35cb268ace15e91d3b57"
+checksum = "7837d08f69c77cf6b07689544538e017c1bfcf57e34b4c0ff58e6c2cd3b37091"
 dependencies = [
- "windows-link 0.1.3",
+ "windows-link",
 ]
 
 [[package]]
@@ -6933,7 +6941,7 @@ version = "0.61.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc"
 dependencies = [
- "windows-link 0.2.1",
+ "windows-link",
 ]
 
 [[package]]
@@ -6958,7 +6966,7 @@ version = "0.53.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4945f9f551b88e0d65f3db0bc25c33b8acea4d9e41163edf90dcd0b19f9069f3"
 dependencies = [
- "windows-link 0.2.1",
+ "windows-link",
  "windows_aarch64_gnullvm 0.53.1",
  "windows_aarch64_msvc 0.53.1",
  "windows_i686_gnu 0.53.1",
@@ -6971,11 +6979,11 @@ dependencies = [
 
 [[package]]
 name = "windows-threading"
-version = "0.1.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b66463ad2e0ea3bbf808b7f1d371311c80e115c0b71d60efc142cafbcfb057a6"
+checksum = "3949bd5b99cafdf1c7ca86b43ca564028dfe27d66958f2470940f73d86d75b37"
 dependencies = [
- "windows-link 0.1.3",
+ "windows-link",
 ]
 
 [[package]]

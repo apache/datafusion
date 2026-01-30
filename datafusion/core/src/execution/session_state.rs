@@ -878,11 +878,8 @@ impl SessionState {
         &self.catalog_list
     }
 
-    /// set the catalog list
-    pub(crate) fn register_catalog_list(
-        &mut self,
-        catalog_list: Arc<dyn CatalogProviderList>,
-    ) {
+    /// Set the catalog list
+    pub fn register_catalog_list(&mut self, catalog_list: Arc<dyn CatalogProviderList>) {
         self.catalog_list = catalog_list;
     }
 
