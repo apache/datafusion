@@ -54,7 +54,7 @@ use datafusion_physical_optimizer::enforce_distribution::*;
 use datafusion_physical_optimizer::enforce_sorting::EnforceSorting;
 use datafusion_physical_optimizer::output_requirements::OutputRequirements;
 use datafusion_physical_plan::aggregates::{
-    AggregateExec, AggregateInputPartitioning, AggregateMode, PhysicalGroupBy,
+    AggregateExec, AggregateMode, PhysicalGroupBy,
 };
 
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -328,9 +328,8 @@ fn aggregate_exec_with_alias(
     let final_grouping = PhysicalGroupBy::new_single(final_group_by_expr);
 
     Arc::new(
-        AggregateExec::try_new_with_partitioning(
+        AggregateExec::try_new(
             AggregateMode::Final,
-            AggregateInputPartitioning::HashPartitioned,
             final_grouping,
             vec![],
             vec![],
@@ -343,11 +342,13 @@ fn aggregate_exec_with_alias(
                     input,
                     schema.clone(),
                 )
-                .unwrap(),
+                .unwrap()
+                .with_repartition_aggregations(true),
             ),
             schema,
         )
-        .unwrap(),
+        .unwrap()
+        .with_repartition_aggregations(true),
     )
 }
 

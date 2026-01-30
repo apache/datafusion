@@ -1871,6 +1871,8 @@ pub struct AggregateExecNode {
     pub limit: ::core::option::Option<AggLimit>,
     #[prost(bool, tag = "12")]
     pub has_grouping_set: bool,
+    #[prost(bool, tag = "13")]
+    pub repartition_aggregations: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GlobalLimitExecNode {

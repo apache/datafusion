@@ -36,9 +36,7 @@ use crate::logical_expr::{
     UserDefinedLogicalNode,
 };
 use crate::physical_expr::{create_physical_expr, create_physical_exprs};
-use crate::physical_plan::aggregates::{
-    AggregateExec, AggregateInputPartitioning, AggregateMode, PhysicalGroupBy,
-};
+use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::analyze::AnalyzeExec;
 use crate::physical_plan::explain::ExplainExec;
 use crate::physical_plan::filter::FilterExecBuilder;
@@ -924,18 +922,21 @@ impl DefaultPhysicalPlanner {
                     input_exec
                 };
 
-                let initial_aggr = Arc::new(AggregateExec::try_new(
-                    AggregateMode::Partial,
-                    groups.clone(),
-                    aggregates,
-                    filters.clone(),
-                    input_exec,
-                    Arc::clone(&physical_input_schema),
-                )?);
-
                 let can_repartition = !groups.is_empty()
                     && session_state.config().target_partitions() > 1
                     && session_state.config().repartition_aggregations();
+
+                let initial_aggr = Arc::new(
+                    AggregateExec::try_new(
+                        AggregateMode::Partial,
+                        groups.clone(),
+                        aggregates,
+                        filters.clone(),
+                        input_exec,
+                        Arc::clone(&physical_input_schema),
+                    )?
+                    .with_repartition_aggregations(can_repartition),
+                );
 
                 // Some aggregators may be modified during initialization for
                 // optimization purposes. For example, a FIRST_VALUE may turn
@@ -944,25 +945,19 @@ impl DefaultPhysicalPlanner {
                 // `AggregateFunctionExpr`/`PhysicalSortExpr` objects.
                 let updated_aggregates = initial_aggr.aggr_expr().to_vec();
 
-                let next_partitioning = if can_repartition {
-                    // construct a second aggregation with hash-partitioned input
-                    AggregateInputPartitioning::HashPartitioned
-                } else {
-                    // construct a second aggregation with single-partition input
-                    AggregateInputPartitioning::SinglePartition
-                };
-
                 let final_grouping_set = initial_aggr.group_expr().as_final();
 
-                Arc::new(AggregateExec::try_new_with_partitioning(
-                    AggregateMode::Final,
-                    next_partitioning,
-                    final_grouping_set,
-                    updated_aggregates,
-                    filters,
-                    initial_aggr,
-                    Arc::clone(&physical_input_schema),
-                )?)
+                Arc::new(
+                    AggregateExec::try_new(
+                        AggregateMode::Final,
+                        final_grouping_set,
+                        updated_aggregates,
+                        filters,
+                        initial_aggr,
+                        Arc::clone(&physical_input_schema),
+                    )?
+                    .with_repartition_aggregations(can_repartition),
+                )
             }
             LogicalPlan::Projection(Projection { input, expr, .. }) => self
                 .create_project_physical_exec(

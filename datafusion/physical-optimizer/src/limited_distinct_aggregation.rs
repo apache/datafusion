@@ -20,7 +20,8 @@
 
 use std::sync::Arc;
 
-use datafusion_physical_plan::aggregates::{AggregateExec, LimitOptions};
+use datafusion_physical_plan::aggregates::{AggregateExec, AggregateMode, LimitOptions};
+use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
@@ -54,9 +55,8 @@ impl LimitedDistinctAggregation {
         }
 
         // We found what we want: clone, copy the limit down, and return modified node
-        let new_aggr = AggregateExec::try_new_with_partitioning(
+        let new_aggr = AggregateExec::try_new(
             *aggr.mode(),
-            aggr.input_partitioning(),
             aggr.group_expr().clone(),
             aggr.aggr_expr().to_vec(),
             aggr.filter_expr().to_vec(),
@@ -64,7 +64,56 @@ impl LimitedDistinctAggregation {
             aggr.input_schema(),
         )
         .expect("Unable to copy Aggregate!")
-        .with_limit_options(Some(LimitOptions::new(limit)));
+        .with_limit_options(Some(LimitOptions::new(limit)))
+        .with_repartition_aggregations(aggr.repartition_aggregations());
+
+        if matches!(aggr.mode(), AggregateMode::Final)
+            && let (child_plan, wrap_coalesce) = if let Some(coalesce) = aggr
+                .input()
+                .as_any()
+                .downcast_ref::<CoalescePartitionsExec>()
+            {
+                (Arc::clone(coalesce.input()), true)
+            } else {
+                (Arc::clone(aggr.input()), false)
+            }
+            && let Some(child_agg) = child_plan.as_any().downcast_ref::<AggregateExec>()
+            && matches!(child_agg.mode(), AggregateMode::Partial)
+            && !child_agg.group_expr().has_grouping_set()
+        {
+            let new_child = AggregateExec::try_new(
+                AggregateMode::Partial,
+                child_agg.group_expr().clone(),
+                child_agg.aggr_expr().to_vec(),
+                child_agg.filter_expr().to_vec(),
+                child_agg.input().to_owned(),
+                child_agg.input_schema(),
+            )
+            .expect("Unable to copy Aggregate!")
+            .with_limit_options(Some(LimitOptions::new(limit)))
+            .with_repartition_aggregations(child_agg.repartition_aggregations());
+
+            let new_input: Arc<dyn ExecutionPlan> = if wrap_coalesce {
+                Arc::new(CoalescePartitionsExec::new(Arc::new(new_child)))
+            } else {
+                Arc::new(new_child)
+            };
+
+            let rebuilt_final = AggregateExec::try_new(
+                AggregateMode::Final,
+                new_aggr.group_expr().clone(),
+                new_aggr.aggr_expr().to_vec(),
+                new_aggr.filter_expr().to_vec(),
+                new_input,
+                new_aggr.input_schema(),
+            )
+            .expect("Unable to copy Aggregate!")
+            .with_limit_options(Some(LimitOptions::new(limit)))
+            .with_repartition_aggregations(new_aggr.repartition_aggregations());
+
+            return Some(Arc::new(rebuilt_final));
+        }
+
         Some(Arc::new(new_aggr))
     }
 

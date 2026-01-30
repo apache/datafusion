@@ -44,7 +44,7 @@ use datafusion_physical_expr::{
 };
 use datafusion_physical_plan::ExecutionPlanProperties;
 use datafusion_physical_plan::aggregates::{
-    AggregateExec, AggregateInputPartitioning, AggregateMode, PhysicalGroupBy,
+    AggregateExec, AggregateMode, PhysicalGroupBy,
 };
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::execution_plan::EmissionType;
@@ -394,8 +394,10 @@ pub fn adjust_input_keys_ordering(
     } else if let Some(aggregate_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
         if !requirements.data.is_empty() {
             if aggregate_exec.mode() == &AggregateMode::Final
-                && aggregate_exec.input_partitioning()
-                    == AggregateInputPartitioning::HashPartitioned
+                && matches!(
+                    aggregate_exec.required_input_distribution().first(),
+                    Some(Distribution::HashPartitioned(_))
+                )
             {
                 return reorder_aggregate_keys(requirements, aggregate_exec)
                     .map(Transformed::yes);
@@ -514,7 +516,8 @@ pub fn reorder_aggregate_keys(
             agg_exec.filter_expr().to_vec(),
             Arc::clone(agg_exec.input()),
             Arc::clone(&agg_exec.input_schema),
-        )?);
+        )?
+        .with_repartition_aggregations(agg_exec.repartition_aggregations()));
         // Build new group expressions that correspond to the output
         // of the "reordered" aggregator:
         let group_exprs = partial_agg.group_expr().expr();
@@ -526,15 +529,15 @@ pub fn reorder_aggregate_keys(
                 .map(|(idx, expr)| (expr, group_exprs[idx].1.clone()))
                 .collect(),
         );
-        let new_final_agg = Arc::new(AggregateExec::try_new_with_partitioning(
+        let new_final_agg = Arc::new(AggregateExec::try_new(
             AggregateMode::Final,
-            AggregateInputPartitioning::HashPartitioned,
             new_group_by,
             agg_exec.aggr_expr().to_vec(),
             agg_exec.filter_expr().to_vec(),
             Arc::clone(&partial_agg) as _,
             agg_exec.input_schema(),
-        )?);
+        )?
+        .with_repartition_aggregations(agg_exec.repartition_aggregations()));
 
         agg_node.plan = Arc::clone(&new_final_agg) as _;
         agg_node.data.clear();

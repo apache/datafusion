@@ -39,7 +39,7 @@ mod test {
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
     use datafusion_physical_plan::aggregates::{
-        AggregateExec, AggregateInputPartitioning, AggregateMode, PhysicalGroupBy,
+        AggregateExec, AggregateMode, PhysicalGroupBy,
     };
     use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use datafusion_physical_plan::common::compute_record_batch_statistics;
@@ -881,9 +881,8 @@ mod test {
         )
         .await?;
 
-        let agg_final = Arc::new(AggregateExec::try_new_with_partitioning(
+        let agg_final = Arc::new(AggregateExec::try_new(
             AggregateMode::Final,
-            AggregateInputPartitioning::HashPartitioned,
             group_by.clone(),
             aggr_expr.clone(),
             vec![None],
@@ -954,9 +953,8 @@ mod test {
             scan_schema.clone(),
         )?);
 
-        let agg_final = Arc::new(AggregateExec::try_new_with_partitioning(
+        let agg_final = Arc::new(AggregateExec::try_new(
             AggregateMode::Final,
-            AggregateInputPartitioning::HashPartitioned,
             group_by.clone(),
             aggr_expr.clone(),
             vec![None],

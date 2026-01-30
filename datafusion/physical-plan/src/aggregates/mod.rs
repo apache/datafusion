@@ -135,28 +135,6 @@ impl AggregateMode {
     }
 }
 
-/// Required input partitioning for an aggregate.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum AggregateInputPartitioning {
-    /// No specific distribution requirement.
-    Unspecified,
-    /// Requires all rows to be in a single partition.
-    SinglePartition,
-    /// Requires input to be hash partitioned by group keys.
-    HashPartitioned,
-}
-
-impl AggregateInputPartitioning {
-    fn default_for_mode(mode: AggregateMode) -> Self {
-        match mode {
-            AggregateMode::Partial => AggregateInputPartitioning::Unspecified,
-            AggregateMode::Final | AggregateMode::Single => {
-                AggregateInputPartitioning::SinglePartition
-            }
-        }
-    }
-}
-
 /// Represents `GROUP BY` clause in the plan (including the more general GROUPING SET)
 /// In the case of a simple `GROUP BY a, b` clause, this will contain the expression [a, b]
 /// and a single group [false, false].
@@ -536,12 +514,10 @@ impl LimitOptions {
 }
 
 /// Hash aggregate execution plan
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AggregateExec {
     /// Aggregation mode (full, partial)
     mode: AggregateMode,
-    /// Required input partitioning.
-    input_partitioning: AggregateInputPartitioning,
     /// Group by expressions
     group_by: PhysicalGroupBy,
     /// Aggregate expressions
@@ -565,6 +541,8 @@ pub struct AggregateExec {
     required_input_ordering: Option<OrderingRequirements>,
     /// Describes how the input is ordered relative to the group by columns
     input_order_mode: InputOrderMode,
+    /// Whether hash repartitioning is enabled for final/single aggregation
+    repartition_aggregations: bool,
     cache: PlanProperties,
     /// During initialization, if the plan supports dynamic filtering (see [`AggrDynFilter`]),
     /// it is set to `Some(..)` regardless of whether it can be pushed down to a child node.
@@ -573,6 +551,27 @@ pub struct AggregateExec {
     /// it remains `Some(..)` to enable dynamic filtering during aggregate execution;
     /// otherwise, it is cleared to `None`.
     dynamic_filter: Option<Arc<AggrDynFilter>>,
+}
+
+impl std::fmt::Debug for AggregateExec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AggregateExec")
+            .field("mode", &self.mode_display())
+            .field("group_by", &self.group_by)
+            .field("aggr_expr", &self.aggr_expr)
+            .field("filter_expr", &self.filter_expr)
+            .field("limit_options", &self.limit_options)
+            .field("input", &self.input)
+            .field("schema", &self.schema)
+            .field("input_schema", &self.input_schema)
+            .field("metrics", &self.metrics)
+            .field("required_input_ordering", &self.required_input_ordering)
+            .field("input_order_mode", &self.input_order_mode)
+            .field("repartition_aggregations", &self.repartition_aggregations)
+            .field("cache", &self.cache)
+            .field("dynamic_filter", &self.dynamic_filter)
+            .finish()
+    }
 }
 
 impl AggregateExec {
@@ -589,9 +588,9 @@ impl AggregateExec {
             required_input_ordering: self.required_input_ordering.clone(),
             metrics: ExecutionPlanMetricsSet::new(),
             input_order_mode: self.input_order_mode.clone(),
+            repartition_aggregations: self.repartition_aggregations,
             cache: self.cache.clone(),
             mode: self.mode,
-            input_partitioning: self.input_partitioning,
             group_by: self.group_by.clone(),
             filter_expr: self.filter_expr.clone(),
             limit_options: self.limit_options,
@@ -610,9 +609,9 @@ impl AggregateExec {
             required_input_ordering: self.required_input_ordering.clone(),
             metrics: ExecutionPlanMetricsSet::new(),
             input_order_mode: self.input_order_mode.clone(),
+            repartition_aggregations: self.repartition_aggregations,
             cache: self.cache.clone(),
             mode: self.mode,
-            input_partitioning: self.input_partitioning,
             group_by: self.group_by.clone(),
             aggr_expr: self.aggr_expr.clone(),
             filter_expr: self.filter_expr.clone(),
@@ -636,34 +635,11 @@ impl AggregateExec {
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
     ) -> Result<Self> {
-        let input_partitioning = AggregateInputPartitioning::default_for_mode(mode);
-        Self::try_new_with_partitioning(
-            mode,
-            input_partitioning,
-            group_by,
-            aggr_expr,
-            filter_expr,
-            input,
-            input_schema,
-        )
-    }
-
-    /// Create a new hash aggregate execution plan with explicit input partitioning.
-    pub fn try_new_with_partitioning(
-        mode: AggregateMode,
-        input_partitioning: AggregateInputPartitioning,
-        group_by: PhysicalGroupBy,
-        aggr_expr: Vec<Arc<AggregateFunctionExpr>>,
-        filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
-        input: Arc<dyn ExecutionPlan>,
-        input_schema: SchemaRef,
-    ) -> Result<Self> {
         let schema = create_schema(&input.schema(), &group_by, &aggr_expr, mode)?;
 
         let schema = Arc::new(schema);
         AggregateExec::try_new_with_schema(
             mode,
-            input_partitioning,
             group_by,
             aggr_expr,
             filter_expr,
@@ -683,7 +659,6 @@ impl AggregateExec {
     /// the schema in such cases.
     fn try_new_with_schema(
         mode: AggregateMode,
-        input_partitioning: AggregateInputPartitioning,
         group_by: PhysicalGroupBy,
         mut aggr_expr: Vec<Arc<AggregateFunctionExpr>>,
         filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
@@ -691,7 +666,6 @@ impl AggregateExec {
         input_schema: SchemaRef,
         schema: SchemaRef,
     ) -> Result<Self> {
-        validate_aggregate_partitioning(mode, input_partitioning)?;
         // Make sure arguments are consistent in size
         assert_eq_or_internal_err!(
             aggr_expr.len(),
@@ -763,7 +737,6 @@ impl AggregateExec {
 
         let mut exec = AggregateExec {
             mode,
-            input_partitioning,
             group_by,
             aggr_expr,
             filter_expr,
@@ -774,6 +747,7 @@ impl AggregateExec {
             required_input_ordering,
             limit_options: None,
             input_order_mode,
+            repartition_aggregations: false,
             cache,
             dynamic_filter: None,
         };
@@ -790,28 +764,37 @@ impl AggregateExec {
 
     /// Display-friendly mode label that includes input partitioning.
     fn mode_display(&self) -> &'static str {
-        match (self.mode, self.input_partitioning) {
-            (AggregateMode::Final, AggregateInputPartitioning::HashPartitioned) => {
-                "FinalPartitioned"
-            }
-            (AggregateMode::Single, AggregateInputPartitioning::HashPartitioned) => {
-                "SinglePartitioned"
-            }
-            (AggregateMode::Final, _) => "Final",
-            (AggregateMode::Single, _) => "Single",
+        let is_hash_partitioned = matches!(
+            self.required_input_distribution().first(),
+            Some(Distribution::HashPartitioned(_))
+        );
+        match (self.mode, is_hash_partitioned) {
+            (AggregateMode::Final, true) => "FinalPartitioned",
+            (AggregateMode::Single, true) => "SinglePartitioned",
+            (AggregateMode::Final, false) => "Final",
+            (AggregateMode::Single, false) => "Single",
             (AggregateMode::Partial, _) => "Partial",
         }
-    }
-
-    /// Required input partitioning.
-    pub fn input_partitioning(&self) -> AggregateInputPartitioning {
-        self.input_partitioning
     }
 
     /// Set the limit options for this AggExec
     pub fn with_limit_options(mut self, limit_options: Option<LimitOptions>) -> Self {
         self.limit_options = limit_options;
         self
+    }
+
+    /// Configure whether final/single aggregates should require hash repartitioning.
+    pub fn with_repartition_aggregations(
+        mut self,
+        repartition_aggregations: bool,
+    ) -> Self {
+        self.repartition_aggregations = repartition_aggregations;
+        self
+    }
+
+    /// Returns whether hash repartitioning is enabled for final/single aggregation.
+    pub fn repartition_aggregations(&self) -> bool {
+        self.repartition_aggregations
     }
 
     /// Get the limit options (if set)
@@ -1292,15 +1275,15 @@ impl ExecutionPlan for AggregateExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        match self.input_partitioning {
-            AggregateInputPartitioning::Unspecified => {
-                vec![Distribution::UnspecifiedDistribution]
-            }
-            AggregateInputPartitioning::HashPartitioned => {
-                vec![Distribution::HashPartitioned(self.group_by.input_exprs())]
-            }
-            AggregateInputPartitioning::SinglePartition => {
+        match self.mode {
+            AggregateMode::Partial => vec![Distribution::UnspecifiedDistribution],
+            AggregateMode::Final | AggregateMode::Single
+                if !self.repartition_aggregations || self.group_by.expr.is_empty() =>
+            {
                 vec![Distribution::SinglePartition]
+            }
+            AggregateMode::Final | AggregateMode::Single => {
+                vec![Distribution::HashPartitioned(self.group_by.input_exprs())]
             }
         }
     }
@@ -1332,7 +1315,6 @@ impl ExecutionPlan for AggregateExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let mut me = AggregateExec::try_new_with_schema(
             self.mode,
-            self.input_partitioning,
             self.group_by.clone(),
             self.aggr_expr.clone(),
             self.filter_expr.clone(),
@@ -1341,6 +1323,7 @@ impl ExecutionPlan for AggregateExec {
             Arc::clone(&self.schema),
         )?;
         me.limit_options = self.limit_options;
+        me.repartition_aggregations = self.repartition_aggregations;
         me.dynamic_filter = self.dynamic_filter.clone();
 
         Ok(Arc::new(me))
@@ -1511,26 +1494,6 @@ impl ExecutionPlan for AggregateExec {
         }
 
         Ok(result)
-    }
-}
-
-fn validate_aggregate_partitioning(
-    mode: AggregateMode,
-    input_partitioning: AggregateInputPartitioning,
-) -> Result<()> {
-    match mode {
-        AggregateMode::Partial => match input_partitioning {
-            AggregateInputPartitioning::Unspecified => Ok(()),
-            _ => not_impl_err!(
-                "Partial aggregation requires unspecified input partitioning"
-            ),
-        },
-        AggregateMode::Final | AggregateMode::Single => match input_partitioning {
-            AggregateInputPartitioning::Unspecified => not_impl_err!(
-                "Final or single aggregation requires an explicit input partitioning"
-            ),
-            _ => Ok(()),
-        },
     }
 }
 
@@ -3163,9 +3126,8 @@ mod tests {
             Arc::<Schema>::clone(&batch.schema()),
             None,
         )?;
-        let aggregate_exec = Arc::new(AggregateExec::try_new_with_partitioning(
+        let aggregate_exec = Arc::new(AggregateExec::try_new(
             AggregateMode::Final,
-            AggregateInputPartitioning::HashPartitioned,
             group_by,
             aggr_expr,
             vec![None],

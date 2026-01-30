@@ -23,7 +23,7 @@ use std::sync::Arc;
 use datafusion_common::error::Result;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::aggregates::{
-    AggregateExec, AggregateInputPartitioning, AggregateMode, PhysicalGroupBy,
+    AggregateExec, AggregateMode, PhysicalGroupBy,
 };
 
 use crate::PhysicalOptimizerRule;
@@ -82,15 +82,8 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
                         input_agg_exec.filter_expr(),
                     ),
                 ) {
-                let input_partitioning = match agg_exec.input_partitioning() {
-                    AggregateInputPartitioning::HashPartitioned => {
-                        AggregateInputPartitioning::HashPartitioned
-                    }
-                    _ => AggregateInputPartitioning::SinglePartition,
-                };
-                AggregateExec::try_new_with_partitioning(
+                AggregateExec::try_new(
                     AggregateMode::Single,
-                    input_partitioning,
                     input_agg_exec.group_expr().clone(),
                     input_agg_exec.aggr_expr().to_vec(),
                     input_agg_exec.filter_expr().to_vec(),
@@ -98,7 +91,11 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
                     input_agg_exec.input_schema(),
                 )
                 .map(|combined_agg| {
-                    combined_agg.with_limit_options(agg_exec.limit_options())
+                    combined_agg
+                        .with_limit_options(agg_exec.limit_options())
+                        .with_repartition_aggregations(
+                            agg_exec.repartition_aggregations(),
+                        )
                 })
                 .ok()
                 .map(Arc::new)
