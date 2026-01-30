@@ -224,7 +224,7 @@ impl ScalarUDFImpl for DateTruncFunc {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!("return_field_from_args should be used instead")
+        internal_err!("return_field_from_args should be called instead")
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
