@@ -403,20 +403,16 @@ impl Range {
             };
 
             let neg = months < 0 || days < 0;
-            let mut new_date = start;
+            let mut new_date = Some(start);
 
             let values = from_fn(|| {
-                if (neg && new_date < stop) || (!neg && new_date > stop) {
+                let Some(current_date) = new_date else {
+                    return None; // previous overflow
+                };
+                if (neg && current_date < stop) || (!neg && current_date > stop) {
                     None
                 } else {
-                    let current_date = new_date;
-                    new_date = Date32Type::add_month_day_nano_opt(new_date, step)
-                        .ok_or_else(|| {
-                            exec_datafusion_err!(
-                                "Cannot generate date range where new_date {} + {step:?}) overflows",
-                                date32_to_string(new_date)
-                            )
-                        })?;
+                    new_date = Date32Type::add_month_day_nano_opt(current_date, step);
                     Some(Some(current_date))
                 }
             });
