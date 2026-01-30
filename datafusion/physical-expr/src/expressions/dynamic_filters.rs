@@ -272,6 +272,10 @@ impl DynamicFilterPhysicalExpr {
     ///
     /// This method will return when [`Self::update`] is called and the generation increases.
     /// It does not guarantee that the filter is complete.
+    ///
+    /// Producers (e.g.) HashJoinExec may never update the expression or mark it as completed if there are no consumers.
+    /// If you call this method on a dynamic filter created by such a producer and there are no consumers registered this method would wait indefinitely.
+    /// This should not happen under normal operation and would indicate a programming error either in your producer or in DataFusion if the producer is a built in node.
     pub async fn wait_update(&self) {
         let mut rx = self.state_watch.subscribe();
         // Get the current generation
@@ -283,17 +287,16 @@ impl DynamicFilterPhysicalExpr {
 
     /// Wait asynchronously until this dynamic filter is marked as complete.
     ///
-    /// This method returns immediately if the filter is already complete or if the filter
-    /// is not being used by any consumers.
+    /// This method returns immediately if the filter is already complete.
     /// Otherwise, it waits until [`Self::mark_complete`] is called.
     ///
     /// Unlike [`Self::wait_update`], this method guarantees that when it returns,
     /// the filter is fully complete with no more updates expected.
-    pub async fn wait_complete(self: &Arc<Self>) {
-        if !self.is_used() {
-            return;
-        }
-
+    ///
+    /// Producers (e.g.) HashJoinExec may never update the expression or mark it as completed if there are no consumers.
+    /// If you call this method on a dynamic filter created by such a producer and there are no consumers registered this method would wait indefinitely.
+    /// This should not happen under normal operation and would indicate a programming error either in your producer or in DataFusion if the producer is a built in node.
+    pub async fn wait_complete(&self) {
         if self.inner.read().is_complete {
             return;
         }
@@ -310,14 +313,14 @@ impl DynamicFilterPhysicalExpr {
     /// that created the filter). This is useful to avoid computing expensive filter
     /// expressions when no consumer will actually use them.
     ///
-    /// Note: We check the inner Arc's strong_count, not the outer Arc's count, because
-    /// when filters are transformed (e.g., via reassign_expr_columns during filter pushdown),
-    /// new outer Arc instances are created via with_new_children(), but they all share the
-    /// same inner `Arc<RwLock<Inner>>`. This is what allows filter updates to propagate to
-    /// consumers even after transformation.
+    /// # Implementation Details
+    ///
+    /// We check both Arc counts to handle two cases:
+    /// - Transformed filters (via `with_new_children`) share the inner Arc (inner count > 1)
+    /// - Direct clones (via `Arc::clone`) increment the outer count (outer count > 1)
     pub fn is_used(self: &Arc<Self>) -> bool {
         // Strong count > 1 means at least one consumer is holding a reference beyond the producer.
-        Arc::strong_count(&self.inner) > 1
+        Arc::strong_count(self) > 1 || Arc::strong_count(&self.inner) > 1
     }
 
     fn render(
