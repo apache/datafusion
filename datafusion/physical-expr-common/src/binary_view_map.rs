@@ -19,9 +19,10 @@
 //! `StringViewArray`/`BinaryViewArray`.
 use crate::binary_map::OutputType;
 use ahash::RandomState;
+use arrow::array::NullBufferBuilder;
 use arrow::array::cast::AsArray;
 use arrow::array::{Array, ArrayRef, BinaryViewArray, ByteView, make_view};
-use arrow::buffer::{Buffer, NullBuffer, ScalarBuffer};
+use arrow::buffer::{Buffer, ScalarBuffer};
 use arrow::datatypes::{BinaryViewType, ByteViewType, DataType, StringViewType};
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::utils::proxy::{HashTableAllocExt, VecAllocExt};
@@ -134,7 +135,7 @@ where
     /// Completed buffers containing string data
     completed: Vec<Buffer>,
     /// Tracks null values (true = null)
-    nulls: Vec<bool>,
+    nulls: NullBufferBuilder,
 
     /// random state used to generate hashes
     random_state: RandomState,
@@ -161,7 +162,7 @@ where
             views: Vec::new(),
             in_progress: Vec::new(),
             completed: Vec::new(),
-            nulls: Vec::new(),
+            nulls: NullBufferBuilder::new(0),
             random_state: RandomState::new(),
             hashes_buffer: vec![],
             null: None,
@@ -281,7 +282,7 @@ where
                     let payload = make_payload_fn(None);
                     let null_index = self.views.len();
                     self.views.push(0);
-                    self.nulls.push(true);
+                    self.nulls.append_null();
                     self.null = Some((payload, null_index));
                     payload
                 };
@@ -371,16 +372,7 @@ where
         }
 
         // Build null buffer if we have any nulls
-        let null_buffer = if self.nulls.iter().any(|&is_null| is_null) {
-            Some(NullBuffer::from(
-                self.nulls
-                    .iter()
-                    .map(|&is_null| !is_null)
-                    .collect::<Vec<_>>(),
-            ))
-        } else {
-            None
-        };
+        let null_buffer = self.nulls.finish();
 
         let views = ScalarBuffer::from(self.views);
         let array =
@@ -420,7 +412,7 @@ where
         };
 
         self.views.push(view);
-        self.nulls.push(false);
+        self.nulls.append_non_null();
         view
     }
 
@@ -445,7 +437,7 @@ where
         let views_size = self.views.len() * size_of::<u128>();
         let in_progress_size = self.in_progress.capacity();
         let completed_size: usize = self.completed.iter().map(|b| b.len()).sum();
-        let nulls_size = self.nulls.len();
+        let nulls_size = self.nulls.len() / 8;
 
         self.map_size
             + views_size
