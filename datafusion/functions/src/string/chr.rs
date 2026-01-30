@@ -24,9 +24,9 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Int64;
 use arrow::datatypes::DataType::Utf8;
 
-use crate::utils::make_scalar_function;
 use datafusion_common::cast::as_int64_array;
-use datafusion_common::{Result, exec_err};
+use datafusion_common::utils::take_function_args;
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
 use datafusion_expr::{ColumnarValue, Documentation, Volatility};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_macros::user_doc;
@@ -119,7 +119,47 @@ impl ScalarUDFImpl for ChrFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(chr, vec![])(&args.args)
+        let return_type = args.return_field.data_type();
+        let [arg] = take_function_args(self.name(), args.args)?;
+
+        match arg {
+            ColumnarValue::Scalar(scalar) => {
+                if scalar.is_null() {
+                    return Ok(ColumnarValue::Scalar(ScalarValue::try_from(
+                        return_type,
+                    )?));
+                }
+
+                let code_point = match scalar {
+                    ScalarValue::Int64(Some(v)) => v,
+                    _ => {
+                        return internal_err!(
+                            "Unexpected data type {:?} for function chr",
+                            scalar.data_type()
+                        );
+                    }
+                };
+
+                if let Ok(u) = u32::try_from(code_point)
+                    && let Some(c) = core::char::from_u32(u)
+                {
+                    Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+                        c.to_string(),
+                    ))))
+                } else {
+                    exec_err!("invalid Unicode scalar value: {code_point}")
+                }
+            }
+            ColumnarValue::Array(array) => {
+                if !matches!(array.data_type(), Int64) {
+                    return internal_err!(
+                        "Unexpected data type {:?} for function chr",
+                        array.data_type()
+                    );
+                }
+                Ok(ColumnarValue::Array(chr(&[array])?))
+            }
+        }
     }
 
     fn documentation(&self) -> Option<&Documentation> {
