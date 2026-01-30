@@ -48,7 +48,9 @@ use datafusion_functions_table::generate_series::{
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::async_scalar_function::AsyncFuncExpr;
-use datafusion_physical_expr::{LexOrdering, LexRequirement, Partitioning, PhysicalExprRef};
+use datafusion_physical_expr::{
+    LexOrdering, LexRequirement, Partitioning, PhysicalExprRef,
+};
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, LimitOptions, PhysicalGroupBy,
 };
@@ -1220,15 +1222,15 @@ impl protobuf::PhysicalPlanNode {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        let agg = AggregateExec::try_new(
+        let agg = AggregateExec::try_new_with_require_single_output_partition(
             agg_mode,
             PhysicalGroupBy::new(group_expr, null_expr, groups, has_grouping_set),
             physical_aggr_expr,
             physical_filter_expr,
             input,
             physical_schema,
-        )?
-        .with_repartition_aggregations(hash_agg.repartition_aggregations);
+            hash_agg.require_single_output_partition,
+        )?;
 
         let agg = if let Some(limit_proto) = &hash_agg.limit {
             let limit = limit_proto.limit as usize;
@@ -2722,7 +2724,8 @@ impl protobuf::PhysicalPlanNode {
                     groups,
                     limit,
                     has_grouping_set: exec.group_expr().has_grouping_set(),
-                    repartition_aggregations: exec.repartition_aggregations(),
+                    require_single_output_partition: exec
+                        .require_single_output_partition(),
                 },
             ))),
         })

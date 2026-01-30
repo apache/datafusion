@@ -154,7 +154,7 @@ impl serde::Serialize for AggregateExecNode {
         if self.has_grouping_set {
             len += 1;
         }
-        if self.repartition_aggregations {
+        if self.require_single_output_partition {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.AggregateExecNode", len)?;
@@ -196,10 +196,10 @@ impl serde::Serialize for AggregateExecNode {
         if self.has_grouping_set {
             struct_ser.serialize_field("hasGroupingSet", &self.has_grouping_set)?;
         }
-        if self.repartition_aggregations {
+        if self.require_single_output_partition {
             struct_ser.serialize_field(
-                "repartitionAggregations",
-                &self.repartition_aggregations,
+                "requireSingleOutputPartition",
+                &self.require_single_output_partition,
             )?;
         }
         struct_ser.end()
@@ -232,6 +232,8 @@ impl<'de> serde::Deserialize<'de> for AggregateExecNode {
             "limit",
             "has_grouping_set",
             "hasGroupingSet",
+            "require_single_output_partition",
+            "requireSingleOutputPartition",
             "repartition_aggregations",
             "repartitionAggregations",
         ];
@@ -250,7 +252,7 @@ impl<'de> serde::Deserialize<'de> for AggregateExecNode {
             FilterExpr,
             Limit,
             HasGroupingSet,
-            RepartitionAggregations,
+            RequireSingleOutputPartition,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -284,7 +286,8 @@ impl<'de> serde::Deserialize<'de> for AggregateExecNode {
                             "filterExpr" | "filter_expr" => Ok(GeneratedField::FilterExpr),
                             "limit" => Ok(GeneratedField::Limit),
                             "hasGroupingSet" | "has_grouping_set" => Ok(GeneratedField::HasGroupingSet),
-                            "repartitionAggregations" | "repartition_aggregations" => Ok(GeneratedField::RepartitionAggregations),
+                            "requireSingleOutputPartition" | "require_single_output_partition" => Ok(GeneratedField::RequireSingleOutputPartition),
+                            "repartitionAggregations" | "repartition_aggregations" => Ok(GeneratedField::RequireSingleOutputPartition),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -316,7 +319,7 @@ impl<'de> serde::Deserialize<'de> for AggregateExecNode {
                 let mut filter_expr__ = None;
                 let mut limit__ = None;
                 let mut has_grouping_set__ = None;
-                let mut repartition_aggregations__ = None;
+                let mut require_single_output_partition__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::GroupExpr => {
@@ -391,13 +394,14 @@ impl<'de> serde::Deserialize<'de> for AggregateExecNode {
                             }
                             has_grouping_set__ = Some(map_.next_value()?);
                         }
-                        GeneratedField::RepartitionAggregations => {
-                            if repartition_aggregations__.is_some() {
+                        GeneratedField::RequireSingleOutputPartition => {
+                            if require_single_output_partition__.is_some() {
                                 return Err(serde::de::Error::duplicate_field(
-                                    "repartitionAggregations",
+                                    "requireSingleOutputPartition",
                                 ));
                             }
-                            repartition_aggregations__ = Some(map_.next_value()?);
+                            require_single_output_partition__ =
+                                Some(map_.next_value()?);
                         }
                     }
                 }
@@ -414,7 +418,8 @@ impl<'de> serde::Deserialize<'de> for AggregateExecNode {
                     filter_expr: filter_expr__.unwrap_or_default(),
                     limit: limit__,
                     has_grouping_set: has_grouping_set__.unwrap_or_default(),
-                    repartition_aggregations: repartition_aggregations__.unwrap_or_default(),
+                    require_single_output_partition: require_single_output_partition__
+                        .unwrap_or_default(),
                 })
             }
         }

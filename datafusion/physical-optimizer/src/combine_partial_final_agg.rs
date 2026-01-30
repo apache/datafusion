@@ -82,7 +82,8 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
                         input_agg_exec.filter_expr(),
                     ),
                 ) {
-                AggregateExec::try_new(
+                AggregateExec::try_new_with_settings_from(
+                    agg_exec,
                     AggregateMode::Single,
                     input_agg_exec.group_expr().clone(),
                     input_agg_exec.aggr_expr().to_vec(),
@@ -91,11 +92,7 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
                     input_agg_exec.input_schema(),
                 )
                 .map(|combined_agg| {
-                    combined_agg
-                        .with_limit_options(agg_exec.limit_options())
-                        .with_repartition_aggregations(
-                            agg_exec.repartition_aggregations(),
-                        )
+                    combined_agg.with_limit_options(agg_exec.limit_options())
                 })
                 .ok()
                 .map(Arc::new)

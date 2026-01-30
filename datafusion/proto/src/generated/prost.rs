@@ -1872,7 +1872,7 @@ pub struct AggregateExecNode {
     #[prost(bool, tag = "12")]
     pub has_grouping_set: bool,
     #[prost(bool, tag = "13")]
-    pub repartition_aggregations: bool,
+    pub require_single_output_partition: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GlobalLimitExecNode {

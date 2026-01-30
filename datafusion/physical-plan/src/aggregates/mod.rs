@@ -541,8 +541,8 @@ pub struct AggregateExec {
     required_input_ordering: Option<OrderingRequirements>,
     /// Describes how the input is ordered relative to the group by columns
     input_order_mode: InputOrderMode,
-    /// Whether hash repartitioning is enabled for final/single aggregation
-    repartition_aggregations: bool,
+    /// Whether final/single aggregation should require a single input partition
+    require_single_output_partition: bool,
     cache: PlanProperties,
     /// During initialization, if the plan supports dynamic filtering (see [`AggrDynFilter`]),
     /// it is set to `Some(..)` regardless of whether it can be pushed down to a child node.
@@ -567,7 +567,10 @@ impl std::fmt::Debug for AggregateExec {
             .field("metrics", &self.metrics)
             .field("required_input_ordering", &self.required_input_ordering)
             .field("input_order_mode", &self.input_order_mode)
-            .field("repartition_aggregations", &self.repartition_aggregations)
+            .field(
+                "require_single_output_partition",
+                &self.require_single_output_partition,
+            )
             .field("cache", &self.cache)
             .field("dynamic_filter", &self.dynamic_filter)
             .finish()
@@ -588,7 +591,7 @@ impl AggregateExec {
             required_input_ordering: self.required_input_ordering.clone(),
             metrics: ExecutionPlanMetricsSet::new(),
             input_order_mode: self.input_order_mode.clone(),
-            repartition_aggregations: self.repartition_aggregations,
+            require_single_output_partition: self.require_single_output_partition,
             cache: self.cache.clone(),
             mode: self.mode,
             group_by: self.group_by.clone(),
@@ -609,7 +612,7 @@ impl AggregateExec {
             required_input_ordering: self.required_input_ordering.clone(),
             metrics: ExecutionPlanMetricsSet::new(),
             input_order_mode: self.input_order_mode.clone(),
-            repartition_aggregations: self.repartition_aggregations,
+            require_single_output_partition: self.require_single_output_partition,
             cache: self.cache.clone(),
             mode: self.mode,
             group_by: self.group_by.clone(),
@@ -646,6 +649,50 @@ impl AggregateExec {
             input,
             input_schema,
             schema,
+        )
+    }
+
+    /// Create a new [`AggregateExec`] with an explicit input partition requirement.
+    pub fn try_new_with_require_single_output_partition(
+        mode: AggregateMode,
+        group_by: PhysicalGroupBy,
+        aggr_expr: Vec<Arc<AggregateFunctionExpr>>,
+        filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
+        input: Arc<dyn ExecutionPlan>,
+        input_schema: SchemaRef,
+        require_single_output_partition: bool,
+    ) -> Result<Self> {
+        let mut exec = AggregateExec::try_new(
+            mode,
+            group_by,
+            aggr_expr,
+            filter_expr,
+            input,
+            input_schema,
+        )?;
+        exec.require_single_output_partition = require_single_output_partition;
+        Ok(exec)
+    }
+
+    /// Create a new [`AggregateExec`] while reusing the input partitioning
+    /// requirement from an existing aggregate.
+    pub fn try_new_with_settings_from(
+        settings: &AggregateExec,
+        mode: AggregateMode,
+        group_by: PhysicalGroupBy,
+        aggr_expr: Vec<Arc<AggregateFunctionExpr>>,
+        filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
+        input: Arc<dyn ExecutionPlan>,
+        input_schema: SchemaRef,
+    ) -> Result<Self> {
+        Self::try_new_with_require_single_output_partition(
+            mode,
+            group_by,
+            aggr_expr,
+            filter_expr,
+            input,
+            input_schema,
+            settings.require_single_output_partition,
         )
     }
 
@@ -747,7 +794,7 @@ impl AggregateExec {
             required_input_ordering,
             limit_options: None,
             input_order_mode,
-            repartition_aggregations: false,
+            require_single_output_partition: true,
             cache,
             dynamic_filter: None,
         };
@@ -783,18 +830,18 @@ impl AggregateExec {
         self
     }
 
-    /// Configure whether final/single aggregates should require hash repartitioning.
-    pub fn with_repartition_aggregations(
+    /// Configure whether final/single aggregates should require a single input partition.
+    pub fn with_require_single_output_partition(
         mut self,
-        repartition_aggregations: bool,
+        require_single_output_partition: bool,
     ) -> Self {
-        self.repartition_aggregations = repartition_aggregations;
+        self.require_single_output_partition = require_single_output_partition;
         self
     }
 
-    /// Returns whether hash repartitioning is enabled for final/single aggregation.
-    pub fn repartition_aggregations(&self) -> bool {
-        self.repartition_aggregations
+    /// Returns whether final/single aggregation requires a single input partition.
+    pub fn require_single_output_partition(&self) -> bool {
+        self.require_single_output_partition
     }
 
     /// Get the limit options (if set)
@@ -1278,7 +1325,8 @@ impl ExecutionPlan for AggregateExec {
         match self.mode {
             AggregateMode::Partial => vec![Distribution::UnspecifiedDistribution],
             AggregateMode::Final | AggregateMode::Single
-                if !self.repartition_aggregations || self.group_by.expr.is_empty() =>
+                if self.require_single_output_partition
+                    || self.group_by.expr.is_empty() =>
             {
                 vec![Distribution::SinglePartition]
             }
@@ -1323,7 +1371,7 @@ impl ExecutionPlan for AggregateExec {
             Arc::clone(&self.schema),
         )?;
         me.limit_options = self.limit_options;
-        me.repartition_aggregations = self.repartition_aggregations;
+        me.require_single_output_partition = self.require_single_output_partition;
         me.dynamic_filter = self.dynamic_filter.clone();
 
         Ok(Arc::new(me))

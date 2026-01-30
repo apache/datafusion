@@ -1252,7 +1252,7 @@ message AggregateExecNode {
   repeated MaybeFilter filter_expr = 10;
   AggLimit limit = 11;
   bool has_grouping_set = 12;
-  bool repartition_aggregations = 13;
+  bool require_single_output_partition = 13;
 }
 
 message GlobalLimitExecNode {

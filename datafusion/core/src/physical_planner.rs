@@ -925,17 +925,18 @@ impl DefaultPhysicalPlanner {
                 let can_repartition = !groups.is_empty()
                     && session_state.config().target_partitions() > 1
                     && session_state.config().repartition_aggregations();
+                let require_single_output_partition = !can_repartition;
 
                 let initial_aggr = Arc::new(
-                    AggregateExec::try_new(
+                    AggregateExec::try_new_with_require_single_output_partition(
                         AggregateMode::Partial,
                         groups.clone(),
                         aggregates,
                         filters.clone(),
                         input_exec,
                         Arc::clone(&physical_input_schema),
-                    )?
-                    .with_repartition_aggregations(can_repartition),
+                        require_single_output_partition,
+                    )?,
                 );
 
                 // Some aggregators may be modified during initialization for
@@ -947,17 +948,15 @@ impl DefaultPhysicalPlanner {
 
                 let final_grouping_set = initial_aggr.group_expr().as_final();
 
-                Arc::new(
-                    AggregateExec::try_new(
-                        AggregateMode::Final,
-                        final_grouping_set,
-                        updated_aggregates,
-                        filters,
-                        initial_aggr,
-                        Arc::clone(&physical_input_schema),
-                    )?
-                    .with_repartition_aggregations(can_repartition),
-                )
+                Arc::new(AggregateExec::try_new_with_require_single_output_partition(
+                    AggregateMode::Final,
+                    final_grouping_set,
+                    updated_aggregates,
+                    filters,
+                    initial_aggr,
+                    Arc::clone(&physical_input_schema),
+                    require_single_output_partition,
+                )?)
             }
             LogicalPlan::Projection(Projection { input, expr, .. }) => self
                 .create_project_physical_exec(

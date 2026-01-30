@@ -509,15 +509,15 @@ pub fn reorder_aggregate_keys(
             .into_iter()
             .map(|idx| group_exprs[idx].clone())
             .collect();
-        let partial_agg = Arc::new(AggregateExec::try_new(
+        let partial_agg = Arc::new(AggregateExec::try_new_with_settings_from(
+            agg_exec,
             AggregateMode::Partial,
             PhysicalGroupBy::new_single(new_group_exprs),
             agg_exec.aggr_expr().to_vec(),
             agg_exec.filter_expr().to_vec(),
             Arc::clone(agg_exec.input()),
             Arc::clone(&agg_exec.input_schema),
-        )?
-        .with_repartition_aggregations(agg_exec.repartition_aggregations()));
+        )?);
         // Build new group expressions that correspond to the output
         // of the "reordered" aggregator:
         let group_exprs = partial_agg.group_expr().expr();
@@ -529,15 +529,15 @@ pub fn reorder_aggregate_keys(
                 .map(|(idx, expr)| (expr, group_exprs[idx].1.clone()))
                 .collect(),
         );
-        let new_final_agg = Arc::new(AggregateExec::try_new(
+        let new_final_agg = Arc::new(AggregateExec::try_new_with_settings_from(
+            agg_exec,
             AggregateMode::Final,
             new_group_by,
             agg_exec.aggr_expr().to_vec(),
             agg_exec.filter_expr().to_vec(),
             Arc::clone(&partial_agg) as _,
             agg_exec.input_schema(),
-        )?
-        .with_repartition_aggregations(agg_exec.repartition_aggregations()));
+        )?);
 
         agg_node.plan = Arc::clone(&new_final_agg) as _;
         agg_node.data.clear();

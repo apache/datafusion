@@ -328,27 +328,27 @@ fn aggregate_exec_with_alias(
     let final_grouping = PhysicalGroupBy::new_single(final_group_by_expr);
 
     Arc::new(
-        AggregateExec::try_new(
+        AggregateExec::try_new_with_require_single_output_partition(
             AggregateMode::Final,
             final_grouping,
             vec![],
             vec![],
             Arc::new(
-                AggregateExec::try_new(
+                AggregateExec::try_new_with_require_single_output_partition(
                     AggregateMode::Partial,
                     group_by,
                     vec![],
                     vec![],
                     input,
                     schema.clone(),
+                    false,
                 )
-                .unwrap()
-                .with_repartition_aggregations(true),
+                .unwrap(),
             ),
             schema,
+            false,
         )
-        .unwrap()
-        .with_repartition_aggregations(true),
+        .unwrap(),
     )
 }
 

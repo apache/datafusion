@@ -55,7 +55,8 @@ impl LimitedDistinctAggregation {
         }
 
         // We found what we want: clone, copy the limit down, and return modified node
-        let new_aggr = AggregateExec::try_new(
+        let new_aggr = AggregateExec::try_new_with_settings_from(
+            aggr,
             *aggr.mode(),
             aggr.group_expr().clone(),
             aggr.aggr_expr().to_vec(),
@@ -64,8 +65,7 @@ impl LimitedDistinctAggregation {
             aggr.input_schema(),
         )
         .expect("Unable to copy Aggregate!")
-        .with_limit_options(Some(LimitOptions::new(limit)))
-        .with_repartition_aggregations(aggr.repartition_aggregations());
+        .with_limit_options(Some(LimitOptions::new(limit)));
 
         if matches!(aggr.mode(), AggregateMode::Final)
             && let (child_plan, wrap_coalesce) = if let Some(coalesce) = aggr
@@ -81,7 +81,8 @@ impl LimitedDistinctAggregation {
             && matches!(child_agg.mode(), AggregateMode::Partial)
             && !child_agg.group_expr().has_grouping_set()
         {
-            let new_child = AggregateExec::try_new(
+            let new_child = AggregateExec::try_new_with_settings_from(
+                child_agg,
                 AggregateMode::Partial,
                 child_agg.group_expr().clone(),
                 child_agg.aggr_expr().to_vec(),
@@ -90,8 +91,7 @@ impl LimitedDistinctAggregation {
                 child_agg.input_schema(),
             )
             .expect("Unable to copy Aggregate!")
-            .with_limit_options(Some(LimitOptions::new(limit)))
-            .with_repartition_aggregations(child_agg.repartition_aggregations());
+            .with_limit_options(Some(LimitOptions::new(limit)));
 
             let new_input: Arc<dyn ExecutionPlan> = if wrap_coalesce {
                 Arc::new(CoalescePartitionsExec::new(Arc::new(new_child)))
@@ -99,7 +99,8 @@ impl LimitedDistinctAggregation {
                 Arc::new(new_child)
             };
 
-            let rebuilt_final = AggregateExec::try_new(
+            let rebuilt_final = AggregateExec::try_new_with_settings_from(
+                &new_aggr,
                 AggregateMode::Final,
                 new_aggr.group_expr().clone(),
                 new_aggr.aggr_expr().to_vec(),
@@ -108,8 +109,7 @@ impl LimitedDistinctAggregation {
                 new_aggr.input_schema(),
             )
             .expect("Unable to copy Aggregate!")
-            .with_limit_options(Some(LimitOptions::new(limit)))
-            .with_repartition_aggregations(new_aggr.repartition_aggregations());
+            .with_limit_options(Some(LimitOptions::new(limit)));
 
             return Some(Arc::new(rebuilt_final));
         }
