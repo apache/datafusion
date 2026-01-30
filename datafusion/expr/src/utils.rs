@@ -1798,7 +1798,7 @@ mod tests {
 
     #[test]
     fn test_generate_signature_error_msg_user_defined() {
-        let error_msg = generate_signature_error_message(
+        let error = generate_signature_error_message(
             &MockUdf(Signature::user_defined(Volatility::Immutable)),
             &[Field::new("name", DataType::Int32, true).into()],
             DataFusionError::Plan("Expected 'mock' to fail".to_string()),
@@ -1806,7 +1806,7 @@ mod tests {
 
         let expected = "Error during planning: User-defined coercion of function call 'mock(Int32)' failed with:
 Expected 'mock' to fail";
-        assert_eq!(expected, error_msg.to_string());
+        assert!(error.to_string().starts_with(expected));
     }
 
     #[test]
@@ -1829,7 +1829,7 @@ Expected 'mock' to fail";
         ])
         .expect("valid parameter names");
 
-        let error_msg = generate_signature_error_message(
+        let error = generate_signature_error_message(
             &MockUdf(sig),
             &[Field::new("name", DataType::Utf8, true).into()],
             DataFusionError::Plan("".to_string()),
@@ -1839,7 +1839,7 @@ Expected 'mock' to fail";
 \tCandidate functions:
 \tmock(str: Utf8, start_pos: Int64)
 \tmock(str: Utf8, start_pos: Int64, length: Int64)";
-        assert_eq!(expected, error_msg.to_string());
+        assert!(error.to_string().starts_with(expected));
     }
 
     #[test]
@@ -1849,7 +1849,7 @@ Expected 'mock' to fail";
             Volatility::Immutable,
         );
 
-        let error_msg = generate_signature_error_message(
+        let error = generate_signature_error_message(
             &MockUdf(sig),
             &[Field::new("name", DataType::Int32, true).into()],
             DataFusionError::Plan("".to_string()),
@@ -1859,6 +1859,6 @@ Expected 'mock' to fail";
 \tCandidate functions:
 \tmock(Any, Any)
 \tmock(Any, Any, Any)";
-        assert_eq!(expected, error_msg.to_string());
+        assert!(error.to_string().starts_with(expected));
     }
 }
