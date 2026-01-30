@@ -59,7 +59,7 @@ impl SparkNegative {
         Self {
             signature: Signature {
                 type_signature: TypeSignature::OneOf(vec![
-                    // Numeric types: signed/unsigned integers, float, decimals
+                    // Numeric types: signed integers, float, decimals
                     TypeSignature::Numeric(1),
                     // Interval types: YearMonth, DayTime, MonthDayNano
                     TypeSignature::Uniform(
@@ -106,11 +106,7 @@ fn spark_negative(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 
     match arg {
         ColumnarValue::Array(array) => match array.data_type() {
-            DataType::Null
-            | DataType::UInt8
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64 => Ok(arg.clone()),
+            DataType::Null => Ok(arg.clone()),
 
             // Signed integers - use wrapping negation (Spark legacy mode behavior)
             DataType::Int8 => {
@@ -207,11 +203,7 @@ fn spark_negative(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             dt => not_impl_err!("Not supported datatype for Spark negative(): {dt}"),
         },
         ColumnarValue::Scalar(sv) => match sv {
-            ScalarValue::Null
-            | ScalarValue::UInt8(_)
-            | ScalarValue::UInt16(_)
-            | ScalarValue::UInt32(_)
-            | ScalarValue::UInt64(_) => Ok(arg.clone()),
+            ScalarValue::Null => Ok(arg.clone()),
             _ if sv.is_null() => Ok(arg.clone()),
 
             // Signed integers - wrapping negation
