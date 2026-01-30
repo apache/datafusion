@@ -801,27 +801,6 @@ impl LogicalPlanBuilder {
         sorts: impl IntoIterator<Item = impl Into<SortExpr>> + Clone,
         fetch: Option<usize>,
     ) -> Result<Self> {
-        self.sort_with_limit_inner(sorts, fetch, false)
-    }
-
-    /// Apply a sort with option to skip adding missing columns
-    ///
-    /// This is used by SELECT statements where missing ORDER BY columns are
-    /// already added by `add_missing_order_by_exprs`.
-    pub fn sort_with_limit_skip_missing(
-        self,
-        sorts: impl IntoIterator<Item = impl Into<SortExpr>> + Clone,
-        fetch: Option<usize>,
-    ) -> Result<Self> {
-        self.sort_with_limit_inner(sorts, fetch, true)
-    }
-
-    fn sort_with_limit_inner(
-        self,
-        sorts: impl IntoIterator<Item = impl Into<SortExpr>> + Clone,
-        fetch: Option<usize>,
-        skip_add_missing_columns: bool,
-    ) -> Result<Self> {
         let sorts = rewrite_sort_cols_by_aggs(sorts, &self.plan)?;
 
         let schema = self.plan.schema();
@@ -841,7 +820,7 @@ impl LogicalPlanBuilder {
             Ok(())
         })?;
 
-        if missing_cols.is_empty() || skip_add_missing_columns {
+        if missing_cols.is_empty() {
             return Ok(Self::new(LogicalPlan::Sort(Sort {
                 expr: normalize_sorts(sorts, &self.plan)?,
                 input: self.plan,

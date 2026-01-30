@@ -129,7 +129,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             projected_plan.schema().as_ref(),
             planner_context,
             true,
-            Some(base_plan.schema().as_ref()),
         )?;
         let mut order_by_rex = normalize_sorts(order_by_rex, &projected_plan)?;
 
@@ -455,12 +454,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             plan
         };
 
-        // For non-aggregate queries (no GROUP BY and no aggregates), we can skip
-        // add_missing_columns because add_missing_order_by_exprs has already added
-        // the missing columns. For aggregate queries, we still need add_missing_columns
-        // to handle complex cases like ORDER BY count(*).
-        let skip_add_missing = !strict;
-        let plan = self.order_by(plan, order_by_rex, skip_add_missing)?;
+        let plan = self.order_by(plan, order_by_rex)?;
         // if add missing columns, we MUST remove unused columns in project
         if added {
             LogicalPlanBuilder::from(plan)

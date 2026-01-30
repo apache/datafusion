@@ -51,21 +51,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         input_schema: &DFSchema,
         planner_context: &mut PlannerContext,
         literal_to_column: bool,
-        additional_schema: Option<&DFSchema>,
     ) -> Result<Vec<SortExpr>> {
         if order_by_exprs.is_empty() {
             return Ok(vec![]);
         }
-
-        let mut combined_schema;
-        let order_by_schema = match additional_schema {
-            Some(schema) => {
-                combined_schema = input_schema.clone();
-                combined_schema.merge(schema);
-                &combined_schema
-            }
-            None => input_schema,
-        };
 
         let mut sort_expr_vec = Vec::with_capacity(order_by_exprs.len());
 
@@ -114,9 +103,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         input_schema.qualified_field(field_index - 1),
                     ))
                 }
-                e => {
-                    self.sql_expr_to_logical_expr(e, order_by_schema, planner_context)?
-                }
+                e => self.sql_expr_to_logical_expr(e, input_schema, planner_context)?,
             };
             sort_expr_vec.push(make_sort_expr(expr, asc, nulls_first));
         }
@@ -226,9 +213,8 @@ fn add_missing_order_by_exprs_impl(
         }
         match expr {
             Expr::AggregateFunction(_) | Expr::WindowFunction(_) => {
-                let replaced = Expr::Column(Column::new_unqualified(
-                    expr.schema_name().to_string(),
-                ));
+                let replaced =
+                    Expr::Column(Column::new_unqualified(expr.schema_name().to_string()));
                 missing_exprs.insert(expr);
                 Ok(Transformed::new(replaced, true, TreeNodeRecursion::Jump))
             }
