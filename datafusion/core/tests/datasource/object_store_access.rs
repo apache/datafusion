@@ -894,7 +894,7 @@ impl ObjectStore for RequestCountingObjectStore {
         _payload: PutPayload,
         _opts: PutOptions,
     ) -> object_store::Result<PutResult> {
-        Err(object_store::Error::NotImplemented)
+        unimplemented!()
     }
 
     async fn put_multipart_opts(
@@ -902,7 +902,7 @@ impl ObjectStore for RequestCountingObjectStore {
         _location: &Path,
         _opts: PutMultipartOptions,
     ) -> object_store::Result<Box<dyn MultipartUpload>> {
-        Err(object_store::Error::NotImplemented)
+        unimplemented!()
     }
 
     async fn get_opts(
@@ -968,7 +968,7 @@ impl ObjectStore for RequestCountingObjectStore {
 
     fn delete_stream(
         &self,
-        _locations: BoxStream<'static, _object_store::Result<Path>>,
+        _locations: BoxStream<'static, object_store::Result<Path>>,
     ) -> BoxStream<'static, object_store::Result<Path>> {
         unimplemented!()
     }

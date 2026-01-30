@@ -18,7 +18,7 @@
 //! Object store implementation used for testing
 
 use crate::tracing::asserting_tracer::assert_traceability;
-use futures::TryStreamExt;
+use futures::{StreamExt};
 use futures::stream::BoxStream;
 use object_store::{
     CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
@@ -90,7 +90,7 @@ impl ObjectStore for TraceableObjectStore {
     ) -> BoxStream<'static, object_store::Result<Path>> {
         self.inner
             .delete_stream(locations)
-            .and_then(|res| async {
+            .then(|res| async {
                 futures::executor::block_on(assert_traceability());
                 res
             })

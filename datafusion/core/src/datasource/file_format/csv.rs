@@ -169,7 +169,7 @@ mod tests {
 
         fn delete_stream(
             &self,
-            locations: BoxStream<'static, object_store::Result<Path>>,
+            _locations: BoxStream<'static, object_store::Result<Path>>,
         ) -> BoxStream<'static, object_store::Result<Path>> {
             unimplemented!()
         }
