@@ -753,10 +753,7 @@ impl Test {
 /// Details of individual requests made through the [`RequestCountingObjectStore`]
 #[derive(Clone, Debug)]
 enum RequestDetails {
-    Get { path: Path },
     GetOpts { path: Path, get_options: GetOptions },
-    GetRanges { path: Path, ranges: Vec<Range<u64>> },
-    GetRange { path: Path, range: Range<u64> },
     Head { path: Path },
     List { prefix: Option<Path> },
     ListWithDelimiter { prefix: Option<Path> },
@@ -775,9 +772,6 @@ fn display_range(range: &Range<u64>) -> impl Display + '_ {
 impl Display for RequestDetails {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            RequestDetails::Get { path } => {
-                write!(f, "GET  path={path}")
-            }
             RequestDetails::GetOpts { path, get_options } => {
                 write!(f, "GET  (opts) path={path}")?;
                 if let Some(range) = &get_options.range {
@@ -801,23 +795,6 @@ impl Display for RequestDetails {
                     write!(f, " head=true")?;
                 }
                 Ok(())
-            }
-            RequestDetails::GetRanges { path, ranges } => {
-                write!(f, "GET  (ranges) path={path}")?;
-                if !ranges.is_empty() {
-                    write!(f, " ranges=")?;
-                    for (i, range) in ranges.iter().enumerate() {
-                        if i > 0 {
-                            write!(f, ",")?;
-                        }
-                        write!(f, "{}", display_range(range))?;
-                    }
-                }
-                Ok(())
-            }
-            RequestDetails::GetRange { path, range } => {
-                let range = display_range(range);
-                write!(f, "GET  (range) range={range} path={path}")
             }
             RequestDetails::Head { path } => {
                 write!(f, "HEAD path={path}")
