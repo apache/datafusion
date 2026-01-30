@@ -47,7 +47,7 @@ use datafusion_physical_expr_adapter::{
 };
 use object_store::memory::InMemory;
 use object_store::path::Path;
-use object_store::{ObjectStore, PutPayload};
+use object_store::{ObjectStoreExt, PutPayload};
 
 // Example showing how to implement custom filter rewriting for JSON shredding.
 //

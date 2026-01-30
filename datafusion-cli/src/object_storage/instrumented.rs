@@ -38,8 +38,8 @@ use datafusion::{
 use futures::stream::{BoxStream, Stream};
 use object_store::{
     GetOptions, GetRange, GetResult, ListResult, MultipartUpload, ObjectMeta,
-    ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
-    path::Path,
+    ObjectStore, ObjectStoreExt, PutMultipartOptions, PutOptions, PutPayload, PutResult,
+    Result, path::Path,
 };
 use parking_lot::{Mutex, RwLock};
 use url::Url;

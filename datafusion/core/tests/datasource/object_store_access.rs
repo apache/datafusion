@@ -37,7 +37,7 @@ use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::{
     GetOptions, GetRange, GetResult, ListResult, MultipartUpload, ObjectMeta,
-    ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult,
+    ObjectStore, ObjectStoreExt, PutMultipartOptions, PutOptions, PutPayload, PutResult,
 };
 use parking_lot::Mutex;
 use std::fmt;

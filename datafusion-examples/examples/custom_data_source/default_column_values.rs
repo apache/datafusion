@@ -48,7 +48,7 @@ use datafusion_physical_expr_adapter::{
 use futures::StreamExt;
 use object_store::memory::InMemory;
 use object_store::path::Path;
-use object_store::{ObjectStore, PutPayload};
+use object_store::{ObjectStore, ObjectStoreExt, PutPayload};
 
 // Metadata key for storing default values in field metadata
 const DEFAULT_VALUE_METADATA_KEY: &str = "example.default_value";

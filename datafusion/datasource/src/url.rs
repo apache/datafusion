@@ -1108,7 +1108,14 @@ mod tests {
             location: &Path,
             options: GetOptions,
         ) -> object_store::Result<GetResult> {
-            self.in_mem.get_opts(location, options).await
+            if options.head && self.forbidden_paths.contains(location) {
+                Err(object_store::Error::PermissionDenied {
+                    path: location.to_string(),
+                    source: "forbidden".into(),
+                })
+            } else {
+                self.in_mem.get_opts(location, options).await
+            }
         }
 
         async fn get_ranges(
