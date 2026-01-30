@@ -1124,15 +1124,23 @@ impl OptimizerRule for PushDownFilter {
             }
             LogicalPlan::Join(join) => push_down_join(join, Some(&filter.predicate)),
             LogicalPlan::TableScan(scan) => {
-                // Move ALL filters to the TableScan - the physical planner will
-                // decide which filters to push down based on supports_filters_pushdown
+                // Move filters to the TableScan.
+                // Exclude scalar subqueries from being pushed down since those are essentially a
+                // fork in the logical plan tree that should not be processed by TableScan nodes.
                 let filter_predicates = split_conjunction(&filter.predicate);
 
-                // Combine existing scan filters with new filter predicates
+                // Partition predicates: scalar subqueries must stay in a Filter node
+                let (scalar_subquery_filters, pushable_filters): (Vec<_>, Vec<_>) =
+                    filter_predicates.iter().partition(|pred| {
+                        pred.exists(|e| Ok(matches!(e, Expr::ScalarSubquery(_))))
+                            .unwrap()
+                    });
+
+                // Combine existing scan filters with pushable filter predicates
                 let new_scan_filters: Vec<Expr> = scan
                     .filters
                     .iter()
-                    .chain(filter_predicates)
+                    .chain(pushable_filters)
                     .unique()
                     .cloned()
                     .collect();
@@ -1142,9 +1150,15 @@ impl OptimizerRule for PushDownFilter {
                     ..scan
                 });
 
-                // Don't create Filter node above - physical planner handles
-                // creating FilterExec for unsupported/inexact filters
-                Ok(Transformed::yes(new_scan))
+                // Keep scalar subquery filters in a Filter node above the TableScan
+                let remaining_predicates: Vec<Expr> =
+                    scalar_subquery_filters.into_iter().cloned().collect();
+
+                if let Some(predicate) = conjunction(remaining_predicates) {
+                    make_filter(predicate, Arc::new(new_scan)).map(Transformed::yes)
+                } else {
+                    Ok(Transformed::yes(new_scan))
+                }
             }
             LogicalPlan::Extension(extension_plan) => {
                 // This check prevents the Filter from being removed when the extension node has no children,
