@@ -64,7 +64,8 @@ impl<'a> PhysicalExprSimplifier<'a> {
                     })?
                     .transform_data(|node| const_evaluator::simplify_const_expr(&node))?;
 
-                debug_assert_eq!(
+                #[cfg(debug_assertions)]
+                assert_eq!(
                     rewritten.data.data_type(schema).unwrap(),
                     original_type,
                     "Simplified expression should have the same data type as the original"
