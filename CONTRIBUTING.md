@@ -18,5 +18,3 @@
 -->
 
 See the [Contributor Guide](https://datafusion.apache.org/contributor-guide/index.html)
-
-
