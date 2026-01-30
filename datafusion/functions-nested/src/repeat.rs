@@ -256,15 +256,6 @@ fn general_list_repeat<O: OffsetSizeTrait>(
         })
         .sum();
 
-    // Build outer offsets
-    let mut outer_offsets = Vec::with_capacity(counts.len() + 1);
-    outer_offsets.push(O::zero());
-    let mut running_offset = 0usize;
-    for &count in counts.iter() {
-        running_offset += count as usize;
-        outer_offsets.push(O::from_usize(running_offset).unwrap());
-    }
-
     // Build inner structures
     let mut inner_offsets = Vec::with_capacity(outer_total + 1);
     let mut take_indices = Vec::with_capacity(inner_total);
@@ -307,7 +298,7 @@ fn general_list_repeat<O: OffsetSizeTrait>(
             list_array.data_type().to_owned(),
             true,
         )),
-        OffsetBuffer::new(outer_offsets.into()),
+        OffsetBuffer::<O>::from_lengths(counts.iter().map(|&c| c as usize)),
         Arc::new(inner_list),
         None,
     )?))
