@@ -30,6 +30,7 @@
 
 pub mod decoder;
 pub mod display;
+pub mod extended_file_columns;
 pub mod file;
 pub mod file_compression_type;
 pub mod file_format;

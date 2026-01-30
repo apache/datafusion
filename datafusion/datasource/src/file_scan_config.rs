@@ -18,6 +18,9 @@
 //! [`FileScanConfig`] to configure scanning of possibly partitioned
 //! file sources.
 
+use crate::extended_file_columns::{
+    ExtendedFileColumn, ExtendedFileColumnsOpener, append_extended_file_columns,
+};
 use crate::file_groups::FileGroup;
 use crate::{
     PartitionedFile, display::FileGroupsDisplay, file::FileSource,
@@ -27,8 +30,10 @@ use crate::{
 use arrow::datatypes::FieldRef;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::metadata_columns::INPUT_FILE_NAME_COL;
 use datafusion_common::{
-    Constraints, Result, ScalarValue, Statistics, internal_datafusion_err, internal_err,
+    ColumnStatistics, Constraints, Result, ScalarValue, Statistics,
+    internal_datafusion_err, internal_err,
 };
 use datafusion_execution::{
     SendableRecordBatchStream, TaskContext, object_store::ObjectStoreUrl,
@@ -169,6 +174,8 @@ pub struct FileScanConfig {
     /// Expression adapter used to adapt filters and projections that are pushed down into the scan
     /// from the logical schema to the physical schema of the file.
     pub expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
+    /// Additional per-file columns appended to the scan output.
+    pub extended_file_columns: Vec<ExtendedFileColumn>,
     /// Unprojected statistics for the table (file schema + partition columns).
     /// These are projected on-demand via `projected_stats()`.
     ///
@@ -254,6 +261,7 @@ pub struct FileScanConfigBuilder {
     batch_size: Option<usize>,
     expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
     partitioned_by_file_group: bool,
+    extended_file_columns: Vec<ExtendedFileColumn>,
 }
 
 impl FileScanConfigBuilder {
@@ -280,6 +288,7 @@ impl FileScanConfigBuilder {
             batch_size: None,
             expr_adapter_factory: None,
             partitioned_by_file_group: false,
+            extended_file_columns: vec![],
         }
     }
 
@@ -475,6 +484,7 @@ impl FileScanConfigBuilder {
             batch_size,
             expr_adapter_factory: expr_adapter,
             partitioned_by_file_group,
+            extended_file_columns,
         } = self;
 
         let constraints = constraints.unwrap_or_default();
@@ -500,6 +510,7 @@ impl FileScanConfigBuilder {
             expr_adapter_factory: expr_adapter,
             statistics,
             partitioned_by_file_group,
+            extended_file_columns,
         }
     }
 }
@@ -519,6 +530,7 @@ impl From<FileScanConfig> for FileScanConfigBuilder {
             batch_size: config.batch_size,
             expr_adapter_factory: config.expr_adapter_factory,
             partitioned_by_file_group: config.partitioned_by_file_group,
+            extended_file_columns: config.extended_file_columns,
         }
     }
 }
@@ -537,6 +549,15 @@ impl DataSource for FileScanConfig {
         let source = self.file_source.with_batch_size(batch_size);
 
         let opener = source.create_file_opener(object_store, self, partition)?;
+        let opener = if self.extended_file_columns.is_empty() {
+            opener
+        } else {
+            ExtendedFileColumnsOpener::wrap(
+                opener,
+                self.extended_file_columns.clone(),
+                self.projected_schema()?,
+            )
+        };
 
         let stream = FileStream::new(self, partition, opener, source.metrics())?;
         Ok(Box::pin(cooperative(stream)))
@@ -721,6 +742,24 @@ impl DataSource for FileScanConfig {
             }
         }
 
+        if !self.extended_file_columns.is_empty() {
+            match self.projected_schema() {
+                Ok(schema) => match eq_properties.with_appended_schema(schema) {
+                    Ok(updated) => eq_properties = updated,
+                    Err(e) => {
+                        warn!("Failed to append schema to equivalence properties: {e}");
+                        #[cfg(debug_assertions)]
+                        panic!("Failed to append schema to equivalence properties: {e}");
+                    }
+                },
+                Err(e) => {
+                    warn!("Failed to compute projected schema: {e}");
+                    #[cfg(debug_assertions)]
+                    panic!("Failed to compute projected schema: {e}");
+                }
+            }
+        }
+
         eq_properties
     }
 
@@ -729,33 +768,34 @@ impl DataSource for FileScanConfig {
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        if let Some(partition) = partition {
+        let base_schema = self.projected_schema_without_extended()?;
+        let stats = if let Some(partition) = partition {
             // Get statistics for a specific partition
             // Note: FileGroup statistics include partition columns (computed from partition_values)
             if let Some(file_group) = self.file_groups.get(partition)
                 && let Some(stat) = file_group.file_statistics(None)
             {
                 // Project the statistics based on the projection
-                let output_schema = self.projected_schema()?;
-                return if let Some(projection) = self.file_source.projection() {
-                    projection.project_statistics(stat.clone(), &output_schema)
+                if let Some(projection) = self.file_source.projection() {
+                    projection.project_statistics(stat.clone(), &base_schema)
                 } else {
                     Ok(stat.clone())
-                };
+                }
+            } else {
+                // If no statistics available for this partition, return unknown
+                Ok(Statistics::new_unknown(base_schema.as_ref()))
             }
-            // If no statistics available for this partition, return unknown
-            Ok(Statistics::new_unknown(self.projected_schema()?.as_ref()))
         } else {
             // Return aggregate statistics across all partitions
             let statistics = self.statistics();
-            let projection = self.file_source.projection();
-            let output_schema = self.projected_schema()?;
-            if let Some(projection) = &projection {
-                projection.project_statistics(statistics.clone(), &output_schema)
+            if let Some(projection) = self.file_source.projection() {
+                projection.project_statistics(statistics.clone(), &base_schema)
             } else {
                 Ok(statistics)
             }
-        }
+        }?;
+
+        self.append_extended_column_stats(stats)
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn DataSource>> {
@@ -777,6 +817,14 @@ impl DataSource for FileScanConfig {
         &self,
         projection: &ProjectionExprs,
     ) -> Result<Option<Arc<dyn DataSource>>> {
+        if projection
+            .as_ref()
+            .iter()
+            .any(|expr| expr_contains_input_file_name(&expr.expr))
+        {
+            return Ok(None);
+        }
+
         match self.file_source.try_pushdown_projection(projection)? {
             Some(new_source) => {
                 let mut new_file_scan_config = self.clone();
@@ -886,6 +934,20 @@ impl DataSource for FileScanConfig {
     }
 }
 
+fn expr_contains_input_file_name(expr: &Arc<dyn PhysicalExpr>) -> bool {
+    if expr
+        .as_any()
+        .downcast_ref::<Column>()
+        .is_some_and(|col| col.name() == INPUT_FILE_NAME_COL)
+    {
+        return true;
+    }
+
+    expr.children()
+        .iter()
+        .any(|child| expr_contains_input_file_name(child))
+}
+
 impl FileScanConfig {
     /// Get the file schema (schema of the files without partition columns)
     pub fn file_schema(&self) -> &SchemaRef {
@@ -910,12 +972,34 @@ impl FileScanConfig {
         }
     }
 
-    pub fn projected_schema(&self) -> Result<Arc<Schema>> {
+    fn projected_schema_without_extended(&self) -> Result<Arc<Schema>> {
         let schema = self.file_source.table_schema().table_schema();
         match self.file_source.projection() {
             Some(proj) => Ok(Arc::new(proj.project_schema(schema)?)),
             None => Ok(Arc::clone(schema)),
         }
+    }
+
+    pub fn projected_schema(&self) -> Result<Arc<Schema>> {
+        let schema = self.projected_schema_without_extended()?;
+        Ok(append_extended_file_columns(
+            &schema,
+            &self.extended_file_columns,
+        ))
+    }
+
+    fn append_extended_column_stats(&self, mut stats: Statistics) -> Result<Statistics> {
+        if self.extended_file_columns.is_empty() {
+            return Ok(stats);
+        }
+
+        stats.column_statistics.extend(
+            std::iter::repeat_with(ColumnStatistics::new_unknown)
+                .take(self.extended_file_columns.len()),
+        );
+        stats.calculate_total_byte_size(self.projected_schema()?.as_ref());
+
+        Ok(stats)
     }
 
     fn add_filter_equivalence_info(
@@ -1377,13 +1461,18 @@ mod tests {
 
     use super::*;
     use crate::TableSchema;
+    use crate::extended_file_columns::ExtendedFileColumn;
+    use crate::file_stream::{FileOpenFuture, FileOpener};
     use crate::test_util::col;
     use crate::{
         generate_test_files, test_util::MockSource, tests::aggr_test_schema,
         verify_sort_integrity,
     };
 
-    use arrow::datatypes::Field;
+    use arrow::array::{Int32Array, StringArray};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
+    use datafusion_common::metadata_columns::INPUT_FILE_NAME_COL;
     use datafusion_common::stats::Precision;
     use datafusion_common::{ColumnStatistics, internal_err};
     use datafusion_expr::{Operator, SortExpr};
@@ -1391,6 +1480,9 @@ mod tests {
     use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
     use datafusion_physical_expr::projection::ProjectionExpr;
     use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+    use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
+    use futures::{FutureExt, StreamExt};
+    use object_store::ObjectStore;
 
     #[test]
     fn physical_plan_config_no_projection_tab_cols_as_field() {
@@ -1419,6 +1511,105 @@ mod tests {
             table_partition_col,
             "partition columns are the last columns and ust have all values defined in created field"
         );
+    }
+
+    #[derive(Clone)]
+    struct TestSource {
+        table_schema: TableSchema,
+        opener: Arc<dyn FileOpener>,
+        metrics: ExecutionPlanMetricsSet,
+    }
+
+    impl TestSource {
+        fn new(table_schema: TableSchema, opener: Arc<dyn FileOpener>) -> Self {
+            Self {
+                table_schema,
+                opener,
+                metrics: ExecutionPlanMetricsSet::new(),
+            }
+        }
+    }
+
+    impl FileSource for TestSource {
+        fn create_file_opener(
+            &self,
+            _object_store: Arc<dyn ObjectStore>,
+            _base_config: &FileScanConfig,
+            _partition: usize,
+        ) -> Result<Arc<dyn FileOpener>> {
+            Ok(Arc::clone(&self.opener))
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn table_schema(&self) -> &TableSchema {
+            &self.table_schema
+        }
+
+        fn with_batch_size(&self, _batch_size: usize) -> Arc<dyn FileSource> {
+            Arc::new(self.clone())
+        }
+
+        fn metrics(&self) -> &ExecutionPlanMetricsSet {
+            &self.metrics
+        }
+
+        fn file_type(&self) -> &str {
+            "test"
+        }
+    }
+
+    struct TestOpener {
+        batch: RecordBatch,
+    }
+
+    impl FileOpener for TestOpener {
+        fn open(&self, _partitioned_file: PartitionedFile) -> Result<FileOpenFuture> {
+            let batch = self.batch.clone();
+            Ok(async move {
+                let stream = futures::stream::iter(vec![Ok(batch)]);
+                Ok(stream.boxed())
+            }
+            .boxed())
+        }
+    }
+
+    #[tokio::test]
+    async fn extended_file_columns_inject_input_file_name() -> Result<()> {
+        let file_schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&file_schema),
+            vec![Arc::new(Int32Array::from(vec![1]))],
+        )?;
+        let opener: Arc<dyn FileOpener> = Arc::new(TestOpener { batch });
+
+        let table_schema = TableSchema::new(Arc::clone(&file_schema), vec![]);
+        let source: Arc<dyn FileSource> = Arc::new(TestSource::new(table_schema, opener));
+
+        let mut config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
+                .with_file(PartitionedFile::new("data/path/file.csv", 0))
+                .build();
+        config.extended_file_columns = vec![ExtendedFileColumn::InputFileName];
+
+        let task_ctx = Arc::new(TaskContext::default());
+        let mut stream = config.open(0, task_ctx)?;
+        let output_batch = stream.next().await.unwrap()?;
+
+        assert_eq!(output_batch.schema().fields().len(), 2);
+        assert_eq!(output_batch.schema().field(1).name(), INPUT_FILE_NAME_COL);
+
+        let file_name_array = output_batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("input file name column should be Utf8");
+        assert!(file_name_array.value(0).ends_with("file.csv"));
+
+        Ok(())
     }
 
     #[test]

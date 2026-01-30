@@ -239,6 +239,39 @@ impl EquivalenceProperties {
         &self.schema
     }
 
+    /// Updates the schema by appending new trailing fields.
+    ///
+    /// Validates that the existing schema is a prefix of the new schema.
+    pub fn with_appended_schema(mut self, new_schema: SchemaRef) -> Result<Self> {
+        let existing_fields = self.schema.fields();
+        let new_fields = new_schema.fields();
+
+        if new_fields.len() < existing_fields.len() {
+            return plan_err!(
+                "appended schema has fewer fields ({} < {})",
+                new_fields.len(),
+                existing_fields.len()
+            );
+        }
+
+        for (idx, field) in existing_fields.iter().enumerate() {
+            let new_field = &new_fields[idx];
+            if field.name() != new_field.name()
+                || field.data_type() != new_field.data_type()
+                || field.is_nullable() != new_field.is_nullable()
+            {
+                return plan_err!(
+                    "appended schema mismatch at index {idx}: expected {} got {}",
+                    field,
+                    new_field
+                );
+            }
+        }
+
+        self.schema = new_schema;
+        Ok(self)
+    }
+
     /// Returns a reference to the ordering equivalence class within.
     pub fn oeq_class(&self) -> &OrderingEquivalenceClass {
         &self.oeq_class
