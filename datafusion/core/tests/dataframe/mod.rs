@@ -6546,7 +6546,10 @@ async fn test_insert_into_casting_support() -> Result<()> {
     let initial_table = Arc::new(MemTable::try_new(schema.clone(), vec![vec![]])?);
     session_ctx.register_table("t", initial_table.clone())?;
 
-    let mut write_df = session_ctx.sql("values (x'a123'), (x'b456')").await.unwrap();
+    let mut write_df = session_ctx
+        .sql("values (x'a123'), (x'b456')")
+        .await
+        .unwrap();
 
     write_df = write_df
         .clone()
