@@ -754,6 +754,7 @@ impl Test {
 #[derive(Clone, Debug)]
 enum RequestDetails {
     GetOpts { path: Path, get_options: GetOptions },
+    GetRanges { path: Path, ranges: Vec<Range<u64>> },
     Head { path: Path },
     List { prefix: Option<Path> },
     ListWithDelimiter { prefix: Option<Path> },
@@ -793,6 +794,19 @@ impl Display for RequestDetails {
                 }
                 if get_options.head {
                     write!(f, " head=true")?;
+                }
+                Ok(())
+            }
+            RequestDetails::GetRanges { path, ranges } => {
+                write!(f, "GET  (ranges) path={path}")?;
+                if !ranges.is_empty() {
+                    write!(f, " ranges=")?;
+                    for (i, range) in ranges.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ",")?;
+                        }
+                        write!(f, "{}", display_range(range))?;
+                    }
                 }
                 Ok(())
             }

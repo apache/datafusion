@@ -230,16 +230,26 @@ impl InstrumentedObjectStore {
         let timestamp = Utc::now();
         let range = options.range.clone();
 
+        let head = options.head;
         let start = Instant::now();
         let ret = self.inner.get_opts(location, options).await?;
         let elapsed = start.elapsed();
 
+        let (op, size) = if head {
+            (Operation::Head, None)
+        } else {
+            (
+                Operation::Get,
+                Some((ret.range.end - ret.range.start) as usize),
+            )
+        };
+
         self.requests.lock().push(RequestDetails {
-            op: Operation::Get,
+            op,
             path: location.clone(),
             timestamp,
             duration: Some(elapsed),
-            size: Some((ret.range.end - ret.range.start) as usize),
+            size,
             range,
             extra_display: None,
         });
