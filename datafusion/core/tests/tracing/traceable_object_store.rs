@@ -18,7 +18,7 @@
 //! Object store implementation used for testing
 
 use crate::tracing::asserting_tracer::assert_traceability;
-use futures::{StreamExt};
+use futures::StreamExt;
 use futures::stream::BoxStream;
 use object_store::{
     CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,

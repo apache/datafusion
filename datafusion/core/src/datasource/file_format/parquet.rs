@@ -153,8 +153,8 @@ mod tests {
     use async_trait::async_trait;
     use datafusion_datasource::file_groups::FileGroup;
     use datafusion_datasource_parquet::metadata::DFParquetMetadata;
+    use futures::StreamExt;
     use futures::stream::BoxStream;
-    use futures::{StreamExt};
     use insta::assert_snapshot;
     use object_store::local::LocalFileSystem;
     use object_store::{CopyOptions, ObjectMeta};
@@ -333,7 +333,7 @@ mod tests {
 
         fn delete_stream(
             &self,
-            _   locations: BoxStream<'static, object_store::Result<Path>>,
+            _locations: BoxStream<'static, object_store::Result<Path>>,
         ) -> BoxStream<'static, object_store::Result<Path>> {
             unimplemented!()
         }
