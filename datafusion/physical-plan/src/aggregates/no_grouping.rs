@@ -18,8 +18,9 @@
 //! Aggregate without grouping columns
 
 use crate::aggregates::{
-    AccumulatorItem, AggrDynFilter, AggregateMode, DynamicFilterAggregateType,
-    aggregate_expressions, create_accumulators, finalize_aggregation,
+    AccumulatorItem, AggrDynFilter, AggregateInputMode, AggregateMode,
+    DynamicFilterAggregateType, aggregate_expressions, create_accumulators,
+    finalize_aggregation,
 };
 use crate::metrics::{BaselineMetrics, RecordOutput};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
@@ -282,10 +283,9 @@ impl AggregateStream {
         let input = agg.input.execute(partition, Arc::clone(context))?;
 
         let aggregate_expressions = aggregate_expressions(&agg.aggr_expr, &agg.mode, 0)?;
-        let filter_expressions = if agg.mode.is_first_stage() {
-            agg_filter_expr
-        } else {
-            vec![None; agg.aggr_expr.len()]
+        let filter_expressions = match agg.mode.input_mode() {
+            AggregateInputMode::Raw => agg_filter_expr,
+            AggregateInputMode::Partial => vec![None; agg.aggr_expr.len()],
         };
         let accumulators = create_accumulators(&agg.aggr_expr)?;
 
@@ -452,10 +452,9 @@ fn aggregate_batch(
 
             // 1.4
             let size_pre = accum.size();
-            let res = if mode.is_first_stage() {
-                accum.update_batch(&values)
-            } else {
-                accum.merge_batch(&values)
+            let res = match mode.input_mode() {
+                AggregateInputMode::Raw => accum.update_batch(&values),
+                AggregateInputMode::Partial => accum.merge_batch(&values),
             };
             let size_post = accum.size();
             allocated += size_post.saturating_sub(size_pre);

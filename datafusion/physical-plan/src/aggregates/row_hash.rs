@@ -26,8 +26,8 @@ use super::order::GroupOrdering;
 use crate::aggregates::group_values::{GroupByMetrics, GroupValues, new_group_values};
 use crate::aggregates::order::GroupOrderingFull;
 use crate::aggregates::{
-    AggregateMode, PhysicalGroupBy, create_schema, evaluate_group_by, evaluate_many,
-    evaluate_optional,
+    AggregateInputMode, AggregateMode, AggregateOutputMode, PhysicalGroupBy,
+    create_schema, evaluate_group_by, evaluate_many, evaluate_optional,
 };
 use crate::metrics::{BaselineMetrics, MetricBuilder, RecordOutput};
 use crate::sorts::sort::sort_batch;
@@ -491,10 +491,9 @@ impl GroupedHashAggregateStream {
             agg_group_by.num_group_exprs(),
         )?;
 
-        let filter_expressions = if agg.mode.is_first_stage() {
-            agg_filter_expr
-        } else {
-            vec![None; agg.aggr_expr.len()]
+        let filter_expressions = match agg.mode.input_mode() {
+            AggregateInputMode::Raw => agg_filter_expr,
+            AggregateInputMode::Partial => vec![None; agg.aggr_expr.len()],
         };
 
         // Instantiate the accumulators
@@ -979,7 +978,9 @@ impl GroupedHashAggregateStream {
 
                 // Call the appropriate method on each aggregator with
                 // the entire input row and the relevant group indexes
-                if self.mode.is_first_stage() && !self.spill_state.is_stream_merging {
+                if self.mode.input_mode() == AggregateInputMode::Raw
+                    && !self.spill_state.is_stream_merging
+                {
                     acc.update_batch(
                         values,
                         group_indices,
@@ -1082,7 +1083,7 @@ impl GroupedHashAggregateStream {
 
         // Next output each aggregate value
         for acc in self.accumulators.iter_mut() {
-            if self.mode.is_last_stage() && !spilling {
+            if self.mode.output_mode() == AggregateOutputMode::Final && !spilling {
                 output.push(acc.evaluate(emit_to)?)
             } else {
                 // Output partial state: either because we're in a non-final mode,
