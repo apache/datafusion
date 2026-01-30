@@ -55,8 +55,8 @@ async fn create_single_csv_file() {
         @r"
     RequestCountingObjectStore()
     Total Requests: 2
-    - HEAD path=csv_table.csv
-    - GET  path=csv_table.csv
+    - GET  (opts) path=csv_table.csv head=true
+    - GET  (opts) path=csv_table.csv
     "
     );
 }
@@ -77,7 +77,7 @@ async fn query_single_csv_file() {
     ------- Object Store Request Summary -------
     RequestCountingObjectStore()
     Total Requests: 2
-    - HEAD path=csv_table.csv
+    - GET  (opts) path=csv_table.csv head=true
     - GET  (opts) path=csv_table.csv
     "
     );
@@ -92,9 +92,9 @@ async fn create_multi_file_csv_file() {
     RequestCountingObjectStore()
     Total Requests: 4
     - LIST prefix=data
-    - GET  path=data/file_0.csv
-    - GET  path=data/file_1.csv
-    - GET  path=data/file_2.csv
+    - GET  (opts) path=data/file_0.csv
+    - GET  (opts) path=data/file_1.csv
+    - GET  (opts) path=data/file_2.csv
     "
     );
 }
@@ -352,8 +352,8 @@ async fn create_single_parquet_file_default() {
         @r"
     RequestCountingObjectStore()
     Total Requests: 2
-    - HEAD path=parquet_table.parquet
-    - GET  (range) range=0-2994 path=parquet_table.parquet
+    - GET  (opts) path=parquet_table.parquet head=true
+    - GET  (opts) path=parquet_table.parquet range=0-2994
     "
     );
 }
@@ -371,8 +371,8 @@ async fn create_single_parquet_file_prefetch() {
         @r"
     RequestCountingObjectStore()
     Total Requests: 2
-    - HEAD path=parquet_table.parquet
-    - GET  (range) range=1994-2994 path=parquet_table.parquet
+    - GET  (opts) path=parquet_table.parquet head=true
+    - GET  (opts) path=parquet_table.parquet range=1994-2994
     "
     );
 }
@@ -400,10 +400,10 @@ async fn create_single_parquet_file_too_small_prefetch() {
         @r"
     RequestCountingObjectStore()
     Total Requests: 4
-    - HEAD path=parquet_table.parquet
-    - GET  (range) range=2494-2994 path=parquet_table.parquet
-    - GET  (range) range=2264-2986 path=parquet_table.parquet
-    - GET  (range) range=2124-2264 path=parquet_table.parquet
+    - GET  (opts) path=parquet_table.parquet head=true
+    - GET  (opts) path=parquet_table.parquet range=2494-2994
+    - GET  (opts) path=parquet_table.parquet range=2264-2986
+    - GET  (opts) path=parquet_table.parquet range=2124-2264
     "
     );
 }
@@ -432,9 +432,9 @@ async fn create_single_parquet_file_small_prefetch() {
         @r"
     RequestCountingObjectStore()
     Total Requests: 3
-    - HEAD path=parquet_table.parquet
-    - GET  (range) range=2254-2994 path=parquet_table.parquet
-    - GET  (range) range=2124-2264 path=parquet_table.parquet
+    - GET  (opts) path=parquet_table.parquet head=true
+    - GET  (opts) path=parquet_table.parquet range=2254-2994
+    - GET  (opts) path=parquet_table.parquet range=2124-2264
     "
     );
 }
@@ -456,8 +456,8 @@ async fn create_single_parquet_file_no_prefetch() {
         @r"
     RequestCountingObjectStore()
     Total Requests: 2
-    - HEAD path=parquet_table.parquet
-    - GET  (range) range=0-2994 path=parquet_table.parquet
+    - GET  (opts) path=parquet_table.parquet head=true
+    - GET  (opts) path=parquet_table.parquet range=0-2994
     "
     );
 }
@@ -477,7 +477,7 @@ async fn query_single_parquet_file() {
     ------- Object Store Request Summary -------
     RequestCountingObjectStore()
     Total Requests: 3
-    - HEAD path=parquet_table.parquet
+    - GET  (opts) path=parquet_table.parquet head=true
     - GET  (ranges) path=parquet_table.parquet ranges=4-534,534-1064
     - GET  (ranges) path=parquet_table.parquet ranges=1064-1594,1594-2124
     "
@@ -501,7 +501,7 @@ async fn query_single_parquet_file_with_single_predicate() {
     ------- Object Store Request Summary -------
     RequestCountingObjectStore()
     Total Requests: 2
-    - HEAD path=parquet_table.parquet
+    - GET  (opts) path=parquet_table.parquet head=true
     - GET  (ranges) path=parquet_table.parquet ranges=1064-1481,1481-1594,1594-2011,2011-2124
     "
     );
@@ -525,7 +525,7 @@ async fn query_single_parquet_file_multi_row_groups_multiple_predicates() {
     ------- Object Store Request Summary -------
     RequestCountingObjectStore()
     Total Requests: 3
-    - HEAD path=parquet_table.parquet
+    - GET  (opts) path=parquet_table.parquet head=true
     - GET  (ranges) path=parquet_table.parquet ranges=4-421,421-534,534-951,951-1064
     - GET  (ranges) path=parquet_table.parquet ranges=1064-1481,1481-1594,1594-2011,2011-2124
     "
