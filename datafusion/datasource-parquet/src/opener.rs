@@ -25,7 +25,10 @@ use crate::{
 };
 use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::DataType;
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
+use datafusion_physical_expr::ScalarFunctionExpr;
+use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::utils::reassign_expr_columns;
 use datafusion_physical_expr_adapter::replace_columns_with_literals;
@@ -65,6 +68,29 @@ use parquet::arrow::arrow_reader::{
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
 use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader, RowGroupMetaData};
+
+fn replace_input_file_name_in_projection(
+    projection: ProjectionExprs,
+    file_name: &str,
+) -> Result<ProjectionExprs> {
+    let file_name_literal: Arc<dyn PhysicalExpr> =
+        Arc::new(Literal::new(ScalarValue::Utf8(Some(file_name.to_owned()))));
+
+    projection.try_map_exprs(|expr| {
+        Ok(expr
+            .transform(|expr| {
+                if let Some(func) = expr.as_any().downcast_ref::<ScalarFunctionExpr>()
+                    && func.fun().name() == "input_file_name"
+                    && func.args().is_empty()
+                {
+                    return Ok(Transformed::yes(Arc::clone(&file_name_literal)));
+                }
+                Ok(Transformed::no(expr))
+            })
+            .data()
+            .expect("infallible transform"))
+    })
+}
 
 /// Implements [`FileOpener`] for a parquet file
 pub(super) struct ParquetOpener {
@@ -259,6 +285,8 @@ impl FileOpener for ParquetOpener {
                 .map(|p| replace_columns_with_literals(p, &literal_columns))
                 .transpose()?;
         }
+        // Replace any `input_file_name()` UDFs in the projection with a literal for this file.
+        projection = replace_input_file_name_in_projection(projection, &file_name)?;
 
         let reorder_predicates = self.reorder_filters;
         let pushdown_filters = self.pushdown_filters;
@@ -1014,23 +1042,33 @@ fn should_enable_page_index(
 
 #[cfg(test)]
 mod test {
+    use std::any::Any;
     use std::sync::Arc;
 
-    use super::{ConstantColumns, constant_columns_from_stats};
+    use super::{
+        ConstantColumns, constant_columns_from_stats,
+        replace_input_file_name_in_projection,
+    };
     use crate::{DefaultParquetFileReaderFactory, RowGroupAccess, opener::ParquetOpener};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use bytes::{BufMut, BytesMut};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::{
-        ColumnStatistics, DataFusionError, ScalarValue, Statistics, record_batch,
+        ColumnStatistics, DataFusionError, Result, ScalarValue, Statistics, record_batch,
         stats::Precision,
     };
     use datafusion_datasource::{PartitionedFile, TableSchema, file_stream::FileOpener};
+    use datafusion_expr::{
+        ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+        Volatility,
+    };
     use datafusion_expr::{col, lit};
+    use datafusion_physical_expr::ScalarFunctionExpr;
     use datafusion_physical_expr::{
         PhysicalExpr,
         expressions::{Column, DynamicFilterPhysicalExpr, Literal},
         planner::logical2physical,
-        projection::ProjectionExprs,
+        projection::{ProjectionExpr, ProjectionExprs},
     };
     use datafusion_physical_expr_adapter::{
         DefaultPhysicalExprAdapterFactory, replace_columns_with_literals,
@@ -1040,6 +1078,77 @@ mod test {
     use object_store::{ObjectStore, memory::InMemory, path::Path};
     use parquet::arrow::ArrowWriter;
     use parquet::file::properties::WriterProperties;
+
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct TestInputFileNameUdf {
+        signature: Signature,
+    }
+
+    impl TestInputFileNameUdf {
+        fn new() -> Self {
+            Self {
+                signature: Signature::nullary(Volatility::Volatile),
+            }
+        }
+    }
+
+    impl ScalarUDFImpl for TestInputFileNameUdf {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn name(&self) -> &str {
+            "input_file_name"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Utf8)
+        }
+
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))
+        }
+    }
+
+    #[test]
+    fn parquet_opener_replaces_input_file_name_udf_with_literal() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+
+        let udf = Arc::new(ScalarUDF::new_from_impl(TestInputFileNameUdf::new()));
+        let udf_expr = Arc::new(ScalarFunctionExpr::try_new(
+            udf,
+            vec![],
+            schema.as_ref(),
+            Arc::new(ConfigOptions::default()),
+        )?);
+
+        let projection = ProjectionExprs::new(vec![
+            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a"),
+            ProjectionExpr::new(udf_expr, "input_file_name"),
+        ]);
+
+        let file_name = "s3://bucket/data/file.parquet";
+        let rewritten = replace_input_file_name_in_projection(projection, file_name)?;
+
+        assert_eq!(rewritten.as_ref().len(), 2);
+        assert_eq!(rewritten.as_ref()[1].alias, "input_file_name");
+
+        let expr = &rewritten.as_ref()[1].expr;
+        let literal = expr
+            .as_any()
+            .downcast_ref::<Literal>()
+            .expect("expected input_file_name() to be rewritten to a literal");
+        assert_eq!(
+            literal.value(),
+            &ScalarValue::Utf8(Some(file_name.to_owned()))
+        );
+
+        Ok(())
+    }
 
     /// Builder for creating [`ParquetOpener`] instances with sensible defaults for tests.
     /// This helps reduce code duplication and makes it clear what differs between test cases.

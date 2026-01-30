@@ -5126,6 +5126,7 @@ union_tag(union_expression)
 - [arrow_metadata](#arrow_metadata)
 - [arrow_typeof](#arrow_typeof)
 - [get_field](#get_field)
+- [input_file_name](#input_file_name)
 - [version](#version)
 
 ### `arrow_cast`
@@ -5269,6 +5270,27 @@ get_field(expression, field_name[, field_name2, ...])
 +--------+
 | 42     |
 +--------+
+```
+
+### `input_file_name`
+
+Returns the path of the input file that produced the current row.
+
+Note: file paths/URIs may be sensitive metadata depending on your environment.
+
+This function is intended to be rewritten at file-scan time (when the file is
+known). If the input file is not known (for example, if this function is
+evaluated outside a file scan, or was not pushed down into one), this function
+returns NULL.
+
+```sql
+input_file_name()
+```
+
+#### Example
+
+```sql
+SELECT input_file_name() FROM t;
 ```
 
 ### `version`

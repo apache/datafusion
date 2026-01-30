@@ -24,9 +24,6 @@ use crate::{OptimizerConfig, OptimizerRule};
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use datafusion_common::metadata_columns::{
-    INPUT_FILE_NAME_COL, append_input_file_name_field,
-};
 use datafusion_common::{
     Column, DFSchema, HashMap, JoinType, Result, assert_eq_or_internal_err,
     get_required_group_by_exprs_indices, internal_datafusion_err, internal_err,
@@ -262,41 +259,8 @@ fn optimize_projections(
                 projection,
                 filters,
                 fetch,
-                projected_schema,
+                projected_schema: _,
             } = table_scan;
-
-            let source_has_input_file_name = source
-                .schema()
-                .fields()
-                .iter()
-                .any(|field| field.name() == INPUT_FILE_NAME_COL);
-
-            let input_file_name_idx = if source_has_input_file_name {
-                None
-            } else {
-                projected_schema
-                    .fields()
-                    .iter()
-                    .position(|field| field.name() == INPUT_FILE_NAME_COL)
-            };
-
-            let (needs_input_file_name, indices) =
-                if let Some(input_file_name_idx) = input_file_name_idx {
-                    let needs_input_file_name = indices
-                        .indices()
-                        .binary_search(&input_file_name_idx)
-                        .is_ok();
-                    let indices = RequiredIndices::new_from_indices(
-                        indices
-                            .into_inner()
-                            .into_iter()
-                            .filter(|idx| *idx != input_file_name_idx)
-                            .collect(),
-                    );
-                    (needs_input_file_name, indices)
-                } else {
-                    (false, indices)
-                };
 
             // Get indices referred to in the original (schema with all fields)
             // given projected indices.
@@ -304,17 +268,8 @@ fn optimize_projections(
                 Some(projection) => indices.into_mapped_indices(|idx| projection[idx]),
                 None => indices.into_inner(),
             };
-            let qualifier = table_name.clone();
-            let mut new_scan =
+            let new_scan =
                 TableScan::try_new(table_name, source, Some(projection), filters, fetch)?;
-
-            if needs_input_file_name {
-                let new_schema = append_input_file_name_field(
-                    new_scan.projected_schema.as_ref(),
-                    Some(qualifier),
-                )?;
-                new_scan.projected_schema = Arc::new(new_schema);
-            }
 
             return Ok(Transformed::yes(LogicalPlan::TableScan(new_scan)));
         }
@@ -991,7 +946,6 @@ mod tests {
     };
     use crate::{OptimizerContext, OptimizerRule};
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::metadata_columns::INPUT_FILE_NAME_COL;
     use datafusion_common::{
         Column, DFSchema, DFSchemaRef, JoinType, Result, TableReference,
     };
@@ -1227,29 +1181,6 @@ mod tests {
           TableScan: test projection=[a]
         "
         )
-    }
-
-    #[test]
-    fn optimize_projections_keeps_reserved_column_from_source() -> Result<()> {
-        let schema = Schema::new(vec![
-            Field::new(INPUT_FILE_NAME_COL, DataType::Utf8, false),
-            Field::new("a", DataType::UInt32, false),
-        ]);
-
-        let plan = table_scan(Some("t"), &schema, None)?.build()?;
-        let optimized_plan = optimize(plan)?;
-
-        match optimized_plan {
-            LogicalPlan::TableScan(scan) => {
-                let projection = scan.projection.expect("projection present");
-                assert_eq!(projection, vec![0, 1]);
-                assert_eq!(scan.projected_schema.field(0).name(), INPUT_FILE_NAME_COL);
-                assert_eq!(scan.projected_schema.fields().len(), 2);
-            }
-            _ => panic!("expected optimized plan to be a TableScan"),
-        }
-
-        Ok(())
     }
 
     #[test]

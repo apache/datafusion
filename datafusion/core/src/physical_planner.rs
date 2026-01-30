@@ -65,7 +65,6 @@ use datafusion_catalog::ScanArgs;
 use datafusion_common::Column;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::format::ExplainAnalyzeLevel;
-use datafusion_common::metadata_columns::INPUT_FILE_NAME_COL;
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeRecursion, TreeNodeVisitor,
 };
@@ -76,11 +75,8 @@ use datafusion_common::{
 use datafusion_common::{
     TableReference, assert_eq_or_internal_err, assert_or_internal_err,
 };
-use datafusion_datasource::extended_file_columns::ExtendedFileColumn;
 use datafusion_datasource::file_groups::FileGroup;
-use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::memory::MemorySourceConfig;
-use datafusion_datasource::source::DataSourceExec;
 use datafusion_expr::dml::{CopyTo, InsertOp};
 use datafusion_expr::expr::{
     AggregateFunction, AggregateFunctionParams, Alias, GroupingSet, NullTreatment,
@@ -464,7 +460,6 @@ impl DefaultPhysicalPlanner {
                 projection,
                 filters,
                 fetch,
-                projected_schema,
                 ..
             }) => {
                 let source = source_as_provider(source)?;
@@ -478,59 +473,7 @@ impl DefaultPhysicalPlanner {
                     .with_filters(Some(&filters_vec))
                     .with_limit(*fetch);
                 let res = source.scan_with_args(session_state, opts).await?;
-                let plan = Arc::clone(res.plan());
-                let projected_has_input_file_name = projected_schema
-                    .fields()
-                    .iter()
-                    .any(|field| field.name() == INPUT_FILE_NAME_COL);
-                let source_has_input_file_name = source
-                    .schema()
-                    .fields()
-                    .iter()
-                    .any(|field| field.name() == INPUT_FILE_NAME_COL);
-                let needs_input_file_name =
-                    projected_has_input_file_name && !source_has_input_file_name;
-
-                if needs_input_file_name {
-                    let data_source_exec = plan
-                        .as_any()
-                        .downcast_ref::<DataSourceExec>()
-                        .ok_or_else(|| {
-                            DataFusionError::Plan(
-                                "input_file_name() is only supported for file-backed table scans"
-                                    .to_string(),
-                            )
-                        })?;
-
-                    let file_scan_config = data_source_exec
-                    .data_source()
-                    .as_any()
-                    .downcast_ref::<FileScanConfig>()
-                    .ok_or_else(|| {
-                        DataFusionError::Plan(
-                            "input_file_name() is only supported for file-backed table scans"
-                                .to_string(),
-                        )
-                    })?;
-
-                    let mut new_config = file_scan_config.clone();
-                    if !new_config
-                        .extended_file_columns
-                        .contains(&ExtendedFileColumn::InputFileName)
-                    {
-                        new_config
-                            .extended_file_columns
-                            .push(ExtendedFileColumn::InputFileName);
-                    }
-
-                    Arc::new(
-                        data_source_exec
-                            .clone()
-                            .with_data_source(Arc::new(new_config)),
-                    )
-                } else {
-                    plan
-                }
+                Arc::clone(res.plan())
             }
             LogicalPlan::Values(Values { values, schema }) => {
                 let exprs = values

@@ -18,7 +18,7 @@
 //! [`InputFileNameFunc`]: Implementation of the `input_file_name` function.
 
 use arrow::datatypes::DataType;
-use datafusion_common::{Result, exec_err, utils::take_function_args};
+use datafusion_common::{Result, ScalarValue, utils::take_function_args};
 use datafusion_doc::Documentation;
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
@@ -31,6 +31,11 @@ use std::any::Any;
     description = r#"Returns the path of the input file that produced the current row.
 
 Note: file paths/URIs may be sensitive metadata depending on your environment.
+
+This function is intended to be rewritten at file-scan time (when the file is
+known). If the input file is not known (for example, if this function is
+evaluated outside a file scan, or was not pushed down into one), this function
+returns NULL.
 "#,
     syntax_example = "input_file_name()",
     sql_example = r#"```sql
@@ -76,7 +81,7 @@ impl ScalarUDFImpl for InputFileNameFunc {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let [] = take_function_args(self.name(), args.args)?;
-        exec_err!("input_file_name() must be planned as a file-scan metadata column")
+        Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))
     }
 
     fn documentation(&self) -> Option<&Documentation> {

@@ -23,6 +23,7 @@ use datafusion_common::{
     tree_node::{Transformed, TransformedResult, TreeNode},
 };
 use datafusion_physical_expr::{
+    PhysicalExpr, ScalarFunctionExpr,
     expressions::{Column, Literal},
     projection::{ProjectionExpr, ProjectionExprs},
 };
@@ -69,6 +70,7 @@ impl ProjectionOpener {
 impl FileOpener for ProjectionOpener {
     fn open(&self, partitioned_file: PartitionedFile) -> Result<FileOpenFuture> {
         let partition_values = partitioned_file.partition_values.clone();
+        let file_name = partitioned_file.object_meta.location.to_string();
         // Modify any references to partition columns in the projection expressions
         // and substitute them with literal values from PartitionedFile.partition_values
         let projection = if self.partition_columns.is_empty() {
@@ -80,6 +82,8 @@ impl FileOpener for ProjectionOpener {
                 partition_values,
             )
         };
+        // Replace `input_file_name()` with a per-file literal if present.
+        let projection = inject_input_file_name_into_projection(&projection, file_name);
         let projector = projection.make_projector(&self.input_schema)?;
 
         let inner = self.inner.open(partitioned_file)?;
@@ -140,6 +144,35 @@ fn inject_partition_columns_into_projection(
             ProjectionExpr::new(expr, projection.alias.clone())
         })
         .collect_vec();
+    ProjectionExprs::new(projections)
+}
+
+fn inject_input_file_name_into_projection(
+    projection: &ProjectionExprs,
+    file_name: String,
+) -> ProjectionExprs {
+    let file_name_literal: Arc<dyn PhysicalExpr> =
+        Arc::new(Literal::new(ScalarValue::Utf8(Some(file_name))));
+
+    let projections = projection
+        .iter()
+        .map(|projection| {
+            let expr = Arc::clone(&projection.expr)
+                .transform(|expr| {
+                    if let Some(func) = expr.as_any().downcast_ref::<ScalarFunctionExpr>()
+                        && func.fun().name() == "input_file_name"
+                        && func.args().is_empty()
+                    {
+                        return Ok(Transformed::yes(Arc::clone(&file_name_literal)));
+                    }
+                    Ok(Transformed::no(expr))
+                })
+                .data()
+                .expect("infallible transform");
+            ProjectionExpr::new(expr, projection.alias.clone())
+        })
+        .collect_vec();
+
     ProjectionExprs::new(projections)
 }
 
@@ -238,7 +271,7 @@ impl SplitProjection {
             };
 
             // Pre-create the remapped column so all references can share the same Arc
-            let new_column: Arc<dyn datafusion_physical_plan::PhysicalExpr> =
+            let new_column: Arc<dyn PhysicalExpr> =
                 Arc::new(Column::new(&name, new_index));
             column_mapping.insert(original_index, new_column);
         }
@@ -285,16 +318,63 @@ impl SplitProjection {
 
 #[cfg(test)]
 mod test {
+    use std::any::Any;
     use std::sync::Arc;
 
     use arrow::array::AsArray;
-    use arrow::datatypes::{DataType, SchemaRef};
+    use arrow::datatypes::{DataType, Field, SchemaRef};
+    use arrow::record_batch::RecordBatch;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::{DFSchema, ScalarValue, record_batch};
+    use datafusion_common::{Result, exec_err};
+    use datafusion_expr::{
+        ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+        Volatility,
+    };
     use datafusion_expr::{Expr, col, execution_props::ExecutionProps};
+    use datafusion_physical_expr::ScalarFunctionExpr;
     use datafusion_physical_expr::{create_physical_exprs, projection::ProjectionExpr};
+    use futures::StreamExt;
     use itertools::Itertools;
 
     use super::*;
+
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct TestInputFileNameUdf {
+        signature: Signature,
+    }
+
+    impl TestInputFileNameUdf {
+        fn new() -> Self {
+            Self {
+                signature: Signature::nullary(Volatility::Volatile),
+            }
+        }
+    }
+
+    impl ScalarUDFImpl for TestInputFileNameUdf {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn name(&self) -> &str {
+            "input_file_name"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Utf8)
+        }
+
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            exec_err!(
+                "input_file_name() should be replaced with a literal before execution"
+            )
+        }
+    }
 
     fn create_projection_exprs<'a>(
         exprs: impl IntoIterator<Item = &'a Expr>,
@@ -309,6 +389,65 @@ mod test {
             .map(|(i, e)| ProjectionExpr::new(Arc::clone(&e), format!("col{i}")))
             .collect_vec();
         ProjectionExprs::from(projection_exprs)
+    }
+
+    #[tokio::test]
+    async fn projection_opener_replaces_input_file_name_udf_with_literal() -> Result<()> {
+        let file_schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&file_schema),
+            vec![Arc::new(arrow::array::Int32Array::from(vec![1]))],
+        )?;
+
+        struct TestOpener {
+            batch: RecordBatch,
+        }
+
+        impl FileOpener for TestOpener {
+            fn open(&self, _partitioned_file: PartitionedFile) -> Result<FileOpenFuture> {
+                let batch = self.batch.clone();
+                Ok(async move {
+                    let stream = futures::stream::iter(vec![Ok(batch)]);
+                    Ok(stream.boxed())
+                }
+                .boxed())
+            }
+        }
+
+        let udf = Arc::new(ScalarUDF::new_from_impl(TestInputFileNameUdf::new()));
+        let udf_expr = Arc::new(ScalarFunctionExpr::try_new(
+            udf,
+            vec![],
+            file_schema.as_ref(),
+            Arc::new(ConfigOptions::default()),
+        )?);
+
+        let projection = ProjectionExprs::new(vec![
+            ProjectionExpr::new(Arc::new(Column::new("c1", 0)), "c1"),
+            ProjectionExpr::new(udf_expr, "input_file_name"),
+        ]);
+
+        let split = SplitProjection::new(file_schema.as_ref(), &projection);
+        let inner: Arc<dyn FileOpener> = Arc::new(TestOpener { batch });
+        let opener = ProjectionOpener::try_new(split, inner, file_schema.as_ref())?;
+
+        let mut stream = opener
+            .open(PartitionedFile::new("data/path/file.csv", 0))?
+            .await?;
+        let output_batch = stream.next().await.unwrap()?;
+
+        assert_eq!(output_batch.schema().field(1).name(), "input_file_name");
+        assert!(
+            output_batch
+                .column(1)
+                .as_string::<i32>()
+                .value(0)
+                .ends_with("file.csv")
+        );
+
+        Ok(())
     }
 
     #[test]
