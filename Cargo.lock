@@ -233,7 +233,7 @@ checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
 [[package]]
 name = "arrow"
 version = "57.2.0"
-source = "git+https://github.com/apache/arrow-rs.git?branch=main#0258ec0aa2bd8acae9df41f44b75699c335cbfa1"
+source = "git+https://github.com/apache/arrow-rs.git?branch=main#5695bb33746735dde01b80ee9e7e6bcccbd7bdd4"
 dependencies = [
  "arrow-arith",
  "arrow-array",
@@ -255,7 +255,7 @@ dependencies = [
 [[package]]
 name = "arrow-arith"
 version = "57.2.0"
-source = "git+https://github.com/apache/arrow-rs.git?branch=main#0258ec0aa2bd8acae9df41f44b75699c335cbfa1"
+source = "git+https://github.com/apache/arrow-rs.git?branch=main#5695bb33746735dde01b80ee9e7e6bcccbd7bdd4"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -268,7 +268,7 @@ dependencies = [
 [[package]]
 name = "arrow-array"
 version = "57.2.0"
-source = "git+https://github.com/apache/arrow-rs.git?branch=main#0258ec0aa2bd8acae9df41f44b75699c335cbfa1"
+source = "git+https://github.com/apache/arrow-rs.git?branch=main#5695bb33746735dde01b80ee9e7e6bcccbd7bdd4"
 dependencies = [
  "ahash",
  "arrow-buffer",
@@ -286,7 +286,7 @@ dependencies = [
 [[package]]
 name = "arrow-buffer"
 version = "57.2.0"
-source = "git+https://github.com/apache/arrow-rs.git?branch=main#0258ec0aa2bd8acae9df41f44b75699c335cbfa1"
+source = "git+https://github.com/apache/arrow-rs.git?branch=main#5695bb33746735dde01b80ee9e7e6bcccbd7bdd4"
 dependencies = [
  "bytes",
  "half",
@@ -297,7 +297,7 @@ dependencies = [
 [[package]]
 name = "arrow-cast"
 version = "57.2.0"
-source = "git+https://github.com/apache/arrow-rs.git?branch=main#0258ec0aa2bd8acae9df41f44b75699c335cbfa1"
+source = "git+https://github.com/apache/arrow-rs.git?branch=main#5695bb33746735dde01b80ee9e7e6bcccbd7bdd4"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -318,7 +318,7 @@ dependencies = [
 [[package]]
 name = "arrow-csv"
 version = "57.2.0"
-source = "git+https://github.com/apache/arrow-rs.git?branch=main#0258ec0aa2bd8acae9df41f44b75699c335cbfa1"
+source = "git+https://github.com/apache/arrow-rs.git?branch=main#5695bb33746735dde01b80ee9e7e6bcccbd7bdd4"
 dependencies = [
  "arrow-array",
  "arrow-cast",
@@ -332,7 +332,7 @@ dependencies = [
 [[package]]
 name = "arrow-data"
 version = "57.2.0"
-source = "git+https://github.com/apache/arrow-rs.git?branch=main#0258ec0aa2bd8acae9df41f44b75699c335cbfa1"
+source = "git+https://github.com/apache/arrow-rs.git?branch=main#5695bb33746735dde01b80ee9e7e6bcccbd7bdd4"
 dependencies = [
  "arrow-buffer",
  "arrow-schema",
@@ -344,7 +344,7 @@ dependencies = [
 [[package]]
 name = "arrow-flight"
 version = "57.2.0"
-source = "git+https://github.com/apache/arrow-rs.git?branch=main#0258ec0aa2bd8acae9df41f44b75699c335cbfa1"
+source = "git+https://github.com/apache/arrow-rs.git?branch=main#5695bb33746735dde01b80ee9e7e6bcccbd7bdd4"
 dependencies = [
  "arrow-arith",
  "arrow-array",
@@ -371,7 +371,7 @@ dependencies = [
 [[package]]
 name = "arrow-ipc"
 version = "57.2.0"
-source = "git+https://github.com/apache/arrow-rs.git?branch=main#0258ec0aa2bd8acae9df41f44b75699c335cbfa1"
+source = "git+https://github.com/apache/arrow-rs.git?branch=main#5695bb33746735dde01b80ee9e7e6bcccbd7bdd4"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -386,7 +386,7 @@ dependencies = [
 [[package]]
 name = "arrow-json"
 version = "57.2.0"
-source = "git+https://github.com/apache/arrow-rs.git?branch=main#0258ec0aa2bd8acae9df41f44b75699c335cbfa1"
+source = "git+https://github.com/apache/arrow-rs.git?branch=main#5695bb33746735dde01b80ee9e7e6bcccbd7bdd4"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -409,7 +409,7 @@ dependencies = [
 [[package]]
 name = "arrow-ord"
 version = "57.2.0"
-source = "git+https://github.com/apache/arrow-rs.git?branch=main#0258ec0aa2bd8acae9df41f44b75699c335cbfa1"
+source = "git+https://github.com/apache/arrow-rs.git?branch=main#5695bb33746735dde01b80ee9e7e6bcccbd7bdd4"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -421,7 +421,7 @@ dependencies = [
 [[package]]
 name = "arrow-row"
 version = "57.2.0"
-source = "git+https://github.com/apache/arrow-rs.git?branch=main#0258ec0aa2bd8acae9df41f44b75699c335cbfa1"
+source = "git+https://github.com/apache/arrow-rs.git?branch=main#5695bb33746735dde01b80ee9e7e6bcccbd7bdd4"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -433,7 +433,7 @@ dependencies = [
 [[package]]
 name = "arrow-schema"
 version = "57.2.0"
-source = "git+https://github.com/apache/arrow-rs.git?branch=main#0258ec0aa2bd8acae9df41f44b75699c335cbfa1"
+source = "git+https://github.com/apache/arrow-rs.git?branch=main#5695bb33746735dde01b80ee9e7e6bcccbd7bdd4"
 dependencies = [
  "bitflags",
  "serde",
@@ -444,7 +444,7 @@ dependencies = [
 [[package]]
 name = "arrow-select"
 version = "57.2.0"
-source = "git+https://github.com/apache/arrow-rs.git?branch=main#0258ec0aa2bd8acae9df41f44b75699c335cbfa1"
+source = "git+https://github.com/apache/arrow-rs.git?branch=main#5695bb33746735dde01b80ee9e7e6bcccbd7bdd4"
 dependencies = [
  "ahash",
  "arrow-array",
@@ -457,7 +457,7 @@ dependencies = [
 [[package]]
 name = "arrow-string"
 version = "57.2.0"
-source = "git+https://github.com/apache/arrow-rs.git?branch=main#0258ec0aa2bd8acae9df41f44b75699c335cbfa1"
+source = "git+https://github.com/apache/arrow-rs.git?branch=main#5695bb33746735dde01b80ee9e7e6bcccbd7bdd4"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -1745,7 +1745,7 @@ dependencies = [
  "liblzma",
  "log",
  "nix 0.31.1",
- "object_store",
+ "object_store 0.12.4",
  "parking_lot",
  "parquet",
  "paste",
@@ -1781,7 +1781,7 @@ dependencies = [
  "libmimalloc-sys",
  "log",
  "mimalloc",
- "object_store",
+ "object_store 0.12.4",
  "parquet",
  "rand 0.9.2",
  "regex",
@@ -1810,7 +1810,7 @@ dependencies = [
  "futures",
  "itertools 0.14.0",
  "log",
- "object_store",
+ "object_store 0.12.4",
  "parking_lot",
  "tokio",
 ]
@@ -1834,7 +1834,7 @@ dependencies = [
  "futures",
  "itertools 0.14.0",
  "log",
- "object_store",
+ "object_store 0.12.4",
 ]
 
 [[package]]
@@ -1857,7 +1857,7 @@ dependencies = [
  "insta-cmd",
  "log",
  "mimalloc",
- "object_store",
+ "object_store 0.12.4",
  "parking_lot",
  "parquet",
  "regex",
@@ -1886,7 +1886,7 @@ dependencies = [
  "itertools 0.14.0",
  "libc",
  "log",
- "object_store",
+ "object_store 0.12.4",
  "parquet",
  "paste",
  "rand 0.9.2",
@@ -1931,7 +1931,7 @@ dependencies = [
  "itertools 0.14.0",
  "liblzma",
  "log",
- "object_store",
+ "object_store 0.12.4",
  "rand 0.9.2",
  "tempfile",
  "tokio",
@@ -1959,7 +1959,7 @@ dependencies = [
  "datafusion-session",
  "futures",
  "itertools 0.14.0",
- "object_store",
+ "object_store 0.12.4",
  "tokio",
 ]
 
@@ -1978,7 +1978,7 @@ dependencies = [
  "datafusion-session",
  "futures",
  "num-traits",
- "object_store",
+ "object_store 0.12.4",
  "serde_json",
 ]
 
@@ -1998,7 +1998,7 @@ dependencies = [
  "datafusion-physical-plan",
  "datafusion-session",
  "futures",
- "object_store",
+ "object_store 0.12.4",
  "regex",
  "tokio",
 ]
@@ -2019,7 +2019,7 @@ dependencies = [
  "datafusion-physical-plan",
  "datafusion-session",
  "futures",
- "object_store",
+ "object_store 0.12.4",
  "tokio",
 ]
 
@@ -2048,7 +2048,7 @@ dependencies = [
  "futures",
  "itertools 0.14.0",
  "log",
- "object_store",
+ "object_store 0.12.4",
  "parking_lot",
  "parquet",
  "tempfile",
@@ -2082,7 +2082,7 @@ dependencies = [
  "log",
  "mimalloc",
  "nix 0.31.1",
- "object_store",
+ "object_store 0.12.4",
  "prost",
  "rand 0.9.2",
  "serde",
@@ -2113,7 +2113,7 @@ dependencies = [
  "futures",
  "insta",
  "log",
- "object_store",
+ "object_store 0.12.4",
  "parking_lot",
  "parquet",
  "rand 0.9.2",
@@ -2495,7 +2495,7 @@ dependencies = [
  "datafusion-physical-plan",
  "datafusion-proto-common",
  "doc-comment",
- "object_store",
+ "object_store 0.12.4",
  "pbjson 0.9.0",
  "pretty_assertions",
  "prost",
@@ -2616,7 +2616,7 @@ dependencies = [
  "indicatif",
  "itertools 0.14.0",
  "log",
- "object_store",
+ "object_store 0.12.4",
  "postgres-types",
  "regex",
  "sqllogictest",
@@ -2640,7 +2640,7 @@ dependencies = [
  "half",
  "insta",
  "itertools 0.14.0",
- "object_store",
+ "object_store 0.12.4",
  "pbjson-types",
  "prost",
  "serde_json",
@@ -2666,7 +2666,7 @@ dependencies = [
  "datafusion-sql",
  "futures",
  "getrandom 0.3.4",
- "object_store",
+ "object_store 0.12.4",
  "tokio",
  "url",
  "wasm-bindgen",
@@ -4237,6 +4237,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "object_store"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c2858065e55c148d294a9f3aae3b0fa9458edadb41a108397094566f4e3c0dfb"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "chrono",
+ "futures",
+ "http 1.4.0",
+ "humantime",
+ "itertools 0.14.0",
+ "parking_lot",
+ "percent-encoding",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "url",
+ "wasm-bindgen-futures",
+ "web-time",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4323,7 +4346,7 @@ dependencies = [
 [[package]]
 name = "parquet"
 version = "57.2.0"
-source = "git+https://github.com/apache/arrow-rs.git?branch=main#0258ec0aa2bd8acae9df41f44b75699c335cbfa1"
+source = "git+https://github.com/apache/arrow-rs.git?branch=main#5695bb33746735dde01b80ee9e7e6bcccbd7bdd4"
 dependencies = [
  "ahash",
  "arrow-array",
@@ -4344,7 +4367,7 @@ dependencies = [
  "num-bigint",
  "num-integer",
  "num-traits",
- "object_store",
+ "object_store 0.13.1",
  "paste",
  "ring",
  "seq-macro",
