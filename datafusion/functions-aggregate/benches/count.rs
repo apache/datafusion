@@ -130,7 +130,7 @@ fn count_benchmark(c: &mut Criterion) {
     let mut accumulator = prepare_accumulator();
     c.bench_function("count low cardinality dict 20% nulls, no filter", |b| {
         b.iter(|| {
-            #[allow(clippy::unit_arg)]
+            #[expect(clippy::unit_arg)]
             black_box(
                 accumulator
                     .update_batch(std::slice::from_ref(&values))

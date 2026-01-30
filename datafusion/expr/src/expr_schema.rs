@@ -21,7 +21,7 @@ use crate::expr::{
     InSubquery, Placeholder, ScalarFunction, TryCast, Unnest, WindowFunction,
     WindowFunctionParams,
 };
-use crate::type_coercion::functions::fields_with_udf;
+use crate::type_coercion::functions::{UDFCoercionExt, fields_with_udf};
 use crate::udf::ReturnFieldArgs;
 use crate::{LogicalPlan, Projection, Subquery, WindowFunctionDefinition, utils};
 use arrow::compute::can_cast_types;
@@ -153,49 +153,16 @@ impl ExprSchemable for Expr {
                     }
                 }
             }
-            Expr::ScalarFunction(_func) => {
-                let return_type = self.to_field(schema)?.1.data_type().clone();
-                Ok(return_type)
-            }
-            Expr::WindowFunction(window_function) => Ok(self
-                .window_function_field(schema, window_function)?
-                .data_type()
-                .clone()),
-            Expr::AggregateFunction(AggregateFunction {
-                func,
-                params: AggregateFunctionParams { args, .. },
-            }) => {
-                let fields = args
-                    .iter()
-                    .map(|e| e.to_field(schema).map(|(_, f)| f))
-                    .collect::<Result<Vec<_>>>()?;
-                let new_fields = fields_with_udf(&fields, func.as_ref())
-                    .map_err(|err| {
-                        let data_types = fields
-                            .iter()
-                            .map(|f| f.data_type().clone())
-                            .collect::<Vec<_>>();
-                        plan_datafusion_err!(
-                            "{} {}",
-                            match err {
-                                DataFusionError::Plan(msg) => msg,
-                                err => err.to_string(),
-                            },
-                            utils::generate_signature_error_msg(
-                                func.name(),
-                                func.signature().clone(),
-                                &data_types
-                            )
-                        )
-                    })?
-                    .into_iter()
-                    .collect::<Vec<_>>();
-                Ok(func.return_field(&new_fields)?.data_type().clone())
+            Expr::ScalarFunction(_)
+            | Expr::WindowFunction(_)
+            | Expr::AggregateFunction(_) => {
+                Ok(self.to_field(schema)?.1.data_type().clone())
             }
             Expr::Not(_)
             | Expr::IsNull(_)
             | Expr::Exists { .. }
             | Expr::InSubquery(_)
+            | Expr::SetComparison(_)
             | Expr::Between { .. }
             | Expr::InList { .. }
             | Expr::IsNotNull(_)
@@ -350,18 +317,9 @@ impl ExprSchemable for Expr {
                 }
             }
             Expr::Cast(Cast { expr, .. }) => expr.nullable(input_schema),
-            Expr::ScalarFunction(_func) => {
-                let field = self.to_field(input_schema)?.1;
-
-                let nullable = field.is_nullable();
-                Ok(nullable)
-            }
-            Expr::AggregateFunction(AggregateFunction { func, .. }) => {
-                Ok(func.is_nullable())
-            }
-            Expr::WindowFunction(window_function) => Ok(self
-                .window_function_field(input_schema, window_function)?
-                .is_nullable()),
+            Expr::ScalarFunction(_)
+            | Expr::AggregateFunction(_)
+            | Expr::WindowFunction(_) => Ok(self.to_field(input_schema)?.1.is_nullable()),
             Expr::ScalarVariable(field, _) => Ok(field.is_nullable()),
             Expr::TryCast { .. } | Expr::Unnest(_) | Expr::Placeholder(_) => Ok(true),
             Expr::IsNull(_)
@@ -373,6 +331,7 @@ impl ExprSchemable for Expr {
             | Expr::IsNotFalse(_)
             | Expr::IsNotUnknown(_)
             | Expr::Exists { .. } => Ok(false),
+            Expr::SetComparison(_) => Ok(true),
             Expr::InSubquery(InSubquery { expr, .. }) => expr.nullable(input_schema),
             Expr::ScalarSubquery(subquery) => {
                 Ok(subquery.subquery.schema().field(0).is_nullable())
@@ -533,69 +492,49 @@ impl ExprSchemable for Expr {
                 )))
             }
             Expr::WindowFunction(window_function) => {
-                self.window_function_field(schema, window_function)
-            }
-            Expr::AggregateFunction(aggregate_function) => {
-                let AggregateFunction {
-                    func,
-                    params: AggregateFunctionParams { args, .. },
+                let WindowFunction {
+                    fun,
+                    params: WindowFunctionParams { args, .. },
                     ..
-                } = aggregate_function;
+                } = window_function.as_ref();
 
                 let fields = args
                     .iter()
                     .map(|e| e.to_field(schema).map(|(_, f)| f))
                     .collect::<Result<Vec<_>>>()?;
-                // Verify that function is invoked with correct number and type of arguments as defined in `TypeSignature`
-                let new_fields = fields_with_udf(&fields, func.as_ref())
-                    .map_err(|err| {
-                        let arg_types = fields
-                            .iter()
-                            .map(|f| f.data_type())
-                            .cloned()
-                            .collect::<Vec<_>>();
-                        plan_datafusion_err!(
-                            "{} {}",
-                            match err {
-                                DataFusionError::Plan(msg) => msg,
-                                err => err.to_string(),
-                            },
-                            utils::generate_signature_error_msg(
-                                func.name(),
-                                func.signature().clone(),
-                                &arg_types,
-                            )
-                        )
-                    })?
-                    .into_iter()
-                    .collect::<Vec<_>>();
-
+                match fun {
+                    WindowFunctionDefinition::AggregateUDF(udaf) => {
+                        let new_fields =
+                            verify_function_arguments(udaf.as_ref(), &fields)?;
+                        let return_field = udaf.return_field(&new_fields)?;
+                        Ok(return_field)
+                    }
+                    WindowFunctionDefinition::WindowUDF(udwf) => {
+                        let new_fields =
+                            verify_function_arguments(udwf.as_ref(), &fields)?;
+                        let return_field = udwf
+                            .field(WindowUDFFieldArgs::new(&new_fields, &schema_name))?;
+                        Ok(return_field)
+                    }
+                }
+            }
+            Expr::AggregateFunction(AggregateFunction {
+                func,
+                params: AggregateFunctionParams { args, .. },
+            }) => {
+                let fields = args
+                    .iter()
+                    .map(|e| e.to_field(schema).map(|(_, f)| f))
+                    .collect::<Result<Vec<_>>>()?;
+                let new_fields = verify_function_arguments(func.as_ref(), &fields)?;
                 func.return_field(&new_fields)
             }
             Expr::ScalarFunction(ScalarFunction { func, args }) => {
-                let (arg_types, fields): (Vec<DataType>, Vec<Arc<Field>>) = args
+                let fields = args
                     .iter()
                     .map(|e| e.to_field(schema).map(|(_, f)| f))
-                    .collect::<Result<Vec<_>>>()?
-                    .into_iter()
-                    .map(|f| (f.data_type().clone(), f))
-                    .unzip();
-                // Verify that function is invoked with correct number and type of arguments as defined in `TypeSignature`
-                let new_fields =
-                    fields_with_udf(&fields, func.as_ref()).map_err(|err| {
-                        plan_datafusion_err!(
-                            "{} {}",
-                            match err {
-                                DataFusionError::Plan(msg) => msg,
-                                err => err.to_string(),
-                            },
-                            utils::generate_signature_error_msg(
-                                func.name(),
-                                func.signature().clone(),
-                                &arg_types,
-                            )
-                        )
-                    })?;
+                    .collect::<Result<Vec<_>>>()?;
+                let new_fields = verify_function_arguments(func.as_ref(), &fields)?;
 
                 let arguments = args
                     .iter()
@@ -641,6 +580,7 @@ impl ExprSchemable for Expr {
             | Expr::TryCast(_)
             | Expr::InList(_)
             | Expr::InSubquery(_)
+            | Expr::SetComparison(_)
             | Expr::Wildcard { .. }
             | Expr::GroupingSet(_)
             | Expr::Placeholder(_)
@@ -674,7 +614,16 @@ impl ExprSchemable for Expr {
         // like all of the binary expressions below. Perhaps Expr should track the
         // type of the expression?
 
-        if can_cast_types(&this_type, cast_to_type) {
+        // Special handling for struct-to-struct casts with name-based field matching
+        let can_cast = match (&this_type, cast_to_type) {
+            (DataType::Struct(_), DataType::Struct(_)) => {
+                // Always allow struct-to-struct casts; field matching happens at runtime
+                true
+            }
+            _ => can_cast_types(&this_type, cast_to_type),
+        };
+
+        if can_cast {
             match self {
                 Expr::ScalarSubquery(subquery) => {
                     Ok(Expr::ScalarSubquery(cast_subquery(subquery, cast_to_type)?))
@@ -687,6 +636,33 @@ impl ExprSchemable for Expr {
     }
 }
 
+/// Verify that function is invoked with correct number and type of arguments as
+/// defined in `TypeSignature`.
+fn verify_function_arguments<F: UDFCoercionExt>(
+    function: &F,
+    input_fields: &[FieldRef],
+) -> Result<Vec<FieldRef>> {
+    fields_with_udf(input_fields, function).map_err(|err| {
+        let data_types = input_fields
+            .iter()
+            .map(|f| f.data_type())
+            .cloned()
+            .collect::<Vec<_>>();
+        plan_datafusion_err!(
+            "{} {}",
+            match err {
+                DataFusionError::Plan(msg) => msg,
+                err => err.to_string(),
+            },
+            utils::generate_signature_error_message(
+                function.name(),
+                function.signature(),
+                &data_types
+            )
+        )
+    })
+}
+
 /// Returns the innermost [Expr] that is provably null if `expr` is null.
 fn unwrap_certainly_null_expr(expr: &Expr) -> &Expr {
     match expr {
@@ -694,90 +670,6 @@ fn unwrap_certainly_null_expr(expr: &Expr) -> &Expr {
         Expr::Negative(e) => unwrap_certainly_null_expr(e),
         Expr::Cast(e) => unwrap_certainly_null_expr(e.expr.as_ref()),
         _ => expr,
-    }
-}
-
-impl Expr {
-    /// Common method for window functions that applies type coercion
-    /// to all arguments of the window function to check if it matches
-    /// its signature.
-    ///
-    /// If successful, this method returns the data type and
-    /// nullability of the window function's result.
-    ///
-    /// Otherwise, returns an error if there's a type mismatch between
-    /// the window function's signature and the provided arguments.
-    fn window_function_field(
-        &self,
-        schema: &dyn ExprSchema,
-        window_function: &WindowFunction,
-    ) -> Result<FieldRef> {
-        let WindowFunction {
-            fun,
-            params: WindowFunctionParams { args, .. },
-            ..
-        } = window_function;
-
-        let fields = args
-            .iter()
-            .map(|e| e.to_field(schema).map(|(_, f)| f))
-            .collect::<Result<Vec<_>>>()?;
-        match fun {
-            WindowFunctionDefinition::AggregateUDF(udaf) => {
-                let data_types = fields
-                    .iter()
-                    .map(|f| f.data_type())
-                    .cloned()
-                    .collect::<Vec<_>>();
-                let new_fields = fields_with_udf(&fields, udaf.as_ref())
-                    .map_err(|err| {
-                        plan_datafusion_err!(
-                            "{} {}",
-                            match err {
-                                DataFusionError::Plan(msg) => msg,
-                                err => err.to_string(),
-                            },
-                            utils::generate_signature_error_msg(
-                                fun.name(),
-                                fun.signature(),
-                                &data_types
-                            )
-                        )
-                    })?
-                    .into_iter()
-                    .collect::<Vec<_>>();
-
-                udaf.return_field(&new_fields)
-            }
-            WindowFunctionDefinition::WindowUDF(udwf) => {
-                let data_types = fields
-                    .iter()
-                    .map(|f| f.data_type())
-                    .cloned()
-                    .collect::<Vec<_>>();
-                let new_fields = fields_with_udf(&fields, udwf.as_ref())
-                    .map_err(|err| {
-                        plan_datafusion_err!(
-                            "{} {}",
-                            match err {
-                                DataFusionError::Plan(msg) => msg,
-                                err => err.to_string(),
-                            },
-                            utils::generate_signature_error_msg(
-                                fun.name(),
-                                fun.signature(),
-                                &data_types
-                            )
-                        )
-                    })?
-                    .into_iter()
-                    .collect::<Vec<_>>();
-                let (_, function_name) = self.qualified_name();
-                let field_args = WindowUDFFieldArgs::new(&new_fields, &function_name);
-
-                udwf.field(field_args)
-            }
-        }
     }
 }
 

@@ -444,6 +444,7 @@ pub mod dml_node {
         InsertAppend = 3,
         InsertOverwrite = 4,
         InsertReplace = 5,
+        Truncate = 6,
     }
     impl Type {
         /// String value of the enum field names used in the ProtoBuf definition.
@@ -458,6 +459,7 @@ pub mod dml_node {
                 Self::InsertAppend => "INSERT_APPEND",
                 Self::InsertOverwrite => "INSERT_OVERWRITE",
                 Self::InsertReplace => "INSERT_REPLACE",
+                Self::Truncate => "TRUNCATE",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -469,6 +471,7 @@ pub mod dml_node {
                 "INSERT_APPEND" => Some(Self::InsertAppend),
                 "INSERT_OVERWRITE" => Some(Self::InsertOverwrite),
                 "INSERT_REPLACE" => Some(Self::InsertReplace),
+                "TRUNCATE" => Some(Self::Truncate),
                 _ => None,
             }
         }
@@ -1197,6 +1200,9 @@ pub struct FileSinkConfig {
     pub insert_op: i32,
     #[prost(string, tag = "11")]
     pub file_extension: ::prost::alloc::string::String,
+    /// Determines how the output path is interpreted.
+    #[prost(enumeration = "FileOutputMode", tag = "12")]
+    pub file_output_mode: i32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct JsonSink {
@@ -1557,6 +1563,8 @@ pub struct FilterExecNode {
     pub default_filter_selectivity: u32,
     #[prost(uint32, repeated, tag = "9")]
     pub projection: ::prost::alloc::vec::Vec<u32>,
+    #[prost(uint32, tag = "10")]
+    pub batch_size: u32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FileGroup {
@@ -1702,6 +1710,8 @@ pub struct HashJoinExecNode {
     pub filter: ::core::option::Option<JoinFilter>,
     #[prost(uint32, repeated, tag = "9")]
     pub projection: ::prost::alloc::vec::Vec<u32>,
+    #[prost(bool, tag = "10")]
+    pub null_aware: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SymmetricHashJoinExecNode {
@@ -1844,6 +1854,9 @@ pub struct AggLimit {
     /// wrap into a message to make it optional
     #[prost(uint64, tag = "1")]
     pub limit: u64,
+    /// Optional ordering direction for TopK aggregation (true = descending, false = ascending)
+    #[prost(bool, optional, tag = "2")]
+    pub descending: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AggregateExecNode {
@@ -2258,6 +2271,39 @@ impl DateUnit {
         }
     }
 }
+/// Determines how file sink output paths are interpreted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum FileOutputMode {
+    /// Infer output mode from the URL (extension/trailing `/` heuristic).
+    Automatic = 0,
+    /// Write to a single file at the exact output path.
+    SingleFile = 1,
+    /// Write to a directory with generated filenames.
+    Directory = 2,
+}
+impl FileOutputMode {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Automatic => "FILE_OUTPUT_MODE_AUTOMATIC",
+            Self::SingleFile => "FILE_OUTPUT_MODE_SINGLE_FILE",
+            Self::Directory => "FILE_OUTPUT_MODE_DIRECTORY",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "FILE_OUTPUT_MODE_AUTOMATIC" => Some(Self::Automatic),
+            "FILE_OUTPUT_MODE_SINGLE_FILE" => Some(Self::SingleFile),
+            "FILE_OUTPUT_MODE_DIRECTORY" => Some(Self::Directory),
+            _ => None,
+        }
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum InsertOp {
@@ -2350,6 +2396,7 @@ pub enum AggregateMode {
     FinalPartitioned = 2,
     Single = 3,
     SinglePartitioned = 4,
+    PartialReduce = 5,
 }
 impl AggregateMode {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2363,6 +2410,7 @@ impl AggregateMode {
             Self::FinalPartitioned => "FINAL_PARTITIONED",
             Self::Single => "SINGLE",
             Self::SinglePartitioned => "SINGLE_PARTITIONED",
+            Self::PartialReduce => "PARTIAL_REDUCE",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2373,6 +2421,7 @@ impl AggregateMode {
             "FINAL_PARTITIONED" => Some(Self::FinalPartitioned),
             "SINGLE" => Some(Self::Single),
             "SINGLE_PARTITIONED" => Some(Self::SinglePartitioned),
+            "PARTIAL_REDUCE" => Some(Self::PartialReduce),
             _ => None,
         }
     }

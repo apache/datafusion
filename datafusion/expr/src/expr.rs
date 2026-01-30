@@ -44,7 +44,7 @@ use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 #[cfg(feature = "sql")]
 use sqlparser::ast::{
     ExceptSelectItem, ExcludeSelectItem, IlikeSelectItem, RenameSelectItem,
-    ReplaceSelectElement, display_comma_separated,
+    ReplaceSelectElement,
 };
 
 // Moved in 51.0.0 to datafusion_common
@@ -374,6 +374,8 @@ pub enum Expr {
     Exists(Exists),
     /// IN subquery
     InSubquery(InSubquery),
+    /// Set comparison subquery (e.g. `= ANY`, `> ALL`)
+    SetComparison(SetComparison),
     /// Scalar subquery
     ScalarSubquery(Subquery),
     /// Represents a reference to all available fields in a specific schema,
@@ -969,7 +971,7 @@ impl AggregateFunction {
 pub enum WindowFunctionDefinition {
     /// A user defined aggregate function
     AggregateUDF(Arc<AggregateUDF>),
-    /// A user defined aggregate function
+    /// A user defined window function
     WindowUDF(Arc<WindowUDF>),
 }
 
@@ -1114,6 +1116,54 @@ impl Exists {
     // Create a new Exists expression.
     pub fn new(subquery: Subquery, negated: bool) -> Self {
         Self { subquery, negated }
+    }
+}
+
+/// Whether the set comparison uses `ANY`/`SOME` or `ALL`
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Hash, Debug)]
+pub enum SetQuantifier {
+    /// `ANY` (or `SOME`)
+    Any,
+    /// `ALL`
+    All,
+}
+
+impl Display for SetQuantifier {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            SetQuantifier::Any => write!(f, "ANY"),
+            SetQuantifier::All => write!(f, "ALL"),
+        }
+    }
+}
+
+/// Set comparison subquery (e.g. `= ANY`, `> ALL`)
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
+pub struct SetComparison {
+    /// The expression to compare
+    pub expr: Box<Expr>,
+    /// Subquery that will produce a single column of data to compare against
+    pub subquery: Subquery,
+    /// Comparison operator (e.g. `=`, `>`, `<`)
+    pub op: Operator,
+    /// Quantifier (`ANY`/`ALL`)
+    pub quantifier: SetQuantifier,
+}
+
+impl SetComparison {
+    /// Create a new set comparison expression
+    pub fn new(
+        expr: Box<Expr>,
+        subquery: Subquery,
+        op: Operator,
+        quantifier: SetQuantifier,
+    ) -> Self {
+        Self {
+            expr,
+            subquery,
+            op,
+            quantifier,
+        }
     }
 }
 
@@ -1284,7 +1334,6 @@ impl Display for ExceptSelectItem {
     }
 }
 
-#[cfg(not(feature = "sql"))]
 pub fn display_comma_separated<T>(slice: &[T]) -> String
 where
     T: Display,
@@ -1519,6 +1568,7 @@ impl Expr {
             Expr::GroupingSet(..) => "GroupingSet",
             Expr::InList { .. } => "InList",
             Expr::InSubquery(..) => "InSubquery",
+            Expr::SetComparison(..) => "SetComparison",
             Expr::IsNotNull(..) => "IsNotNull",
             Expr::IsNull(..) => "IsNull",
             Expr::Like { .. } => "Like",
@@ -2074,6 +2124,7 @@ impl Expr {
             | Expr::GroupingSet(..)
             | Expr::InList(..)
             | Expr::InSubquery(..)
+            | Expr::SetComparison(..)
             | Expr::IsFalse(..)
             | Expr::IsNotFalse(..)
             | Expr::IsNotNull(..)
@@ -2661,6 +2712,16 @@ impl HashNode for Expr {
                 subquery.hash(state);
                 negated.hash(state);
             }
+            Expr::SetComparison(SetComparison {
+                expr: _,
+                subquery,
+                op,
+                quantifier,
+            }) => {
+                subquery.hash(state);
+                op.hash(state);
+                quantifier.hash(state);
+            }
             Expr::ScalarSubquery(subquery) => {
                 subquery.hash(state);
             }
@@ -2851,6 +2912,12 @@ impl Display for SchemaDisplay<'_> {
                 write!(f, "NOT IN")
             }
             Expr::InSubquery(InSubquery { negated: false, .. }) => write!(f, "IN"),
+            Expr::SetComparison(SetComparison {
+                expr,
+                op,
+                quantifier,
+                ..
+            }) => write!(f, "{} {op} {quantifier}", SchemaDisplay(expr.as_ref())),
             Expr::IsTrue(expr) => write!(f, "{} IS TRUE", SchemaDisplay(expr)),
             Expr::IsFalse(expr) => write!(f, "{} IS FALSE", SchemaDisplay(expr)),
             Expr::IsNotTrue(expr) => {
@@ -3330,6 +3397,12 @@ impl Display for Expr {
                 subquery,
                 negated: false,
             }) => write!(f, "{expr} IN ({subquery:?})"),
+            Expr::SetComparison(SetComparison {
+                expr,
+                subquery,
+                op,
+                quantifier,
+            }) => write!(f, "{expr} {op} {quantifier} ({subquery:?})"),
             Expr::ScalarSubquery(subquery) => write!(f, "({subquery:?})"),
             Expr::BinaryExpr(expr) => write!(f, "{expr}"),
             Expr::ScalarFunction(fun) => {
@@ -3813,6 +3886,7 @@ mod test {
     }
 
     use super::*;
+    use crate::logical_plan::{EmptyRelation, LogicalPlan};
 
     #[test]
     fn test_display_wildcard() {
@@ -3901,6 +3975,28 @@ mod test {
             ),
             "* RENAME (c1 AS a1)"
         )
+    }
+
+    #[test]
+    fn test_display_set_comparison() {
+        let subquery = Subquery {
+            subquery: Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row: false,
+                schema: Arc::new(DFSchema::empty()),
+            })),
+            outer_ref_columns: vec![],
+            spans: Spans::new(),
+        };
+
+        let expr = Expr::SetComparison(SetComparison::new(
+            Box::new(Expr::Column(Column::from_name("a"))),
+            subquery,
+            Operator::Gt,
+            SetQuantifier::Any,
+        ));
+
+        assert_eq!(format!("{expr}"), "a > ANY (<subquery>)");
+        assert_eq!(format!("{}", expr.human_display()), "a > ANY (<subquery>)");
     }
 
     #[test]

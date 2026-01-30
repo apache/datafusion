@@ -38,10 +38,10 @@ mod tests {
     use crate::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
     use crate::test::object_store::local_unpartitioned_file;
     use arrow::array::{
-        ArrayRef, AsArray, Date64Array, Int8Array, Int32Array, Int64Array, StringArray,
-        StringViewArray, StructArray, TimestampNanosecondArray,
+        ArrayRef, AsArray, Date64Array, DictionaryArray, Int8Array, Int32Array,
+        Int64Array, StringArray, StringViewArray, StructArray, TimestampNanosecondArray,
     };
-    use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaBuilder};
+    use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaBuilder, UInt16Type};
     use arrow::record_batch::RecordBatch;
     use arrow::util::pretty::pretty_format_batches;
     use arrow_schema::{SchemaRef, TimeUnit};
@@ -995,6 +995,7 @@ mod tests {
         assert_eq!(read, 1, "Expected 1 rows to match the predicate");
         assert_eq!(get_value(&metrics, "row_groups_pruned_statistics"), 0);
         assert_eq!(get_value(&metrics, "page_index_rows_pruned"), 2);
+        assert_eq!(get_value(&metrics, "page_index_pages_pruned"), 1);
         assert_eq!(get_value(&metrics, "pushdown_rows_pruned"), 1);
         // If we filter with a value that is completely out of the range of the data
         // we prune at the row group level.
@@ -1168,10 +1169,16 @@ mod tests {
         // There are 4 rows pruned in each of batch2, batch3, and
         // batch4 for a total of 12. batch1 had no pruning as c2 was
         // filled in as null
-        let (page_index_pruned, page_index_matched) =
+        let (page_index_rows_pruned, page_index_rows_matched) =
             get_pruning_metric(&metrics, "page_index_rows_pruned");
-        assert_eq!(page_index_pruned, 12);
-        assert_eq!(page_index_matched, 6);
+        assert_eq!(page_index_rows_pruned, 12);
+        assert_eq!(page_index_rows_matched, 6);
+
+        // each page has 2 rows, so the num of pages is 1/2 the number of rows
+        let (page_index_pages_pruned, page_index_pages_matched) =
+            get_pruning_metric(&metrics, "page_index_pages_pruned");
+        assert_eq!(page_index_pages_pruned, 6);
+        assert_eq!(page_index_pages_matched, 3);
     }
 
     #[tokio::test]
@@ -1734,6 +1741,7 @@ mod tests {
             Some(3),
             Some(4),
             Some(5),
+            Some(6), // last page with only one row
         ]));
         let batch1 = create_batch(vec![("int", c1.clone())]);
 
@@ -1742,7 +1750,7 @@ mod tests {
         let rt = RoundTrip::new()
             .with_predicate(filter)
             .with_page_index_predicate()
-            .round_trip(vec![batch1])
+            .round_trip(vec![batch1.clone()])
             .await;
 
         let metrics = rt.parquet_exec.metrics().unwrap();
@@ -1755,14 +1763,40 @@ mod tests {
         | 5   |
         +-----+
         ");
-        let (page_index_pruned, page_index_matched) =
+        let (page_index_rows_pruned, page_index_rows_matched) =
             get_pruning_metric(&metrics, "page_index_rows_pruned");
-        assert_eq!(page_index_pruned, 4);
-        assert_eq!(page_index_matched, 2);
+        assert_eq!(page_index_rows_pruned, 5);
+        assert_eq!(page_index_rows_matched, 2);
         assert!(
             get_value(&metrics, "page_index_eval_time") > 0,
             "no eval time in metrics: {metrics:#?}"
         );
+
+        // each page has 2 rows, so the num of pages is 1/2 the number of rows
+        let (page_index_pages_pruned, page_index_pages_matched) =
+            get_pruning_metric(&metrics, "page_index_pages_pruned");
+        assert_eq!(page_index_pages_pruned, 3);
+        assert_eq!(page_index_pages_matched, 1);
+
+        // test with a filter that matches the page with one row
+        let filter = col("int").eq(lit(6_i32));
+        let rt = RoundTrip::new()
+            .with_predicate(filter)
+            .with_page_index_predicate()
+            .round_trip(vec![batch1])
+            .await;
+
+        let metrics = rt.parquet_exec.metrics().unwrap();
+
+        let (page_index_rows_pruned, page_index_rows_matched) =
+            get_pruning_metric(&metrics, "page_index_rows_pruned");
+        assert_eq!(page_index_rows_pruned, 6);
+        assert_eq!(page_index_rows_matched, 1);
+
+        let (page_index_pages_pruned, page_index_pages_matched) =
+            get_pruning_metric(&metrics, "page_index_pages_pruned");
+        assert_eq!(page_index_pages_pruned, 3);
+        assert_eq!(page_index_pages_matched, 1);
     }
 
     /// Returns a string array with contents:
@@ -2225,6 +2259,48 @@ mod tests {
         +---------------------+----+--------+
         | {id: 4, name: aaa2} | 2  | test02 |
         +---------------------+----+--------+
+        ");
+        Ok(())
+    }
+
+    /// Tests that constant dictionary columns (where min == max in statistics)
+    /// are correctly handled. This reproduced a bug where the constant value
+    /// from statistics had type Utf8 but the schema expected Dictionary.
+    #[tokio::test]
+    async fn test_constant_dictionary_column_parquet() -> Result<()> {
+        let tmp_dir = TempDir::new()?;
+        let path = tmp_dir.path().to_str().unwrap().to_string() + "/test.parquet";
+
+        // Write parquet with dictionary column where all values are the same
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "status",
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8)),
+            false,
+        )]));
+        let status: DictionaryArray<UInt16Type> =
+            vec!["active", "active"].into_iter().collect();
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(status)])?;
+        let file = File::create(&path)?;
+        let props = WriterProperties::builder()
+            .set_statistics_enabled(parquet::file::properties::EnabledStatistics::Page)
+            .build();
+        let mut writer = ArrowWriter::try_new(file, schema, Some(props))?;
+        writer.write(&batch)?;
+        writer.close()?;
+
+        // Query the constant dictionary column
+        let ctx = SessionContext::new();
+        ctx.register_parquet("t", &path, ParquetReadOptions::default())
+            .await?;
+        let result = ctx.sql("SELECT status FROM t").await?.collect().await?;
+
+        insta::assert_snapshot!(batches_to_string(&result),@r"
+        +--------+
+        | status |
+        +--------+
+        | active |
+        | active |
+        +--------+
         ");
         Ok(())
     }

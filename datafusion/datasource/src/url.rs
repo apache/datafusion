@@ -43,7 +43,7 @@ pub struct ListingTableUrl {
     prefix: Path,
     /// An optional glob expression used to filter files
     glob: Option<Pattern>,
-
+    /// Optional table reference for the table this url belongs to
     table_ref: Option<TableReference>,
 }
 
@@ -341,17 +341,19 @@ impl ListingTableUrl {
     }
 
     /// Returns a copy of current [`ListingTableUrl`] with a specified `glob`
-    pub fn with_glob(self, glob: &str) -> Result<Self> {
-        let glob =
-            Pattern::new(glob).map_err(|e| DataFusionError::External(Box::new(e)))?;
-        Self::try_new(self.url, Some(glob))
+    pub fn with_glob(mut self, glob: &str) -> Result<Self> {
+        self.glob =
+            Some(Pattern::new(glob).map_err(|e| DataFusionError::External(Box::new(e)))?);
+        Ok(self)
     }
 
+    /// Set the table reference for this [`ListingTableUrl`]
     pub fn with_table_ref(mut self, table_ref: TableReference) -> Self {
         self.table_ref = Some(table_ref);
         self
     }
 
+    /// Return the table reference for this [`ListingTableUrl`]
     pub fn get_table_ref(&self) -> &Option<TableReference> {
         &self.table_ref
     }

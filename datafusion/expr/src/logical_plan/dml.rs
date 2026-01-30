@@ -237,6 +237,8 @@ pub enum WriteOp {
     Update,
     /// `CREATE TABLE AS SELECT` operation
     Ctas,
+    /// `TRUNCATE` operation
+    Truncate,
 }
 
 impl WriteOp {
@@ -247,6 +249,7 @@ impl WriteOp {
             WriteOp::Delete => "Delete",
             WriteOp::Update => "Update",
             WriteOp::Ctas => "Ctas",
+            WriteOp::Truncate => "Truncate",
         }
     }
 }
