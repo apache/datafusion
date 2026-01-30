@@ -34,6 +34,7 @@ use datafusion_common::error::Result;
 use datafusion_common::types::NativeType;
 use datafusion_execution::TaskContext;
 use datafusion_execution::runtime_env::RuntimeEnv;
+use datafusion_expr::function::WindowUDFFieldArgs;
 use datafusion_expr::{
     AggregateUDF, ReturnFieldArgs, ScalarUDF, Signature, TypeSignature, WindowUDF,
 };
@@ -499,11 +500,26 @@ fn get_udwf_args_and_return_types(
         Ok(arg_types
             .into_iter()
             .map(|arg_types| {
+                let arg_fields: Vec<FieldRef> = arg_types
+                    .iter()
+                    .enumerate()
+                    .map(|(i, t)| {
+                        Arc::new(Field::new(format!("arg_{i}"), t.clone(), true))
+                    })
+                    .collect();
+                let return_type = udwf
+                    .field(WindowUDFFieldArgs::new(&arg_fields, udwf.name()))
+                    .map(|f| {
+                        remove_native_type_prefix(&NativeType::from(
+                            f.data_type().clone(),
+                        ))
+                    })
+                    .ok();
                 let arg_types = arg_types
                     .into_iter()
                     .map(|t| remove_native_type_prefix(&NativeType::from(t)))
                     .collect::<Vec<_>>();
-                (arg_types, None)
+                (arg_types, return_type)
             })
             .collect::<BTreeSet<_>>())
     }
