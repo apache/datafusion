@@ -29,6 +29,7 @@ use datafusion_expr::expr_rewriter::FunctionRewrite;
 use datafusion_expr::{InvariantLevel, LogicalPlan};
 
 use crate::analyzer::resolve_grouping_function::ResolveGroupingFunction;
+use crate::analyzer::resolve_input_file_name::ResolveInputFileName;
 use crate::analyzer::type_coercion::TypeCoercion;
 use crate::utils::log_plan;
 
@@ -36,6 +37,7 @@ use self::function_rewrite::ApplyFunctionRewrites;
 
 pub mod function_rewrite;
 pub mod resolve_grouping_function;
+pub mod resolve_input_file_name;
 pub mod type_coercion;
 
 /// [`AnalyzerRule`]s transform [`LogicalPlan`]s in some way to make
@@ -87,6 +89,7 @@ impl Analyzer {
     pub fn new() -> Self {
         let rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>> = vec![
             Arc::new(ResolveGroupingFunction::new()),
+            Arc::new(ResolveInputFileName::new()),
             Arc::new(TypeCoercion::new()),
         ];
         Self::with_rules(rules)

@@ -31,14 +31,7 @@ use std::any::Any;
     description = r#"Returns the path of the input file that produced the current row.
 
 Note: file paths/URIs may be sensitive metadata depending on your environment.
-
-DataFrame example:
-```rust
-use datafusion::functions::expr_fn::input_file_name;
-
-// df: DataFrame
-let df = df.select(vec![input_file_name()])?;
-```"#,
+"#,
     syntax_example = "input_file_name()",
     sql_example = r#"```sql
 SELECT input_file_name() FROM t;
