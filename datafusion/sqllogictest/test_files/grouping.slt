@@ -210,7 +210,7 @@ select c1, grouping(c2) from test group by c1;
 statement error c2.*not in grouping columns
 select c1, grouping(c1, c2) from test group by CUBE(c1);
 
-statement error zero arguments
+statement error Failed to coerce function call 'grouping\(\)'
 select c1, grouping() from test group by CUBE(c1);
 
 # grouping_sets_with_empty_set

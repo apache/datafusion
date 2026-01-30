@@ -36,22 +36,22 @@ SELECT next_day('2015-07-27'::DATE, 'Sat'::string);
 ----
 2015-08-01
 
-query error Failed to coerce arguments to satisfy a call to 'next_day' function
+query error Failed to coerce function call 'next_day\(Date32\)'
 SELECT next_day('2015-07-27'::DATE);
 
-query error Failed to coerce arguments to satisfy a call to 'next_day' function
+query error Failed to coerce function call 'next_day\(Utf8View\)'
 SELECT next_day('Sun'::string);
 
-query error 'next_day' does not support zero arguments
+query error Failed to coerce function call 'next_day\(\)'
 SELECT next_day();
 
-query error Failed to coerce arguments to satisfy a call to 'next_day' function
+query error Failed to coerce function call 'next_day\(Int32, Utf8View\)'
 SELECT next_day(1::int, 'Sun'::string);
 
-query error Failed to coerce arguments to satisfy a call to 'next_day' function
+query error Failed to coerce function call 'next_day\(Date32, Utf8View, Utf8View\)'
 SELECT next_day('2015-07-27'::DATE, 'Sat'::string, 'Sun'::string);
 
-query error Failed to coerce arguments to satisfy a call to 'next_day' function
+query error Failed to coerce function call 'next_day\(Utf8View, Utf8View\)'
 SELECT next_day('invalid_date'::string, 'Mon'::string);
 
 query D

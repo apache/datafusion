@@ -1830,7 +1830,7 @@ mod test {
 
         let err = Projection::try_new(vec![udaf], empty).err().unwrap();
         assert!(
-            err.strip_backtrace().starts_with("Error during planning: Failed to coerce arguments to satisfy a call to 'MY_AVG' function: coercion from Utf8 to the signature Uniform(1, [Float64]) failed")
+            err.strip_backtrace().starts_with("Error during planning: Failed to coerce function call 'MY_AVG(Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tMY_AVG(Float64)")
         );
         Ok(())
     }
@@ -1891,7 +1891,7 @@ mod test {
             .err()
             .unwrap()
             .strip_backtrace();
-        assert!(err.starts_with("Error during planning: Failed to coerce arguments to satisfy a call to 'avg' function: coercion from Utf8 to the signature Uniform(1, [Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64]) failed"));
+        assert!(err.starts_with("Error during planning: Failed to coerce function call 'avg(Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tavg(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"));
         Ok(())
     }
 

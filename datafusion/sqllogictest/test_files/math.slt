@@ -126,15 +126,15 @@ statement error
 SELECT abs(1, 2);
 
 # abs: unsupported argument type
-query error DataFusion error: Error during planning: Function 'abs' expects NativeType::Numeric but received NativeType::String
+query error Failed to coerce function call 'abs\(Utf8\)'
 SELECT abs('foo');
 
 # abs: numeric string
 # TODO: In Postgres, '-1.2' is unknown type and interpreted to float8 so they don't fail on this query
-query error DataFusion error: Error during planning: Function 'abs' expects NativeType::Numeric but received NativeType::String
+query error Failed to coerce function call 'abs\(Utf8\)'
 select abs('-1.2');
 
-query error DataFusion error: Error during planning: Function 'abs' expects NativeType::Numeric but received NativeType::String
+query error Failed to coerce function call 'abs\(Utf8\)'
 select abs(arrow_cast('-1.2', 'Utf8'));
 
 statement ok

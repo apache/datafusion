@@ -32,13 +32,13 @@ select union_column, union_extract(union_column, 'int') from union_table;
 query error DataFusion error: Execution error: field bool not found on union
 select union_extract(union_column, 'bool') from union_table;
 
-query error DataFusion error: Error during planning: 'union_extract' does not support zero arguments
+query error Failed to coerce function call 'union_extract\(\)'
 select union_extract() from union_table;
 
-query error DataFusion error: Error during planning: The function 'union_extract' expected 2 arguments but received 1
+query error Failed to coerce function call 'union_extract\(Union\(Sparse, 3: \("int": non-null Int32\), 1: \("string": non-null Utf8\)\)\)'
 select union_extract(union_column) from union_table;
 
-query error DataFusion error: Error during planning: The function 'union_extract' expected 2 arguments but received 1
+query error Failed to coerce function call 'union_extract\(Utf8\)'
 select union_extract('a') from union_table;
 
 query error DataFusion error: Execution error: union_extract first argument must be a union, got Utf8 instead
@@ -47,7 +47,7 @@ select union_extract('a', union_column) from union_table;
 query error DataFusion error: Execution error: union_extract second argument must be a non\-null string literal, got Int64 instead
 select union_extract(union_column, 1) from union_table;
 
-query error DataFusion error: Error during planning: The function 'union_extract' expected 2 arguments but received 3
+query error Failed to coerce function call 'union_extract\(Union\(Sparse, 3: \("int": non-null Int32\), 1: \("string": non-null Utf8\)\), Utf8, Utf8\)'
 select union_extract(union_column, 'a', 'b') from union_table;
 
 query ?T
@@ -57,10 +57,10 @@ select union_column, union_tag(union_column) from union_table;
 {string=bar} string
 {int=3} int
 
-query error DataFusion error: Error during planning: 'union_tag' does not support zero arguments
+query error Failed to coerce function call 'union_tag\(\)'
 select union_tag() from union_table;
 
-query error DataFusion error: Error during planning: The function 'union_tag' expected 1 arguments but received 2
+query error Failed to coerce function call 'union_tag\(Union\(Sparse, 3: \("int": non-null Int32\), 1: \("string": non-null Utf8\)\), Utf8\)'
 select union_tag(union_column, 'int') from union_table;
 
 query error DataFusion error: Execution error: union_tag only support unions, got Utf8

@@ -208,10 +208,10 @@ SELECT substr('alphabet', NULL, 2)
 ----
 NULL
 
-statement error Function 'substr' failed to match any signature
+statement error Failed to coerce function call 'substr\(Int64, Int64\)'
 SELECT substr(1, 3)
 
-statement error Function 'substr' failed to match any signature
+statement error Failed to coerce function call 'substr\(Int64, Int64, Int64\)'
 SELECT substr(1, 3, 4)
 
 query T
@@ -873,7 +873,7 @@ SELECT greatest(-1, 1, 2.3, 123456789, 3 + 5, -(-4), abs(-9.0))
 123456789
 
 
-query error Function 'greatest' user-defined coercion failed with "Error during planning: greatest was called without any arguments. It requires at least 1."
+query error User-defined coercion of function call 'greatest\(\)' failed with:\ngreatest was called without any arguments. It requires at least 1.
 SELECT greatest()
 
 query I
@@ -1071,7 +1071,7 @@ SELECT least(-1, 1, 2.3, 123456789, 3 + 5, -(-4), abs(-9.0))
 -1
 
 
-query error Function 'least' user-defined coercion failed with "Error during planning: least was called without any arguments. It requires at least 1."
+query error User-defined coercion of function call 'least\(\)' failed with:\nleast was called without any arguments. It requires at least 1.
 SELECT least()
 
 query I

@@ -27,7 +27,7 @@ use datafusion_common::utils::{
     ListCoercion, base_type, coerced_fixed_size_list_to_list,
 };
 use datafusion_common::{
-    Result, exec_err, internal_err, plan_err, types::NativeType, utils::list_ndims,
+    Result, internal_err, plan_err, types::NativeType, utils::list_ndims,
 };
 use datafusion_expr_common::signature::ArrayFunctionArgument;
 use datafusion_expr_common::type_coercion::binary::type_union_resolution;
@@ -313,16 +313,10 @@ fn get_valid_types_with_udf<F: UDFCoercionExt>(
     func: &F,
 ) -> Result<Vec<Vec<DataType>>> {
     let valid_types = match signature {
-        TypeSignature::UserDefined => match func.coerce_types(current_types) {
-            Ok(coerced_types) => vec![coerced_types],
-            Err(e) => {
-                return exec_err!(
-                    "Function '{}' user-defined coercion failed with {:?}",
-                    func.name(),
-                    e.strip_backtrace()
-                );
-            }
-        },
+        TypeSignature::UserDefined => {
+            let coerced_types = func.coerce_types(current_types)?;
+            vec![coerced_types]
+        }
         TypeSignature::OneOf(signatures) => {
             let mut res = vec![];
             let mut errors = vec![];

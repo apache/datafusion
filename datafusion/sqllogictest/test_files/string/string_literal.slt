@@ -132,10 +132,10 @@ SELECT substr('Hello🌏世界', 5, 3)
 ----
 o🌏世
 
-statement error Function 'substr' failed to match any signature
+statement error Failed to coerce function call 'substr\(Int64, Int64\)'
 SELECT substr(1, 3)
 
-statement error Function 'substr' failed to match any signature
+statement error Failed to coerce function call 'substr\(Int64, Int64, Int64\)'
 SELECT substr(1, 3, 4)
 
 statement error Execution error: negative substring length not allowed

@@ -144,26 +144,26 @@ statement error DataFusion error: Schema error: Schema contains duplicate unqual
 SELECT approx_distinct(c9) count_c9, approx_distinct(cast(c9 as varchar)) count_c9_str FROM aggregate_test_100
 
 # csv_query_approx_percentile_cont_with_weight
-statement error Failed to coerce arguments to satisfy a call to 'approx_percentile_cont_with_weight' function
+statement error Failed to coerce function call 'approx_percentile_cont_with_weight\(Utf8View, Int8, Float64\)'
 SELECT approx_percentile_cont_with_weight(c2, 0.95) WITHIN GROUP (ORDER BY c1) FROM aggregate_test_100
 
-statement error Failed to coerce arguments to satisfy a call to 'approx_percentile_cont_with_weight' function
+statement error Failed to coerce function call 'approx_percentile_cont_with_weight\(Int16, Utf8View, Float64\)'
 SELECT approx_percentile_cont_with_weight(c1, 0.95) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
 
-statement error Failed to coerce arguments to satisfy a call to 'approx_percentile_cont_with_weight' function
+statement error Failed to coerce function call 'approx_percentile_cont_with_weight\(Int16, Int8, Utf8View\)'
 SELECT approx_percentile_cont_with_weight(c2, c1) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
 
 # csv_query_approx_percentile_cont_with_histogram_bins
 statement error DataFusion error: Error during planning: Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be UInt > 0 literal \(got data type Int64\)\.
 SELECT c1, approx_percentile_cont(0.95, -1000) WITHIN GROUP (ORDER BY c3) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 
-statement error Failed to coerce arguments to satisfy a call to 'approx_percentile_cont' function
+statement error Failed to coerce function call 'approx_percentile_cont\(Int16, Float64, Utf8View\)'
 SELECT approx_percentile_cont(0.95, c1) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
 
-statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont' function: coercion from Int16, Float64, Float64 to the signature OneOf(.*) failed(.|\n)*
+statement error Failed to coerce function call 'approx_percentile_cont\(Int16, Float64, Float64\)'
 SELECT approx_percentile_cont(0.95, 111.1) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
 
-statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont' function: coercion from Float64, Float64, Float64 to the signature OneOf(.*) failed(.|\n)*
+statement error Failed to coerce function call 'approx_percentile_cont\(Float64, Float64, Float64\)'
 SELECT approx_percentile_cont(0.95, 111.1) WITHIN GROUP (ORDER BY c12) FROM aggregate_test_100
 
 statement error DataFusion error: Error during planning: Percentile value for 'APPROX_PERCENTILE_CONT' must be a literal

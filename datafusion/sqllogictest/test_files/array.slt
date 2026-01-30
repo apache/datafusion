@@ -1210,7 +1210,7 @@ from arrays_values_without_nulls;
 ## array_element (aliases: array_extract, list_extract, list_element)
 
 # Testing with empty arguments should result in an error
-query error DataFusion error: Error during planning: 'array_element' does not support zero arguments
+query error Failed to coerce function call 'array_element\(\)'
 select array_element();
 
 # array_element error
@@ -1548,7 +1548,7 @@ select array_max(make_array());
 NULL
 
 # Testing with empty arguments should result in an error
-query error DataFusion error: Error during planning: 'array_max' does not support zero arguments
+query error Failed to coerce function call 'array_max\(\)'
 select array_max();
 
 ## array_min
@@ -1638,7 +1638,7 @@ select array_min(make_array());
 NULL
 
 # Testing with empty arguments should result in an error
-query error DataFusion error: Error during planning: 'array_min' does not support zero arguments
+query error Failed to coerce function call 'array_min\(\)'
 select array_min();
 
 
@@ -1993,7 +1993,7 @@ select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 0,
 # Expected output (once supported):
 # ----
 # [1, 2, 3, 4, 5] [h, e, l, l, o]
-query error Failed to coerce arguments to satisfy a call to 'array_slice' function:
+query error Failed to coerce function call 'array_slice\(ListView\(Int64\), Int64, Int64\)'
 select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'ListView(Int64)'), 0, 6),
        array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'ListView(Utf8)'), 0, 5);
 
@@ -2040,7 +2040,7 @@ select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 2,
 # Expected output (once supported):
 # ----
 # [2, 3, 4, 5] [l, l, o]
-query error Failed to coerce arguments to satisfy a call to 'array_slice' function:
+query error Failed to coerce function call 'array_slice\(LargeListView\(Int64\), Int64, Int64\)'
 select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeListView(Int64)'), 2, 6),
        array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeListView(Utf8)'), 3, 7);
 
@@ -2321,10 +2321,10 @@ select array_slice(a, -1, 2, 1), array_slice(a, -1, 2),
 [6.0] [6.0] [] []
 
 # Testing with empty arguments should result in an error
-query error DataFusion error: Error during planning: 'array_slice' does not support zero arguments
+query error Failed to coerce function call 'array_slice\(\)'
 select array_slice();
 
-query error Failed to coerce arguments
+query error Failed to coerce function call 'array_slice\(Float64, Null, Null\)'
 select array_slice(3.5, NULL, NULL);
 
 ## array_any_value (aliases: list_any_value)
@@ -3361,7 +3361,7 @@ select
 [1, 2, 3] List(Utf8View)
 
 # array_concat error
-query error DataFusion error: Error during planning: Execution error: Function 'array_concat' user-defined coercion failed with "Error during planning: array_concat does not support type Int64"
+query error User-defined coercion of function call 'array_concat\(Int64, Int64\)' failed with:\narray_concat does not support type Int64
 select array_concat(1, 2);
 
 # array_concat scalar function #1
@@ -3688,10 +3688,10 @@ SELECT array_position(arrow_cast([1, 1, 100, 1, 1], 'LargeList(Int32)'), 100)
 ----
 3
 
-query error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'array_position' function: coercion from
+query error Failed to coerce function call 'array_position\(List\(Int64\), Utf8\)'
 SELECT array_position([1, 2, 3], 'foo')
 
-query error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'array_position' function: coercion from
+query error Failed to coerce function call 'array_position\(List\(Int64\), Utf8, Int64\)'
 SELECT array_position([1, 2, 3], 'foo', 2)
 
 # list_position scalar function #5 (function alias `array_position`)
@@ -4778,7 +4778,7 @@ select array_union(arrow_cast([], 'LargeList(Int64)'), arrow_cast([], 'LargeList
 # ----
 # [[]]
 
-query error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'array_union' function:
+query error Failed to coerce function call 'array_union\(LargeList\(List\(Int64\)\), LargeList\(Int64\)\)'
 select array_union(arrow_cast([[null]], 'LargeList(List(Int64))'), arrow_cast([], 'LargeList(Int64)'));
 
 # array_union scalar function #8
@@ -7271,17 +7271,17 @@ select generate_series(arrow_cast('2021-01-01T00:00:00', 'Timestamp(Nanosecond, 
 [2021-01-01T00:00:00-05:00, 2021-01-01T01:29:54.500-05:00, 2021-01-01T02:59:49-05:00, 2021-01-01T04:29:43.500-05:00, 2021-01-01T05:59:38-05:00]
 
 ## mixing types for timestamps is not supported
-query error DataFusion error: Error during planning: Internal error: Function 'generate_series' failed to match any signature
+query error Failed to coerce function call 'generate_series\(Timestamp\(ns, "-05:00"\), Date32, Interval\(MonthDayNano\)\)'
 select generate_series(arrow_cast('2021-01-01T00:00:00', 'Timestamp(Nanosecond, Some("-05:00"))'), DATE '2021-01-02', INTERVAL '1' HOUR);
 
 ## mixing types not allowed even if an argument is null
-query error DataFusion error: Error during planning: Internal error: Function 'generate_series' failed to match any signature
+query error Failed to coerce function call 'generate_series\(Timestamp\(ns\), Date32, Null\)'
 select generate_series(TIMESTAMP '1992-09-01', DATE '1993-03-01', NULL);
 
-query error DataFusion error: Error during planning: Internal error: Function 'generate_series' failed to match any signature
+query error Failed to coerce function call 'generate_series\(Int64, Utf8, Utf8\)'
 select generate_series(1, '2024-01-01', '2025-01-02');
 
-query error DataFusion error: Error during planning: Internal error: Function 'generate_series' failed to match any signature
+query error Failed to coerce function call 'generate_series\(Timestamp\(ns\), Utf8, Interval\(MonthDayNano\)\)'
 select generate_series('2024-01-01'::timestamp, '2025-01-02', interval '1 day');
 
 ## should return NULL

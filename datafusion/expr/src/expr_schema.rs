@@ -29,8 +29,8 @@ use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::datatype::FieldExt;
 use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
-    Column, DataFusionError, ExprSchema, Result, ScalarValue, Spans, TableReference,
-    not_impl_err, plan_datafusion_err, plan_err,
+    Column, ExprSchema, Result, ScalarValue, Spans, TableReference, not_impl_err,
+    plan_err,
 };
 use datafusion_expr_common::type_coercion::binary::BinaryTypeCoercer;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
@@ -628,23 +628,7 @@ fn verify_function_arguments<F: UDFCoercionExt>(
     input_fields: &[FieldRef],
 ) -> Result<Vec<FieldRef>> {
     fields_with_udf(input_fields, function).map_err(|err| {
-        let data_types = input_fields
-            .iter()
-            .map(|f| f.data_type())
-            .cloned()
-            .collect::<Vec<_>>();
-        plan_datafusion_err!(
-            "{} {}",
-            match err {
-                DataFusionError::Plan(msg) => msg,
-                err => err.to_string(),
-            },
-            utils::generate_signature_error_message(
-                function.name(),
-                function.signature(),
-                &data_types
-            )
-        )
+        utils::generate_signature_error_message(function, input_fields, err)
     })
 }
 
