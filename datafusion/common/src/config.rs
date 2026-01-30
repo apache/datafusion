@@ -3080,7 +3080,7 @@ config_namespace! {
        ///   {"key1": 2, "key2": "vals"}
        /// ]
        /// ```
-        pub newline_delimited: bool, default = true
+       pub newline_delimited: bool, default = true
     }
 }
 
