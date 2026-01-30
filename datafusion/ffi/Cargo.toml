@@ -67,7 +67,7 @@ datafusion-proto-common = { workspace = true }
 datafusion-session = { workspace = true }
 futures = { workspace = true }
 log = { workspace = true }
-prost = { workspace = true }
+prost = { version = "0.13" }
 semver = "1.0.27"
 tokio = { workspace = true }
 

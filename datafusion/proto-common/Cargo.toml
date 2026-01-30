@@ -45,7 +45,7 @@ json = ["serde", "pbjson"]
 arrow = { workspace = true }
 datafusion-common = { workspace = true }
 pbjson = { workspace = true, optional = true }
-prost = { workspace = true }
+prost = { version = "0.13" }
 serde = { version = "1.0", optional = true }
 
 [dev-dependencies]

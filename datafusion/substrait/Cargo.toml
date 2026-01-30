@@ -41,9 +41,9 @@ datafusion = { workspace = true, features = ["sql"] }
 half = { workspace = true }
 itertools = { workspace = true }
 object_store = { workspace = true }
-pbjson-types = { workspace = true }
-prost = { workspace = true }
-substrait = { version = "0.62", features = ["serde"] }
+pbjson-types = { version = "0.7" }
+prost = { version = "0.13" }
+substrait = { version = "0.58", features = ["serde"] }
 url = { workspace = true }
 tokio = { workspace = true, features = ["fs"] }
 uuid = { version = "1.19.0", features = ["v4"] }
