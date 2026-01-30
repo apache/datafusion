@@ -755,7 +755,6 @@ impl Test {
 enum RequestDetails {
     GetOpts { path: Path, get_options: GetOptions },
     GetRanges { path: Path, ranges: Vec<Range<u64>> },
-    Head { path: Path },
     List { prefix: Option<Path> },
     ListWithDelimiter { prefix: Option<Path> },
     ListWithOffset { prefix: Option<Path>, offset: Path },
@@ -809,9 +808,6 @@ impl Display for RequestDetails {
                     }
                 }
                 Ok(())
-            }
-            RequestDetails::Head { path } => {
-                write!(f, "HEAD path={path}")
             }
             RequestDetails::List { prefix } => {
                 write!(f, "LIST")?;

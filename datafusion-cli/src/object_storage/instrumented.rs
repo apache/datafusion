@@ -36,6 +36,7 @@ use datafusion::{
     execution::object_store::{DefaultObjectStoreRegistry, ObjectStoreRegistry},
 };
 use futures::stream::{BoxStream, Stream};
+use futures::{StreamExt, TryStreamExt};
 use object_store::{
     CopyOptions, GetOptions, GetRange, GetResult, ListResult, MultipartUpload,
     ObjectMeta, ObjectStore, ObjectStoreExt, PutMultipartOptions, PutOptions, PutPayload,
@@ -257,6 +258,32 @@ impl InstrumentedObjectStore {
         Ok(ret)
     }
 
+    fn instrumented_delete_stream(
+        &self,
+        locations: BoxStream<'static, Result<Path>>,
+    ) -> BoxStream<'static, Result<Path>> {
+        let requests_captured = Arc::clone(&self.requests);
+
+        let timestamp = Utc::now();
+        let start = Instant::now();
+        self.inner
+            .delete_stream(locations)
+            .and_then(move |location| {
+                let elapsed = start.elapsed();
+                requests_captured.lock().push(RequestDetails {
+                    op: Operation::Delete,
+                    path: location.clone(),
+                    timestamp: timestamp.clone(),
+                    duration: Some(elapsed),
+                    size: None,
+                    range: None,
+                    extra_display: None,
+                });
+                futures::future::ok(location)
+            })
+            .boxed()
+    }
+
     fn instrumented_list(
         &self,
         prefix: Option<&Path>,
@@ -397,6 +424,7 @@ impl ObjectStore for InstrumentedObjectStore {
         if self.enabled() {
             return self.instrumented_get_opts(location, options).await;
         }
+
         self.inner.get_opts(location, options).await
     }
 
@@ -405,7 +433,7 @@ impl ObjectStore for InstrumentedObjectStore {
         locations: BoxStream<'static, Result<Path>>,
     ) -> BoxStream<'static, Result<Path>> {
         if self.enabled() {
-            // TODO: Implement instrumented delete_stream
+            return self.instrumented_delete_stream(locations);
         }
 
         self.inner.delete_stream(locations)
