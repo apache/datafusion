@@ -273,7 +273,7 @@ impl InstrumentedObjectStore {
                 requests_captured.lock().push(RequestDetails {
                     op: Operation::Delete,
                     path: location.clone(),
-                    timestamp: timestamp.clone(),
+                    timestamp,
                     duration: Some(elapsed),
                     size: None,
                     range: None,
