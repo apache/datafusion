@@ -230,13 +230,13 @@ fn right_byte_length(string: &str, n: i64) -> usize {
     match n.cmp(&0) {
         Ordering::Less => string
             .char_indices()
-            .nth(n.unsigned_abs() as usize)
+            .nth(n.unsigned_abs().min(usize::MAX as u64) as usize)
             .map(|(index, _)| index)
             .unwrap_or(string.len()),
         Ordering::Equal => string.len(),
         Ordering::Greater => string
             .char_indices()
-            .nth_back(n.unsigned_abs() as usize - 1)
+            .nth_back((n.unsigned_abs().min(usize::MAX as u64) - 1) as usize)
             .map(|(index, _)| index)
             .unwrap_or(0),
     }
