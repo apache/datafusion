@@ -156,8 +156,8 @@ cargo run --example dataframe -- dataframe
 
 | Subcommand               | File Path                                                                         | Description                                                                   |
 | ------------------------ | --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| composed_extension_codec | [`proto/composed_extension_codec.rs`](examples/proto/composed_extension_codec.rs) | Example of expression caching/deduplication using the codec decorator pattern |
-| expression_deduplication | [`proto/expression_deduplication.rs`](examples/proto/expression_deduplication.rs) | Use multiple extension codecs for serialization/deserialization               |
+| composed_extension_codec | [`proto/composed_extension_codec.rs`](examples/proto/composed_extension_codec.rs) | Use multiple extension codecs for serialization/deserialization               |
+| expression_deduplication | [`proto/expression_deduplication.rs`](examples/proto/expression_deduplication.rs) | Example of expression caching/deduplication using the codec decorator pattern |
 
 ## Query Planning Examples
 
