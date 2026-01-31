@@ -155,6 +155,7 @@ pub fn pushdown_limit_helper(
         global_state.skip = skip;
         global_state.fetch = fetch;
         global_state.preserve_order = limit_exec.preserve_order();
+        global_state.satisfied = false;
 
         // Now the global state has the most recent information, we can remove
         // the `LimitExec` plan. We will decide later if we should add it again
@@ -172,7 +173,7 @@ pub fn pushdown_limit_helper(
     // If we have a non-limit operator with fetch capability, update global
     // state as necessary:
     if pushdown_plan.fetch().is_some() {
-        if global_state.fetch.is_none() {
+        if global_state.skip == 0 {
             global_state.satisfied = true;
         }
         (global_state.skip, global_state.fetch) = combine_limit(
