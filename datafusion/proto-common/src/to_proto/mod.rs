@@ -1010,7 +1010,7 @@ fn create_proto_scalar<I, T: FnOnce(&I) -> protobuf::scalar_value::Value>(
     Ok(protobuf::ScalarValue { value: Some(value) })
 }
 
-// ScalarValue::List / FixedSizeList / LargeList / Struct / Map are serialized using
+// Nested ScalarValue types (List / FixedSizeList / LargeList / Struct / Map) are serialized using
 // Arrow IPC messages as a single column RecordBatch
 fn encode_scalar_nested_value(
     arr: ArrayRef,
@@ -1018,7 +1018,7 @@ fn encode_scalar_nested_value(
 ) -> Result<protobuf::ScalarValue, Error> {
     let batch = RecordBatch::try_from_iter(vec![("field_name", arr)]).map_err(|e| {
         Error::General(format!(
-            "Error creating temporary batch while encoding ScalarValue::List: {e}"
+            "Error creating temporary batch while encoding nested ScalarValue: {e}"
         ))
     })?;
 
@@ -1041,7 +1041,7 @@ fn encode_scalar_nested_value(
             &mut compression_context,
         )
         .map_err(|e| {
-            Error::General(format!("Error encoding ScalarValue::List as IPC: {e}"))
+            Error::General(format!("Error encoding nested ScalarValue as IPC: {e}"))
         })?;
 
     let schema: protobuf::Schema = batch.schema().try_into()?;

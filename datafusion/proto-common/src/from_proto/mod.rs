@@ -389,7 +389,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
             Value::Float32Value(v) => Self::Float32(Some(*v)),
             Value::Float64Value(v) => Self::Float64(Some(*v)),
             Value::Date32Value(v) => Self::Date32(Some(*v)),
-            // ScalarValue::List is serialized using arrow IPC format
+            // Nested ScalarValue types are serialized using arrow IPC format
             Value::ListValue(v)
             | Value::FixedSizeListValue(v)
             | Value::LargeListValue(v)
@@ -406,7 +406,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                     schema_ref.try_into()?
                 } else {
                     return Err(Error::General(
-                        "Invalid schema while deserializing ScalarValue::List"
+                        "Invalid schema while deserializing nested ScalarValue"
                             .to_string(),
                     ));
                 };
@@ -427,13 +427,13 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                         root_as_message(encoded_schema.ipc_message.as_slice()).map_err(
                             |e| {
                                 Error::General(format!(
-                                    "Error IPC schema message while deserializing ScalarValue::List: {e}"
+                                    "Error IPC schema message while deserializing nested ScalarValue: {e}"
                                 ))
                             },
                         )?;
                     let ipc_schema = message.header_as_schema().ok_or_else(|| {
                         Error::General(
-                            "Unexpected message type deserializing ScalarValue::List schema"
+                            "Unexpected message type deserializing nested ScalarValue schema"
                                 .to_string(),
                         )
                     })?;
@@ -442,14 +442,14 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
 
                 let message = root_as_message(ipc_message.as_slice()).map_err(|e| {
                     Error::General(format!(
-                        "Error IPC message while deserializing ScalarValue::List: {e}"
+                        "Error IPC message while deserializing nested ScalarValue: {e}"
                     ))
                 })?;
                 let buffer = Buffer::from(arrow_data.as_slice());
 
                 let ipc_batch = message.header_as_record_batch().ok_or_else(|| {
                     Error::General(
-                        "Unexpected message type deserializing ScalarValue::List"
+                        "Unexpected message type deserializing nested ScalarValue"
                             .to_string(),
                     )
                 })?;
@@ -462,14 +462,14 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 {
                     let message = root_as_message(ipc_message.as_slice()).map_err(|e| {
                         Error::General(format!(
-                            "Error IPC message while deserializing ScalarValue::List dictionary message: {e}"
+                            "Error IPC message while deserializing nested ScalarValue dictionary message: {e}"
                         ))
                     })?;
                     let buffer = Buffer::from(arrow_data.as_slice());
 
                     let dict_batch = message.header_as_dictionary_batch().ok_or_else(|| {
                         Error::General(
-                            "Unexpected message type deserializing ScalarValue::List dictionary message"
+                            "Unexpected message type deserializing nested ScalarValue dictionary message"
                                 .to_string(),
                         )
                     })?;
@@ -481,7 +481,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                         &message.version(),
                     )
                     .map_err(|e| arrow_datafusion_err!(e))
-                    .map_err(|e| e.context("Decoding ScalarValue::List dictionary"))?;
+                    .map_err(|e| e.context("Decoding nested ScalarValue dictionary"))?;
                 }
 
                 let record_batch = read_record_batch(
@@ -493,7 +493,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                     &message.version(),
                 )
                 .map_err(|e| arrow_datafusion_err!(e))
-                .map_err(|e| e.context("Decoding ScalarValue::List Value"))?;
+                .map_err(|e| e.context("Decoding nested ScalarValue value"))?;
                 let arr = record_batch.column(0);
                 match value {
                     Value::ListValue(_) => {
