@@ -26,14 +26,30 @@
 //!
 //! Each subcommand runs a corresponding example:
 //! - `all` — run all examples included in this module
-//! - `adapter_serialization` — preserve custom PhysicalExprAdapter information during plan serialization using PhysicalExtensionCodec interception
-//! - `csv_json_opener` — use low level FileOpener APIs to read CSV/JSON into Arrow RecordBatches
-//! - `csv_sql_streaming` — build and run a streaming query plan from a SQL statement against a local CSV file
-//! - `custom_datasource` — run queries against a custom datasource (TableProvider)
-//! - `custom_file_casts` — implement custom casting rules to adapt file schemas
-//! - `custom_file_format` — write data to a custom file format
-//! - `default_column_values` — implement custom default value handling for missing columns using field metadata and PhysicalExprAdapter
-//! - `file_stream_provider` — run a query on FileStreamProvider which implements StreamProvider for reading and writing to arbitrary stream sources/sinks
+//!
+//! - `adapter_serialization`  
+//!   (file: adapter_serialization.rs, desc: Preserve custom PhysicalExprAdapter information during plan serialization using PhysicalExtensionCodec interception)
+//!
+//! - `csv_json_opener`  
+//!   (file: csv_json_opener.rs, desc: Use low-level FileOpener APIs for CSV/JSON)
+//!
+//! - `csv_sql_streaming`
+//!   (file: csv_sql_streaming.rs, desc: Run a streaming SQL query against CSV data)
+//!
+//! - `custom_datasource`  
+//!   (file: custom_datasource.rs, desc: Query a custom TableProvider)
+//!
+//! - `custom_file_casts`
+//!   (file: custom_file_casts.rs, desc: Implement custom casting rules)
+//!
+//! - `custom_file_format`
+//!   (file: custom_file_format.rs, desc: Write to a custom file format)
+//!
+//! - `default_column_values`
+//!   (file: default_column_values.rs, desc: Custom default values using metadata)
+//!
+//! - `file_stream_provider`
+//!   (file: file_stream_provider.rs, desc: Read/write via FileStreamProvider for streams)
 
 mod adapter_serialization;
 mod csv_json_opener;
