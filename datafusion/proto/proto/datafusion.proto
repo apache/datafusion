@@ -759,6 +759,16 @@ message PartitionColumn {
 }
 
 
+// Determines how file sink output paths are interpreted.
+enum FileOutputMode {
+  // Infer output mode from the URL (extension/trailing `/` heuristic).
+  FILE_OUTPUT_MODE_AUTOMATIC = 0;
+  // Write to a single file at the exact output path.
+  FILE_OUTPUT_MODE_SINGLE_FILE = 1;
+  // Write to a directory with generated filenames.
+  FILE_OUTPUT_MODE_DIRECTORY = 2;
+}
+
 message FileSinkConfig {
   reserved 6; // writer_mode
   reserved 8; // was `overwrite` which has been superseded by `insert_op`
@@ -771,6 +781,8 @@ message FileSinkConfig {
   bool keep_partition_by_columns = 9;
   InsertOp insert_op = 10;
   string file_extension = 11;
+  // Determines how the output path is interpreted.
+  FileOutputMode file_output_mode = 12;
 }
 
 enum InsertOp {
@@ -1193,6 +1205,7 @@ enum AggregateMode {
   FINAL_PARTITIONED = 2;
   SINGLE = 3;
   SINGLE_PARTITIONED = 4;
+  PARTIAL_REDUCE = 5;
 }
 
 message PartiallySortedInputOrderMode {

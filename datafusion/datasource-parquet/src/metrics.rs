@@ -65,6 +65,8 @@ pub struct ParquetFileMetrics {
     pub bloom_filter_eval_time: Time,
     /// Total rows filtered or matched by parquet page index
     pub page_index_rows_pruned: PruningMetrics,
+    /// Total pages filtered or matched by parquet page index
+    pub page_index_pages_pruned: PruningMetrics,
     /// Total time spent evaluating parquet page index filters
     pub page_index_eval_time: Time,
     /// Total time spent reading and parsing metadata from the footer
@@ -116,10 +118,10 @@ impl ParquetFileMetrics {
             .with_type(MetricType::SUMMARY)
             .pruning_metrics("row_groups_pruned_statistics", partition);
 
-        let page_index_rows_pruned = MetricBuilder::new(metrics)
+        let page_index_pages_pruned = MetricBuilder::new(metrics)
             .with_new_label("filename", filename.to_string())
             .with_type(MetricType::SUMMARY)
-            .pruning_metrics("page_index_rows_pruned", partition);
+            .pruning_metrics("page_index_pages_pruned", partition);
 
         let bytes_scanned = MetricBuilder::new(metrics)
             .with_new_label("filename", filename.to_string())
@@ -172,6 +174,10 @@ impl ParquetFileMetrics {
             .with_new_label("filename", filename.to_string())
             .subset_time("page_index_eval_time", partition);
 
+        let page_index_rows_pruned = MetricBuilder::new(metrics)
+            .with_new_label("filename", filename.to_string())
+            .pruning_metrics("page_index_rows_pruned", partition);
+
         let predicate_cache_inner_records = MetricBuilder::new(metrics)
             .with_new_label("filename", filename.to_string())
             .gauge("predicate_cache_inner_records", partition);
@@ -191,6 +197,7 @@ impl ParquetFileMetrics {
             pushdown_rows_matched,
             row_pushdown_eval_time,
             page_index_rows_pruned,
+            page_index_pages_pruned,
             statistics_eval_time,
             bloom_filter_eval_time,
             page_index_eval_time,
