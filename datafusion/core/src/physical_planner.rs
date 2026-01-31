@@ -1770,57 +1770,46 @@ impl DefaultPhysicalPlanner {
             return Ok((None, (0..source_schema.fields().len()).collect()));
         };
 
-        // Empty projection means zero columns
         if exprs.is_empty() {
             return Ok((None, vec![]));
         }
 
-        // Check if all expressions are simple column references
-        if self.is_simple_column_projection(exprs) {
-            // Extract column indices in projection order (preserving duplicates)
-            let indices: Vec<usize> = exprs
-                .iter()
-                .filter_map(|e| {
-                    if let Expr::Column(col) = e {
-                        source_schema.index_of(col.name()).ok()
-                    } else {
-                        None
-                    }
-                })
-                .collect();
+        let mut has_complex_expr = false;
+        let mut column_indices = Vec::with_capacity(exprs.len());
+        let mut all_required_columns = BTreeSet::new();
 
-            // No remainder needed for pure column projections
-            return Ok((None, indices));
-        }
-
-        // For expressions, compute required columns (deduplicated and sorted)
-        let mut required_columns = BTreeSet::new();
         for expr in exprs {
-            expr.apply(|e| {
-                if let Expr::Column(col) = e
-                    && let Ok(index) = source_schema.index_of(col.name())
-                {
-                    required_columns.insert(index);
+            if let Expr::Column(col) = expr {
+                if let Ok(index) = source_schema.index_of(col.name()) {
+                    column_indices.push(index);
+                    all_required_columns.insert(index);
                 }
-                Ok(TreeNodeRecursion::Continue)
-            })?;
+            } else {
+                has_complex_expr = true;
+                // Collect all column references from this expression
+                expr.apply(|e| {
+                    if let Expr::Column(col) = e
+                        && let Ok(index) = source_schema.index_of(col.name())
+                    {
+                        all_required_columns.insert(index);
+                    }
+                    Ok(TreeNodeRecursion::Continue)
+                })?;
+            }
         }
 
-        let indices: Vec<usize> = if required_columns.is_empty() {
-            // No columns found - scan all columns
-            (0..source_schema.fields().len()).collect()
+        if has_complex_expr {
+            // For expressions, use deduplicated/sorted indices and return remainder
+            let indices = if all_required_columns.is_empty() {
+                (0..source_schema.fields().len()).collect()
+            } else {
+                all_required_columns.into_iter().collect()
+            };
+            Ok((Some(exprs.clone()), indices))
         } else {
-            required_columns.into_iter().collect()
-        };
-
-        // Return the expressions as remainder projection
-        Ok((Some(exprs.clone()), indices))
-    }
-
-    /// Check if all projection expressions are simple column references.
-    /// If true, the scan can handle the projection directly without needing ProjectionExec.
-    fn is_simple_column_projection(&self, exprs: &[Expr]) -> bool {
-        exprs.iter().all(|expr| matches!(expr, Expr::Column(_)))
+            // For pure column projections, use indices in projection order
+            Ok((None, column_indices))
+        }
     }
 
     /// Creates a ProjectionExec from logical expressions.
