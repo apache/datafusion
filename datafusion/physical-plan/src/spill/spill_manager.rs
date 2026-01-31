@@ -41,8 +41,6 @@ pub struct SpillManager {
     env: Arc<RuntimeEnv>,
     pub(crate) metrics: SpillMetrics,
     schema: SchemaRef,
-    /// Number of batches to buffer in memory during disk reads
-    batch_read_buffer_capacity: usize,
     /// general-purpose compression options
     pub(crate) compression: SpillCompression,
 }
@@ -53,18 +51,10 @@ impl SpillManager {
             env,
             metrics,
             schema,
-            batch_read_buffer_capacity: 2,
             compression: SpillCompression::default(),
         }
     }
 
-    pub fn with_batch_read_buffer_capacity(
-        mut self,
-        batch_read_buffer_capacity: usize,
-    ) -> Self {
-        self.batch_read_buffer_capacity = batch_read_buffer_capacity;
-        self
-    }
 
     pub fn with_compression_type(mut self, spill_compression: SpillCompression) -> Self {
         self.compression = spill_compression;
