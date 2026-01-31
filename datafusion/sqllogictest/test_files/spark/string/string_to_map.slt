@@ -1,0 +1,85 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Tests for Spark-compatible string_to_map function
+# https://spark.apache.org/docs/latest/api/sql/index.html#str_to_map
+#
+# Test cases derived from Spark test("StringToMap"):
+# https://github.com/apache/spark/blob/v4.0.0/sql/catalyst/src/test/scala/org/apache/spark/sql/catalyst/expressions/ComplexTypeSuite.scala#L525-L618
+#
+# Note: Duplicate key handling uses LAST_WIN policy (not EXCEPTION which is Spark default)
+
+# Basic test with explicit delimiters
+query ?
+SELECT string_to_map('a:1,b:2,c:3', ',', ':');
+----
+{a: 1, b: 2, c: 3}
+
+# Default delimiters (1-arg form)
+query ?
+SELECT string_to_map('a:1,b:2,c:3');
+----
+{a: 1, b: 2, c: 3}
+
+# Alias str_to_map
+query ?
+SELECT str_to_map('a:1,b:2');
+----
+{a: 1, b: 2}
+
+# Custom delimiters with '='
+query ?
+SELECT string_to_map('a=1,b=2,c=3', ',', '=');
+----
+{a: 1, b: 2, c: 3}
+
+# NULL input returns NULL
+query ?
+SELECT string_to_map(NULL, ',', ':');
+----
+NULL
+
+# Empty string returns map with empty key and NULL value
+query ?
+SELECT string_to_map('', ',', ':');
+----
+{: NULL}
+
+# Single key without value returns NULL value
+query ?
+SELECT string_to_map('a', ',', ':');
+----
+{a: NULL}
+
+# Missing key-value delimiter results in NULL value
+query ?
+SELECT string_to_map('a,b:2', ',', ':');
+----
+{a: NULL, b: 2}
+
+# Duplicate keys: last wins (LAST_WIN policy)
+# Note: map order may differ from Spark, but values are correct
+query ?
+SELECT string_to_map('a:1,b:2,a:3', ',', ':');
+----
+{b: 2, a: 3}
+
+# Preserve spaces in values
+query ?
+SELECT string_to_map('a: ,b:2', ',', ':');
+----
+{a:  , b: 2}

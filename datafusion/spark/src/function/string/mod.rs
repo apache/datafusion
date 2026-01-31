@@ -26,6 +26,7 @@ pub mod length;
 pub mod like;
 pub mod luhn_check;
 pub mod space;
+pub mod string_to_map;
 pub mod substring;
 
 use datafusion_expr::ScalarUDF;
@@ -45,6 +46,7 @@ make_udf_function!(format_string::FormatStringFunc, format_string);
 make_udf_function!(space::SparkSpace, space);
 make_udf_function!(substring::SparkSubstring, substring);
 make_udf_function!(base64::SparkUnBase64, unbase64);
+make_udf_function!(string_to_map::SparkStringToMap, string_to_map);
 
 pub mod expr_fn {
     use datafusion_functions::export_functions;
@@ -110,6 +112,11 @@ pub mod expr_fn {
         "Decodes the input string `str` from a base64 string into binary data.",
         str
     ));
+    export_functions!((
+        string_to_map,
+        "Creates a map after splitting the text into key/value pairs using delimiters. Default delimiters are ',' for pair_delim and ':' for key_value_delim. Both pair_delim and key_value_delim are treated as regular expressions.",
+        text pair_delim key_value_delim
+    ));
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
@@ -127,5 +134,6 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         space(),
         substring(),
         unbase64(),
+        string_to_map(),
     ]
 }

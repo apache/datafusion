@@ -17,7 +17,7 @@
 
 pub mod map_from_arrays;
 pub mod map_from_entries;
-mod utils;
+pub mod utils;
 
 use datafusion_expr::ScalarUDF;
 use datafusion_functions::make_udf_function;
