@@ -154,13 +154,6 @@ fn right_impl<'a, T: OffsetSizeTrait, V: ArrayAccessor<Item = &'a str>>(
         .map(|(string, n)| match (string, n) {
             (Some(string), Some(n)) => {
                 let byte_length = right_byte_length(string, n);
-                // println!(
-                //     "Input string: {}, n: {} -> byte_length: {} -> {}",
-                //     &string,
-                //     n,
-                //     byte_length,
-                //     &string[byte_length..]
-                // );
                 // Extract starting from `byte_length` bytes from a byte-indexed slice
                 Some(&string[byte_length..])
             }
