@@ -1775,41 +1775,50 @@ impl DefaultPhysicalPlanner {
         }
 
         let mut has_complex_expr = false;
-        let mut column_indices = Vec::with_capacity(exprs.len());
         let mut all_required_columns = BTreeSet::new();
+        let mut remainder_exprs = vec![];
 
         for expr in exprs {
-            if let Expr::Column(col) = expr {
-                if let Ok(index) = source_schema.index_of(col.name()) {
-                    column_indices.push(index);
-                    all_required_columns.insert(index);
-                }
-            } else {
-                has_complex_expr = true;
-                // Collect all column references from this expression
-                expr.apply(|e| {
-                    if let Expr::Column(col) = e
-                        && let Ok(index) = source_schema.index_of(col.name())
-                    {
+            // Collect all column references from this expression
+            let mut is_complex_expr = false;
+            expr.apply(|e| {
+                if let Expr::Column(col) = e {
+                    if let Ok(index) = source_schema.index_of(col.name()) {
+                        // If we made it this far this must be the first level and the whole expression is a simple column reference
+                        // But we don't know if subsequent expressions might have more complex expressions necessitating `remainder_exprs`
+                        // to be populated, so we push to `remainder_exprs` just in case they are needed later.
+                        // It is simpler to do this now than to try to backtrack later since we already matched into Expr::Column
+                        // and thus can simply clone `expr` here.
+                        // If `is_complex_expr` is true then we will append the complex expression itself to `remainder_exprs` instead
+                        // later once we've fully traversed this expression.
+                        if !is_complex_expr {
+                            remainder_exprs.push(expr.clone());
+                        }
                         all_required_columns.insert(index);
                     }
-                    Ok(TreeNodeRecursion::Continue)
-                })?;
+                } else {
+                    // Nothing to do here except note that we will have to append the full expression later
+                    is_complex_expr = true;
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })?;
+            if is_complex_expr {
+                // If any expression in the projection is not a simple column reference we will need to apply a remainder projection
+                has_complex_expr = true;
+                // Append the full expression itself to the remainder expressions
+                // So given a projection like `[a, a + c, d]` we would have:
+                // all_required_columns = {0, 2, 3}
+                // original schema: [a: Int, b: Int, c: Int, d: Int]
+                // projected schema: [a: Int, c: Int, d: Int]
+                // remainder_exprs = [col(a), col(a) + col(c), col(d)]
+                remainder_exprs.push(expr.clone());
             }
         }
 
-        if has_complex_expr {
-            // For expressions, use deduplicated/sorted indices and return remainder
-            let indices = if all_required_columns.is_empty() {
-                (0..source_schema.fields().len()).collect()
-            } else {
-                all_required_columns.into_iter().collect()
-            };
-            Ok((Some(exprs.clone()), indices))
-        } else {
-            // For pure column projections, use indices in projection order
-            Ok((None, column_indices))
-        }
+        Ok((
+            has_complex_expr.then_some(remainder_exprs),
+            all_required_columns.into_iter().collect(),
+        ))
     }
 
     /// Creates a ProjectionExec from logical expressions.
