@@ -1782,10 +1782,10 @@ impl DefaultPhysicalPlanner {
         let mut required_columns = BTreeSet::new();
         for expr in exprs {
             expr.apply(|e| {
-                if let Expr::Column(col) = e {
-                    if let Ok(index) = source_schema.index_of(col.name()) {
-                        required_columns.insert(index);
-                    }
+                if let Expr::Column(col) = e
+                    && let Ok(index) = source_schema.index_of(col.name())
+                {
+                    required_columns.insert(index);
                 }
                 Ok(TreeNodeRecursion::Continue)
             })?;
