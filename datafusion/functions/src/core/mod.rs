@@ -39,6 +39,7 @@ pub mod r#struct;
 pub mod union_extract;
 pub mod union_tag;
 pub mod version;
+pub mod operators;
 
 // create UDFs
 make_udf_function!(arrow_cast::ArrowCastFunc, arrow_cast);
@@ -57,6 +58,7 @@ make_udf_function!(union_extract::UnionExtractFun, union_extract);
 make_udf_function!(union_tag::UnionTagFunc, union_tag);
 make_udf_function!(version::VersionFunc, version);
 make_udf_function!(arrow_metadata::ArrowMetadataFunc, arrow_metadata);
+make_udf_function!(operators::bitwise_xor::BitwiseXorFunc, bitwise_xor);
 
 pub mod expr_fn {
     use datafusion_expr::{Expr, Literal};
@@ -160,6 +162,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         union_extract(),
         union_tag(),
         version(),
+        bitwise_xor(),
         r#struct(),
     ]
 }

@@ -15,7 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use arrow::datatypes::{DataType, TimeUnit};
+use datafusion_expr::ScalarUDF;
 use datafusion_expr::planner::{
     PlannerResult, RawBinaryExpr, RawDictionaryExpr, RawFieldAccessExpr,
 };
@@ -140,6 +143,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         }
 
         let RawBinaryExpr { op, left, right } = binary_expr;
+
+        // This is part of the ongoing effort to migrate binary operators to the UDF framework.
+        // See https://github.com/apache/datafusion/issues/20018 for more details.
+        if let Some(fm) = self.rewrite_operator_to_function(&op) {
+            let inner = ScalarFunction::new_udf(fm, vec![left, right]);
+            return Ok(Expr::ScalarFunction(inner))
+        }
+
         Ok(Expr::BinaryExpr(BinaryExpr::new(
             Box::new(left),
             self.parse_sql_binary_op(&op)?,
@@ -174,6 +185,20 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         self.validate_schema_satisfies_exprs(schema, std::slice::from_ref(&expr))?;
         let (expr, _) = expr.infer_placeholder_types(schema)?;
         Ok(expr)
+    }
+
+    /// This is part of the ongoing effort to migrate binary operators to the UDF framework.
+    /// See https://github.com/apache/datafusion/issues/20018 for more details.
+    fn rewrite_operator_to_function(&self, op: &BinaryOperator) -> Option<Arc<ScalarUDF>> {
+        let expr_op = if let Ok(op) = self.parse_sql_binary_op(&op) {
+            op
+        } else {
+            return None;
+        };
+        match expr_op {
+            Operator::BitwiseXor => self.context_provider.get_function_meta("bitwise_xor"),
+            _ => None,
+        }
     }
 
     /// Rewrite aliases which are not-complete (e.g. ones that only include only table qualifier in a schema.table qualified relation)

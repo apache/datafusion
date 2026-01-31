@@ -21,7 +21,6 @@ use arrow::array::*;
 use arrow::compute::kernels::bitwise::{
     bitwise_and, bitwise_and_scalar, bitwise_or, bitwise_or_scalar, bitwise_shift_left,
     bitwise_shift_left_scalar, bitwise_shift_right, bitwise_shift_right_scalar,
-    bitwise_xor, bitwise_xor_scalar,
 };
 use arrow::compute::kernels::boolean::not;
 use arrow::compute::kernels::comparison::{regexp_is_match, regexp_is_match_scalar};
@@ -83,7 +82,7 @@ macro_rules! create_left_integral_dyn_kernel {
 }
 
 create_left_integral_dyn_kernel!(bitwise_or_dyn, bitwise_or);
-create_left_integral_dyn_kernel!(bitwise_xor_dyn, bitwise_xor);
+// create_left_integral_dyn_kernel!(bitwise_xor_dyn, bitwise_xor);
 create_left_integral_dyn_kernel!(bitwise_and_dyn, bitwise_and);
 create_left_integral_dyn_kernel!(bitwise_shift_right_dyn, bitwise_shift_right);
 create_left_integral_dyn_kernel!(bitwise_shift_left_dyn, bitwise_shift_left);
@@ -150,7 +149,7 @@ macro_rules! create_left_integral_dyn_scalar_kernel {
 
 create_left_integral_dyn_scalar_kernel!(bitwise_and_dyn_scalar, bitwise_and_scalar);
 create_left_integral_dyn_scalar_kernel!(bitwise_or_dyn_scalar, bitwise_or_scalar);
-create_left_integral_dyn_scalar_kernel!(bitwise_xor_dyn_scalar, bitwise_xor_scalar);
+// create_left_integral_dyn_scalar_kernel!(bitwise_xor_dyn_scalar, bitwise_xor_scalar);
 create_left_integral_dyn_scalar_kernel!(
     bitwise_shift_right_dyn_scalar,
     bitwise_shift_right_scalar
