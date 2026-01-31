@@ -41,7 +41,7 @@ use crate::utils::UNNEST_PLACEHOLDER;
 use datafusion_common::{
     Column, DataFusionError, Result, ScalarValue, TableReference, assert_or_internal_err,
     internal_err, not_impl_err,
-    tree_node::{TransformedResult, TreeNode},
+    tree_node::{Transformed, TransformedResult, TreeNode},
 };
 use datafusion_expr::expr::OUTER_REFERENCE_COLUMN_PREFIX;
 use datafusion_expr::{
@@ -1093,25 +1093,38 @@ impl Unparser<'_> {
                     if project_exprs.is_empty() {
                         builder = builder.project(self.empty_projection_fallback())?;
                     } else {
-                        let project_columns = project_exprs
-                            .iter()
-                            .map(|expr| {
-                                // Extract column name from the expression
-                                let col_name = if let Expr::Column(col) = expr {
-                                    col.name.clone()
-                                } else {
-                                    expr.schema_name().to_string()
-                                };
-                                if alias.is_some() {
-                                    Column::new(alias.clone(), col_name)
-                                } else {
-                                    Column::new(
-                                        Some(table_scan.table_name.clone()),
-                                        col_name,
-                                    )
-                                }
-                            })
-                            .collect::<Vec<_>>();
+                        // Handle expression-based projections with alias rewriting
+                        let project_columns: Vec<Expr> = if alias.is_some() {
+                            project_exprs
+                                .iter()
+                                .map(|expr| {
+                                    expr.clone()
+                                        .transform(|e| {
+                                            if let Expr::Column(col) = &e {
+                                                if let Some(relation) = &col.relation {
+                                                    if relation != &table_scan.table_name
+                                                    {
+                                                        return Ok(Transformed::no(e));
+                                                    }
+                                                    Ok(Transformed::yes(Expr::Column(
+                                                        Column::new(
+                                                            alias.clone(),
+                                                            col.name().to_string(),
+                                                        ),
+                                                    )))
+                                                } else {
+                                                    Ok(Transformed::no(e))
+                                                }
+                                            } else {
+                                                Ok(Transformed::no(e))
+                                            }
+                                        })
+                                        .map(|t| t.data)
+                                })
+                                .collect::<Result<Vec<_>>>()?
+                        } else {
+                            project_exprs.clone()
+                        };
                         builder = builder.project(project_columns)?;
                     };
                 }

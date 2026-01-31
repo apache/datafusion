@@ -18,7 +18,7 @@
 //! Planner for [`LogicalPlan`] to [`ExecutionPlan`]
 
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use crate::datasource::file_format::file_type_to_format;
@@ -455,34 +455,8 @@ impl DefaultPhysicalPlanner {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let exec_node: Arc<dyn ExecutionPlan> = match node {
             // Leaves (no children)
-            LogicalPlan::TableScan(TableScan {
-                source,
-                projection,
-                filters,
-                fetch,
-                ..
-            }) => {
-                let table_source = source_as_provider(source)?;
-                // Remove all qualifiers from the scan as the provider
-                // doesn't know (nor should care) how the relation was
-                // referred to in the query
-                let filters = unnormalize_cols(filters.iter().cloned());
-                let filters_vec = filters.into_iter().collect::<Vec<_>>();
-
-                // Convert projection expressions to indices for the table provider
-                let source_schema = source.schema();
-                let projection_indices = projection.as_ref().and_then(|exprs| {
-                    datafusion_expr::utils::projection_indices_from_exprs(
-                        exprs,
-                        &source_schema,
-                    )
-                });
-                let opts = ScanArgs::default()
-                    .with_projection(projection_indices.as_deref())
-                    .with_filters(Some(&filters_vec))
-                    .with_limit(*fetch);
-                let res = table_source.scan_with_args(session_state, opts).await?;
-                Arc::clone(res.plan())
+            LogicalPlan::TableScan(scan) => {
+                self.plan_table_scan(scan, session_state).await?
             }
             LogicalPlan::Values(Values { values, schema }) => {
                 let exprs = values
@@ -1733,6 +1707,124 @@ impl DefaultPhysicalPlanner {
                     .collect::<Result<Vec<_>>>()?,
             ))
         }
+    }
+
+    /// Plan a TableScan node, wrapping with ProjectionExec as needed.
+    async fn plan_table_scan(
+        &self,
+        scan: &TableScan,
+        session_state: &SessionState,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let provider = source_as_provider(&scan.source)?;
+        let source_schema = scan.source.schema();
+
+        // Remove qualifiers from filters
+        let filters: Vec<Expr> = unnormalize_cols(scan.filters.iter().cloned());
+
+        // Compute required column indices for the scan
+        let scan_projection =
+            self.compute_scan_projection(&scan.projection, &source_schema)?;
+
+        // Create the scan
+        let scan_args = ScanArgs::default()
+            .with_projection(scan_projection.as_deref())
+            .with_filters(if filters.is_empty() {
+                None
+            } else {
+                Some(&filters)
+            })
+            .with_limit(scan.fetch);
+
+        let scan_result = provider.scan_with_args(session_state, scan_args).await?;
+        let mut plan: Arc<dyn ExecutionPlan> = Arc::clone(scan_result.plan());
+
+        // Wrap with ProjectionExec if projection contains expressions beyond simple columns
+        if let Some(ref proj_exprs) = scan.projection {
+            // Only need ProjectionExec if projection contains non-column expressions
+            let needs_projection = !self.is_simple_column_projection(proj_exprs);
+
+            if needs_projection {
+                let scan_output_schema = plan.schema();
+                let scan_df_schema =
+                    DFSchema::try_from(scan_output_schema.as_ref().clone())?;
+                let unnormalized_proj_exprs =
+                    unnormalize_cols(proj_exprs.iter().cloned());
+                plan = self.create_projection_exec(
+                    &unnormalized_proj_exprs,
+                    plan,
+                    &scan_df_schema,
+                    session_state,
+                )?;
+            }
+        }
+
+        Ok(plan)
+    }
+
+    /// Compute the column indices needed for the scan based on projection expressions.
+    fn compute_scan_projection(
+        &self,
+        projection: &Option<Vec<Expr>>,
+        source_schema: &Schema,
+    ) -> Result<Option<Vec<usize>>> {
+        let Some(exprs) = projection else {
+            // None means scan all columns
+            return Ok(None);
+        };
+
+        // Empty projection means project zero columns
+        if exprs.is_empty() {
+            return Ok(Some(vec![]));
+        }
+
+        // Collect column names from projection expressions
+        // Use a BTreeSet to return deduplicated and sorted column indices
+        let mut required_columns = BTreeSet::new();
+        for expr in exprs {
+            expr.apply(|e| {
+                if let Expr::Column(col) = e {
+                    if let Ok(index) = source_schema.index_of(col.name()) {
+                        required_columns.insert(index);
+                    }
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })?;
+        }
+
+        // If no columns found, return None to scan all columns
+        // (this handles cases like expressions that don't reference any columns)
+        if required_columns.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(required_columns.into_iter().collect()))
+        }
+    }
+
+    /// Check if all projection expressions are simple column references.
+    /// If true, the scan can handle the projection directly without needing ProjectionExec.
+    fn is_simple_column_projection(&self, exprs: &[Expr]) -> bool {
+        exprs.iter().all(|expr| matches!(expr, Expr::Column(_)))
+    }
+
+    /// Creates a ProjectionExec from logical expressions.
+    fn create_projection_exec(
+        &self,
+        exprs: &[Expr],
+        input: Arc<dyn ExecutionPlan>,
+        input_dfschema: &DFSchema,
+        session_state: &SessionState,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let physical_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = exprs
+            .iter()
+            .map(|e| {
+                let physical =
+                    self.create_physical_expr(e, input_dfschema, session_state)?;
+                let name = e.schema_name().to_string();
+                Ok((physical, name))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(Arc::new(ProjectionExec::try_new(physical_exprs, input)?))
     }
 }
 

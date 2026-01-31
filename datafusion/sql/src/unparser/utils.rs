@@ -27,8 +27,8 @@ use datafusion_common::{
     tree_node::{Transformed, TransformedResult, TreeNode},
 };
 use datafusion_expr::{
-    Aggregate, Expr, LogicalPlan, LogicalPlanBuilder, Projection, SortExpr, Unnest,
-    Window, expr, utils::grouping_set_to_exprlist,
+    Aggregate, Expr, LogicalPlan, LogicalPlanBuilder, Projection, SortExpr,
+    TableScanBuilder, Unnest, Window, expr, utils::grouping_set_to_exprlist,
 };
 
 use indexmap::IndexSet;
@@ -385,20 +385,17 @@ pub(crate) fn try_transform_to_simple_table_scan_with_filters(
                     }
                 }
 
-                // Convert projection expressions back to indices for the scan builder
-                let source_schema = table_scan.source.schema();
-                let projection_indices =
-                    table_scan.projection.as_ref().and_then(|exprs| {
-                        datafusion_expr::utils::projection_indices_from_exprs(
-                            exprs,
-                            &source_schema,
-                        )
-                    });
-                let mut builder = LogicalPlanBuilder::scan(
-                    table_scan.table_name.clone(),
-                    Arc::clone(&table_scan.source),
-                    projection_indices,
-                )?;
+                // Use TableScanBuilder to preserve expression-based projections
+                let mut builder = LogicalPlanBuilder::from(LogicalPlan::TableScan(
+                    TableScanBuilder::new(
+                        table_scan.table_name.clone(),
+                        Arc::clone(&table_scan.source),
+                    )
+                    .projection(table_scan.projection.clone())
+                    .filters(vec![]) // Filters handled separately
+                    .fetch(None)
+                    .build()?,
+                ));
 
                 if let Some(alias) = table_alias.take() {
                     builder = builder.alias(alias)?;
