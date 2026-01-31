@@ -1550,7 +1550,7 @@ impl Expr {
                     func.args.iter().map(|arg| arg.placement()).collect();
                 func.func.placement(&arg_placements)
             }
-            _ => ExpressionPlacement::PlaceAtRoot,
+            _ => ExpressionPlacement::MoveTowardsRootNodes,
         }
     }
 

@@ -525,7 +525,7 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
     expr.iter()
         .for_each(|expr| expr.add_column_ref_counts(&mut column_referral_map));
 
-    // If an expression is non-trivial (PlaceAtRoot) and appears more than once, do not merge
+    // If an expression is non-trivial (MoveTowardsRootNodes) and appears more than once, do not merge
     // them as consecutive projections will benefit from a compute-once approach.
     // For details, see: https://github.com/apache/datafusion/issues/8296
     if column_referral_map.into_iter().any(|(col, usage)| {

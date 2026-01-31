@@ -978,13 +978,13 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// This is used by optimizers to make decisions about expression placement,
     /// such as whether to push expressions down through projections.
     ///
-    /// The default implementation returns [`ExpressionPlacement::PlaceAtRoot`],
+    /// The default implementation returns [`ExpressionPlacement::MoveTowardsRootNodes`],
     /// meaning the expression should stay at the root of the plan.
     ///
     /// Override this method to indicate that the function can be pushed down
     /// closer to the data source.
     fn placement(&self, _args: &[ExpressionPlacement]) -> ExpressionPlacement {
-        ExpressionPlacement::PlaceAtRoot
+        ExpressionPlacement::MoveTowardsRootNodes
     }
 }
 

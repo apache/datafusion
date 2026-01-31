@@ -437,9 +437,9 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     /// This is used by optimizers to make decisions about expression placement,
     /// such as whether to push expressions down through projections.
     ///
-    /// The default implementation returns [`ExpressionPlacement::PlaceAtRoot`].
+    /// The default implementation returns [`ExpressionPlacement::MoveTowardsRootNodes`].
     fn placement(&self) -> ExpressionPlacement {
-        ExpressionPlacement::PlaceAtRoot
+        ExpressionPlacement::MoveTowardsRootNodes
     }
 }
 

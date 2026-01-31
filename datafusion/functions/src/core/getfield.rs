@@ -505,13 +505,13 @@ impl ScalarUDFImpl for GetFieldFunc {
         // 1. The base (first arg) is a column or already placeable at leaves
         // 2. All field keys (remaining args) are literals
         if args.is_empty() {
-            return ExpressionPlacement::PlaceAtRoot;
+            return ExpressionPlacement::MoveTowardsRootNodes;
         }
 
         let base_placement = args[0];
         let base_is_pushable = matches!(
             base_placement,
-            ExpressionPlacement::Column | ExpressionPlacement::PlaceAtLeaves
+            ExpressionPlacement::Column | ExpressionPlacement::MoveTowardsLeafNodes
         );
 
         let all_keys_are_literals = args
@@ -520,9 +520,9 @@ impl ScalarUDFImpl for GetFieldFunc {
             .all(|p| matches!(p, ExpressionPlacement::Literal));
 
         if base_is_pushable && all_keys_are_literals {
-            ExpressionPlacement::PlaceAtLeaves
+            ExpressionPlacement::MoveTowardsLeafNodes
         } else {
-            ExpressionPlacement::PlaceAtRoot
+            ExpressionPlacement::MoveTowardsRootNodes
         }
     }
 }
@@ -575,7 +575,10 @@ mod tests {
 
         // get_field(col, 'literal') -> leaf-pushable (static field access)
         let args = vec![ExpressionPlacement::Column, ExpressionPlacement::Literal];
-        assert_eq!(func.placement(&args), ExpressionPlacement::PlaceAtLeaves);
+        assert_eq!(
+            func.placement(&args),
+            ExpressionPlacement::MoveTowardsLeafNodes
+        );
 
         // get_field(col, 'a', 'b') -> leaf-pushable (nested static field access)
         let args = vec![
@@ -583,14 +586,20 @@ mod tests {
             ExpressionPlacement::Literal,
             ExpressionPlacement::Literal,
         ];
-        assert_eq!(func.placement(&args), ExpressionPlacement::PlaceAtLeaves);
+        assert_eq!(
+            func.placement(&args),
+            ExpressionPlacement::MoveTowardsLeafNodes
+        );
 
-        // get_field(get_field(col, 'a'), 'b') represented as PlaceAtLeaves for base
+        // get_field(get_field(col, 'a'), 'b') represented as MoveTowardsLeafNodes for base
         let args = vec![
-            ExpressionPlacement::PlaceAtLeaves,
+            ExpressionPlacement::MoveTowardsLeafNodes,
             ExpressionPlacement::Literal,
         ];
-        assert_eq!(func.placement(&args), ExpressionPlacement::PlaceAtLeaves);
+        assert_eq!(
+            func.placement(&args),
+            ExpressionPlacement::MoveTowardsLeafNodes
+        );
     }
 
     #[test]
@@ -599,7 +608,10 @@ mod tests {
 
         // get_field(col, other_col) -> NOT leaf-pushable (dynamic per-row lookup)
         let args = vec![ExpressionPlacement::Column, ExpressionPlacement::Column];
-        assert_eq!(func.placement(&args), ExpressionPlacement::PlaceAtRoot);
+        assert_eq!(
+            func.placement(&args),
+            ExpressionPlacement::MoveTowardsRootNodes
+        );
 
         // get_field(col, 'a', other_col) -> NOT leaf-pushable (dynamic nested lookup)
         let args = vec![
@@ -607,7 +619,10 @@ mod tests {
             ExpressionPlacement::Literal,
             ExpressionPlacement::Column,
         ];
-        assert_eq!(func.placement(&args), ExpressionPlacement::PlaceAtRoot);
+        assert_eq!(
+            func.placement(&args),
+            ExpressionPlacement::MoveTowardsRootNodes
+        );
     }
 
     #[test]
@@ -616,17 +631,23 @@ mod tests {
 
         // get_field(root_expr, 'literal') -> NOT leaf-pushable
         let args = vec![
-            ExpressionPlacement::PlaceAtRoot,
+            ExpressionPlacement::MoveTowardsRootNodes,
             ExpressionPlacement::Literal,
         ];
-        assert_eq!(func.placement(&args), ExpressionPlacement::PlaceAtRoot);
+        assert_eq!(
+            func.placement(&args),
+            ExpressionPlacement::MoveTowardsRootNodes
+        );
 
         // get_field(col, root_expr) -> NOT leaf-pushable
         let args = vec![
             ExpressionPlacement::Column,
-            ExpressionPlacement::PlaceAtRoot,
+            ExpressionPlacement::MoveTowardsRootNodes,
         ];
-        assert_eq!(func.placement(&args), ExpressionPlacement::PlaceAtRoot);
+        assert_eq!(
+            func.placement(&args),
+            ExpressionPlacement::MoveTowardsRootNodes
+        );
     }
 
     #[test]
@@ -634,14 +655,23 @@ mod tests {
         let func = GetFieldFunc::new();
 
         // Empty args -> NOT leaf-pushable
-        assert_eq!(func.placement(&[]), ExpressionPlacement::PlaceAtRoot);
+        assert_eq!(
+            func.placement(&[]),
+            ExpressionPlacement::MoveTowardsRootNodes
+        );
 
-        // Just base, no key -> PlaceAtLeaves (not a valid call but should handle gracefully)
+        // Just base, no key -> MoveTowardsLeafNodes (not a valid call but should handle gracefully)
         let args = vec![ExpressionPlacement::Column];
-        assert_eq!(func.placement(&args), ExpressionPlacement::PlaceAtLeaves);
+        assert_eq!(
+            func.placement(&args),
+            ExpressionPlacement::MoveTowardsLeafNodes
+        );
 
         // Literal base with literal key -> NOT leaf-pushable (would be constant-folded)
         let args = vec![ExpressionPlacement::Literal, ExpressionPlacement::Literal];
-        assert_eq!(func.placement(&args), ExpressionPlacement::PlaceAtRoot);
+        assert_eq!(
+            func.placement(&args),
+            ExpressionPlacement::MoveTowardsRootNodes
+        );
     }
 }

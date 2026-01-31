@@ -29,10 +29,14 @@ pub enum ExpressionPlacement {
     Column,
     /// A cheap expression that can be pushed to leaf nodes in the plan.
     /// Examples include `get_field` for struct field access.
-    PlaceAtLeaves,
-    /// An expensive expression that should stay at the root of the plan.
-    /// This is the default for most expressions.
-    PlaceAtRoot,
+    /// Pushing these expressions down in the plan can reduce data early
+    /// at low compute cost.
+    /// See [`ExpressionPlacement::should_push_to_leaves`] for details.
+    MoveTowardsLeafNodes,
+    /// An expensive expression that should stay where it is in the plan
+    /// or possibly be moved closer to the root nodes (this is not implemented yet).
+    /// Examples include complex scalar functions or UDFs.
+    MoveTowardsRootNodes,
 }
 
 impl ExpressionPlacement {
@@ -40,11 +44,11 @@ impl ExpressionPlacement {
     /// in the query plan.
     ///
     /// This returns true for:
-    /// - `Column`: Simple column references can be pushed down. They do no compute and do not increase or
+    /// - [`ExpressionPlacement::Column`]: Simple column references can be pushed down. They do no compute and do not increase or
     ///   decrease the amount of data being processed.
     ///   A projection that reduces the number of columns can eliminate unnecessary data early,
     ///   but this method only considers one expression at a time, not a projection as a whole.
-    /// - `PlaceAtLeaves`: Cheap expressions can be pushed down to leaves to take advantage of
+    /// - [`ExpressionPlacement::MoveTowardsLeafNodes`]: Cheap expressions can be pushed down to leaves to take advantage of
     ///   early computation and potential optimizations at the data source level.
     ///   For example `struct_col['field']` is cheap to compute (just an Arc clone of the nested array for `'field'`)
     ///   and thus can reduce data early in the plan at very low compute cost.
@@ -53,7 +57,7 @@ impl ExpressionPlacement {
     pub fn should_push_to_leaves(&self) -> bool {
         matches!(
             self,
-            ExpressionPlacement::Column | ExpressionPlacement::PlaceAtLeaves
+            ExpressionPlacement::Column | ExpressionPlacement::MoveTowardsLeafNodes
         )
     }
 }
