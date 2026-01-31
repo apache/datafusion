@@ -26,8 +26,12 @@
 //!
 //! Each subcommand runs a corresponding example:
 //! - `all` — run all examples included in this module
-//! - `composed_extension_codec` — example of using multiple extension codecs for serialization / deserialization
-//! - `expression_deduplication` — example of expression caching/deduplication using the codec decorator pattern
+//!
+//! - `composed_extension_codec`
+//!   (file: composed_extension_codec.rs, desc: Example of expression caching/deduplication using the codec decorator pattern)
+//!
+//! - `expression_deduplication`
+//!   (file: composed_extension_codec.rs, desc: Use multiple extension codecs for serialization/deserialization)
 
 mod composed_extension_codec;
 mod expression_deduplication;

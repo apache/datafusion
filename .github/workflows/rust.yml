@@ -710,9 +710,10 @@ jobs:
           git diff --exit-code
 
 # This job ensures `datafusion-examples/README.md` stays in sync with the source code:
-# 1. Generates README automatically from examples/*.rs and examples.toml
-# 2. Formats it with DataFusion's standard prettier script
-# 3. Compares against committed README.md and fails if out-of-date
+# 1. Generates README automatically using the Rust examples docs generator
+#    (parsing documentation from `examples/<group>/main.rs`)
+# 2. Formats the generated Markdown using DataFusion's standard Prettier setup
+# 3. Compares the result against the committed README.md and fails if out-of-date
   examples-docs-check:
     name: check example README is up-to-date
     needs: linux-build-lib

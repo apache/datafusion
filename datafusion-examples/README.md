@@ -53,38 +53,6 @@ cargo run --example dataframe -- all
 cargo run --example dataframe -- dataframe
 ```
 
-## Example Metadata (`examples.toml`)
-
-The list of examples and their documentation is generated automatically from
-the filesystem and the `examples.toml` file located in this crate.
-
-### What is `examples.toml`?
-
-`examples.toml` defines **human-readable metadata** for examples, including:
-
-- the subcommand name used with `cargo run --example <group> -- <subcommand>`
-- a short description explaining what the example demonstrates
-- the Rust source file that implements the example
-
-The actual source files under `examples/<group>/*.rs` remain the source of truth
-for which examples exist.
-
-### Important notes
-
-- the subcommand name does not have to match the filename
-- subcommands are a stable CLI interface; filenames are free to change
-- all files referenced in examples.toml must exist on disk (validated by CI)
-
-### Format
-
-Each section corresponds to an example group and maps subcommands to files:
-
-```toml
-[dataframe]
-dataframe = { file = "dataframe.rs", desc = "Query DataFrames from various sources" }
-cache_factory = { file = "cache_factory.rs", desc = "Custom lazy caching for DataFrames" }
-```
-
 ## Builtin Functions Examples
 
 ### Group: `builtin_functions`
