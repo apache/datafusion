@@ -80,6 +80,11 @@ fn criterion_benchmark(c: &mut Criterion) {
                         Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
                     })
                     .collect::<Vec<_>>();
+                let return_type = if is_string_view {
+                    DataType::Utf8View
+                } else {
+                    DataType::Utf8
+                };
                 let config_options = Arc::new(ConfigOptions::default());
 
                 b.iter(|| {
@@ -89,7 +94,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                                 args: args.clone(),
                                 arg_fields: arg_fields.clone(),
                                 number_rows: size,
-                                return_field: Field::new("f", DataType::Utf8, true)
+                                return_field: Field::new("f", return_type.clone(), true)
                                     .into(),
                                 config_options: Arc::clone(&config_options),
                             })
@@ -113,6 +118,11 @@ fn criterion_benchmark(c: &mut Criterion) {
                         Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
                     })
                     .collect::<Vec<_>>();
+                let return_type = if is_string_view {
+                    DataType::Utf8View
+                } else {
+                    DataType::Utf8
+                };
                 let config_options = Arc::new(ConfigOptions::default());
 
                 b.iter(|| {
@@ -122,7 +132,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                                 args: args.clone(),
                                 arg_fields: arg_fields.clone(),
                                 number_rows: size,
-                                return_field: Field::new("f", DataType::Utf8, true)
+                                return_field: Field::new("f", return_type.clone(), true)
                                     .into(),
                                 config_options: Arc::clone(&config_options),
                             })
