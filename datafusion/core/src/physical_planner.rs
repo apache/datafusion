@@ -1721,13 +1721,13 @@ impl DefaultPhysicalPlanner {
         // Remove qualifiers from filters
         let filters: Vec<Expr> = unnormalize_cols(scan.filters.iter().cloned());
 
-        // Compute required column indices for the scan
-        let scan_projection =
+        // Compute required column indices and remainder projection
+        let (remainder_projection, scan_indices) =
             self.compute_scan_projection(&scan.projection, &source_schema)?;
 
         // Create the scan
         let scan_args = ScanArgs::default()
-            .with_projection(scan_projection.as_deref())
+            .with_projection(Some(&scan_indices))
             .with_filters(if filters.is_empty() {
                 None
             } else {
@@ -1738,47 +1738,62 @@ impl DefaultPhysicalPlanner {
         let scan_result = provider.scan_with_args(session_state, scan_args).await?;
         let mut plan: Arc<dyn ExecutionPlan> = Arc::clone(scan_result.plan());
 
-        // Wrap with ProjectionExec if projection contains expressions beyond simple columns
-        if let Some(ref proj_exprs) = scan.projection {
-            // Only need ProjectionExec if projection contains non-column expressions
-            let needs_projection = !self.is_simple_column_projection(proj_exprs);
-
-            if needs_projection {
-                let scan_output_schema = plan.schema();
-                let scan_df_schema =
-                    DFSchema::try_from(scan_output_schema.as_ref().clone())?;
-                let unnormalized_proj_exprs =
-                    unnormalize_cols(proj_exprs.iter().cloned());
-                plan = self.create_projection_exec(
-                    &unnormalized_proj_exprs,
-                    plan,
-                    &scan_df_schema,
-                    session_state,
-                )?;
-            }
+        // Wrap with ProjectionExec if remainder projection is needed
+        if let Some(ref proj_exprs) = remainder_projection {
+            let scan_output_schema = plan.schema();
+            let scan_df_schema = DFSchema::try_from(scan_output_schema.as_ref().clone())?;
+            let unnormalized_proj_exprs = unnormalize_cols(proj_exprs.iter().cloned());
+            plan = self.create_projection_exec(
+                &unnormalized_proj_exprs,
+                plan,
+                &scan_df_schema,
+                session_state,
+            )?;
         }
 
         Ok(plan)
     }
 
     /// Compute the column indices needed for the scan based on projection expressions.
+    ///
+    /// Returns a tuple of:
+    /// - `Option<Vec<Expr>>`: Remainder projection to apply on top of the scan output.
+    ///   `None` if the projection is all simple column references (reordering, dropping, etc.)
+    /// - `Vec<usize>`: Column indices to scan from the source.
     fn compute_scan_projection(
         &self,
         projection: &Option<Vec<Expr>>,
         source_schema: &Schema,
-    ) -> Result<Option<Vec<usize>>> {
+    ) -> Result<(Option<Vec<Expr>>, Vec<usize>)> {
         let Some(exprs) = projection else {
-            // None means scan all columns
-            return Ok(None);
+            // None means scan all columns, no remainder needed
+            return Ok((None, (0..source_schema.fields().len()).collect()));
         };
 
-        // Empty projection means project zero columns
+        // Empty projection means zero columns
         if exprs.is_empty() {
-            return Ok(Some(vec![]));
+            return Ok((None, vec![]));
         }
 
-        // Collect column names from projection expressions
-        // Use a BTreeSet to return deduplicated and sorted column indices
+        // Check if all expressions are simple column references
+        if self.is_simple_column_projection(exprs) {
+            // Extract column indices in projection order (preserving duplicates)
+            let indices: Vec<usize> = exprs
+                .iter()
+                .filter_map(|e| {
+                    if let Expr::Column(col) = e {
+                        source_schema.index_of(col.name()).ok()
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            // No remainder needed for pure column projections
+            return Ok((None, indices));
+        }
+
+        // For expressions, compute required columns (deduplicated and sorted)
         let mut required_columns = BTreeSet::new();
         for expr in exprs {
             expr.apply(|e| {
@@ -1791,13 +1806,15 @@ impl DefaultPhysicalPlanner {
             })?;
         }
 
-        // If no columns found, return None to scan all columns
-        // (this handles cases like expressions that don't reference any columns)
-        if required_columns.is_empty() {
-            Ok(None)
+        let indices: Vec<usize> = if required_columns.is_empty() {
+            // No columns found - scan all columns
+            (0..source_schema.fields().len()).collect()
         } else {
-            Ok(Some(required_columns.into_iter().collect()))
-        }
+            required_columns.into_iter().collect()
+        };
+
+        // Return the expressions as remainder projection
+        Ok((Some(exprs.clone()), indices))
     }
 
     /// Check if all projection expressions are simple column references.
