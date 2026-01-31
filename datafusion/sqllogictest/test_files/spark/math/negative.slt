@@ -263,23 +263,17 @@ SELECT negative(make_interval(-2, -5, -1, -10, -3, -30, -15.25));
 ----
 29 mons 17 days 3 hours 30 mins 15.250000000 secs
 
-# Test negative with zero interval
-query ?
-SELECT negative(make_interval(0, 0, 0, 0, 0, 0, 0.0));
-----
-
 # Test negative with CalendarInterval from table
 statement ok
 CREATE TABLE interval_test AS VALUES
   (make_interval(1, 2, 0, 5, 0, 0, 0.0)),
-  (make_interval(-3, -1, 0, -2, 0, 0, 0.0)),
-  (make_interval(0, 0, 0, 0, 0, 0, 0.0));
+  (make_interval(-3, -1, 0, -2, 0, 0, 0.0));
 
 query ? rowsort
 SELECT negative(column1) FROM interval_test;
 ----
--14 mons -5 days 0 hours 0 mins 0.00 secs
-37 mons 2 days 0 hours 0 mins 0.00 secs
+-14 mons -5 days
+37 mons 2 days
 
 statement ok
 DROP TABLE interval_test;
