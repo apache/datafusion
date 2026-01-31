@@ -78,19 +78,19 @@ By default, string types are mapped to `Utf8View`. This can be configured using 
 
 ## Numeric Types
 
-| SQL DataType                         | Arrow DataType                 |
-| ------------------------------------ | :----------------------------- |
-| `TINYINT`                            | `Int8`                         |
-| `SMALLINT`                           | `Int16`                        |
-| `INT` or `INTEGER`                   | `Int32`                        |
-| `BIGINT`                             | `Int64`                        |
-| `TINYINT UNSIGNED`                   | `UInt8`                        |
-| `SMALLINT UNSIGNED`                  | `UInt16`                       |
-| `INT UNSIGNED` or `INTEGER UNSIGNED` | `UInt32`                       |
-| `BIGINT UNSIGNED`                    | `UInt64`                       |
-| `FLOAT`                              | `Float32`                      |
-| `REAL`                               | `Float32`                      |
-| `DOUBLE`                             | `Float64`                      |
+| SQL DataType                                     | Arrow DataType                 |
+| ------------------------------------------------ | :----------------------------- |
+| `TINYINT`                                        | `Int8`                         |
+| `SMALLINT`                                       | `Int16`                        |
+| `INT` or `INTEGER`                               | `Int32`                        |
+| `BIGINT`                                         | `Int64`                        |
+| `TINYINT UNSIGNED`                               | `UInt8`                        |
+| `SMALLINT UNSIGNED`                              | `UInt16`                       |
+| `INT UNSIGNED` or `INTEGER UNSIGNED`             | `UInt32`                       |
+| `BIGINT UNSIGNED`                                | `UInt64`                       |
+| `FLOAT`                                          | `Float32`                      |
+| `REAL`                                           | `Float32`                      |
+| `DOUBLE`                                         | `Float64`                      |
 | `DECIMAL(precision, scale)` where precision ≤ 38 | `Decimal128(precision, scale)` |
 | `DECIMAL(precision, scale)` where precision > 38 | `Decimal256(precision, scale)` |
 
