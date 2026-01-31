@@ -405,9 +405,7 @@ async fn csv_explain_plans() {
         actual,
         @r"
     Explain [plan_type:Utf8, plan:Utf8]
-      Projection: aggregate_test_100.c1 [c1:Utf8View]
-        Filter: aggregate_test_100.c2 > Int8(10) [c1:Utf8View, c2:Int8]
-          TableScan: aggregate_test_100 projection=[c1, c2], partial_filters=[aggregate_test_100.c2 > Int8(10)] [c1:Utf8View, c2:Int8]
+      TableScan: aggregate_test_100 projection=[c1], partial_filters=[aggregate_test_100.c2 > Int8(10)] [c1:Utf8View]
     "
     );
     //
@@ -418,9 +416,7 @@ async fn csv_explain_plans() {
         actual,
         @r"
     Explain
-      Projection: aggregate_test_100.c1
-        Filter: aggregate_test_100.c2 > Int8(10)
-          TableScan: aggregate_test_100 projection=[c1, c2], partial_filters=[aggregate_test_100.c2 > Int8(10)]
+      TableScan: aggregate_test_100 projection=[c1], partial_filters=[aggregate_test_100.c2 > Int8(10)]
     "
     );
     //
@@ -438,23 +434,15 @@ async fn csv_explain_plans() {
       {
         graph[label="LogicalPlan"]
         2[shape=box label="Explain"]
-        3[shape=box label="Projection: aggregate_test_100.c1"]
+        3[shape=box label="TableScan: aggregate_test_100 projection=[c1], partial_filters=[aggregate_test_100.c2 > Int8(10)]"]
         2 -> 3 [arrowhead=none, arrowtail=normal, dir=back]
-        4[shape=box label="Filter: aggregate_test_100.c2 > Int8(10)"]
-        3 -> 4 [arrowhead=none, arrowtail=normal, dir=back]
-        5[shape=box label="TableScan: aggregate_test_100 projection=[c1, c2], partial_filters=[aggregate_test_100.c2 > Int8(10)]"]
-        4 -> 5 [arrowhead=none, arrowtail=normal, dir=back]
       }
-      subgraph cluster_6
+      subgraph cluster_4
       {
         graph[label="Detailed LogicalPlan"]
-        7[shape=box label="Explain\nSchema: [plan_type:Utf8, plan:Utf8]"]
-        8[shape=box label="Projection: aggregate_test_100.c1\nSchema: [c1:Utf8View]"]
-        7 -> 8 [arrowhead=none, arrowtail=normal, dir=back]
-        9[shape=box label="Filter: aggregate_test_100.c2 > Int8(10)\nSchema: [c1:Utf8View, c2:Int8]"]
-        8 -> 9 [arrowhead=none, arrowtail=normal, dir=back]
-        10[shape=box label="TableScan: aggregate_test_100 projection=[c1, c2], partial_filters=[aggregate_test_100.c2 > Int8(10)]\nSchema: [c1:Utf8View, c2:Int8]"]
-        9 -> 10 [arrowhead=none, arrowtail=normal, dir=back]
+        5[shape=box label="Explain\nSchema: [plan_type:Utf8, plan:Utf8]"]
+        6[shape=box label="TableScan: aggregate_test_100 projection=[c1], partial_filters=[aggregate_test_100.c2 > Int8(10)]\nSchema: [c1:Utf8View]"]
+        5 -> 6 [arrowhead=none, arrowtail=normal, dir=back]
       }
     }
     // End DataFusion GraphViz Plan
@@ -474,8 +462,9 @@ async fn csv_explain_plans() {
     let actual = actual.into_iter().map(|r| r.join("\t")).collect::<String>();
     // Since the plan contains path that are environmentally dependant (e.g. full path of the test file), only verify important content
     assert_contains!(&actual, "logical_plan");
-    assert_contains!(&actual, "Projection: aggregate_test_100.c1");
-    assert_contains!(actual, "Filter: aggregate_test_100.c2 > Int8(10)");
+    // Filters are now pushed to TableScan.filters (classification happens in physical planner)
+    assert_contains!(&actual, "TableScan: aggregate_test_100 projection=[c1]");
+    assert_contains!(actual, "partial_filters=[aggregate_test_100.c2 > Int8(10)]");
 }
 
 #[tokio::test]
@@ -621,9 +610,7 @@ async fn csv_explain_verbose_plans() {
         actual,
         @r"
     Explain [plan_type:Utf8, plan:Utf8]
-      Projection: aggregate_test_100.c1 [c1:Utf8View]
-        Filter: aggregate_test_100.c2 > Int8(10) [c1:Utf8View, c2:Int8]
-          TableScan: aggregate_test_100 projection=[c1, c2], partial_filters=[aggregate_test_100.c2 > Int8(10)] [c1:Utf8View, c2:Int8]
+      TableScan: aggregate_test_100 projection=[c1], partial_filters=[aggregate_test_100.c2 > Int8(10)] [c1:Utf8View]
     "
     );
     //
@@ -634,9 +621,7 @@ async fn csv_explain_verbose_plans() {
         actual,
         @r"
     Explain
-      Projection: aggregate_test_100.c1
-        Filter: aggregate_test_100.c2 > Int8(10)
-          TableScan: aggregate_test_100 projection=[c1, c2], partial_filters=[aggregate_test_100.c2 > Int8(10)]
+      TableScan: aggregate_test_100 projection=[c1], partial_filters=[aggregate_test_100.c2 > Int8(10)]
     "
     );
     //
@@ -654,23 +639,15 @@ async fn csv_explain_verbose_plans() {
       {
         graph[label="LogicalPlan"]
         2[shape=box label="Explain"]
-        3[shape=box label="Projection: aggregate_test_100.c1"]
+        3[shape=box label="TableScan: aggregate_test_100 projection=[c1], partial_filters=[aggregate_test_100.c2 > Int8(10)]"]
         2 -> 3 [arrowhead=none, arrowtail=normal, dir=back]
-        4[shape=box label="Filter: aggregate_test_100.c2 > Int8(10)"]
-        3 -> 4 [arrowhead=none, arrowtail=normal, dir=back]
-        5[shape=box label="TableScan: aggregate_test_100 projection=[c1, c2], partial_filters=[aggregate_test_100.c2 > Int8(10)]"]
-        4 -> 5 [arrowhead=none, arrowtail=normal, dir=back]
       }
-      subgraph cluster_6
+      subgraph cluster_4
       {
         graph[label="Detailed LogicalPlan"]
-        7[shape=box label="Explain\nSchema: [plan_type:Utf8, plan:Utf8]"]
-        8[shape=box label="Projection: aggregate_test_100.c1\nSchema: [c1:Utf8View]"]
-        7 -> 8 [arrowhead=none, arrowtail=normal, dir=back]
-        9[shape=box label="Filter: aggregate_test_100.c2 > Int8(10)\nSchema: [c1:Utf8View, c2:Int8]"]
-        8 -> 9 [arrowhead=none, arrowtail=normal, dir=back]
-        10[shape=box label="TableScan: aggregate_test_100 projection=[c1, c2], partial_filters=[aggregate_test_100.c2 > Int8(10)]\nSchema: [c1:Utf8View, c2:Int8]"]
-        9 -> 10 [arrowhead=none, arrowtail=normal, dir=back]
+        5[shape=box label="Explain\nSchema: [plan_type:Utf8, plan:Utf8]"]
+        6[shape=box label="TableScan: aggregate_test_100 projection=[c1], partial_filters=[aggregate_test_100.c2 > Int8(10)]\nSchema: [c1:Utf8View]"]
+        5 -> 6 [arrowhead=none, arrowtail=normal, dir=back]
       }
     }
     // End DataFusion GraphViz Plan

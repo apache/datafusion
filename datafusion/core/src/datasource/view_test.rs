@@ -322,11 +322,13 @@ mod tests {
 
         let plan = df.explain(false, false)?.collect().await?;
 
-        // Filters all the way to Parquet
+        // Filters all the way to Parquet - physical planner creates FilterExec
+        // for inexact filters. Column index is @2 because we expand projection
+        // to include filter columns.
         let formatted = arrow::util::pretty::pretty_format_batches(&plan)
             .unwrap()
             .to_string();
-        assert!(formatted.contains("FilterExec: id@0 = 1"));
+        assert!(formatted.contains("FilterExec: id@2 = 1"), "{formatted}");
         Ok(())
     }
 
@@ -396,11 +398,12 @@ mod tests {
             .await?;
         let plan = dataframe.into_optimized_plan()?;
         let actual = format!("{}", plan.display_indent());
+        // Filters are now pushed to TableScan.filters during logical optimization
+        // (classification happens in physical planner)
         let expected = "\
         Explain\
         \n  CreateView: Bare { table: \"xyz\" }\
-        \n    Filter: abc.column2 = Int64(5)\
-        \n      TableScan: abc projection=[column1, column2, column3]";
+        \n    TableScan: abc projection=[column1, column2, column3], unsupported_filters=[abc.column2 = Int64(5)]";
         assert_eq!(expected, actual);
 
         let dataframe = session_ctx
@@ -408,11 +411,11 @@ mod tests {
             .await?;
         let plan = dataframe.into_optimized_plan()?;
         let actual = format!("{}", plan.display_indent());
+        // Filters are now pushed to TableScan.filters during logical optimization
         let expected = "\
         Explain\
         \n  CreateView: Bare { table: \"xyz\" }\
-        \n    Filter: abc.column2 = Int64(5)\
-        \n      TableScan: abc projection=[column1, column2]";
+        \n    TableScan: abc projection=[column1, column2], unsupported_filters=[abc.column2 = Int64(5)]";
         assert_eq!(expected, actual);
 
         Ok(())
