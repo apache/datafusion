@@ -456,20 +456,21 @@ For example, to cast the output of <code class="docutils literal notranslate"><s
 </thead>
 <tbody>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">CHAR</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">Utf8</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">Utf8View</span></code></p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">VARCHAR</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">Utf8</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">Utf8View</span></code></p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">TEXT</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">Utf8</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">Utf8View</span></code></p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">STRING</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">Utf8</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">Utf8View</span></code></p></td>
 </tr>
 </tbody>
 </table>
 </div>
+<p>By default, string types are mapped to <code class="docutils literal notranslate"><span class="pre">Utf8View</span></code>. This can be configured using the <code class="docutils literal notranslate"><span class="pre">datafusion.sql_parser.map_string_types_to_utf8view</span></code> setting. When set to <code class="docutils literal notranslate"><span class="pre">false</span></code>, string types are mapped to <code class="docutils literal notranslate"><span class="pre">Utf8</span></code> instead.</p>
 </section>
 <section id="numeric-types">
 <h2>Numeric Types<a class="headerlink" href="#numeric-types" title="Link to this heading">#</a></h2>
@@ -513,12 +514,16 @@ For example, to cast the output of <code class="docutils literal notranslate"><s
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">DOUBLE</span></code></p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">Float64</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">DECIMAL(precision,</span> <span class="pre">scale)</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">DECIMAL(precision,</span> <span class="pre">scale)</span></code> where precision ≤ 38</p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">Decimal128(precision,</span> <span class="pre">scale)</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">DECIMAL(precision,</span> <span class="pre">scale)</span></code> where precision &gt; 38</p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">Decimal256(precision,</span> <span class="pre">scale)</span></code></p></td>
 </tr>
 </tbody>
 </table>
 </div>
+<p>The maximum supported precision for <code class="docutils literal notranslate"><span class="pre">DECIMAL</span></code> types is 76.</p>
 </section>
 <section id="date-time-types">
 <h2>Date/Time Types<a class="headerlink" href="#date-time-types" title="Link to this heading">#</a></h2>
@@ -628,83 +633,6 @@ For example, to cast the output of <code class="docutils literal notranslate"><s
 </table>
 </div>
 </section>
-<section id="supported-arrow-types">
-<h2>Supported Arrow Types<a class="headerlink" href="#supported-arrow-types" title="Link to this heading">#</a></h2>
-<p>The following types are supported by the <code class="docutils literal notranslate"><span class="pre">arrow_typeof</span></code> function:</p>
-<div class="pst-scrollable-table-container"><table class="table">
-<thead>
-<tr class="row-odd"><th class="head"><p>Arrow Type</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">Null</span></code></p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">Boolean</span></code></p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">Int8</span></code></p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">Int16</span></code></p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">Int32</span></code></p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">Int64</span></code></p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">UInt8</span></code></p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">UInt16</span></code></p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">UInt32</span></code></p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">UInt64</span></code></p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">Float16</span></code></p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">Float32</span></code></p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">Float64</span></code></p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">Utf8</span></code></p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">LargeUtf8</span></code></p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">Binary</span></code></p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">Timestamp(Second,</span> <span class="pre">None)</span></code></p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">Timestamp(Millisecond,</span> <span class="pre">None)</span></code></p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">Timestamp(Microsecond,</span> <span class="pre">None)</span></code></p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">Timestamp(Nanosecond,</span> <span class="pre">None)</span></code></p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">Time32</span></code></p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">Time64</span></code></p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">Duration(Second)</span></code></p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">Duration(Millisecond)</span></code></p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">Duration(Microsecond)</span></code></p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">Duration(Nanosecond)</span></code></p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">Interval(YearMonth)</span></code></p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">Interval(DayTime)</span></code></p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">Interval(MonthDayNano)</span></code></p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">FixedSizeBinary(&lt;len&gt;)</span></code> (e.g. <code class="docutils literal notranslate"><span class="pre">FixedSizeBinary(16)</span></code>)</p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">Decimal128(&lt;precision&gt;,</span> <span class="pre">&lt;scale&gt;)</span></code> e.g. <code class="docutils literal notranslate"><span class="pre">Decimal128(3,</span> <span class="pre">10)</span></code></p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">Decimal256(&lt;precision&gt;,</span> <span class="pre">&lt;scale&gt;)</span></code> e.g. <code class="docutils literal notranslate"><span class="pre">Decimal256(3,</span> <span class="pre">10)</span></code></p></td>
-</tr>
-</tbody>
-</table>
-</div>
-</section>
 </section>
 
 
@@ -760,7 +688,6 @@ For example, to cast the output of <code class="docutils literal notranslate"><s
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#boolean-types">Boolean Types</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#binary-types">Binary Types</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#unsupported-sql-types">Unsupported SQL Types</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#supported-arrow-types">Supported Arrow Types</a></li>
 </ul>
   </nav></div>
 
