@@ -1088,22 +1088,26 @@ impl Unparser<'_> {
                 // Avoid creating a duplicate Projection node, which would result in an additional subquery if a projection already exists.
                 // For example, if the `optimize_projection` rule is applied, there will be a Projection node, and duplicate projection
                 // information included in the TableScan node.
-                if !already_projected && let Some(project_vec) = &table_scan.projection {
-                    if project_vec.is_empty() {
+                if !already_projected && let Some(project_exprs) = &table_scan.projection
+                {
+                    if project_exprs.is_empty() {
                         builder = builder.project(self.empty_projection_fallback())?;
                     } else {
-                        let project_columns = project_vec
+                        let project_columns = project_exprs
                             .iter()
-                            .cloned()
-                            .map(|i| {
-                                let schema = table_scan.source.schema();
-                                let field = schema.field(i);
+                            .map(|expr| {
+                                // Extract column name from the expression
+                                let col_name = if let Expr::Column(col) = expr {
+                                    col.name.clone()
+                                } else {
+                                    expr.schema_name().to_string()
+                                };
                                 if alias.is_some() {
-                                    Column::new(alias.clone(), field.name().clone())
+                                    Column::new(alias.clone(), col_name)
                                 } else {
                                     Column::new(
                                         Some(table_scan.table_name.clone()),
-                                        field.name().clone(),
+                                        col_name,
                                     )
                                 }
                             })

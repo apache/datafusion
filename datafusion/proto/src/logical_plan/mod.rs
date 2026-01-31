@@ -1023,10 +1023,17 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                 let projection = match projection {
                     None => None,
-                    Some(columns) => {
-                        let column_names = columns
+                    Some(exprs) => {
+                        // Extract column names from projection expressions
+                        let column_names = exprs
                             .iter()
-                            .map(|i| schema.field(*i).name().to_owned())
+                            .map(|e| {
+                                if let Expr::Column(col) = e {
+                                    col.name.clone()
+                                } else {
+                                    e.schema_name().to_string()
+                                }
+                            })
                             .collect();
                         Some(protobuf::ProjectionColumns {
                             columns: column_names,

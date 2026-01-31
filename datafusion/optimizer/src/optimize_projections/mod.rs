@@ -30,8 +30,8 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::Alias;
 use datafusion_expr::{
-    Aggregate, Distinct, EmptyRelation, Expr, Projection, TableScan, Unnest, Window,
-    logical_plan::LogicalPlan,
+    Aggregate, Distinct, EmptyRelation, Expr, Projection, TableScan, TableScanBuilder,
+    Unnest, Window, logical_plan::LogicalPlan,
 };
 
 use crate::optimize_projections::required_indices::RequiredIndices;
@@ -262,14 +262,36 @@ fn optimize_projections(
                 projected_schema: _,
             } = table_scan;
 
-            // Get indices referred to in the original (schema with all fields)
-            // given projected indices.
-            let projection = match &projection {
-                Some(projection) => indices.into_mapped_indices(|idx| projection[idx]),
-                None => indices.into_inner(),
+            let source_schema = source.schema();
+            let new_projection = match &projection {
+                Some(proj_exprs) => {
+                    // Map required indices through existing projection expressions
+                    let new_exprs: Vec<Expr> = indices
+                        .into_inner()
+                        .iter()
+                        .map(|&idx| proj_exprs[idx].clone())
+                        .collect();
+                    new_exprs
+                }
+                None => {
+                    // Create column expressions for required indices
+                    let new_exprs: Vec<Expr> = indices
+                        .into_inner()
+                        .iter()
+                        .map(|&idx| {
+                            let field = source_schema.field(idx);
+                            Expr::Column(Column::new_unqualified(field.name()))
+                        })
+                        .collect();
+                    new_exprs
+                }
             };
-            let new_scan =
-                TableScan::try_new(table_name, source, Some(projection), filters, fetch)?;
+
+            let new_scan = TableScanBuilder::new(table_name, source)
+                .projection(Some(new_projection))
+                .filters(filters)
+                .fetch(fetch)
+                .build()?;
 
             return Ok(Transformed::yes(LogicalPlan::TableScan(new_scan)));
         }

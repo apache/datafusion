@@ -193,15 +193,6 @@ impl RequiredIndices {
         self
     }
 
-    /// Apply the given function `f` to each index in this instance, returning
-    /// the mapped indices
-    pub fn into_mapped_indices<F>(self, f: F) -> Vec<usize>
-    where
-        F: Fn(usize) -> usize,
-    {
-        self.map_indices(f).into_inner()
-    }
-
     /// Returns the `Expr`s from `exprs` that are at the indices in this instance
     pub fn get_at_indices(&self, exprs: &[Expr]) -> Vec<Expr> {
         self.indices.iter().map(|&idx| exprs[idx].clone()).collect()

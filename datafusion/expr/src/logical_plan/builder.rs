@@ -520,13 +520,8 @@ impl LogicalPlanBuilder {
         {
             let sub_plan = p.into_owned();
 
-            if let Some(proj) = table_scan.projection {
-                let projection_exprs = proj
-                    .into_iter()
-                    .map(|i| {
-                        Expr::Column(Column::from(sub_plan.schema().qualified_field(i)))
-                    })
-                    .collect::<Vec<_>>();
+            if let Some(projection_exprs) = table_scan.projection {
+                // projection is now Vec<Expr>, use directly
                 return Self::new(sub_plan)
                     .project(projection_exprs)?
                     .alias(table_scan.table_name);

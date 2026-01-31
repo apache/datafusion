@@ -1815,11 +1815,16 @@ impl LogicalPlan {
                         ..
                     }) => {
                         let projected_fields = match projection {
-                            Some(indices) => {
-                                let schema = source.schema();
-                                let names: Vec<&str> = indices
+                            Some(exprs) => {
+                                let names: Vec<String> = exprs
                                     .iter()
-                                    .map(|i| schema.field(*i).name().as_str())
+                                    .map(|e| {
+                                        if let Expr::Column(col) = e {
+                                            col.name.clone()
+                                        } else {
+                                            e.schema_name().to_string()
+                                        }
+                                    })
                                     .collect();
                                 format!(" projection=[{}]", names.join(", "))
                             }
@@ -2682,8 +2687,9 @@ pub struct TableScan {
     pub table_name: TableReference,
     /// The source of the table
     pub source: Arc<dyn TableSource>,
-    /// Optional column indices to use as a projection
-    pub projection: Option<Vec<usize>>,
+    /// Optional column expressions to use as a projection.
+    /// Each expression should be a simple column reference (`Expr::Column`).
+    pub projection: Option<Vec<Expr>>,
     /// The schema description of the output
     pub projected_schema: DFSchemaRef,
     /// Optional expressions to be used as filters by the table provider
@@ -2725,8 +2731,8 @@ impl PartialOrd for TableScan {
         struct ComparableTableScan<'a> {
             /// The name of the table
             pub table_name: &'a TableReference,
-            /// Optional column indices to use as a projection
-            pub projection: &'a Option<Vec<usize>>,
+            /// Optional column expressions to use as a projection
+            pub projection: &'a Option<Vec<Expr>>,
             /// Optional expressions to be used as filters by the table provider
             pub filters: &'a Vec<Expr>,
             /// Optional number of rows to read
@@ -2764,6 +2770,10 @@ impl Hash for TableScan {
 impl TableScan {
     /// Initialize TableScan with appropriate schema from the given
     /// arguments.
+    ///
+    /// This method accepts column indices for backward compatibility and
+    /// converts them internally to column expressions.
+    #[expect(clippy::needless_pass_by_value)]
     pub fn try_new(
         table_name: impl Into<TableReference>,
         table_source: Arc<dyn TableSource>,
@@ -2781,6 +2791,18 @@ impl TableScan {
             table_source.constraints(),
             schema.fields.len(),
         );
+
+        // Convert indices to column expressions
+        let projection_exprs = projection.as_ref().map(|indices| {
+            indices
+                .iter()
+                .map(|&i| {
+                    let field = schema.field(i);
+                    Expr::Column(Column::new_unqualified(field.name()))
+                })
+                .collect::<Vec<_>>()
+        });
+
         let projected_schema = projection
             .as_ref()
             .map(|p| {
@@ -2807,10 +2829,125 @@ impl TableScan {
         Ok(Self {
             table_name,
             source: table_source,
-            projection,
+            projection: projection_exprs,
             projected_schema,
             filters,
             fetch,
+        })
+    }
+}
+
+/// Builder for creating `TableScan` nodes with expression-based projections.
+///
+/// This builder provides a flexible way to construct `TableScan` nodes,
+/// particularly when working with expression-based projections directly.
+#[derive(Clone)]
+pub struct TableScanBuilder {
+    table_name: TableReference,
+    table_source: Arc<dyn TableSource>,
+    projection: Option<Vec<Expr>>,
+    filters: Vec<Expr>,
+    fetch: Option<usize>,
+}
+
+impl Debug for TableScanBuilder {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        f.debug_struct("TableScanBuilder")
+            .field("table_name", &self.table_name)
+            .field("table_source", &"...")
+            .field("projection", &self.projection)
+            .field("filters", &self.filters)
+            .field("fetch", &self.fetch)
+            .finish()
+    }
+}
+
+impl TableScanBuilder {
+    /// Create a new TableScanBuilder with the given table name and source.
+    pub fn new(
+        table_name: impl Into<TableReference>,
+        table_source: Arc<dyn TableSource>,
+    ) -> Self {
+        Self {
+            table_name: table_name.into(),
+            table_source,
+            projection: None,
+            filters: vec![],
+            fetch: None,
+        }
+    }
+
+    /// Set the projection expressions.
+    pub fn projection(mut self, projection: Option<Vec<Expr>>) -> Self {
+        self.projection = projection;
+        self
+    }
+
+    /// Set the filters.
+    pub fn filters(mut self, filters: Vec<Expr>) -> Self {
+        self.filters = filters;
+        self
+    }
+
+    /// Set the fetch limit.
+    pub fn fetch(mut self, fetch: Option<usize>) -> Self {
+        self.fetch = fetch;
+        self
+    }
+
+    /// Build the TableScan.
+    pub fn build(self) -> Result<TableScan> {
+        use crate::utils::projection_indices_from_exprs;
+
+        if self.table_name.table().is_empty() {
+            return plan_err!("table_name cannot be empty");
+        }
+
+        let schema = self.table_source.schema();
+        let func_dependencies = FunctionalDependencies::new_from_constraints(
+            self.table_source.constraints(),
+            schema.fields.len(),
+        );
+
+        let projected_schema = if let Some(ref proj_exprs) = self.projection {
+            // Convert expressions to indices for schema calculation
+            let indices =
+                projection_indices_from_exprs(proj_exprs, &schema).ok_or_else(|| {
+                    DataFusionError::Plan(
+                        "Projection expressions must be simple column references"
+                            .to_string(),
+                    )
+                })?;
+
+            let projected_func_dependencies = func_dependencies
+                .project_functional_dependencies(&indices, indices.len());
+
+            let df_schema = DFSchema::new_with_metadata(
+                indices
+                    .iter()
+                    .map(|i| {
+                        (
+                            Some(self.table_name.clone()),
+                            Arc::clone(&schema.fields()[*i]),
+                        )
+                    })
+                    .collect(),
+                schema.metadata.clone(),
+            )?;
+            Arc::new(df_schema.with_functional_dependencies(projected_func_dependencies)?)
+        } else {
+            let df_schema =
+                DFSchema::try_from_qualified_schema(self.table_name.clone(), &schema)?;
+            Arc::new(df_schema.with_functional_dependencies(func_dependencies)?)
+        };
+
+        Ok(TableScan {
+            table_name: self.table_name,
+            source: self.table_source,
+            projection: self.projection,
+            projected_schema,
+            filters: self.filters,
+            fetch: self.fetch,
         })
     }
 }

@@ -462,17 +462,26 @@ impl DefaultPhysicalPlanner {
                 fetch,
                 ..
             }) => {
-                let source = source_as_provider(source)?;
+                let table_source = source_as_provider(source)?;
                 // Remove all qualifiers from the scan as the provider
                 // doesn't know (nor should care) how the relation was
                 // referred to in the query
                 let filters = unnormalize_cols(filters.iter().cloned());
                 let filters_vec = filters.into_iter().collect::<Vec<_>>();
+
+                // Convert projection expressions to indices for the table provider
+                let source_schema = source.schema();
+                let projection_indices = projection.as_ref().and_then(|exprs| {
+                    datafusion_expr::utils::projection_indices_from_exprs(
+                        exprs,
+                        &source_schema,
+                    )
+                });
                 let opts = ScanArgs::default()
-                    .with_projection(projection.as_deref())
+                    .with_projection(projection_indices.as_deref())
                     .with_filters(Some(&filters_vec))
                     .with_limit(*fetch);
-                let res = source.scan_with_args(session_state, opts).await?;
+                let res = table_source.scan_with_args(session_state, opts).await?;
                 Arc::clone(res.plan())
             }
             LogicalPlan::Values(Values { values, schema }) => {

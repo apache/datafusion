@@ -3109,13 +3109,27 @@ mod tests {
         filters: Vec<Expr>,
         projection: Option<Vec<usize>>,
     ) -> Result<LogicalPlanBuilder> {
+        use datafusion_common::Column;
+
         let test_provider = PushDownProvider { filter_support };
+        let schema = test_provider.schema();
+
+        // Convert indices to expressions
+        let projection_exprs = projection.map(|indices| {
+            indices
+                .iter()
+                .map(|&i| {
+                    let field = schema.field(i);
+                    Expr::Column(Column::new_unqualified(field.name()))
+                })
+                .collect::<Vec<_>>()
+        });
 
         let table_scan = LogicalPlan::TableScan(TableScan {
             table_name: "test".into(),
             filters,
-            projected_schema: Arc::new(DFSchema::try_from(test_provider.schema())?),
-            projection,
+            projected_schema: Arc::new(DFSchema::try_from(schema)?),
+            projection: projection_exprs,
             source: Arc::new(test_provider),
             fetch: None,
         });

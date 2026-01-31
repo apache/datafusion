@@ -97,10 +97,19 @@ pub fn from_table_scan(
     producer: &mut impl SubstraitProducer,
     scan: &TableScan,
 ) -> datafusion::common::Result<Box<Rel>> {
+    // Convert projection expressions back to indices for Substrait
+    let source_schema = scan.source.schema();
     let projection = scan.projection.as_ref().map(|p| {
         p.iter()
+            .filter_map(|expr| {
+                if let Expr::Column(col) = expr {
+                    source_schema.index_of(&col.name).ok()
+                } else {
+                    None
+                }
+            })
             .map(|i| StructItem {
-                field: *i as i32,
+                field: i as i32,
                 child: None,
             })
             .collect()

@@ -1286,6 +1286,36 @@ pub fn format_state_name(name: &str, state_name: &str) -> String {
     format!("{name}[{state_name}]")
 }
 
+/// Convert projection expressions (assumed to be column references) to column indices.
+///
+/// This function takes a list of expressions (which should be `Expr::Column` variants)
+/// and returns the indices of those columns in the given schema. Returns `None` if
+/// any expression is not a simple column reference, or if the column is not found
+/// in the schema.
+///
+/// # Arguments
+/// * `exprs` - A slice of expressions, expected to be `Expr::Column` variants
+/// * `schema` - The schema to look up column indices in
+///
+/// # Returns
+/// * `Some(Vec<usize>)` - If all expressions are column references found in the schema
+/// * `None` - If any expression is not a column reference or not found in schema
+pub fn projection_indices_from_exprs(
+    exprs: &[Expr],
+    schema: &Schema,
+) -> Option<Vec<usize>> {
+    exprs
+        .iter()
+        .map(|e| {
+            if let Expr::Column(col) = e {
+                schema.index_of(&col.name).ok()
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
 /// Determine the set of [`Column`]s produced by the subquery.
 pub fn collect_subquery_cols(
     exprs: &[Expr],
