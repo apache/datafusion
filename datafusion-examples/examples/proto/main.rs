@@ -21,7 +21,7 @@
 //!
 //! ## Usage
 //! ```bash
-//! cargo run --example proto -- [all|composed_extension_codec]
+//! cargo run --example proto -- [all|composed_extension_codec|expression_deduplication]
 //! ```
 //!
 //! Each subcommand runs a corresponding example:
@@ -31,7 +31,7 @@
 //!   (file: composed_extension_codec.rs, desc: Example of expression caching/deduplication using the codec decorator pattern)
 //!
 //! - `expression_deduplication`
-//!   (file: composed_extension_codec.rs, desc: Use multiple extension codecs for serialization/deserialization)
+//!   (file: expression_deduplication.rs, desc: Use multiple extension codecs for serialization/deserialization)
 
 mod composed_extension_codec;
 mod expression_deduplication;
