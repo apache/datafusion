@@ -18,7 +18,7 @@
 //! Planner for [`LogicalPlan`] to [`ExecutionPlan`]
 
 use std::borrow::Cow;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use crate::datasource::file_format::file_type_to_format;
@@ -1733,7 +1733,7 @@ impl DefaultPhysicalPlanner {
 
         // Create the scan
         let scan_args = ScanArgs::default()
-            .with_projection(Some(&scan_indices))
+            .with_projection(scan_indices.as_ref().map(|v| v.as_slice()))
             .with_filters(if filters.is_empty() {
                 None
             } else {
@@ -1746,129 +1746,15 @@ impl DefaultPhysicalPlanner {
 
         // Wrap with ProjectionExec if remainder projection is needed
         if let Some(ref proj_exprs) = remainder_projection {
-            let scan_output_schema = plan.schema();
-            let scan_df_schema = DFSchema::try_from(scan_output_schema.as_ref().clone())?;
+            let scan_df_schema = DFSchema::try_from(plan.schema().as_ref().clone())?;
             let unnormalized_proj_exprs: Vec<Expr> =
                 unnormalize_cols(proj_exprs.iter().cloned());
-
-            // Classify expressions as async or non-async
-            let (async_indices, non_async_indices) = self.classify_projection_exprs(
+            plan = self.create_projection_exec(
                 &unnormalized_proj_exprs,
+                plan,
                 &scan_df_schema,
                 session_state,
             )?;
-
-            if async_indices.is_empty() {
-                // All expressions are non-async - try to push the entire projection
-                let physical_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> =
-                    unnormalized_proj_exprs
-                        .iter()
-                        .map(|e| {
-                            let physical = self.create_physical_expr(
-                                e,
-                                &scan_df_schema,
-                                session_state,
-                            )?;
-                            let name = e.schema_name().to_string();
-                            Ok((physical, name))
-                        })
-                        .collect::<Result<Vec<_>>>()?;
-
-                let proj_exprs: Vec<ProjectionExpr> = physical_exprs
-                    .into_iter()
-                    .map(|(expr, alias)| ProjectionExpr { expr, alias })
-                    .collect();
-                let projection_exec =
-                    ProjectionExec::try_new(proj_exprs, Arc::clone(&plan))?;
-
-                match plan.try_swapping_with_projection(&projection_exec)? {
-                    Some(optimized_plan) => {
-                        plan = optimized_plan;
-                    }
-                    None => {
-                        plan = Arc::new(projection_exec);
-                    }
-                }
-            } else if non_async_indices.is_empty() {
-                // All expressions are async - just create ProjectionExec with AsyncFuncExec
-                plan = self.create_projection_exec(
-                    &unnormalized_proj_exprs,
-                    plan,
-                    &scan_df_schema,
-                    session_state,
-                )?;
-            } else {
-                // Mixed: push non-async expressions + columns needed by async, keep async on top
-
-                // Collect columns needed by async expressions
-                let mut async_cols: HashSet<String> = HashSet::new();
-                for &idx in &async_indices {
-                    unnormalized_proj_exprs[idx].apply(|e| {
-                        if let Expr::Column(col) = e {
-                            async_cols.insert(col.name().to_string());
-                        }
-                        Ok(TreeNodeRecursion::Continue)
-                    })?;
-                }
-
-                // Build pushdown projection: non-async exprs + columns for async
-                let mut pushdown_exprs: Vec<Expr> = non_async_indices
-                    .iter()
-                    .map(|&i| unnormalized_proj_exprs[i].clone())
-                    .collect();
-
-                // Add column references for async expression dependencies
-                for col_name in &async_cols {
-                    if scan_output_schema.index_of(col_name).is_ok() {
-                        let col_expr =
-                            Expr::Column(Column::new_unqualified(col_name.clone()));
-                        // Only add if not already in pushdown_exprs
-                        if !pushdown_exprs.iter().any(|e| e == &col_expr) {
-                            pushdown_exprs.push(col_expr);
-                        }
-                    }
-                }
-
-                // Create and try to push the non-async projection
-                let physical_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = pushdown_exprs
-                    .iter()
-                    .map(|e| {
-                        let physical =
-                            self.create_physical_expr(e, &scan_df_schema, session_state)?;
-                        let name = e.schema_name().to_string();
-                        Ok((physical, name))
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-
-                let proj_exprs: Vec<ProjectionExpr> = physical_exprs
-                    .into_iter()
-                    .map(|(expr, alias)| ProjectionExpr { expr, alias })
-                    .collect();
-                let projection_exec =
-                    ProjectionExec::try_new(proj_exprs, Arc::clone(&plan))?;
-
-                match plan.try_swapping_with_projection(&projection_exec)? {
-                    Some(optimized_plan) => {
-                        plan = optimized_plan;
-                    }
-                    None => {
-                        plan = Arc::new(projection_exec);
-                    }
-                }
-
-                // Now apply the full projection (including async) on top
-                // The schema has changed, so we need a new DFSchema
-                let new_schema = plan.schema();
-                let new_df_schema = DFSchema::try_from(new_schema.as_ref().clone())?;
-
-                // The final projection needs to produce the original output
-                plan = self.create_projection_exec(
-                    &unnormalized_proj_exprs,
-                    plan,
-                    &new_df_schema,
-                    session_state,
-                )?;
-            }
         }
 
         Ok(plan)
@@ -1884,14 +1770,14 @@ impl DefaultPhysicalPlanner {
         &self,
         projection: &Option<Vec<Expr>>,
         source_schema: &Schema,
-    ) -> Result<(Option<Vec<Expr>>, Vec<usize>)> {
+    ) -> Result<(Option<Vec<Expr>>, Option<Vec<usize>>)> {
         let Some(exprs) = projection else {
             // None means scan all columns, no remainder needed
-            return Ok((None, (0..source_schema.fields().len()).collect()));
+            return Ok((None, None));
         };
 
         if exprs.is_empty() {
-            return Ok((None, vec![]));
+            return Ok((None, Some(vec![])));
         }
 
         let mut has_complex_expr = false;
@@ -1935,43 +1821,21 @@ impl DefaultPhysicalPlanner {
             }
         }
 
+        // Check if we are just selecting all columns without reordering or dropping
+        let is_identity_projection =
+            if all_required_columns.len() == source_schema.fields().len() {
+                all_required_columns
+                    .iter()
+                    .enumerate()
+                    .all(|(i, &col_index)| i == col_index)
+            } else {
+                false
+            };
+
         Ok((
             has_complex_expr.then_some(remainder_exprs),
-            all_required_columns.into_iter().collect(),
+            is_identity_projection.then_some(all_required_columns.into_iter().collect()),
         ))
-    }
-
-    /// Classifies projection expressions into async and non-async.
-    ///
-    /// Returns `(async_expr_indices, non_async_expr_indices)` where:
-    /// - `async_expr_indices`: indices of expressions that contain async UDFs
-    /// - `non_async_expr_indices`: indices of expressions that are purely synchronous
-    fn classify_projection_exprs(
-        &self,
-        exprs: &[Expr],
-        input_dfschema: &DFSchema,
-        session_state: &SessionState,
-    ) -> Result<(Vec<usize>, Vec<usize>)> {
-        let mut async_indices = vec![];
-        let mut non_async_indices = vec![];
-        let schema = input_dfschema.as_arrow();
-
-        for (i, expr) in exprs.iter().enumerate() {
-            let physical =
-                self.create_physical_expr(expr, input_dfschema, session_state)?;
-
-            // Use AsyncMapper to check if expression has async UDFs
-            let mut async_map = AsyncMapper::new(schema.fields().len());
-            async_map.find_references(&physical, schema)?;
-
-            if async_map.is_empty() {
-                non_async_indices.push(i);
-            } else {
-                async_indices.push(i);
-            }
-        }
-
-        Ok((async_indices, non_async_indices))
     }
 
     /// Creates a ProjectionExec from logical expressions, handling async UDF expressions.

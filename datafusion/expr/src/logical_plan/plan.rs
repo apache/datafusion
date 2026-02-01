@@ -2781,59 +2781,19 @@ impl TableScan {
         filters: Vec<Expr>,
         fetch: Option<usize>,
     ) -> Result<Self> {
-        let table_name = table_name.into();
-
-        if table_name.table().is_empty() {
-            return plan_err!("table_name cannot be empty");
-        }
         let schema = table_source.schema();
-        let func_dependencies = FunctionalDependencies::new_from_constraints(
-            table_source.constraints(),
-            schema.fields.len(),
-        );
-
-        // Convert indices to column expressions
-        let projection_exprs = projection.as_ref().map(|indices| {
+        let projection_exprs = projection.map(|indices| {
             indices
                 .iter()
-                .map(|&i| {
-                    let field = schema.field(i);
-                    Expr::Column(Column::new_unqualified(field.name()))
-                })
+                .map(|&i| Expr::Column(Column::new_unqualified(schema.field(i).name())))
                 .collect::<Vec<_>>()
         });
 
-        let projected_schema = projection
-            .as_ref()
-            .map(|p| {
-                let projected_func_dependencies =
-                    func_dependencies.project_functional_dependencies(p, p.len());
-
-                let df_schema = DFSchema::new_with_metadata(
-                    p.iter()
-                        .map(|i| {
-                            (Some(table_name.clone()), Arc::clone(&schema.fields()[*i]))
-                        })
-                        .collect(),
-                    schema.metadata.clone(),
-                )?;
-                df_schema.with_functional_dependencies(projected_func_dependencies)
-            })
-            .unwrap_or_else(|| {
-                let df_schema =
-                    DFSchema::try_from_qualified_schema(table_name.clone(), &schema)?;
-                df_schema.with_functional_dependencies(func_dependencies)
-            })?;
-        let projected_schema = Arc::new(projected_schema);
-
-        Ok(Self {
-            table_name,
-            source: table_source,
-            projection: projection_exprs,
-            projected_schema,
-            filters,
-            fetch,
-        })
+        TableScanBuilder::new(table_name, table_source)
+            .projection(projection_exprs)
+            .filters(filters)
+            .fetch(fetch)
+            .build()
     }
 }
 
