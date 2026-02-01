@@ -709,22 +709,101 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
         Ok(ExprSimplifyResult::Original(args))
     }
 
-    /// Returns the [preimage] for this function and the specified scalar value, if any.
+    /// Returns a single contiguous preimage for this function and the specified
+    /// scalar expression, if any.
     ///
-    /// A preimage is a single contiguous [`Interval`] of values where the function
-    /// will always return `lit_value`
+    /// Currently only applies to `=, !=, >, >=, <, <=, is distinct from, is not distinct from` predicates
+    /// # Return Value
     ///
-    /// Implementations should return intervals with an inclusive lower bound and
-    /// exclusive upper bound.
+    /// Implementations should return a half-open interval: inclusive lower
+    /// bound and exclusive upper bound. This is slightly different from normal
+    /// [`Interval`] semantics where the upper bound is closed (inclusive).
+    /// Typically this means the upper endpoint must be adjusted to the next
+    /// value not included in the preimage. See the Half-Open Intervals section
+    /// below for more details.
     ///
-    /// This rewrite is described in the [ClickHouse Paper] and is particularly
-    /// useful for simplifying expressions `date_part` or equivalent functions. The
-    /// idea is that if you have an expression like `date_part(YEAR, k) = 2024` and you
-    /// can find a [preimage] for `date_part(YEAR, k)`, which is the range of dates
-    /// covering the entire year of 2024. Thus, you can rewrite the expression to `k
-    /// >= '2024-01-01' AND k < '2025-01-01' which is often more optimizable.
+    /// # Background
     ///
+    /// Inspired by the [ClickHouse Paper], a "preimage rewrite" transforms a
+    /// predicate containing a function call into a predicate containing an
+    /// equivalent set of input literal (constant) values. The resulting
+    /// predicate can often be further optimized by other rewrites (see
+    /// Examples).
+    ///
+    /// From the paper:
+    ///
+    /// > some functions can compute the preimage of a given function result.
+    /// > This is used to replace comparisons of constants with function calls
+    /// > on the key columns by comparing the key column value with the preimage.
+    /// > For example, `toYear(k) = 2024` can be replaced by
+    /// > `k >= 2024-01-01 && k < 2025-01-01`
+    ///
+    /// For example, given an expression like
+    /// ```sql
+    /// date_part('YEAR', k) = 2024
+    /// ```
+    ///
+    /// The interval `[2024-01-01, 2025-12-31`]` contains all possible input
+    /// values (preimage values) for which the function `date_part(YEAR, k)`
+    /// produces the output value `2024` (image value). Returning the interval
+    /// (note upper bound adjusted up) `[2024-01-01, 2025-01-01]` the expression
+    /// can be rewritten to
+    ///
+    /// ```sql
+    /// k >= '2024-01-01' AND k < '2025-01-01'
+    /// ```
+    ///
+    /// which is a simpler and a more canonical form, making it easier for other
+    /// optimizer passes to recognize and apply further transformations.
+    ///
+    /// # Examples
+    ///
+    /// Case 1:
+    ///
+    /// Original:
+    /// ```sql
+    /// date_part('YEAR', k) = 2024 AND k >= '2024-06-01'
+    /// ```
+    ///
+    /// After preimage rewrite:
+    /// ```sql
+    /// k >= '2024-01-01' AND k < '2025-01-01' AND k >= '2024-06-01'
+    /// ```
+    ///
+    /// Since this form is much simpler, the optimizer can combine and simplify
+    /// sub-expressions further into:
+    /// ```sql
+    /// k >= '2024-06-01' AND k < '2025-01-01'
+    /// ```
+    ///
+    /// Case 2:
+    ///
+    /// For min/max pruning, simpler predicates such as:
+    /// ```sql
+    /// k >= '2024-01-01' AND k < '2025-01-01'
+    /// ```
+    /// are much easier for the pruner to reason about. See [PruningPredicate]
+    /// for the backgrounds of predicate pruning.
+    ///
+    /// The trade-off with the preimage rewrite is that evaluating the rewritten
+    /// form might be slightly more expensive than evaluating the original
+    /// expression. In practice, this cost is usually outweighed by the more
+    /// aggressive optimization opportunities it enables.
+    ///
+    /// # Half-Open Intervals
+    ///
+    /// The preimage API uses half-open intervals, which makes the rewrite
+    /// easier to implement by avoiding calculations to adjust the upper bound.
+    /// For example, if a function returns its input unchanged and the desired
+    /// output is the single value `5`, a closed interval could be represented
+    /// as `[5, 5]`, but then the rewrite would require adjusting the upper
+    /// bound to `6` to create a proper range predicate. With a half-open
+    /// interval, the same range is represented as `[5, 6)`, which already
+    /// forms a valid predicate.
+    ///
+    /// [PruningPredicate]: https://docs.rs/datafusion/latest/datafusion/physical_optimizer/pruning/struct.PruningPredicate.html
     /// [ClickHouse Paper]:  https://www.vldb.org/pvldb/vol17/p3731-schulze.pdf
+    /// [image]: https://en.wikipedia.org/wiki/Image_(mathematics)#Image_of_an_element
     /// [preimage]: https://en.wikipedia.org/wiki/Image_(mathematics)#Inverse_image
     fn preimage(
         &self,

@@ -20,7 +20,7 @@ use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_physical_plan::aggregates::AggregateExec;
+use datafusion_physical_plan::aggregates::{AggregateExec, AggregateInputMode};
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::udaf::{AggregateFunctionExpr, StatisticsArgs};
@@ -116,13 +116,13 @@ impl PhysicalOptimizerRule for AggregateStatistics {
 /// the `ExecutionPlan.children()` method that returns an owned reference.
 fn take_optimizable(node: &dyn ExecutionPlan) -> Option<Arc<dyn ExecutionPlan>> {
     if let Some(final_agg_exec) = node.as_any().downcast_ref::<AggregateExec>()
-        && !final_agg_exec.mode().is_first_stage()
+        && final_agg_exec.mode().input_mode() == AggregateInputMode::Partial
         && final_agg_exec.group_expr().is_empty()
     {
         let mut child = Arc::clone(final_agg_exec.input());
         loop {
             if let Some(partial_agg_exec) = child.as_any().downcast_ref::<AggregateExec>()
-                && partial_agg_exec.mode().is_first_stage()
+                && partial_agg_exec.mode().input_mode() == AggregateInputMode::Raw
                 && partial_agg_exec.group_expr().is_empty()
                 && partial_agg_exec.filter_expr().iter().all(|e| e.is_none())
             {
