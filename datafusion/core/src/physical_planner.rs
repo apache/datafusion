@@ -1821,21 +1821,12 @@ impl DefaultPhysicalPlanner {
             }
         }
 
-        // Check if we are just selecting all columns without reordering or dropping
-        let is_identity_projection =
-            if all_required_columns.len() == source_schema.fields().len() {
-                all_required_columns
-                    .iter()
-                    .enumerate()
-                    .all(|(i, &col_index)| i == col_index)
-            } else {
-                false
-            };
-
+        // Always return explicit indices to ensure compatibility with all providers.
+        // Some providers (e.g., FFI) cannot distinguish between None (scan all) and
+        // empty vec (scan nothing), so we always provide explicit column indices.
         Ok((
             has_complex_expr.then_some(remainder_exprs),
-            (!is_identity_projection)
-                .then_some(all_required_columns.into_iter().collect()),
+            Some(all_required_columns.into_iter().collect()),
         ))
     }
 

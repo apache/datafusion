@@ -42,7 +42,8 @@ use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::{DmlStatement, Statement};
 use crate::utils::{
     enumerate_grouping_sets, exprlist_to_fields, find_out_reference_exprs,
-    grouping_set_expr_count, grouping_set_to_exprlist, split_conjunction,
+    grouping_set_expr_count, grouping_set_to_exprlist, projection_indices_from_exprs,
+    split_conjunction,
 };
 use crate::{
     BinaryExpr, CreateMemoryTable, CreateView, Execute, Expr, ExprSchemable,
@@ -2857,8 +2858,6 @@ impl TableScanBuilder {
 
     /// Build the TableScan.
     pub fn build(self) -> Result<TableScan> {
-        use crate::utils::projection_indices_from_exprs;
-
         if self.table_name.table().is_empty() {
             return plan_err!("table_name cannot be empty");
         }
@@ -2869,43 +2868,59 @@ impl TableScanBuilder {
             schema.fields.len(),
         );
 
-        let projected_schema = if let Some(ref proj_exprs) = self.projection {
-            // Convert expressions to indices for schema calculation
-            let indices =
-                projection_indices_from_exprs(proj_exprs, &schema).ok_or_else(|| {
-                    DataFusionError::Plan(
-                        "Projection expressions must be simple column references"
-                            .to_string(),
-                    )
-                })?;
+        // Build the projected schema from projection expressions
+        let projected_schema = match &self.projection {
+            Some(exprs) => {
+                // Create a qualified schema for expression evaluation
+                let qualified_schema = DFSchema::try_from_qualified_schema(
+                    self.table_name.clone(),
+                    &schema,
+                )?;
 
-            let projected_func_dependencies = func_dependencies
-                .project_functional_dependencies(&indices, indices.len());
-
-            let df_schema = DFSchema::new_with_metadata(
-                indices
+                // Derive output fields from projection expressions
+                // For simple column references, qualify with table name
+                // For complex expressions, don't add qualifier (matches Projection behavior)
+                let fields: Vec<(Option<TableReference>, FieldRef)> = exprs
                     .iter()
-                    .map(|i| {
-                        (
-                            Some(self.table_name.clone()),
-                            Arc::clone(&schema.fields()[*i]),
-                        )
+                    .map(|expr| {
+                        let (_qualifier, field) = expr.to_field(&qualified_schema)?;
+                        let qualifier = if matches!(expr, Expr::Column(_)) {
+                            Some(self.table_name.clone())
+                        } else {
+                            None
+                        };
+                        Ok((qualifier, field))
                     })
-                    .collect(),
-                schema.metadata.clone(),
-            )?;
-            Arc::new(df_schema.with_functional_dependencies(projected_func_dependencies)?)
-        } else {
-            let df_schema =
-                DFSchema::try_from_qualified_schema(self.table_name.clone(), &schema)?;
-            Arc::new(df_schema.with_functional_dependencies(func_dependencies)?)
+                    .collect::<Result<Vec<_>>>()?;
+
+                // Try to compute functional dependencies for simple column projections
+                let projected_func_dependencies = if let Some(indices) =
+                    projection_indices_from_exprs(exprs, &schema)
+                {
+                    func_dependencies
+                        .project_functional_dependencies(&indices, indices.len())
+                } else {
+                    FunctionalDependencies::empty()
+                };
+
+                let df_schema =
+                    DFSchema::new_with_metadata(fields, schema.metadata.clone())?;
+                df_schema.with_functional_dependencies(projected_func_dependencies)?
+            }
+            None => {
+                let df_schema = DFSchema::try_from_qualified_schema(
+                    self.table_name.clone(),
+                    &schema,
+                )?;
+                df_schema.with_functional_dependencies(func_dependencies)?
+            }
         };
 
         Ok(TableScan {
             table_name: self.table_name,
             source: self.table_source,
             projection: self.projection,
-            projected_schema,
+            projected_schema: Arc::new(projected_schema),
             filters: self.filters,
             fetch: self.fetch,
         })
