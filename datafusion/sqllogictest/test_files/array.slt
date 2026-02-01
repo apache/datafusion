@@ -3262,14 +3262,16 @@ create table array_repeat_null_count_table
 as values
 (1, 2),
 (2, null),
-(3, 1);
+(3, 1),
+(4, -1);
 
 query I?
 select column1, array_repeat(column1, column2) from array_repeat_null_count_table;
 ----
 1 [1, 1]
-2 []
+2 NULL
 3 [3]
+4 []
 
 statement ok
 drop table array_repeat_null_count_table
