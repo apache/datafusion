@@ -64,7 +64,7 @@ pub struct AnalyzeExec {
     /// Possible values:
     ///   - stdout (default)
     ///   - stderr
-    ///   - *path to file* (creates if it does not exist; appends to it if it does)
+    ///   - *path to file* (creates if it does not exist; or appends to it if it does)
     auto_explain_output: String,
     /// In the `auto_explain` mode, only output if the execution is greater or equal to this value,
     /// in milliseconds. (default=0)
