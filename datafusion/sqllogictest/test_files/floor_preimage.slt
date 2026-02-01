@@ -170,6 +170,101 @@ logical_plan
 02)--TableScan: test_data projection=[id, float_val, int_val, decimal_val]
 
 ##########
+## Other Comparison Operators
+##
+## The preimage framework automatically handles all comparison operators:
+##   floor(x) <> N  ->  x < N OR x >= N+1
+##   floor(x) > N   ->  x >= N+1
+##   floor(x) < N   ->  x < N
+##   floor(x) >= N  ->  x >= N
+##   floor(x) <= N  ->  x < N+1
+##########
+
+# Data correctness tests for other operators
+
+# Not equals: floor(x) <> 5 matches values outside [5.0, 6.0)
+query I rowsort
+SELECT id FROM test_data WHERE floor(float_val) <> arrow_cast(5, 'Float64');
+----
+3
+4
+5
+
+# Greater than: floor(x) > 5 matches values in [6.0, inf)
+query I rowsort
+SELECT id FROM test_data WHERE floor(float_val) > arrow_cast(5, 'Float64');
+----
+3
+4
+5
+
+# Less than: floor(x) < 6 matches values in (-inf, 6.0)
+query I rowsort
+SELECT id FROM test_data WHERE floor(float_val) < arrow_cast(6, 'Float64');
+----
+1
+2
+
+# Greater than or equal: floor(x) >= 5 matches values in [5.0, inf)
+query I rowsort
+SELECT id FROM test_data WHERE floor(float_val) >= arrow_cast(5, 'Float64');
+----
+1
+2
+3
+4
+5
+
+# Less than or equal: floor(x) <= 5 matches values in (-inf, 6.0)
+query I rowsort
+SELECT id FROM test_data WHERE floor(float_val) <= arrow_cast(5, 'Float64');
+----
+1
+2
+
+# EXPLAIN tests showing optimized transformations
+
+# Not equals: floor(x) <> 5 -> x < 5 OR x >= 6
+query TT
+EXPLAIN SELECT * FROM test_data WHERE floor(float_val) <> arrow_cast(5, 'Float64');
+----
+logical_plan
+01)Filter: test_data.float_val < Float64(5) OR test_data.float_val >= Float64(6)
+02)--TableScan: test_data projection=[id, float_val, int_val, decimal_val]
+
+# Greater than: floor(x) > 5 -> x >= 6
+query TT
+EXPLAIN SELECT * FROM test_data WHERE floor(float_val) > arrow_cast(5, 'Float64');
+----
+logical_plan
+01)Filter: test_data.float_val >= Float64(6)
+02)--TableScan: test_data projection=[id, float_val, int_val, decimal_val]
+
+# Less than: floor(x) < 6 -> x < 6
+query TT
+EXPLAIN SELECT * FROM test_data WHERE floor(float_val) < arrow_cast(6, 'Float64');
+----
+logical_plan
+01)Filter: test_data.float_val < Float64(6)
+02)--TableScan: test_data projection=[id, float_val, int_val, decimal_val]
+
+# Greater than or equal: floor(x) >= 5 -> x >= 5
+query TT
+EXPLAIN SELECT * FROM test_data WHERE floor(float_val) >= arrow_cast(5, 'Float64');
+----
+logical_plan
+01)Filter: test_data.float_val >= Float64(5)
+02)--TableScan: test_data projection=[id, float_val, int_val, decimal_val]
+
+# Less than or equal: floor(x) <= 5 -> x < 6
+query TT
+EXPLAIN SELECT * FROM test_data WHERE floor(float_val) <= arrow_cast(5, 'Float64');
+----
+logical_plan
+01)Filter: test_data.float_val < Float64(6)
+02)--TableScan: test_data projection=[id, float_val, int_val, decimal_val]
+
+##########
 ## Cleanup
 ##########
 
