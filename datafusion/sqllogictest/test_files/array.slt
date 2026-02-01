@@ -3256,6 +3256,24 @@ drop table array_repeat_table;
 statement ok
 drop table large_array_repeat_table;
 
+
+statement ok
+create table array_repeat_null_count_table
+as values
+(1, 2),
+(2, null),
+(3, 1);
+
+query I?
+select column1, array_repeat(column1, column2) from array_repeat_null_count_table;
+----
+1 [1, 1]
+2 []
+3 [3]
+
+statement ok
+drop table array_repeat_null_count_table
+
 ## array_concat (aliases: `array_cat`, `list_concat`, `list_cat`)
 
 # test with empty array
