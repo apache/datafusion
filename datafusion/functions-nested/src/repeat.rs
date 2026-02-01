@@ -191,7 +191,7 @@ fn general_repeat<O: OffsetSizeTrait>(
     let mut take_indices = Vec::with_capacity(total_repeated_values);
     let mut nulls = BooleanBufferBuilder::new(count_array.len());
     let mut offsets = Vec::with_capacity(count_array.len() + 1);
-    offsets.push(O::default());
+    offsets.push(O::zero());
     let mut running_offset = 0usize;
 
     for idx in 0..count_array.len() {
@@ -200,7 +200,7 @@ fn general_repeat<O: OffsetSizeTrait>(
         running_offset += count;
         offsets.push(O::from_usize(running_offset).unwrap());
         nulls.append(is_valid);
-        take_indices.resize_with(take_indices.len() + count, || idx as u64);
+        take_indices.extend(std::iter::repeat_n(idx as u64, count));
     }
 
     // Build the flattened values
