@@ -281,11 +281,22 @@ impl ScalarUDFImpl for FloorFunc {
 
 /// Compute preimage bounds for floor function on floating-point types.
 /// For floor(x) = n, the preimage is [n, n+1).
-/// Returns None if the value is non-finite or would lose precision.
+/// Returns None if:
+/// - The value is non-finite (infinity, NaN)
+/// - The value is not an integer (floor always returns integers, so floor(x) = 1.3 has no solution)
+/// - Adding 1 would lose precision at extreme values
 fn float_preimage_bounds<F: Float>(n: F) -> Option<(F, F)> {
     let one = F::one();
-    // Check for non-finite values (infinity, NaN) or precision loss at extreme values
-    if !n.is_finite() || n + one <= n {
+    // Check for non-finite values (infinity, NaN)
+    if !n.is_finite() {
+        return None;
+    }
+    // floor always returns an integer, so if n has a fractional part, there's no solution
+    if n.fract() != F::zero() {
+        return None;
+    }
+    // Check for precision loss at extreme values
+    if n + one <= n {
         return None;
     }
     Some((n, n + one))
@@ -381,6 +392,15 @@ mod tests {
             ScalarValue::Float64(Some(0.0)),
             ScalarValue::Float64(Some(1.0)),
         );
+    }
+
+    #[test]
+    fn test_floor_preimage_non_integer_float() {
+        // floor(x) = 1.3 has NO SOLUTION because floor always returns an integer
+        // Therefore preimage should return None for non-integer literals
+        assert_preimage_none(ScalarValue::Float64(Some(1.3)));
+        assert_preimage_none(ScalarValue::Float64(Some(-2.5)));
+        assert_preimage_none(ScalarValue::Float32(Some(3.14)));
     }
 
     #[test]
