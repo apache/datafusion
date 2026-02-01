@@ -54,6 +54,7 @@ use datafusion_physical_plan::aggregates::{
 };
 use datafusion_physical_plan::analyze::AnalyzeExec;
 use datafusion_physical_plan::async_func::AsyncFuncExec;
+use datafusion_physical_plan::buffer::BufferExec;
 #[expect(deprecated)]
 use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -305,6 +306,9 @@ impl protobuf::PhysicalPlanNode {
                     codec,
                     proto_converter,
                 ),
+            PhysicalPlanType::Buffer(buffer) => {
+                self.try_into_buffer_physical_plan(buffer, ctx, codec, proto_converter)
+            }
         }
     }
 
@@ -539,6 +543,14 @@ impl protobuf::PhysicalPlanNode {
 
         if let Some(exec) = plan.downcast_ref::<AsyncFuncExec>() {
             return protobuf::PhysicalPlanNode::try_from_async_func_exec(
+                exec,
+                codec,
+                proto_converter,
+            );
+        }
+
+        if let Some(exec) = plan.downcast_ref::<BufferExec>() {
+            return protobuf::PhysicalPlanNode::try_from_buffer_exec(
                 exec,
                 codec,
                 proto_converter,
@@ -2170,6 +2182,19 @@ impl protobuf::PhysicalPlanNode {
         Ok(Arc::new(AsyncFuncExec::try_new(async_exprs, input)?))
     }
 
+    fn try_into_buffer_physical_plan(
+        &self,
+        buffer: &protobuf::BufferExecNode,
+        ctx: &TaskContext,
+        extension_codec: &dyn PhysicalExtensionCodec,
+        proto_converter: &dyn PhysicalProtoConverterExtension,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let input: Arc<dyn ExecutionPlan> =
+            into_physical_plan(&buffer.input, ctx, extension_codec, proto_converter)?;
+
+        Ok(Arc::new(BufferExec::new(input, buffer.capacity as usize)))
+    }
+
     fn try_from_explain_exec(
         exec: &ExplainExec,
         _codec: &dyn PhysicalExtensionCodec,
@@ -3512,6 +3537,27 @@ impl protobuf::PhysicalPlanNode {
                     input: Some(Box::new(input)),
                     async_exprs,
                     async_expr_names,
+                },
+            ))),
+        })
+    }
+
+    fn try_from_buffer_exec(
+        exec: &BufferExec,
+        extension_codec: &dyn PhysicalExtensionCodec,
+        proto_converter: &dyn PhysicalProtoConverterExtension,
+    ) -> Result<Self> {
+        let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
+            Arc::clone(exec.input()),
+            extension_codec,
+            proto_converter,
+        )?;
+
+        Ok(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::Buffer(Box::new(
+                protobuf::BufferExecNode {
+                    input: Some(Box::new(input)),
+                    capacity: exec.capacity() as u64,
                 },
             ))),
         })
