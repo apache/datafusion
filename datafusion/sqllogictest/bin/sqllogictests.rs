@@ -336,6 +336,7 @@ async fn run_test_file(
     filters: &[Filter],
     currently_executing_sql_tracker: CurrentlyExecutingSqlTracker,
 ) -> Result<()> {
+    let begin = Instant::now();
     let TestFile {
         path,
         relative_path,
@@ -364,8 +365,9 @@ async fn run_test_file(
     runner.with_column_validator(strict_column_validator);
     runner.with_normalizer(value_normalizer);
     runner.with_validator(validator);
-    let result = run_file_in_runner(path, runner, filters).await;
+    let result = run_file_in_runner(path.clone(), runner, filters).await;
     pb.finish_and_clear();
+    println!("{},{}", path.display(), begin.elapsed().as_secs_f64());
     result
 }
 
