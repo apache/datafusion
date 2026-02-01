@@ -1834,7 +1834,7 @@ impl DefaultPhysicalPlanner {
 
         Ok((
             has_complex_expr.then_some(remainder_exprs),
-            is_identity_projection.then_some(all_required_columns.into_iter().collect()),
+            (!is_identity_projection).then_some(all_required_columns.into_iter().collect()),
         ))
     }
 
