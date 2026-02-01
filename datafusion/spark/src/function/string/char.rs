@@ -22,7 +22,7 @@ use arrow::datatypes::DataType::Utf8;
 use arrow::datatypes::{DataType, Field, FieldRef};
 use std::{any::Any, sync::Arc};
 
-use datafusion_common::{cast::as_int64_array, exec_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, cast::as_int64_array, exec_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
@@ -127,7 +127,7 @@ fn chr(args: &[ArrayRef]) -> Result<ArrayRef> {
                         None => {
                             return exec_err!(
                                 "requested character not compatible for encoding."
-                            )
+                            );
                         }
                     }
                 }

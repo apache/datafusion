@@ -24,8 +24,6 @@
 // https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
-// https://github.com/apache/datafusion/issues/18881
-#![deny(clippy::allow_attributes)]
 
 //! Traits for physical query plan, supporting parallel execution for partitioned relations.
 //!
@@ -50,6 +48,7 @@ pub use crate::execution_plan::{
 };
 pub use crate::metrics::Metric;
 pub use crate::ordering::InputOrderMode;
+pub use crate::sort_pushdown::SortOrderPushdownResult;
 pub use crate::stream::EmptyRecordBatchStream;
 pub use crate::topk::TopK;
 pub use crate::visitor::{ExecutionPlanVisitor, accept, visit_execution_plan};
@@ -67,6 +66,7 @@ pub mod async_func;
 pub mod coalesce;
 pub mod coalesce_batches;
 pub mod coalesce_partitions;
+pub mod column_rewriter;
 pub mod common;
 pub mod coop;
 pub mod display;
@@ -83,6 +83,7 @@ pub mod placeholder_row;
 pub mod projection;
 pub mod recursive_query;
 pub mod repartition;
+pub mod sort_pushdown;
 pub mod sorts;
 pub mod spill;
 pub mod stream;

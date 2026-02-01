@@ -31,7 +31,7 @@ mod tests {
     use std::fs;
     use substrait::proto::plan_rel::RelType;
     use substrait::proto::rel_common::{Emit, EmitKind};
-    use substrait::proto::{rel, RelCommon};
+    use substrait::proto::{RelCommon, rel};
 
     #[tokio::test]
     async fn serialize_to_file() -> Result<()> {
@@ -95,10 +95,10 @@ mod tests {
 
         assert_snapshot!(
                     format!("{}", datafusion_plan),
-                    @r#"
-Projection: data.b, data.a + data.a, data.a
-  TableScan: data projection=[a, b]
-"#
+                    @r"
+        Projection: data.b, data.a + data.a, data.a
+          TableScan: data projection=[a, b]
+        "
         ,
                 );
 
@@ -142,11 +142,11 @@ Projection: data.b, data.a + data.a, data.a
         let datafusion_plan = df.into_optimized_plan()?;
         assert_snapshot!(
                     datafusion_plan,
-                    @r#"
-Projection: data.b, rank() PARTITION BY [data.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, data.c
-  WindowAggr: windowExpr=[[rank() PARTITION BY [data.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
-    TableScan: data projection=[a, b, c]
-"#
+                    @r"
+        Projection: data.b, rank() PARTITION BY [data.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, data.c
+          WindowAggr: windowExpr=[[rank() PARTITION BY [data.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+            TableScan: data projection=[a, b, c]
+        "
         ,
                 );
 

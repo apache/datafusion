@@ -18,8 +18,9 @@
 //! Aggregate without grouping columns
 
 use crate::aggregates::{
-    AccumulatorItem, AggrDynFilter, AggregateMode, DynamicFilterAggregateType,
-    aggregate_expressions, create_accumulators, finalize_aggregation,
+    AccumulatorItem, AggrDynFilter, AggregateInputMode, AggregateMode,
+    DynamicFilterAggregateType, aggregate_expressions, create_accumulators,
+    finalize_aggregation,
 };
 use crate::metrics::{BaselineMetrics, RecordOutput};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
@@ -251,6 +252,23 @@ fn scalar_cmp_null_short_circuit(
     }
 }
 
+/// Prepend the grouping ID column to the output columns if present.
+///
+/// For GROUPING SETS with no GROUP BY expressions, the schema includes a `__grouping_id`
+/// column that must be present in the output. This function inserts it at the beginning
+/// of the columns array to maintain schema alignment.
+fn prepend_grouping_id_column(
+    mut columns: Vec<Arc<dyn arrow::array::Array>>,
+    grouping_id: Option<&ScalarValue>,
+) -> Result<Vec<Arc<dyn arrow::array::Array>>> {
+    if let Some(id) = grouping_id {
+        let num_rows = columns.first().map(|array| array.len()).unwrap_or(1);
+        let grouping_ids = id.to_array_of_size(num_rows)?;
+        columns.insert(0, grouping_ids);
+    }
+    Ok(columns)
+}
+
 impl AggregateStream {
     /// Create a new AggregateStream
     pub fn new(
@@ -265,13 +283,9 @@ impl AggregateStream {
         let input = agg.input.execute(partition, Arc::clone(context))?;
 
         let aggregate_expressions = aggregate_expressions(&agg.aggr_expr, &agg.mode, 0)?;
-        let filter_expressions = match agg.mode {
-            AggregateMode::Partial
-            | AggregateMode::Single
-            | AggregateMode::SinglePartitioned => agg_filter_expr,
-            AggregateMode::Final | AggregateMode::FinalPartitioned => {
-                vec![None; agg.aggr_expr.len()]
-            }
+        let filter_expressions = match agg.mode.input_mode() {
+            AggregateInputMode::Raw => agg_filter_expr,
+            AggregateInputMode::Partial => vec![None; agg.aggr_expr.len()],
         };
         let accumulators = create_accumulators(&agg.aggr_expr)?;
 
@@ -350,6 +364,9 @@ impl AggregateStream {
                         let timer = this.baseline_metrics.elapsed_compute().timer();
                         let result =
                             finalize_aggregation(&mut this.accumulators, &this.mode)
+                                .and_then(|columns| {
+                                    prepend_grouping_id_column(columns, None)
+                                })
                                 .and_then(|columns| {
                                     RecordBatch::try_new(
                                         Arc::clone(&this.schema),
@@ -435,13 +452,9 @@ fn aggregate_batch(
 
             // 1.4
             let size_pre = accum.size();
-            let res = match mode {
-                AggregateMode::Partial
-                | AggregateMode::Single
-                | AggregateMode::SinglePartitioned => accum.update_batch(&values),
-                AggregateMode::Final | AggregateMode::FinalPartitioned => {
-                    accum.merge_batch(&values)
-                }
+            let res = match mode.input_mode() {
+                AggregateInputMode::Raw => accum.update_batch(&values),
+                AggregateInputMode::Partial => accum.merge_batch(&values),
             };
             let size_post = accum.size();
             allocated += size_post.saturating_sub(size_pre);

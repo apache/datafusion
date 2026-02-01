@@ -21,7 +21,7 @@ description = "DataFusion SQL Query Planner"
 keywords = ["datafusion", "sql", "parser", "planner"]
 readme = "README.md"
 version = { workspace = true }
-edition = "2024"
+edition = { workspace = true }
 homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
@@ -56,6 +56,7 @@ bigdecimal = { workspace = true }
 chrono = { workspace = true }
 datafusion-common = { workspace = true, features = ["sql"] }
 datafusion-expr = { workspace = true, features = ["sql"] }
+datafusion-functions-nested = { workspace = true, features = ["sql"] }
 indexmap = { workspace = true }
 log = { workspace = true }
 recursive = { workspace = true, optional = true }

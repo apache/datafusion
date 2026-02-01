@@ -19,18 +19,18 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int64Array};
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field, FieldRef};
 use crc32fast::Hasher;
 use datafusion_common::cast::{
     as_binary_array, as_binary_view_array, as_fixed_size_binary_array,
     as_large_binary_array,
 };
-use datafusion_common::types::{logical_string, NativeType};
+use datafusion_common::types::{NativeType, logical_string};
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::{
-    Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    TypeSignatureClass, Volatility,
+    Coercion, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, TypeSignatureClass, Volatility,
 };
 use datafusion_functions::utils::make_scalar_function;
 
@@ -75,7 +75,12 @@ impl ScalarUDFImpl for SparkCrc32 {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Int64)
+        internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
+        Ok(Arc::new(Field::new(self.name(), DataType::Int64, nullable)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -120,5 +125,35 @@ fn spark_crc32(args: &[ArrayRef]) -> Result<ArrayRef> {
         dt => {
             internal_err!("Unsupported data type for crc32: {dt}")
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_crc32_nullability() -> Result<()> {
+        let crc32_func = SparkCrc32::new();
+
+        // non-nullable field should produce non-nullable output
+        let field_not_null = Arc::new(Field::new("data", DataType::Binary, false));
+        let result = crc32_func.return_field_from_args(ReturnFieldArgs {
+            arg_fields: std::slice::from_ref(&field_not_null),
+            scalar_arguments: &[None],
+        })?;
+        assert!(!result.is_nullable());
+        assert_eq!(result.data_type(), &DataType::Int64);
+
+        // nullable field should produce nullable output
+        let field_nullable = Arc::new(Field::new("data", DataType::Binary, true));
+        let result = crc32_func.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &[field_nullable],
+            scalar_arguments: &[None],
+        })?;
+        assert!(result.is_nullable());
+        assert_eq!(result.data_type(), &DataType::Int64);
+
+        Ok(())
     }
 }

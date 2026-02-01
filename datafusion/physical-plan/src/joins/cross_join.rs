@@ -206,7 +206,7 @@ async fn load_left_input(
     let (batches, _metrics, reservation) = stream
         .try_fold(
             (Vec::new(), metrics, reservation),
-            |(mut batches, metrics, mut reservation), batch| async {
+            |(mut batches, metrics, reservation), batch| async {
                 let batch_size = batch.get_array_memory_size();
                 // Reserve memory for incoming batch
                 reservation.try_grow(batch_size)?;
@@ -869,18 +869,18 @@ mod tests {
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
 
-        assert_snapshot!(batches_to_sort_string(&batches), @r#"
-            +----+----+----+----+----+----+
-            | a1 | b1 | c1 | a2 | b2 | c2 |
-            +----+----+----+----+----+----+
-            | 1  | 4  | 7  | 10 | 12 | 14 |
-            | 1  | 4  | 7  | 11 | 13 | 15 |
-            | 2  | 5  | 8  | 10 | 12 | 14 |
-            | 2  | 5  | 8  | 11 | 13 | 15 |
-            | 3  | 6  | 9  | 10 | 12 | 14 |
-            | 3  | 6  | 9  | 11 | 13 | 15 |
-            +----+----+----+----+----+----+
-            "#);
+        assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +----+----+----+----+----+----+
+        | a1 | b1 | c1 | a2 | b2 | c2 |
+        +----+----+----+----+----+----+
+        | 1  | 4  | 7  | 10 | 12 | 14 |
+        | 1  | 4  | 7  | 11 | 13 | 15 |
+        | 2  | 5  | 8  | 10 | 12 | 14 |
+        | 2  | 5  | 8  | 11 | 13 | 15 |
+        | 3  | 6  | 9  | 10 | 12 | 14 |
+        | 3  | 6  | 9  | 11 | 13 | 15 |
+        +----+----+----+----+----+----+
+        ");
 
         assert_join_metrics!(metrics, 6);
 

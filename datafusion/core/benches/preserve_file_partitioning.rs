@@ -38,8 +38,8 @@ use arrow::array::{ArrayRef, Float64Array, StringArray, TimestampMillisecondArra
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
-use criterion::{criterion_group, criterion_main, Criterion};
-use datafusion::prelude::{col, ParquetReadOptions, SessionConfig, SessionContext};
+use criterion::{Criterion, criterion_group, criterion_main};
+use datafusion::prelude::{ParquetReadOptions, SessionConfig, SessionContext, col};
 use datafusion_expr::SortExpr;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
@@ -322,7 +322,7 @@ async fn save_plans(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn run_benchmark(
     c: &mut Criterion,
     rt: &Runtime,

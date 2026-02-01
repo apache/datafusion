@@ -15,18 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::{
-    array::{ArrayRef, Int64Array},
-    error::ArrowError,
-};
+use arrow::array::{ArrayRef, AsArray, Int64Array};
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Int64;
+use arrow::datatypes::{DataType, Int64Type};
 
-use crate::utils::make_scalar_function;
-use datafusion_common::{Result, arrow_datafusion_err, exec_err};
+use datafusion_common::{
+    Result, ScalarValue, exec_err, internal_err, utils::take_function_args,
+};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
@@ -84,7 +82,39 @@ impl ScalarUDFImpl for FactorialFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(factorial, vec![])(&args.args)
+        let [arg] = take_function_args(self.name(), args.args)?;
+
+        match arg {
+            ColumnarValue::Scalar(scalar) => {
+                if scalar.is_null() {
+                    return Ok(ColumnarValue::Scalar(ScalarValue::Int64(None)));
+                }
+
+                match scalar {
+                    ScalarValue::Int64(Some(v)) => {
+                        let result = compute_factorial(v)?;
+                        Ok(ColumnarValue::Scalar(ScalarValue::Int64(Some(result))))
+                    }
+                    _ => {
+                        internal_err!(
+                            "Unexpected data type {:?} for function factorial",
+                            scalar.data_type()
+                        )
+                    }
+                }
+            }
+            ColumnarValue::Array(array) => match array.data_type() {
+                Int64 => {
+                    let result: Int64Array = array
+                        .as_primitive::<Int64Type>()
+                        .try_unary(compute_factorial)?;
+                    Ok(ColumnarValue::Array(Arc::new(result) as ArrayRef))
+                }
+                other => {
+                    internal_err!("Unexpected data type {other:?} for function factorial")
+                }
+            },
+        }
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -92,50 +122,36 @@ impl ScalarUDFImpl for FactorialFunc {
     }
 }
 
-/// Factorial SQL function
-fn factorial(args: &[ArrayRef]) -> Result<ArrayRef> {
-    match args[0].data_type() {
-        Int64 => {
-            let arg = downcast_named_arg!((&args[0]), "value", Int64Array);
-            Ok(arg
-                .iter()
-                .map(|a| match a {
-                    Some(a) => (2..=a)
-                        .try_fold(1i64, i64::checked_mul)
-                        .ok_or_else(|| {
-                            arrow_datafusion_err!(ArrowError::ComputeError(format!(
-                                "Overflow happened on FACTORIAL({a})"
-                            )))
-                        })
-                        .map(Some),
-                    _ => Ok(None),
-                })
-                .collect::<Result<Int64Array>>()
-                .map(Arc::new)? as ArrayRef)
-        }
-        other => exec_err!("Unsupported data type {other:?} for function factorial."),
-    }
-}
+const FACTORIALS: [i64; 21] = [
+    1,
+    1,
+    2,
+    6,
+    24,
+    120,
+    720,
+    5040,
+    40320,
+    362880,
+    3628800,
+    39916800,
+    479001600,
+    6227020800,
+    87178291200,
+    1307674368000,
+    20922789888000,
+    355687428096000,
+    6402373705728000,
+    121645100408832000,
+    2432902008176640000,
+]; // if return type changes, this constant needs to be updated accordingly
 
-#[cfg(test)]
-mod test {
-
-    use datafusion_common::cast::as_int64_array;
-
-    use super::*;
-
-    #[test]
-    fn test_factorial_i64() {
-        let args: Vec<ArrayRef> = vec![
-            Arc::new(Int64Array::from(vec![0, 1, 2, 4])), // input
-        ];
-
-        let result = factorial(&args).expect("failed to initialize function factorial");
-        let ints =
-            as_int64_array(&result).expect("failed to initialize function factorial");
-
-        let expected = Int64Array::from(vec![1, 1, 2, 24]);
-
-        assert_eq!(ints, &expected);
+fn compute_factorial(n: i64) -> Result<i64> {
+    if n < 0 {
+        Ok(1)
+    } else if n < FACTORIALS.len() as i64 {
+        Ok(FACTORIALS[n as usize])
+    } else {
+        exec_err!("Overflow happened on FACTORIAL({n})")
     }
 }

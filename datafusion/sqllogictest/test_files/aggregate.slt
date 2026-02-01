@@ -379,6 +379,59 @@ select array_sort(c1), array_sort(c2) from (
 statement ok
 drop table array_agg_distinct_list_table;
 
+# Test array_agg with DISTINCT and IGNORE NULLS (regression test for issue #19735)
+query ?
+SELECT array_sort(ARRAY_AGG(DISTINCT x IGNORE NULLS)) as result
+FROM (VALUES (1), (2), (NULL), (2), (NULL), (1)) AS t(x);
+----
+[1, 2]
+
+# Test that non-DISTINCT aggregates also preserve IGNORE NULLS when mixed with DISTINCT
+# This tests the two-phase aggregation rewrite in SingleDistinctToGroupBy
+query I?
+SELECT
+  COUNT(DISTINCT x) as distinct_count,
+  array_sort(ARRAY_AGG(y IGNORE NULLS)) as y_agg
+FROM (VALUES
+  (1, 10),
+  (1, 20),
+  (2, 30),
+  (3, NULL),
+  (3, 40),
+  (NULL, 50)
+) AS t(x, y)
+----
+3 [10, 20, 30, 40, 50]
+
+# Test that FILTER clause is preserved in two-phase aggregation rewrite
+query II
+SELECT
+  COUNT(DISTINCT x) as distinct_count,
+  SUM(y) FILTER (WHERE y > 15) as filtered_sum
+FROM (VALUES
+  (1, 10),
+  (1, 20),
+  (2, 5),
+  (2, 30),
+  (3, 25)
+) AS t(x, y)
+----
+3 75
+
+# Test that ORDER BY is preserved in two-phase aggregation rewrite
+query I?
+SELECT
+  COUNT(DISTINCT x) as distinct_count,
+  ARRAY_AGG(y ORDER BY y DESC) as ordered_agg
+FROM (VALUES
+  (1, 10),
+  (1, 30),
+  (2, 20),
+  (2, 40)
+) AS t(x, y)
+----
+2 [40, 30, 20, 10]
+
 statement error This feature is not implemented: Calling array_agg: LIMIT not supported in function arguments: 1
 SELECT array_agg(c13 LIMIT 1) FROM aggregate_test_100
 
@@ -434,20 +487,19 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[array_length(array_agg(DISTINCT a.foo)@1) as array_length(array_agg(DISTINCT a.foo)), sum(DISTINCT Int64(1))@2 as sum(DISTINCT Int64(1))]
 02)--AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[array_agg(DISTINCT a.foo), sum(DISTINCT Int64(1))], ordering_mode=Sorted
-03)----CoalesceBatchesExec: target_batch_size=8192
-04)------RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=5
-05)--------AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[array_agg(DISTINCT a.foo), sum(DISTINCT Int64(1))], ordering_mode=Sorted
-06)----------UnionExec
-07)------------ProjectionExec: expr=[1 as id, 2 as foo]
-08)--------------PlaceholderRowExec
-09)------------ProjectionExec: expr=[1 as id, NULL as foo]
-10)--------------PlaceholderRowExec
-11)------------ProjectionExec: expr=[1 as id, NULL as foo]
-12)--------------PlaceholderRowExec
-13)------------ProjectionExec: expr=[1 as id, 3 as foo]
-14)--------------PlaceholderRowExec
-15)------------ProjectionExec: expr=[1 as id, 2 as foo]
-16)--------------PlaceholderRowExec
+03)----RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=5
+04)------AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[array_agg(DISTINCT a.foo), sum(DISTINCT Int64(1))], ordering_mode=Sorted
+05)--------UnionExec
+06)----------ProjectionExec: expr=[1 as id, 2 as foo]
+07)------------PlaceholderRowExec
+08)----------ProjectionExec: expr=[1 as id, NULL as foo]
+09)------------PlaceholderRowExec
+10)----------ProjectionExec: expr=[1 as id, NULL as foo]
+11)------------PlaceholderRowExec
+12)----------ProjectionExec: expr=[1 as id, 3 as foo]
+13)------------PlaceholderRowExec
+14)----------ProjectionExec: expr=[1 as id, 2 as foo]
+15)------------PlaceholderRowExec
 
 
 # FIX: custom absolute values
@@ -701,8 +753,10 @@ SELECT var(distinct c2) FROM aggregate_test_100
 ----
 2.5
 
-statement error DataFusion error: This feature is not implemented: VAR\(DISTINCT\) aggregations are not available
+query RR
 SELECT var(c2), var(distinct c2) FROM aggregate_test_100
+----
+1.886363636364 2.5
 
 # csv_query_distinct_variance_population
 query R
@@ -710,8 +764,10 @@ SELECT var_pop(distinct c2) FROM aggregate_test_100
 ----
 2
 
-statement error DataFusion error: This feature is not implemented: VAR_POP\(DISTINCT\) aggregations are not available
+query RR
 SELECT var_pop(c2), var_pop(distinct c2) FROM aggregate_test_100
+----
+1.8675 2
 
 # csv_query_variance_5
 query R
@@ -990,6 +1046,267 @@ query R
 SELECT approx_median(col_f64_nan) FROM median_table
 ----
 NaN
+
+
+# median_i8_overflow_negative
+query I
+SELECT median(v) FROM (VALUES (arrow_cast(-85, 'Int8')), (arrow_cast(-56, 'Int8'))) AS t(v);
+----
+-70
+
+# median_i8_overflow_positive
+# Test overflow with positive values: 100 + 120 = 220 > 127 (max i8)
+query I
+SELECT median(v) FROM (VALUES (arrow_cast(100, 'Int8')), (arrow_cast(120, 'Int8'))) AS t(v);
+----
+110
+
+# median_u8_overflow
+# Test unsigned overflow: 200 + 250 = 450 > 255 (max u8)
+query I
+SELECT median(v) FROM (VALUES (arrow_cast(200, 'UInt8')), (arrow_cast(250, 'UInt8'))) AS t(v);
+----
+225
+
+# median_i8_no_overflow_normal_case
+# Normal case that doesn't overflow for comparison
+query I
+SELECT median(v) FROM (VALUES (arrow_cast(4, 'Int8')), (arrow_cast(5, 'Int8'))) AS t(v);
+----
+4
+
+# median_i8_max_values
+# Test with both i8::MAX values: 127 + 127 = 254 > 127, overflow
+query I
+SELECT median(v) FROM (VALUES (arrow_cast(127, 'Int8')), (arrow_cast(127, 'Int8'))) AS t(v);
+----
+127
+
+# median_i8_min_values
+# Test with both i8::MIN values: -128 + -128 = -256 < -128, underflow
+query I
+SELECT median(v) FROM (VALUES (arrow_cast(-128, 'Int8')), (arrow_cast(-128, 'Int8'))) AS t(v);
+----
+-128
+
+# median_i8_min_max_values
+# Test with i8::MIN and i8::MAX: -128 + 127 = -1, no overflow, median = 0 (truncated from -0.5)
+query I
+SELECT median(v) FROM (VALUES (arrow_cast(-128, 'Int8')), (arrow_cast(127, 'Int8'))) AS t(v);
+----
+0
+
+# median_u8_max_values
+# Test with both u8::MAX values: 255 + 255 = 510 > 255, overflow
+query I
+SELECT median(v) FROM (VALUES (arrow_cast(255, 'UInt8')), (arrow_cast(255, 'UInt8'))) AS t(v);
+----
+255
+
+# median_sliding_window
+statement ok
+CREATE TABLE median_window_test (
+    timestamp INT,
+    tags VARCHAR,
+    value DOUBLE
+);
+
+statement ok
+INSERT INTO median_window_test (timestamp, tags, value) VALUES
+(1, 'tag1', 10.0),
+(2, 'tag1', 20.0),
+(3, 'tag1', 30.0),
+(4, 'tag1', 40.0),
+(5, 'tag1', 50.0),
+(1, 'tag2', 60.0),
+(2, 'tag2', 70.0),
+(3, 'tag2', 80.0),
+(4, 'tag2', 90.0),
+(5, 'tag2', 100.0);
+
+query ITRR
+SELECT
+    timestamp,
+    tags,
+    value,
+    median(value) OVER (
+        PARTITION BY tags
+        ORDER BY timestamp
+        ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING
+    ) AS value_median_3
+FROM median_window_test
+ORDER BY tags, timestamp;
+----
+1 tag1 10 15
+2 tag1 20 20
+3 tag1 30 30
+4 tag1 40 40
+5 tag1 50 45
+1 tag2 60 65
+2 tag2 70 70
+3 tag2 80 80
+4 tag2 90 90
+5 tag2 100 95
+
+# median_non_sliding_window
+query ITRRRR
+SELECT
+    timestamp,
+    tags,
+    value,
+    median(value) OVER (
+        PARTITION BY tags
+        ORDER BY timestamp
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS value_median_unbounded_preceding,
+    median(value) OVER (
+        PARTITION BY tags
+        ORDER BY timestamp
+        ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+    ) AS value_median_unbounded_both,
+    median(value) OVER (
+        PARTITION BY tags
+        ORDER BY timestamp
+        ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+    ) AS value_median_unbounded_following
+FROM median_window_test
+ORDER BY tags, timestamp;
+----
+1 tag1 10 10 30 30
+2 tag1 20 15 30 35
+3 tag1 30 20 30 40
+4 tag1 40 25 30 45
+5 tag1 50 30 30 50
+1 tag2 60 60 80 80
+2 tag2 70 65 80 85
+3 tag2 80 70 80 90
+4 tag2 90 75 80 95
+5 tag2 100 80 80 100
+
+###########
+# Issue #19612: Test that percentile_cont produces correct results
+# in window frame queries. Previously percentile_cont consumed its internal state
+# during evaluate(), causing incorrect results when called multiple times.
+###########
+
+# Test percentile_cont sliding window (same as median)
+query ITRR
+SELECT
+    timestamp,
+    tags,
+    value,
+    percentile_cont(value, 0.5) OVER (
+        PARTITION BY tags
+        ORDER BY timestamp
+        ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING
+    ) AS value_percentile_50
+FROM median_window_test
+ORDER BY tags, timestamp;
+----
+1 tag1 10 15
+2 tag1 20 20
+3 tag1 30 30
+4 tag1 40 40
+5 tag1 50 45
+1 tag2 60 65
+2 tag2 70 70
+3 tag2 80 80
+4 tag2 90 90
+5 tag2 100 95
+
+# Test percentile_cont non-sliding window
+query ITRRRR
+SELECT
+    timestamp,
+    tags,
+    value,
+    percentile_cont(value, 0.5) OVER (
+        PARTITION BY tags
+        ORDER BY timestamp
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS value_percentile_unbounded_preceding,
+    percentile_cont(value, 0.5) OVER (
+        PARTITION BY tags
+        ORDER BY timestamp
+        ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+    ) AS value_percentile_unbounded_both,
+    percentile_cont(value, 0.5) OVER (
+        PARTITION BY tags
+        ORDER BY timestamp
+        ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+    ) AS value_percentile_unbounded_following
+FROM median_window_test
+ORDER BY tags, timestamp;
+----
+1 tag1 10 10 30 30
+2 tag1 20 15 30 35
+3 tag1 30 20 30 40
+4 tag1 40 25 30 45
+5 tag1 50 30 30 50
+1 tag2 60 60 80 80
+2 tag2 70 65 80 85
+3 tag2 80 70 80 90
+4 tag2 90 75 80 95
+5 tag2 100 80 80 100
+
+# Test percentile_cont with different percentile values
+query ITRRR
+SELECT
+    timestamp,
+    tags,
+    value,
+    percentile_cont(value, 0.25) OVER (
+        PARTITION BY tags
+        ORDER BY timestamp
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS p25,
+    percentile_cont(value, 0.75) OVER (
+        PARTITION BY tags
+        ORDER BY timestamp
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS p75
+FROM median_window_test
+ORDER BY tags, timestamp;
+----
+1 tag1 10 10 10
+2 tag1 20 12.5 17.5
+3 tag1 30 15 25
+4 tag1 40 17.5 32.5
+5 tag1 50 20 40
+1 tag2 60 60 60
+2 tag2 70 62.5 67.5
+3 tag2 80 65 75
+4 tag2 90 67.5 82.5
+5 tag2 100 70 90
+
+
+# Test distinct median non-sliding window
+query ITRR
+SELECT
+    timestamp,
+    tags,
+    value,
+    median(DISTINCT value) OVER (
+        PARTITION BY tags
+        ORDER BY timestamp
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS distinct_median
+FROM median_window_test
+ORDER BY tags, timestamp;
+----
+1 tag1 10 10
+2 tag1 20 15
+3 tag1 30 20
+4 tag1 40 25
+5 tag1 50 30
+1 tag2 60 60
+2 tag2 70 65
+3 tag2 80 70
+4 tag2 90 75
+5 tag2 100 80
+
+statement ok
+DROP TABLE median_window_test;
 
 query RT
 select approx_median(arrow_cast(col_f32, 'Float16')), arrow_typeof(approx_median(arrow_cast(col_f32, 'Float16'))) from median_table;
@@ -1276,10 +1593,9 @@ physical_plan
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[], aggr=[median(alias1)]
 05)--------AggregateExec: mode=FinalPartitioned, gby=[alias1@0 as alias1], aggr=[]
-06)----------CoalesceBatchesExec: target_batch_size=8192
-07)------------RepartitionExec: partitioning=Hash([alias1@0], 4), input_partitions=1
-08)--------------AggregateExec: mode=Partial, gby=[c@0 as alias1], aggr=[]
-09)----------------DataSourceExec: partitions=1, partition_sizes=[1]
+06)----------RepartitionExec: partitioning=Hash([alias1@0], 4), input_partitions=1
+07)------------AggregateExec: mode=Partial, gby=[c@0 as alias1], aggr=[]
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 drop table t;
@@ -1713,11 +2029,12 @@ statement ok
 INSERT INTO t1 VALUES (TRUE);
 
 # ISSUE: https://github.com/apache/datafusion/issues/12716
-# This test verifies that approx_percentile_cont_with_weight does not panic when given 'NaN' and returns 'inf'
+# This test verifies that approx_percentile_cont_with_weight does not panic when given 'NaN'
+# With weight=0, the data point does not contribute, so result is NULL
 query R
 SELECT approx_percentile_cont_with_weight(0, 0) WITHIN GROUP (ORDER BY 'NaN'::DOUBLE) FROM t1 WHERE t1.v1;
 ----
-Infinity
+NULL
 
 statement ok
 DROP TABLE t1;
@@ -2036,21 +2353,21 @@ e 115
 query TI
 SELECT c1, approx_percentile_cont_with_weight(c2, 0.95) WITHIN GROUP (ORDER BY c3) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
-a 74
+a 65
 b 68
-c 123
-d 124
-e 115
+c 122
+d 123
+e 110
 
 # approx_percentile_cont_with_weight with centroids
 query TI
 SELECT c1, approx_percentile_cont_with_weight(c2, 0.95, 200) WITHIN GROUP (ORDER BY c3) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
-a 74
+a 65
 b 68
-c 123
-d 124
-e 115
+c 122
+d 123
+e 110
 
 # csv_query_sum_crossjoin
 query TTI
@@ -5185,10 +5502,10 @@ as values
 statement ok
 create table t as
 select
-  arrow_cast(column1, 'Timestamp(Nanosecond, None)') as nanos,
-  arrow_cast(column1, 'Timestamp(Microsecond, None)') as micros,
-  arrow_cast(column1, 'Timestamp(Millisecond, None)') as millis,
-  arrow_cast(column1, 'Timestamp(Second, None)') as secs,
+  arrow_cast(column1, 'Timestamp(ns)') as nanos,
+  arrow_cast(column1, 'Timestamp(µs)') as micros,
+  arrow_cast(column1, 'Timestamp(ms)') as millis,
+  arrow_cast(column1, 'Timestamp(s)') as secs,
   arrow_cast(column1, 'Timestamp(Nanosecond, Some("UTC"))') as nanos_utc,
   arrow_cast(column1, 'Timestamp(Microsecond, Some("UTC"))') as micros_utc,
   arrow_cast(column1, 'Timestamp(Millisecond, Some("UTC"))') as millis_utc,
@@ -5271,7 +5588,7 @@ SELECT tag, avg(nanos), avg(micros), avg(millis), avg(secs) FROM t GROUP BY tag 
 
 # aggregate_duration_array_agg
 query T?
-SELECT tag, array_agg(millis - arrow_cast(secs, 'Timestamp(Millisecond, None)')) FROM t GROUP BY tag ORDER BY tag;
+SELECT tag, array_agg(millis - arrow_cast(secs, 'Timestamp(ms)')) FROM t GROUP BY tag ORDER BY tag;
 ----
 X [0 days 0 hours 0 mins 0.011 secs, 0 days 0 hours 0 mins 0.123 secs]
 Y [NULL, 0 days 0 hours 0 mins 0.432 secs]
@@ -6112,16 +6429,12 @@ logical_plan
 04)------TableScan: aggregate_test_100 projection=[c1, c3]
 physical_plan
 01)CoalescePartitionsExec: fetch=5
-02)--AggregateExec: mode=FinalPartitioned, gby=[c3@0 as c3, min(aggregate_test_100.c1)@1 as min(aggregate_test_100.c1)], aggr=[], lim=[5]
-03)----CoalesceBatchesExec: target_batch_size=8192
-04)------RepartitionExec: partitioning=Hash([c3@0, min(aggregate_test_100.c1)@1], 4), input_partitions=4
-05)--------AggregateExec: mode=Partial, gby=[c3@0 as c3, min(aggregate_test_100.c1)@1 as min(aggregate_test_100.c1)], aggr=[], lim=[5]
-06)----------AggregateExec: mode=FinalPartitioned, gby=[c3@0 as c3], aggr=[min(aggregate_test_100.c1)]
-07)------------CoalesceBatchesExec: target_batch_size=8192
-08)--------------RepartitionExec: partitioning=Hash([c3@0], 4), input_partitions=4
-09)----------------AggregateExec: mode=Partial, gby=[c3@1 as c3], aggr=[min(aggregate_test_100.c1)]
-10)------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-11)--------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[c1, c3], file_type=csv, has_header=true
+02)--AggregateExec: mode=SinglePartitioned, gby=[c3@0 as c3, min(aggregate_test_100.c1)@1 as min(aggregate_test_100.c1)], aggr=[], lim=[5]
+03)----AggregateExec: mode=FinalPartitioned, gby=[c3@0 as c3], aggr=[min(aggregate_test_100.c1)]
+04)------RepartitionExec: partitioning=Hash([c3@0], 4), input_partitions=4
+05)--------AggregateExec: mode=Partial, gby=[c3@1 as c3], aggr=[min(aggregate_test_100.c1)]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[c1, c3], file_type=csv, has_header=true
 
 
 #
@@ -7351,10 +7664,9 @@ logical_plan
 physical_plan
 01)FilterExec: max(having_test.v1)@2 = 3, projection=[v1@0, v2@1]
 02)--AggregateExec: mode=FinalPartitioned, gby=[v1@0 as v1, v2@1 as v2], aggr=[max(having_test.v1)]
-03)----CoalesceBatchesExec: target_batch_size=8192
-04)------RepartitionExec: partitioning=Hash([v1@0, v2@1], 4), input_partitions=1
-05)--------AggregateExec: mode=Partial, gby=[v1@0 as v1, v2@1 as v2], aggr=[max(having_test.v1)]
-06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+03)----RepartitionExec: partitioning=Hash([v1@0, v2@1], 4), input_partitions=1
+04)------AggregateExec: mode=Partial, gby=[v1@0 as v1, v2@1 as v2], aggr=[max(having_test.v1)]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 
 query error
@@ -7499,20 +7811,19 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[last_value(a.foo) ORDER BY [a.foo ASC NULLS LAST]@1 as last_value(a.foo) ORDER BY [a.foo ASC NULLS LAST], sum(DISTINCT Int64(1))@2 as sum(DISTINCT Int64(1))]
 02)--AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[last_value(a.foo) ORDER BY [a.foo ASC NULLS LAST], sum(DISTINCT Int64(1))], ordering_mode=Sorted
-03)----CoalesceBatchesExec: target_batch_size=8192
-04)------RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=5
-05)--------AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[last_value(a.foo) ORDER BY [a.foo ASC NULLS LAST], sum(DISTINCT Int64(1))], ordering_mode=Sorted
-06)----------UnionExec
-07)------------ProjectionExec: expr=[1 as id, 2 as foo]
-08)--------------PlaceholderRowExec
-09)------------ProjectionExec: expr=[1 as id, 4 as foo]
-10)--------------PlaceholderRowExec
-11)------------ProjectionExec: expr=[1 as id, 5 as foo]
-12)--------------PlaceholderRowExec
-13)------------ProjectionExec: expr=[1 as id, 3 as foo]
-14)--------------PlaceholderRowExec
-15)------------ProjectionExec: expr=[1 as id, 2 as foo]
-16)--------------PlaceholderRowExec
+03)----RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=5
+04)------AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[last_value(a.foo) ORDER BY [a.foo ASC NULLS LAST], sum(DISTINCT Int64(1))], ordering_mode=Sorted
+05)--------UnionExec
+06)----------ProjectionExec: expr=[1 as id, 2 as foo]
+07)------------PlaceholderRowExec
+08)----------ProjectionExec: expr=[1 as id, 4 as foo]
+09)------------PlaceholderRowExec
+10)----------ProjectionExec: expr=[1 as id, 5 as foo]
+11)------------PlaceholderRowExec
+12)----------ProjectionExec: expr=[1 as id, 3 as foo]
+13)------------PlaceholderRowExec
+14)----------ProjectionExec: expr=[1 as id, 2 as foo]
+15)------------PlaceholderRowExec
 
 # SortExec is removed if it is coming after one-row producing AggregateExec's having an empty group by expression
 query TT
@@ -8110,3 +8421,330 @@ NULL NULL NULL NULL
 
 statement ok
 drop table distinct_avg;
+
+query R
+select percentile_cont(null, 0.5);
+----
+NULL
+
+# Test string_agg window frame behavior (fix for issue #19612)
+statement ok
+CREATE TABLE string_agg_window_test (
+    id INT,
+    grp VARCHAR,
+    val VARCHAR
+);
+
+statement ok
+INSERT INTO string_agg_window_test (id, grp, val) VALUES
+(1, 'A', 'a'),
+(2, 'A', 'b'),
+(3, 'A', 'c'),
+(1, 'B', 'x'),
+(2, 'B', 'y'),
+(3, 'B', 'z');
+
+# Test string_agg with ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+# The function should maintain state correctly across multiple evaluate() calls
+query ITT
+SELECT
+    id,
+    grp,
+    string_agg(val, ',') OVER (
+        PARTITION BY grp
+        ORDER BY id
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS cumulative_string
+FROM string_agg_window_test
+ORDER BY grp, id;
+----
+1 A a
+2 A a,b
+3 A a,b,c
+1 B x
+2 B x,y
+3 B x,y,z
+
+statement ok
+DROP TABLE string_agg_window_test;
+
+# Enable streaming aggregation by limiting partitions and ensuring sorted input
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+# Setup data
+statement ok
+CREATE TABLE stream_test (
+    g INT,
+    x DOUBLE,
+    y DOUBLE,
+    i INT,
+    b BOOLEAN,
+    s VARCHAR
+) AS VALUES
+(1, 1.0, 1.0, 1, true, 'a'), (1, 2.0, 2.0, 2, true, 'b'),
+(2, 1.0, 5.0, 3, false, 'c'), (2, 2.0, 5.0, 4, true, 'd'),
+(3, 1.0, 1.0, 7, false, 'e'), (3, 2.0, 2.0, 8, false, 'f');
+
+# Test comprehensive aggregates with streaming
+# This verifies that CORR and other aggregates work together in a streaming plan (ordering_mode=Sorted)
+
+# Basic Aggregates
+query TT
+EXPLAIN SELECT
+  g,
+  COUNT(*),
+  SUM(x),
+  AVG(x),
+  MEAN(x),
+  MIN(x),
+  MAX(y),
+  BIT_AND(i),
+  BIT_OR(i),
+  BIT_XOR(i),
+  BOOL_AND(b),
+  BOOL_OR(b),
+  MEDIAN(x),
+  GROUPING(g),
+  VAR(x),
+  VAR_SAMP(x),
+  VAR_POP(x),
+  VAR_SAMPLE(x),
+  VAR_POPULATION(x),
+  STDDEV(x),
+  STDDEV_SAMP(x),
+  STDDEV_POP(x)
+FROM (SELECT * FROM stream_test ORDER BY g LIMIT 10000)
+GROUP BY g
+ORDER BY g;
+----
+logical_plan
+01)Sort: stream_test.g ASC NULLS LAST
+02)--Projection: stream_test.g, count(Int64(1)) AS count(*), sum(stream_test.x), avg(stream_test.x), avg(stream_test.x) AS mean(stream_test.x), min(stream_test.x), max(stream_test.y), bit_and(stream_test.i), bit_or(stream_test.i), bit_xor(stream_test.i), bool_and(stream_test.b), bool_or(stream_test.b), median(stream_test.x), Int32(0) AS grouping(stream_test.g), var(stream_test.x), var(stream_test.x) AS var_samp(stream_test.x), var_pop(stream_test.x), var(stream_test.x) AS var_sample(stream_test.x), var_pop(stream_test.x) AS var_population(stream_test.x), stddev(stream_test.x), stddev(stream_test.x) AS stddev_samp(stream_test.x), stddev_pop(stream_test.x)
+03)----Aggregate: groupBy=[[stream_test.g]], aggr=[[count(Int64(1)), sum(stream_test.x), avg(stream_test.x), min(stream_test.x), max(stream_test.y), bit_and(stream_test.i), bit_or(stream_test.i), bit_xor(stream_test.i), bool_and(stream_test.b), bool_or(stream_test.b), median(stream_test.x), var(stream_test.x), var_pop(stream_test.x), stddev(stream_test.x), stddev_pop(stream_test.x)]]
+04)------Sort: stream_test.g ASC NULLS LAST, fetch=10000
+05)--------TableScan: stream_test projection=[g, x, y, i, b]
+physical_plan
+01)ProjectionExec: expr=[g@0 as g, count(Int64(1))@1 as count(*), sum(stream_test.x)@2 as sum(stream_test.x), avg(stream_test.x)@3 as avg(stream_test.x), avg(stream_test.x)@3 as mean(stream_test.x), min(stream_test.x)@4 as min(stream_test.x), max(stream_test.y)@5 as max(stream_test.y), bit_and(stream_test.i)@6 as bit_and(stream_test.i), bit_or(stream_test.i)@7 as bit_or(stream_test.i), bit_xor(stream_test.i)@8 as bit_xor(stream_test.i), bool_and(stream_test.b)@9 as bool_and(stream_test.b), bool_or(stream_test.b)@10 as bool_or(stream_test.b), median(stream_test.x)@11 as median(stream_test.x), 0 as grouping(stream_test.g), var(stream_test.x)@12 as var(stream_test.x), var(stream_test.x)@12 as var_samp(stream_test.x), var_pop(stream_test.x)@13 as var_pop(stream_test.x), var(stream_test.x)@12 as var_sample(stream_test.x), var_pop(stream_test.x)@13 as var_population(stream_test.x), stddev(stream_test.x)@14 as stddev(stream_test.x), stddev(stream_test.x)@14 as stddev_samp(stream_test.x), stddev_pop(stream_test.x)@15 as stddev_pop(stream_test.x)]
+02)--AggregateExec: mode=Single, gby=[g@0 as g], aggr=[count(Int64(1)), sum(stream_test.x), avg(stream_test.x), min(stream_test.x), max(stream_test.y), bit_and(stream_test.i), bit_or(stream_test.i), bit_xor(stream_test.i), bool_and(stream_test.b), bool_or(stream_test.b), median(stream_test.x), var(stream_test.x), var_pop(stream_test.x), stddev(stream_test.x), stddev_pop(stream_test.x)], ordering_mode=Sorted
+03)----SortExec: TopK(fetch=10000), expr=[g@0 ASC NULLS LAST], preserve_partitioning=[false]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query IIRRRRRIIIBBRIRRRRRRRR
+SELECT
+  g,
+  COUNT(*),
+  SUM(x),
+  AVG(x),
+  MEAN(x),
+  MIN(x),
+  MAX(y),
+  BIT_AND(i),
+  BIT_OR(i),
+  BIT_XOR(i),
+  BOOL_AND(b),
+  BOOL_OR(b),
+  MEDIAN(x),
+  GROUPING(g),
+  VAR(x),
+  VAR_SAMP(x),
+  VAR_POP(x),
+  VAR_SAMPLE(x),
+  VAR_POPULATION(x),
+  STDDEV(x),
+  STDDEV_SAMP(x),
+  STDDEV_POP(x)
+FROM (SELECT * FROM stream_test ORDER BY g LIMIT 10000)
+GROUP BY g
+ORDER BY g;
+----
+1 2 3 1.5 1.5 1 2 0 3 3 true true 1.5 0 0.5 0.5 0.25 0.5 0.25 0.707106781187 0.707106781187 0.5
+2 2 3 1.5 1.5 1 5 0 7 7 false true 1.5 0 0.5 0.5 0.25 0.5 0.25 0.707106781187 0.707106781187 0.5
+3 2 3 1.5 1.5 1 2 0 15 15 false false 1.5 0 0.5 0.5 0.25 0.5 0.25 0.707106781187 0.707106781187 0.5
+
+# Ordered Aggregates (by x)
+query TT
+EXPLAIN SELECT
+  g,
+  ARRAY_AGG(x ORDER BY x),
+  ARRAY_AGG(DISTINCT x ORDER BY x),
+  FIRST_VALUE(x ORDER BY x),
+  LAST_VALUE(x ORDER BY x),
+  NTH_VALUE(x, 1 ORDER BY x)
+FROM (SELECT * FROM stream_test ORDER BY g LIMIT 10000)
+GROUP BY g
+ORDER BY g;
+----
+logical_plan
+01)Sort: stream_test.g ASC NULLS LAST
+02)--Aggregate: groupBy=[[stream_test.g]], aggr=[[array_agg(stream_test.x) ORDER BY [stream_test.x ASC NULLS LAST], array_agg(DISTINCT stream_test.x) ORDER BY [stream_test.x ASC NULLS LAST], first_value(stream_test.x) ORDER BY [stream_test.x ASC NULLS LAST], last_value(stream_test.x) ORDER BY [stream_test.x ASC NULLS LAST], nth_value(stream_test.x, Int64(1)) ORDER BY [stream_test.x ASC NULLS LAST]]]
+03)----Sort: stream_test.g ASC NULLS LAST, fetch=10000
+04)------TableScan: stream_test projection=[g, x]
+physical_plan
+01)AggregateExec: mode=Single, gby=[g@0 as g], aggr=[array_agg(stream_test.x) ORDER BY [stream_test.x ASC NULLS LAST], array_agg(DISTINCT stream_test.x) ORDER BY [stream_test.x ASC NULLS LAST], first_value(stream_test.x) ORDER BY [stream_test.x ASC NULLS LAST], last_value(stream_test.x) ORDER BY [stream_test.x ASC NULLS LAST], nth_value(stream_test.x,Int64(1)) ORDER BY [stream_test.x ASC NULLS LAST]], ordering_mode=Sorted
+02)--SortExec: TopK(fetch=10000), expr=[g@0 ASC NULLS LAST, x@1 ASC NULLS LAST], preserve_partitioning=[false]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I??RRR
+SELECT
+  g,
+  ARRAY_AGG(x ORDER BY x),
+  ARRAY_AGG(DISTINCT x ORDER BY x),
+  FIRST_VALUE(x ORDER BY x),
+  LAST_VALUE(x ORDER BY x),
+  NTH_VALUE(x, 1 ORDER BY x)
+FROM (SELECT * FROM stream_test ORDER BY g LIMIT 10000)
+GROUP BY g
+ORDER BY g;
+----
+1 [1.0, 2.0] [1.0, 2.0] 1 2 1
+2 [1.0, 2.0] [1.0, 2.0] 1 2 1
+3 [1.0, 2.0] [1.0, 2.0] 1 2 1
+
+# Ordered Aggregates (by s)
+query TT
+EXPLAIN SELECT
+  g,
+  ARRAY_AGG(s ORDER BY s),
+  STRING_AGG(s, '|' ORDER BY s),
+  STRING_AGG(DISTINCT s, '|' ORDER BY s)
+FROM (SELECT * FROM stream_test ORDER BY g LIMIT 10000)
+GROUP BY g
+ORDER BY g;
+----
+logical_plan
+01)Sort: stream_test.g ASC NULLS LAST
+02)--Aggregate: groupBy=[[stream_test.g]], aggr=[[array_agg(stream_test.s) ORDER BY [stream_test.s ASC NULLS LAST], string_agg(stream_test.s, Utf8("|")) ORDER BY [stream_test.s ASC NULLS LAST], string_agg(DISTINCT stream_test.s, Utf8("|")) ORDER BY [stream_test.s ASC NULLS LAST]]]
+03)----Sort: stream_test.g ASC NULLS LAST, fetch=10000
+04)------TableScan: stream_test projection=[g, s]
+physical_plan
+01)AggregateExec: mode=Single, gby=[g@0 as g], aggr=[array_agg(stream_test.s) ORDER BY [stream_test.s ASC NULLS LAST], string_agg(stream_test.s,Utf8("|")) ORDER BY [stream_test.s ASC NULLS LAST], string_agg(DISTINCT stream_test.s,Utf8("|")) ORDER BY [stream_test.s ASC NULLS LAST]], ordering_mode=Sorted
+02)--SortExec: TopK(fetch=10000), expr=[g@0 ASC NULLS LAST, s@1 ASC NULLS LAST], preserve_partitioning=[false]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I?TT
+SELECT
+  g,
+  ARRAY_AGG(s ORDER BY s),
+  STRING_AGG(s, '|' ORDER BY s),
+  STRING_AGG(DISTINCT s, '|' ORDER BY s)
+FROM (SELECT * FROM stream_test ORDER BY g LIMIT 10000)
+GROUP BY g
+ORDER BY g;
+----
+1 [a, b] a|b a|b
+2 [c, d] c|d c|d
+3 [e, f] e|f e|f
+
+# Statistical & Regression Aggregates
+query TT
+EXPLAIN SELECT
+  g,
+  CORR(x, y),
+  COVAR(x, y),
+  COVAR_SAMP(x, y),
+  COVAR_POP(x, y),
+  REGR_SXX(x, y),
+  REGR_SXY(x, y),
+  REGR_SYY(x, y),
+  REGR_AVGX(x, y),
+  REGR_AVGY(x, y),
+  REGR_COUNT(x, y),
+  REGR_SLOPE(x, y),
+  REGR_INTERCEPT(x, y),
+  REGR_R2(x, y)
+FROM (SELECT * FROM stream_test ORDER BY g LIMIT 10000)
+GROUP BY g
+ORDER BY g;
+----
+logical_plan
+01)Sort: stream_test.g ASC NULLS LAST
+02)--Projection: stream_test.g, corr(stream_test.x,stream_test.y), covar_samp(stream_test.x,stream_test.y) AS covar(stream_test.x,stream_test.y), covar_samp(stream_test.x,stream_test.y), covar_pop(stream_test.x,stream_test.y), regr_sxx(stream_test.x,stream_test.y), regr_sxy(stream_test.x,stream_test.y), regr_syy(stream_test.x,stream_test.y), regr_avgx(stream_test.x,stream_test.y), regr_avgy(stream_test.x,stream_test.y), regr_count(stream_test.x,stream_test.y), regr_slope(stream_test.x,stream_test.y), regr_intercept(stream_test.x,stream_test.y), regr_r2(stream_test.x,stream_test.y)
+03)----Aggregate: groupBy=[[stream_test.g]], aggr=[[corr(stream_test.x, stream_test.y), covar_samp(stream_test.x, stream_test.y), covar_pop(stream_test.x, stream_test.y), regr_sxx(stream_test.x, stream_test.y), regr_sxy(stream_test.x, stream_test.y), regr_syy(stream_test.x, stream_test.y), regr_avgx(stream_test.x, stream_test.y), regr_avgy(stream_test.x, stream_test.y), regr_count(stream_test.x, stream_test.y), regr_slope(stream_test.x, stream_test.y), regr_intercept(stream_test.x, stream_test.y), regr_r2(stream_test.x, stream_test.y)]]
+04)------Sort: stream_test.g ASC NULLS LAST, fetch=10000
+05)--------TableScan: stream_test projection=[g, x, y]
+physical_plan
+01)ProjectionExec: expr=[g@0 as g, corr(stream_test.x,stream_test.y)@1 as corr(stream_test.x,stream_test.y), covar_samp(stream_test.x,stream_test.y)@2 as covar(stream_test.x,stream_test.y), covar_samp(stream_test.x,stream_test.y)@2 as covar_samp(stream_test.x,stream_test.y), covar_pop(stream_test.x,stream_test.y)@3 as covar_pop(stream_test.x,stream_test.y), regr_sxx(stream_test.x,stream_test.y)@4 as regr_sxx(stream_test.x,stream_test.y), regr_sxy(stream_test.x,stream_test.y)@5 as regr_sxy(stream_test.x,stream_test.y), regr_syy(stream_test.x,stream_test.y)@6 as regr_syy(stream_test.x,stream_test.y), regr_avgx(stream_test.x,stream_test.y)@7 as regr_avgx(stream_test.x,stream_test.y), regr_avgy(stream_test.x,stream_test.y)@8 as regr_avgy(stream_test.x,stream_test.y), regr_count(stream_test.x,stream_test.y)@9 as regr_count(stream_test.x,stream_test.y), regr_slope(stream_test.x,stream_test.y)@10 as regr_slope(stream_test.x,stream_test.y), regr_intercept(stream_test.x,stream_test.y)@11 as regr_intercept(stream_test.x,stream_test.y), regr_r2(stream_test.x,stream_test.y)@12 as regr_r2(stream_test.x,stream_test.y)]
+02)--AggregateExec: mode=Single, gby=[g@0 as g], aggr=[corr(stream_test.x,stream_test.y), covar_samp(stream_test.x,stream_test.y), covar_pop(stream_test.x,stream_test.y), regr_sxx(stream_test.x,stream_test.y), regr_sxy(stream_test.x,stream_test.y), regr_syy(stream_test.x,stream_test.y), regr_avgx(stream_test.x,stream_test.y), regr_avgy(stream_test.x,stream_test.y), regr_count(stream_test.x,stream_test.y), regr_slope(stream_test.x,stream_test.y), regr_intercept(stream_test.x,stream_test.y), regr_r2(stream_test.x,stream_test.y)], ordering_mode=Sorted
+03)----SortExec: TopK(fetch=10000), expr=[g@0 ASC NULLS LAST], preserve_partitioning=[false]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query IRRRRRRRRRIRRR
+SELECT
+  g,
+  CORR(x, y),
+  COVAR(x, y),
+  COVAR_SAMP(x, y),
+  COVAR_POP(x, y),
+  REGR_SXX(x, y),
+  REGR_SXY(x, y),
+  REGR_SYY(x, y),
+  REGR_AVGX(x, y),
+  REGR_AVGY(x, y),
+  REGR_COUNT(x, y),
+  REGR_SLOPE(x, y),
+  REGR_INTERCEPT(x, y),
+  REGR_R2(x, y)
+FROM (SELECT * FROM stream_test ORDER BY g LIMIT 10000)
+GROUP BY g
+ORDER BY g;
+----
+1 1 0.5 0.5 0.25 0.5 0.5 0.5 1.5 1.5 2 1 0 1
+2 NULL 0 0 0 0 0 0.5 5 1.5 2 NULL NULL NULL
+3 1 0.5 0.5 0.25 0.5 0.5 0.5 1.5 1.5 2 1 0 1
+
+# Approximate and Ordered-Set Aggregates
+query TT
+EXPLAIN SELECT
+  g,
+  APPROX_DISTINCT(i),
+  APPROX_MEDIAN(x),
+  PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY x),
+  QUANTILE_CONT(0.5) WITHIN GROUP (ORDER BY x),
+  APPROX_PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY x),
+  APPROX_PERCENTILE_CONT_WITH_WEIGHT(1.0, 0.5) WITHIN GROUP (ORDER BY x),
+  PERCENTILE_CONT(x, 0.5),
+  APPROX_PERCENTILE_CONT(x, 0.5),
+  APPROX_PERCENTILE_CONT_WITH_WEIGHT(x, 1.0, 0.5)
+FROM (SELECT * FROM stream_test ORDER BY g LIMIT 10000)
+GROUP BY g
+ORDER BY g;
+----
+logical_plan
+01)Sort: stream_test.g ASC NULLS LAST
+02)--Projection: stream_test.g, approx_distinct(stream_test.i), approx_median(stream_test.x), percentile_cont(Float64(0.5)) WITHIN GROUP [stream_test.x ASC NULLS LAST], percentile_cont(Float64(0.5)) WITHIN GROUP [stream_test.x ASC NULLS LAST] AS quantile_cont(stream_test.x,Float64(0.5)), approx_percentile_cont(Float64(0.5)) WITHIN GROUP [stream_test.x ASC NULLS LAST], approx_percentile_cont_with_weight(Float64(1),Float64(0.5)) WITHIN GROUP [stream_test.x ASC NULLS LAST], percentile_cont(stream_test.x,Float64(0.5)), approx_percentile_cont(stream_test.x,Float64(0.5)), approx_percentile_cont_with_weight(stream_test.x,Float64(1),Float64(0.5))
+03)----Aggregate: groupBy=[[stream_test.g]], aggr=[[approx_distinct(stream_test.i), approx_median(stream_test.x), percentile_cont(stream_test.x, Float64(0.5)) ORDER BY [stream_test.x ASC NULLS LAST], approx_percentile_cont(stream_test.x, Float64(0.5)) ORDER BY [stream_test.x ASC NULLS LAST], approx_percentile_cont_with_weight(stream_test.x, Float64(1), Float64(0.5)) ORDER BY [stream_test.x ASC NULLS LAST], percentile_cont(stream_test.x, Float64(0.5)), approx_percentile_cont(stream_test.x, Float64(0.5)), approx_percentile_cont_with_weight(stream_test.x, Float64(1), Float64(0.5))]]
+04)------Sort: stream_test.g ASC NULLS LAST, fetch=10000
+05)--------TableScan: stream_test projection=[g, x, i]
+physical_plan
+01)ProjectionExec: expr=[g@0 as g, approx_distinct(stream_test.i)@1 as approx_distinct(stream_test.i), approx_median(stream_test.x)@2 as approx_median(stream_test.x), percentile_cont(Float64(0.5)) WITHIN GROUP [stream_test.x ASC NULLS LAST]@3 as percentile_cont(Float64(0.5)) WITHIN GROUP [stream_test.x ASC NULLS LAST], percentile_cont(Float64(0.5)) WITHIN GROUP [stream_test.x ASC NULLS LAST]@3 as quantile_cont(stream_test.x,Float64(0.5)), approx_percentile_cont(Float64(0.5)) WITHIN GROUP [stream_test.x ASC NULLS LAST]@4 as approx_percentile_cont(Float64(0.5)) WITHIN GROUP [stream_test.x ASC NULLS LAST], approx_percentile_cont_with_weight(Float64(1),Float64(0.5)) WITHIN GROUP [stream_test.x ASC NULLS LAST]@5 as approx_percentile_cont_with_weight(Float64(1),Float64(0.5)) WITHIN GROUP [stream_test.x ASC NULLS LAST], percentile_cont(stream_test.x,Float64(0.5))@6 as percentile_cont(stream_test.x,Float64(0.5)), approx_percentile_cont(stream_test.x,Float64(0.5))@7 as approx_percentile_cont(stream_test.x,Float64(0.5)), approx_percentile_cont_with_weight(stream_test.x,Float64(1),Float64(0.5))@8 as approx_percentile_cont_with_weight(stream_test.x,Float64(1),Float64(0.5))]
+02)--AggregateExec: mode=Single, gby=[g@0 as g], aggr=[approx_distinct(stream_test.i), approx_median(stream_test.x), percentile_cont(Float64(0.5)) WITHIN GROUP [stream_test.x ASC NULLS LAST], approx_percentile_cont(Float64(0.5)) WITHIN GROUP [stream_test.x ASC NULLS LAST], approx_percentile_cont_with_weight(Float64(1),Float64(0.5)) WITHIN GROUP [stream_test.x ASC NULLS LAST], percentile_cont(stream_test.x,Float64(0.5)), approx_percentile_cont(stream_test.x,Float64(0.5)), approx_percentile_cont_with_weight(stream_test.x,Float64(1),Float64(0.5))], ordering_mode=Sorted
+03)----SortExec: TopK(fetch=10000), expr=[g@0 ASC NULLS LAST], preserve_partitioning=[false]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query IIRRRRRRRR
+SELECT
+  g,
+  APPROX_DISTINCT(i),
+  APPROX_MEDIAN(x),
+  PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY x),
+  QUANTILE_CONT(0.5) WITHIN GROUP (ORDER BY x),
+  APPROX_PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY x),
+  APPROX_PERCENTILE_CONT_WITH_WEIGHT(1.0, 0.5) WITHIN GROUP (ORDER BY x),
+  PERCENTILE_CONT(x, 0.5),
+  APPROX_PERCENTILE_CONT(x, 0.5),
+  APPROX_PERCENTILE_CONT_WITH_WEIGHT(x, 1.0, 0.5)
+FROM (SELECT * FROM stream_test ORDER BY g LIMIT 10000)
+GROUP BY g
+ORDER BY g;
+----
+1 2 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5
+2 2 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5
+3 2 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5
+
+statement ok
+DROP TABLE stream_test;
+
+# Restore default target partitions
+statement ok
+set datafusion.execution.target_partitions = 4;

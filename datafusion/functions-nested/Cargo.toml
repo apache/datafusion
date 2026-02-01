@@ -21,7 +21,7 @@ description = "Nested Type Function packages for the DataFusion query engine"
 keywords = ["datafusion", "logical", "plan", "expressions"]
 readme = "README.md"
 version = { workspace = true }
-edition = "2024"
+edition = { workspace = true }
 homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
@@ -84,3 +84,11 @@ name = "array_slice"
 [[bench]]
 harness = false
 name = "map"
+
+[[bench]]
+harness = false
+name = "array_remove"
+
+[[bench]]
+harness = false
+name = "array_repeat"

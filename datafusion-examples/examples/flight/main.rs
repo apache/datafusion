@@ -29,9 +29,15 @@
 //!   Note: The Flight server must be started in a separate process
 //!   before running the `client` example. Therefore, running `all` will
 //!   not produce a full server+client workflow automatically.
-//! - `client` — run DataFusion as a standalone process and execute SQL queries from a client using the Flight protocol
-//! - `server` — run DataFusion as a standalone process and execute SQL queries from a client using the Flight protocol
-//! - `sql_server` — run DataFusion as a standalone process and execute SQL queries from JDBC clients
+//!
+//! - `client`
+//!   (file: client.rs, desc: Execute SQL queries via Arrow Flight protocol)
+//!
+//! - `server`
+//!   (file: server.rs, desc: Run DataFusion server accepting FlightSQL/JDBC queries)
+//!
+//! - `sql_server`
+//!   (file: sql_server.rs, desc: Standalone SQL server for JDBC clients)
 
 mod client;
 mod server;
@@ -87,7 +93,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let example: ExampleKind = std::env::args()
         .nth(1)
-        .ok_or_else(|| DataFusionError::Execution(format!("Missing argument. {usage}")))?
+        .unwrap_or_else(|| ExampleKind::All.to_string())
         .parse()
         .map_err(|_| DataFusionError::Execution(format!("Unknown example. {usage}")))?;
 

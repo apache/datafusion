@@ -22,7 +22,6 @@ use std::sync::Arc;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result};
 use datafusion_expr::Expr;
-use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::merge_schema;
@@ -67,17 +66,14 @@ impl OptimizerRule for SimplifyExpressions {
         plan: LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>, DataFusionError> {
-        let mut execution_props = ExecutionProps::new();
-        execution_props.query_execution_start_time = config.query_execution_start_time();
-        execution_props.config_options = Some(config.options());
-        Self::optimize_internal(plan, &execution_props)
+        Self::optimize_internal(plan, config)
     }
 }
 
 impl SimplifyExpressions {
     fn optimize_internal(
         plan: LogicalPlan,
-        execution_props: &ExecutionProps,
+        config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
         let schema = if !plan.inputs().is_empty() {
             DFSchemaRef::new(merge_schema(&plan.inputs()))
@@ -100,7 +96,10 @@ impl SimplifyExpressions {
             Arc::new(DFSchema::empty())
         };
 
-        let info = SimplifyContext::new(execution_props).with_schema(schema);
+        let info = SimplifyContext::default()
+            .with_schema(schema)
+            .with_config_options(config.options())
+            .with_query_execution_start_time(config.query_execution_start_time());
 
         // Inputs have already been rewritten (due to bottom-up traversal handled by Optimizer)
         // Just need to rewrite our own expressions
@@ -143,7 +142,7 @@ impl SimplifyExpressions {
 }
 
 impl SimplifyExpressions {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
@@ -219,7 +218,7 @@ mod tests {
 
         assert_optimized_plan_equal!(
             table_scan,
-            @ r"TableScan: test projection=[a], full_filters=[Boolean(true)]"
+            @ "TableScan: test projection=[a], full_filters=[Boolean(true)]"
         )
     }
 
@@ -252,10 +251,10 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-            Filter: test.b > Int32(1)
-              Projection: test.a
-                TableScan: test
-            "
+        Filter: test.b > Int32(1)
+          Projection: test.a
+            TableScan: test
+        "
         )
     }
 
@@ -270,10 +269,10 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-            Filter: test.b > Int32(1)
-              Projection: test.a
-                TableScan: test
-            "
+        Filter: test.b > Int32(1)
+          Projection: test.a
+            TableScan: test
+        "
         )
     }
 

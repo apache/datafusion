@@ -18,16 +18,16 @@
 use crate::logical_plan::consumer::SubstraitConsumer;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit, UnionFields};
 use datafusion::common::{
-    exec_err, not_impl_err, substrait_datafusion_err, substrait_err, DFSchema,
-    DFSchemaRef,
+    DFSchema, DFSchemaRef, exec_err, not_impl_err, substrait_datafusion_err,
+    substrait_err,
 };
 use datafusion::logical_expr::expr::Sort;
 use datafusion::logical_expr::{Cast, Expr, ExprSchemable};
 use std::collections::HashSet;
 use std::sync::Arc;
+use substrait::proto::SortField;
 use substrait::proto::sort_field::SortDirection;
 use substrait::proto::sort_field::SortKind::{ComparisonFunctionReference, Direction};
-use substrait::proto::SortField;
 
 // Substrait PrecisionTimestampTz indicates that the timestamp is relative to UTC, which
 // is the same as the expectation for any non-empty timezone in DF, so any non-empty timezone
@@ -246,7 +246,8 @@ pub(super) fn make_renamed_schema(
         return substrait_err!(
             "Names list must match exactly to nested schema, but found {} uses for {} names",
             name_idx,
-            dfs_names.len());
+            dfs_names.len()
+        );
     }
 
     DFSchema::from_field_specific_qualified_schema(

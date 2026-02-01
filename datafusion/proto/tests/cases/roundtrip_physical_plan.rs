@@ -18,28 +18,12 @@
 use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
-
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::vec;
-
-use crate::cases::{
-    CustomUDWF, CustomUDWFNode, MyAggregateUDF, MyAggregateUdfNode, MyRegexUdf,
-    MyRegexUdfNode,
-};
 
 use arrow::array::RecordBatch;
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{Fields, TimeUnit};
-use datafusion::physical_expr::aggregate::AggregateExprBuilder;
-use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
-use datafusion::physical_plan::metrics::MetricType;
-use datafusion_datasource::TableSchema;
-use datafusion_expr::dml::InsertOp;
-use datafusion_functions_aggregate::approx_percentile_cont::approx_percentile_cont_udaf;
-use datafusion_functions_aggregate::array_agg::array_agg_udaf;
-use datafusion_functions_aggregate::min_max::max_udaf;
-use prost::Message;
-
 use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::compute::kernels::sort::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema};
@@ -52,8 +36,8 @@ use datafusion::datasource::listing::{
 };
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
-    wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileGroup,
-    FileScanConfigBuilder, FileSinkConfig, ParquetSource,
+    FileGroup, FileOutputMode, FileScanConfigBuilder, FileSinkConfig, ParquetSource,
+    wrap_partition_type_in_dict, wrap_partition_value_in_dict,
 };
 use datafusion::datasource::sink::DataSinkExec;
 use datafusion::datasource::source::DataSourceExec;
@@ -62,27 +46,31 @@ use datafusion::functions_aggregate::count::count_udaf;
 use datafusion::functions_aggregate::sum::sum_udaf;
 use datafusion::functions_window::nth_value::nth_value_udwf;
 use datafusion::functions_window::row_number::row_number_udwf;
-use datafusion::logical_expr::{create_udf, JoinType, Operator, Volatility};
+use datafusion::logical_expr::{JoinType, Operator, Volatility, create_udf};
+use datafusion::physical_expr::aggregate::AggregateExprBuilder;
 use datafusion::physical_expr::expressions::Literal;
 use datafusion::physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
 use datafusion::physical_expr::{
     LexOrdering, PhysicalSortRequirement, ScalarFunctionExpr,
 };
 use datafusion::physical_plan::aggregates::{
-    AggregateExec, AggregateMode, PhysicalGroupBy,
+    AggregateExec, AggregateMode, LimitOptions, PhysicalGroupBy,
 };
 use datafusion::physical_plan::analyze::AnalyzeExec;
+#[expect(deprecated)]
+use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::{
-    binary, cast, col, in_list, like, lit, BinaryExpr, Column, NotExpr, PhysicalSortExpr,
+    BinaryExpr, Column, NotExpr, PhysicalSortExpr, binary, cast, col, in_list, like, lit,
 };
-use datafusion::physical_plan::filter::FilterExec;
+use datafusion::physical_plan::filter::{FilterExec, FilterExecBuilder};
 use datafusion::physical_plan::joins::{
-    HashJoinExec, HashTableLookupExpr, NestedLoopJoinExec, PartitionMode,
-    SortMergeJoinExec, StreamJoinPartitionMode, SymmetricHashJoinExec,
+    HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
+    StreamJoinPartitionMode, SymmetricHashJoinExec,
 };
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+use datafusion::physical_plan::metrics::MetricType;
 use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion::physical_plan::repartition::RepartitionExec;
@@ -90,11 +78,11 @@ use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::union::{InterleaveExec, UnionExec};
 use datafusion::physical_plan::unnest::{ListUnnest, UnnestExec};
 use datafusion::physical_plan::windows::{
-    create_udwf_window_expr, BoundedWindowAggExec, PlainAggregateWindowExpr,
-    WindowAggExec,
+    BoundedWindowAggExec, PlainAggregateWindowExpr, WindowAggExec,
+    create_udwf_window_expr,
 };
 use datafusion::physical_plan::{
-    displayable, ExecutionPlan, InputOrderMode, Partitioning, PhysicalExpr, Statistics,
+    ExecutionPlan, InputOrderMode, Partitioning, PhysicalExpr, Statistics, displayable,
 };
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion::scalar::ScalarValue;
@@ -104,23 +92,41 @@ use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, not_impl_err, DataFusionError, NullEquality,
-    Result, UnnestOptions,
+    DataFusionError, NullEquality, Result, UnnestOptions, exec_datafusion_err,
+    internal_datafusion_err, internal_err, not_impl_err,
 };
+use datafusion_datasource::TableSchema;
 use datafusion_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
+use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{
     Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue,
     ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, SimpleAggregateUDF,
     WindowFrame, WindowFrameBound, WindowUDF,
 };
+use datafusion_functions_aggregate::approx_percentile_cont::approx_percentile_cont_udaf;
+use datafusion_functions_aggregate::array_agg::array_agg_udaf;
 use datafusion_functions_aggregate::average::avg_udaf;
+use datafusion_functions_aggregate::min_max::max_udaf;
 use datafusion_functions_aggregate::nth_value::nth_value_udaf;
 use datafusion_functions_aggregate::string_agg::string_agg_udaf;
-use datafusion_physical_plan::joins::join_hash_map::JoinHashMapU32;
-use datafusion_proto::physical_plan::{
-    AsExecutionPlan, DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
+use datafusion_proto::bytes::{
+    physical_plan_from_bytes_with_proto_converter,
+    physical_plan_to_bytes_with_proto_converter,
 };
-use datafusion_proto::protobuf::{self, PhysicalPlanNode};
+use datafusion_proto::physical_plan::from_proto::parse_physical_expr_with_converter;
+use datafusion_proto::physical_plan::to_proto::serialize_physical_expr_with_converter;
+use datafusion_proto::physical_plan::{
+    AsExecutionPlan, DefaultPhysicalExtensionCodec, DefaultPhysicalProtoConverter,
+    PhysicalExtensionCodec, PhysicalProtoConverterExtension,
+};
+use datafusion_proto::protobuf;
+use datafusion_proto::protobuf::{PhysicalExprNode, PhysicalPlanNode};
+use prost::Message;
+
+use crate::cases::{
+    CustomUDWF, CustomUDWFNode, MyAggregateUDF, MyAggregateUdfNode, MyRegexUdf,
+    MyRegexUdfNode,
+};
 
 /// Perform a serde roundtrip and assert that the string representation of the before and after plans
 /// are identical. Note that this often isn't sufficient to guarantee that no information is
@@ -128,7 +134,8 @@ use datafusion_proto::protobuf::{self, PhysicalPlanNode};
 fn roundtrip_test(exec_plan: Arc<dyn ExecutionPlan>) -> Result<()> {
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
-    roundtrip_test_and_return(exec_plan, &ctx, &codec)?;
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    roundtrip_test_and_return(exec_plan, &ctx, &codec, &proto_converter)?;
     Ok(())
 }
 
@@ -142,13 +149,19 @@ fn roundtrip_test_and_return(
     exec_plan: Arc<dyn ExecutionPlan>,
     ctx: &SessionContext,
     codec: &dyn PhysicalExtensionCodec,
+    proto_converter: &dyn PhysicalProtoConverterExtension,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let proto: protobuf::PhysicalPlanNode =
-        protobuf::PhysicalPlanNode::try_from_physical_plan(exec_plan.clone(), codec)
-            .expect("to proto");
-    let result_exec_plan: Arc<dyn ExecutionPlan> = proto
-        .try_into_physical_plan(&ctx.task_ctx(), codec)
-        .expect("from proto");
+    let bytes = physical_plan_to_bytes_with_proto_converter(
+        Arc::clone(&exec_plan),
+        codec,
+        proto_converter,
+    )?;
+    let result_exec_plan = physical_plan_from_bytes_with_proto_converter(
+        bytes.as_ref(),
+        ctx.task_ctx().as_ref(),
+        codec,
+        proto_converter,
+    )?;
 
     pretty_assertions::assert_eq!(
         format!("{exec_plan:?}"),
@@ -168,7 +181,8 @@ fn roundtrip_test_with_context(
     ctx: &SessionContext,
 ) -> Result<()> {
     let codec = DefaultPhysicalExtensionCodec {};
-    roundtrip_test_and_return(exec_plan, ctx, &codec)?;
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    roundtrip_test_and_return(exec_plan, ctx, &codec, &proto_converter)?;
     Ok(())
 }
 
@@ -176,9 +190,10 @@ fn roundtrip_test_with_context(
 /// query results are identical.
 async fn roundtrip_test_sql_with_context(sql: &str, ctx: &SessionContext) -> Result<()> {
     let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
     let initial_plan = ctx.sql(sql).await?.create_physical_plan().await?;
 
-    roundtrip_test_and_return(initial_plan, ctx, &codec)?;
+    roundtrip_test_and_return(initial_plan, ctx, &codec, &proto_converter)?;
     Ok(())
 }
 
@@ -285,6 +300,7 @@ fn roundtrip_hash_join() -> Result<()> {
                 None,
                 *partition_mode,
                 NullEquality::NullEqualsNothing,
+                false,
             )?))?;
         }
     }
@@ -599,14 +615,13 @@ fn roundtrip_aggregate_with_limit() -> Result<()> {
     let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
         vec![(col("a", &schema)?, "unused".to_string())];
 
-    let aggregates =
-        vec![
-            AggregateExprBuilder::new(avg_udaf(), vec![col("b", &schema)?])
-                .schema(Arc::clone(&schema))
-                .alias("AVG(b)")
-                .build()
-                .map(Arc::new)?,
-        ];
+    let aggregates = vec![
+        AggregateExprBuilder::new(avg_udaf(), vec![col("b", &schema)?])
+            .schema(Arc::clone(&schema))
+            .alias("AVG(b)")
+            .build()
+            .map(Arc::new)?,
+    ];
 
     let agg = AggregateExec::try_new(
         AggregateMode::Final,
@@ -616,7 +631,7 @@ fn roundtrip_aggregate_with_limit() -> Result<()> {
         Arc::new(EmptyExec::new(schema.clone())),
         schema,
     )?;
-    let agg = agg.with_limit(Some(12));
+    let agg = agg.with_limit_options(Some(LimitOptions::new_with_order(12, false)));
     roundtrip_test(Arc::new(agg))
 }
 
@@ -629,14 +644,16 @@ fn roundtrip_aggregate_with_approx_pencentile_cont() -> Result<()> {
     let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
         vec![(col("a", &schema)?, "unused".to_string())];
 
-    let aggregates = vec![AggregateExprBuilder::new(
-        approx_percentile_cont_udaf(),
-        vec![col("b", &schema)?, lit(0.5)],
-    )
-    .schema(Arc::clone(&schema))
-    .alias("APPROX_PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY b)")
-    .build()
-    .map(Arc::new)?];
+    let aggregates = vec![
+        AggregateExprBuilder::new(
+            approx_percentile_cont_udaf(),
+            vec![col("b", &schema)?, lit(0.5)],
+        )
+        .schema(Arc::clone(&schema))
+        .alias("APPROX_PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY b)")
+        .build()
+        .map(Arc::new)?,
+    ];
 
     let agg = AggregateExec::try_new(
         AggregateMode::Final,
@@ -665,15 +682,14 @@ fn roundtrip_aggregate_with_sort() -> Result<()> {
         },
     }];
 
-    let aggregates =
-        vec![
-            AggregateExprBuilder::new(array_agg_udaf(), vec![col("b", &schema)?])
-                .schema(Arc::clone(&schema))
-                .alias("ARRAY_AGG(b)")
-                .order_by(sort_exprs)
-                .build()
-                .map(Arc::new)?,
-        ];
+    let aggregates = vec![
+        AggregateExprBuilder::new(array_agg_udaf(), vec![col("b", &schema)?])
+            .schema(Arc::clone(&schema))
+            .alias("ARRAY_AGG(b)")
+            .order_by(sort_exprs)
+            .build()
+            .map(Arc::new)?,
+    ];
 
     let agg = AggregateExec::try_new(
         AggregateMode::Final,
@@ -733,14 +749,13 @@ fn roundtrip_aggregate_udaf() -> Result<()> {
     let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
         vec![(col("a", &schema)?, "unused".to_string())];
 
-    let aggregates =
-        vec![
-            AggregateExprBuilder::new(Arc::new(udaf), vec![col("b", &schema)?])
-                .schema(Arc::clone(&schema))
-                .alias("example_agg")
-                .build()
-                .map(Arc::new)?,
-        ];
+    let aggregates = vec![
+        AggregateExprBuilder::new(Arc::new(udaf), vec![col("b", &schema)?])
+            .schema(Arc::clone(&schema))
+            .alias("example_agg")
+            .build()
+            .map(Arc::new)?,
+    ];
 
     roundtrip_test_with_context(
         Arc::new(AggregateExec::try_new(
@@ -846,11 +861,13 @@ fn roundtrip_coalesce_batches_with_fetch() -> Result<()> {
     let field_b = Field::new("b", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![field_a, field_b]));
 
+    #[expect(deprecated)]
     roundtrip_test(Arc::new(CoalesceBatchesExec::new(
         Arc::new(EmptyExec::new(schema.clone())),
         8096,
     )))?;
 
+    #[expect(deprecated)]
     roundtrip_test(Arc::new(
         CoalesceBatchesExec::new(Arc::new(EmptyExec::new(schema)), 8096)
             .with_fetch(Some(10)),
@@ -933,7 +950,6 @@ async fn roundtrip_parquet_exec_with_table_partition_cols() -> Result<()> {
         FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
             .with_projection_indices(Some(vec![0, 1]))?
             .with_file_group(FileGroup::new(vec![file_group]))
-            .with_newlines_in_values(false)
             .build();
 
     roundtrip_test(DataSourceExec::from_data_source(scan_config))
@@ -987,7 +1003,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
     }
 
     impl Display for CustomPredicateExpr {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
             write!(f, "CustomPredicateExpr")
         }
     }
@@ -1080,7 +1096,12 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
     let exec_plan = DataSourceExec::from_data_source(scan_config);
 
     let ctx = SessionContext::new();
-    roundtrip_test_and_return(exec_plan, &ctx, &CustomPhysicalExtensionCodec {})?;
+    roundtrip_test_and_return(
+        exec_plan,
+        &ctx,
+        &CustomPhysicalExtensionCodec {},
+        &DefaultPhysicalProtoConverter {},
+    )?;
     Ok(())
 }
 
@@ -1278,7 +1299,7 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
 
     let aggregate = Arc::new(AggregateExec::try_new(
         AggregateMode::Final,
-        PhysicalGroupBy::new(vec![], vec![], vec![]),
+        PhysicalGroupBy::new(vec![], vec![], vec![], false),
         vec![aggr_expr],
         vec![None],
         window,
@@ -1286,7 +1307,8 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
     )?);
 
     let ctx = SessionContext::new();
-    roundtrip_test_and_return(aggregate, &ctx, &UDFExtensionCodec)?;
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    roundtrip_test_and_return(aggregate, &ctx, &UDFExtensionCodec, &proto_converter)?;
     Ok(())
 }
 
@@ -1333,7 +1355,8 @@ fn roundtrip_udwf_extension_codec() -> Result<()> {
     )?);
 
     let ctx = SessionContext::new();
-    roundtrip_test_and_return(window, &ctx, &UDFExtensionCodec)?;
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    roundtrip_test_and_return(window, &ctx, &UDFExtensionCodec, &proto_converter)?;
     Ok(())
 }
 
@@ -1396,7 +1419,7 @@ fn roundtrip_aggregate_udf_extension_codec() -> Result<()> {
 
     let aggregate = Arc::new(AggregateExec::try_new(
         AggregateMode::Final,
-        PhysicalGroupBy::new(vec![], vec![], vec![]),
+        PhysicalGroupBy::new(vec![], vec![], vec![], false),
         vec![aggr_expr],
         vec![None],
         window,
@@ -1404,7 +1427,8 @@ fn roundtrip_aggregate_udf_extension_codec() -> Result<()> {
     )?);
 
     let ctx = SessionContext::new();
-    roundtrip_test_and_return(aggregate, &ctx, &UDFExtensionCodec)?;
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    roundtrip_test_and_return(aggregate, &ctx, &UDFExtensionCodec, &proto_converter)?;
     Ok(())
 }
 
@@ -1474,6 +1498,7 @@ fn roundtrip_json_sink() -> Result<()> {
         insert_op: InsertOp::Overwrite,
         keep_partition_by_columns: true,
         file_extension: "json".into(),
+        file_output_mode: FileOutputMode::SingleFile,
     };
     let data_sink = Arc::new(JsonSink::new(
         file_sink_config,
@@ -1512,6 +1537,7 @@ fn roundtrip_csv_sink() -> Result<()> {
         insert_op: InsertOp::Overwrite,
         keep_partition_by_columns: true,
         file_extension: "csv".into(),
+        file_output_mode: FileOutputMode::Directory,
     };
     let data_sink = Arc::new(CsvSink::new(
         file_sink_config,
@@ -1528,12 +1554,14 @@ fn roundtrip_csv_sink() -> Result<()> {
 
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+
     let roundtrip_plan = roundtrip_test_and_return(
         Arc::new(DataSinkExec::new(input, data_sink, Some(sort_order))),
         &ctx,
         &codec,
-    )
-    .unwrap();
+        &proto_converter,
+    )?;
 
     let roundtrip_plan = roundtrip_plan
         .as_any()
@@ -1569,6 +1597,7 @@ fn roundtrip_parquet_sink() -> Result<()> {
         insert_op: InsertOp::Overwrite,
         keep_partition_by_columns: true,
         file_extension: "parquet".into(),
+        file_output_mode: FileOutputMode::Automatic,
     };
     let data_sink = Arc::new(ParquetSink::new(
         file_sink_config,
@@ -1820,11 +1849,12 @@ async fn roundtrip_projection_source() -> Result<()> {
             .build();
 
     let filter = Arc::new(
-        FilterExec::try_new(
+        FilterExecBuilder::new(
             Arc::new(BinaryExpr::new(col("c", &schema)?, Operator::Eq, lit(1))),
             DataSourceExec::from_data_source(scan_config),
-        )?
-        .with_projection(Some(vec![0, 1]))?,
+        )
+        .apply_projection(Some(vec![0, 1]))?
+        .build()?,
     );
 
     roundtrip_test(filter)
@@ -1974,6 +2004,7 @@ async fn test_serialize_deserialize_tpch_queries() -> Result<()> {
 
             // serialize the physical plan
             let codec = DefaultPhysicalExtensionCodec {};
+
             let proto =
                 PhysicalPlanNode::try_from_physical_plan(physical_plan.clone(), &codec)?;
 
@@ -2095,6 +2126,7 @@ async fn test_tpch_part_in_list_query_with_real_parquet_data() -> Result<()> {
 
     // Serialize the physical plan - bug may happen here already but not necessarily manifests
     let codec = DefaultPhysicalExtensionCodec {};
+
     let proto = PhysicalPlanNode::try_from_physical_plan(physical_plan.clone(), &codec)?;
 
     // This will fail with the bug, but should succeed when fixed
@@ -2336,15 +2368,19 @@ async fn roundtrip_async_func_exec() -> Result<()> {
 /// it's a performance optimization filter, not a correctness requirement.
 #[test]
 fn roundtrip_hash_table_lookup_expr_to_lit() -> Result<()> {
+    use datafusion::physical_plan::joins::join_hash_map::JoinHashMapU32;
+    use datafusion::physical_plan::joins::{HashTableLookupExpr, Map};
+
     // Create a simple schema and input plan
     let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Int64, false)]));
     let input = Arc::new(EmptyExec::new(schema.clone()));
 
     // Create a HashTableLookupExpr - it will be replaced with lit(true) during serialization
-    let hash_map = Arc::new(JoinHashMapU32::with_capacity(0));
-    let hash_expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new("col", 0));
+    let hash_map = Arc::new(Map::HashMap(Box::new(JoinHashMapU32::with_capacity(0))));
+    let on_columns = vec![datafusion::physical_plan::expressions::col("col", &schema)?];
     let lookup_expr: Arc<dyn PhysicalExpr> = Arc::new(HashTableLookupExpr::new(
-        hash_expr,
+        on_columns,
+        datafusion::physical_plan::joins::SeededRandomState::with_seeds(0, 0, 0, 0),
         hash_map,
         "test_lookup".to_string(),
     ));
@@ -2355,8 +2391,9 @@ fn roundtrip_hash_table_lookup_expr_to_lit() -> Result<()> {
     // Serialize
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
-    let proto: protobuf::PhysicalPlanNode =
-        protobuf::PhysicalPlanNode::try_from_physical_plan(filter.clone(), &codec)
+
+    let proto: PhysicalPlanNode =
+        PhysicalPlanNode::try_from_physical_plan(filter.clone(), &codec)
             .expect("serialization should succeed");
 
     // Deserialize
@@ -2370,6 +2407,160 @@ fn roundtrip_hash_table_lookup_expr_to_lit() -> Result<()> {
     let predicate = result_filter.predicate();
     let literal = predicate.as_any().downcast_ref::<Literal>().unwrap();
     assert_eq!(*literal.value(), ScalarValue::Boolean(Some(true)));
+
+    Ok(())
+}
+
+#[test]
+fn roundtrip_hash_expr() -> Result<()> {
+    use datafusion::physical_plan::joins::{HashExpr, SeededRandomState};
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int64, false),
+        Field::new("b", DataType::Utf8, false),
+    ]));
+
+    // Create a HashExpr with test columns and seeds
+    let on_columns = vec![col("a", &schema)?, col("b", &schema)?];
+    let hash_expr: Arc<dyn PhysicalExpr> = Arc::new(HashExpr::new(
+        on_columns,
+        SeededRandomState::with_seeds(0, 1, 2, 3), // arbitrary random seeds for testing
+        "test_hash".to_string(),
+    ));
+
+    // Wrap in a filter by comparing hash value to a literal
+    // hash_expr > 0 is always boolean
+    let filter_expr = binary(hash_expr, Operator::Gt, lit(0u64), &schema)?;
+    let filter = Arc::new(FilterExec::try_new(
+        filter_expr,
+        Arc::new(EmptyExec::new(schema)),
+    )?);
+
+    // Confirm that the debug string contains the random state seeds
+    assert!(
+        format!("{filter:?}").contains("test_hash(a@0, b@1, [0,1,2,3])"),
+        "Debug string missing seeds: {filter:?}"
+    );
+    roundtrip_test(filter)
+}
+
+#[test]
+fn custom_proto_converter_intercepts() -> Result<()> {
+    #[derive(Default)]
+    struct CustomConverterInterceptor {
+        num_proto_plans: RwLock<usize>,
+        num_physical_plans: RwLock<usize>,
+        num_proto_exprs: RwLock<usize>,
+        num_physical_exprs: RwLock<usize>,
+    }
+
+    impl PhysicalProtoConverterExtension for CustomConverterInterceptor {
+        fn proto_to_execution_plan(
+            &self,
+            ctx: &TaskContext,
+            codec: &dyn PhysicalExtensionCodec,
+            proto: &protobuf::PhysicalPlanNode,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            {
+                let mut counter = self
+                    .num_proto_plans
+                    .write()
+                    .map_err(|err| exec_datafusion_err!("{err}"))?;
+                *counter += 1;
+            }
+            proto.try_into_physical_plan_with_converter(ctx, codec, self)
+        }
+
+        fn execution_plan_to_proto(
+            &self,
+            plan: &Arc<dyn ExecutionPlan>,
+            codec: &dyn PhysicalExtensionCodec,
+        ) -> Result<protobuf::PhysicalPlanNode>
+        where
+            Self: Sized,
+        {
+            {
+                let mut counter = self
+                    .num_physical_plans
+                    .write()
+                    .map_err(|err| exec_datafusion_err!("{err}"))?;
+                *counter += 1;
+            }
+            PhysicalPlanNode::try_from_physical_plan_with_converter(
+                Arc::clone(plan),
+                codec,
+                self,
+            )
+        }
+
+        fn proto_to_physical_expr(
+            &self,
+            proto: &PhysicalExprNode,
+            ctx: &TaskContext,
+            input_schema: &Schema,
+            codec: &dyn PhysicalExtensionCodec,
+        ) -> Result<Arc<dyn PhysicalExpr>>
+        where
+            Self: Sized,
+        {
+            {
+                let mut counter = self
+                    .num_proto_exprs
+                    .write()
+                    .map_err(|err| exec_datafusion_err!("{err}"))?;
+                *counter += 1;
+            }
+            parse_physical_expr_with_converter(proto, ctx, input_schema, codec, self)
+        }
+
+        fn physical_expr_to_proto(
+            &self,
+            expr: &Arc<dyn PhysicalExpr>,
+            codec: &dyn PhysicalExtensionCodec,
+        ) -> Result<PhysicalExprNode> {
+            {
+                let mut counter = self
+                    .num_physical_exprs
+                    .write()
+                    .map_err(|err| exec_datafusion_err!("{err}"))?;
+                *counter += 1;
+            }
+            serialize_physical_expr_with_converter(expr, codec, self)
+        }
+    }
+
+    let field_a = Field::new("a", DataType::Boolean, false);
+    let field_b = Field::new("b", DataType::Int64, false);
+    let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+    let sort_exprs = [
+        PhysicalSortExpr {
+            expr: col("a", &schema)?,
+            options: SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+        },
+        PhysicalSortExpr {
+            expr: col("b", &schema)?,
+            options: SortOptions {
+                descending: false,
+                nulls_first: true,
+            },
+        },
+    ]
+    .into();
+
+    let exec_plan = Arc::new(SortExec::new(sort_exprs, Arc::new(EmptyExec::new(schema))));
+
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = CustomConverterInterceptor::default();
+    roundtrip_test_and_return(exec_plan, &ctx, &codec, &proto_converter)?;
+
+    assert_eq!(*proto_converter.num_proto_exprs.read().unwrap(), 2);
+    assert_eq!(*proto_converter.num_physical_exprs.read().unwrap(), 2);
+    assert_eq!(*proto_converter.num_proto_plans.read().unwrap(), 2);
+    assert_eq!(*proto_converter.num_physical_plans.read().unwrap(), 2);
 
     Ok(())
 }

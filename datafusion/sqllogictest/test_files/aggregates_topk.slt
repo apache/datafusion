@@ -46,10 +46,9 @@ physical_plan
 01)SortPreservingMergeExec: [max(traces.timestamp)@1 DESC], fetch=4
 02)--SortExec: TopK(fetch=4), expr=[max(traces.timestamp)@1 DESC], preserve_partitioning=[true]
 03)----AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[max(traces.timestamp)]
-04)------CoalesceBatchesExec: target_batch_size=8192
-05)--------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=1
-06)----------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[max(traces.timestamp)]
-07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+04)------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=1
+05)--------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[max(traces.timestamp)]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TI
 select * from (select trace_id, MAX(timestamp) max_ts from traces t group by trace_id) where trace_id != 'b' order by max_ts desc limit 3;
@@ -109,10 +108,9 @@ physical_plan
 01)SortPreservingMergeExec: [max(traces.timestamp)@1 DESC], fetch=4
 02)--SortExec: TopK(fetch=4), expr=[max(traces.timestamp)@1 DESC], preserve_partitioning=[true]
 03)----AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[max(traces.timestamp)], lim=[4]
-04)------CoalesceBatchesExec: target_batch_size=8192
-05)--------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=1
-06)----------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[max(traces.timestamp)], lim=[4]
-07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+04)------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=1
+05)--------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[max(traces.timestamp)], lim=[4]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TT
 explain select trace_id, MIN(timestamp) from traces group by trace_id order by MIN(timestamp) desc limit 4;
@@ -125,10 +123,9 @@ physical_plan
 01)SortPreservingMergeExec: [min(traces.timestamp)@1 DESC], fetch=4
 02)--SortExec: TopK(fetch=4), expr=[min(traces.timestamp)@1 DESC], preserve_partitioning=[true]
 03)----AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[min(traces.timestamp)]
-04)------CoalesceBatchesExec: target_batch_size=8192
-05)--------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=1
-06)----------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[min(traces.timestamp)]
-07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+04)------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=1
+05)--------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[min(traces.timestamp)]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TT
 explain select trace_id, MAX(timestamp) from traces group by trace_id order by MAX(timestamp) asc limit 4;
@@ -141,10 +138,9 @@ physical_plan
 01)SortPreservingMergeExec: [max(traces.timestamp)@1 ASC NULLS LAST], fetch=4
 02)--SortExec: TopK(fetch=4), expr=[max(traces.timestamp)@1 ASC NULLS LAST], preserve_partitioning=[true]
 03)----AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[max(traces.timestamp)]
-04)------CoalesceBatchesExec: target_batch_size=8192
-05)--------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=1
-06)----------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[max(traces.timestamp)]
-07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+04)------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=1
+05)--------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[max(traces.timestamp)]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TT
 explain select trace_id, MAX(timestamp) from traces group by trace_id order by trace_id asc limit 4;
@@ -157,10 +153,9 @@ physical_plan
 01)SortPreservingMergeExec: [trace_id@0 ASC NULLS LAST], fetch=4
 02)--SortExec: TopK(fetch=4), expr=[trace_id@0 ASC NULLS LAST], preserve_partitioning=[true]
 03)----AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[max(traces.timestamp)]
-04)------CoalesceBatchesExec: target_batch_size=8192
-05)--------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=1
-06)----------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[max(traces.timestamp)]
-07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+04)------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=1
+05)--------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[max(traces.timestamp)]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TI
 select trace_id, max(timestamp) from traces group by trace_id order by MAX(timestamp) desc limit 4;
@@ -200,6 +195,70 @@ a -1 -1
 NULL 0 0
 a 1 1
 
+statement ok
+CREATE TABLE string_topk(category varchar, val varchar) AS VALUES
+('x', 'apple'),
+('x', 'zebra'),
+('y', 'banana'),
+('y', 'apricot'),
+('z', 'mango');
+
+statement ok
+CREATE VIEW string_topk_view AS
+SELECT
+  arrow_cast(category, 'Utf8View') AS category,
+  arrow_cast(val, 'Utf8View') AS val
+FROM
+  string_topk;
+
+query TT
+select category, max(val) from string_topk group by category order by max(val) desc limit 2;
+----
+x zebra
+z mango
+
+query TT
+explain select category, max(val) max_val from string_topk group by category order by max_val desc limit 2;
+----
+logical_plan
+01)Sort: max_val DESC NULLS FIRST, fetch=2
+02)--Projection: string_topk.category, max(string_topk.val) AS max_val
+03)----Aggregate: groupBy=[[string_topk.category]], aggr=[[max(string_topk.val)]]
+04)------TableScan: string_topk projection=[category, val]
+physical_plan
+01)SortPreservingMergeExec: [max_val@1 DESC], fetch=2
+02)--SortExec: TopK(fetch=2), expr=[max_val@1 DESC], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[category@0 as category, max(string_topk.val)@1 as max_val]
+04)------AggregateExec: mode=FinalPartitioned, gby=[category@0 as category], aggr=[max(string_topk.val)], lim=[2]
+05)--------RepartitionExec: partitioning=Hash([category@0], 4), input_partitions=1
+06)----------AggregateExec: mode=Partial, gby=[category@0 as category], aggr=[max(string_topk.val)], lim=[2]
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+select category, max(val) from string_topk_view group by category order by max(val) desc limit 2;
+----
+x zebra
+z mango
+
+query TT
+explain select category, max(val) max_val from string_topk_view group by category order by max_val desc limit 2;
+----
+logical_plan
+01)Sort: max_val DESC NULLS FIRST, fetch=2
+02)--Projection: string_topk_view.category, max(string_topk_view.val) AS max_val
+03)----Aggregate: groupBy=[[string_topk_view.category]], aggr=[[max(string_topk_view.val)]]
+04)------SubqueryAlias: string_topk_view
+05)--------Projection: string_topk.category AS category, string_topk.val AS val
+06)----------TableScan: string_topk projection=[category, val]
+physical_plan
+01)SortPreservingMergeExec: [max_val@1 DESC], fetch=2
+02)--SortExec: TopK(fetch=2), expr=[max_val@1 DESC], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[category@0 as category, max(string_topk_view.val)@1 as max_val]
+04)------AggregateExec: mode=FinalPartitioned, gby=[category@0 as category], aggr=[max(string_topk_view.val)], lim=[2]
+05)--------RepartitionExec: partitioning=Hash([category@0], 4), input_partitions=1
+06)----------AggregateExec: mode=Partial, gby=[category@0 as category], aggr=[max(string_topk_view.val)], lim=[2]
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
 query TII
 select trace_id, min(other), MIN(timestamp) from traces group by trace_id order by MIN(timestamp), MIN(other) limit 4;
 ----
@@ -207,6 +266,30 @@ b 0 -2
 a -1 -1
 NULL 0 0
 c 1 2
+
+# Regression tests for string max with ORDER BY ... LIMIT to ensure schema stability
+query TT
+select trace_id, max(trace_id) as max_trace from traces group by trace_id order by max_trace desc limit 2;
+----
+c c
+b b
+
+query TT
+explain select trace_id, max(trace_id) as max_trace from traces group by trace_id order by max_trace desc limit 2;
+----
+logical_plan
+01)Sort: max_trace DESC NULLS FIRST, fetch=2
+02)--Projection: traces.trace_id, max(traces.trace_id) AS max_trace
+03)----Aggregate: groupBy=[[traces.trace_id]], aggr=[[max(traces.trace_id)]]
+04)------TableScan: traces projection=[trace_id]
+physical_plan
+01)SortPreservingMergeExec: [max_trace@1 DESC], fetch=2
+02)--SortExec: TopK(fetch=2), expr=[max_trace@1 DESC], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[trace_id@0 as trace_id, max(traces.trace_id)@1 as max_trace]
+04)------AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[max(traces.trace_id)], lim=[2]
+05)--------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=1
+06)----------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[max(traces.trace_id)], lim=[2]
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 
 # Setting to map varchar to utf8view, to test PR https://github.com/apache/datafusion/pull/15152
@@ -230,10 +313,9 @@ physical_plan
 01)SortPreservingMergeExec: [max(traces_utf8view.timestamp)@1 DESC], fetch=4
 02)--SortExec: TopK(fetch=4), expr=[max(traces_utf8view.timestamp)@1 DESC], preserve_partitioning=[true]
 03)----AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[max(traces_utf8view.timestamp)], lim=[4]
-04)------CoalesceBatchesExec: target_batch_size=8192
-05)--------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=1
-06)----------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[max(traces_utf8view.timestamp)], lim=[4]
-07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+04)------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=1
+05)--------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[max(traces_utf8view.timestamp)], lim=[4]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 
 # Also add LargeUtf8 to test PR https://github.com/apache/datafusion/pull/15152
@@ -257,11 +339,128 @@ physical_plan
 01)SortPreservingMergeExec: [max(traces_largeutf8.timestamp)@1 DESC], fetch=4
 02)--SortExec: TopK(fetch=4), expr=[max(traces_largeutf8.timestamp)@1 DESC], preserve_partitioning=[true]
 03)----AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[max(traces_largeutf8.timestamp)], lim=[4]
-04)------CoalesceBatchesExec: target_batch_size=8192
-05)--------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=1
-06)----------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[max(traces_largeutf8.timestamp)], lim=[4]
-07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+04)------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=1
+05)--------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[max(traces_largeutf8.timestamp)], lim=[4]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
+
+## Test GROUP BY with ORDER BY on the same column (no aggregate functions)
+statement ok
+CREATE TABLE ids(id int, value int) AS VALUES
+(1, 10),
+(2, 20),
+(3, 30),
+(4, 40),
+(1, 50),
+(2, 60),
+(5, 70);
+
+query TT
+explain select id from ids group by id order by id desc limit 3;
+----
+logical_plan
+01)Sort: ids.id DESC NULLS FIRST, fetch=3
+02)--Aggregate: groupBy=[[ids.id]], aggr=[[]]
+03)----TableScan: ids projection=[id]
+physical_plan
+01)SortPreservingMergeExec: [id@0 DESC], fetch=3
+02)--SortExec: TopK(fetch=3), expr=[id@0 DESC], preserve_partitioning=[true]
+03)----AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[], lim=[3]
+04)------RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1
+05)--------AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[], lim=[3]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I
+select id from ids group by id order by id desc limit 3;
+----
+5
+4
+3
+
+query TT
+explain select id from ids group by id order by id asc limit 2;
+----
+logical_plan
+01)Sort: ids.id ASC NULLS LAST, fetch=2
+02)--Aggregate: groupBy=[[ids.id]], aggr=[[]]
+03)----TableScan: ids projection=[id]
+physical_plan
+01)SortPreservingMergeExec: [id@0 ASC NULLS LAST], fetch=2
+02)--SortExec: TopK(fetch=2), expr=[id@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[], lim=[2]
+04)------RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1
+05)--------AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[], lim=[2]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I
+select id from ids group by id order by id asc limit 2;
+----
+1
+2
+
+# Test with larger limit than distinct values
+query I
+select id from ids group by id order by id desc limit 100;
+----
+5
+4
+3
+2
+1
+
+# Test with bigint group by
+statement ok
+CREATE TABLE values_table (value INT, category BIGINT) AS VALUES
+(10, 100),
+(20, 200),
+(30, 300),
+(40, 400),
+(50, 500),
+(20, 200),
+(10, 100),
+(40, 400);
+
+query TT
+explain select category from values_table group by category order by category desc limit 3;
+----
+logical_plan
+01)Sort: values_table.category DESC NULLS FIRST, fetch=3
+02)--Aggregate: groupBy=[[values_table.category]], aggr=[[]]
+03)----TableScan: values_table projection=[category]
+physical_plan
+01)SortPreservingMergeExec: [category@0 DESC], fetch=3
+02)--SortExec: TopK(fetch=3), expr=[category@0 DESC], preserve_partitioning=[true]
+03)----AggregateExec: mode=FinalPartitioned, gby=[category@0 as category], aggr=[], lim=[3]
+04)------RepartitionExec: partitioning=Hash([category@0], 4), input_partitions=1
+05)--------AggregateExec: mode=Partial, gby=[category@0 as category], aggr=[], lim=[3]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I
+select category from values_table group by category order by category desc limit 3;
+----
+500
+400
+300
+
+# Test with integer group by
+query I
+select value from values_table group by value order by value asc limit 3;
+----
+10
+20
+30
+
+# Test DISTINCT semantics are preserved
+query I
+select count(*) from (select category from values_table group by category order by category desc limit 3);
+----
+3
+
+statement ok
+drop table values_table;
+
+statement ok
+drop table ids;
 
 statement ok
 drop table traces;

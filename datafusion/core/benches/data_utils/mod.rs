@@ -18,9 +18,9 @@
 //! This module provides the in-memory table for more realistic benchmarking.
 
 use arrow::array::{
-    builder::{Int64Builder, StringBuilder},
     ArrayRef, Float32Array, Float64Array, RecordBatch, StringArray, StringViewBuilder,
     UInt64Array,
+    builder::{Int64Builder, StringBuilder},
 };
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::datasource::MemTable;
@@ -36,6 +36,7 @@ use std::sync::Arc;
 
 /// create an in-memory table given the partition len, array len, and batch size,
 /// and the result table will be of array_len in total, and then partitioned, and batched.
+#[expect(clippy::allow_attributes)] // some issue where expect(dead_code) doesn't fire properly
 #[allow(dead_code)]
 pub fn create_table_provider(
     partitions_len: usize,
@@ -183,6 +184,7 @@ impl TraceIdBuilder {
 
 /// Create time series data with `partition_cnt` partitions and `sample_cnt` rows per partition
 /// in ascending order, if `asc` is true, otherwise randomly sampled using a Pareto distribution
+#[expect(clippy::allow_attributes)] // some issue where expect(dead_code) doesn't fire properly
 #[allow(dead_code)]
 pub(crate) fn make_data(
     partition_cnt: i32,

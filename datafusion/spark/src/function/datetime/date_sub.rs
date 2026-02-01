@@ -21,11 +21,10 @@ use std::sync::Arc;
 use arrow::array::ArrayRef;
 use arrow::compute;
 use arrow::datatypes::{DataType, Date32Type, Field, FieldRef};
-use arrow::error::ArrowError;
 use datafusion_common::cast::{
-    as_date32_array, as_int16_array, as_int32_array, as_int8_array,
+    as_date32_array, as_int8_array, as_int16_array, as_int32_array,
 };
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     TypeSignature, Volatility,
@@ -76,12 +75,7 @@ impl ScalarUDFImpl for SparkDateSub {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let nullable = args.arg_fields.iter().any(|f| f.is_nullable())
-            || args
-                .scalar_arguments
-                .iter()
-                .any(|arg| matches!(arg, Some(sv) if sv.is_null()));
-
+        let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
         Ok(Arc::new(Field::new(
             self.name(),
             DataType::Date32,
@@ -105,38 +99,26 @@ fn spark_date_sub(args: &[ArrayRef]) -> Result<ArrayRef> {
     let result = match days_arg.data_type() {
         DataType::Int8 => {
             let days_array = as_int8_array(days_arg)?;
-            compute::try_binary::<_, _, _, Date32Type>(
+            compute::binary::<_, _, _, Date32Type>(
                 date_array,
                 days_array,
-                |date, days| {
-                    date.checked_sub(days as i32).ok_or_else(|| {
-                        ArrowError::ArithmeticOverflow("date_sub".to_string())
-                    })
-                },
+                |date, days| date.wrapping_sub(days as i32),
             )?
         }
         DataType::Int16 => {
             let days_array = as_int16_array(days_arg)?;
-            compute::try_binary::<_, _, _, Date32Type>(
+            compute::binary::<_, _, _, Date32Type>(
                 date_array,
                 days_array,
-                |date, days| {
-                    date.checked_sub(days as i32).ok_or_else(|| {
-                        ArrowError::ArithmeticOverflow("date_sub".to_string())
-                    })
-                },
+                |date, days| date.wrapping_sub(days as i32),
             )?
         }
         DataType::Int32 => {
             let days_array = as_int32_array(days_arg)?;
-            compute::try_binary::<_, _, _, Date32Type>(
+            compute::binary::<_, _, _, Date32Type>(
                 date_array,
                 days_array,
-                |date, days| {
-                    date.checked_sub(days).ok_or_else(|| {
-                        ArrowError::ArithmeticOverflow("date_sub".to_string())
-                    })
-                },
+                |date, days| date.wrapping_sub(days),
             )?
         }
         _ => {
@@ -152,7 +134,6 @@ fn spark_date_sub(args: &[ArrayRef]) -> Result<ArrayRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion_common::ScalarValue;
 
     #[test]
     fn test_date_sub_nullability_non_nullable_args() {
@@ -181,24 +162,6 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: &[date_field, nullable_days_field],
                 scalar_arguments: &[None, None],
-            })
-            .unwrap();
-
-        assert!(result.is_nullable());
-        assert_eq!(result.data_type(), &DataType::Date32);
-    }
-
-    #[test]
-    fn test_date_sub_nullability_scalar_null_argument() {
-        let udf = SparkDateSub::new();
-        let date_field = Arc::new(Field::new("d", DataType::Date32, false));
-        let days_field = Arc::new(Field::new("n", DataType::Int32, false));
-        let null_scalar = ScalarValue::Int32(None);
-
-        let result = udf
-            .return_field_from_args(ReturnFieldArgs {
-                arg_fields: &[date_field, days_field],
-                scalar_arguments: &[None, Some(&null_scalar)],
             })
             .unwrap();
 
