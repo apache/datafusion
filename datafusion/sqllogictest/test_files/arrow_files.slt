@@ -121,7 +121,9 @@ SELECT f0 FROM arrow_partitioned WHERE part = 123 ORDER BY f0
 query TT
 EXPLAIN SELECT f0 FROM arrow_partitioned WHERE part = 456
 ----
-logical_plan TableScan: arrow_partitioned projection=[f0], full_filters=[arrow_partitioned.part = Int32(456)]
+logical_plan
+01)Projection: arrow_partitioned.f0
+02)--TableScan: arrow_partitioned projection=[f0, part], full_filters=[arrow_partitioned.part = Int32(456)]
 physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_table_arrow/part=456/data.arrow]]}, projection=[f0], file_type=arrow
 
 
@@ -346,7 +348,9 @@ SELECT f0 FROM arrow_partitioned_stream WHERE part = 123 ORDER BY f0
 query TT
 EXPLAIN SELECT f0 FROM arrow_partitioned_stream WHERE part = 456
 ----
-logical_plan TableScan: arrow_partitioned_stream projection=[f0], full_filters=[arrow_partitioned_stream.part = Int32(456)]
+logical_plan
+01)Projection: arrow_partitioned_stream.f0
+02)--TableScan: arrow_partitioned_stream projection=[f0, part], full_filters=[arrow_partitioned_stream.part = Int32(456)]
 physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_table_arrow_stream/part=456/data.arrow]]}, projection=[f0], file_type=arrow_stream
 
 

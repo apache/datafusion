@@ -264,12 +264,42 @@ fn optimize_projections(
 
             // Get indices referred to in the original (schema with all fields)
             // given projected indices.
-            let projection = match &projection {
+            // Note: `indices` refers to the projected schema, so we map through
+            // the projection to get source schema indices.
+            let new_projection = match &projection {
                 Some(projection) => indices.into_mapped_indices(|idx| projection[idx]),
                 None => indices.into_inner(),
             };
-            let new_scan =
-                TableScan::try_new(table_name, source, Some(projection), filters, fetch)?;
+
+            // Include columns from filters in the projection.
+            // This ensures filter columns are included even when there is no
+            // separate Filter node above the TableScan.
+            // Filter columns reference the source schema directly.
+            // We add any filter columns that are not already in the projection,
+            // preserving the original projection order.
+            let source_schema = Arc::new(DFSchema::try_from_qualified_schema(
+                table_name.clone(),
+                &source.schema(),
+            )?);
+            let filter_indices =
+                RequiredIndices::new().with_exprs(&source_schema, filters.iter());
+
+            // Convert to a set for fast lookup, then add missing filter indices
+            let projection_set: HashSet<usize> = new_projection.iter().cloned().collect();
+            let mut final_projection = new_projection;
+            for idx in filter_indices.into_inner() {
+                if !projection_set.contains(&idx) {
+                    final_projection.push(idx);
+                }
+            }
+
+            let new_scan = TableScan::try_new(
+                table_name,
+                source,
+                Some(final_projection),
+                filters,
+                fetch,
+            )?;
 
             return Ok(Transformed::yes(LogicalPlan::TableScan(new_scan)));
         }
@@ -2173,7 +2203,8 @@ mod tests {
             plan,
             @r"
         Projection: Int32(1) AS a
-          TableScan: test projection=[], full_filters=[b = Int32(1)]
+          Projection:
+            TableScan: test projection=[b], full_filters=[b = Int32(1)]
         "
         )
     }

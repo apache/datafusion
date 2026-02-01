@@ -54,11 +54,10 @@ pub async fn optimizer_rule() -> Result<()> {
     let plan = ctx.sql(sql).await?.into_optimized_plan()?;
 
     // We can see the effect of our rewrite on the output plan that the filter
-    // has been rewritten to `my_eq`
+    // has been rewritten to `my_eq` (consolidated into TableScan as unsupported_filters)
     assert_eq!(
         plan.display_indent().to_string(),
-        "Filter: my_eq(person.age, Int32(22))\
-        \n  TableScan: person projection=[name, age]"
+        "TableScan: person projection=[name, age], unsupported_filters=[my_eq(person.age, Int32(22))]"
     );
 
     // The query below doesn't respect a filter `where age = 22` because

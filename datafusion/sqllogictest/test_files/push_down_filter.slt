@@ -40,7 +40,7 @@ physical_plan
 02)--UnnestExec
 03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 04)------ProjectionExec: expr=[column2@0 as __unnest_placeholder(v.column2)]
-05)--------FilterExec: column1@0 = 2, projection=[column2@1]
+05)--------FilterExec: column1@1 = 2, projection=[column2@0]
 06)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query I
@@ -536,10 +536,8 @@ explain select * from t1 left join t2 on t1.k = t2.k where t1.k > 1;
 ----
 logical_plan
 01)Left Join: t1.k = t2.k
-02)--Filter: t1.k > Int32(1)
-03)----TableScan: t1 projection=[k, v]
-04)--Filter: t2.k > Int32(1)
-05)----TableScan: t2 projection=[k, v]
+02)--TableScan: t1 projection=[k, v], unsupported_filters=[t1.k > Int32(1)]
+03)--TableScan: t2 projection=[k, v], unsupported_filters=[t2.k > Int32(1)]
 
 query IIII rowsort
 select * from t1 left join t2 on t1.k = t2.k where t1.k > 1;
@@ -555,9 +553,8 @@ explain select * from t1 left join t2 on t1.k = t2.k where t1.v > 1;
 ----
 logical_plan
 01)Left Join: t1.k = t2.k
-02)--Filter: t1.v > Int32(1)
-03)----TableScan: t1 projection=[k, v]
-04)--TableScan: t2 projection=[k, v]
+02)--TableScan: t1 projection=[k, v], unsupported_filters=[t1.v > Int32(1)]
+03)--TableScan: t2 projection=[k, v]
 
 query IIII rowsort
 select * from t1 left join t2 on t1.k = t2.k where t1.v > 1;
@@ -574,9 +571,8 @@ explain select * from t1 left join t2 on t1.k = t2.k where t1.k > 3 or t1.v > 20
 ----
 logical_plan
 01)Left Join: t1.k = t2.k
-02)--Filter: t1.k > Int32(3) OR t1.v > Int32(20)
-03)----TableScan: t1 projection=[k, v]
-04)--TableScan: t2 projection=[k, v]
+02)--TableScan: t1 projection=[k, v], unsupported_filters=[t1.k > Int32(3) OR t1.v > Int32(20)]
+03)--TableScan: t2 projection=[k, v]
 
 query IIII rowsort
 select * from t1 left join t2 on t1.k = t2.k where t1.k > 3 or t1.v > 20;
@@ -592,10 +588,8 @@ explain select * from t1 right join t2 on t1.k = t2.k where t1.k > 1;
 ----
 logical_plan
 01)Inner Join: t1.k = t2.k
-02)--Filter: t1.k > Int32(1)
-03)----TableScan: t1 projection=[k, v]
-04)--Filter: t2.k > Int32(1)
-05)----TableScan: t2 projection=[k, v]
+02)--TableScan: t1 projection=[k, v], unsupported_filters=[t1.k > Int32(1)]
+03)--TableScan: t2 projection=[k, v], unsupported_filters=[t2.k > Int32(1)]
 
 query IIII rowsort
 select * from t1 right join t2 on t1.k = t2.k where t1.k > 1;
@@ -609,9 +603,8 @@ explain select * from t1 right join t2 on t1.k = t2.k where t1.v > 1;
 ----
 logical_plan
 01)Inner Join: t1.k = t2.k
-02)--Filter: t1.v > Int32(1)
-03)----TableScan: t1 projection=[k, v]
-04)--TableScan: t2 projection=[k, v]
+02)--TableScan: t1 projection=[k, v], unsupported_filters=[t1.v > Int32(1)]
+03)--TableScan: t2 projection=[k, v]
 
 query IIII rowsort
 select * from t1 right join t2 on t1.k = t2.k where t1.v > 1;
@@ -626,9 +619,8 @@ explain select * from t1 right join t2 on t1.k = t2.k where t1.k > 3 or t1.v > 2
 ----
 logical_plan
 01)Inner Join: t1.k = t2.k
-02)--Filter: t1.k > Int32(3) OR t1.v > Int32(20)
-03)----TableScan: t1 projection=[k, v]
-04)--TableScan: t2 projection=[k, v]
+02)--TableScan: t1 projection=[k, v], unsupported_filters=[t1.k > Int32(3) OR t1.v > Int32(20)]
+03)--TableScan: t2 projection=[k, v]
 
 query IIII rowsort
 select * from t1 right join t2 on t1.k = t2.k where t1.k > 3 or t1.v > 20;
@@ -641,10 +633,8 @@ explain select * from t1 left anti join t2 on t1.k = t2.k where t1.k > 1;
 ----
 logical_plan
 01)LeftAnti Join: t1.k = t2.k
-02)--Filter: t1.k > Int32(1)
-03)----TableScan: t1 projection=[k, v]
-04)--Filter: t2.k > Int32(1)
-05)----TableScan: t2 projection=[k]
+02)--TableScan: t1 projection=[k, v], unsupported_filters=[t1.k > Int32(1)]
+03)--TableScan: t2 projection=[k], unsupported_filters=[t2.k > Int32(1)]
 
 query II rowsort
 select * from t1 left anti join t2 on t1.k = t2.k where t1.k > 1;
@@ -658,9 +648,8 @@ explain select * from t1 left anti join t2 on t1.k = t2.k where t1.v > 1;
 ----
 logical_plan
 01)LeftAnti Join: t1.k = t2.k
-02)--Filter: t1.v > Int32(1)
-03)----TableScan: t1 projection=[k, v]
-04)--TableScan: t2 projection=[k]
+02)--TableScan: t1 projection=[k, v], unsupported_filters=[t1.v > Int32(1)]
+03)--TableScan: t2 projection=[k]
 
 query II rowsort
 select * from t1 left anti join t2 on t1.k = t2.k where t1.v > 1;
@@ -674,9 +663,8 @@ explain select * from t1 left anti join t2 on t1.k = t2.k where t1.k > 3 or t1.v
 ----
 logical_plan
 01)LeftAnti Join: t1.k = t2.k
-02)--Filter: t1.k > Int32(3) OR t1.v > Int32(20)
-03)----TableScan: t1 projection=[k, v]
-04)--TableScan: t2 projection=[k]
+02)--TableScan: t1 projection=[k, v], unsupported_filters=[t1.k > Int32(3) OR t1.v > Int32(20)]
+03)--TableScan: t2 projection=[k]
 
 query II rowsort
 select * from t1 left anti join t2 on t1.k = t2.k where t1.k > 3 or t1.v > 20;
@@ -692,10 +680,8 @@ explain select * from t1 right anti join t2 on t1.k = t2.k where t2.k > 1;
 ----
 logical_plan
 01)RightAnti Join: t1.k = t2.k
-02)--Filter: t1.k > Int32(1)
-03)----TableScan: t1 projection=[k]
-04)--Filter: t2.k > Int32(1)
-05)----TableScan: t2 projection=[k, v]
+02)--TableScan: t1 projection=[k], unsupported_filters=[t1.k > Int32(1)]
+03)--TableScan: t2 projection=[k, v], unsupported_filters=[t2.k > Int32(1)]
 
 query II rowsort
 select * from t1 right anti join t2 on t1.k = t2.k where t2.k > 1;
@@ -709,8 +695,7 @@ explain select * from t1 right anti join t2 on t1.k = t2.k where t2.v > 1;
 logical_plan
 01)RightAnti Join: t1.k = t2.k
 02)--TableScan: t1 projection=[k]
-03)--Filter: t2.v > Int32(1)
-04)----TableScan: t2 projection=[k, v]
+03)--TableScan: t2 projection=[k, v], unsupported_filters=[t2.v > Int32(1)]
 
 query II rowsort
 select * from t1 right anti join t2 on t1.k = t2.k where t2.v > 1;
@@ -724,8 +709,7 @@ explain select * from t1 right anti join t2 on t1.k = t2.k where t2.k > 3 or t2.
 logical_plan
 01)RightAnti Join: t1.k = t2.k
 02)--TableScan: t1 projection=[k]
-03)--Filter: t2.k > Int32(3) OR t2.v > Int32(20)
-04)----TableScan: t2 projection=[k, v]
+03)--TableScan: t2 projection=[k, v], unsupported_filters=[t2.k > Int32(3) OR t2.v > Int32(20)]
 
 query II rowsort
 select * from t1 right anti join t2 on t1.k = t2.k where t2.k > 3 or t2.v > 20;
