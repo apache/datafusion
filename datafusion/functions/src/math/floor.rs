@@ -400,7 +400,7 @@ mod tests {
         // Therefore preimage should return None for non-integer literals
         assert_preimage_none(ScalarValue::Float64(Some(1.3)));
         assert_preimage_none(ScalarValue::Float64(Some(-2.5)));
-        assert_preimage_none(ScalarValue::Float32(Some(3.14)));
+        assert_preimage_none(ScalarValue::Float32(Some(3.7)));
     }
 
     #[test]
