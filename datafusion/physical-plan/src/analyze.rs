@@ -39,6 +39,7 @@ use futures::StreamExt;
 
 /// `EXPLAIN ANALYZE` execution plan operator. This operator runs its input,
 /// discards the results, and then prints out an annotated plan with metrics
+/// TEST
 #[derive(Debug, Clone)]
 pub struct AnalyzeExec {
     /// Control how much extra to print
