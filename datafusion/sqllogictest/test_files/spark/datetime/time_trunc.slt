@@ -71,4 +71,3 @@ NULL
 # incorrect format
 query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nError during planning: The format argument of `TIME_TRUNC` must be one of: hour, minute, second, millisecond, microsecond
 SELECT time_trunc('test', '09:32:05.123456'::time);
-
