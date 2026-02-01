@@ -230,6 +230,8 @@ impl ScalarUDFImpl for FloorFunc {
 
         // Compute lower bound (N) and upper bound (N + 1) using helper functions
         let Some((lower, upper)) = (match lit_value {
+            // Decimal types should be supported and tracked in 
+            // https://github.com/apache/datafusion/issues/20080
             // Floating-point types
             ScalarValue::Float64(Some(n)) => float_preimage_bounds(*n).map(|(lo, hi)| {
                 (
