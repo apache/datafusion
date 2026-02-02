@@ -199,3 +199,9 @@ Please understand the reviewing capacity is **very limited** for the project, so
 ### Better ways to contribute than an “AI dump”
 
 It's recommended to write a high-quality issue with a clear problem statement and a minimal, reproducible example. This can make it easier for others to contribute.
+
+### CI Runners
+
+We use [Runs-On](https://runs-on.com/) for some actions in the main repository, which run in the ASF AWS account to speed up CI time. In forks, these actions run on the default GitHub runners since forks do not have access to ASF infrastructure.
+
+We also use standard GitHub runners for some actions in the main repository; these are also runnable in forks.
