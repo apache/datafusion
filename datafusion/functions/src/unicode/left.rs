@@ -225,7 +225,7 @@ fn left_byte_length(string: &str, n: i64) -> usize {
         Ordering::Equal => 0,
         Ordering::Greater => string
             .char_indices()
-            .nth(n as usize)
+            .nth(n.unsigned_abs() as usize)
             .map(|(index, _)| index)
             .unwrap_or(string.len()),
     }
