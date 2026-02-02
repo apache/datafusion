@@ -265,13 +265,13 @@ fn web_sales_predicate(num_partitions: usize) -> Arc<dyn PhysicalExpr> {
 /// Measures how long `PhysicalExprSimplifier::simplify` takes for a given expression.
 fn bench_simplify(
     c: &mut Criterion,
-    name: String,
+    name: &str,
     schema: &Schema,
-    expr: Arc<dyn PhysicalExpr>,
+    expr: &Arc<dyn PhysicalExpr>,
 ) {
     let simplifier = PhysicalExprSimplifier::new(schema);
-    c.bench_function(&name, |b| {
-        b.iter(|| black_box(simplifier.simplify(black_box(Arc::clone(&expr))).unwrap()))
+    c.bench_function(name, |b| {
+        b.iter(|| black_box(simplifier.simplify(black_box(Arc::clone(expr))).unwrap()))
     });
 }
 
@@ -282,15 +282,15 @@ fn criterion_benchmark(c: &mut Criterion) {
     for num_partitions in [16, 128] {
         bench_simplify(
             c,
-            format!("tpc-ds/q76/cs/{num_partitions}"),
+            &format!("tpc-ds/q76/cs/{num_partitions}"),
             &cs_schema,
-            catalog_sales_predicate(num_partitions),
+            &catalog_sales_predicate(num_partitions),
         );
         bench_simplify(
             c,
-            format!("tpc-ds/q76/ws/{num_partitions}"),
+            &format!("tpc-ds/q76/ws/{num_partitions}"),
             &ws_schema,
-            web_sales_predicate(num_partitions),
+            &web_sales_predicate(num_partitions),
         );
     }
 }
