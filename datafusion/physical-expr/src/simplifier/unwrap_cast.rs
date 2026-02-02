@@ -34,10 +34,7 @@
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Schema};
-use datafusion_common::{
-    Result, ScalarValue,
-    tree_node::{Transformed, TreeNode},
-};
+use datafusion_common::{Result, ScalarValue, tree_node::Transformed};
 use datafusion_expr::Operator;
 use datafusion_expr_common::casts::try_cast_literal_to_type;
 

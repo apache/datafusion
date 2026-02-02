@@ -66,7 +66,7 @@ impl<'a> PhysicalExprSimplifier<'a> {
                 // then constant expression evaluation
                 let rewritten = simplify_not_expr(node, schema)?
                     .transform_data(|node| unwrap_cast_in_comparison(node, schema))?
-                    .transform_data(|node| simplify_const_expr(node))?;
+                    .transform_data(simplify_const_expr)?;
 
                 #[cfg(debug_assertions)]
                 assert_eq!(

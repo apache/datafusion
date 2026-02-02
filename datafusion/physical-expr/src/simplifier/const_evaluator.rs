@@ -17,7 +17,7 @@
 
 //! Constant expression evaluation for the physical expression simplifier
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arrow::array::new_null_array;
 use arrow::datatypes::{DataType, Field, Schema};
@@ -28,6 +28,8 @@ use datafusion_expr_common::columnar_value::ColumnarValue;
 
 use crate::PhysicalExpr;
 use crate::expressions::{Column, Literal};
+
+static BATCH: OnceLock<RecordBatch> = OnceLock::new();
 
 /// Simplify expressions that consist only of literals by evaluating them.
 ///
@@ -47,10 +49,10 @@ pub fn simplify_const_expr(
     }
 
     // Create a 1-row dummy batch for evaluation
-    let batch = create_dummy_batch()?;
+    let batch = BATCH.get_or_init(create_dummy_batch);
 
     // Evaluate the expression
-    match expr.evaluate(&batch) {
+    match expr.evaluate(batch) {
         Ok(ColumnarValue::Scalar(scalar)) => {
             Ok(Transformed::yes(Arc::new(Literal::new(scalar))))
         }
@@ -72,22 +74,6 @@ pub fn simplify_const_expr(
     }
 }
 
-fn can_evaluate_as_constant(expr: &Arc<dyn PhysicalExpr>) -> bool {
-    let mut can_evaluate = true;
-
-    expr.apply(|e| {
-        if e.as_any().is::<Column>() || e.is_volatile_node() {
-            can_evaluate = false;
-            Ok(TreeNodeRecursion::Stop)
-        } else {
-            Ok(TreeNodeRecursion::Continue)
-        }
-    })
-    .expect("apply should not fail");
-
-    can_evaluate
-}
-
 /// Create a 1-row dummy RecordBatch for evaluating constant expressions.
 ///
 /// The batch is never actually accessed for data - it's just needed because
@@ -95,11 +81,11 @@ fn can_evaluate_as_constant(expr: &Arc<dyn PhysicalExpr>) -> bool {
 /// that only contain literals, the batch content is irrelevant.
 ///
 /// This is the same approach used in the logical expression `ConstEvaluator`.
-fn create_dummy_batch() -> Result<RecordBatch> {
+fn create_dummy_batch() -> RecordBatch {
     // RecordBatch requires at least one column
     let dummy_schema = Arc::new(Schema::new(vec![Field::new("_", DataType::Null, true)]));
     let col = new_null_array(&DataType::Null, 1);
-    Ok(RecordBatch::try_new(dummy_schema, vec![col])?)
+    RecordBatch::try_new(dummy_schema, vec![col]).expect("valid batch")
 }
 
 /// Check if this expression has any column references.
