@@ -275,3 +275,22 @@ incremental = false
 inherits = "release"
 debug = true
 strip = false
+
+
+
+# pin to https://github.com/apache/arrow-rs/pull/9333
+
+[patch.crates-io]
+arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "559368f" }
+arrow-array = { git = "https://github.com/apache/arrow-rs.git", rev = "559368f" }
+arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", rev = "559368f" }
+arrow-cast = { git = "https://github.com/apache/arrow-rs.git", rev = "559368f" }
+arrow-data = { git = "https://github.com/apache/arrow-rs.git", rev = "559368f" }
+arrow-ipc = { git = "https://github.com/apache/arrow-rs.git", rev = "559368f" }
+arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "559368f" }
+arrow-select = { git = "https://github.com/apache/arrow-rs.git", rev = "559368f" }
+arrow-string = { git = "https://github.com/apache/arrow-rs.git", rev = "559368f" }
+arrow-ord = { git = "https://github.com/apache/arrow-rs.git", rev = "559368f" }
+arrow-flight = { git = "https://github.com/apache/arrow-rs.git", rev = "559368f" }
+parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "559368f" }
+
