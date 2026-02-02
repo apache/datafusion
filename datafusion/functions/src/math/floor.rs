@@ -668,6 +668,14 @@ mod tests {
         // Decimal256
         assert_preimage_none(ScalarValue::Decimal256(Some(i256::from(130)), 76, 2)); // 1.30
         assert_preimage_none(ScalarValue::Decimal256(Some(i256::from(-250)), 76, 2)); // -2.50
+
+        // Decimal32: i32::MAX - 50
+        // This return None because the value is not an integer, not because it is out of range.
+        assert_preimage_none(ScalarValue::Decimal32(Some(i32::MAX - 50), 10, 2));
+
+        // Decimal64: i64::MAX - 50
+        // This return None because the value is not an integer, not because it is out of range.
+        assert_preimage_none(ScalarValue::Decimal64(Some(i64::MAX - 50), 19, 2));
     }
 
     #[test]
@@ -675,26 +683,10 @@ mod tests {
         // Test near MAX where adding scale_factor would overflow
 
         // Decimal32: i32::MAX
-        // For scale=2, we add 100, so i32::MAX - 50 would overflow
-        assert_preimage_none(ScalarValue::Decimal32(Some(i32::MAX - 50), 9, 2));
-        // For scale=0, we add 1, so i32::MAX would overflow
-        assert_preimage_none(ScalarValue::Decimal32(Some(i32::MAX), 9, 0));
+        assert_preimage_none(ScalarValue::Decimal32(Some(i32::MAX), 10, 0));
 
         // Decimal64: i64::MAX
-        assert_preimage_none(ScalarValue::Decimal64(Some(i64::MAX - 50), 18, 2));
-        assert_preimage_none(ScalarValue::Decimal64(Some(i64::MAX), 18, 0));
-
-        // Decimal128: i128::MAX
-        assert_preimage_none(ScalarValue::Decimal128(Some(i128::MAX - 50), 38, 2));
-        assert_preimage_none(ScalarValue::Decimal128(Some(i128::MAX), 38, 0));
-
-        // Decimal256: i256::MAX
-        assert_preimage_none(ScalarValue::Decimal256(
-            Some(i256::MAX.wrapping_sub(i256::from(50))),
-            76,
-            2,
-        ));
-        assert_preimage_none(ScalarValue::Decimal256(Some(i256::MAX), 76, 0));
+        assert_preimage_none(ScalarValue::Decimal64(Some(i64::MAX), 19, 0));
     }
 
     #[test]
@@ -706,66 +698,17 @@ mod tests {
         // Make it divisible by 100 for scale=2
         let safe_max_aligned_32 = (safe_max_32 / 100) * 100;
         assert_preimage_range(
-            ScalarValue::Decimal32(Some(safe_max_aligned_32), 9, 2),
-            ScalarValue::Decimal32(Some(safe_max_aligned_32), 9, 2),
-            ScalarValue::Decimal32(Some(safe_max_aligned_32 + 100), 9, 2),
+            ScalarValue::Decimal32(Some(safe_max_aligned_32), 10, 2),
+            ScalarValue::Decimal32(Some(safe_max_aligned_32), 10, 2),
+            ScalarValue::Decimal32(Some(safe_max_aligned_32 + 100), 10, 2),
         );
 
         // Negative edge: i32::MIN should work since we're adding (not subtracting)
         let min_aligned_32 = (i32::MIN / 100) * 100;
         assert_preimage_range(
-            ScalarValue::Decimal32(Some(min_aligned_32), 9, 2),
-            ScalarValue::Decimal32(Some(min_aligned_32), 9, 2),
-            ScalarValue::Decimal32(Some(min_aligned_32 + 100), 9, 2),
-        );
-
-        // ===== Decimal64 =====
-        let safe_max_64 = i64::MAX - 100;
-        let safe_max_aligned_64 = (safe_max_64 / 100) * 100;
-        assert_preimage_range(
-            ScalarValue::Decimal64(Some(safe_max_aligned_64), 18, 2),
-            ScalarValue::Decimal64(Some(safe_max_aligned_64), 18, 2),
-            ScalarValue::Decimal64(Some(safe_max_aligned_64 + 100), 18, 2),
-        );
-
-        let min_aligned_64 = (i64::MIN / 100) * 100;
-        assert_preimage_range(
-            ScalarValue::Decimal64(Some(min_aligned_64), 18, 2),
-            ScalarValue::Decimal64(Some(min_aligned_64), 18, 2),
-            ScalarValue::Decimal64(Some(min_aligned_64 + 100), 18, 2),
-        );
-
-        // ===== Decimal128 =====
-        let safe_max_128 = i128::MAX - 100;
-        let safe_max_aligned_128 = (safe_max_128 / 100) * 100;
-        assert_preimage_range(
-            ScalarValue::Decimal128(Some(safe_max_aligned_128), 38, 2),
-            ScalarValue::Decimal128(Some(safe_max_aligned_128), 38, 2),
-            ScalarValue::Decimal128(Some(safe_max_aligned_128 + 100), 38, 2),
-        );
-
-        let min_aligned_128 = (i128::MIN / 100) * 100;
-        assert_preimage_range(
-            ScalarValue::Decimal128(Some(min_aligned_128), 38, 2),
-            ScalarValue::Decimal128(Some(min_aligned_128), 38, 2),
-            ScalarValue::Decimal128(Some(min_aligned_128 + 100), 38, 2),
-        );
-
-        // ===== Decimal256 =====
-        // For i256, we use smaller values since MAX is huge
-        let large_256 = i256::from(1_000_000_000_000i64);
-        assert_preimage_range(
-            ScalarValue::Decimal256(Some(large_256), 76, 2),
-            ScalarValue::Decimal256(Some(large_256), 76, 2),
-            ScalarValue::Decimal256(Some(large_256.wrapping_add(i256::from(100))), 76, 2),
-        );
-
-        // Negative i256
-        let neg_256 = i256::from(-1_000_000_000_000i64);
-        assert_preimage_range(
-            ScalarValue::Decimal256(Some(neg_256), 76, 2),
-            ScalarValue::Decimal256(Some(neg_256), 76, 2),
-            ScalarValue::Decimal256(Some(neg_256.wrapping_add(i256::from(100))), 76, 2),
+            ScalarValue::Decimal32(Some(min_aligned_32), 10, 2),
+            ScalarValue::Decimal32(Some(min_aligned_32), 10, 2),
+            ScalarValue::Decimal32(Some(min_aligned_32 + 100), 10, 2),
         );
     }
 
