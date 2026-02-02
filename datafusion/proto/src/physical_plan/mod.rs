@@ -15,7 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fmt::Debug;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 use arrow::compute::SortOptions;
@@ -2993,6 +2996,7 @@ impl protobuf::PhysicalPlanNode {
                     nulls_first: expr.options.nulls_first,
                 });
                 Ok(protobuf::PhysicalExprNode {
+                    expr_id: None,
                     expr_type: Some(ExprType::Sort(sort_expr)),
                 })
             })
@@ -3078,6 +3082,7 @@ impl protobuf::PhysicalPlanNode {
                     nulls_first: expr.options.nulls_first,
                 });
                 Ok(protobuf::PhysicalExprNode {
+                    expr_id: None,
                     expr_type: Some(ExprType::Sort(sort_expr)),
                 })
             })
@@ -3709,6 +3714,217 @@ impl PhysicalProtoConverterExtension for DefaultPhysicalProtoConverter {
         codec: &dyn PhysicalExtensionCodec,
     ) -> Result<protobuf::PhysicalExprNode> {
         serialize_physical_expr_with_converter(expr, codec, self)
+    }
+}
+
+/// Internal serializer that adds expr_id to expressions.
+/// Created fresh for each serialization operation.
+struct DeduplicatingSerializer {
+    /// Random salt combined with pointer addresses and process ID to create globally unique expr_ids.
+    session_id: u64,
+}
+
+impl DeduplicatingSerializer {
+    fn new() -> Self {
+        Self {
+            session_id: rand::random(),
+        }
+    }
+}
+
+impl PhysicalProtoConverterExtension for DeduplicatingSerializer {
+    fn proto_to_execution_plan(
+        &self,
+        _ctx: &TaskContext,
+        _codec: &dyn PhysicalExtensionCodec,
+        _proto: &protobuf::PhysicalPlanNode,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        internal_err!("DeduplicatingSerializer cannot deserialize execution plans")
+    }
+
+    fn execution_plan_to_proto(
+        &self,
+        plan: &Arc<dyn ExecutionPlan>,
+        codec: &dyn PhysicalExtensionCodec,
+    ) -> Result<protobuf::PhysicalPlanNode>
+    where
+        Self: Sized,
+    {
+        protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
+            Arc::clone(plan),
+            codec,
+            self,
+        )
+    }
+
+    fn proto_to_physical_expr(
+        &self,
+        _proto: &protobuf::PhysicalExprNode,
+        _ctx: &TaskContext,
+        _input_schema: &Schema,
+        _codec: &dyn PhysicalExtensionCodec,
+    ) -> Result<Arc<dyn PhysicalExpr>>
+    where
+        Self: Sized,
+    {
+        internal_err!("DeduplicatingSerializer cannot deserialize physical expressions")
+    }
+
+    fn physical_expr_to_proto(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+        codec: &dyn PhysicalExtensionCodec,
+    ) -> Result<protobuf::PhysicalExprNode> {
+        let mut proto = serialize_physical_expr_with_converter(expr, codec, self)?;
+
+        // Hash session_id, pointer address, and process ID together to create expr_id.
+        // - session_id: random per serializer, prevents collisions when merging serializations
+        // - ptr: unique address per Arc within a process
+        // - pid: prevents collisions if serializer is shared across processes
+        let mut hasher = DefaultHasher::new();
+        self.session_id.hash(&mut hasher);
+        (Arc::as_ptr(expr) as *const () as u64).hash(&mut hasher);
+        std::process::id().hash(&mut hasher);
+        proto.expr_id = Some(hasher.finish());
+
+        Ok(proto)
+    }
+}
+
+/// Internal deserializer that caches expressions by expr_id.
+/// Created fresh for each deserialization operation.
+#[derive(Default)]
+struct DeduplicatingDeserializer {
+    /// Cache mapping expr_id to deserialized expressions.
+    cache: RefCell<HashMap<u64, Arc<dyn PhysicalExpr>>>,
+}
+
+impl PhysicalProtoConverterExtension for DeduplicatingDeserializer {
+    fn proto_to_execution_plan(
+        &self,
+        ctx: &TaskContext,
+        codec: &dyn PhysicalExtensionCodec,
+        proto: &protobuf::PhysicalPlanNode,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        proto.try_into_physical_plan_with_converter(ctx, codec, self)
+    }
+
+    fn execution_plan_to_proto(
+        &self,
+        _plan: &Arc<dyn ExecutionPlan>,
+        _codec: &dyn PhysicalExtensionCodec,
+    ) -> Result<protobuf::PhysicalPlanNode>
+    where
+        Self: Sized,
+    {
+        internal_err!("DeduplicatingDeserializer cannot serialize execution plans")
+    }
+
+    fn proto_to_physical_expr(
+        &self,
+        proto: &protobuf::PhysicalExprNode,
+        ctx: &TaskContext,
+        input_schema: &Schema,
+        codec: &dyn PhysicalExtensionCodec,
+    ) -> Result<Arc<dyn PhysicalExpr>>
+    where
+        Self: Sized,
+    {
+        if let Some(expr_id) = proto.expr_id {
+            // Check cache first
+            if let Some(cached) = self.cache.borrow().get(&expr_id) {
+                return Ok(Arc::clone(cached));
+            }
+            // Deserialize and cache
+            let expr = parse_physical_expr_with_converter(
+                proto,
+                ctx,
+                input_schema,
+                codec,
+                self,
+            )?;
+            self.cache.borrow_mut().insert(expr_id, Arc::clone(&expr));
+            Ok(expr)
+        } else {
+            parse_physical_expr_with_converter(proto, ctx, input_schema, codec, self)
+        }
+    }
+
+    fn physical_expr_to_proto(
+        &self,
+        _expr: &Arc<dyn PhysicalExpr>,
+        _codec: &dyn PhysicalExtensionCodec,
+    ) -> Result<protobuf::PhysicalExprNode> {
+        internal_err!("DeduplicatingDeserializer cannot serialize physical expressions")
+    }
+}
+
+/// A proto converter that adds expression deduplication during serialization
+/// and deserialization.
+///
+/// During serialization, each expression's Arc pointer address is XORed with a
+/// random session_id to create a salted `expr_id`. This prevents cross-process
+/// collisions when serialized plans are merged.
+///
+/// During deserialization, expressions with the same `expr_id` share the same
+/// Arc, reducing memory usage for plans with duplicate expressions (e.g., large
+/// IN lists) and supporting correctly linking [`DynamicFilterPhysicalExpr`] instances.
+///
+/// This converter is stateless - it creates internal serializers/deserializers
+/// on demand for each operation.
+///
+/// [`DynamicFilterPhysicalExpr`]: https://docs.rs/datafusion-physical-expr/latest/datafusion_physical_expr/expressions/struct.DynamicFilterPhysicalExpr.html
+#[derive(Debug, Default, Clone, Copy)]
+pub struct DeduplicatingProtoConverter {}
+
+impl PhysicalProtoConverterExtension for DeduplicatingProtoConverter {
+    fn proto_to_execution_plan(
+        &self,
+        ctx: &TaskContext,
+        codec: &dyn PhysicalExtensionCodec,
+        proto: &protobuf::PhysicalPlanNode,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let deserializer = DeduplicatingDeserializer::default();
+        proto.try_into_physical_plan_with_converter(ctx, codec, &deserializer)
+    }
+
+    fn execution_plan_to_proto(
+        &self,
+        plan: &Arc<dyn ExecutionPlan>,
+        codec: &dyn PhysicalExtensionCodec,
+    ) -> Result<protobuf::PhysicalPlanNode>
+    where
+        Self: Sized,
+    {
+        let serializer = DeduplicatingSerializer::new();
+        protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
+            Arc::clone(plan),
+            codec,
+            &serializer,
+        )
+    }
+
+    fn proto_to_physical_expr(
+        &self,
+        proto: &protobuf::PhysicalExprNode,
+        ctx: &TaskContext,
+        input_schema: &Schema,
+        codec: &dyn PhysicalExtensionCodec,
+    ) -> Result<Arc<dyn PhysicalExpr>>
+    where
+        Self: Sized,
+    {
+        let deserializer = DeduplicatingDeserializer::default();
+        deserializer.proto_to_physical_expr(proto, ctx, input_schema, codec)
+    }
+
+    fn physical_expr_to_proto(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+        codec: &dyn PhysicalExtensionCodec,
+    ) -> Result<protobuf::PhysicalExprNode> {
+        let serializer = DeduplicatingSerializer::new();
+        serializer.physical_expr_to_proto(expr, codec)
     }
 }
 
