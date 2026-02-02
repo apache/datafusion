@@ -2893,14 +2893,12 @@ impl TableScanBuilder {
                     .collect::<Result<Vec<_>>>()?;
 
                 // Try to compute functional dependencies for simple column projections
-                let projected_func_dependencies = if let Some(indices) =
-                    projection_indices_from_exprs(exprs, &schema)
-                {
-                    func_dependencies
-                        .project_functional_dependencies(&indices, indices.len())
-                } else {
-                    FunctionalDependencies::empty()
-                };
+                let projected_func_dependencies =
+                    match projection_indices_from_exprs(exprs, &schema)? {
+                        Some(indices) => func_dependencies
+                            .project_functional_dependencies(&indices, indices.len()),
+                        None => FunctionalDependencies::empty(),
+                    };
 
                 let df_schema =
                     DFSchema::new_with_metadata(fields, schema.metadata.clone())?;

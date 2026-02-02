@@ -101,11 +101,10 @@ pub fn from_table_scan(
     let source_schema = scan.source.schema();
 
     // Compute required column indices and remainder projection expressions.
-    let (remainder_projection, scan_indices) =
-        split_projection(&scan.projection, source_schema.as_ref())?;
+    let split = split_projection(&scan.projection, source_schema.as_ref())?;
 
     // Build the projection mask from computed scan indices
-    let projection = scan_indices.as_ref().map(|indices| {
+    let projection = split.column_indices.as_ref().map(|indices| {
         let struct_items = indices
             .iter()
             .map(|&i| StructItem {
@@ -155,16 +154,17 @@ pub fn from_table_scan(
     });
 
     // If we have complex expressions, wrap the ReadRel with a ProjectRel
-    if let Some(ref proj_exprs) = remainder_projection {
+    if let Some(ref proj_exprs) = split.remainder {
         // Build a schema for the scanned columns (the output of the ReadRel).
         // The projection expressions reference columns by name, and the schema
         // tells us the position of each column in the scan output.
         // We need to construct this from the source schema and scan indices since
         // `projected_schema` is the final output schema after complex projections.
         let scan_output_schema = {
-            let indices = scan_indices
+            let indices = split
+                .column_indices
                 .as_ref()
-                .expect("scan_indices should be Some when remainder_projection is Some");
+                .expect("column_indices should be Some when remainder is Some");
             let projected_arrow_schema = source_schema.project(indices)?;
             Arc::new(DFSchema::try_from_qualified_schema(
                 scan.table_name.clone(),

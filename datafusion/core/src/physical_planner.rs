@@ -1728,12 +1728,11 @@ impl DefaultPhysicalPlanner {
         let filters: Vec<Expr> = unnormalize_cols(scan.filters.iter().cloned());
 
         // Compute required column indices and remainder projection
-        let (remainder_projection, scan_indices) =
-            split_projection(&scan.projection, &source_schema)?;
+        let split = split_projection(&scan.projection, &source_schema)?;
 
         // Create the scan
         let scan_args = ScanArgs::default()
-            .with_projection(scan_indices.as_ref().map(|v| v.as_slice()))
+            .with_projection(split.column_indices.as_deref())
             .with_filters(if filters.is_empty() {
                 None
             } else {
@@ -1745,7 +1744,7 @@ impl DefaultPhysicalPlanner {
         let mut plan: Arc<dyn ExecutionPlan> = Arc::clone(scan_result.plan());
 
         // Wrap with ProjectionExec if remainder projection is needed
-        if let Some(ref proj_exprs) = remainder_projection {
+        if let Some(ref proj_exprs) = split.remainder {
             let scan_df_schema = DFSchema::try_from(plan.schema().as_ref().clone())?;
             let unnormalized_proj_exprs: Vec<Expr> =
                 unnormalize_cols(proj_exprs.iter().cloned());
