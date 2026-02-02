@@ -3720,3 +3720,173 @@ async fn test_hashjoin_dynamic_filter_pushdown_is_used() {
         );
     }
 }
+
+/// Test that FilterExec with projection correctly handles filter pushdown
+/// This is a regression test for a bug where FilterExec with projection
+/// would create filters with incorrect column indices after pushdown.
+///
+/// Bug scenario:
+/// 1. DataSourceExec with schema [time@0, event@1, size@2]
+/// 2. FilterExec with predicate time@0 < X and projection=[1,2] -> schema [event@0, size@1]
+/// 3. FilterExec with predicate event@0 = Y and projection=[1] -> schema [size@0]
+///
+/// During pushdown, when the second FilterExec's predicate is pushed down to the first,
+/// and the first FilterExec combines filters, column indices must be remapped correctly.
+/// The bug was that event@0 from the projected schema wasn't remapped to event@1 in
+/// the DataSourceExec schema, causing "Invalid comparison operation: Int64 == Utf8".
+#[tokio::test]
+async fn test_filter_with_projection_pushdown() {
+    use arrow::array::{Int64Array, RecordBatch, StringArray};
+    use datafusion_physical_plan::collect;
+    use datafusion_physical_plan::filter::FilterExecBuilder;
+
+    // Create schema: [time, event, size]
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("time", DataType::Int64, false),
+        Field::new("event", DataType::Utf8, false),
+        Field::new("size", DataType::Int64, false),
+    ]));
+
+    // Create sample data
+    let timestamps = vec![100i64, 200, 300, 400, 500];
+    let events = vec!["Ingestion", "Ingestion", "Query", "Ingestion", "Query"];
+    let sizes = vec![10i64, 20, 30, 40, 50];
+
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int64Array::from(timestamps)),
+            Arc::new(StringArray::from(events)),
+            Arc::new(Int64Array::from(sizes)),
+        ],
+    )
+    .unwrap();
+
+    // Create data source
+    let memory_exec = datafusion_datasource::memory::MemorySourceConfig::try_new_exec(
+        &[vec![batch]],
+        schema.clone(),
+        None,
+    )
+    .unwrap();
+
+    // First FilterExec: time < 350 with projection=[event@1, size@2]
+    let time_col = col("time", &memory_exec.schema()).unwrap();
+    let time_filter = Arc::new(BinaryExpr::new(
+        time_col,
+        Operator::Lt,
+        Arc::new(Literal::new(ScalarValue::Int64(Some(350)))),
+    ));
+    let filter1 = Arc::new(
+        FilterExecBuilder::new(time_filter, memory_exec)
+            .apply_projection(Some(vec![1, 2]))
+            .unwrap()
+            .build()
+            .unwrap(),
+    );
+
+    // Second FilterExec: event = 'Ingestion' with projection=[size@1]
+    let event_col = col("event", &filter1.schema()).unwrap();
+    let event_filter = Arc::new(BinaryExpr::new(
+        event_col,
+        Operator::Eq,
+        Arc::new(Literal::new(ScalarValue::Utf8(Some(
+            "Ingestion".to_string(),
+        )))),
+    ));
+    let filter2 = Arc::new(
+        FilterExecBuilder::new(event_filter, filter1)
+            .apply_projection(Some(vec![1]))
+            .unwrap()
+            .build()
+            .unwrap(),
+    );
+
+    // Apply filter pushdown optimization
+    let config = ConfigOptions::default();
+    let optimized_plan = FilterPushdown::new()
+        .optimize(Arc::clone(&filter2) as Arc<dyn ExecutionPlan>, &config)
+        .unwrap();
+
+    // Execute the optimized plan - this should not error
+    let ctx = SessionContext::new();
+    let result = collect(optimized_plan, ctx.task_ctx()).await.unwrap();
+
+    // Verify results: should return rows where time < 350 AND event = 'Ingestion'
+    // That's rows with time=100,200 (both have event='Ingestion'), so sizes 10,20
+    let expected = [
+        "+------+", "| size |", "+------+", "| 10   |", "| 20   |", "+------+",
+    ];
+    assert_batches_eq!(expected, &result);
+}
+
+/// Test that FilterExec preserves projection when some filters cannot be pushed down
+#[tokio::test]
+async fn test_filter_with_projection_preserved() {
+    use arrow::array::{Int64Array, RecordBatch};
+    use datafusion_physical_plan::collect;
+    use datafusion_physical_plan::filter::FilterExecBuilder;
+
+    // Create schema: [a, b, c]
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int64, false),
+        Field::new("b", DataType::Int64, false),
+        Field::new("c", DataType::Int64, false),
+    ]));
+
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int64Array::from(vec![1i64, 2, 3, 4, 5])),
+            Arc::new(Int64Array::from(vec![10i64, 20, 30, 40, 50])),
+            Arc::new(Int64Array::from(vec![100i64, 200, 300, 400, 500])),
+        ],
+    )
+    .unwrap();
+
+    let memory_exec = datafusion_datasource::memory::MemorySourceConfig::try_new_exec(
+        &[vec![batch]],
+        schema.clone(),
+        None,
+    )
+    .unwrap();
+
+    // FilterExec: a > 2 with projection=[b@1, c@2]
+    // Output should be [b, c] for rows where a > 2
+    let a_col = col("a", &memory_exec.schema()).unwrap();
+    let filter = Arc::new(BinaryExpr::new(
+        a_col,
+        Operator::Gt,
+        Arc::new(Literal::new(ScalarValue::Int64(Some(2)))),
+    ));
+
+    let filter_exec = Arc::new(
+        FilterExecBuilder::new(filter, memory_exec)
+            .apply_projection(Some(vec![1, 2]))
+            .unwrap()
+            .build()
+            .unwrap(),
+    );
+
+    // Apply filter pushdown - filter cannot be pushed to MemoryExec
+    let config = ConfigOptions::default();
+    let optimized_plan = FilterPushdown::new()
+        .optimize(Arc::clone(&filter_exec) as Arc<dyn ExecutionPlan>, &config)
+        .unwrap();
+
+    // Execute and verify
+    let ctx = SessionContext::new();
+    let result = collect(optimized_plan, ctx.task_ctx()).await.unwrap();
+
+    // Should return [b, c] columns for rows where a > 2
+    let expected = [
+        "+----+-----+",
+        "| b  | c   |",
+        "+----+-----+",
+        "| 30 | 300 |",
+        "| 40 | 400 |",
+        "| 50 | 500 |",
+        "+----+-----+",
+    ];
+    assert_batches_eq!(expected, &result);
+}
