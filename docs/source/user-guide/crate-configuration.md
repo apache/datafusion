@@ -156,7 +156,7 @@ By default, Datafusion returns errors as a plain text message. You can enable mo
 such as backtraces by enabling the `backtrace` feature to your `Cargo.toml` file like this:
 
 ```toml
-datafusion = { version = "31.0.0", features = ["backtrace"]}
+datafusion = { version = "52.0.0", features = ["backtrace"]}
 ```
 
 Set environment [variables](https://doc.rust-lang.org/std/backtrace/index.html#environment-variables)

@@ -25,7 +25,6 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr_common::columnar_value::ColumnarValue;
-use datafusion_physical_expr_common::physical_expr::is_volatile;
 
 use crate::PhysicalExpr;
 use crate::expressions::{Column, Literal};
@@ -43,7 +42,7 @@ use crate::expressions::{Column, Literal};
 pub fn simplify_const_expr(
     expr: &Arc<dyn PhysicalExpr>,
 ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
-    if is_volatile(expr) || has_column_references(expr) {
+    if !can_evaluate_as_constant(expr) {
         return Ok(Transformed::no(Arc::clone(expr)));
     }
 
@@ -71,6 +70,22 @@ pub fn simplify_const_expr(
             Ok(Transformed::no(Arc::clone(expr)))
         }
     }
+}
+
+fn can_evaluate_as_constant(expr: &Arc<dyn PhysicalExpr>) -> bool {
+    let mut can_evaluate = true;
+
+    expr.apply(|e| {
+        if e.as_any().is::<Column>() || e.is_volatile_node() {
+            can_evaluate = false;
+            Ok(TreeNodeRecursion::Stop)
+        } else {
+            Ok(TreeNodeRecursion::Continue)
+        }
+    })
+    .expect("apply should not fail");
+
+    can_evaluate
 }
 
 /// Create a 1-row dummy RecordBatch for evaluating constant expressions.

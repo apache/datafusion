@@ -141,11 +141,11 @@ where
 ///         &self,
 ///         logical_file_schema: SchemaRef,
 ///         physical_file_schema: SchemaRef,
-///     ) -> Arc<dyn PhysicalExprAdapter> {
-///         Arc::new(CustomPhysicalExprAdapter {
+///     ) -> Result<Arc<dyn PhysicalExprAdapter>> {
+///         Ok(Arc::new(CustomPhysicalExprAdapter {
 ///             logical_file_schema,
 ///             physical_file_schema,
-///         })
+///         }))
 ///     }
 /// }
 /// ```
@@ -178,7 +178,7 @@ pub trait PhysicalExprAdapterFactory: Send + Sync + std::fmt::Debug {
         &self,
         logical_file_schema: SchemaRef,
         physical_file_schema: SchemaRef,
-    ) -> Arc<dyn PhysicalExprAdapter>;
+    ) -> Result<Arc<dyn PhysicalExprAdapter>>;
 }
 
 #[derive(Debug, Clone)]
@@ -189,11 +189,11 @@ impl PhysicalExprAdapterFactory for DefaultPhysicalExprAdapterFactory {
         &self,
         logical_file_schema: SchemaRef,
         physical_file_schema: SchemaRef,
-    ) -> Arc<dyn PhysicalExprAdapter> {
-        Arc::new(DefaultPhysicalExprAdapter {
+    ) -> Result<Arc<dyn PhysicalExprAdapter>> {
+        Ok(Arc::new(DefaultPhysicalExprAdapter {
             logical_file_schema,
             physical_file_schema,
-        })
+        }))
     }
 }
 
@@ -232,7 +232,8 @@ impl PhysicalExprAdapterFactory for DefaultPhysicalExprAdapterFactory {
 /// #     logical_file_schema: &Schema,
 /// # ) -> datafusion_common::Result<()> {
 /// let factory = DefaultPhysicalExprAdapterFactory;
-/// let adapter = factory.create(Arc::new(logical_file_schema.clone()), Arc::new(physical_file_schema.clone()));
+/// let adapter =
+///     factory.create(Arc::new(logical_file_schema.clone()), Arc::new(physical_file_schema.clone()))?;
 /// let adapted_predicate = adapter.rewrite(predicate)?;
 /// # Ok(())
 /// # }
@@ -571,7 +572,7 @@ impl BatchAdapterFactory {
     pub fn make_adapter(&self, source_schema: SchemaRef) -> Result<BatchAdapter> {
         let expr_adapter = self
             .expr_adapter_factory
-            .create(Arc::clone(&self.target_schema), Arc::clone(&source_schema));
+            .create(Arc::clone(&self.target_schema), Arc::clone(&source_schema))?;
 
         let simplifier = PhysicalExprSimplifier::new(&self.target_schema);
 
@@ -647,7 +648,9 @@ mod tests {
         let (physical_schema, logical_schema) = create_test_schema();
 
         let factory = DefaultPhysicalExprAdapterFactory;
-        let adapter = factory.create(Arc::new(logical_schema), Arc::new(physical_schema));
+        let adapter = factory
+            .create(Arc::new(logical_schema), Arc::new(physical_schema))
+            .unwrap();
         let column_expr = Arc::new(Column::new("a", 0));
 
         let result = adapter.rewrite(column_expr).unwrap();
@@ -660,7 +663,9 @@ mod tests {
     fn test_rewrite_multi_column_expr_with_type_cast() {
         let (physical_schema, logical_schema) = create_test_schema();
         let factory = DefaultPhysicalExprAdapterFactory;
-        let adapter = factory.create(Arc::new(logical_schema), Arc::new(physical_schema));
+        let adapter = factory
+            .create(Arc::new(logical_schema), Arc::new(physical_schema))
+            .unwrap();
 
         // Create a complex expression: (a + 5) OR (c > 0.0) that tests the recursive case of the rewriter
         let column_a = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
@@ -725,7 +730,9 @@ mod tests {
         )]);
 
         let factory = DefaultPhysicalExprAdapterFactory;
-        let adapter = factory.create(Arc::new(logical_schema), Arc::new(physical_schema));
+        let adapter = factory
+            .create(Arc::new(logical_schema), Arc::new(physical_schema))
+            .unwrap();
         let column_expr = Arc::new(Column::new("data", 0));
 
         let error_msg = adapter.rewrite(column_expr).unwrap_err().to_string();
@@ -763,7 +770,9 @@ mod tests {
         )]);
 
         let factory = DefaultPhysicalExprAdapterFactory;
-        let adapter = factory.create(Arc::new(logical_schema), Arc::new(physical_schema));
+        let adapter = factory
+            .create(Arc::new(logical_schema), Arc::new(physical_schema))
+            .unwrap();
         let column_expr = Arc::new(Column::new("data", 0));
 
         let result = adapter.rewrite(column_expr).unwrap();
@@ -803,7 +812,9 @@ mod tests {
         let (physical_schema, logical_schema) = create_test_schema();
 
         let factory = DefaultPhysicalExprAdapterFactory;
-        let adapter = factory.create(Arc::new(logical_schema), Arc::new(physical_schema));
+        let adapter = factory
+            .create(Arc::new(logical_schema), Arc::new(physical_schema))
+            .unwrap();
         let column_expr = Arc::new(Column::new("c", 2));
 
         let result = adapter.rewrite(column_expr)?;
@@ -827,7 +838,9 @@ mod tests {
         ]);
 
         let factory = DefaultPhysicalExprAdapterFactory;
-        let adapter = factory.create(Arc::new(logical_schema), Arc::new(physical_schema));
+        let adapter = factory
+            .create(Arc::new(logical_schema), Arc::new(physical_schema))
+            .unwrap();
         let column_expr = Arc::new(Column::new("b", 1));
 
         let error_msg = adapter.rewrite(column_expr).unwrap_err().to_string();
@@ -843,7 +856,9 @@ mod tests {
         ]);
 
         let factory = DefaultPhysicalExprAdapterFactory;
-        let adapter = factory.create(Arc::new(logical_schema), Arc::new(physical_schema));
+        let adapter = factory
+            .create(Arc::new(logical_schema), Arc::new(physical_schema))
+            .unwrap();
         let column_expr = Arc::new(Column::new("b", 1));
 
         let result = adapter.rewrite(column_expr).unwrap();
@@ -909,7 +924,9 @@ mod tests {
         let (physical_schema, logical_schema) = create_test_schema();
 
         let factory = DefaultPhysicalExprAdapterFactory;
-        let adapter = factory.create(Arc::new(logical_schema), Arc::new(physical_schema));
+        let adapter = factory
+            .create(Arc::new(logical_schema), Arc::new(physical_schema))
+            .unwrap();
         let column_expr = Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>;
 
         let result = adapter.rewrite(Arc::clone(&column_expr))?;
@@ -933,7 +950,9 @@ mod tests {
         ]);
 
         let factory = DefaultPhysicalExprAdapterFactory;
-        let adapter = factory.create(Arc::new(logical_schema), Arc::new(physical_schema));
+        let adapter = factory
+            .create(Arc::new(logical_schema), Arc::new(physical_schema))
+            .unwrap();
         let column_expr = Arc::new(Column::new("b", 1));
 
         let result = adapter.rewrite(column_expr);
@@ -991,8 +1010,9 @@ mod tests {
         ];
 
         let factory = DefaultPhysicalExprAdapterFactory;
-        let adapter =
-            factory.create(Arc::clone(&logical_schema), Arc::clone(&physical_schema));
+        let adapter = factory
+            .create(Arc::clone(&logical_schema), Arc::clone(&physical_schema))
+            .unwrap();
 
         let adapted_projection = projection
             .into_iter()
@@ -1093,8 +1113,9 @@ mod tests {
         let projection = vec![col("data", &logical_schema).unwrap()];
 
         let factory = DefaultPhysicalExprAdapterFactory;
-        let adapter =
-            factory.create(Arc::clone(&logical_schema), Arc::clone(&physical_schema));
+        let adapter = factory
+            .create(Arc::clone(&logical_schema), Arc::clone(&physical_schema))
+            .unwrap();
 
         let adapted_projection = projection
             .into_iter()

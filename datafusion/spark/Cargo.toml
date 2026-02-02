@@ -60,6 +60,7 @@ log = { workspace = true }
 percent-encoding = "2.3.2"
 rand = { workspace = true }
 sha1 = "0.10"
+sha2 = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
