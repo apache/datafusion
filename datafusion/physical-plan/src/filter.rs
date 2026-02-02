@@ -602,13 +602,28 @@ impl ExecutionPlan for FilterExec {
             }));
         }
 
+        // Split the predicate into conjunctions
+        let self_filter_exprs: Vec<_> = split_conjunction(&self.predicate)
+            .into_iter()
+            .cloned()
+            .collect();
+
+        // If this FilterExec has a projection, the predicate uses column indices
+        // from the projected schema. We need to remap them to the input schema
+        // before pushing down to the child.
+        let self_filters = if self.projection.is_some() {
+            use datafusion_physical_expr::utils::reassign_expr_columns;
+            let input_schema = self.input().schema();
+            self_filter_exprs
+                .into_iter()
+                .map(|expr| reassign_expr_columns(expr, &input_schema))
+                .collect::<Result<Vec<_>>>()?
+        } else {
+            self_filter_exprs
+        };
+
         let child = ChildFilterDescription::from_child(&parent_filters, self.input())?
-            .with_self_filters(
-                split_conjunction(&self.predicate)
-                    .into_iter()
-                    .cloned()
-                    .collect(),
-            );
+            .with_self_filters(self_filters);
 
         Ok(FilterDescription::new().with_child(child))
     }
@@ -623,10 +638,27 @@ impl ExecutionPlan for FilterExec {
             return Ok(FilterPushdownPropagation::if_all(child_pushdown_result));
         }
         // We absorb any parent filters that were not handled by our children
-        let unsupported_parent_filters =
-            child_pushdown_result.parent_filters.iter().filter_map(|f| {
-                matches!(f.all(), PushedDown::No).then_some(Arc::clone(&f.filter))
-            });
+        let mut unsupported_parent_filters: Vec<Arc<dyn PhysicalExpr>> =
+            child_pushdown_result
+                .parent_filters
+                .iter()
+                .filter_map(|f| {
+                    matches!(f.all(), PushedDown::No).then_some(Arc::clone(&f.filter))
+                })
+                .collect();
+
+        // If this FilterExec has a projection, the unsupported parent filters
+        // are in the output schema (after projection) coordinates. We need to
+        // remap them to the input schema coordinates before combining with self filters.
+        if self.projection.is_some() {
+            use datafusion_physical_expr::utils::reassign_expr_columns;
+            let input_schema = self.input().schema();
+            unsupported_parent_filters = unsupported_parent_filters
+                .into_iter()
+                .map(|expr| reassign_expr_columns(expr, &input_schema))
+                .collect::<Result<Vec<_>>>()?;
+        }
+
         let unsupported_self_filters = child_pushdown_result
             .self_filters
             .first()
@@ -674,7 +706,7 @@ impl ExecutionPlan for FilterExec {
             // The new predicate is the same as our current predicate
             None
         } else {
-            // Create a new FilterExec with the new predicate
+            // Create a new FilterExec with the new predicate, preserving the projection
             let new = FilterExec {
                 predicate: Arc::clone(&new_predicate),
                 input: Arc::clone(&filter_input),
@@ -686,7 +718,7 @@ impl ExecutionPlan for FilterExec {
                     self.default_selectivity,
                     self.projection.as_ref(),
                 )?,
-                projection: None,
+                projection: self.projection.clone(),
                 batch_size: self.batch_size,
                 fetch: self.fetch,
             };
