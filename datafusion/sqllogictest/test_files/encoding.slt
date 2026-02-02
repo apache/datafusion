@@ -21,9 +21,19 @@ SELECT encode(arrow_cast('tom', 'Utf8View'),'base64');
 dG9t
 
 query T
+SELECT encode(arrow_cast('tommy', 'Utf8View'),'base64pad');
+----
+dG9tbXk=
+
+query T
 SELECT arrow_cast(decode(arrow_cast('dG9t', 'Utf8View'),'base64'), 'Utf8');
 ----
 tom
+
+query T
+SELECT arrow_cast(decode(arrow_cast('dG9tbXk=', 'Utf8View'),'base64pad'), 'Utf8');
+----
+tommy
 
 query T
 SELECT encode(arrow_cast('tom', 'BinaryView'),'base64');
@@ -31,9 +41,19 @@ SELECT encode(arrow_cast('tom', 'BinaryView'),'base64');
 dG9t
 
 query T
+SELECT encode(arrow_cast('tommy', 'BinaryView'),'base64pad');
+----
+dG9tbXk=
+
+query T
 SELECT arrow_cast(decode(arrow_cast('dG9t', 'BinaryView'),'base64'), 'Utf8');
 ----
 tom
+
+query T
+SELECT arrow_cast(decode(arrow_cast('dG9tbXk=', 'BinaryView'),'base64pad'), 'Utf8');
+----
+tommy
 
 # test for hex digest
 query T
@@ -61,10 +81,10 @@ select encode(12, 'hex');
 query error DataFusion error: Error during planning: Function 'decode' requires TypeSignatureClass::Binary, but received Int64 \(DataType: Int64\)
 select decode(12, 'hex');
 
-query error DataFusion error: Error during planning: There is no built\-in encoding named 'non_encoding', currently supported encodings are: base64, hex
+query error DataFusion error: Error during planning: There is no built\-in encoding named 'non_encoding', currently supported encodings are: base64, base64pad, hex
 select encode('', 'non_encoding');
 
-query error DataFusion error: Error during planning: There is no built\-in encoding named 'non_encoding', currently supported encodings are: base64, hex
+query error DataFusion error: Error during planning: There is no built\-in encoding named 'non_encoding', currently supported encodings are: base64, base64pad, hex
 select decode('', 'non_encoding');
 
 query error DataFusion error: Execution error: Encoding must be a non-null string
@@ -124,8 +144,18 @@ select encode(bin_field, 'base64') FROM test WHERE num = 3;
 ----
 j1DT9g6uNw3b+FyGIZxVEIo1AWU
 
+query T
+select encode(bin_field, 'base64pad') FROM test WHERE num = 3;
+----
+j1DT9g6uNw3b+FyGIZxVEIo1AWU=
+
 query B
 select decode(encode(bin_field, 'base64'), 'base64') = X'8f50d3f60eae370ddbf85c86219c55108a350165' FROM test WHERE num = 3;
+----
+true
+
+query B
+select decode(encode(bin_field, 'base64pad'), 'base64pad') = X'8f50d3f60eae370ddbf85c86219c55108a350165' FROM test WHERE num = 3;
 ----
 true
 
@@ -144,18 +174,20 @@ FROM VALUES
     ('Raphael', 'R'),
     (NULL, 'R');
 
-query TTTT
+query TTTTTT
 SELECT
   encode(column1_utf8view, 'base64') AS column1_base64,
+  encode(column1_utf8view, 'base64pad') AS column1_base64pad,
   encode(column1_utf8view, 'hex') AS column1_hex,
   encode(column2_utf8view, 'base64') AS column2_base64,
+  encode(column2_utf8view, 'base64pad') AS column2_base64pad,
   encode(column2_utf8view, 'hex') AS column2_hex
 FROM test_utf8view;
 ----
-QW5kcmV3 416e64726577 WA 58
-WGlhbmdwZW5n 5869616e6770656e67 WGlhbmdwZW5n 5869616e6770656e67
-UmFwaGFlbA 5261706861656c Ug 52
-NULL NULL Ug 52
+QW5kcmV3 QW5kcmV3 416e64726577 WA WA== 58
+WGlhbmdwZW5n WGlhbmdwZW5n 5869616e6770656e67 WGlhbmdwZW5n WGlhbmdwZW5n 5869616e6770656e67
+UmFwaGFlbA UmFwaGFlbA== 5261706861656c Ug Ug== 52
+NULL NULL NULL Ug Ug== 52
 
 query TTTTTT
 SELECT
@@ -172,6 +204,22 @@ WGlhbmdwZW5n WGlhbmdwZW5n WGlhbmdwZW5n WGlhbmdwZW5n WGlhbmdwZW5n WGlhbmdwZW5n
 UmFwaGFlbA UmFwaGFlbA UmFwaGFlbA UmFwaGFlbA UmFwaGFlbA UmFwaGFlbA
 NULL NULL NULL NULL NULL NULL
 
+
+query TTTTTT
+SELECT
+  encode(arrow_cast(column1_utf8view, 'Utf8'), 'base64pad'),
+  encode(arrow_cast(column1_utf8view, 'LargeUtf8'), 'base64pad'),
+  encode(arrow_cast(column1_utf8view, 'Utf8View'), 'base64pad'),
+  encode(arrow_cast(column1_utf8view, 'Binary'), 'base64pad'),
+  encode(arrow_cast(column1_utf8view, 'LargeBinary'), 'base64pad'),
+  encode(arrow_cast(column1_utf8view, 'BinaryView'), 'base64pad')
+FROM test_utf8view;
+----
+QW5kcmV3 QW5kcmV3 QW5kcmV3 QW5kcmV3 QW5kcmV3 QW5kcmV3
+WGlhbmdwZW5n WGlhbmdwZW5n WGlhbmdwZW5n WGlhbmdwZW5n WGlhbmdwZW5n WGlhbmdwZW5n
+UmFwaGFlbA== UmFwaGFlbA== UmFwaGFlbA== UmFwaGFlbA== UmFwaGFlbA== UmFwaGFlbA==
+NULL NULL NULL NULL NULL NULL
+
 statement ok
 drop table test_utf8view
 
@@ -180,26 +228,31 @@ statement ok
 CREATE TABLE test_fsb AS
 SELECT arrow_cast(X'0123456789ABCDEF', 'FixedSizeBinary(8)') as fsb_col;
 
-query ??
+query ???
 SELECT
   decode(encode(arrow_cast(X'0123456789abcdef', 'FixedSizeBinary(8)'), 'base64'), 'base64'),
+  decode(encode(arrow_cast(X'0123456789abcdef', 'FixedSizeBinary(8)'), 'base64pad'), 'base64pad'),
   decode(encode(arrow_cast(X'0123456789abcdef', 'FixedSizeBinary(8)'), 'hex'), 'hex');
 ----
-0123456789abcdef 0123456789abcdef
+0123456789abcdef 0123456789abcdef 0123456789abcdef
 
-query ??
+query ???
 SELECT
   decode(encode(column1, 'base64'), 'base64'),
+  decode(encode(column1, 'base64pad'), 'base64pad'),
   decode(encode(column1, 'hex'), 'hex')
 FROM values
   (arrow_cast(X'0123456789abcdef', 'FixedSizeBinary(8)')),
   (arrow_cast(X'ffffffffffffffff', 'FixedSizeBinary(8)'));
 ----
-0123456789abcdef 0123456789abcdef
-ffffffffffffffff ffffffffffffffff
+0123456789abcdef 0123456789abcdef 0123456789abcdef
+ffffffffffffffff ffffffffffffffff ffffffffffffffff
 
 query error DataFusion error: Execution error: Failed to decode value using base64
 select decode('invalid', 'base64');
+
+query error DataFusion error: Execution error: Failed to decode value using base64pad
+select decode('invalid', 'base64pad');
 
 query error DataFusion error: Execution error: Failed to decode value using hex
 select decode('invalid', 'hex');

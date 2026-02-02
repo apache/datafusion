@@ -29,7 +29,7 @@ Find latest available Datafusion version on [DataFusion's
 crates.io] page. Add the dependency to your `Cargo.toml` file:
 
 ```toml
-datafusion = "latest_version"
+datafusion = "52.0.0"
 tokio = { version = "1.0", features = ["rt-multi-thread"] }
 ```
 
@@ -103,8 +103,8 @@ exported by DataFusion, for example:
 use datafusion::arrow::datatypes::Schema;
 ```
 
-For example, [DataFusion `25.0.0` dependencies] require `arrow`
-`39.0.0`. If instead you used `arrow` `40.0.0` in your project you may
+For example, [DataFusion `26.0.0` dependencies] require `arrow`
+`40.0.0`. If instead you used `arrow` `41.0.0` in your project you may
 see errors such as:
 
 ```text

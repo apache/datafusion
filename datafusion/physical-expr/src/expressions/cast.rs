@@ -146,7 +146,7 @@ impl CastExpr {
 
 impl fmt::Display for CastExpr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "CAST({} AS {:?})", self.expr, self.cast_type)
+        write!(f, "CAST({} AS {})", self.expr, self.cast_type)
     }
 }
 
@@ -312,10 +312,7 @@ mod tests {
                 cast_with_options(col("a", &schema)?, &schema, $TYPE, $CAST_OPTIONS)?;
 
             // verify that its display is correct
-            assert_eq!(
-                format!("CAST(a@0 AS {:?})", $TYPE),
-                format!("{}", expression)
-            );
+            assert_eq!(format!("CAST(a@0 AS {})", $TYPE), format!("{}", expression));
 
             // verify that the expression's type is correct
             assert_eq!(expression.data_type(&schema)?, $TYPE);
@@ -364,10 +361,7 @@ mod tests {
                 cast_with_options(col("a", &schema)?, &schema, $TYPE, $CAST_OPTIONS)?;
 
             // verify that its display is correct
-            assert_eq!(
-                format!("CAST(a@0 AS {:?})", $TYPE),
-                format!("{}", expression)
-            );
+            assert_eq!(format!("CAST(a@0 AS {})", $TYPE), format!("{}", expression));
 
             // verify that the expression's type is correct
             assert_eq!(expression.data_type(&schema)?, $TYPE);

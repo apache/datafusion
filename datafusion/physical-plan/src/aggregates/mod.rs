@@ -89,10 +89,54 @@ pub fn topk_types_supported(key_type: &DataType, value_type: &DataType) -> bool 
 const AGGREGATION_HASH_SEED: ahash::RandomState =
     ahash::RandomState::with_seeds('A' as u64, 'G' as u64, 'G' as u64, 'R' as u64);
 
+/// Whether an aggregate stage consumes raw input data or intermediate
+/// accumulator state from a previous aggregation stage.
+///
+/// See the [table on `AggregateMode`](AggregateMode#variants-and-their-inputoutput-modes)
+/// for how this relates to aggregate modes.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum AggregateInputMode {
+    /// The stage consumes raw, unaggregated input data and calls
+    /// [`Accumulator::update_batch`].
+    Raw,
+    /// The stage consumes intermediate accumulator state from a previous
+    /// aggregation stage and calls [`Accumulator::merge_batch`].
+    Partial,
+}
+
+/// Whether an aggregate stage produces intermediate accumulator state
+/// or final output values.
+///
+/// See the [table on `AggregateMode`](AggregateMode#variants-and-their-inputoutput-modes)
+/// for how this relates to aggregate modes.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum AggregateOutputMode {
+    /// The stage produces intermediate accumulator state, serialized via
+    /// [`Accumulator::state`].
+    Partial,
+    /// The stage produces final output values via
+    /// [`Accumulator::evaluate`].
+    Final,
+}
+
 /// Aggregation modes
 ///
 /// See [`Accumulator::state`] for background information on multi-phase
 /// aggregation and how these modes are used.
+///
+/// # Variants and their input/output modes
+///
+/// Each variant can be characterized by its [`AggregateInputMode`] and
+/// [`AggregateOutputMode`]:
+///
+/// ```text
+///                       | Input: Raw data           | Input: Partial state
+/// Output: Final values  | Single, SinglePartitioned | Final, FinalPartitioned
+/// Output: Partial state | Partial                   | PartialReduce
+/// ```
+///
+/// Use [`AggregateMode::input_mode`] and [`AggregateMode::output_mode`]
+/// to query these properties.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum AggregateMode {
     /// One of multiple layers of aggregation, any input partitioning
@@ -144,18 +188,56 @@ pub enum AggregateMode {
     /// This mode requires that the input has more than one partition, and is
     /// partitioned by group key (like FinalPartitioned).
     SinglePartitioned,
+    /// Combine multiple partial aggregations to produce a new partial
+    /// aggregation.
+    ///
+    /// Input is intermediate accumulator state (like Final), but output is
+    /// also intermediate accumulator state (like Partial). This enables
+    /// tree-reduce aggregation strategies where partial results from
+    /// multiple workers are combined in multiple stages before a final
+    /// evaluation.
+    ///
+    /// ```text
+    ///               Final
+    ///            /        \
+    ///     PartialReduce   PartialReduce
+    ///     /         \      /         \
+    ///  Partial   Partial  Partial   Partial
+    /// ```
+    PartialReduce,
 }
 
 impl AggregateMode {
-    /// Checks whether this aggregation step describes a "first stage" calculation.
-    /// In other words, its input is not another aggregation result and the
-    /// `merge_batch` method will not be called for these modes.
-    pub fn is_first_stage(&self) -> bool {
+    /// Returns the [`AggregateInputMode`] for this mode: whether this
+    /// stage consumes raw input data or intermediate accumulator state.
+    ///
+    /// See the [table above](AggregateMode#variants-and-their-inputoutput-modes)
+    /// for details.
+    pub fn input_mode(&self) -> AggregateInputMode {
         match self {
             AggregateMode::Partial
             | AggregateMode::Single
-            | AggregateMode::SinglePartitioned => true,
-            AggregateMode::Final | AggregateMode::FinalPartitioned => false,
+            | AggregateMode::SinglePartitioned => AggregateInputMode::Raw,
+            AggregateMode::Final
+            | AggregateMode::FinalPartitioned
+            | AggregateMode::PartialReduce => AggregateInputMode::Partial,
+        }
+    }
+
+    /// Returns the [`AggregateOutputMode`] for this mode: whether this
+    /// stage produces intermediate accumulator state or final output values.
+    ///
+    /// See the [table above](AggregateMode#variants-and-their-inputoutput-modes)
+    /// for details.
+    pub fn output_mode(&self) -> AggregateOutputMode {
+        match self {
+            AggregateMode::Final
+            | AggregateMode::FinalPartitioned
+            | AggregateMode::Single
+            | AggregateMode::SinglePartitioned => AggregateOutputMode::Final,
+            AggregateMode::Partial | AggregateMode::PartialReduce => {
+                AggregateOutputMode::Partial
+            }
         }
     }
 }
@@ -917,14 +999,15 @@ impl AggregateExec {
 
         // Get output partitioning:
         let input_partitioning = input.output_partitioning().clone();
-        let output_partitioning = if mode.is_first_stage() {
-            // First stage aggregation will not change the output partitioning,
-            // but needs to respect aliases (e.g. mapping in the GROUP BY
-            // expression).
-            let input_eq_properties = input.equivalence_properties();
-            input_partitioning.project(group_expr_mapping, input_eq_properties)
-        } else {
-            input_partitioning.clone()
+        let output_partitioning = match mode.input_mode() {
+            AggregateInputMode::Raw => {
+                // First stage aggregation will not change the output partitioning,
+                // but needs to respect aliases (e.g. mapping in the GROUP BY
+                // expression).
+                let input_eq_properties = input.equivalence_properties();
+                input_partitioning.project(group_expr_mapping, input_eq_properties)
+            }
+            AggregateInputMode::Partial => input_partitioning.clone(),
         };
 
         // TODO: Emission type and boundedness information can be enhanced here
@@ -1248,7 +1331,7 @@ impl ExecutionPlan for AggregateExec {
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
         match &self.mode {
-            AggregateMode::Partial => {
+            AggregateMode::Partial | AggregateMode::PartialReduce => {
                 vec![Distribution::UnspecifiedDistribution]
             }
             AggregateMode::FinalPartitioned | AggregateMode::SinglePartitioned => {
@@ -1477,20 +1560,17 @@ fn create_schema(
     let mut fields = Vec::with_capacity(group_by.num_output_exprs() + aggr_expr.len());
     fields.extend(group_by.output_fields(input_schema)?);
 
-    match mode {
-        AggregateMode::Partial => {
-            // in partial mode, the fields of the accumulator's state
-            for expr in aggr_expr {
-                fields.extend(expr.state_fields()?.iter().cloned());
-            }
-        }
-        AggregateMode::Final
-        | AggregateMode::FinalPartitioned
-        | AggregateMode::Single
-        | AggregateMode::SinglePartitioned => {
+    match mode.output_mode() {
+        AggregateOutputMode::Final => {
             // in final mode, the field with the final result of the accumulator
             for expr in aggr_expr {
                 fields.push(expr.field())
+            }
+        }
+        AggregateOutputMode::Partial => {
+            // in partial mode, the fields of the accumulator's state
+            for expr in aggr_expr {
+                fields.extend(expr.state_fields()?.iter().cloned());
             }
         }
     }
@@ -1530,7 +1610,7 @@ fn get_aggregate_expr_req(
     // If the aggregation is performing a "second stage" calculation,
     // then ignore the ordering requirement. Ordering requirement applies
     // only to the aggregation input data.
-    if !agg_mode.is_first_stage() {
+    if agg_mode.input_mode() == AggregateInputMode::Partial {
         return None;
     }
 
@@ -1696,10 +1776,8 @@ pub fn aggregate_expressions(
     mode: &AggregateMode,
     col_idx_base: usize,
 ) -> Result<Vec<Vec<Arc<dyn PhysicalExpr>>>> {
-    match mode {
-        AggregateMode::Partial
-        | AggregateMode::Single
-        | AggregateMode::SinglePartitioned => Ok(aggr_expr
+    match mode.input_mode() {
+        AggregateInputMode::Raw => Ok(aggr_expr
             .iter()
             .map(|agg| {
                 let mut result = agg.expressions();
@@ -1710,8 +1788,8 @@ pub fn aggregate_expressions(
                 result
             })
             .collect()),
-        // In this mode, we build the merge expressions of the aggregation.
-        AggregateMode::Final | AggregateMode::FinalPartitioned => {
+        AggregateInputMode::Partial => {
+            // In merge mode, we build the merge expressions of the aggregation.
             let mut col_idx_base = col_idx_base;
             aggr_expr
                 .iter()
@@ -1759,8 +1837,15 @@ pub fn finalize_aggregation(
     accumulators: &mut [AccumulatorItem],
     mode: &AggregateMode,
 ) -> Result<Vec<ArrayRef>> {
-    match mode {
-        AggregateMode::Partial => {
+    match mode.output_mode() {
+        AggregateOutputMode::Final => {
+            // Merge the state to the final value
+            accumulators
+                .iter_mut()
+                .map(|accumulator| accumulator.evaluate().and_then(|v| v.to_array()))
+                .collect()
+        }
+        AggregateOutputMode::Partial => {
             // Build the vector of states
             accumulators
                 .iter_mut()
@@ -1772,16 +1857,6 @@ pub fn finalize_aggregation(
                     })
                 })
                 .flatten_ok()
-                .collect()
-        }
-        AggregateMode::Final
-        | AggregateMode::FinalPartitioned
-        | AggregateMode::Single
-        | AggregateMode::SinglePartitioned => {
-            // Merge the state to the final value
-            accumulators
-                .iter_mut()
-                .map(|accumulator| accumulator.evaluate().and_then(|v| v.to_array()))
                 .collect()
         }
     }
@@ -3743,6 +3818,137 @@ mod tests {
             +---+---+--------+
         ");
         }
+        Ok(())
+    }
+
+    /// Tests that PartialReduce mode:
+    /// 1. Accepts state as input (like Final)
+    /// 2. Produces state as output (like Partial)
+    /// 3. Can be followed by a Final stage to get the correct result
+    ///
+    /// This simulates a tree-reduce pattern:
+    ///   Partial -> PartialReduce -> Final
+    #[tokio::test]
+    async fn test_partial_reduce_mode() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::UInt32, false),
+            Field::new("b", DataType::Float64, false),
+        ]));
+
+        // Produce two partitions of input data
+        let batch1 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(UInt32Array::from(vec![1, 2, 3])),
+                Arc::new(Float64Array::from(vec![10.0, 20.0, 30.0])),
+            ],
+        )?;
+        let batch2 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(UInt32Array::from(vec![1, 2, 3])),
+                Arc::new(Float64Array::from(vec![40.0, 50.0, 60.0])),
+            ],
+        )?;
+
+        let groups =
+            PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]);
+        let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![Arc::new(
+            AggregateExprBuilder::new(sum_udaf(), vec![col("b", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("SUM(b)")
+                .build()?,
+        )];
+
+        // Step 1: Partial aggregation on partition 1
+        let input1 =
+            TestMemoryExec::try_new_exec(&[vec![batch1]], Arc::clone(&schema), None)?;
+        let partial1 = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            groups.clone(),
+            aggregates.clone(),
+            vec![None],
+            input1,
+            Arc::clone(&schema),
+        )?);
+
+        // Step 2: Partial aggregation on partition 2
+        let input2 =
+            TestMemoryExec::try_new_exec(&[vec![batch2]], Arc::clone(&schema), None)?;
+        let partial2 = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            groups.clone(),
+            aggregates.clone(),
+            vec![None],
+            input2,
+            Arc::clone(&schema),
+        )?);
+
+        // Collect partial results
+        let task_ctx = Arc::new(TaskContext::default());
+        let partial_result1 =
+            crate::collect(Arc::clone(&partial1) as _, Arc::clone(&task_ctx)).await?;
+        let partial_result2 =
+            crate::collect(Arc::clone(&partial2) as _, Arc::clone(&task_ctx)).await?;
+
+        // The partial results have state schema (group cols + accumulator state)
+        let partial_schema = partial1.schema();
+
+        // Step 3: PartialReduce — combine partial results, still producing state
+        let combined_input = TestMemoryExec::try_new_exec(
+            &[partial_result1, partial_result2],
+            Arc::clone(&partial_schema),
+            None,
+        )?;
+        // Coalesce into a single partition for the PartialReduce
+        let coalesced = Arc::new(CoalescePartitionsExec::new(combined_input));
+
+        let partial_reduce = Arc::new(AggregateExec::try_new(
+            AggregateMode::PartialReduce,
+            groups.clone(),
+            aggregates.clone(),
+            vec![None],
+            coalesced,
+            Arc::clone(&partial_schema),
+        )?);
+
+        // Verify PartialReduce output schema matches Partial output schema
+        // (both produce state, not final values)
+        assert_eq!(partial_reduce.schema(), partial_schema);
+
+        // Collect PartialReduce results
+        let reduce_result =
+            crate::collect(Arc::clone(&partial_reduce) as _, Arc::clone(&task_ctx))
+                .await?;
+
+        // Step 4: Final aggregation on the PartialReduce output
+        let final_input = TestMemoryExec::try_new_exec(
+            &[reduce_result],
+            Arc::clone(&partial_schema),
+            None,
+        )?;
+        let final_agg = Arc::new(AggregateExec::try_new(
+            AggregateMode::Final,
+            groups.clone(),
+            aggregates.clone(),
+            vec![None],
+            final_input,
+            Arc::clone(&partial_schema),
+        )?);
+
+        let result = crate::collect(final_agg, Arc::clone(&task_ctx)).await?;
+
+        // Expected: group 1 -> 10+40=50, group 2 -> 20+50=70, group 3 -> 30+60=90
+        assert_snapshot!(batches_to_sort_string(&result), @r"
+            +---+--------+
+            | a | SUM(b) |
+            +---+--------+
+            | 1 | 50.0   |
+            | 2 | 70.0   |
+            | 3 | 90.0   |
+            +---+--------+
+        ");
+
         Ok(())
     }
 }
