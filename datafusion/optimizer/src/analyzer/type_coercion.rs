@@ -43,10 +43,10 @@ use datafusion_expr::expr_schema::cast_subquery;
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{comparison_coercion, like_coercion};
 use datafusion_expr::type_coercion::functions::{UDFCoercionExt, fields_with_udf};
+use datafusion_expr::type_coercion::is_datetime;
 use datafusion_expr::type_coercion::other::{
     get_coerce_type_for_case_expression, get_coerce_type_for_list,
 };
-use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_utf8view_or_large_utf8};
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     Cast, Expr, ExprSchemable, Join, Limit, LogicalPlan, Operator, Projection, Union,
@@ -513,10 +513,8 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 .data;
                 let expr_type = expr.get_type(self.schema)?;
                 let subquery_type = new_plan.schema().field(0).data_type();
-                if (expr_type.is_numeric()
-                    && is_utf8_or_utf8view_or_large_utf8(subquery_type))
-                    || (subquery_type.is_numeric()
-                        && is_utf8_or_utf8view_or_large_utf8(&expr_type))
+                if (expr_type.is_numeric() && subquery_type.is_string())
+                    || (subquery_type.is_numeric() && expr_type.is_string())
                 {
                     return plan_err!(
                         "expr type {expr_type} can't cast to {subquery_type} in SetComparison"
@@ -890,12 +888,15 @@ fn coerce_frame_bound(
 
 fn extract_window_frame_target_type(col_type: &DataType) -> Result<DataType> {
     if col_type.is_numeric()
-        || is_utf8_or_utf8view_or_large_utf8(col_type)
-        || matches!(col_type, DataType::List(_))
-        || matches!(col_type, DataType::LargeList(_))
-        || matches!(col_type, DataType::FixedSizeList(_, _))
-        || matches!(col_type, DataType::Null)
-        || matches!(col_type, DataType::Boolean)
+        || col_type.is_string()
+        || col_type.is_null()
+        || matches!(
+            col_type,
+            DataType::List(_)
+                | DataType::LargeList(_)
+                | DataType::FixedSizeList(_, _)
+                | DataType::Boolean
+        )
     {
         Ok(col_type.clone())
     } else if is_datetime(col_type) {
