@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use crate::datasource::file_format::file_type_to_format;
 use crate::datasource::listing::ListingTableUrl;
-use crate::datasource::physical_plan::FileSinkConfig;
+use crate::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
 use crate::datasource::{DefaultTableSource, source_as_provider};
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::{ExecutionProps, SessionState};
@@ -39,7 +39,7 @@ use crate::physical_expr::{create_physical_expr, create_physical_exprs};
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::analyze::AnalyzeExec;
 use crate::physical_plan::explain::ExplainExec;
-use crate::physical_plan::filter::FilterExec;
+use crate::physical_plan::filter::FilterExecBuilder;
 use crate::physical_plan::joins::utils as join_utils;
 use crate::physical_plan::joins::{
     CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
@@ -549,8 +549,30 @@ impl DefaultPhysicalPlanner {
                     }
                 };
 
+                // Parse single_file_output option if explicitly set
+                let file_output_mode = match source_option_tuples
+                    .get("single_file_output")
+                    .map(|v| v.trim())
+                {
+                    None => FileOutputMode::Automatic,
+                    Some("true") => FileOutputMode::SingleFile,
+                    Some("false") => FileOutputMode::Directory,
+                    Some(value) => {
+                        return Err(DataFusionError::Configuration(format!(
+                            "provided value for 'single_file_output' was not recognized: \"{value}\""
+                        )));
+                    }
+                };
+
+                // Filter out sink-related options that are not format options
+                let format_options: HashMap<String, String> = source_option_tuples
+                    .iter()
+                    .filter(|(k, _)| k.as_str() != "single_file_output")
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+
                 let sink_format = file_type_to_format(file_type)?
-                    .create(session_state, source_option_tuples)?;
+                    .create(session_state, &format_options)?;
 
                 // Determine extension based on format extension and compression
                 let file_extension = match sink_format.compression_type() {
@@ -571,6 +593,7 @@ impl DefaultPhysicalPlanner {
                     insert_op: InsertOp::Append,
                     keep_partition_by_columns,
                     file_extension,
+                    file_output_mode,
                 };
 
                 let ordering = input_exec.properties().output_ordering().cloned();
@@ -648,6 +671,30 @@ impl DefaultPhysicalPlanner {
                         .await
                         .map_err(|e| {
                             e.context(format!("UPDATE operation on table '{table_name}'"))
+                        })?
+                } else {
+                    return exec_err!(
+                        "Table source can't be downcasted to DefaultTableSource"
+                    );
+                }
+            }
+            LogicalPlan::Dml(DmlStatement {
+                table_name,
+                target,
+                op: WriteOp::Truncate,
+                ..
+            }) => {
+                if let Some(provider) =
+                    target.as_any().downcast_ref::<DefaultTableSource>()
+                {
+                    provider
+                        .table_provider
+                        .truncate(session_state)
+                        .await
+                        .map_err(|e| {
+                            e.context(format!(
+                                "TRUNCATE operation on table '{table_name}'"
+                            ))
                         })?
                 } else {
                     return exec_err!(
@@ -938,8 +985,12 @@ impl DefaultPhysicalPlanner {
                     input_schema.as_arrow(),
                 )? {
                     PlanAsyncExpr::Sync(PlannedExprResult::Expr(runtime_expr)) => {
-                        FilterExec::try_new(Arc::clone(&runtime_expr[0]), physical_input)?
-                            .with_batch_size(session_state.config().batch_size())?
+                        FilterExecBuilder::new(
+                            Arc::clone(&runtime_expr[0]),
+                            physical_input,
+                        )
+                        .with_batch_size(session_state.config().batch_size())
+                        .build()?
                     }
                     PlanAsyncExpr::Async(
                         async_map,
@@ -949,16 +1000,17 @@ impl DefaultPhysicalPlanner {
                             async_map.async_exprs,
                             physical_input,
                         )?;
-                        FilterExec::try_new(
+                        FilterExecBuilder::new(
                             Arc::clone(&runtime_expr[0]),
                             Arc::new(async_exec),
-                        )?
+                        )
                         // project the output columns excluding the async functions
                         // The async functions are always appended to the end of the schema.
-                        .with_projection(Some(
+                        .apply_projection(Some(
                             (0..input.schema().fields().len()).collect(),
                         ))?
-                        .with_batch_size(session_state.config().batch_size())?
+                        .with_batch_size(session_state.config().batch_size())
+                        .build()?
                     }
                     _ => {
                         return internal_err!(
@@ -1091,6 +1143,7 @@ impl DefaultPhysicalPlanner {
                 filter,
                 join_type,
                 null_equality,
+                null_aware,
                 schema: join_schema,
                 ..
             }) => {
@@ -1487,6 +1540,8 @@ impl DefaultPhysicalPlanner {
                 } else if session_state.config().target_partitions() > 1
                     && session_state.config().repartition_joins()
                     && prefer_hash_join
+                    && !*null_aware
+                // Null-aware joins must use CollectLeft
                 {
                     Arc::new(HashJoinExec::try_new(
                         physical_left,
@@ -1497,6 +1552,7 @@ impl DefaultPhysicalPlanner {
                         None,
                         PartitionMode::Auto,
                         *null_equality,
+                        *null_aware,
                     )?)
                 } else {
                     Arc::new(HashJoinExec::try_new(
@@ -1508,6 +1564,7 @@ impl DefaultPhysicalPlanner {
                         None,
                         PartitionMode::CollectLeft,
                         *null_equality,
+                        *null_aware,
                     )?)
                 };
 
@@ -2719,7 +2776,7 @@ impl<'a> OptimizationInvariantChecker<'a> {
             && !is_allowed_schema_change(previous_schema.as_ref(), plan.schema().as_ref())
         {
             internal_err!(
-                "PhysicalOptimizer rule '{}' failed. Schema mismatch. Expected original schema: {:?}, got new schema: {:?}",
+                "PhysicalOptimizer rule '{}' failed. Schema mismatch. Expected original schema: {}, got new schema: {}",
                 self.rule.name(),
                 previous_schema,
                 plan.schema()

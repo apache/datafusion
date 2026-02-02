@@ -18,7 +18,7 @@
 //! Expression simplification API
 
 use arrow::{
-    array::{AsArray, new_null_array},
+    array::{Array, AsArray, new_null_array},
     datatypes::{DataType, Field, Schema},
     record_batch::RecordBatch,
 };
@@ -38,8 +38,8 @@ use datafusion_common::{
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
 };
 use datafusion_expr::{
-    BinaryExpr, Case, ColumnarValue, Expr, Like, Operator, Volatility, and,
-    binary::BinaryTypeCoercer, lit, or,
+    BinaryExpr, Case, ColumnarValue, Expr, ExprSchemable, Like, Operator, Volatility,
+    and, binary::BinaryTypeCoercer, lit, or, preimage::PreimageResult,
 };
 use datafusion_expr::{Cast, TryCast, simplify::ExprSimplifyResult};
 use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterval};
@@ -51,13 +51,16 @@ use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionP
 
 use super::inlist_simplifier::ShortenInListSimplifier;
 use super::utils::*;
-use crate::analyzer::type_coercion::TypeCoercionRewriter;
 use crate::simplify_expressions::SimplifyContext;
 use crate::simplify_expressions::regex::simplify_regex_expr;
 use crate::simplify_expressions::unwrap_cast::{
     is_cast_expr_and_support_unwrap_cast_in_comparison_for_binary,
     is_cast_expr_and_support_unwrap_cast_in_comparison_for_inlist,
     unwrap_cast_in_comparison_for_binary,
+};
+use crate::{
+    analyzer::type_coercion::TypeCoercionRewriter,
+    simplify_expressions::udf_preimage::rewrite_with_preimage,
 };
 use datafusion_expr::expr_rewriter::rewrite_with_guarantees_map;
 use datafusion_expr_common::casts::try_cast_literal_to_type;
@@ -633,6 +636,7 @@ impl ConstEvaluator {
             | Expr::OuterReferenceColumn(_, _)
             | Expr::Exists { .. }
             | Expr::InSubquery(_)
+            | Expr::SetComparison(_)
             | Expr::ScalarSubquery(_)
             | Expr::WindowFunction { .. }
             | Expr::GroupingSet(_)
@@ -640,6 +644,30 @@ impl ConstEvaluator {
             | Expr::Placeholder(_) => false,
             Expr::ScalarFunction(ScalarFunction { func, .. }) => {
                 Self::volatility_ok(func.signature().volatility)
+            }
+            Expr::Cast(Cast { expr, data_type })
+            | Expr::TryCast(TryCast { expr, data_type }) => {
+                if let (
+                    Ok(DataType::Struct(source_fields)),
+                    DataType::Struct(target_fields),
+                ) = (expr.get_type(&DFSchema::empty()), data_type)
+                {
+                    // Don't const-fold struct casts with different field counts
+                    if source_fields.len() != target_fields.len() {
+                        return false;
+                    }
+
+                    // Don't const-fold struct casts with empty (0-row) literals
+                    // The simplifier uses a 1-row input batch, which causes dimension mismatches
+                    // when evaluating 0-row struct literals
+                    if let Expr::Literal(ScalarValue::Struct(struct_array), _) =
+                        expr.as_ref()
+                        && struct_array.len() == 0
+                    {
+                        return false;
+                    }
+                }
+                true
             }
             Expr::Literal(_, _)
             | Expr::Alias(..)
@@ -659,8 +687,6 @@ impl ConstEvaluator {
             | Expr::Like { .. }
             | Expr::SimilarTo { .. }
             | Expr::Case(_)
-            | Expr::Cast { .. }
-            | Expr::TryCast { .. }
             | Expr::InList { .. } => true,
         }
     }
@@ -1044,6 +1070,22 @@ impl TreeNodeRewriter for Simplifier<'_> {
                         "can_reduce_to_equal_statement should only be called with a BinaryExpr"
                     );
                 }
+            }
+            // A = L1 AND A != L2 --> A = L1 (when L1 != L2)
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: And,
+                right,
+            }) if is_eq_and_ne_with_different_literal(&left, &right) => {
+                Transformed::yes(*left)
+            }
+            // A != L2 AND A = L1 --> A = L1 (when L1 != L2)
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: And,
+                right,
+            }) if is_eq_and_ne_with_different_literal(&right, &left) => {
+                Transformed::yes(*right)
             }
 
             //
@@ -1952,9 +1994,82 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 }))
             }
 
+            // =======================================
+            // preimage_in_comparison
+            // =======================================
+            //
+            // For case:
+            // date_part('YEAR', expr) op literal
+            //
+            // For details see datafusion_expr::ScalarUDFImpl::preimage
+            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+                use datafusion_expr::Operator::*;
+                let is_preimage_op = matches!(
+                    op,
+                    Eq | NotEq
+                        | Lt
+                        | LtEq
+                        | Gt
+                        | GtEq
+                        | IsDistinctFrom
+                        | IsNotDistinctFrom
+                );
+                if !is_preimage_op || is_null(&right) {
+                    return Ok(Transformed::no(Expr::BinaryExpr(BinaryExpr {
+                        left,
+                        op,
+                        right,
+                    })));
+                }
+
+                if let PreimageResult::Range { interval, expr } =
+                    get_preimage(left.as_ref(), right.as_ref(), info)?
+                {
+                    rewrite_with_preimage(*interval, op, expr)?
+                } else if let Some(swapped) = op.swap() {
+                    if let PreimageResult::Range { interval, expr } =
+                        get_preimage(right.as_ref(), left.as_ref(), info)?
+                    {
+                        rewrite_with_preimage(*interval, swapped, expr)?
+                    } else {
+                        Transformed::no(Expr::BinaryExpr(BinaryExpr { left, op, right }))
+                    }
+                } else {
+                    Transformed::no(Expr::BinaryExpr(BinaryExpr { left, op, right }))
+                }
+            }
+
             // no additional rewrites possible
             expr => Transformed::no(expr),
         })
+    }
+}
+
+fn get_preimage(
+    left_expr: &Expr,
+    right_expr: &Expr,
+    info: &SimplifyContext,
+) -> Result<PreimageResult> {
+    let Expr::ScalarFunction(ScalarFunction { func, args }) = left_expr else {
+        return Ok(PreimageResult::None);
+    };
+    if !is_literal_or_literal_cast(right_expr) {
+        return Ok(PreimageResult::None);
+    }
+    if func.signature().volatility != Volatility::Immutable {
+        return Ok(PreimageResult::None);
+    }
+    func.preimage(args, right_expr, info)
+}
+
+fn is_literal_or_literal_cast(expr: &Expr) -> bool {
+    match expr {
+        Expr::Literal(_, _) => true,
+        Expr::Cast(Cast { expr, .. }) => matches!(expr.as_ref(), Expr::Literal(_, _)),
+        Expr::TryCast(TryCast { expr, .. }) => {
+            matches!(expr.as_ref(), Expr::Literal(_, _))
+        }
+        _ => false,
     }
 }
 
@@ -2150,7 +2265,10 @@ mod tests {
     use super::*;
     use crate::simplify_expressions::SimplifyContext;
     use crate::test::test_table_scan_with_name;
-    use arrow::datatypes::FieldRef;
+    use arrow::{
+        array::{Int32Array, StructArray},
+        datatypes::{FieldRef, Fields},
+    };
     use datafusion_common::{DFSchemaRef, ToDFSchema, assert_contains};
     use datafusion_expr::{
         expr::WindowFunction,
@@ -2396,6 +2514,27 @@ mod tests {
 
         assert_eq!(simplify(expr_a), expected);
         assert_eq!(simplify(expr_b), expected);
+    }
+
+    #[test]
+    fn test_simplify_eq_and_neq_with_different_literals() {
+        // A = 1 AND A != 0 --> A = 1 (when 1 != 0)
+        let expr = col("c2").eq(lit(1)).and(col("c2").not_eq(lit(0)));
+        let expected = col("c2").eq(lit(1));
+        assert_eq!(simplify(expr), expected);
+
+        // A != 0 AND A = 1 --> A = 1 (when 1 != 0)
+        let expr = col("c2").not_eq(lit(0)).and(col("c2").eq(lit(1)));
+        let expected = col("c2").eq(lit(1));
+        assert_eq!(simplify(expr), expected);
+
+        // Should NOT simplify when literals are the same (A = 1 AND A != 1)
+        // This is a contradiction but handled by other rules
+        let expr = col("c2").eq(lit(1)).and(col("c2").not_eq(lit(1)));
+        // Should not be simplified by this rule (left unchanged or handled elsewhere)
+        let result = simplify(expr.clone());
+        // The expression should not have been simplified
+        assert_eq!(result, expr);
     }
 
     #[test]
@@ -4994,5 +5133,160 @@ mod tests {
             when_then_expr: vec![(lit(true).into(), lit(then).into())],
             else_expr: None,
         })
+    }
+
+    // --------------------------------
+    // --- Struct Cast Tests -----
+    // --------------------------------
+
+    /// Helper to create a `Struct` literal cast expression from `source_fields` and `target_fields`.
+    fn make_struct_cast_expr(source_fields: Fields, target_fields: Fields) -> Expr {
+        // Create 1-row struct array (not 0-row) so it can be evaluated by simplifier
+        let arrays: Vec<Arc<dyn Array>> = vec![
+            Arc::new(Int32Array::from(vec![Some(1)])),
+            Arc::new(Int32Array::from(vec![Some(2)])),
+        ];
+        let struct_array = StructArray::try_new(source_fields, arrays, None).unwrap();
+
+        Expr::Cast(Cast::new(
+            Box::new(Expr::Literal(
+                ScalarValue::Struct(Arc::new(struct_array)),
+                None,
+            )),
+            DataType::Struct(target_fields),
+        ))
+    }
+
+    #[test]
+    fn test_struct_cast_different_field_counts_not_foldable() {
+        // Test that struct casts with different field counts are NOT marked as foldable
+        // When field counts differ, const-folding should not be attempted
+
+        let source_fields = Fields::from(vec![
+            Arc::new(Field::new("a", DataType::Int32, true)),
+            Arc::new(Field::new("b", DataType::Int32, true)),
+        ]);
+
+        let target_fields = Fields::from(vec![
+            Arc::new(Field::new("x", DataType::Int32, true)),
+            Arc::new(Field::new("y", DataType::Int32, true)),
+            Arc::new(Field::new("z", DataType::Int32, true)),
+        ]);
+
+        let expr = make_struct_cast_expr(source_fields, target_fields);
+
+        let simplifier =
+            ExprSimplifier::new(SimplifyContext::default().with_schema(test_schema()));
+
+        // The cast should remain unchanged since field counts differ
+        let result = simplifier.simplify(expr.clone()).unwrap();
+        // Ensure const-folding was not attempted (the expression remains exactly the same)
+        assert_eq!(
+            result, expr,
+            "Struct cast with different field counts should remain unchanged (no const-folding)"
+        );
+    }
+
+    #[test]
+    fn test_struct_cast_same_field_count_foldable() {
+        // Test that struct casts with same field counts can be considered for const-folding
+
+        let source_fields = Fields::from(vec![
+            Arc::new(Field::new("a", DataType::Int32, true)),
+            Arc::new(Field::new("b", DataType::Int32, true)),
+        ]);
+
+        let target_fields = Fields::from(vec![
+            Arc::new(Field::new("a", DataType::Int32, true)),
+            Arc::new(Field::new("b", DataType::Int32, true)),
+        ]);
+
+        let expr = make_struct_cast_expr(source_fields, target_fields);
+
+        let simplifier =
+            ExprSimplifier::new(SimplifyContext::default().with_schema(test_schema()));
+
+        // The cast should be simplified
+        let result = simplifier.simplify(expr.clone()).unwrap();
+        // Struct casts with same field count should be const-folded to a literal
+        assert!(matches!(result, Expr::Literal(_, _)));
+        // Ensure the simplifier made a change (not identical to original)
+        assert_ne!(
+            result, expr,
+            "Struct cast with same field count should be simplified (not identical to input)"
+        );
+    }
+
+    #[test]
+    fn test_struct_cast_different_names_same_count() {
+        // Test struct cast with same field count but different names
+        // Field count matches; simplification should succeed
+
+        let source_fields = Fields::from(vec![
+            Arc::new(Field::new("a", DataType::Int32, true)),
+            Arc::new(Field::new("b", DataType::Int32, true)),
+        ]);
+
+        let target_fields = Fields::from(vec![
+            Arc::new(Field::new("x", DataType::Int32, true)),
+            Arc::new(Field::new("y", DataType::Int32, true)),
+        ]);
+
+        let expr = make_struct_cast_expr(source_fields, target_fields);
+
+        let simplifier =
+            ExprSimplifier::new(SimplifyContext::default().with_schema(test_schema()));
+
+        // The cast should be simplified since field counts match
+        let result = simplifier.simplify(expr.clone()).unwrap();
+        // Struct casts with same field count are const-folded to literals
+        assert!(matches!(result, Expr::Literal(_, _)));
+        // Ensure the simplifier made a change (not identical to original)
+        assert_ne!(
+            result, expr,
+            "Struct cast with different names but same field count should be simplified"
+        );
+    }
+
+    #[test]
+    fn test_struct_cast_empty_array_not_foldable() {
+        // Test that struct casts with 0-row (empty) struct arrays are NOT const-folded
+        // The simplifier uses a 1-row input batch, which causes dimension mismatches
+        // when evaluating 0-row struct literals
+
+        let source_fields = Fields::from(vec![
+            Arc::new(Field::new("a", DataType::Int32, true)),
+            Arc::new(Field::new("b", DataType::Int32, true)),
+        ]);
+
+        let target_fields = Fields::from(vec![
+            Arc::new(Field::new("a", DataType::Int32, true)),
+            Arc::new(Field::new("b", DataType::Int32, true)),
+        ]);
+
+        // Create a 0-row (empty) struct array
+        let arrays: Vec<Arc<dyn Array>> = vec![
+            Arc::new(Int32Array::new(vec![].into(), None)),
+            Arc::new(Int32Array::new(vec![].into(), None)),
+        ];
+        let struct_array = StructArray::try_new(source_fields, arrays, None).unwrap();
+
+        let expr = Expr::Cast(Cast::new(
+            Box::new(Expr::Literal(
+                ScalarValue::Struct(Arc::new(struct_array)),
+                None,
+            )),
+            DataType::Struct(target_fields),
+        ));
+
+        let simplifier =
+            ExprSimplifier::new(SimplifyContext::default().with_schema(test_schema()));
+
+        // The cast should remain unchanged since the struct array is empty (0-row)
+        let result = simplifier.simplify(expr.clone()).unwrap();
+        assert_eq!(
+            result, expr,
+            "Struct cast with empty (0-row) array should remain unchanged"
+        );
     }
 }

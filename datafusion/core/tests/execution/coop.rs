@@ -24,7 +24,7 @@ use datafusion::physical_expr::aggregate::AggregateExprBuilder;
 use datafusion::physical_plan;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::aggregates::{
-    AggregateExec, AggregateMode, PhysicalGroupBy,
+    AggregateExec, AggregateMode, LimitOptions, PhysicalGroupBy,
 };
 use datafusion::physical_plan::execution_plan::Boundedness;
 use datafusion::prelude::SessionContext;
@@ -233,6 +233,7 @@ async fn agg_grouped_topk_yields(
     #[values(false, true)] pretend_infinite: bool,
 ) -> Result<(), Box<dyn Error>> {
     // build session
+
     let session_ctx = SessionContext::new();
 
     // set up a top-k aggregation
@@ -260,7 +261,7 @@ async fn agg_grouped_topk_yields(
             inf.clone(),
             inf.schema(),
         )?
-        .with_limit(Some(100)),
+        .with_limit_options(Some(LimitOptions::new(100))),
     );
 
     query_yields(aggr, session_ctx.task_ctx()).await
@@ -606,6 +607,7 @@ async fn join_yields(
         None,
         PartitionMode::CollectLeft,
         NullEquality::NullEqualsNull,
+        false,
     )?);
 
     query_yields(join, session_ctx.task_ctx()).await
@@ -655,6 +657,7 @@ async fn join_agg_yields(
         None,
         PartitionMode::CollectLeft,
         NullEquality::NullEqualsNull,
+        false,
     )?);
 
     // Project only one column (“value” from the left side) because we just want to sum that
@@ -720,6 +723,7 @@ async fn hash_join_yields(
         None,
         PartitionMode::CollectLeft,
         NullEquality::NullEqualsNull,
+        false,
     )?);
 
     query_yields(join, session_ctx.task_ctx()).await
@@ -751,9 +755,10 @@ async fn hash_join_without_repartition_and_no_agg(
         /* filter */ None,
         &JoinType::Inner,
         /* output64 */ None,
-        // Using CollectLeft is fine—just avoid RepartitionExec’s partitioned channels.
+        // Using CollectLeft is fine—just avoid RepartitionExec's partitioned channels.
         PartitionMode::CollectLeft,
         NullEquality::NullEqualsNull,
+        false,
     )?);
 
     query_yields(join, session_ctx.task_ctx()).await
@@ -762,7 +767,7 @@ async fn hash_join_without_repartition_and_no_agg(
 #[derive(Debug)]
 enum Yielded {
     ReadyOrPending,
-    Err(#[allow(dead_code)] DataFusionError),
+    Err(#[expect(dead_code)] DataFusionError),
     Timeout,
 }
 

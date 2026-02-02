@@ -21,7 +21,7 @@
 use crate::{
     ObjectStoreFetch, apply_file_schema_type_coercions, coerce_int96_to_resolution,
 };
-use arrow::array::{ArrayRef, BooleanArray};
+use arrow::array::{Array, ArrayRef, BooleanArray};
 use arrow::compute::and;
 use arrow::compute::kernels::cmp::eq;
 use arrow::compute::sum;
@@ -487,22 +487,40 @@ fn summarize_min_max_null_counts(
 
     if let Some(max_acc) = &mut accumulators.max_accs[logical_schema_index] {
         max_acc.update_batch(&[Arc::clone(&max_values)])?;
-        let mut cur_max_acc = max_acc.clone();
-        accumulators.is_max_value_exact[logical_schema_index] = has_any_exact_match(
-            &cur_max_acc.evaluate()?,
-            &max_values,
-            &is_max_value_exact_stat,
-        );
+
+        // handle the common special case when all row groups have exact statistics
+        let exactness = &is_max_value_exact_stat;
+        if !exactness.is_empty()
+            && exactness.null_count() == 0
+            && exactness.true_count() == exactness.len()
+        {
+            accumulators.is_max_value_exact[logical_schema_index] = Some(true);
+        } else if exactness.true_count() == 0 {
+            accumulators.is_max_value_exact[logical_schema_index] = Some(false);
+        } else {
+            let val = max_acc.evaluate()?;
+            accumulators.is_max_value_exact[logical_schema_index] =
+                has_any_exact_match(&val, &max_values, exactness);
+        }
     }
 
     if let Some(min_acc) = &mut accumulators.min_accs[logical_schema_index] {
         min_acc.update_batch(&[Arc::clone(&min_values)])?;
-        let mut cur_min_acc = min_acc.clone();
-        accumulators.is_min_value_exact[logical_schema_index] = has_any_exact_match(
-            &cur_min_acc.evaluate()?,
-            &min_values,
-            &is_min_value_exact_stat,
-        );
+
+        // handle the common special case when all row groups have exact statistics
+        let exactness = &is_min_value_exact_stat;
+        if !exactness.is_empty()
+            && exactness.null_count() == 0
+            && exactness.true_count() == exactness.len()
+        {
+            accumulators.is_min_value_exact[logical_schema_index] = Some(true);
+        } else if exactness.true_count() == 0 {
+            accumulators.is_min_value_exact[logical_schema_index] = Some(false);
+        } else {
+            let val = min_acc.evaluate()?;
+            accumulators.is_min_value_exact[logical_schema_index] =
+                has_any_exact_match(&val, &min_values, exactness);
+        }
     }
 
     accumulators.null_counts_array[logical_schema_index] = match sum(&null_counts) {
@@ -582,6 +600,15 @@ fn has_any_exact_match(
     array: &ArrayRef,
     exactness: &BooleanArray,
 ) -> Option<bool> {
+    if value.is_null() {
+        return Some(false);
+    }
+
+    // Shortcut for single row group
+    if array.len() == 1 {
+        return Some(exactness.is_valid(0) && exactness.value(0));
+    }
+
     let scalar_array = value.to_scalar().ok()?;
     let eq_mask = eq(&scalar_array, &array).ok()?;
     let combined_mask = and(&eq_mask, exactness).ok()?;
@@ -656,6 +683,73 @@ pub(crate) fn lex_ordering_to_sorting_columns(
     ordering: &LexOrdering,
 ) -> Result<Vec<SortingColumn>> {
     ordering.iter().map(sort_expr_to_sorting_column).collect()
+}
+
+/// Extracts ordering information from Parquet metadata.
+///
+/// This function reads the sorting_columns from the first row group's metadata
+/// and converts them into a [`LexOrdering`] that can be used by the query engine.
+///
+/// # Arguments
+/// * `metadata` - The Parquet metadata containing sorting_columns information
+/// * `schema` - The Arrow schema to use for column lookup
+///
+/// # Returns
+/// * `Ok(Some(ordering))` if valid ordering information was found
+/// * `Ok(None)` if no sorting columns were specified or they couldn't be resolved
+pub fn ordering_from_parquet_metadata(
+    metadata: &ParquetMetaData,
+    schema: &SchemaRef,
+) -> Result<Option<LexOrdering>> {
+    // Get the sorting columns from the first row group metadata.
+    // If no row groups exist or no sorting columns are specified, return None.
+    let sorting_columns = metadata
+        .row_groups()
+        .first()
+        .and_then(|rg| rg.sorting_columns())
+        .filter(|cols| !cols.is_empty());
+
+    let Some(sorting_columns) = sorting_columns else {
+        return Ok(None);
+    };
+
+    let parquet_schema = metadata.file_metadata().schema_descr();
+
+    let sort_exprs =
+        sorting_columns_to_physical_exprs(sorting_columns, parquet_schema, schema);
+
+    if sort_exprs.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(LexOrdering::new(sort_exprs))
+}
+
+/// Converts Parquet sorting columns to physical sort expressions.
+fn sorting_columns_to_physical_exprs(
+    sorting_columns: &[SortingColumn],
+    parquet_schema: &SchemaDescriptor,
+    arrow_schema: &SchemaRef,
+) -> Vec<PhysicalSortExpr> {
+    use arrow::compute::SortOptions;
+
+    sorting_columns
+        .iter()
+        .filter_map(|sc| {
+            let parquet_column = parquet_schema.column(sc.column_idx as usize);
+            let name = parquet_column.name();
+
+            // Find the column in the arrow schema
+            let (index, _) = arrow_schema.column_with_name(name)?;
+
+            let expr = Arc::new(Column::new(name, index));
+            let options = SortOptions {
+                descending: sc.descending,
+                nulls_first: sc.nulls_first,
+            };
+            Some(PhysicalSortExpr::new(expr, options))
+        })
+        .collect()
 }
 
 #[cfg(test)]

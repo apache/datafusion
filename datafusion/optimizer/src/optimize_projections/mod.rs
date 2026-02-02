@@ -268,15 +268,10 @@ fn optimize_projections(
                 Some(projection) => indices.into_mapped_indices(|idx| projection[idx]),
                 None => indices.into_inner(),
             };
-            return TableScan::try_new(
-                table_name,
-                source,
-                Some(projection),
-                filters,
-                fetch,
-            )
-            .map(LogicalPlan::TableScan)
-            .map(Transformed::yes);
+            let new_scan =
+                TableScan::try_new(table_name, source, Some(projection), filters, fetch)?;
+
+            return Ok(Transformed::yes(LogicalPlan::TableScan(new_scan)));
         }
         // Other node types are handled below
         _ => {}
@@ -530,15 +525,14 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
     expr.iter()
         .for_each(|expr| expr.add_column_ref_counts(&mut column_referral_map));
 
-    // If an expression is non-trivial and appears more than once, do not merge
+    // If an expression is non-trivial (KeepInPlace) and appears more than once, do not merge
     // them as consecutive projections will benefit from a compute-once approach.
     // For details, see: https://github.com/apache/datafusion/issues/8296
     if column_referral_map.into_iter().any(|(col, usage)| {
         usage > 1
-            && !is_expr_trivial(
-                &prev_projection.expr
-                    [prev_projection.schema.index_of_column(col).unwrap()],
-            )
+            && !prev_projection.expr[prev_projection.schema.index_of_column(col).unwrap()]
+                .placement()
+                .should_push_to_leaves()
     }) {
         // no change
         return Projection::try_new_with_schema(expr, input, schema).map(Transformed::no);
@@ -589,11 +583,6 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
         Projection::try_new_with_schema(new_exprs.data, input, schema)
             .map(Transformed::no)
     }
-}
-
-// Check whether `expr` is trivial; i.e. it doesn't imply any computation.
-fn is_expr_trivial(expr: &Expr) -> bool {
-    matches!(expr, Expr::Column(_) | Expr::Literal(_, _))
 }
 
 /// Rewrites a projection expression using the projection before it (i.e. its input)

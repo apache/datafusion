@@ -449,6 +449,57 @@ impl FileFormat for ParquetFormat {
             .await
     }
 
+    async fn infer_ordering(
+        &self,
+        state: &dyn Session,
+        store: &Arc<dyn ObjectStore>,
+        table_schema: SchemaRef,
+        object: &ObjectMeta,
+    ) -> Result<Option<LexOrdering>> {
+        let file_decryption_properties =
+            get_file_decryption_properties(state, &self.options, &object.location)
+                .await?;
+        let file_metadata_cache =
+            state.runtime_env().cache_manager.get_file_metadata_cache();
+        let metadata = DFParquetMetadata::new(store, object)
+            .with_metadata_size_hint(self.metadata_size_hint())
+            .with_decryption_properties(file_decryption_properties)
+            .with_file_metadata_cache(Some(file_metadata_cache))
+            .fetch_metadata()
+            .await?;
+        crate::metadata::ordering_from_parquet_metadata(&metadata, &table_schema)
+    }
+
+    async fn infer_stats_and_ordering(
+        &self,
+        state: &dyn Session,
+        store: &Arc<dyn ObjectStore>,
+        table_schema: SchemaRef,
+        object: &ObjectMeta,
+    ) -> Result<datafusion_datasource::file_format::FileMeta> {
+        let file_decryption_properties =
+            get_file_decryption_properties(state, &self.options, &object.location)
+                .await?;
+        let file_metadata_cache =
+            state.runtime_env().cache_manager.get_file_metadata_cache();
+        let metadata = DFParquetMetadata::new(store, object)
+            .with_metadata_size_hint(self.metadata_size_hint())
+            .with_decryption_properties(file_decryption_properties)
+            .with_file_metadata_cache(Some(file_metadata_cache))
+            .fetch_metadata()
+            .await?;
+        let statistics = DFParquetMetadata::statistics_from_parquet_metadata(
+            &metadata,
+            &table_schema,
+        )?;
+        let ordering =
+            crate::metadata::ordering_from_parquet_metadata(&metadata, &table_schema)?;
+        Ok(
+            datafusion_datasource::file_format::FileMeta::new(statistics)
+                .with_ordering(ordering),
+        )
+    }
+
     async fn create_physical_plan(
         &self,
         state: &dyn Session,
@@ -1309,7 +1360,7 @@ impl FileSink for ParquetSink {
                         parquet_props.clone(),
                     )
                     .await?;
-                let mut reservation = MemoryConsumer::new(format!("ParquetSink[{path}]"))
+                let reservation = MemoryConsumer::new(format!("ParquetSink[{path}]"))
                     .register(context.memory_pool());
                 file_write_tasks.spawn(async move {
                     while let Some(batch) = rx.recv().await {
@@ -1414,7 +1465,7 @@ impl DataSink for ParquetSink {
 async fn column_serializer_task(
     mut rx: Receiver<ArrowLeafColumn>,
     mut writer: ArrowColumnWriter,
-    mut reservation: MemoryReservation,
+    reservation: MemoryReservation,
 ) -> Result<(ArrowColumnWriter, MemoryReservation)> {
     while let Some(col) = rx.recv().await {
         writer.write(&col)?;
@@ -1499,7 +1550,7 @@ fn spawn_rg_join_and_finalize_task(
     rg_rows: usize,
     pool: &Arc<dyn MemoryPool>,
 ) -> SpawnedTask<RBStreamSerializeResult> {
-    let mut rg_reservation =
+    let rg_reservation =
         MemoryConsumer::new("ParquetSink(SerializedRowGroupWriter)").register(pool);
 
     SpawnedTask::spawn(async move {
@@ -1631,12 +1682,12 @@ async fn concatenate_parallel_row_groups(
     mut object_store_writer: Box<dyn AsyncWrite + Send + Unpin>,
     pool: Arc<dyn MemoryPool>,
 ) -> Result<ParquetMetaData> {
-    let mut file_reservation =
+    let file_reservation =
         MemoryConsumer::new("ParquetSink(SerializedFileWriter)").register(&pool);
 
     while let Some(task) = serialize_rx.recv().await {
         let result = task.join_unwind().await;
-        let (serialized_columns, mut rg_reservation, _cnt) =
+        let (serialized_columns, rg_reservation, _cnt) =
             result.map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??;
 
         let mut rg_out = parquet_writer.next_row_group()?;

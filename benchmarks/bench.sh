@@ -322,8 +322,7 @@ main() {
                     echo "NLJ benchmark does not require data generation"
                     ;;
                 hj)
-                    # hj uses range() function, no data generation needed
-                    echo "HJ benchmark does not require data generation"
+                    data_tpch "10" "parquet"
                     ;;
                 smj)
                     # smj uses range() function, no data generation needed
@@ -684,7 +683,7 @@ run_tpch_mem() {
 
 # Runs the tpcds benchmark
 run_tpcds() {
-    TPCDS_DIR="${DATA_DIR}"
+    TPCDS_DIR="${DATA_DIR}/tpcds_sf1"
 
     # Check if TPCDS data directory and representative file exists
     if [ ! -f "${TPCDS_DIR}/web_site.parquet" ]; then
@@ -1228,10 +1227,11 @@ run_nlj() {
 
 # Runs the hj benchmark
 run_hj() {
+    TPCH_DIR="${DATA_DIR}/tpch_sf10"
     RESULTS_FILE="${RESULTS_DIR}/hj.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running hj benchmark..."
-    debug_run $CARGO_COMMAND --bin dfbench -- hj --iterations 5 -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- hj --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
 # Runs the smj benchmark
