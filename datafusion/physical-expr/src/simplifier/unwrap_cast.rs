@@ -49,14 +49,12 @@ pub(crate) fn unwrap_cast_in_comparison(
     expr: Arc<dyn PhysicalExpr>,
     schema: &Schema,
 ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
-    expr.transform_down(|e| {
-        if let Some(binary) = e.as_any().downcast_ref::<BinaryExpr>()
-            && let Some(unwrapped) = try_unwrap_cast_binary(binary, schema)?
-        {
-            return Ok(Transformed::yes(unwrapped));
-        }
-        Ok(Transformed::no(e))
-    })
+    if let Some(binary) = expr.as_any().downcast_ref::<BinaryExpr>()
+        && let Some(unwrapped) = try_unwrap_cast_binary(binary, schema)?
+    {
+        return Ok(Transformed::yes(unwrapped));
+    }
+    Ok(Transformed::no(expr))
 }
 
 /// Try to unwrap casts in binary expressions

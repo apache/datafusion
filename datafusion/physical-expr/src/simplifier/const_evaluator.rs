@@ -40,10 +40,10 @@ use crate::expressions::{Column, Literal};
 /// - `(1 + 2) * 3` -> `9` (with bottom-up traversal)
 /// - `'hello' || ' world'` -> `'hello world'`
 pub fn simplify_const_expr(
-    expr: &Arc<dyn PhysicalExpr>,
+    expr: Arc<dyn PhysicalExpr>,
 ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
-    if !can_evaluate_as_constant(expr) {
-        return Ok(Transformed::no(Arc::clone(expr)));
+    if expr.as_any().is::<Column>() || expr.is_volatile_node() {
+        return Ok(Transformed::no(expr));
     }
 
     // Create a 1-row dummy batch for evaluation
@@ -61,13 +61,13 @@ pub fn simplify_const_expr(
         }
         Ok(_) => {
             // Unexpected result - keep original expression
-            Ok(Transformed::no(Arc::clone(expr)))
+            Ok(Transformed::no(expr))
         }
         Err(_) => {
             // On error, keep original expression
             // The expression might succeed at runtime due to short-circuit evaluation
             // or other runtime conditions
-            Ok(Transformed::no(Arc::clone(expr)))
+            Ok(Transformed::no(expr))
         }
     }
 }
