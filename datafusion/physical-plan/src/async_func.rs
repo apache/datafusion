@@ -332,6 +332,9 @@ impl AsyncMapper {
                     Arc::clone(expr),
                     schema,
                 )?));
+                // Async UDFs are traversal boundaries; do not recurse into their arguments.
+                // Use Jump (not Stop) to continue visiting sibling expressions.
+                return Ok(TreeNodeRecursion::Jump);
             }
             Ok(TreeNodeRecursion::Continue)
         })?;

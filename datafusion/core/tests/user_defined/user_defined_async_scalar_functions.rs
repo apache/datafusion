@@ -113,6 +113,39 @@ async fn test_async_udf_metrics() -> Result<()> {
     Ok(())
 }
 
+// Regression test for https://github.com/apache/datafusion/issues/20031
+// This test verifies that nested async UDF calls work correctly.
+#[tokio::test]
+async fn test_nested_async_udf() -> Result<()> {
+    let ctx = register_table_and_udf()?;
+
+    // This query previously failed with:
+    // "Internal error: async functions should not be called directly"
+    let df = ctx
+        .sql("SELECT id, test_async_udf(test_async_udf(prompt)) as result FROM test_table")
+        .await?;
+
+    let result = df.collect().await?;
+
+    // The nested call test_async_udf(test_async_udf(prompt)) should:
+    // 1. First evaluate inner: test_async_udf(prompt) -> prompt (identity function)
+    // 2. Then evaluate outer: test_async_udf(prompt) -> prompt
+    assert_batches_eq!(
+        &[
+            "+----+---------+",
+            "| id | result  |",
+            "+----+---------+",
+            "| 0  | prompt0 |",
+            "| 1  | prompt1 |",
+            "| 2  | prompt2 |",
+            "+----+---------+"
+        ],
+        &result
+    );
+
+    Ok(())
+}
+
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 struct TestAsyncUDFImpl {
     batch_size: usize,
