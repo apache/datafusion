@@ -65,7 +65,7 @@ enum EvalMethod {
     /// for expressions that are infallible and can be cheaply computed for the entire
     /// record batch rather than just for the rows where the predicate is true.
     ///
-    /// CASE WHEN condition THEN column [ELSE NULL] END
+    /// CASE WHEN condition THEN infallible_expression [ELSE NULL] END
     InfallibleExprOrNull,
     /// This is a specialization for a specific use case where we can take a fast path
     /// if there is just one when/then pair and both the `then` and `else` expressions
@@ -73,9 +73,13 @@ enum EvalMethod {
     /// CASE WHEN condition THEN literal ELSE literal END
     ScalarOrScalar,
     /// This is a specialization for a specific use case where we can take a fast path
-    /// if there is just one when/then pair and both the `then` and `else` are expressions
+    /// if there is just one when/then pair, the `then` is an expression, and `else` is either
+    /// an expression, literal NULL or absent.
     ///
-    /// CASE WHEN condition THEN expression ELSE expression END
+    /// In contrast to [`EvalMethod::InfallibleExprOrNull`], this specialization can handle fallible
+    /// `then` expressions.
+    ///
+    /// CASE WHEN condition THEN expression [ELSE expression] END
     ExpressionOrExpression(ProjectedCaseBody),
 
     /// This is a specialization for [`EvalMethod::WithExpression`] when the value and results are literals
