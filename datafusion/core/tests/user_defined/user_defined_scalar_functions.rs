@@ -715,10 +715,7 @@ impl ScalarUDFImpl for CastToI64UDF {
             arg
         } else {
             // need to use an actual cast to get the correct type
-            Expr::Cast(datafusion_expr::Cast {
-                expr: Box::new(arg),
-                data_type: DataType::Int64,
-            })
+            Expr::Cast(datafusion_expr::Cast::new(Box::new(arg), DataType::Int64))
         };
         // return the newly written argument to DataFusion
         Ok(ExprSimplifyResult::Simplified(new_expr))

@@ -934,6 +934,21 @@ See the [default column values example](https://github.com/apache/datafusion/blo
 If you implemented a custom `SchemaAdapterFactory`, migrate to `PhysicalExprAdapterFactory`.
 See the [default column values example](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/custom_data_source/default_column_values.rs) for a complete implementation.
 
+### `Expr::ScalarVariable` and `Expr::Cast` now store type information as a `FieldRef`
+
+Code that explicitly constructed `Expr::ScalarVariable(DataType::xxx)` must now convert
+the `DataType` into a `FieldRef` (e.g., `Expr::ScalarVariable(DataType::Int8.into_nullable_field_ref())`).
+Implementations of a custom `ContextProvider` may implement `get_variable_field()` to provide
+planning information for variables with Arrow extension types or explicit nullability. See
+[#18243](https://github.com/apache/datafusion/pull/18243) for more information.
+
+Similarly, the `Cast` type wrapped by `Expr::Cast` was updated to use a `FieldRef` as the
+underlying storage to represent casts to Arrow extension types. Code that constructed
+or matched casts in the form `Expr::Cast(Cast { expr, data_type })` will need to be updated.
+Casts to `DataType` can continue to be constructed with `Expr::Cast(Cast::new(expr, DataType::...))`,
+although we recommend `Expr::Cast(Cast::new_from_field(expr, existing_field_ref))` when
+constructing casts programmatically to avoid dropping extension type metadata.
+
 ## DataFusion `51.0.0`
 
 ### `arrow` / `parquet` updated to 57.0.0

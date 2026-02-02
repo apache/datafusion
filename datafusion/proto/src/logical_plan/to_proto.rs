@@ -521,19 +521,23 @@ pub fn serialize_expr(
                 expr_type: Some(ExprType::Case(expr)),
             }
         }
-        Expr::Cast(Cast { expr, data_type }) => {
+        Expr::Cast(Cast { expr, field }) => {
             let expr = Box::new(protobuf::CastNode {
                 expr: Some(Box::new(serialize_expr(expr.as_ref(), codec)?)),
-                arrow_type: Some(data_type.try_into()?),
+                arrow_type: Some(field.data_type().try_into()?),
+                metadata: field.metadata().clone(),
+                nullable: Some(field.is_nullable()),
             });
             protobuf::LogicalExprNode {
                 expr_type: Some(ExprType::Cast(expr)),
             }
         }
-        Expr::TryCast(TryCast { expr, data_type }) => {
+        Expr::TryCast(TryCast { expr, field }) => {
             let expr = Box::new(protobuf::TryCastNode {
                 expr: Some(Box::new(serialize_expr(expr.as_ref(), codec)?)),
-                arrow_type: Some(data_type.try_into()?),
+                arrow_type: Some(field.data_type().try_into()?),
+                metadata: field.metadata().clone(),
+                nullable: Some(field.is_nullable()),
             });
             protobuf::LogicalExprNode {
                 expr_type: Some(ExprType::TryCast(expr)),

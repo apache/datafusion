@@ -132,8 +132,9 @@ impl ExprSchemable for Expr {
                     .as_ref()
                     .map_or(Ok(DataType::Null), |e| e.get_type(schema))
             }
-            Expr::Cast(Cast { data_type, .. })
-            | Expr::TryCast(TryCast { data_type, .. }) => Ok(data_type.clone()),
+            Expr::Cast(Cast { field, .. }) | Expr::TryCast(TryCast { field, .. }) => {
+                Ok(field.data_type().clone())
+            }
             Expr::Unnest(Unnest { expr }) => {
                 let arg_data_type = expr.get_type(schema)?;
                 // Unnest's output type is the inner type of the list
@@ -550,9 +551,23 @@ impl ExprSchemable for Expr {
                 func.return_field_from_args(args)
             }
             // _ => Ok((self.get_type(schema)?, self.nullable(schema)?)),
-            Expr::Cast(Cast { expr, data_type }) => expr
+            Expr::Cast(Cast { expr, field }) => expr
                 .to_field(schema)
-                .map(|(_, f)| f.retyped(data_type.clone())),
+                .map(|(_table_ref, destination_field)| {
+                    // This propagates the nullability of the input rather than
+                    // force the nullability of the destination field. This is
+                    // usually the desired behaviour (i.e., specifying a cast
+                    // destination type usually does not force a user to pick
+                    // nullability, and assuming `true` would prevent the non-nullability
+                    // of the parent expression to make the result eligible for
+                    // optimizations that only apply to non-nullable values).
+                    destination_field
+                        .as_ref()
+                        .clone()
+                        .with_data_type(field.data_type().clone())
+                        .with_metadata(destination_field.metadata().clone())
+                })
+                .map(Arc::new),
             Expr::Placeholder(Placeholder {
                 id: _,
                 field: Some(field),
