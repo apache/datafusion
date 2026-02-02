@@ -64,15 +64,13 @@ logical_plan
 06)----------Inner Join:  Filter: CAST(customer.c_acctbal AS Decimal128(19, 6)) > __scalar_sq_2.avg(customer.c_acctbal)
 07)------------Projection: customer.c_phone, customer.c_acctbal
 08)--------------LeftAnti Join: customer.c_custkey = __correlated_sq_1.o_custkey
-09)----------------Filter: substr(customer.c_phone, Int64(1), Int64(2)) IN ([Utf8View("13"), Utf8View("31"), Utf8View("23"), Utf8View("29"), Utf8View("30"), Utf8View("18"), Utf8View("17")])
-10)------------------TableScan: customer projection=[c_custkey, c_phone, c_acctbal], partial_filters=[substr(customer.c_phone, Int64(1), Int64(2)) IN ([Utf8View("13"), Utf8View("31"), Utf8View("23"), Utf8View("29"), Utf8View("30"), Utf8View("18"), Utf8View("17")]), Boolean(true)]
-11)----------------SubqueryAlias: __correlated_sq_1
-12)------------------TableScan: orders projection=[o_custkey]
-13)------------SubqueryAlias: __scalar_sq_2
-14)--------------Aggregate: groupBy=[[]], aggr=[[avg(customer.c_acctbal)]]
-15)----------------Projection: customer.c_acctbal
-16)------------------Filter: customer.c_acctbal > Decimal128(Some(0),15,2) AND substr(customer.c_phone, Int64(1), Int64(2)) IN ([Utf8View("13"), Utf8View("31"), Utf8View("23"), Utf8View("29"), Utf8View("30"), Utf8View("18"), Utf8View("17")])
-17)--------------------TableScan: customer projection=[c_phone, c_acctbal], partial_filters=[customer.c_acctbal > Decimal128(Some(0),15,2), substr(customer.c_phone, Int64(1), Int64(2)) IN ([Utf8View("13"), Utf8View("31"), Utf8View("23"), Utf8View("29"), Utf8View("30"), Utf8View("18"), Utf8View("17")])]
+09)----------------TableScan: customer projection=[c_custkey, c_phone, c_acctbal], partial_filters=[substr(customer.c_phone, Int64(1), Int64(2)) IN ([Utf8View("13"), Utf8View("31"), Utf8View("23"), Utf8View("29"), Utf8View("30"), Utf8View("18"), Utf8View("17")]), Boolean(true)]
+10)----------------SubqueryAlias: __correlated_sq_1
+11)------------------TableScan: orders projection=[o_custkey]
+12)------------SubqueryAlias: __scalar_sq_2
+13)--------------Aggregate: groupBy=[[]], aggr=[[avg(customer.c_acctbal)]]
+14)----------------Projection: customer.c_acctbal
+15)------------------TableScan: customer projection=[c_acctbal, c_phone], partial_filters=[customer.c_acctbal > Decimal128(Some(0),15,2), substr(customer.c_phone, Int64(1), Int64(2)) IN ([Utf8View("13"), Utf8View("31"), Utf8View("23"), Utf8View("29"), Utf8View("30"), Utf8View("18"), Utf8View("17")])]
 physical_plan
 01)SortPreservingMergeExec: [cntrycode@0 ASC NULLS LAST]
 02)--SortExec: expr=[cntrycode@0 ASC NULLS LAST], preserve_partitioning=[true]
@@ -87,7 +85,7 @@ physical_plan
 11)--------------------CoalescePartitionsExec
 12)----------------------HashJoinExec: mode=Partitioned, join_type=LeftAnti, on=[(c_custkey@0, o_custkey@0)], projection=[c_phone@1, c_acctbal@2]
 13)------------------------RepartitionExec: partitioning=Hash([c_custkey@0], 4), input_partitions=4
-14)--------------------------FilterExec: substr(c_phone@1, 1, 2) IN (SET) ([13, 31, 23, 29, 30, 18, 17])
+14)--------------------------FilterExec: substr(c_phone@1, 1, 2) IN (SET) ([13, 31, 23, 29, 30, 18, 17]) AND true
 15)----------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 16)------------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/customer.tbl]]}, projection=[c_custkey, c_phone, c_acctbal], file_type=csv, has_header=false
 17)------------------------RepartitionExec: partitioning=Hash([o_custkey@0], 4), input_partitions=4
@@ -95,6 +93,6 @@ physical_plan
 19)------------------AggregateExec: mode=Final, gby=[], aggr=[avg(customer.c_acctbal)]
 20)--------------------CoalescePartitionsExec
 21)----------------------AggregateExec: mode=Partial, gby=[], aggr=[avg(customer.c_acctbal)]
-22)------------------------FilterExec: c_acctbal@1 > Some(0),15,2 AND substr(c_phone@0, 1, 2) IN (SET) ([13, 31, 23, 29, 30, 18, 17]), projection=[c_acctbal@1]
+22)------------------------FilterExec: c_acctbal@0 > Some(0),15,2 AND substr(c_phone@1, 1, 2) IN (SET) ([13, 31, 23, 29, 30, 18, 17]), projection=[c_acctbal@0]
 23)--------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-24)----------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/customer.tbl]]}, projection=[c_phone, c_acctbal], file_type=csv, has_header=false
+24)----------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/customer.tbl]]}, projection=[c_acctbal, c_phone], file_type=csv, has_header=false
