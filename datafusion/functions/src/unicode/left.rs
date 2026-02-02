@@ -17,7 +17,7 @@
 
 use std::any::Any;
 
-use crate::string::common::{LeftSlicer, general_left_right};
+use crate::unicode::common::{LeftSlicer, general_left_right};
 use crate::utils::make_scalar_function;
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
