@@ -1715,7 +1715,6 @@ impl DefaultPhysicalPlanner {
     /// 1. Computing which columns the scan needs to produce
     /// 2. Creating the scan with minimal required columns
     /// 3. Applying any remainder projection (for complex expressions)
-    /// 4. Attempting to push non-async expressions into the scan via `try_swapping_with_projection`
     async fn plan_table_scan(
         &self,
         scan: &TableScan,
