@@ -88,11 +88,9 @@ logical_plan
 02)--Projection: t2.a AS a2, t2.b
 03)----RightSemi Join: t1.d = t2.d, t1.c = t2.c
 04)------SubqueryAlias: t1
-05)--------Filter: annotated_data.d = Int32(3)
-06)----------TableScan: annotated_data projection=[c, d], partial_filters=[annotated_data.d = Int32(3)]
-07)------SubqueryAlias: t2
-08)--------Filter: annotated_data.d = Int32(3)
-09)----------TableScan: annotated_data projection=[a, b, c, d], partial_filters=[annotated_data.d = Int32(3)]
+05)--------TableScan: annotated_data projection=[c, d], partial_filters=[annotated_data.d = Int32(3)]
+06)------SubqueryAlias: t2
+07)--------TableScan: annotated_data projection=[a, b, c, d], partial_filters=[annotated_data.d = Int32(3)]
 physical_plan
 01)SortPreservingMergeExec: [a2@0 ASC NULLS LAST, b@1 ASC NULLS LAST], fetch=10
 02)--ProjectionExec: expr=[a@0 as a2, b@1 as b]

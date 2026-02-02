@@ -1052,10 +1052,8 @@ WHERE join_t2.t2_id < 100
 ----
 logical_plan
 01)Inner Join: join_t1.t1_id = join_t2.t2_id
-02)--Filter: join_t1.t1_id < UInt32(100)
-03)----TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
-04)--Filter: join_t2.t2_id < UInt32(100)
-05)----TableScan: join_t2 projection=[t2_id, t2_name, t2_int]
+02)--TableScan: join_t1 projection=[t1_id, t1_name, t1_int], unsupported_filters=[join_t1.t1_id < UInt32(100)]
+03)--TableScan: join_t2 projection=[t2_id, t2_name, t2_int], unsupported_filters=[join_t2.t2_id < UInt32(100)]
 
 # Reduce left join 2 (to inner join)
 
@@ -1069,8 +1067,7 @@ WHERE join_t2.t2_int < 10 or (join_t1.t1_int > 2 and join_t2.t2_name != 'w')
 logical_plan
 01)Inner Join: join_t1.t1_id = join_t2.t2_id Filter: join_t2.t2_int < UInt32(10) OR join_t1.t1_int > UInt32(2) AND join_t2.t2_name != Utf8View("w")
 02)--TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
-03)--Filter: join_t2.t2_int < UInt32(10) OR join_t2.t2_name != Utf8View("w")
-04)----TableScan: join_t2 projection=[t2_id, t2_name, t2_int]
+03)--TableScan: join_t2 projection=[t2_id, t2_name, t2_int], unsupported_filters=[join_t2.t2_int < UInt32(10) OR join_t2.t2_name != Utf8View("w")]
 
 # Reduce left join 3 (to inner join)
 
@@ -1091,12 +1088,10 @@ logical_plan
 02)--SubqueryAlias: t3
 03)----Projection: join_t1.t1_id, join_t1.t1_name, join_t1.t1_int
 04)------Inner Join: join_t1.t1_id = join_t2.t2_id
-05)--------Filter: join_t1.t1_id < UInt32(100)
-06)----------TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
-07)--------Projection: join_t2.t2_id
-08)----------Filter: join_t2.t2_int < UInt32(3) AND join_t2.t2_id < UInt32(100)
-09)------------TableScan: join_t2 projection=[t2_id, t2_int]
-10)--TableScan: join_t2 projection=[t2_id, t2_name, t2_int]
+05)--------TableScan: join_t1 projection=[t1_id, t1_name, t1_int], unsupported_filters=[join_t1.t1_id < UInt32(100)]
+06)--------Projection: join_t2.t2_id
+07)----------TableScan: join_t2 projection=[t2_id, t2_int], unsupported_filters=[join_t2.t2_int < UInt32(3), join_t2.t2_id < UInt32(100)]
+08)--TableScan: join_t2 projection=[t2_id, t2_name, t2_int]
 
 # Reduce right join 1 (to inner join)
 
@@ -1109,9 +1104,8 @@ WHERE join_t1.t1_int IS NOT NULL
 ----
 logical_plan
 01)Inner Join: join_t1.t1_id = join_t2.t2_id
-02)--Filter: join_t1.t1_int IS NOT NULL
-03)----TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
-04)--TableScan: join_t2 projection=[t2_id, t2_name, t2_int]
+02)--TableScan: join_t1 projection=[t1_id, t1_name, t1_int], unsupported_filters=[join_t1.t1_int IS NOT NULL]
+03)--TableScan: join_t2 projection=[t2_id, t2_name, t2_int]
 
 # Reduce right join 2 (to inner join)
 
@@ -1139,8 +1133,7 @@ WHERE join_t2.t2_name IS NOT NULL
 logical_plan
 01)Right Join: join_t1.t1_id = join_t2.t2_id
 02)--TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
-03)--Filter: join_t2.t2_name IS NOT NULL
-04)----TableScan: join_t2 projection=[t2_id, t2_name, t2_int]
+03)--TableScan: join_t2 projection=[t2_id, t2_name, t2_int], unsupported_filters=[join_t2.t2_name IS NOT NULL]
 
 # Reduce full join to left join
 
@@ -1153,9 +1146,8 @@ WHERE join_t1.t1_name != 'b'
 ----
 logical_plan
 01)Left Join: join_t1.t1_id = join_t2.t2_id
-02)--Filter: join_t1.t1_name != Utf8View("b")
-03)----TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
-04)--TableScan: join_t2 projection=[t2_id, t2_name, t2_int]
+02)--TableScan: join_t1 projection=[t1_id, t1_name, t1_int], unsupported_filters=[join_t1.t1_name != Utf8View("b")]
+03)--TableScan: join_t2 projection=[t2_id, t2_name, t2_int]
 
 # Reduce full join to inner join
 
@@ -1168,10 +1160,8 @@ WHERE join_t1.t1_name != 'b' and join_t2.t2_name = 'x'
 ----
 logical_plan
 01)Inner Join: join_t1.t1_id = join_t2.t2_id
-02)--Filter: join_t1.t1_name != Utf8View("b")
-03)----TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
-04)--Filter: join_t2.t2_name = Utf8View("x")
-05)----TableScan: join_t2 projection=[t2_id, t2_name, t2_int]
+02)--TableScan: join_t1 projection=[t1_id, t1_name, t1_int], unsupported_filters=[join_t1.t1_name != Utf8View("b")]
+03)--TableScan: join_t2 projection=[t2_id, t2_name, t2_int], unsupported_filters=[join_t2.t2_name = Utf8View("x")]
 
 ###
 # Configuration teardown
@@ -1222,8 +1212,7 @@ logical_plan
 01)LeftSemi Join: lsaj_t1.t1_id = lsaj_t2.t2_id
 02)--TableScan: lsaj_t1 projection=[t1_id, t1_name]
 03)--Projection: lsaj_t2.t2_id
-04)----Filter: lsaj_t2.t2_int > UInt32(1)
-05)------TableScan: lsaj_t2 projection=[t2_id, t2_int]
+04)----TableScan: lsaj_t2 projection=[t2_id, t2_int], unsupported_filters=[lsaj_t2.t2_int > UInt32(1)]
 
 # Left anti join
 
@@ -1847,8 +1836,7 @@ logical_plan
 02)--TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
 03)--SubqueryAlias: __correlated_sq_1
 04)----Projection: CAST(join_t2.t2_id AS Int64) + Int64(1), join_t2.t2_int
-05)------Filter: join_t2.t2_int > UInt32(0)
-06)--------TableScan: join_t2 projection=[t2_id, t2_int]
+05)------TableScan: join_t2 projection=[t2_id, t2_int], unsupported_filters=[join_t2.t2_int > UInt32(0)]
 
 query ITI rowsort
 select join_t1.t1_id, join_t1.t1_name, join_t1.t1_int
@@ -1883,8 +1871,7 @@ logical_plan
 02)--TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
 03)--SubqueryAlias: __correlated_sq_1
 04)----Projection: CAST(join_t2.t2_id AS Int64) + Int64(1), join_t2.t2_int, join_t2.t2_name
-05)------Filter: join_t2.t2_int > UInt32(0)
-06)--------TableScan: join_t2 projection=[t2_id, t2_name, t2_int]
+05)------TableScan: join_t2 projection=[t2_id, t2_name, t2_int], unsupported_filters=[join_t2.t2_int > UInt32(0)]
 
 query ITI rowsort
 select join_t1.t1_id, join_t1.t1_name, join_t1.t1_int
@@ -1912,11 +1899,10 @@ where join_t1.t1_id + 12 in
 ----
 logical_plan
 01)LeftSemi Join: CAST(join_t1.t1_id AS Int64) + Int64(12) = __correlated_sq_1.join_t2.t2_id + Int64(1)
-02)--Filter: join_t1.t1_int > UInt32(0)
-03)----TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
-04)--SubqueryAlias: __correlated_sq_1
-05)----Projection: CAST(join_t2.t2_id AS Int64) + Int64(1)
-06)------TableScan: join_t2 projection=[t2_id]
+02)--TableScan: join_t1 projection=[t1_id, t1_name, t1_int], unsupported_filters=[join_t1.t1_int > UInt32(0)]
+03)--SubqueryAlias: __correlated_sq_1
+04)----Projection: CAST(join_t2.t2_id AS Int64) + Int64(1)
+05)------TableScan: join_t2 projection=[t2_id]
 
 # Not in subquery to join with correlated outer filter
 
@@ -1951,11 +1937,10 @@ where join_t1.t1_id + 12 in
 ----
 logical_plan
 01)LeftSemi Join: CAST(join_t1.t1_id AS Int64) + Int64(12) = __correlated_sq_1.join_t2.t2_id + Int64(1) Filter: join_t1.t1_int <= __correlated_sq_1.t2_int AND join_t1.t1_name != __correlated_sq_1.t2_name
-02)--Filter: join_t1.t1_id > UInt32(0)
-03)----TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
-04)--SubqueryAlias: __correlated_sq_1
-05)----Projection: CAST(join_t2.t2_id AS Int64) + Int64(1), join_t2.t2_int, join_t2.t2_name
-06)------TableScan: join_t2 projection=[t2_id, t2_name, t2_int]
+02)--TableScan: join_t1 projection=[t1_id, t1_name, t1_int], unsupported_filters=[join_t1.t1_id > UInt32(0)]
+03)--SubqueryAlias: __correlated_sq_1
+04)----Projection: CAST(join_t2.t2_id AS Int64) + Int64(1), join_t2.t2_int, join_t2.t2_name
+05)------TableScan: join_t2 projection=[t2_id, t2_name, t2_int]
 
 query ITI rowsort
 select join_t1.t1_id, join_t1.t1_name, join_t1.t1_int
@@ -1985,14 +1970,13 @@ where join_t1.t1_id + 12 in (select join_t2.t2_id + 1 from join_t2)
 logical_plan
 01)LeftSemi Join: CAST(join_t1.t1_int AS Int64) = __correlated_sq_2.join_t2.t2_int + Int64(1)
 02)--LeftSemi Join: CAST(join_t1.t1_id AS Int64) + Int64(12) = __correlated_sq_1.join_t2.t2_id + Int64(1)
-03)----Filter: join_t1.t1_id > UInt32(0)
-04)------TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
-05)----SubqueryAlias: __correlated_sq_1
-06)------Projection: CAST(join_t2.t2_id AS Int64) + Int64(1)
-07)--------TableScan: join_t2 projection=[t2_id]
-08)--SubqueryAlias: __correlated_sq_2
-09)----Projection: CAST(join_t2.t2_int AS Int64) + Int64(1)
-10)------TableScan: join_t2 projection=[t2_int]
+03)----TableScan: join_t1 projection=[t1_id, t1_name, t1_int], unsupported_filters=[join_t1.t1_id > UInt32(0)]
+04)----SubqueryAlias: __correlated_sq_1
+05)------Projection: CAST(join_t2.t2_id AS Int64) + Int64(1)
+06)--------TableScan: join_t2 projection=[t2_id]
+07)--SubqueryAlias: __correlated_sq_2
+08)----Projection: CAST(join_t2.t2_int AS Int64) + Int64(1)
+09)------TableScan: join_t2 projection=[t2_int]
 
 query ITI
 select join_t1.t1_id, join_t1.t1_name, join_t1.t1_int
@@ -2026,11 +2010,9 @@ WHERE join_t1.t1_id > 10 AND join_t2.t2_int > 1
 ----
 logical_plan
 01)Inner Join:  Filter: join_t1.t1_id > join_t2.t2_id
-02)--Filter: join_t1.t1_id > UInt32(10)
-03)----TableScan: join_t1 projection=[t1_id]
-04)--Projection: join_t2.t2_id
-05)----Filter: join_t2.t2_int > UInt32(1)
-06)------TableScan: join_t2 projection=[t2_id, t2_int]
+02)--TableScan: join_t1 projection=[t1_id], unsupported_filters=[join_t1.t1_id > UInt32(10)]
+03)--Projection: join_t2.t2_id
+04)----TableScan: join_t2 projection=[t2_id, t2_int], unsupported_filters=[join_t2.t2_int > UInt32(1)]
 physical_plan
 01)ProjectionExec: expr=[t1_id@1 as t1_id, t2_id@0 as t2_id]
 02)--NestedLoopJoinExec: join_type=Inner, filter=t1_id@0 > t2_id@1
@@ -2065,11 +2047,9 @@ RIGHT JOIN (select t2_id from join_t2 where join_t2.t2_id > 11) as join_t2
 logical_plan
 01)Right Join:  Filter: join_t1.t1_id < join_t2.t2_id
 02)--SubqueryAlias: join_t1
-03)----Filter: join_t1.t1_id > UInt32(22)
-04)------TableScan: join_t1 projection=[t1_id]
-05)--SubqueryAlias: join_t2
-06)----Filter: join_t2.t2_id > UInt32(11)
-07)------TableScan: join_t2 projection=[t2_id]
+03)----TableScan: join_t1 projection=[t1_id], unsupported_filters=[join_t1.t1_id > UInt32(22)]
+04)--SubqueryAlias: join_t2
+05)----TableScan: join_t2 projection=[t2_id], unsupported_filters=[join_t2.t2_id > UInt32(11)]
 physical_plan
 01)NestedLoopJoinExec: join_type=Right, filter=t1_id@0 < t2_id@1
 02)--CoalescePartitionsExec
@@ -2172,8 +2152,7 @@ logical_plan
 02)--TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
 03)--SubqueryAlias: __correlated_sq_1
 04)----Projection: join_t2.t2_id
-05)------Filter: join_t2.t2_int < UInt32(3)
-06)--------TableScan: join_t2 projection=[t2_id, t2_int]
+05)------TableScan: join_t2 projection=[t2_id, t2_int], unsupported_filters=[join_t2.t2_int < UInt32(3)]
 
 statement ok
 set datafusion.optimizer.repartition_joins = false;
@@ -2217,10 +2196,9 @@ WHERE EXISTS (
 ----
 logical_plan
 01)LeftSemi Join:  Filter: CAST(join_t1.t1_id AS Int64) + Int64(1) > CAST(__correlated_sq_1.t2_id AS Int64) * Int64(2)
-02)--Filter: join_t1.t1_int < UInt32(3)
-03)----TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
-04)--SubqueryAlias: __correlated_sq_1
-05)----TableScan: join_t2 projection=[t2_id]
+02)--TableScan: join_t1 projection=[t1_id, t1_name, t1_int], unsupported_filters=[join_t1.t1_int < UInt32(3)]
+03)--SubqueryAlias: __correlated_sq_1
+04)----TableScan: join_t2 projection=[t2_id]
 
 statement ok
 set datafusion.optimizer.repartition_joins = false;
@@ -4043,15 +4021,14 @@ logical_plan
 07)------------TableScan: sales_global projection=[ts, sn, amount, currency]
 08)----------SubqueryAlias: e
 09)------------Projection: exchange_rates.ts, exchange_rates.currency_from, exchange_rates.rate
-10)--------------Filter: exchange_rates.currency_to = Utf8View("USD")
-11)----------------TableScan: exchange_rates projection=[ts, currency_from, currency_to, rate]
+10)--------------TableScan: exchange_rates projection=[ts, currency_from, rate, currency_to], unsupported_filters=[exchange_rates.currency_to = Utf8View("USD")]
 physical_plan
 01)SortExec: expr=[sn@1 ASC NULLS LAST], preserve_partitioning=[false]
 02)--ProjectionExec: expr=[ts@1 as ts, sn@0 as sn, amount@2 as amount, currency@3 as currency, CAST(amount@2 AS Float32) * last_value(e.rate)@4 as amount_usd]
 03)----AggregateExec: mode=Single, gby=[sn@1 as sn, ts@0 as ts, amount@2 as amount, currency@3 as currency], aggr=[last_value(e.rate)]
 04)------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(currency@3, currency_from@1)], filter=ts@0 >= ts@1, projection=[ts@0, sn@1, amount@2, currency@3, rate@6]
 05)--------DataSourceExec: partitions=1, partition_sizes=[0]
-06)--------FilterExec: currency_to@2 = USD, projection=[ts@0, currency_from@1, rate@3]
+06)--------FilterExec: currency_to@3 = USD, projection=[ts@0, currency_from@1, rate@2]
 07)----------DataSourceExec: partitions=1, partition_sizes=[0]
 
 statement ok
@@ -4392,8 +4369,7 @@ logical_plan
 03)----TableScan: test projection=[a, b, c]
 04)----SubqueryAlias: __correlated_sq_1
 05)------Projection: test.a
-06)--------Filter: test.b > Int32(3)
-07)----------TableScan: test projection=[a, b]
+06)--------TableScan: test projection=[a, b], unsupported_filters=[test.b > Int32(3)]
 physical_plan
 01)SortPreservingMergeExec: [c@2 DESC]
 02)--HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(a@0, a@0)]
@@ -4412,8 +4388,7 @@ logical_plan
 03)----TableScan: test projection=[a, b, c]
 04)----SubqueryAlias: __correlated_sq_1
 05)------Projection: test.a
-06)--------Filter: test.b > Int32(3)
-07)----------TableScan: test projection=[a, b]
+06)--------TableScan: test projection=[a, b], unsupported_filters=[test.b > Int32(3)]
 physical_plan
 01)SortPreservingMergeExec: [c@2 DESC NULLS LAST]
 02)--HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(a@0, a@0)]
@@ -4578,20 +4553,19 @@ query TT
 explain SELECT j1_string, j2_string FROM j1, LATERAL (SELECT * FROM j2 WHERE j1_id < j2_id) AS j2;
 ----
 logical_plan
-01)Cross Join: 
+01)Cross Join:
 02)--TableScan: j1 projection=[j1_string]
 03)--SubqueryAlias: j2
 04)----Projection: j2.j2_string
 05)------Subquery:
-06)--------Filter: outer_ref(j1.j1_id) < j2.j2_id
-07)----------TableScan: j2 projection=[j2_string, j2_id]
+06)--------TableScan: j2 projection=[j2_string, j2_id], unsupported_filters=[outer_ref(j1.j1_id) < j2.j2_id]
 physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Field { name: "j1_id", data_type: Int32, nullable: true }, Column { relation: Some(Bare { table: "j1" }), name: "j1_id" })
 
 query TT
 explain SELECT * FROM j1 JOIN (j2 JOIN j3 ON(j2_id = j3_id - 2)) ON(j1_id = j2_id), LATERAL (SELECT * FROM j3 WHERE j3_string = j2_string) as j4
 ----
 logical_plan
-01)Cross Join: 
+01)Cross Join:
 02)--Inner Join: CAST(j2.j2_id AS Int64) = CAST(j3.j3_id AS Int64) - Int64(2)
 03)----Inner Join: j1.j1_id = j2.j2_id
 04)------TableScan: j1 projection=[j1_string, j1_id]
@@ -4599,51 +4573,47 @@ logical_plan
 06)----TableScan: j3 projection=[j3_string, j3_id]
 07)--SubqueryAlias: j4
 08)----Subquery:
-09)------Filter: j3.j3_string = outer_ref(j2.j2_string)
-10)--------TableScan: j3 projection=[j3_string, j3_id]
+09)------TableScan: j3 projection=[j3_string, j3_id], unsupported_filters=[j3.j3_string = outer_ref(j2.j2_string)]
 physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Field { name: "j2_string", data_type: Utf8View, nullable: true }, Column { relation: Some(Bare { table: "j2" }), name: "j2_string" })
 
 query TT
 explain SELECT * FROM j1, LATERAL (SELECT * FROM j1, LATERAL (SELECT * FROM j2 WHERE j1_id = j2_id) as j2) as j2;
 ----
 logical_plan
-01)Cross Join: 
+01)Cross Join:
 02)--TableScan: j1 projection=[j1_string, j1_id]
 03)--SubqueryAlias: j2
 04)----Subquery:
-05)------Cross Join: 
+05)------Cross Join:
 06)--------TableScan: j1 projection=[j1_string, j1_id]
 07)--------SubqueryAlias: j2
 08)----------Subquery:
-09)------------Filter: outer_ref(j1.j1_id) = j2.j2_id
-10)--------------TableScan: j2 projection=[j2_string, j2_id]
+09)------------TableScan: j2 projection=[j2_string, j2_id], unsupported_filters=[outer_ref(j1.j1_id) = j2.j2_id]
 physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Field { name: "j1_id", data_type: Int32, nullable: true }, Column { relation: Some(Bare { table: "j1" }), name: "j1_id" })
 
 query TT
 explain SELECT j1_string, j2_string FROM j1 LEFT JOIN LATERAL (SELECT * FROM j2 WHERE j1_id < j2_id) AS j2 ON(true);
 ----
 logical_plan
-01)Left Join: 
+01)Left Join:
 02)--TableScan: j1 projection=[j1_string]
 03)--SubqueryAlias: j2
 04)----Projection: j2.j2_string
 05)------Subquery:
-06)--------Filter: outer_ref(j1.j1_id) < j2.j2_id
-07)----------TableScan: j2 projection=[j2_string, j2_id]
+06)--------TableScan: j2 projection=[j2_string, j2_id], unsupported_filters=[outer_ref(j1.j1_id) < j2.j2_id]
 physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Field { name: "j1_id", data_type: Int32, nullable: true }, Column { relation: Some(Bare { table: "j1" }), name: "j1_id" })
 
 query TT
 explain SELECT * FROM j1, (j2 LEFT JOIN LATERAL (SELECT * FROM j3 WHERE j1_id + j2_id = j3_id) AS j3 ON(true));
 ----
 logical_plan
-01)Cross Join: 
+01)Cross Join:
 02)--TableScan: j1 projection=[j1_string, j1_id]
-03)--Left Join: 
+03)--Left Join:
 04)----TableScan: j2 projection=[j2_string, j2_id]
 05)----SubqueryAlias: j3
 06)------Subquery:
-07)--------Filter: outer_ref(j1.j1_id) + outer_ref(j2.j2_id) = j3.j3_id
-08)----------TableScan: j3 projection=[j3_string, j3_id]
+07)--------TableScan: j3 projection=[j3_string, j3_id], unsupported_filters=[outer_ref(j1.j1_id) + outer_ref(j2.j2_id) = j3.j3_id]
 physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Field { name: "j1_id", data_type: Int32, nullable: true }, Column { relation: Some(Bare { table: "j1" }), name: "j1_id" })
 
 query TT

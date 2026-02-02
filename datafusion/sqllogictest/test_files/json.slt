@@ -144,5 +144,7 @@ SELECT id FROM json_partitioned_test WHERE part = 1 ORDER BY id
 query TT
 EXPLAIN SELECT id FROM json_partitioned_test WHERE part = 2
 ----
-logical_plan TableScan: json_partitioned_test projection=[id], full_filters=[json_partitioned_test.part = Int32(2)]
+logical_plan
+01)Projection: json_partitioned_test.id
+02)--TableScan: json_partitioned_test projection=[id, part], full_filters=[json_partitioned_test.part = Int32(2)]
 physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_table_json/part=2/data.json]]}, projection=[id], file_type=json

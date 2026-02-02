@@ -367,8 +367,7 @@ logical_plan
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----Projection:
 04)------Limit: skip=6, fetch=3
-05)--------Filter: t1.a > Int32(3)
-06)----------TableScan: t1 projection=[a]
+05)--------TableScan: t1 projection=[a], unsupported_filters=[t1.a > Int32(3)], fetch=9
 physical_plan
 01)ProjectionExec: expr=[count(Int64(1))@0 as count(*)]
 02)--AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]

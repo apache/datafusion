@@ -295,7 +295,7 @@ async fn unparse_cross_join() -> Result<()> {
     let optimized_plan = df.into_optimized_plan()?;
 
     let opt_sql = plan_to_sql(&optimized_plan)?;
-    assert_snapshot!(opt_sql, @"SELECT j1.j1_id, j2.j2_string FROM j1 CROSS JOIN j2 WHERE (j2.j2_id = 0)");
+    assert_snapshot!(opt_sql, @"SELECT j1.j1_id, j2.j2_string FROM j1 INNER JOIN j2 ON (j2.j2_id = 0)");
 
     Ok(())
 }

@@ -78,10 +78,8 @@ fn recursive_cte_with_nested_subquery() -> Result<()> {
           Projection: t.col_int32, numbers.level + Int64(1)
             Inner Join: CAST(t.col_int32 AS Int64) = CAST(numbers.id AS Int64) + Int64(1)
               SubqueryAlias: t
-                Filter: CAST(test.col_int32 AS Int64) IS NOT NULL
-                  TableScan: test
-              Filter: CAST(numbers.id AS Int64) + Int64(1) IS NOT NULL
-                TableScan: numbers
+                TableScan: test, unsupported_filters=[CAST(test.col_int32 AS Int64) IS NOT NULL]
+              TableScan: numbers, unsupported_filters=[CAST(numbers.id AS Int64) + Int64(1) IS NOT NULL]
     "
     );
 
@@ -130,13 +128,10 @@ fn subquery_filter_with_cast() -> Result<()> {
     @r#"
     Projection: test.col_int32
       Inner Join:  Filter: CAST(test.col_int32 AS Float64) > __scalar_sq_1.avg(test.col_int32)
-        TableScan: test projection=[col_int32]
+        TableScan: test projection=[col_int32], unsupported_filters=[Boolean(true)]
         SubqueryAlias: __scalar_sq_1
           Aggregate: groupBy=[[]], aggr=[[avg(CAST(test.col_int32 AS Float64))]]
-            Projection: test.col_int32
-              Filter: __common_expr_4 >= Date32("2002-05-08") AND __common_expr_4 <= Date32("2002-05-13")
-                Projection: CAST(test.col_utf8 AS Date32) AS __common_expr_4, test.col_int32
-                  TableScan: test projection=[col_int32, col_utf8]
+            TableScan: test projection=[col_int32], unsupported_filters=[CAST(test.col_utf8 AS Date32) >= Date32("2002-05-08"), CAST(test.col_utf8 AS Date32) <= Date32("2002-05-13")]
     "#
     );
     Ok(())
@@ -165,11 +160,7 @@ fn unsigned_target_type() -> Result<()> {
 
     assert_snapshot!(
     format!("{plan}"),
-    @r"
-    Projection: test.col_utf8
-      Filter: test.col_uint32 > UInt32(0)
-        TableScan: test projection=[col_uint32, col_utf8]
-    "
+    @"TableScan: test projection=[col_utf8], unsupported_filters=[test.col_uint32 > UInt32(0)]"
     );
     Ok(())
 }
@@ -203,12 +194,10 @@ fn semi_join_with_join_filter() -> Result<()> {
     @r"
     Projection: test.col_utf8
       LeftSemi Join: test.col_int32 = __correlated_sq_1.col_int32 Filter: test.col_uint32 != __correlated_sq_1.col_uint32
-        Filter: test.col_int32 IS NOT NULL
-          TableScan: test projection=[col_int32, col_uint32, col_utf8]
+        TableScan: test projection=[col_int32, col_uint32, col_utf8], unsupported_filters=[test.col_int32 IS NOT NULL]
         SubqueryAlias: __correlated_sq_1
           SubqueryAlias: t2
-            Filter: test.col_int32 IS NOT NULL
-              TableScan: test projection=[col_int32, col_uint32]
+            TableScan: test projection=[col_int32, col_uint32], unsupported_filters=[test.col_int32 IS NOT NULL]
     "
     );
     Ok(())
@@ -230,8 +219,7 @@ fn anti_join_with_join_filter() -> Result<()> {
         TableScan: test projection=[col_int32, col_uint32, col_utf8]
         SubqueryAlias: __correlated_sq_1
           SubqueryAlias: t2
-            Filter: test.col_int32 IS NOT NULL
-              TableScan: test projection=[col_int32, col_uint32]
+            TableScan: test projection=[col_int32, col_uint32], unsupported_filters=[test.col_int32 IS NOT NULL]
     "
     );
     Ok(())
@@ -247,13 +235,11 @@ fn where_exists_distinct() -> Result<()> {
     format!("{plan}"),
     @r"
     LeftSemi Join: test.col_int32 = __correlated_sq_1.col_int32
-      Filter: test.col_int32 IS NOT NULL
-        TableScan: test projection=[col_int32]
+      TableScan: test projection=[col_int32], unsupported_filters=[test.col_int32 IS NOT NULL]
       SubqueryAlias: __correlated_sq_1
         Aggregate: groupBy=[[t2.col_int32]], aggr=[[]]
           SubqueryAlias: t2
-            Filter: test.col_int32 IS NOT NULL
-              TableScan: test projection=[col_int32]
+            TableScan: test projection=[col_int32], unsupported_filters=[test.col_int32 IS NOT NULL]
     "
 
     );
@@ -294,9 +280,7 @@ fn between_date32_plus_interval() -> Result<()> {
     format!("{plan}"),
     @r#"
     Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
-      Projection:
-        Filter: test.col_date32 >= Date32("1998-03-18") AND test.col_date32 <= Date32("1998-06-16")
-          TableScan: test projection=[col_date32]
+      TableScan: test projection=[], unsupported_filters=[test.col_date32 >= Date32("1998-03-18"), test.col_date32 <= Date32("1998-06-16")]
     "#
     );
     Ok(())
@@ -312,9 +296,7 @@ fn between_date64_plus_interval() -> Result<()> {
     format!("{plan}"),
     @r#"
     Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
-      Projection:
-        Filter: test.col_date64 >= Date64("1998-03-18") AND test.col_date64 <= Date64("1998-06-16")
-          TableScan: test projection=[col_date64]
+      TableScan: test projection=[], unsupported_filters=[test.col_date64 >= Date64("1998-03-18"), test.col_date64 <= Date64("1998-06-16")]
     "#
     );
     Ok(())
@@ -342,12 +324,10 @@ fn join_keys_in_subquery_alias() {
     @r"
     Inner Join: a.col_int32 = b.key
       SubqueryAlias: a
-        Filter: test.col_int32 IS NOT NULL
-          TableScan: test projection=[col_int32, col_uint32, col_utf8, col_date32, col_date64, col_ts_nano_none, col_ts_nano_utc]
+        TableScan: test projection=[col_int32, col_uint32, col_utf8, col_date32, col_date64, col_ts_nano_none, col_ts_nano_utc], unsupported_filters=[test.col_int32 IS NOT NULL]
       SubqueryAlias: b
         Projection: test.col_int32 AS key
-          Filter: test.col_int32 IS NOT NULL
-            TableScan: test projection=[col_int32]
+          TableScan: test projection=[col_int32], unsupported_filters=[test.col_int32 IS NOT NULL]
     "
     );
 }
@@ -362,16 +342,13 @@ fn join_keys_in_subquery_alias_1() {
     @r"
     Inner Join: a.col_int32 = b.key
       SubqueryAlias: a
-        Filter: test.col_int32 IS NOT NULL
-          TableScan: test projection=[col_int32, col_uint32, col_utf8, col_date32, col_date64, col_ts_nano_none, col_ts_nano_utc]
+        TableScan: test projection=[col_int32, col_uint32, col_utf8, col_date32, col_date64, col_ts_nano_none, col_ts_nano_utc], unsupported_filters=[test.col_int32 IS NOT NULL]
       SubqueryAlias: b
         Projection: test.col_int32 AS key
           Inner Join: test.col_int32 = c.col_int32
-            Filter: test.col_int32 IS NOT NULL
-              TableScan: test projection=[col_int32]
+            TableScan: test projection=[col_int32], unsupported_filters=[test.col_int32 IS NOT NULL]
             SubqueryAlias: c
-              Filter: test.col_int32 IS NOT NULL
-                TableScan: test projection=[col_int32]
+              TableScan: test projection=[col_int32], unsupported_filters=[test.col_int32 IS NOT NULL]
     "
     );
 }
@@ -386,8 +363,7 @@ fn push_down_filter_groupby_expr_contains_alias() {
     @r"
     Projection: test.col_int32 + test.col_uint32 AS c, count(Int64(1)) AS count(*)
       Aggregate: groupBy=[[CAST(test.col_int32 AS Int64) + CAST(test.col_uint32 AS Int64)]], aggr=[[count(Int64(1))]]
-        Filter: CAST(test.col_int32 AS Int64) + CAST(test.col_uint32 AS Int64) > Int64(3)
-          TableScan: test projection=[col_int32, col_uint32]
+        TableScan: test projection=[col_int32, col_uint32], unsupported_filters=[CAST(test.col_int32 AS Int64) + CAST(test.col_uint32 AS Int64) > Int64(3)]
     "
     );
 }
@@ -422,10 +398,7 @@ fn eliminate_nested_filters() {
 
     assert_snapshot!(
           format!("{plan}"),
-          @r"
-    Filter: test.col_int32 > Int32(0)
-      TableScan: test projection=[col_int32]
-    "
+          @"TableScan: test projection=[col_int32], unsupported_filters=[test.col_int32 > Int32(0)]"
     );
 }
 
@@ -472,8 +445,7 @@ fn test_propagate_empty_relation_inner_join_and_unions() {
     Union
       TableScan: test projection=[col_int32]
       TableScan: test projection=[col_int32]
-      Filter: test.col_int32 < Int32(0)
-        TableScan: test projection=[col_int32]
+      TableScan: test projection=[col_int32], unsupported_filters=[test.col_int32 < Int32(0)]
     ");
 }
 
@@ -511,13 +483,11 @@ fn select_correlated_predicate_subquery_with_uppercase_ident() {
     format!("{plan}"),
     @r"
     LeftSemi Join: test.col_int32 = __correlated_sq_1.COL_INT32
-      Filter: test.col_int32 IS NOT NULL
-        TableScan: test projection=[col_int32, col_uint32, col_utf8, col_date32, col_date64, col_ts_nano_none, col_ts_nano_utc]
+      TableScan: test projection=[col_int32, col_uint32, col_utf8, col_date32, col_date64, col_ts_nano_none, col_ts_nano_utc], unsupported_filters=[test.col_int32 IS NOT NULL]
       SubqueryAlias: __correlated_sq_1
         SubqueryAlias: T1
           Projection: test.col_int32 AS COL_INT32
-            Filter: test.col_int32 IS NOT NULL
-              TableScan: test projection=[col_int32]
+            TableScan: test projection=[col_int32], unsupported_filters=[test.col_int32 IS NOT NULL]
     "
     );
 }
@@ -544,8 +514,7 @@ fn recursive_cte_projection_pushdown() -> Result<()> {
         Projection: test.col_int32 AS id
           TableScan: test projection=[col_int32]
         Projection: CAST(CAST(nodes.id AS Int64) + Int64(1) AS Int32) AS id
-          Filter: nodes.id < Int32(3)
-            TableScan: nodes projection=[id]
+          TableScan: nodes projection=[id], unsupported_filters=[nodes.id < Int32(3)]
     "
     );
     Ok(())
@@ -569,8 +538,7 @@ fn recursive_cte_with_aliased_self_reference() -> Result<()> {
           TableScan: test projection=[col_int32]
         Projection: CAST(CAST(child.id AS Int64) + Int64(1) AS Int32) AS id
           SubqueryAlias: child
-            Filter: nodes.id < Int32(3)
-              TableScan: nodes projection=[id]
+            TableScan: nodes projection=[id], unsupported_filters=[nodes.id < Int32(3)]
     ",
     );
     Ok(())
@@ -595,11 +563,9 @@ fn recursive_cte_with_unused_columns() -> Result<()> {
     SubqueryAlias: series
       RecursiveQuery: is_distinct=false
         Projection: Int64(1) AS n
-          Filter: test.col_int32 = Int32(1)
-            TableScan: test projection=[col_int32]
+          TableScan: test projection=[], unsupported_filters=[test.col_int32 = Int32(1)]
         Projection: series.n + Int64(1)
-          Filter: series.n < Int64(3)
-            TableScan: series projection=[n]
+          TableScan: series projection=[n], unsupported_filters=[series.n < Int64(3)]
     "
     );
     Ok(())
@@ -628,11 +594,9 @@ fn recursive_cte_projection_pushdown_baseline() -> Result<()> {
     SubqueryAlias: countdown
       RecursiveQuery: is_distinct=false
         Projection: test.col_int32 AS n
-          Filter: test.col_int32 = Int32(5)
-            TableScan: test projection=[col_int32]
+          TableScan: test projection=[col_int32], unsupported_filters=[test.col_int32 = Int32(5)]
         Projection: CAST(CAST(countdown.n AS Int64) - Int64(1) AS Int32) AS n
-          Filter: countdown.n > Int32(1)
-            TableScan: countdown projection=[n]
+          TableScan: countdown projection=[n], unsupported_filters=[countdown.n > Int32(1)]
     "
     );
     Ok(())

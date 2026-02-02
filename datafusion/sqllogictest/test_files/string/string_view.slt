@@ -215,8 +215,7 @@ explain SELECT column1_utf8 from test where column1_utf8view = 'Andrew';
 ----
 logical_plan
 01)Projection: test.column1_utf8
-02)--Filter: test.column1_utf8view = Utf8View("Andrew")
-03)----TableScan: test projection=[column1_utf8, column1_utf8view]
+02)--TableScan: test projection=[column1_utf8, column1_utf8view], unsupported_filters=[test.column1_utf8view = Utf8View("Andrew")]
 
 # reverse order should be the same
 query TT
@@ -224,38 +223,31 @@ explain SELECT column1_utf8 from test where 'Andrew' = column1_utf8view;
 ----
 logical_plan
 01)Projection: test.column1_utf8
-02)--Filter: test.column1_utf8view = Utf8View("Andrew")
-03)----TableScan: test projection=[column1_utf8, column1_utf8view]
+02)--TableScan: test projection=[column1_utf8, column1_utf8view], unsupported_filters=[test.column1_utf8view = Utf8View("Andrew")]
 
 query TT
 explain SELECT column1_utf8 from test where column1_utf8 = arrow_cast('Andrew', 'Utf8View');
 ----
-logical_plan
-01)Filter: test.column1_utf8 = Utf8("Andrew")
-02)--TableScan: test projection=[column1_utf8]
+logical_plan TableScan: test projection=[column1_utf8], unsupported_filters=[test.column1_utf8 = Utf8("Andrew")]
 
 query TT
 explain SELECT column1_utf8 from test where arrow_cast('Andrew', 'Utf8View') = column1_utf8;
 ----
-logical_plan
-01)Filter: test.column1_utf8 = Utf8("Andrew")
-02)--TableScan: test projection=[column1_utf8]
+logical_plan TableScan: test projection=[column1_utf8], unsupported_filters=[test.column1_utf8 = Utf8("Andrew")]
 
 query TT
 explain SELECT column1_utf8 from test where column1_utf8view = arrow_cast('Andrew', 'Dictionary(Int32, Utf8)');
 ----
 logical_plan
 01)Projection: test.column1_utf8
-02)--Filter: test.column1_utf8view = Utf8View("Andrew")
-03)----TableScan: test projection=[column1_utf8, column1_utf8view]
+02)--TableScan: test projection=[column1_utf8, column1_utf8view], unsupported_filters=[test.column1_utf8view = Utf8View("Andrew")]
 
 query TT
 explain SELECT column1_utf8 from test where arrow_cast('Andrew', 'Dictionary(Int32, Utf8)') = column1_utf8view;
 ----
 logical_plan
 01)Projection: test.column1_utf8
-02)--Filter: test.column1_utf8view = Utf8View("Andrew")
-03)----TableScan: test projection=[column1_utf8, column1_utf8view]
+02)--TableScan: test projection=[column1_utf8, column1_utf8view], unsupported_filters=[test.column1_utf8view = Utf8View("Andrew")]
 
 # compare string / stringview
 # Should cast string -> stringview (which is cheap), not stringview -> string (which is not)
@@ -264,16 +256,14 @@ explain SELECT column1_utf8 from test where column1_utf8view = column2_utf8;
 ----
 logical_plan
 01)Projection: test.column1_utf8
-02)--Filter: test.column1_utf8view = CAST(test.column2_utf8 AS Utf8View)
-03)----TableScan: test projection=[column1_utf8, column2_utf8, column1_utf8view]
+02)--TableScan: test projection=[column1_utf8, column2_utf8, column1_utf8view], unsupported_filters=[test.column1_utf8view = CAST(test.column2_utf8 AS Utf8View)]
 
 query TT
 explain SELECT column1_utf8 from test where column2_utf8 = column1_utf8view;
 ----
 logical_plan
 01)Projection: test.column1_utf8
-02)--Filter: CAST(test.column2_utf8 AS Utf8View) = test.column1_utf8view
-03)----TableScan: test projection=[column1_utf8, column2_utf8, column1_utf8view]
+02)--TableScan: test projection=[column1_utf8, column2_utf8, column1_utf8view], unsupported_filters=[CAST(test.column2_utf8 AS Utf8View) = test.column1_utf8view]
 
 query TT
 EXPLAIN SELECT

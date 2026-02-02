@@ -90,8 +90,7 @@ EXPLAIN select a from t where b > 2 ORDER BY a;
 logical_plan
 01)Sort: t.a ASC NULLS LAST
 02)--Projection: t.a
-03)----Filter: t.b > Int32(2)
-04)------TableScan: t projection=[a, b], partial_filters=[t.b > Int32(2)]
+03)----TableScan: t projection=[a, b], partial_filters=[t.b > Int32(2)]
 physical_plan
 01)SortPreservingMergeExec: [a@0 ASC NULLS LAST]
 02)--SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
@@ -105,8 +104,7 @@ EXPLAIN select a from t_pushdown where b > 2 ORDER BY a;
 logical_plan
 01)Sort: t_pushdown.a ASC NULLS LAST
 02)--Projection: t_pushdown.a
-03)----Filter: t_pushdown.b > Int32(2)
-04)------TableScan: t_pushdown projection=[a, b], partial_filters=[t_pushdown.b > Int32(2)]
+03)----TableScan: t_pushdown projection=[a, b], partial_filters=[t_pushdown.b > Int32(2)]
 physical_plan
 01)SortPreservingMergeExec: [a@0 ASC NULLS LAST]
 02)--SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
@@ -128,8 +126,7 @@ EXPLAIN select a from t where b = 2 ORDER BY b;
 logical_plan
 01)Projection: t.a
 02)--Sort: t.b ASC NULLS LAST
-03)----Filter: t.b = Int32(2)
-04)------TableScan: t projection=[a, b], partial_filters=[t.b = Int32(2)]
+03)----TableScan: t projection=[a, b], partial_filters=[t.b = Int32(2)]
 physical_plan
 01)CoalescePartitionsExec
 02)--FilterExec: b@1 = 2, projection=[a@0]
@@ -142,8 +139,7 @@ EXPLAIN select a from t_pushdown where b = 2 ORDER BY b;
 logical_plan
 01)Projection: t_pushdown.a
 02)--Sort: t_pushdown.b ASC NULLS LAST
-03)----Filter: t_pushdown.b = Int32(2)
-04)------TableScan: t_pushdown projection=[a, b], partial_filters=[t_pushdown.b = Int32(2)]
+03)----TableScan: t_pushdown projection=[a, b], partial_filters=[t_pushdown.b = Int32(2)]
 physical_plan
 01)CoalescePartitionsExec
 02)--DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/2.parquet]]}, projection=[a], file_type=parquet, predicate=b@1 = 2, pruning_predicate=b_null_count@2 != row_count@3 AND b_min@0 <= 2 AND 2 <= b_max@1, required_guarantees=[b in (2)]
@@ -176,8 +172,7 @@ EXPLAIN select a from t where b > 2 ORDER BY a;
 logical_plan
 01)Sort: t.a ASC NULLS LAST
 02)--Projection: t.a
-03)----Filter: t.b > Int32(2)
-04)------TableScan: t projection=[a, b], partial_filters=[t.b > Int32(2)]
+03)----TableScan: t projection=[a, b], partial_filters=[t.b > Int32(2)]
 physical_plan
 01)SortPreservingMergeExec: [a@0 ASC NULLS LAST]
 02)--SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
@@ -189,8 +184,7 @@ EXPLAIN select a from t_pushdown where b > 2 ORDER BY a;
 logical_plan
 01)Sort: t_pushdown.a ASC NULLS LAST
 02)--Projection: t_pushdown.a
-03)----Filter: t_pushdown.b > Int32(2)
-04)------TableScan: t_pushdown projection=[a, b], partial_filters=[t_pushdown.b > Int32(2)]
+03)----TableScan: t_pushdown projection=[a, b], partial_filters=[t_pushdown.b > Int32(2)]
 physical_plan
 01)SortPreservingMergeExec: [a@0 ASC NULLS LAST]
 02)--SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
@@ -212,8 +206,7 @@ EXPLAIN select a from t where b = 2 ORDER BY b;
 logical_plan
 01)Projection: t.a
 02)--Sort: t.b ASC NULLS LAST
-03)----Filter: t.b = Int32(2)
-04)------TableScan: t projection=[a, b], partial_filters=[t.b = Int32(2)]
+03)----TableScan: t projection=[a, b], partial_filters=[t.b = Int32(2)]
 physical_plan
 01)CoalescePartitionsExec
 02)--DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/2.parquet]]}, projection=[a], file_type=parquet, predicate=b@1 = 2, pruning_predicate=b_null_count@2 != row_count@3 AND b_min@0 <= 2 AND 2 <= b_max@1, required_guarantees=[b in (2)]
@@ -224,8 +217,7 @@ EXPLAIN select a from t_pushdown where b = 2 ORDER BY b;
 logical_plan
 01)Projection: t_pushdown.a
 02)--Sort: t_pushdown.b ASC NULLS LAST
-03)----Filter: t_pushdown.b = Int32(2)
-04)------TableScan: t_pushdown projection=[a, b], partial_filters=[t_pushdown.b = Int32(2)]
+03)----TableScan: t_pushdown projection=[a, b], partial_filters=[t_pushdown.b = Int32(2)]
 physical_plan
 01)CoalescePartitionsExec
 02)--DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/2.parquet]]}, projection=[a], file_type=parquet, predicate=b@1 = 2, pruning_predicate=b_null_count@2 != row_count@3 AND b_min@0 <= 2 AND 2 <= b_max@1, required_guarantees=[b in (2)]
@@ -258,8 +250,7 @@ EXPLAIN select a from t where b > 2 ORDER BY a;
 logical_plan
 01)Sort: t.a ASC NULLS LAST
 02)--Projection: t.a
-03)----Filter: t.b > Int32(2)
-04)------TableScan: t projection=[a, b], partial_filters=[t.b > Int32(2)]
+03)----TableScan: t projection=[a, b], partial_filters=[t.b > Int32(2)]
 physical_plan
 01)SortPreservingMergeExec: [a@0 ASC NULLS LAST]
 02)--SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
@@ -273,8 +264,7 @@ EXPLAIN select a from t_pushdown where b > 2 ORDER BY a;
 logical_plan
 01)Sort: t_pushdown.a ASC NULLS LAST
 02)--Projection: t_pushdown.a
-03)----Filter: t_pushdown.b > Int32(2)
-04)------TableScan: t_pushdown projection=[a, b], partial_filters=[t_pushdown.b > Int32(2)]
+03)----TableScan: t_pushdown projection=[a, b], partial_filters=[t_pushdown.b > Int32(2)]
 physical_plan
 01)SortPreservingMergeExec: [a@0 ASC NULLS LAST]
 02)--SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
@@ -296,8 +286,7 @@ EXPLAIN select a from t where b = 2 ORDER BY b;
 logical_plan
 01)Projection: t.a
 02)--Sort: t.b ASC NULLS LAST
-03)----Filter: t.b = Int32(2)
-04)------TableScan: t projection=[a, b], partial_filters=[t.b = Int32(2)]
+03)----TableScan: t projection=[a, b], partial_filters=[t.b = Int32(2)]
 physical_plan
 01)CoalescePartitionsExec
 02)--FilterExec: b@1 = 2, projection=[a@0]
@@ -310,8 +299,7 @@ EXPLAIN select a from t_pushdown where b = 2 ORDER BY b;
 logical_plan
 01)Projection: t_pushdown.a
 02)--Sort: t_pushdown.b ASC NULLS LAST
-03)----Filter: t_pushdown.b = Int32(2)
-04)------TableScan: t_pushdown projection=[a, b], partial_filters=[t_pushdown.b = Int32(2)]
+03)----TableScan: t_pushdown projection=[a, b], partial_filters=[t_pushdown.b = Int32(2)]
 physical_plan
 01)CoalescePartitionsExec
 02)--DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/2.parquet]]}, projection=[a], file_type=parquet, predicate=b@1 = 2, pruning_predicate=b_null_count@2 != row_count@3 AND b_min@0 <= 2 AND 2 <= b_max@1, required_guarantees=[b in (2)]
@@ -333,8 +321,7 @@ EXPLAIN select a from t where b > 2 ORDER BY a;
 logical_plan
 01)Sort: t.a ASC NULLS LAST
 02)--Projection: t.a
-03)----Filter: t.b > Int32(2)
-04)------TableScan: t projection=[a, b], partial_filters=[t.b > Int32(2)]
+03)----TableScan: t projection=[a, b], partial_filters=[t.b > Int32(2)]
 physical_plan
 01)SortPreservingMergeExec: [a@0 ASC NULLS LAST]
 02)--SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
@@ -353,8 +340,7 @@ EXPLAIN select a from t_pushdown where b = 2 ORDER BY b;
 logical_plan
 01)Projection: t_pushdown.a
 02)--Sort: t_pushdown.b ASC NULLS LAST
-03)----Filter: t_pushdown.b = Int32(2)
-04)------TableScan: t_pushdown projection=[a, b], partial_filters=[t_pushdown.b = Int32(2)]
+03)----TableScan: t_pushdown projection=[a, b], partial_filters=[t_pushdown.b = Int32(2)]
 physical_plan
 01)CoalescePartitionsExec
 02)--DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/2.parquet]]}, projection=[a], file_type=parquet, predicate=b@1 = 2, pruning_predicate=b_null_count@2 != row_count@3 AND b_min@0 <= 2 AND 2 <= b_max@1, required_guarantees=[b in (2)]
@@ -372,8 +358,7 @@ EXPLAIN select a from t_pushdown where b > 2 AND a IS NOT NULL order by a;
 logical_plan
 01)Sort: t_pushdown.a ASC NULLS LAST
 02)--Projection: t_pushdown.a
-03)----Filter: t_pushdown.b > Int32(2) AND t_pushdown.a IS NOT NULL
-04)------TableScan: t_pushdown projection=[a, b], partial_filters=[t_pushdown.b > Int32(2), t_pushdown.a IS NOT NULL]
+03)----TableScan: t_pushdown projection=[a, b], partial_filters=[t_pushdown.b > Int32(2), t_pushdown.a IS NOT NULL]
 physical_plan
 01)SortPreservingMergeExec: [a@0 ASC NULLS LAST]
 02)--SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
@@ -391,8 +376,7 @@ EXPLAIN select b from t_pushdown where a = 'bar' order by b;
 logical_plan
 01)Sort: t_pushdown.b ASC NULLS LAST
 02)--Projection: t_pushdown.b
-03)----Filter: t_pushdown.a = Utf8View("bar")
-04)------TableScan: t_pushdown projection=[a, b], partial_filters=[t_pushdown.a = Utf8View("bar")]
+03)----TableScan: t_pushdown projection=[b, a], partial_filters=[t_pushdown.a = Utf8View("bar")]
 physical_plan
 01)SortPreservingMergeExec: [b@0 ASC NULLS LAST]
 02)--SortExec: expr=[b@0 ASC NULLS LAST], preserve_partitioning=[true]
@@ -406,8 +390,7 @@ EXPLAIN select a from t_pushdown where b > random();
 ----
 logical_plan
 01)Projection: t_pushdown.a
-02)--Filter: CAST(t_pushdown.b AS Float64) > random()
-03)----TableScan: t_pushdown projection=[a, b]
+02)--TableScan: t_pushdown projection=[a, b], partial_filters=[CAST(t_pushdown.b AS Float64) > random()]
 physical_plan
 01)FilterExec: CAST(b@1 AS Float64) > random(), projection=[a@0]
 02)--DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/2.parquet]]}, projection=[a, b], file_type=parquet
@@ -463,9 +446,7 @@ xyz c
 query TT
 EXPLAIN select * from t_pushdown where part != val
 ----
-logical_plan
-01)Filter: t_pushdown.val != t_pushdown.part
-02)--TableScan: t_pushdown projection=[val, part], partial_filters=[t_pushdown.val != t_pushdown.part]
+logical_plan TableScan: t_pushdown projection=[val, part], partial_filters=[t_pushdown.val != t_pushdown.part]
 physical_plan DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_part_test/part=a/file.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_part_test/part=b/file.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_part_test/part=c/file.parquet]]}, projection=[val, part], file_type=parquet, predicate=val@0 != part@1
 
 # If we reference only a partition column it gets evaluated during the listing phase
@@ -479,9 +460,7 @@ physical_plan DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion
 query TT
 EXPLAIN select * from t_pushdown where val != 'c';
 ----
-logical_plan
-01)Filter: t_pushdown.val != Utf8View("c")
-02)--TableScan: t_pushdown projection=[val, part], partial_filters=[t_pushdown.val != Utf8View("c")]
+logical_plan TableScan: t_pushdown projection=[val, part], partial_filters=[t_pushdown.val != Utf8View("c")]
 physical_plan DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_part_test/part=a/file.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_part_test/part=b/file.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_part_test/part=c/file.parquet]]}, projection=[val, part], file_type=parquet, predicate=val@0 != c, pruning_predicate=val_null_count@2 != row_count@3 AND (val_min@0 != c OR c != val_max@1), required_guarantees=[val not in (c)]
 
 # If we have a mix of filters:
@@ -491,18 +470,14 @@ physical_plan DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion
 query TT
 EXPLAIN select * from t_pushdown where val != 'd' AND val != 'c' AND part = 'a' AND part != val;
 ----
-logical_plan
-01)Filter: t_pushdown.val != Utf8View("d") AND t_pushdown.val != Utf8View("c") AND t_pushdown.val != t_pushdown.part
-02)--TableScan: t_pushdown projection=[val, part], full_filters=[t_pushdown.part = Utf8View("a")], partial_filters=[t_pushdown.val != Utf8View("d"), t_pushdown.val != Utf8View("c"), t_pushdown.val != t_pushdown.part]
+logical_plan TableScan: t_pushdown projection=[val, part], full_filters=[t_pushdown.part = Utf8View("a")], partial_filters=[t_pushdown.val != Utf8View("d"), t_pushdown.val != Utf8View("c"), t_pushdown.val != t_pushdown.part]
 physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_part_test/part=a/file.parquet]]}, projection=[val, part], file_type=parquet, predicate=val@0 != d AND val@0 != c AND val@0 != part@1, pruning_predicate=val_null_count@2 != row_count@3 AND (val_min@0 != d OR d != val_max@1) AND val_null_count@2 != row_count@3 AND (val_min@0 != c OR c != val_max@1), required_guarantees=[val not in (c, d)]
 
 # The order of filters should not matter
 query TT
 EXPLAIN select val, part from t_pushdown where part = 'a' AND part = val;
 ----
-logical_plan
-01)Filter: t_pushdown.val = t_pushdown.part
-02)--TableScan: t_pushdown projection=[val, part], full_filters=[t_pushdown.part = Utf8View("a")], partial_filters=[t_pushdown.val = t_pushdown.part]
+logical_plan TableScan: t_pushdown projection=[val, part], full_filters=[t_pushdown.part = Utf8View("a")], partial_filters=[t_pushdown.val = t_pushdown.part]
 physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_part_test/part=a/file.parquet]]}, projection=[val, part], file_type=parquet, predicate=val@0 = part@1
 
 query TT
@@ -513,9 +488,7 @@ a a
 query TT
 EXPLAIN select val, part from t_pushdown where part = val AND part = 'a';
 ----
-logical_plan
-01)Filter: t_pushdown.val = t_pushdown.part
-02)--TableScan: t_pushdown projection=[val, part], full_filters=[t_pushdown.part = Utf8View("a")], partial_filters=[t_pushdown.val = t_pushdown.part]
+logical_plan TableScan: t_pushdown projection=[val, part], full_filters=[t_pushdown.part = Utf8View("a")], partial_filters=[t_pushdown.val = t_pushdown.part]
 physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_part_test/part=a/file.parquet]]}, projection=[val, part], file_type=parquet, predicate=val@0 = part@1
 
 query TT
@@ -599,8 +572,7 @@ EXPLAIN SELECT id, tags FROM array_test WHERE array_has(tags, 'rust') ORDER BY i
 ----
 logical_plan
 01)Sort: array_test.id ASC NULLS LAST
-02)--Filter: array_has(array_test.tags, Utf8("rust"))
-03)----TableScan: array_test projection=[id, tags], partial_filters=[array_has(array_test.tags, Utf8("rust"))]
+02)--TableScan: array_test projection=[id, tags], partial_filters=[array_has(array_test.tags, Utf8("rust"))]
 physical_plan
 01)SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
 02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/array_data/data.parquet]]}, projection=[id, tags], file_type=parquet, predicate=array_has(tags@1, rust)
@@ -616,8 +588,7 @@ EXPLAIN SELECT id, tags FROM array_test WHERE array_has_all(tags, ['rust', 'perf
 ----
 logical_plan
 01)Sort: array_test.id ASC NULLS LAST
-02)--Filter: array_has_all(array_test.tags, List([rust, performance]))
-03)----TableScan: array_test projection=[id, tags], partial_filters=[array_has_all(array_test.tags, List([rust, performance]))]
+02)--TableScan: array_test projection=[id, tags], partial_filters=[array_has_all(array_test.tags, List([rust, performance]))]
 physical_plan
 01)SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
 02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/array_data/data.parquet]]}, projection=[id, tags], file_type=parquet, predicate=array_has_all(tags@1, [rust, performance])
@@ -633,8 +604,7 @@ EXPLAIN SELECT id, tags FROM array_test WHERE array_has_any(tags, ['python', 'go
 ----
 logical_plan
 01)Sort: array_test.id ASC NULLS LAST
-02)--Filter: array_has_any(array_test.tags, List([python, go]))
-03)----TableScan: array_test projection=[id, tags], partial_filters=[array_has_any(array_test.tags, List([python, go]))]
+02)--TableScan: array_test projection=[id, tags], partial_filters=[array_has_any(array_test.tags, List([python, go]))]
 physical_plan
 01)SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
 02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/array_data/data.parquet]]}, projection=[id, tags], file_type=parquet, predicate=array_has_any(tags@1, [python, go])
@@ -652,8 +622,7 @@ EXPLAIN SELECT id, tags FROM array_test WHERE array_has_all(tags, ['rust']) OR a
 ----
 logical_plan
 01)Sort: array_test.id ASC NULLS LAST
-02)--Filter: array_has_all(array_test.tags, List([rust])) OR array_has_any(array_test.tags, List([python, go]))
-03)----TableScan: array_test projection=[id, tags], partial_filters=[array_has_all(array_test.tags, List([rust])) OR array_has_any(array_test.tags, List([python, go]))]
+02)--TableScan: array_test projection=[id, tags], partial_filters=[array_has_all(array_test.tags, List([rust])) OR array_has_any(array_test.tags, List([python, go]))]
 physical_plan
 01)SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
 02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/array_data/data.parquet]]}, projection=[id, tags], file_type=parquet, predicate=array_has_all(tags@1, [rust]) OR array_has_any(tags@1, [python, go])
@@ -669,8 +638,7 @@ EXPLAIN SELECT id, tags FROM array_test WHERE id > 1 AND array_has(tags, 'rust')
 ----
 logical_plan
 01)Sort: array_test.id ASC NULLS LAST
-02)--Filter: array_test.id > Int64(1) AND array_has(array_test.tags, Utf8("rust"))
-03)----TableScan: array_test projection=[id, tags], partial_filters=[array_test.id > Int64(1), array_has(array_test.tags, Utf8("rust"))]
+02)--TableScan: array_test projection=[id, tags], partial_filters=[array_test.id > Int64(1), array_has(array_test.tags, Utf8("rust"))]
 physical_plan
 01)SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
 02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/array_data/data.parquet]]}, projection=[id, tags], file_type=parquet, predicate=id@0 > 1 AND array_has(tags@1, rust), pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 1, required_guarantees=[]

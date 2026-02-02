@@ -150,9 +150,11 @@ mod tests {
             .select_columns(&["bool_col", "int_col"])?;
 
         let plan = df.explain(false, false)?.collect().await?;
-        // Filters all the way to Parquet
+        // Filters all the way to Parquet - the physical planner creates FilterExec
+        // for inexact filters (parquet predicate pushdown is inexact). Column index
+        // is @2 because we expand projection to include filter columns.
         let formatted = pretty::pretty_format_batches(&plan)?.to_string();
-        assert!(formatted.contains("FilterExec: id@0 = 1"), "{formatted}");
+        assert!(formatted.contains("FilterExec: id@2 = 1"), "{formatted}");
 
         Ok(())
     }

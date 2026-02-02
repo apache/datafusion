@@ -312,8 +312,7 @@ logical_plan
 05)--------Projection: users.dept, users.salary
 06)----------Filter: sum(users.salary) > Decimal128(Some(2000000),20,2)
 07)------------Aggregate: groupBy=[[users.dept, users.salary]], aggr=[[sum(users.salary)]]
-08)--------------Filter: users.salary > Decimal128(Some(500000),10,2)
-09)----------------TableScan: users projection=[salary, dept]
+08)--------------TableScan: users projection=[salary, dept], unsupported_filters=[users.salary > Decimal128(Some(500000),10,2)]
 physical_plan
 01)ProjectionExec: expr=[dept@0 as dept, avg(users.salary) PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as r]
 02)--FilterExec: avg(users.salary) PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 > Some(60000000000),14,6
