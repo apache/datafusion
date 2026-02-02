@@ -3263,7 +3263,8 @@ as values
 (1, 2),
 (2, null),
 (3, 1),
-(4, -1);
+(4, -1),
+(null, null);
 
 query I?
 select column1, array_repeat(column1, column2) from array_repeat_null_count_table;
@@ -3272,6 +3273,7 @@ select column1, array_repeat(column1, column2) from array_repeat_null_count_tabl
 2 NULL
 3 [3]
 4 []
+NULL NULL
 
 statement ok
 drop table array_repeat_null_count_table

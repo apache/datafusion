@@ -261,7 +261,7 @@ fn general_list_repeat<O: OffsetSizeTrait>(
     for row_idx in 0..count_array.len() {
         let (count, count_is_valid) = get_count_with_validity(count_array, row_idx);
         outer_nulls.append(count_is_valid);
-        let list_is_valid = !list_array.is_null(row_idx);
+        let list_is_valid = list_array.is_valid(row_idx);
         let start = list_offsets[row_idx].to_usize().unwrap();
         let end = list_offsets[row_idx + 1].to_usize().unwrap();
         let row_len = end - start;
