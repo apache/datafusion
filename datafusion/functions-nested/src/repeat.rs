@@ -29,9 +29,9 @@ use arrow::datatypes::{
     DataType::{LargeList, List},
     Field,
 };
-use datafusion_common::Result;
 use datafusion_common::cast::{as_int64_array, as_large_list_array, as_list_array};
 use datafusion_common::types::{NativeType, logical_int64};
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
@@ -182,24 +182,28 @@ fn general_repeat<O: OffsetSizeTrait>(
     array: &ArrayRef,
     count_array: &Int64Array,
 ) -> Result<ArrayRef> {
-    let total_repeated_values: usize = count_array
-        .values()
-        .iter()
-        .map(|&c| if c > 0 { c as usize } else { 0 })
+    let total_repeated_values: usize = (0..count_array.len())
+        .map(|i| get_count_with_validity(count_array, i))
         .sum();
 
     let mut take_indices = Vec::with_capacity(total_repeated_values);
-    let mut nulls = BooleanBufferBuilder::new(count_array.len());
     let mut offsets = Vec::with_capacity(count_array.len() + 1);
     offsets.push(O::zero());
     let mut running_offset = 0usize;
 
     for idx in 0..count_array.len() {
-        let (count, is_valid) = get_count_with_validity(count_array, idx);
-
-        running_offset += count;
-        offsets.push(O::from_usize(running_offset).unwrap());
-        nulls.append(is_valid);
+        let count = get_count_with_validity(count_array, idx);
+        running_offset = running_offset.checked_add(count).ok_or_else(|| {
+            DataFusionError::Execution(
+                "array_repeat: running_offset overflowed usize".to_string(),
+            )
+        })?;
+        let offset = O::from_usize(running_offset).ok_or_else(|| {
+            DataFusionError::Execution(format!(
+                "array_repeat: offset {running_offset} exceeds the maximum value for offset type"
+            ))
+        })?;
+        offsets.push(offset);
         take_indices.extend(std::iter::repeat_n(idx as u64, count));
     }
 
@@ -215,7 +219,7 @@ fn general_repeat<O: OffsetSizeTrait>(
         Arc::new(Field::new_list_field(array.data_type().to_owned(), true)),
         OffsetBuffer::new(offsets.into()),
         repeated_values,
-        Some(NullBuffer::new(nulls.finish())),
+        count_array.nulls().cloned(),
     )?))
 }
 
@@ -233,19 +237,19 @@ fn general_list_repeat<O: OffsetSizeTrait>(
     list_array: &GenericListArray<O>,
     count_array: &Int64Array,
 ) -> Result<ArrayRef> {
-    let counts = count_array.values();
     let list_offsets = list_array.value_offsets();
 
     // calculate capacities for pre-allocation
     let mut outer_total = 0usize;
     let mut inner_total = 0usize;
-    for (i, &c) in counts.iter().enumerate() {
-        if c > 0 {
-            outer_total += c as usize;
-            if !list_array.is_null(i) {
+    for i in 0..count_array.len() {
+        let count = get_count_with_validity(count_array, i);
+        if count > 0 {
+            outer_total += count;
+            if list_array.is_valid(i) {
                 let len = list_offsets[i + 1].to_usize().unwrap()
                     - list_offsets[i].to_usize().unwrap();
-                inner_total += len * (c as usize);
+                inner_total += len * count;
             }
         }
     }
@@ -254,21 +258,28 @@ fn general_list_repeat<O: OffsetSizeTrait>(
     let mut inner_offsets = Vec::with_capacity(outer_total + 1);
     let mut take_indices = Vec::with_capacity(inner_total);
     let mut inner_nulls = BooleanBufferBuilder::new(outer_total);
-    let mut outer_nulls = BooleanBufferBuilder::new(count_array.len());
     let mut inner_running = 0usize;
     inner_offsets.push(O::zero());
 
     for row_idx in 0..count_array.len() {
-        let (count, count_is_valid) = get_count_with_validity(count_array, row_idx);
-        outer_nulls.append(count_is_valid);
-        let list_is_valid = list_array.is_valid(row_idx);
+        let count = get_count_with_validity(count_array, row_idx);
+        let list_is_valid = !list_array.is_null(row_idx);
         let start = list_offsets[row_idx].to_usize().unwrap();
         let end = list_offsets[row_idx + 1].to_usize().unwrap();
         let row_len = end - start;
 
         for _ in 0..count {
-            inner_running += row_len;
-            inner_offsets.push(O::from_usize(inner_running).unwrap());
+            inner_running = inner_running.checked_add(row_len).ok_or_else(|| {
+                DataFusionError::Execution(
+                    "array_repeat: inner offset overflowed usize".to_string(),
+                )
+            })?;
+            let offset = O::from_usize(inner_running).ok_or_else(|| {
+                DataFusionError::Execution(format!(
+                    "array_repeat: offset {inner_running} exceeds the maximum value for offset type"
+                ))
+            })?;
+            inner_offsets.push(offset);
             inner_nulls.append(list_is_valid);
             if list_is_valid {
                 take_indices.extend(start as u64..end as u64);
@@ -301,16 +312,18 @@ fn general_list_repeat<O: OffsetSizeTrait>(
                 .map(|c| c.map(|v| if v > 0 { v as usize } else { 0 }).unwrap_or(0)),
         ),
         Arc::new(inner_list),
-        Some(NullBuffer::new(outer_nulls.finish())),
+        count_array.nulls().cloned(),
     )?))
 }
 
-/// Helper function to get count and validity from count_array at given index
-fn get_count_with_validity(count_array: &Int64Array, idx: usize) -> (usize, bool) {
+/// Helper function to get count from count_array at given index
+/// Return 0 for null values or non-positive count.
+#[inline]
+fn get_count_with_validity(count_array: &Int64Array, idx: usize) -> usize {
     if count_array.is_null(idx) {
-        (0, false)
+        0
     } else {
         let c = count_array.value(idx);
-        if c > 0 { (c as usize, true) } else { (0, true) }
+        if c > 0 { c as usize } else { 0 }
     }
 }
