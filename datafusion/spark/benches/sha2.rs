@@ -48,7 +48,7 @@ fn generate_binary_data(size: usize, null_density: f32) -> BinaryArray {
     builder.finish()
 }
 
-fn run_benchmark(c: &mut Criterion, name: &str, size: usize, args: Vec<ColumnarValue>) {
+fn run_benchmark(c: &mut Criterion, name: &str, size: usize, args: &[ColumnarValue]) {
     let sha2_func = SparkSha2::new();
     let arg_fields: Vec<_> = args
         .iter()
@@ -62,7 +62,7 @@ fn run_benchmark(c: &mut Criterion, name: &str, size: usize, args: Vec<ColumnarV
             black_box(
                 sha2_func
                     .invoke_with_args(ScalarFunctionArgs {
-                        args: args.clone(),
+                        args: args.to_vec(),
                         arg_fields: arg_fields.clone(),
                         number_rows: size,
                         return_field: Arc::new(Field::new("f", DataType::Utf8, true)),
@@ -76,15 +76,11 @@ fn run_benchmark(c: &mut Criterion, name: &str, size: usize, args: Vec<ColumnarV
 
 fn criterion_benchmark(c: &mut Criterion) {
     // Scalar benchmark (avoid array expansion)
-    run_benchmark(
-        c,
-        "sha2/scalar",
-        1,
-        vec![
-            ColumnarValue::Scalar(ScalarValue::Binary(Some(b"Spark".to_vec()))),
-            ColumnarValue::Scalar(ScalarValue::Int32(Some(256))),
-        ],
-    );
+    let scalar_args = vec![
+        ColumnarValue::Scalar(ScalarValue::Binary(Some(b"Spark".to_vec()))),
+        ColumnarValue::Scalar(ScalarValue::Int32(Some(256))),
+    ];
+    run_benchmark(c, "sha2/scalar", 1, &scalar_args);
 
     let sizes = vec![1024, 4096, 8192];
     let null_density = 0.1;
@@ -92,15 +88,11 @@ fn criterion_benchmark(c: &mut Criterion) {
     for &size in &sizes {
         let values = generate_binary_data(size, null_density);
         let bit_lengths = Int32Array::from(vec![256; size]);
-        run_benchmark(
-            c,
-            "sha2/array_binary_256",
-            size,
-            vec![
-                ColumnarValue::Array(Arc::new(values)),
-                ColumnarValue::Array(Arc::new(bit_lengths)),
-            ],
-        );
+        let array_args = vec![
+            ColumnarValue::Array(Arc::new(values)),
+            ColumnarValue::Array(Arc::new(bit_lengths)),
+        ];
+        run_benchmark(c, "sha2/array_binary_256", size, &array_args);
     }
 }
 
