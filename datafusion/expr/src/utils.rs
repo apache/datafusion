@@ -1334,6 +1334,97 @@ pub fn collect_subquery_cols(
     })
 }
 
+/// Split a projection into a column mask and an optional remainder projection.
+///
+/// Given a list of projection expressions and a schema, this function separates
+/// simple column references from complex expressions. This is useful when an
+/// operator can push down simple column selections but needs a follow-up
+/// projection for computed expressions.
+///
+/// # Arguments
+/// * `projection` - Optional list of projection expressions. `None` means select all columns.
+/// * `schema` - The schema to resolve column indices against
+///
+/// # Returns
+/// A tuple of `(remainder_projection, column_mask)`:
+/// * `(None, None)` - If projection is `None` (select all columns, no remainder needed)
+/// * `(None, Some(indices))` - If all expressions are simple column references
+/// * `(Some(exprs), Some(indices))` - If any expression is complex; `exprs` contains
+///   the full projection to apply on top of the column selection
+///
+/// # Example
+/// Given projection `[col("a"), col("a") + col("c"), col("d")]` and schema `[a, b, c, d]`:
+/// - column_mask = `[0, 2, 3]` (indices of a, c, d)
+/// - remainder_projection = `[col("a"), col("a") + col("c"), col("d")]`
+pub fn split_projection(
+    projection: &Option<Vec<Expr>>,
+    schema: &Schema,
+) -> Result<(Option<Vec<Expr>>, Option<Vec<usize>>)> {
+    let Some(exprs) = projection else {
+        // None means scan all columns, no remainder needed
+        return Ok((None, None));
+    };
+
+    if exprs.is_empty() {
+        return Ok((None, Some(vec![])));
+    }
+
+    let mut has_complex_expr = false;
+    let mut all_required_columns = BTreeSet::new();
+    let mut remainder_exprs = vec![];
+
+    for expr in exprs {
+        // Collect all column references from this expression
+        let mut is_complex_expr = false;
+        expr.apply(|e| {
+            if let Expr::Column(col) = e {
+                if let Ok(index) = schema.index_of(col.name()) {
+                    // If we made it this far this must be the first level and the whole
+                    // expression is a simple column reference.
+                    // But we don't know if subsequent expressions might have more complex
+                    // expressions necessitating `remainder_exprs` to be populated, so we
+                    // push to `remainder_exprs` just in case they are needed later.
+                    // It is simpler to do this now than to try to backtrack later since
+                    // we already matched into Expr::Column and thus can simply clone
+                    // `expr` here.
+                    // If `is_complex_expr` is true then we will append the complex
+                    // expression itself to `remainder_exprs` instead later once we've
+                    // fully traversed this expression.
+                    if !is_complex_expr {
+                        remainder_exprs.push(expr.clone());
+                    }
+                    all_required_columns.insert(index);
+                }
+            } else {
+                // Nothing to do here except note that we will have to append the full
+                // expression later
+                is_complex_expr = true;
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        if is_complex_expr {
+            // If any expression in the projection is not a simple column reference we
+            // will need to apply a remainder projection
+            has_complex_expr = true;
+            // Append the full expression itself to the remainder expressions
+            // So given a projection like `[a, a + c, d]` we would have:
+            // all_required_columns = {0, 2, 3}
+            // original schema: [a: Int, b: Int, c: Int, d: Int]
+            // projected schema: [a: Int, c: Int, d: Int]
+            // remainder_exprs = [col(a), col(a) + col(c), col(d)]
+            remainder_exprs.push(expr.clone());
+        }
+    }
+
+    // Always return explicit indices to ensure compatibility with all providers.
+    // Some providers (e.g., FFI) cannot distinguish between None (scan all) and
+    // empty vec (scan nothing), so we always provide explicit column indices.
+    Ok((
+        has_complex_expr.then_some(remainder_exprs),
+        Some(all_required_columns.into_iter().collect()),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

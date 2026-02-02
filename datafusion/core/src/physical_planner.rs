@@ -18,7 +18,7 @@
 //! Planner for [`LogicalPlan`] to [`ExecutionPlan`]
 
 use std::borrow::Cow;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::datasource::file_format::file_type_to_format;
@@ -84,7 +84,7 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
-use datafusion_expr::utils::split_conjunction;
+use datafusion_expr::utils::{split_conjunction, split_projection};
 use datafusion_expr::{
     Analyze, BinaryExpr, DescribeTable, DmlStatement, Explain, ExplainFormat, Extension,
     FetchType, Filter, JoinType, Operator, RecursiveQuery, SkipType, StringifiedPlan,
@@ -1729,7 +1729,7 @@ impl DefaultPhysicalPlanner {
 
         // Compute required column indices and remainder projection
         let (remainder_projection, scan_indices) =
-            self.compute_scan_projection(&scan.projection, &source_schema)?;
+            split_projection(&scan.projection, &source_schema)?;
 
         // Create the scan
         let scan_args = ScanArgs::default()
@@ -1758,76 +1758,6 @@ impl DefaultPhysicalPlanner {
         }
 
         Ok(plan)
-    }
-
-    /// Compute the column indices needed for the scan based on projection expressions.
-    ///
-    /// Returns a tuple of:
-    /// - `Option<Vec<Expr>>`: Remainder projection to apply on top of the scan output.
-    ///   `None` if the projection is all simple column references (reordering, dropping, etc.)
-    /// - `Vec<usize>`: Column indices to scan from the source.
-    fn compute_scan_projection(
-        &self,
-        projection: &Option<Vec<Expr>>,
-        source_schema: &Schema,
-    ) -> Result<(Option<Vec<Expr>>, Option<Vec<usize>>)> {
-        let Some(exprs) = projection else {
-            // None means scan all columns, no remainder needed
-            return Ok((None, None));
-        };
-
-        if exprs.is_empty() {
-            return Ok((None, Some(vec![])));
-        }
-
-        let mut has_complex_expr = false;
-        let mut all_required_columns = BTreeSet::new();
-        let mut remainder_exprs = vec![];
-
-        for expr in exprs {
-            // Collect all column references from this expression
-            let mut is_complex_expr = false;
-            expr.apply(|e| {
-                if let Expr::Column(col) = e {
-                    if let Ok(index) = source_schema.index_of(col.name()) {
-                        // If we made it this far this must be the first level and the whole expression is a simple column reference
-                        // But we don't know if subsequent expressions might have more complex expressions necessitating `remainder_exprs`
-                        // to be populated, so we push to `remainder_exprs` just in case they are needed later.
-                        // It is simpler to do this now than to try to backtrack later since we already matched into Expr::Column
-                        // and thus can simply clone `expr` here.
-                        // If `is_complex_expr` is true then we will append the complex expression itself to `remainder_exprs` instead
-                        // later once we've fully traversed this expression.
-                        if !is_complex_expr {
-                            remainder_exprs.push(expr.clone());
-                        }
-                        all_required_columns.insert(index);
-                    }
-                } else {
-                    // Nothing to do here except note that we will have to append the full expression later
-                    is_complex_expr = true;
-                }
-                Ok(TreeNodeRecursion::Continue)
-            })?;
-            if is_complex_expr {
-                // If any expression in the projection is not a simple column reference we will need to apply a remainder projection
-                has_complex_expr = true;
-                // Append the full expression itself to the remainder expressions
-                // So given a projection like `[a, a + c, d]` we would have:
-                // all_required_columns = {0, 2, 3}
-                // original schema: [a: Int, b: Int, c: Int, d: Int]
-                // projected schema: [a: Int, c: Int, d: Int]
-                // remainder_exprs = [col(a), col(a) + col(c), col(d)]
-                remainder_exprs.push(expr.clone());
-            }
-        }
-
-        // Always return explicit indices to ensure compatibility with all providers.
-        // Some providers (e.g., FFI) cannot distinguish between None (scan all) and
-        // empty vec (scan nothing), so we always provide explicit column indices.
-        Ok((
-            has_complex_expr.then_some(remainder_exprs),
-            Some(all_required_columns.into_iter().collect()),
-        ))
     }
 
     /// Creates a ProjectionExec from logical expressions, handling async UDF expressions.

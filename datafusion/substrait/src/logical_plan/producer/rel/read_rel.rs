@@ -19,13 +19,10 @@ use crate::logical_plan::producer::rel::project_rel::create_project_remapping;
 use crate::logical_plan::producer::{
     SubstraitProducer, to_substrait_literal, to_substrait_named_struct,
 };
-use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::common::{DFSchema, ToDFSchema, substrait_datafusion_err};
-use datafusion::logical_expr::utils::conjunction;
+use datafusion::logical_expr::utils::{conjunction, split_projection};
 use datafusion::logical_expr::{EmptyRelation, Expr, TableScan, Values};
 use datafusion::scalar::ScalarValue;
-use std::collections::BTreeSet;
 use std::sync::Arc;
 use substrait::proto::expression::MaskExpression;
 use substrait::proto::expression::literal::Struct as LiteralStruct;
@@ -104,9 +101,8 @@ pub fn from_table_scan(
     let source_schema = scan.source.schema();
 
     // Compute required column indices and remainder projection expressions.
-    // This follows the same pattern as the physical planner's compute_scan_projection.
     let (remainder_projection, scan_indices) =
-        compute_scan_projection(&scan.projection, &source_schema)?;
+        split_projection(&scan.projection, source_schema.as_ref())?;
 
     // Build the projection mask from computed scan indices
     let projection = scan_indices.as_ref().map(|indices| {
@@ -202,62 +198,6 @@ pub fn from_table_scan(
     } else {
         Ok(read_rel)
     }
-}
-
-/// Compute the column indices needed for the scan based on projection expressions.
-///
-/// Returns a tuple of:
-/// - `Option<Vec<Expr>>`: Remainder projection to apply on top of the scan output.
-///   `None` if the projection is all simple column references (reordering, dropping, etc.)
-/// - `Option<Vec<usize>>`: Column indices to scan from the source. `None` means scan all.
-fn compute_scan_projection(
-    projection: &Option<Vec<Expr>>,
-    source_schema: &SchemaRef,
-) -> datafusion::common::Result<(Option<Vec<Expr>>, Option<Vec<usize>>)> {
-    let Some(exprs) = projection else {
-        // None means scan all columns, no remainder needed
-        return Ok((None, None));
-    };
-
-    if exprs.is_empty() {
-        return Ok((None, Some(vec![])));
-    }
-
-    let mut has_complex_expr = false;
-    let mut all_required_columns = BTreeSet::new();
-    let mut remainder_exprs = vec![];
-
-    for expr in exprs {
-        // Collect all column references from this expression
-        let mut is_complex_expr = false;
-        expr.apply(|e| {
-            if let Expr::Column(col) = e {
-                if let Ok(index) = source_schema.index_of(col.name()) {
-                    // If we made it this far without seeing a non-Column node, this is a simple
-                    // column reference. We add it to remainder_exprs in case later expressions
-                    // turn out to be complex (requiring us to use remainder projection).
-                    if !is_complex_expr {
-                        remainder_exprs.push(expr.clone());
-                    }
-                    all_required_columns.insert(index);
-                }
-            } else {
-                // This expression contains non-column nodes, so it's complex
-                is_complex_expr = true;
-            }
-            Ok(TreeNodeRecursion::Continue)
-        })?;
-        if is_complex_expr {
-            has_complex_expr = true;
-            // Append the full complex expression to remainder_exprs
-            remainder_exprs.push(expr.clone());
-        }
-    }
-
-    Ok((
-        has_complex_expr.then_some(remainder_exprs),
-        Some(all_required_columns.into_iter().collect()),
-    ))
 }
 
 /// Encodes an EmptyRelation as a Substrait VirtualTable.
