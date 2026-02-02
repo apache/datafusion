@@ -817,31 +817,31 @@ false
 query TTT
 select routine_name, data_type, function_type from information_schema.routines where routine_name = 'row_number';
 ----
-row_number Int64 WINDOW
+row_number NULL WINDOW
 
 query TTT
 select routine_name, data_type, function_type from information_schema.routines where routine_name = 'rank';
 ----
-rank Int64 WINDOW
+rank NULL WINDOW
 
 query TTT
 select routine_name, data_type, function_type from information_schema.routines where routine_name = 'dense_rank';
 ----
-dense_rank Int64 WINDOW
+dense_rank NULL WINDOW
 
 query TTT
 select routine_name, data_type, function_type from information_schema.routines where routine_name = 'lag';
 ----
-lag Null WINDOW
+lag NULL WINDOW
 
 query TTT
 select routine_name, data_type, function_type from information_schema.routines where routine_name = 'lead';
 ----
-lead Null WINDOW
+lead NULL WINDOW
 
 # Test that window functions return types match their actual behavior
-# row_number, rank, dense_rank all return Int64
-# lag and lead return types depend on their input (shown as Null in generic signature)
+# row_number, rank, dense_rank all return NULL (no return type in signature)
+# lag and lead return types depend on their input (shown as NULL in generic signature)
 query TTTB
 select routine_name, data_type, function_type, is_deterministic
 from information_schema.routines
@@ -849,9 +849,9 @@ where function_type = 'WINDOW'
   and (routine_name = 'row_number' OR routine_name = 'rank' OR routine_name = 'dense_rank')
 order by routine_name;
 ----
-dense_rank Int64 WINDOW true
-rank Int64 WINDOW true
-row_number Int64 WINDOW true
+dense_rank NULL WINDOW true
+rank NULL WINDOW true
+row_number NULL WINDOW true
 
 # test every function type are included in the result
 query TTTITTTTBI
