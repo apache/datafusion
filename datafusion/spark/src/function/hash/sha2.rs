@@ -21,7 +21,7 @@ use datafusion_common::types::{
     NativeType, logical_binary, logical_int32, logical_string,
 };
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{Result, internal_err};
+use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::{
     Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     TypeSignatureClass, Volatility,
@@ -29,7 +29,6 @@ use datafusion_expr::{
 use datafusion_functions::utils::make_scalar_function;
 use sha2::{self, Digest};
 use std::any::Any;
-use std::fmt::Write;
 use std::sync::Arc;
 
 /// Differs from DataFusion version in allowing array input for bit lengths, and
@@ -87,7 +86,69 @@ impl ScalarUDFImpl for SparkSha2 {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(sha2_impl, vec![])(&args.args)
+        let values = &args.args[0];
+        let bit_lengths = &args.args[1];
+
+        match (values, bit_lengths) {
+            (
+                ColumnarValue::Scalar(value_scalar),
+                ColumnarValue::Scalar(ScalarValue::Int32(Some(bit_length))),
+            ) => {
+                if value_scalar.is_null() {
+                    return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)));
+                }
+
+                // Accept both Binary and Utf8 scalars (depending on coercion)
+                let bytes: Vec<u8> = match value_scalar {
+                    ScalarValue::Binary(Some(b)) => b.clone(),
+                    ScalarValue::LargeBinary(Some(b)) => b.clone(),
+                    ScalarValue::BinaryView(Some(b)) => b.clone(),
+                    ScalarValue::Utf8(Some(s))
+                    | ScalarValue::LargeUtf8(Some(s))
+                    | ScalarValue::Utf8View(Some(s)) => s.clone().into_bytes(),
+                    other => {
+                        return internal_err!(
+                            "Unsupported scalar datatype for sha2: {}",
+                            other.data_type()
+                        );
+                    }
+                };
+
+                let out = match bit_length {
+                    224 => {
+                        let mut digest = sha2::Sha224::default();
+                        digest.update(&bytes);
+                        Some(hex_encode(digest.finalize()))
+                    }
+                    0 | 256 => {
+                        let mut digest = sha2::Sha256::default();
+                        digest.update(&bytes);
+                        Some(hex_encode(digest.finalize()))
+                    }
+                    384 => {
+                        let mut digest = sha2::Sha384::default();
+                        digest.update(&bytes);
+                        Some(hex_encode(digest.finalize()))
+                    }
+                    512 => {
+                        let mut digest = sha2::Sha512::default();
+                        digest.update(&bytes);
+                        Some(hex_encode(digest.finalize()))
+                    }
+                    _ => None,
+                };
+
+                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(out)))
+            }
+            (
+                ColumnarValue::Scalar(_),
+                ColumnarValue::Scalar(ScalarValue::Int32(None)),
+            ) => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None))),
+            _ => {
+                // Fallback to existing behavior for any array/mixed cases
+                make_scalar_function(sha2_impl, vec![])(&args.args)
+            }
+        }
     }
 }
 
@@ -144,11 +205,16 @@ where
     Arc::new(array)
 }
 
+const HEX_CHARS: [u8; 16] = *b"0123456789abcdef";
+
+#[inline]
 fn hex_encode<T: AsRef<[u8]>>(data: T) -> String {
-    let mut s = String::with_capacity(data.as_ref().len() * 2);
-    for b in data.as_ref() {
-        // Writing to a string never errors, so we can unwrap here.
-        write!(&mut s, "{b:02x}").unwrap();
+    let bytes = data.as_ref();
+    let mut out = Vec::with_capacity(bytes.len() * 2);
+    for &b in bytes {
+        out.push(HEX_CHARS[(b >> 4) as usize]);
+        out.push(HEX_CHARS[(b & 0x0F) as usize]);
     }
-    s
+    // SAFETY: out contains only ASCII
+    unsafe { String::from_utf8_unchecked(out) }
 }
