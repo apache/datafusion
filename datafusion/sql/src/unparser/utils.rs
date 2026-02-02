@@ -385,13 +385,16 @@ pub(crate) fn try_transform_to_simple_table_scan_with_filters(
                     }
                 }
 
-                // Use TableScanBuilder to preserve full projection expressions
+                // Use TableScanBuilder to preserve full projection expressions and fetch
                 let mut scan_builder = TableScanBuilder::new(
                     table_scan.table_name.clone(),
                     Arc::clone(&table_scan.source),
                 );
                 if let Some(proj) = &table_scan.projection {
                     scan_builder = scan_builder.with_projection(Some(proj.clone()));
+                }
+                if let Some(fetch) = table_scan.fetch {
+                    scan_builder = scan_builder.with_fetch(Some(fetch));
                 }
                 // Don't include filters - they're returned separately
                 let new_scan = scan_builder.build()?;

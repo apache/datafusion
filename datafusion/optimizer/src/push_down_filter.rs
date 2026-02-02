@@ -1137,11 +1137,19 @@ impl OptimizerRule for PushDownFilter {
                     });
 
                 // Combine existing scan filters with pushable filter predicates
-                let new_scan_filters: Vec<Expr> = scan
-                    .filters
-                    .iter()
-                    .chain(pushable_filters)
+                // Separate volatile and non-volatile predicates: only deduplicate non-volatile ones
+                // since volatile expressions like `random() < 0.5 AND random() < 0.5` are not equivalent
+                // to a single `random() < 0.5`
+                let all_filters: Vec<&Expr> =
+                    scan.filters.iter().chain(pushable_filters).collect();
+                let (volatile_filters, non_volatile_filters): (Vec<_>, Vec<_>) =
+                    all_filters.into_iter().partition(|pred| pred.is_volatile());
+
+                // Only deduplicate non-volatile filters, preserve all volatile ones
+                let new_scan_filters: Vec<Expr> = non_volatile_filters
+                    .into_iter()
                     .unique()
+                    .chain(volatile_filters)
                     .cloned()
                     .collect();
 
@@ -4072,7 +4080,7 @@ mod tests {
             plan,
             @r"
         Projection: test.a, test.b
-          TableScan: test, full_filters=[TestScalarUDF() > Float64(0.1), t.a > Int32(5), t.b > Int32(10)]
+          TableScan: test, full_filters=[t.a > Int32(5), t.b > Int32(10), TestScalarUDF() > Float64(0.1)]
         "
         )
     }
@@ -4108,7 +4116,7 @@ mod tests {
             plan,
             @r"
         Projection: a, b
-          TableScan: test, unsupported_filters=[TestScalarUDF() > Float64(0.1), t.a > Int32(5), t.b > Int32(10)]
+          TableScan: test, unsupported_filters=[t.a > Int32(5), t.b > Int32(10), TestScalarUDF() > Float64(0.1)]
         "
         )
     }

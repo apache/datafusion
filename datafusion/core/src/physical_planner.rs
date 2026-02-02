@@ -619,7 +619,13 @@ impl DefaultPhysicalPlanner {
                 if let Some(provider) =
                     target.as_any().downcast_ref::<DefaultTableSource>()
                 {
-                    let filters = extract_dml_filters(input)?;
+                    // Create a DFSchema with the table name as qualifier so we can
+                    // properly match qualified column references from the input plan
+                    let target_schema = DFSchema::try_from_qualified_schema(
+                        table_name.clone(),
+                        &target.schema(),
+                    )?;
+                    let filters = extract_dml_filters(input, &target_schema)?;
                     provider
                         .table_provider
                         .delete_from(session_state, filters)
@@ -645,9 +651,15 @@ impl DefaultPhysicalPlanner {
                 {
                     // For UPDATE, the assignments are encoded in the projection of input
                     // We pass the filters and let the provider handle the projection
-                    let filters = extract_dml_filters(input)?;
+                    // Create a DFSchema with the table name as qualifier so we can
+                    // properly match qualified column references from the input plan
+                    let target_schema = DFSchema::try_from_qualified_schema(
+                        table_name.clone(),
+                        &target.schema(),
+                    )?;
+                    let filters = extract_dml_filters(input, &target_schema)?;
                     // Extract assignments from the projection in input plan
-                    let assignments = extract_update_assignments(input)?;
+                    let assignments = extract_update_assignments(input, table_name)?;
                     provider
                         .table_provider
                         .update(session_state, assignments, filters)
@@ -1795,11 +1807,9 @@ impl DefaultPhysicalPlanner {
             .sorted()
             .collect();
 
-        if indices.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(indices))
-        }
+        // Return Some(vec![]) for empty projections (e.g., `SELECT 1 FROM wide_table`)
+        // rather than None, which would scan all columns
+        Ok(Some(indices))
     }
 
     /// Check if projection expressions form an identity projection
@@ -2108,10 +2118,14 @@ fn get_physical_expr_pair(
 /// Extract filter predicates from a DML input plan (DELETE/UPDATE).
 /// Walks the logical plan tree and collects Filter predicates,
 /// splitting AND conjunctions into individual expressions.
+/// Only predicates that exclusively reference columns from the target table are included.
 /// Column qualifiers are stripped so expressions can be evaluated against
 /// the TableProvider's schema.
 ///
-fn extract_dml_filters(input: &Arc<LogicalPlan>) -> Result<Vec<Expr>> {
+fn extract_dml_filters(
+    input: &Arc<LogicalPlan>,
+    target_schema: &DFSchema,
+) -> Result<Vec<Expr>> {
     let mut filters = Vec::new();
 
     input.apply(|node| {
@@ -2129,8 +2143,24 @@ fn extract_dml_filters(input: &Arc<LogicalPlan>) -> Result<Vec<Expr>> {
         Ok(TreeNodeRecursion::Continue)
     })?;
 
+    // Only keep predicates that ONLY reference target table columns.
+    // This prevents issues where predicates like `t2.x = 1` (from a join)
+    // would become `x = 1` after stripping qualifiers and incorrectly
+    // match a column in the target table.
+    let target_filters: Vec<Expr> = filters
+        .into_iter()
+        .filter(|pred| {
+            pred.column_refs()
+                .iter()
+                .all(|col| target_schema.has_column(col))
+        })
+        .collect();
+
     // Strip table qualifiers from column references
-    filters.into_iter().map(strip_column_qualifiers).collect()
+    target_filters
+        .into_iter()
+        .map(strip_column_qualifiers)
+        .collect()
 }
 
 /// Strip table qualifiers from column references in an expression.
@@ -2156,7 +2186,10 @@ fn strip_column_qualifiers(expr: Expr) -> Result<Expr> {
 /// over the source table. This function extracts column name and expression pairs
 /// from the projection. Column qualifiers are stripped from the expressions.
 ///
-fn extract_update_assignments(input: &Arc<LogicalPlan>) -> Result<Vec<(String, Expr)>> {
+fn extract_update_assignments(
+    input: &Arc<LogicalPlan>,
+    target_table: &TableReference,
+) -> Result<Vec<(String, Expr)>> {
     // The UPDATE input plan structure is:
     // Projection(updated columns as expressions with aliases)
     //   Filter(optional WHERE clause)
@@ -2174,7 +2207,7 @@ fn extract_update_assignments(input: &Arc<LogicalPlan>) -> Result<Vec<(String, E
                 let column_name = alias.name.clone();
                 // Only include if it's not just a column reference to itself
                 // (those are columns that aren't being updated)
-                if !is_identity_assignment(&alias.expr, &column_name) {
+                if !is_identity_assignment(&alias.expr, &column_name, target_table) {
                     // Strip qualifiers from the assignment expression
                     let stripped_expr = strip_column_qualifiers((*alias.expr).clone())?;
                     assignments.push((column_name, stripped_expr));
@@ -2188,7 +2221,7 @@ fn extract_update_assignments(input: &Arc<LogicalPlan>) -> Result<Vec<(String, E
                 for expr in &projection.expr {
                     if let Expr::Alias(alias) = expr {
                         let column_name = alias.name.clone();
-                        if !is_identity_assignment(&alias.expr, &column_name) {
+                        if !is_identity_assignment(&alias.expr, &column_name, target_table) {
                             let stripped_expr =
                                 strip_column_qualifiers((*alias.expr).clone())?;
                             assignments.push((column_name, stripped_expr));
@@ -2205,10 +2238,28 @@ fn extract_update_assignments(input: &Arc<LogicalPlan>) -> Result<Vec<(String, E
 }
 
 /// Check if an assignment is an identity assignment (column = column)
-/// These are columns that are not being modified in the UPDATE
-fn is_identity_assignment(expr: &Expr, column_name: &str) -> bool {
+/// These are columns that are not being modified in the UPDATE.
+/// An assignment like `b = t2.b` (from a different table in a join) is NOT identity
+/// even though the column names match - the qualifier indicates it comes from
+/// a different relation.
+fn is_identity_assignment(
+    expr: &Expr,
+    column_name: &str,
+    target_table: &TableReference,
+) -> bool {
     match expr {
-        Expr::Column(col) => col.name == column_name,
+        Expr::Column(col) => {
+            // Check if the column name matches
+            if col.name != column_name {
+                return false;
+            }
+            // If there's no qualifier, it's identity (references the default table)
+            // If there IS a qualifier, it must match the target table to be identity
+            match &col.relation {
+                None => true,
+                Some(qualifier) => qualifier == target_table,
+            }
+        }
         _ => false,
     }
 }

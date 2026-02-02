@@ -52,7 +52,8 @@ use datafusion_datasource_json::file_format::JsonFormat as OtherNdJsonFormat;
 #[cfg(feature = "parquet")]
 use datafusion_datasource_parquet::file_format::ParquetFormat;
 use datafusion_expr::{
-    AggregateUDF, DmlStatement, FetchType, RecursiveQuery, SkipType, TableSource, Unnest,
+    AggregateUDF, DmlStatement, FetchType, RecursiveQuery, SkipType, TableSource,
+    TableScanBuilder, Unnest,
 };
 use datafusion_expr::{
     DistinctOn, DropView, Expr, LogicalPlan, LogicalPlanBuilder, ScalarUDF, SortExpr,
@@ -480,36 +481,51 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let table_name =
                     from_table_reference(scan.table_name.as_ref(), "ListingTableScan")?;
 
-                let mut projection = None;
-                if let Some(columns) = &scan.projection {
-                    let column_indices = columns
+                // Prefer projection_exprs if present (full expressions),
+                // fall back to projection (column names) for backwards compatibility
+                let projection_exprs = if !scan.projection_exprs.is_empty() {
+                    Some(from_proto::parse_exprs(
+                        &scan.projection_exprs,
+                        ctx,
+                        extension_codec,
+                    )?)
+                } else if let Some(columns) = &scan.projection {
+                    // Fall back to column indices for backwards compatibility
+                    let column_indices: Vec<usize> = columns
                         .columns
                         .iter()
                         .map(|name| provider.schema().index_of(name))
                         .collect::<Result<Vec<usize>, _>>()?;
-                    projection = Some(column_indices);
-                }
+                    // Convert column indices to column expressions
+                    Some(
+                        column_indices
+                            .iter()
+                            .map(|&i| {
+                                Expr::Column(datafusion_common::Column::new_unqualified(
+                                    provider.schema().field(i).name(),
+                                ))
+                            })
+                            .collect(),
+                    )
+                } else {
+                    None
+                };
 
-                LogicalPlanBuilder::scan_with_filters(
-                    table_name,
-                    provider_as_source(Arc::new(provider)),
-                    projection,
-                    filters,
-                )?
-                .build()
+                {
+                    let mut builder = TableScanBuilder::new(
+                        table_name,
+                        provider_as_source(Arc::new(provider)),
+                    );
+                    if let Some(exprs) = projection_exprs {
+                        builder = builder.with_projection(Some(exprs));
+                    }
+                    builder = builder.with_filters(filters);
+                    Ok(LogicalPlan::TableScan(builder.build()?))
+                }
             }
             LogicalPlanType::CustomScan(scan) => {
                 let schema: Schema = convert_required!(scan.schema)?;
                 let schema = Arc::new(schema);
-                let mut projection = None;
-                if let Some(columns) = &scan.projection {
-                    let column_indices = columns
-                        .columns
-                        .iter()
-                        .map(|name| schema.index_of(name))
-                        .collect::<Result<Vec<usize>, _>>()?;
-                    projection = Some(column_indices);
-                }
 
                 let filters =
                     from_proto::parse_exprs(&scan.filters, ctx, extension_codec)?;
@@ -520,17 +536,51 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let provider = extension_codec.try_decode_table_provider(
                     &scan.custom_table_data,
                     &table_name,
-                    schema,
+                    Arc::clone(&schema),
                     ctx,
                 )?;
 
-                LogicalPlanBuilder::scan_with_filters(
-                    table_name,
-                    provider_as_source(provider),
-                    projection,
-                    filters,
-                )?
-                .build()
+                // Prefer projection_exprs if present (full expressions),
+                // fall back to projection (column names) for backwards compatibility
+                let projection_exprs = if !scan.projection_exprs.is_empty() {
+                    Some(from_proto::parse_exprs(
+                        &scan.projection_exprs,
+                        ctx,
+                        extension_codec,
+                    )?)
+                } else if let Some(columns) = &scan.projection {
+                    // Fall back to column indices for backwards compatibility
+                    let column_indices: Vec<usize> = columns
+                        .columns
+                        .iter()
+                        .map(|name| schema.index_of(name))
+                        .collect::<Result<Vec<usize>, _>>()?;
+                    // Convert column indices to column expressions
+                    Some(
+                        column_indices
+                            .iter()
+                            .map(|&i| {
+                                Expr::Column(datafusion_common::Column::new_unqualified(
+                                    schema.field(i).name(),
+                                ))
+                            })
+                            .collect(),
+                    )
+                } else {
+                    None
+                };
+
+                {
+                    let mut builder = TableScanBuilder::new(
+                        table_name,
+                        provider_as_source(provider),
+                    );
+                    if let Some(exprs) = projection_exprs {
+                        builder = builder.with_projection(Some(exprs));
+                    }
+                    builder = builder.with_filters(filters);
+                    Ok(LogicalPlan::TableScan(builder.build()?))
+                }
             }
             LogicalPlanType::Sort(sort) => {
                 let input: LogicalPlan =
@@ -838,16 +888,6 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlanType::ViewScan(scan) => {
                 let schema: Schema = convert_required!(scan.schema)?;
 
-                let mut projection = None;
-                if let Some(columns) = &scan.projection {
-                    let column_indices = columns
-                        .columns
-                        .iter()
-                        .map(|name| schema.index_of(name))
-                        .collect::<Result<Vec<usize>, _>>()?;
-                    projection = Some(column_indices);
-                }
-
                 let input: LogicalPlan =
                     into_logical_plan!(scan.input, ctx, extension_codec)?;
 
@@ -862,12 +902,46 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let table_name =
                     from_table_reference(scan.table_name.as_ref(), "ViewScan")?;
 
-                LogicalPlanBuilder::scan(
-                    table_name,
-                    provider_as_source(Arc::new(provider)),
-                    projection,
-                )?
-                .build()
+                // Prefer projection_exprs if present (full expressions),
+                // fall back to projection (column names) for backwards compatibility
+                let projection_exprs = if !scan.projection_exprs.is_empty() {
+                    Some(from_proto::parse_exprs(
+                        &scan.projection_exprs,
+                        ctx,
+                        extension_codec,
+                    )?)
+                } else if let Some(columns) = &scan.projection {
+                    // Fall back to column indices for backwards compatibility
+                    let column_indices: Vec<usize> = columns
+                        .columns
+                        .iter()
+                        .map(|name| schema.index_of(name))
+                        .collect::<Result<Vec<usize>, _>>()?;
+                    // Convert column indices to column expressions
+                    Some(
+                        column_indices
+                            .iter()
+                            .map(|&i| {
+                                Expr::Column(datafusion_common::Column::new_unqualified(
+                                    schema.field(i).name(),
+                                ))
+                            })
+                            .collect(),
+                    )
+                } else {
+                    None
+                };
+
+                {
+                    let mut builder = TableScanBuilder::new(
+                        table_name,
+                        provider_as_source(Arc::new(provider)),
+                    );
+                    if let Some(exprs) = projection_exprs {
+                        builder = builder.with_projection(Some(exprs));
+                    }
+                    Ok(LogicalPlan::TableScan(builder.build()?))
+                }
             }
             LogicalPlanType::Prepare(prepare) => {
                 let input: LogicalPlan =
@@ -1021,15 +1095,23 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let schema = provider.schema();
                 let source = provider.as_any();
 
-                let projection = match projection {
-                    None => None,
+                // Serialize projection in both formats:
+                // - `projection` (column names) for backwards compatibility
+                // - `projection_exprs` (full expressions) for complex projections
+                let (projection, projection_exprs) = match projection {
+                    None => (None, vec![]),
                     Some(exprs) => {
-                        // Extract column names from projection expressions
+                        // Extract column names from projection expressions (backwards compat)
                         let column_names =
                             exprs.iter().map(|e| e.schema_name().to_string()).collect();
-                        Some(protobuf::ProjectionColumns {
-                            columns: column_names,
-                        })
+                        // Also serialize full expressions for roundtrip correctness
+                        let expr_nodes = serialize_exprs(exprs, extension_codec)?;
+                        (
+                            Some(protobuf::ProjectionColumns {
+                                columns: column_names,
+                            }),
+                            expr_nodes,
+                        )
                     }
                 };
 
@@ -1147,6 +1229,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 filters,
                                 target_partitions: options.target_partitions as u32,
                                 file_sort_order: exprs_vec,
+                                projection_exprs: projection_exprs.clone(),
                             },
                         )),
                     })
@@ -1168,6 +1251,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                     .definition()
                                     .map(|s| s.to_string())
                                     .unwrap_or_default(),
+                                projection_exprs: projection_exprs.clone(),
                             },
                         ))),
                     })
@@ -1197,6 +1281,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         schema: Some(schema),
                         filters,
                         custom_table_data: bytes,
+                        projection_exprs,
                     });
                     let node = LogicalPlanNode {
                         logical_plan_type: Some(scan),

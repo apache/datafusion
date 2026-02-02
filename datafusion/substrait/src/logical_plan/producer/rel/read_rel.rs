@@ -18,7 +18,7 @@
 use crate::logical_plan::producer::{
     SubstraitProducer, to_substrait_literal, to_substrait_named_struct,
 };
-use datafusion::common::{DFSchema, ToDFSchema, substrait_datafusion_err};
+use datafusion::common::{DFSchema, TableReference, ToDFSchema, substrait_datafusion_err};
 use datafusion::logical_expr::utils::{
     conjunction, expr_to_columns, projection_indices_from_exprs,
 };
@@ -209,10 +209,27 @@ pub fn from_table_scan(
             }))),
         });
 
+        // Build the schema that represents the output of the ReadRel (after masking).
+        // Expressions in the ProjectRel must reference fields using indices relative
+        // to this masked schema, not the full table schema.
+        let masked_fields: Vec<(Option<TableReference>, Arc<datafusion::arrow::datatypes::Field>)> =
+            column_indices
+                .iter()
+                .map(|&i| {
+                    let (qualifier, field) = table_schema_qualified.qualified_field(i);
+                    (qualifier.cloned(), Arc::clone(field))
+                })
+                .collect();
+        let masked_schema = Arc::new(DFSchema::new_with_metadata(
+            masked_fields,
+            table_schema_qualified.metadata().clone(),
+        )?);
+
         // Create the ProjectRel with the complex expressions
+        // Use the masked schema so field references are correct relative to ReadRel output
         let expressions = proj_exprs
             .iter()
-            .map(|e| producer.handle_expr(e, &table_schema_qualified))
+            .map(|e| producer.handle_expr(e, &masked_schema))
             .collect::<datafusion::common::Result<Vec<_>>>()?;
 
         // Calculate emit mapping: skip input fields, only emit expression results
