@@ -19,10 +19,9 @@
 
 use crate::utils::make_scalar_function;
 use arrow::array::{
-    Array, ArrayRef, Capacities, GenericListArray, ListArray, MutableArrayData,
-    OffsetSizeTrait, UInt64Array, new_null_array,
+    Array, ArrayRef, BooleanBufferBuilder, GenericListArray, OffsetSizeTrait, UInt64Array,
 };
-use arrow::buffer::OffsetBuffer;
+use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::compute;
 use arrow::compute::cast;
 use arrow::datatypes::DataType;
@@ -109,10 +108,17 @@ impl ScalarUDFImpl for ArrayRepeat {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(List(Arc::new(Field::new_list_field(
-            arg_types[0].clone(),
-            true,
-        ))))
+        let element_type = &arg_types[0];
+        match element_type {
+            LargeList(_) => Ok(LargeList(Arc::new(Field::new_list_field(
+                element_type.clone(),
+                true,
+            )))),
+            _ => Ok(List(Arc::new(Field::new_list_field(
+                element_type.clone(),
+                true,
+            )))),
+        }
     }
 
     fn invoke_with_args(
@@ -189,42 +195,33 @@ fn general_repeat<O: OffsetSizeTrait>(
     array: &ArrayRef,
     count_array: &UInt64Array,
 ) -> Result<ArrayRef> {
-    let data_type = array.data_type();
-    let mut new_values = vec![];
+    // Build offsets and take_indices
+    let total_repeated_values: usize =
+        count_array.values().iter().map(|&c| c as usize).sum();
+    let mut take_indices = Vec::with_capacity(total_repeated_values);
+    let mut offsets = Vec::with_capacity(count_array.len() + 1);
+    offsets.push(O::zero());
+    let mut running_offset = 0usize;
 
-    let count_vec = count_array
-        .values()
-        .to_vec()
-        .iter()
-        .map(|x| *x as usize)
-        .collect::<Vec<_>>();
-
-    for (row_index, &count) in count_vec.iter().enumerate() {
-        let repeated_array = if array.is_null(row_index) {
-            new_null_array(data_type, count)
-        } else {
-            let original_data = array.to_data();
-            let capacity = Capacities::Array(count);
-            let mut mutable =
-                MutableArrayData::with_capacities(vec![&original_data], false, capacity);
-
-            for _ in 0..count {
-                mutable.extend(0, row_index, row_index + 1);
-            }
-
-            let data = mutable.freeze();
-            arrow::array::make_array(data)
-        };
-        new_values.push(repeated_array);
+    for (idx, &count) in count_array.values().iter().enumerate() {
+        let count = count as usize;
+        running_offset += count;
+        offsets.push(O::from_usize(running_offset).unwrap());
+        take_indices.extend(std::iter::repeat_n(idx as u64, count))
     }
 
-    let new_values: Vec<_> = new_values.iter().map(|a| a.as_ref()).collect();
-    let values = compute::concat(&new_values)?;
+    // Build the flattened values
+    let repeated_values = compute::take(
+        array.as_ref(),
+        &UInt64Array::from_iter_values(take_indices),
+        None,
+    )?;
 
+    // Construct final ListArray
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        Arc::new(Field::new_list_field(data_type.to_owned(), true)),
-        OffsetBuffer::from_lengths(count_vec),
-        values,
+        Arc::new(Field::new_list_field(array.data_type().to_owned(), true)),
+        OffsetBuffer::new(offsets.into()),
+        repeated_values,
         None,
     )?))
 }
@@ -243,56 +240,66 @@ fn general_list_repeat<O: OffsetSizeTrait>(
     list_array: &GenericListArray<O>,
     count_array: &UInt64Array,
 ) -> Result<ArrayRef> {
-    let data_type = list_array.data_type();
-    let value_type = list_array.value_type();
-    let mut new_values = vec![];
+    let counts = count_array.values();
+    let list_offsets = list_array.value_offsets();
 
-    let count_vec = count_array
-        .values()
-        .to_vec()
+    // calculate capacities for pre-allocation
+    let outer_total = counts.iter().map(|&c| c as usize).sum();
+    let inner_total = counts
         .iter()
-        .map(|x| *x as usize)
-        .collect::<Vec<_>>();
+        .enumerate()
+        .filter(|&(i, _)| !list_array.is_null(i))
+        .map(|(i, &c)| {
+            let len = list_offsets[i + 1].to_usize().unwrap()
+                - list_offsets[i].to_usize().unwrap();
+            len * (c as usize)
+        })
+        .sum();
 
-    for (list_array_row, &count) in list_array.iter().zip(count_vec.iter()) {
-        let list_arr = match list_array_row {
-            Some(list_array_row) => {
-                let original_data = list_array_row.to_data();
-                let capacity = Capacities::Array(original_data.len() * count);
-                let mut mutable = MutableArrayData::with_capacities(
-                    vec![&original_data],
-                    false,
-                    capacity,
-                );
+    // Build inner structures
+    let mut inner_offsets = Vec::with_capacity(outer_total + 1);
+    let mut take_indices = Vec::with_capacity(inner_total);
+    let mut inner_nulls = BooleanBufferBuilder::new(outer_total);
+    let mut inner_running = 0usize;
+    inner_offsets.push(O::zero());
 
-                for _ in 0..count {
-                    mutable.extend(0, 0, original_data.len());
-                }
+    for (row_idx, &count) in counts.iter().enumerate() {
+        let is_valid = !list_array.is_null(row_idx);
+        let start = list_offsets[row_idx].to_usize().unwrap();
+        let end = list_offsets[row_idx + 1].to_usize().unwrap();
+        let row_len = end - start;
 
-                let data = mutable.freeze();
-                let repeated_array = arrow::array::make_array(data);
-
-                let list_arr = GenericListArray::<O>::try_new(
-                    Arc::new(Field::new_list_field(value_type.clone(), true)),
-                    OffsetBuffer::<O>::from_lengths(vec![original_data.len(); count]),
-                    repeated_array,
-                    None,
-                )?;
-                Arc::new(list_arr) as ArrayRef
+        for _ in 0..count {
+            inner_running += row_len;
+            inner_offsets.push(O::from_usize(inner_running).unwrap());
+            inner_nulls.append(is_valid);
+            if is_valid {
+                take_indices.extend(start as u64..end as u64);
             }
-            None => new_null_array(data_type, count),
-        };
-        new_values.push(list_arr);
+        }
     }
 
-    let lengths = new_values.iter().map(|a| a.len()).collect::<Vec<_>>();
-    let new_values: Vec<_> = new_values.iter().map(|a| a.as_ref()).collect();
-    let values = compute::concat(&new_values)?;
+    // Build inner ListArray
+    let inner_values = compute::take(
+        list_array.values().as_ref(),
+        &UInt64Array::from_iter_values(take_indices),
+        None,
+    )?;
+    let inner_list = GenericListArray::<O>::try_new(
+        Arc::new(Field::new_list_field(list_array.value_type().clone(), true)),
+        OffsetBuffer::new(inner_offsets.into()),
+        inner_values,
+        Some(NullBuffer::new(inner_nulls.finish())),
+    )?;
 
-    Ok(Arc::new(ListArray::try_new(
-        Arc::new(Field::new_list_field(data_type.to_owned(), true)),
-        OffsetBuffer::<i32>::from_lengths(lengths),
-        values,
+    // Build outer ListArray
+    Ok(Arc::new(GenericListArray::<O>::try_new(
+        Arc::new(Field::new_list_field(
+            list_array.data_type().to_owned(),
+            true,
+        )),
+        OffsetBuffer::<O>::from_lengths(counts.iter().map(|&c| c as usize)),
+        Arc::new(inner_list),
         None,
     )?))
 }
