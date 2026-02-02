@@ -61,7 +61,7 @@ impl<'a> PhysicalExprSimplifier<'a> {
 
         while count < MAX_LOOP_COUNT {
             count += 1;
-            let result = current_expr.transform_down(|node| {
+            let result = current_expr.transform(|node| {
                 #[cfg(debug_assertions)]
                 let original_type = node.data_type(schema).unwrap();
 

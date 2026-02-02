@@ -49,7 +49,8 @@ pub(crate) fn simplify_const_expr_with_dummy(
     expr: Arc<dyn PhysicalExpr>,
     batch: &RecordBatch,
 ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
-    if !can_evaluate_as_constant(&expr) {
+    // If expr is already a const literal or can't be evaluated into one.
+    if expr.as_any().is::<Literal>() || (!can_evaluate_as_constant(&expr)) {
         return Ok(Transformed::no(expr));
     }
 
