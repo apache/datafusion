@@ -229,4 +229,29 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn duplicate_name_in_union() -> Result<()> {
+        let proto_plan =
+            read_json("tests/testdata/test_plans/duplicate_name_in_union.substrait.json");
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
+
+        assert_snapshot!(
+        plan,
+        @r"
+        Projection: foo AS col1, bar AS col2
+          Union
+            Projection: foo, bar
+              Values: (Int64(100), Int64(200))
+            Projection: x, foo
+              Values: (Int32(300), Int64(400))
+        "
+                );
+
+        // Trigger execution to ensure plan validity
+        DataFrame::new(ctx.state(), plan).show().await?;
+
+        Ok(())
+    }
 }
