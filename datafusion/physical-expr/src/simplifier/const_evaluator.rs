@@ -17,7 +17,7 @@
 
 //! Constant expression evaluation for the physical expression simplifier
 
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::array::new_null_array;
 use arrow::datatypes::{DataType, Field, Schema};
@@ -28,8 +28,6 @@ use datafusion_expr_common::columnar_value::ColumnarValue;
 
 use crate::PhysicalExpr;
 use crate::expressions::{Column, Literal};
-
-static BATCH: OnceLock<RecordBatch> = OnceLock::new();
 
 /// Simplify expressions that consist only of literals by evaluating them.
 ///
@@ -44,12 +42,16 @@ static BATCH: OnceLock<RecordBatch> = OnceLock::new();
 pub fn simplify_const_expr(
     expr: Arc<dyn PhysicalExpr>,
 ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
+    simplify_const_expr_with_dummy(expr, &create_dummy_batch()?)
+}
+
+pub(crate) fn simplify_const_expr_with_dummy(
+    expr: Arc<dyn PhysicalExpr>,
+    batch: &RecordBatch,
+) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
     if !can_evaluate_as_constant(&expr) {
         return Ok(Transformed::no(expr));
     }
-
-    // Create a 1-row dummy batch for evaluation
-    let batch = BATCH.get_or_init(create_dummy_batch);
 
     // Evaluate the expression
     match expr.evaluate(batch) {
@@ -97,11 +99,11 @@ fn can_evaluate_as_constant(expr: &Arc<dyn PhysicalExpr>) -> bool {
 /// that only contain literals, the batch content is irrelevant.
 ///
 /// This is the same approach used in the logical expression `ConstEvaluator`.
-fn create_dummy_batch() -> RecordBatch {
+pub(crate) fn create_dummy_batch() -> Result<RecordBatch> {
     // RecordBatch requires at least one column
     let dummy_schema = Arc::new(Schema::new(vec![Field::new("_", DataType::Null, true)]));
     let col = new_null_array(&DataType::Null, 1);
-    RecordBatch::try_new(dummy_schema, vec![col]).expect("valid batch")
+    Ok(RecordBatch::try_new(dummy_schema, vec![col])?)
 }
 
 /// Check if this expression has any column references.
