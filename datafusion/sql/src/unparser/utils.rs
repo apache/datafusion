@@ -393,7 +393,7 @@ pub(crate) fn try_transform_to_simple_table_scan_with_filters(
                     )
                     .projection(table_scan.projection.clone())
                     .filters(vec![]) // Filters handled separately
-                    .fetch(None)
+                    .fetch(table_scan.fetch)
                     .build()?,
                 ));
 

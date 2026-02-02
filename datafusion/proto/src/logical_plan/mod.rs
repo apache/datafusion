@@ -56,12 +56,12 @@ use datafusion_expr::{
 };
 use datafusion_expr::{
     DistinctOn, DropView, Expr, LogicalPlan, LogicalPlanBuilder, ScalarUDF, SortExpr,
-    Statement, WindowUDF, dml,
+    Statement, WindowUDF, col, dml,
     logical_plan::{
         Aggregate, CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateView,
         DdlStatement, Distinct, EmptyRelation, Extension, Join, JoinConstraint, Prepare,
-        Projection, Repartition, Sort, SubqueryAlias, TableScan, Values, Window,
-        builder::project,
+        Projection, Repartition, Sort, SubqueryAlias, TableScan, TableScanBuilder,
+        Values, Window, builder::project,
     },
 };
 
@@ -480,36 +480,46 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let table_name =
                     from_table_reference(scan.table_name.as_ref(), "ListingTableScan")?;
 
-                let mut projection = None;
-                if let Some(columns) = &scan.projection {
-                    let column_indices = columns
-                        .columns
-                        .iter()
-                        .map(|name| provider.schema().index_of(name))
-                        .collect::<Result<Vec<usize>, _>>()?;
-                    projection = Some(column_indices);
-                }
+                // Prefer new projection_exprs field, fall back to old projection for backward compatibility
+                let projection = if !scan.projection_exprs.is_empty() {
+                    // New format: expressions are in projection_exprs
+                    Some(from_proto::parse_exprs(
+                        &scan.projection_exprs,
+                        ctx,
+                        extension_codec,
+                    )?)
+                } else if let Some(columns) = &scan.projection {
+                    if !columns.columns.is_empty() {
+                        // Backward compatibility: convert old column names to expressions
+                        Some(
+                            columns
+                                .columns
+                                .iter()
+                                .map(|name| col(name.as_str()))
+                                .collect(),
+                        )
+                    } else {
+                        // New format: projection field is a marker indicating Some([])
+                        Some(vec![])
+                    }
+                } else {
+                    // No projection field means projection is None
+                    None
+                };
 
-                LogicalPlanBuilder::scan_with_filters(
-                    table_name,
-                    provider_as_source(Arc::new(provider)),
-                    projection,
-                    filters,
-                )?
-                .build()
+                Ok(LogicalPlan::TableScan(
+                    TableScanBuilder::new(
+                        table_name,
+                        provider_as_source(Arc::new(provider)),
+                    )
+                    .projection(projection)
+                    .filters(filters)
+                    .build()?,
+                ))
             }
             LogicalPlanType::CustomScan(scan) => {
                 let schema: Schema = convert_required!(scan.schema)?;
                 let schema = Arc::new(schema);
-                let mut projection = None;
-                if let Some(columns) = &scan.projection {
-                    let column_indices = columns
-                        .columns
-                        .iter()
-                        .map(|name| schema.index_of(name))
-                        .collect::<Result<Vec<usize>, _>>()?;
-                    projection = Some(column_indices);
-                }
 
                 let filters =
                     from_proto::parse_exprs(&scan.filters, ctx, extension_codec)?;
@@ -524,13 +534,39 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ctx,
                 )?;
 
-                LogicalPlanBuilder::scan_with_filters(
-                    table_name,
-                    provider_as_source(provider),
-                    projection,
-                    filters,
-                )?
-                .build()
+                // Prefer new projection_exprs field, fall back to old projection for backward compatibility
+                let projection = if !scan.projection_exprs.is_empty() {
+                    // New format: expressions are in projection_exprs
+                    Some(from_proto::parse_exprs(
+                        &scan.projection_exprs,
+                        ctx,
+                        extension_codec,
+                    )?)
+                } else if let Some(columns) = &scan.projection {
+                    if !columns.columns.is_empty() {
+                        // Backward compatibility: convert old column names to expressions
+                        Some(
+                            columns
+                                .columns
+                                .iter()
+                                .map(|name| col(name.as_str()))
+                                .collect(),
+                        )
+                    } else {
+                        // New format: projection field is a marker indicating Some([])
+                        Some(vec![])
+                    }
+                } else {
+                    // No projection field means projection is None
+                    None
+                };
+
+                Ok(LogicalPlan::TableScan(
+                    TableScanBuilder::new(table_name, provider_as_source(provider))
+                        .projection(projection)
+                        .filters(filters)
+                        .build()?,
+                ))
             }
             LogicalPlanType::Sort(sort) => {
                 let input: LogicalPlan =
@@ -836,17 +872,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .build()
             }
             LogicalPlanType::ViewScan(scan) => {
-                let schema: Schema = convert_required!(scan.schema)?;
-
-                let mut projection = None;
-                if let Some(columns) = &scan.projection {
-                    let column_indices = columns
-                        .columns
-                        .iter()
-                        .map(|name| schema.index_of(name))
-                        .collect::<Result<Vec<usize>, _>>()?;
-                    projection = Some(column_indices);
-                }
+                let _schema: Schema = convert_required!(scan.schema)?;
 
                 let input: LogicalPlan =
                     into_logical_plan!(scan.input, ctx, extension_codec)?;
@@ -862,12 +888,41 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let table_name =
                     from_table_reference(scan.table_name.as_ref(), "ViewScan")?;
 
-                LogicalPlanBuilder::scan(
-                    table_name,
-                    provider_as_source(Arc::new(provider)),
-                    projection,
-                )?
-                .build()
+                // Prefer new projection_exprs field, fall back to old projection for backward compatibility
+                let projection = if !scan.projection_exprs.is_empty() {
+                    // New format: expressions are in projection_exprs
+                    Some(from_proto::parse_exprs(
+                        &scan.projection_exprs,
+                        ctx,
+                        extension_codec,
+                    )?)
+                } else if let Some(columns) = &scan.projection {
+                    if !columns.columns.is_empty() {
+                        // Backward compatibility: convert old column names to expressions
+                        Some(
+                            columns
+                                .columns
+                                .iter()
+                                .map(|name| col(name.as_str()))
+                                .collect(),
+                        )
+                    } else {
+                        // New format: projection field is a marker indicating Some([])
+                        Some(vec![])
+                    }
+                } else {
+                    // No projection field means projection is None
+                    None
+                };
+
+                Ok(LogicalPlan::TableScan(
+                    TableScanBuilder::new(
+                        table_name,
+                        provider_as_source(Arc::new(provider)),
+                    )
+                    .projection(projection)
+                    .build()?,
+                ))
             }
             LogicalPlanType::Prepare(prepare) => {
                 let input: LogicalPlan =
@@ -1021,23 +1076,16 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let schema = provider.schema();
                 let source = provider.as_any();
 
-                let projection = match projection {
-                    None => None,
+                // Serialize projection expressions to the new projection_exprs field
+                // Use the old projection field as a marker to distinguish None vs Some([])
+                let (projection_exprs, projection) = match projection {
+                    None => (vec![], None),
                     Some(exprs) => {
-                        // Extract column names from projection expressions
-                        let column_names = exprs
-                            .iter()
-                            .map(|e| {
-                                if let Expr::Column(col) = e {
-                                    col.name.clone()
-                                } else {
-                                    e.schema_name().to_string()
-                                }
-                            })
-                            .collect();
-                        Some(protobuf::ProjectionColumns {
-                            columns: column_names,
-                        })
+                        let serialized = serialize_exprs(exprs, extension_codec)?;
+                        // Set projection as a marker that a projection exists (even if empty)
+                        let marker =
+                            Some(protobuf::ProjectionColumns { columns: vec![] });
+                        (serialized, marker)
                     }
                 };
 
@@ -1155,6 +1203,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 filters,
                                 target_partitions: options.target_partitions as u32,
                                 file_sort_order: exprs_vec,
+                                projection_exprs: projection_exprs.clone(),
                             },
                         )),
                     })
@@ -1176,6 +1225,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                     .definition()
                                     .map(|s| s.to_string())
                                     .unwrap_or_default(),
+                                projection_exprs: projection_exprs.clone(),
                             },
                         ))),
                     })
@@ -1205,6 +1255,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         schema: Some(schema),
                         filters,
                         custom_table_data: bytes,
+                        projection_exprs,
                     });
                     let node = LogicalPlanNode {
                         logical_plan_type: Some(scan),
