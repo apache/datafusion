@@ -621,6 +621,27 @@ a
 b
 c
 
+query I
+SELECT CASE WHEN d != 0 THEN n / d ELSE NULL END FROM (VALUES (1, 1), (1, 0), (1, -1)) t(n,d)
+----
+1
+NULL
+-1
+
+query I
+SELECT CASE WHEN d > 0 THEN n / d ELSE NULL END FROM (VALUES (1, 1), (1, 0), (1, -1)) t(n,d)
+----
+1
+NULL
+NULL
+
+query I
+SELECT CASE WHEN d < 0 THEN n / d ELSE NULL END FROM (VALUES (1, 1), (1, 0), (1, -1)) t(n,d)
+----
+NULL
+NULL
+-1
+
 # EvalMethod::WithExpression using subset of all selected columns in case expression
 query III
 SELECT CASE a1 WHEN 1 THEN a1 WHEN 2 THEN a2 WHEN 3 THEN b END, b, c
