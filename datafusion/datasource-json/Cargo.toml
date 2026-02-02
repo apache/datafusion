@@ -47,6 +47,8 @@ object_store = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true, features = ["sync"] }
 tokio-util = { workspace = true, features = ["io", "io-util", "compat"] }
+serde_json = "1.0.149"
+log = "0.4.29"
 
 # Note: add additional linter rules in lib.rs.
 # Rust does not support workspace + new linter rules in subcrates yet

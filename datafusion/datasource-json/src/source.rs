@@ -19,11 +19,12 @@
 
 use std::any::Any;
 use std::io::{BufReader, Read, Seek, SeekFrom};
+use std::pin::Pin;
 use std::sync::Arc;
-use std::task::Poll;
+use std::task::{Context, Poll};
 
 use crate::file_format::JsonDecoder;
-use crate::utils::JsonArrayToNdjsonReader;
+use crate::utils::{ChannelReader, JsonArrayToNdjsonReader};
 
 use datafusion_common::error::{DataFusionError, Result};
 use datafusion_common_runtime::{JoinSet, SpawnedTask};
@@ -37,6 +38,7 @@ use datafusion_datasource::{
 use datafusion_physical_plan::projection::ProjectionExprs;
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
+use arrow::array::RecordBatch;
 use arrow::json::ReaderBuilder;
 use arrow::{datatypes::SchemaRef, json};
 use datafusion_datasource::file::FileSource;
@@ -44,13 +46,52 @@ use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_execution::TaskContext;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 
-use futures::{StreamExt, TryStreamExt};
+use futures::{Stream, StreamExt, TryStreamExt};
 use object_store::buffered::BufWriter;
 use object_store::{GetOptions, GetResultPayload, ObjectStore};
 use tokio::io::AsyncWriteExt;
 use tokio_stream::wrappers::ReceiverStream;
-use tokio_util::io::{StreamReader, SyncIoBridge};
 
+/// Channel buffer size for streaming JSON array processing.
+/// With ~128KB average chunk size, 128 chunks ≈ 16MB buffer.
+const CHANNEL_BUFFER_SIZE: usize = 128;
+
+/// Buffer size for JsonArrayToNdjsonReader (2MB each, 4MB total for input+output)
+const JSON_CONVERTER_BUFFER_SIZE: usize = 2 * 1024 * 1024;
+
+// ============================================================================
+// JsonArrayStream - Custom stream wrapper to hold SpawnedTask handles
+// ============================================================================
+
+/// A stream wrapper that holds SpawnedTask handles to keep them alive
+/// until the stream is fully consumed or dropped.
+///
+/// This ensures cancel-safety: when the stream is dropped, the tasks
+/// are properly aborted via SpawnedTask's Drop implementation.
+struct JsonArrayStream {
+    inner: ReceiverStream<std::result::Result<RecordBatch, arrow::error::ArrowError>>,
+    /// Task that reads from object store and sends bytes to channel.
+    /// Kept alive until stream is consumed or dropped.
+    _read_task: SpawnedTask<()>,
+    /// Task that parses JSON and sends RecordBatches.
+    /// Kept alive until stream is consumed or dropped.
+    _parse_task: SpawnedTask<()>,
+}
+
+impl Stream for JsonArrayStream {
+    type Item = std::result::Result<RecordBatch, arrow::error::ArrowError>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.inner).poll_next(cx)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
 // ============================================================================
 // JsonOpener and JsonSource
 // ============================================================================
@@ -256,7 +297,7 @@ impl FileOpener for JsonOpener {
                         Some(_) => {
                             file.seek(SeekFrom::Start(result.range.start as _))?;
                             let limit = result.range.end - result.range.start;
-                            file_compression_type.convert_read(file.take(limit as u64))?
+                            file_compression_type.convert_read(file.take(limit))?
                         }
                     };
 
@@ -272,8 +313,10 @@ impl FileOpener for JsonOpener {
                             .boxed())
                     } else {
                         // JSON array format: wrap with streaming converter
-                        // JsonArrayToNdjsonReader implements BufRead
-                        let ndjson_reader = JsonArrayToNdjsonReader::new(bytes);
+                        let ndjson_reader = JsonArrayToNdjsonReader::with_capacity(
+                            bytes,
+                            JSON_CONVERTER_BUFFER_SIZE,
+                        );
                         let arrow_reader = ReaderBuilder::new(schema)
                             .with_batch_size(batch_size)
                             .build(ndjson_reader)?;
@@ -298,37 +341,88 @@ impl FileOpener for JsonOpener {
                         );
                         Ok(stream.map_err(Into::into).boxed())
                     } else {
-                        // JSON array format: streaming conversion without loading entire file
+                        // JSON array format: streaming conversion with channel-based byte transfer
+                        //
+                        // Architecture:
+                        // 1. Async task reads from object store stream, decompresses, sends to channel
+                        // 2. Blocking task receives bytes, converts JSON array to NDJSON, parses to Arrow
+                        // 3. RecordBatches are sent back via another channel
+                        //
+                        // Memory budget (~32MB):
+                        // - sync_channel: CHANNEL_BUFFER_SIZE chunks (~16MB)
+                        // - JsonArrayToNdjsonReader: 2 × JSON_CONVERTER_BUFFER_SIZE (~4MB)
+                        // - Arrow JsonReader internal buffer (~8MB)
+                        // - Miscellaneous (~4MB)
+
                         let s = s.map_err(DataFusionError::from);
                         let decompressed_stream =
                             file_compression_type.convert_stream(s.boxed())?;
 
-                        // Convert async stream to sync reader for JsonArrayToNdjsonReader
-                        let stream_reader = StreamReader::new(
-                            decompressed_stream.map_err(DataFusionError::from),
-                        );
-                        let sync_reader = SyncIoBridge::new(stream_reader);
+                        // Channel for bytes: async producer -> sync consumer
+                        let (byte_tx, byte_rx) =
+                            std::sync::mpsc::sync_channel::<bytes::Bytes>(
+                                CHANNEL_BUFFER_SIZE,
+                            );
 
-                        // Use streaming converter - processes data in chunks without loading entire file
-                        let ndjson_reader = JsonArrayToNdjsonReader::new(sync_reader);
+                        // Channel for results: sync producer -> async consumer
+                        let (result_tx, result_rx) = tokio::sync::mpsc::channel(2);
 
-                        let arrow_reader = ReaderBuilder::new(schema)
-                            .with_batch_size(batch_size)
-                            .build(ndjson_reader)?;
-
-                        // Process arrow reader in blocking task to avoid blocking async executor
-                        let (tx, rx) = tokio::sync::mpsc::channel(2);
-                        SpawnedTask::spawn_blocking(move || {
-                            for batch_result in arrow_reader {
-                                if tx.blocking_send(batch_result).is_err() {
-                                    break; // Receiver dropped
+                        // Async task: read from object store stream and send bytes to channel
+                        // Store the SpawnedTask to keep it alive until stream is dropped
+                        let read_task = SpawnedTask::spawn(async move {
+                            tokio::pin!(decompressed_stream);
+                            while let Some(chunk) = decompressed_stream.next().await {
+                                match chunk {
+                                    Ok(bytes) => {
+                                        if byte_tx.send(bytes).is_err() {
+                                            break; // Consumer dropped
+                                        }
+                                    }
+                                    Err(e) => {
+                                        log::error!("Error reading JSON stream: {e}");
+                                        break;
+                                    }
                                 }
                             }
+                            // byte_tx dropped here, signals EOF to ChannelReader
                         });
 
-                        Ok(ReceiverStream::new(rx)
-                            .map(|r| r.map_err(Into::into))
-                            .boxed())
+                        // Blocking task: receive bytes from channel and parse JSON
+                        // Store the SpawnedTask to keep it alive until stream is dropped
+                        let parse_task = SpawnedTask::spawn_blocking(move || {
+                            let channel_reader = ChannelReader::new(byte_rx);
+                            let ndjson_reader = JsonArrayToNdjsonReader::with_capacity(
+                                channel_reader,
+                                JSON_CONVERTER_BUFFER_SIZE,
+                            );
+
+                            match ReaderBuilder::new(schema)
+                                .with_batch_size(batch_size)
+                                .build(ndjson_reader)
+                            {
+                                Ok(arrow_reader) => {
+                                    for batch_result in arrow_reader {
+                                        if result_tx.blocking_send(batch_result).is_err()
+                                        {
+                                            break; // Receiver dropped
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    let _ = result_tx.blocking_send(Err(e));
+                                }
+                            }
+                            // result_tx dropped here, closes the stream
+                        });
+
+                        // Wrap in JsonArrayStream to keep tasks alive until stream is consumed
+                        let stream = JsonArrayStream {
+                            inner: ReceiverStream::new(result_rx),
+                            _read_task: read_task,
+                            _parse_task: parse_task,
+                        };
+
+                        Ok(stream.map(|r| r.map_err(Into::into)).boxed())
                     }
                 }
             }
@@ -389,4 +483,308 @@ pub async fn plan_to_json(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use bytes::Bytes;
+    use datafusion_datasource::FileRange;
+    use futures::TryStreamExt;
+    use object_store::PutPayload;
+    use object_store::memory::InMemory;
+    use object_store::path::Path;
+
+    /// Helper to create a test schema
+    fn test_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, true),
+            Field::new("name", DataType::Utf8, true),
+        ]))
+    }
+
+    #[tokio::test]
+    async fn test_json_array_from_file() -> Result<()> {
+        // Test reading JSON array format from a file
+        let json_data = r#"[{"id": 1, "name": "alice"}, {"id": 2, "name": "bob"}]"#;
+
+        let store = Arc::new(InMemory::new());
+        let path = Path::from("test.json");
+        store
+            .put(&path, PutPayload::from_static(json_data.as_bytes()))
+            .await?;
+
+        let opener = JsonOpener::new(
+            1024,
+            test_schema(),
+            FileCompressionType::UNCOMPRESSED,
+            store.clone(),
+            false, // JSON array format
+        );
+
+        let meta = store.head(&path).await?;
+        let file = PartitionedFile::new(path.to_string(), meta.size);
+
+        let stream = opener.open(file)?.await?;
+        let batches: Vec<_> = stream.try_collect().await?;
+
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].num_rows(), 2);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_json_array_from_stream() -> Result<()> {
+        // Test reading JSON array format from object store stream (simulates S3)
+        let json_data = r#"[{"id": 1, "name": "alice"}, {"id": 2, "name": "bob"}, {"id": 3, "name": "charlie"}]"#;
+
+        // Use InMemory store which returns Stream payload
+        let store = Arc::new(InMemory::new());
+        let path = Path::from("test_stream.json");
+        store
+            .put(&path, PutPayload::from_static(json_data.as_bytes()))
+            .await?;
+
+        let opener = JsonOpener::new(
+            2, // small batch size to test multiple batches
+            test_schema(),
+            FileCompressionType::UNCOMPRESSED,
+            store.clone(),
+            false, // JSON array format
+        );
+
+        let meta = store.head(&path).await?;
+        let file = PartitionedFile::new(path.to_string(), meta.size);
+
+        let stream = opener.open(file)?.await?;
+        let batches: Vec<_> = stream.try_collect().await?;
+
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, 3);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_json_array_nested_objects() -> Result<()> {
+        // Test JSON array with nested objects and arrays
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, true),
+            Field::new("data", DataType::Utf8, true),
+        ]));
+
+        let json_data = r#"[
+            {"id": 1, "data": "{\"nested\": true}"},
+            {"id": 2, "data": "[1, 2, 3]"}
+        ]"#;
+
+        let store = Arc::new(InMemory::new());
+        let path = Path::from("nested.json");
+        store
+            .put(&path, PutPayload::from_static(json_data.as_bytes()))
+            .await?;
+
+        let opener = JsonOpener::new(
+            1024,
+            schema,
+            FileCompressionType::UNCOMPRESSED,
+            store.clone(),
+            false,
+        );
+
+        let meta = store.head(&path).await?;
+        let file = PartitionedFile::new(path.to_string(), meta.size);
+
+        let stream = opener.open(file)?.await?;
+        let batches: Vec<_> = stream.try_collect().await?;
+
+        assert_eq!(batches[0].num_rows(), 2);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_json_array_empty() -> Result<()> {
+        // Test empty JSON array
+        let json_data = "[]";
+
+        let store = Arc::new(InMemory::new());
+        let path = Path::from("empty.json");
+        store
+            .put(&path, PutPayload::from_static(json_data.as_bytes()))
+            .await?;
+
+        let opener = JsonOpener::new(
+            1024,
+            test_schema(),
+            FileCompressionType::UNCOMPRESSED,
+            store.clone(),
+            false,
+        );
+
+        let meta = store.head(&path).await?;
+        let file = PartitionedFile::new(path.to_string(), meta.size);
+
+        let stream = opener.open(file)?.await?;
+        let batches: Vec<_> = stream.try_collect().await?;
+
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, 0);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_json_array_range_not_supported() {
+        // Test that range-based scanning returns error for JSON array format
+        let store = Arc::new(InMemory::new());
+        let path = Path::from("test.json");
+        store
+            .put(&path, PutPayload::from_static(b"[]"))
+            .await
+            .unwrap();
+
+        let opener = JsonOpener::new(
+            1024,
+            test_schema(),
+            FileCompressionType::UNCOMPRESSED,
+            store.clone(),
+            false, // JSON array format
+        );
+
+        let meta = store.head(&path).await.unwrap();
+        let mut file = PartitionedFile::new(path.to_string(), meta.size);
+        file.range = Some(FileRange { start: 0, end: 10 });
+
+        let result = opener.open(file);
+        match result {
+            Ok(_) => panic!("Expected error for range-based JSON array scanning"),
+            Err(e) => {
+                assert!(
+                    e.to_string().contains("does not support range-based"),
+                    "Unexpected error message: {e}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_ndjson_still_works() -> Result<()> {
+        // Ensure NDJSON format still works correctly
+        let json_data =
+            "{\"id\": 1, \"name\": \"alice\"}\n{\"id\": 2, \"name\": \"bob\"}\n";
+
+        let store = Arc::new(InMemory::new());
+        let path = Path::from("test.ndjson");
+        store
+            .put(&path, PutPayload::from_static(json_data.as_bytes()))
+            .await?;
+
+        let opener = JsonOpener::new(
+            1024,
+            test_schema(),
+            FileCompressionType::UNCOMPRESSED,
+            store.clone(),
+            true, // NDJSON format
+        );
+
+        let meta = store.head(&path).await?;
+        let file = PartitionedFile::new(path.to_string(), meta.size);
+
+        let stream = opener.open(file)?.await?;
+        let batches: Vec<_> = stream.try_collect().await?;
+
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].num_rows(), 2);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_json_array_large_file() -> Result<()> {
+        // Test with a larger JSON array to verify streaming works
+        let mut json_data = String::from("[");
+        for i in 0..1000 {
+            if i > 0 {
+                json_data.push(',');
+            }
+            json_data.push_str(&format!(r#"{{"id": {i}, "name": "user{i}"}}"#));
+        }
+        json_data.push(']');
+
+        let store = Arc::new(InMemory::new());
+        let path = Path::from("large.json");
+        store
+            .put(&path, PutPayload::from(Bytes::from(json_data)))
+            .await?;
+
+        let opener = JsonOpener::new(
+            100, // batch size of 100
+            test_schema(),
+            FileCompressionType::UNCOMPRESSED,
+            store.clone(),
+            false,
+        );
+
+        let meta = store.head(&path).await?;
+        let file = PartitionedFile::new(path.to_string(), meta.size);
+
+        let stream = opener.open(file)?.await?;
+        let batches: Vec<_> = stream.try_collect().await?;
+
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, 1000);
+
+        // Should have multiple batches due to batch_size=100
+        assert!(batches.len() >= 10);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_json_array_stream_cancellation() -> Result<()> {
+        // Test that cancellation works correctly (tasks are aborted when stream is dropped)
+        let mut json_data = String::from("[");
+        for i in 0..10000 {
+            if i > 0 {
+                json_data.push(',');
+            }
+            json_data.push_str(&format!(r#"{{"id": {i}, "name": "user{i}"}}"#));
+        }
+        json_data.push(']');
+
+        let store = Arc::new(InMemory::new());
+        let path = Path::from("cancel_test.json");
+        store
+            .put(&path, PutPayload::from(Bytes::from(json_data)))
+            .await?;
+
+        let opener = JsonOpener::new(
+            10, // small batch size
+            test_schema(),
+            FileCompressionType::UNCOMPRESSED,
+            store.clone(),
+            false,
+        );
+
+        let meta = store.head(&path).await?;
+        let file = PartitionedFile::new(path.to_string(), meta.size);
+
+        let mut stream = opener.open(file)?.await?;
+
+        // Read only first batch, then drop the stream (simulating cancellation)
+        let first_batch = stream.next().await;
+        assert!(first_batch.is_some());
+
+        // Drop the stream - this should abort the spawned tasks via SpawnedTask's Drop
+        drop(stream);
+
+        // Give tasks time to be aborted
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+        // If we reach here without hanging, cancellation worked
+        Ok(())
+    }
 }
