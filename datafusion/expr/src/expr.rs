@@ -38,6 +38,7 @@ use datafusion_common::tree_node::{
 use datafusion_common::{
     Column, DFSchema, HashMap, Result, ScalarValue, Spans, TableReference,
 };
+use datafusion_expr_common::placement::ExpressionPlacement;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 #[cfg(feature = "sql")]
 use sqlparser::ast::{
@@ -1533,6 +1534,23 @@ impl Expr {
             }) => (relation.clone(), name.clone()),
             Expr::Alias(Alias { relation, name, .. }) => (relation.clone(), name.clone()),
             _ => (None, self.schema_name().to_string()),
+        }
+    }
+
+    /// Returns placement information for this expression.
+    ///
+    /// This is used by optimizers to make decisions about expression placement,
+    /// such as whether to push expressions down through projections.
+    pub fn placement(&self) -> ExpressionPlacement {
+        match self {
+            Expr::Column(_) => ExpressionPlacement::Column,
+            Expr::Literal(_, _) => ExpressionPlacement::Literal,
+            Expr::ScalarFunction(func) => {
+                let arg_placements: Vec<_> =
+                    func.args.iter().map(|arg| arg.placement()).collect();
+                func.func.placement(&arg_placements)
+            }
+            _ => ExpressionPlacement::KeepInPlace,
         }
     }
 
