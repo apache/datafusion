@@ -91,7 +91,10 @@ pub fn from_window(
 /// A DataFusion Projection only outputs expressions. In order to keep the Substrait
 /// plan consistent with DataFusion, we must apply an output mapping that skips the input
 /// fields so that the Substrait Project will only output the expression fields.
-fn create_project_remapping(expr_count: usize, input_field_count: usize) -> EmitKind {
+pub(crate) fn create_project_remapping(
+    expr_count: usize,
+    input_field_count: usize,
+) -> EmitKind {
     let expression_field_start = input_field_count;
     let expression_field_end = expression_field_start + expr_count;
     let output_mapping = (expression_field_start..expression_field_end)
