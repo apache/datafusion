@@ -139,7 +139,7 @@ mod tests {
     use super::*;
     use crate::expressions::{col, lit};
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::ScalarValue;
+    use datafusion_common::{ScalarValue, tree_node::TreeNode};
     use datafusion_expr::Operator;
 
     /// Check if an expression is a cast expression
@@ -479,8 +479,10 @@ mod tests {
 
         let and_expr = Arc::new(BinaryExpr::new(compare1, Operator::And, compare2));
 
-        // Apply unwrap cast optimization
-        let result = unwrap_cast_in_comparison(and_expr, &schema).unwrap();
+        // Apply unwrap cast optimization recursively
+        let result = (and_expr as Arc<dyn PhysicalExpr>)
+            .transform_down(|node| unwrap_cast_in_comparison(node, &schema))
+            .unwrap();
 
         // Should be transformed
         assert!(result.transformed);
@@ -597,8 +599,10 @@ mod tests {
         // Create AND expression
         let and_expr = Arc::new(BinaryExpr::new(c1_binary, Operator::And, c2_binary));
 
-        // Apply unwrap cast optimization
-        let result = unwrap_cast_in_comparison(and_expr, &schema).unwrap();
+        // Apply unwrap cast optimization recursively
+        let result = (and_expr as Arc<dyn PhysicalExpr>)
+            .transform_down(|node| unwrap_cast_in_comparison(node, &schema))
+            .unwrap();
 
         // Should be transformed
         assert!(result.transformed);

@@ -44,7 +44,7 @@ static BATCH: OnceLock<RecordBatch> = OnceLock::new();
 pub fn simplify_const_expr(
     expr: Arc<dyn PhysicalExpr>,
 ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
-    if expr.as_any().is::<Column>() || expr.is_volatile_node() {
+    if !can_evaluate_as_constant(&expr) {
         return Ok(Transformed::no(expr));
     }
 
@@ -72,6 +72,22 @@ pub fn simplify_const_expr(
             Ok(Transformed::no(expr))
         }
     }
+}
+
+fn can_evaluate_as_constant(expr: &Arc<dyn PhysicalExpr>) -> bool {
+    let mut can_evaluate = true;
+
+    expr.apply(|e| {
+        if e.as_any().is::<Column>() || e.is_volatile_node() {
+            can_evaluate = false;
+            Ok(TreeNodeRecursion::Stop)
+        } else {
+            Ok(TreeNodeRecursion::Continue)
+        }
+    })
+    .expect("apply should not fail");
+
+    can_evaluate
 }
 
 /// Create a 1-row dummy RecordBatch for evaluating constant expressions.
