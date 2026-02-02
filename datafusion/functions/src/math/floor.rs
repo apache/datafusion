@@ -693,22 +693,22 @@ mod tests {
     fn test_floor_preimage_decimal_edge_cases() {
         // ===== Decimal32 =====
         // Large value that doesn't overflow
-        // i32::MAX = 2147483647, with scale=2, max safe is around i32::MAX - 100
-        let safe_max_32 = i32::MAX - 100;
-        // Make it divisible by 100 for scale=2
-        let safe_max_aligned_32 = (safe_max_32 / 100) * 100;
+        // Decimal(9,2) max value is 9,999,999.99 (stored as 999,999,999)
+        // Use a large value that fits Decimal(9,2) and is divisible by 100
+        let safe_max_aligned_32 = 999_999_900; // 9,999,999.00
         assert_preimage_range(
-            ScalarValue::Decimal32(Some(safe_max_aligned_32), 10, 2),
-            ScalarValue::Decimal32(Some(safe_max_aligned_32), 10, 2),
-            ScalarValue::Decimal32(Some(safe_max_aligned_32 + 100), 10, 2),
+            ScalarValue::Decimal32(Some(safe_max_aligned_32), 9, 2),
+            ScalarValue::Decimal32(Some(safe_max_aligned_32), 9, 2),
+            ScalarValue::Decimal32(Some(safe_max_aligned_32 + 100), 9, 2),
         );
 
-        // Negative edge: i32::MIN should work since we're adding (not subtracting)
-        let min_aligned_32 = (i32::MIN / 100) * 100;
+        // Negative edge: use a large negative value that fits Decimal(9,2)
+        // Decimal(9,2) min value is -9,999,999.99 (stored as -999,999,999)
+        let min_aligned_32 = -999_999_900; // -9,999,999.00
         assert_preimage_range(
-            ScalarValue::Decimal32(Some(min_aligned_32), 10, 2),
-            ScalarValue::Decimal32(Some(min_aligned_32), 10, 2),
-            ScalarValue::Decimal32(Some(min_aligned_32 + 100), 10, 2),
+            ScalarValue::Decimal32(Some(min_aligned_32), 9, 2),
+            ScalarValue::Decimal32(Some(min_aligned_32), 9, 2),
+            ScalarValue::Decimal32(Some(min_aligned_32 + 100), 9, 2),
         );
     }
 
