@@ -2039,7 +2039,6 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-stream",
- "tokio-util",
 ]
 
 [[package]]
@@ -6164,7 +6163,6 @@ checksum = "9ae9cec805b01e8fc3fd2fe289f89149a9b66dd16786abd8b19cfa7b48cb0098"
 dependencies = [
  "bytes",
  "futures-core",
- "futures-io",
  "futures-sink",
  "pin-project-lite",
  "tokio",
