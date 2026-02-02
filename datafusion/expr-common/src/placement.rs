@@ -33,10 +33,9 @@ pub enum ExpressionPlacement {
     /// at low compute cost.
     /// See [`ExpressionPlacement::should_push_to_leaves`] for details.
     MoveTowardsLeafNodes,
-    /// An expensive expression that should stay where it is in the plan
-    /// or possibly be moved closer to the root nodes (this is not implemented yet).
+    /// An expensive expression that should stay where it is in the plan.
     /// Examples include complex scalar functions or UDFs.
-    MoveTowardsRootNodes,
+    KeepInPlace,
 }
 
 impl ExpressionPlacement {

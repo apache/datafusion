@@ -288,7 +288,7 @@ impl ExecutionPlan for ProjectionExec {
                 .all(|proj_expr| {
                     !matches!(
                         proj_expr.expr.placement(),
-                        ExpressionPlacement::MoveTowardsRootNodes
+                        ExpressionPlacement::KeepInPlace
                     )
                 });
         // If expressions are all either column_expr or Literal (or other cheap expressions),
@@ -1007,7 +1007,7 @@ fn try_unifying_projections(
             .unwrap();
     });
     // Merging these projections is not beneficial, e.g
-    // If an expression is not trivial (MoveTowardsRootNodes) and it is referred more than 1, unifies projections will be
+    // If an expression is not trivial (KeepInPlace) and it is referred more than 1, unifies projections will be
     // beneficial as caching mechanism for non-trivial computations.
     // See discussion in: https://github.com/apache/datafusion/issues/8296
     if column_ref_map.iter().any(|(column, count)| {
