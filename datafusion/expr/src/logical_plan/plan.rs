@@ -2774,7 +2774,6 @@ impl TableScan {
     ///
     /// This method accepts column indices for backward compatibility and
     /// converts them internally to column expressions.
-    #[expect(clippy::needless_pass_by_value)]
     pub fn try_new(
         table_name: impl Into<TableReference>,
         table_source: Arc<dyn TableSource>,

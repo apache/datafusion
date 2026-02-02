@@ -166,7 +166,9 @@ pub fn from_table_scan(
         // We need to construct this from the source schema and scan indices since
         // `projected_schema` is the final output schema after complex projections.
         let scan_output_schema = {
-            let indices = scan_indices.as_ref().expect("scan_indices should be Some when remainder_projection is Some");
+            let indices = scan_indices
+                .as_ref()
+                .expect("scan_indices should be Some when remainder_projection is Some");
             let projected_arrow_schema = source_schema.project(indices)?;
             Arc::new(DFSchema::try_from_qualified_schema(
                 scan.table_name.clone(),
@@ -179,8 +181,10 @@ pub fn from_table_scan(
             .map(|e| producer.handle_expr(e, &scan_output_schema))
             .collect::<datafusion::common::Result<Vec<_>>>()?;
 
-        let emit_kind =
-            create_project_remapping(expressions.len(), scan_output_schema.fields().len());
+        let emit_kind = create_project_remapping(
+            expressions.len(),
+            scan_output_schema.fields().len(),
+        );
         let common = RelCommon {
             emit_kind: Some(emit_kind),
             hint: None,
