@@ -26,6 +26,7 @@ use async_trait::async_trait;
 use datafusion_catalog::Session;
 use datafusion_catalog::TableFunctionImpl;
 use datafusion_catalog::TableProvider;
+use datafusion_common::scalar::NANOS_PER_DAY;
 use datafusion_common::{Result, ScalarValue, plan_err};
 use datafusion_expr::{Expr, TableType};
 use datafusion_physical_plan::ExecutionPlan;
@@ -226,24 +227,87 @@ pub enum GenSeriesArgs {
     },
 }
 
-/// Table that generates a series of integers/timestamps from `start`(inclusive) to `end`, incrementing by step
+impl GenSeriesArgs {
+    pub fn name(&self) -> &'static str {
+        match self {
+            GenSeriesArgs::ContainsNull { name, .. }
+            | GenSeriesArgs::Int64Args { name, .. }
+            | GenSeriesArgs::TimestampArgs { name, .. }
+            | GenSeriesArgs::DateArgs { name, .. } => name,
+        }
+    }
+
+    pub fn evaluated_args(&self) -> Vec<ScalarValue> {
+        match self {
+            GenSeriesArgs::ContainsNull { .. } => {
+                // All table functions use 3 arguments: start, end, step
+                vec![ScalarValue::Null; 3]
+            }
+            GenSeriesArgs::Int64Args {
+                start, end, step, ..
+            } => vec![
+                ScalarValue::Int64(Some(*start)),
+                ScalarValue::Int64(Some(*end)),
+                ScalarValue::Int64(Some(*step)),
+            ],
+            GenSeriesArgs::TimestampArgs {
+                start,
+                end,
+                step,
+                tz,
+                ..
+            } => vec![
+                ScalarValue::TimestampNanosecond(Some(*start), tz.clone()),
+                ScalarValue::TimestampNanosecond(Some(*end), tz.clone()),
+                ScalarValue::IntervalMonthDayNano(Some(*step)),
+            ],
+            GenSeriesArgs::DateArgs {
+                start, end, step, ..
+            } => vec![
+                ScalarValue::TimestampNanosecond(Some(*start), None),
+                ScalarValue::TimestampNanosecond(Some(*end), None),
+                ScalarValue::IntervalMonthDayNano(Some(*step)),
+            ],
+        }
+    }
+}
+
+/// Table that generates a series of integers/timestamps from `start`(inclusive) to `end`, incrementing by step.
+///
+/// Arguments are stored in structured form (`GenSeriesArgs`) which maintains type-specific
+/// information (e.g., timezone for timestamps) used during execution. For Substrait serialization,
+/// arguments are computed on-demand via the `table_function_details()` method.
 #[derive(Debug, Clone)]
 pub struct GenerateSeriesTable {
     schema: SchemaRef,
     args: GenSeriesArgs,
+    /// Cached evaluated arguments for Substrait serialization
+    evaluated_args: Vec<ScalarValue>,
 }
 
 impl GenerateSeriesTable {
     pub fn new(schema: SchemaRef, args: GenSeriesArgs) -> Self {
-        Self { schema, args }
+        let evaluated_args = args.evaluated_args();
+        Self {
+            schema,
+            args,
+            evaluated_args,
+        }
     }
+
+    // The table function metadata is exposed through the `TableProvider` trait's
+    // `table_function_details` method. Implementations should prefer that API so
+    // that external code can access function metadata even when the table is
+    // accessed through trait objects.
 
     pub fn as_generator(
         &self,
         batch_size: usize,
     ) -> Result<Arc<RwLock<dyn LazyBatchGenerator>>> {
         let generator: Arc<RwLock<dyn LazyBatchGenerator>> = match &self.args {
-            GenSeriesArgs::ContainsNull { name } => Arc::new(RwLock::new(Empty { name })),
+            GenSeriesArgs::ContainsNull { name, .. } => {
+                Arc::new(RwLock::new(Empty { name }))
+            }
             GenSeriesArgs::Int64Args {
                 start,
                 end,
@@ -455,6 +519,16 @@ impl TableProvider for GenerateSeriesTable {
         TableType::Base
     }
 
+    fn table_function_details(
+        &self,
+    ) -> Option<datafusion_catalog::TableFunctionDetails<'_>> {
+        // Return cached evaluated arguments for Substrait serialization.
+        Some(datafusion_catalog::TableFunctionDetails {
+            name: self.args.name(),
+            arguments: &self.evaluated_args,
+        })
+    }
+
     async fn scan(
         &self,
         state: &dyn Session,
@@ -514,7 +588,9 @@ impl GenerateSeriesFuncImpl {
         for (expr_index, expr) in exprs.iter().enumerate() {
             match expr {
                 Expr::Literal(ScalarValue::Null, _) => {}
-                Expr::Literal(ScalarValue::Int64(Some(n)), _) => normalize_args.push(*n),
+                Expr::Literal(ScalarValue::Int64(Some(n)), _) => {
+                    normalize_args.push(*n);
+                }
                 other => {
                     return plan_err!(
                         "Argument #{} must be an INTEGER or NULL, got {:?}",
@@ -533,10 +609,10 @@ impl GenerateSeriesFuncImpl {
 
         if normalize_args.len() != exprs.len() {
             // contain null
-            return Ok(Arc::new(GenerateSeriesTable {
+            return Ok(Arc::new(GenerateSeriesTable::new(
                 schema,
-                args: GenSeriesArgs::ContainsNull { name: self.name },
-            }));
+                GenSeriesArgs::ContainsNull { name: self.name },
+            )));
         }
 
         let (start, end, step) = match &normalize_args[..] {
@@ -552,16 +628,16 @@ impl GenerateSeriesFuncImpl {
             return plan_err!("Step cannot be zero");
         }
 
-        Ok(Arc::new(GenerateSeriesTable {
+        Ok(Arc::new(GenerateSeriesTable::new(
             schema,
-            args: GenSeriesArgs::Int64Args {
+            GenSeriesArgs::Int64Args {
                 start,
                 end,
                 step,
                 include_end: self.include_end,
                 name: self.name,
             },
-        }))
+        )))
     }
 
     fn call_timestamp(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
@@ -600,7 +676,10 @@ impl GenerateSeriesFuncImpl {
         // Parse step interval
         let step_interval = match &exprs[2] {
             Expr::Literal(ScalarValue::Null, _) => None,
-            Expr::Literal(ScalarValue::IntervalMonthDayNano(interval), _) => *interval,
+            Expr::Literal(ScalarValue::IntervalMonthDayNano(Some(interval)), _) => {
+                Some(*interval)
+            }
+            Expr::Literal(ScalarValue::IntervalMonthDayNano(None), _) => None,
             other => {
                 return plan_err!(
                     "Third argument must be an interval or NULL, got {:?}",
@@ -618,18 +697,18 @@ impl GenerateSeriesFuncImpl {
         // Check if any argument is null
         let (Some(start), Some(end), Some(step)) = (start_ts, end_ts, step_interval)
         else {
-            return Ok(Arc::new(GenerateSeriesTable {
+            return Ok(Arc::new(GenerateSeriesTable::new(
                 schema,
-                args: GenSeriesArgs::ContainsNull { name: self.name },
-            }));
+                GenSeriesArgs::ContainsNull { name: self.name },
+            )));
         };
 
         // Validate step interval
         validate_interval_step(step)?;
 
-        Ok(Arc::new(GenerateSeriesTable {
+        Ok(Arc::new(GenerateSeriesTable::new(
             schema,
-            args: GenSeriesArgs::TimestampArgs {
+            GenSeriesArgs::TimestampArgs {
                 start,
                 end,
                 step,
@@ -637,7 +716,7 @@ impl GenerateSeriesFuncImpl {
                 include_end: self.include_end,
                 name: self.name,
             },
-        }))
+        )))
     }
 
     fn call_date(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
@@ -656,14 +735,11 @@ impl GenerateSeriesFuncImpl {
 
         // Parse start date
         let start_date = match &exprs[0] {
-            Expr::Literal(ScalarValue::Date32(Some(date)), _) => *date,
-            Expr::Literal(ScalarValue::Date32(None), _)
-            | Expr::Literal(ScalarValue::Null, _) => {
-                return Ok(Arc::new(GenerateSeriesTable {
-                    schema,
-                    args: GenSeriesArgs::ContainsNull { name: self.name },
-                }));
+            Expr::Literal(ScalarValue::Date32(Some(date)), _) => {
+                Some(*date as i64 * NANOS_PER_DAY)
             }
+            Expr::Literal(ScalarValue::Date32(None), _)
+            | Expr::Literal(ScalarValue::Null, _) => None,
             other => {
                 return plan_err!(
                     "First argument must be a date or NULL, got {:?}",
@@ -674,14 +750,11 @@ impl GenerateSeriesFuncImpl {
 
         // Parse end date
         let end_date = match &exprs[1] {
-            Expr::Literal(ScalarValue::Date32(Some(date)), _) => *date,
-            Expr::Literal(ScalarValue::Date32(None), _)
-            | Expr::Literal(ScalarValue::Null, _) => {
-                return Ok(Arc::new(GenerateSeriesTable {
-                    schema,
-                    args: GenSeriesArgs::ContainsNull { name: self.name },
-                }));
+            Expr::Literal(ScalarValue::Date32(Some(date)), _) => {
+                Some(*date as i64 * NANOS_PER_DAY)
             }
+            Expr::Literal(ScalarValue::Date32(None), _)
+            | Expr::Literal(ScalarValue::Null, _) => None,
             other => {
                 return plan_err!(
                     "Second argument must be a date or NULL, got {:?}",
@@ -693,15 +766,10 @@ impl GenerateSeriesFuncImpl {
         // Parse step interval
         let step_interval = match &exprs[2] {
             Expr::Literal(ScalarValue::IntervalMonthDayNano(Some(interval)), _) => {
-                *interval
+                Some(*interval)
             }
             Expr::Literal(ScalarValue::IntervalMonthDayNano(None), _)
-            | Expr::Literal(ScalarValue::Null, _) => {
-                return Ok(Arc::new(GenerateSeriesTable {
-                    schema,
-                    args: GenSeriesArgs::ContainsNull { name: self.name },
-                }));
-            }
+            | Expr::Literal(ScalarValue::Null, _) => None,
             other => {
                 return plan_err!(
                     "Third argument must be an interval or NULL, got {:?}",
@@ -710,26 +778,28 @@ impl GenerateSeriesFuncImpl {
             }
         };
 
-        // Convert Date32 (days since epoch) to timestamp nanoseconds (nanoseconds since epoch)
-        // Date32 is days since 1970-01-01, so multiply by nanoseconds per day
-        const NANOS_PER_DAY: i64 = 24 * 60 * 60 * 1_000_000_000;
-
-        let start_ts = start_date as i64 * NANOS_PER_DAY;
-        let end_ts = end_date as i64 * NANOS_PER_DAY;
+        let (Some(start_ts), Some(end_ts), Some(step_interval)) =
+            (start_date, end_date, step_interval)
+        else {
+            return Ok(Arc::new(GenerateSeriesTable::new(
+                schema,
+                GenSeriesArgs::ContainsNull { name: self.name },
+            )));
+        };
 
         // Validate step interval
         validate_interval_step(step_interval)?;
 
-        Ok(Arc::new(GenerateSeriesTable {
+        Ok(Arc::new(GenerateSeriesTable::new(
             schema,
-            args: GenSeriesArgs::DateArgs {
+            GenSeriesArgs::DateArgs {
                 start: start_ts,
                 end: end_ts,
                 step: step_interval,
                 include_end: self.include_end,
                 name: self.name,
             },
-        }))
+        )))
     }
 }
 
