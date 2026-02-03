@@ -42,7 +42,6 @@ use datafusion_physical_expr::expressions::{
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef, ScalarFunctionExpr};
 
 use parking_lot::Mutex;
-use tokio::sync::Barrier;
 
 /// Represents the minimum and maximum values for a specific column.
 /// Used in dynamic filter pushdown to establish value boundaries.
@@ -194,8 +193,7 @@ fn create_bounds_predicate(
 ///
 /// 1. Each partition computes information from its build-side data (hash maps and/or bounds)
 /// 2. Information is stored in the shared state
-/// 3. A barrier tracks how many partitions have reported
-/// 4. When the last partition reports, information is merged and the filter is updated exactly once
+/// 3. When the last partition reports, information is merged and the filter is updated exactly once
 ///
 /// ## Hash Map vs Bounds
 ///
@@ -216,7 +214,6 @@ fn create_bounds_predicate(
 pub(crate) struct SharedBuildAccumulator {
     /// Build-side data protected by a single mutex to avoid ordering concerns
     inner: Mutex<AccumulatedBuildData>,
-    barrier: Barrier,
     /// Dynamic filter for pushdown to probe side
     dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
     /// Right side join expressions needed for creating filter expressions
@@ -263,6 +260,7 @@ struct PartitionData {
 enum AccumulatedBuildData {
     Partitioned {
         partitions: Vec<Option<PartitionData>>,
+        reported_count: usize,
     },
     CollectLeft {
         data: Option<PartitionData>,
@@ -303,29 +301,13 @@ impl SharedBuildAccumulator {
         on_right: Vec<PhysicalExprRef>,
         repartition_random_state: SeededRandomState,
     ) -> Self {
-        // Troubleshooting: If partition counts are incorrect, verify this logic matches
-        // the actual execution pattern in collect_build_side()
-        let expected_calls = match partition_mode {
-            // Each output partition accesses shared build data
-            PartitionMode::CollectLeft => {
-                right_child.output_partitioning().partition_count()
-            }
-            // Each partition builds its own data
-            PartitionMode::Partitioned => {
-                left_child.output_partitioning().partition_count()
-            }
-            // Default value, will be resolved during optimization (does not exist once `execute()` is called; will be replaced by one of the other two)
-            PartitionMode::Auto => unreachable!(
-                "PartitionMode::Auto should not be present at execution time. This is a bug in DataFusion, please report it!"
-            ),
-        };
-
         let mode_data = match partition_mode {
             PartitionMode::Partitioned => AccumulatedBuildData::Partitioned {
                 partitions: vec![
                     None;
                     left_child.output_partitioning().partition_count()
                 ],
+                reported_count: 0,
             },
             PartitionMode::CollectLeft => {
                 AccumulatedBuildData::CollectLeft { data: None }
@@ -337,7 +319,6 @@ impl SharedBuildAccumulator {
 
         Self {
             inner: Mutex::new(mode_data),
-            barrier: Barrier::new(expected_calls),
             dynamic_filter,
             on_right,
             repartition_random_state,
@@ -348,7 +329,7 @@ impl SharedBuildAccumulator {
     /// Report build-side data from a partition
     ///
     /// This unified method handles both CollectLeft and Partitioned modes. When all partitions
-    /// have reported (barrier wait), the leader builds the appropriate filter expression:
+    /// have reported, builds the appropriate filter expression:
     /// - CollectLeft: Simple conjunction of bounds and membership check
     /// - Partitioned: CASE expression routing to per-partition filters
     ///
@@ -357,8 +338,9 @@ impl SharedBuildAccumulator {
     ///
     /// # Returns
     /// * `Result<()>` - Ok if successful, Err if filter update failed or mode mismatch
-    pub(crate) async fn report_build_data(&self, data: PartitionBuildData) -> Result<()> {
+    pub(crate) fn report_build_data(&self, data: PartitionBuildData) -> Result<()> {
         // Store data in the accumulator
+        let mut should_update = false;
         {
             let mut guard = self.inner.lock();
 
@@ -370,9 +352,18 @@ impl SharedBuildAccumulator {
                         pushdown,
                         bounds,
                     },
-                    AccumulatedBuildData::Partitioned { partitions },
+                    AccumulatedBuildData::Partitioned {
+                        partitions,
+                        reported_count,
+                    },
                 ) => {
-                    partitions[partition_id] = Some(PartitionData { pushdown, bounds });
+                    if partitions[partition_id].is_none() {
+                        partitions[partition_id] = Some(PartitionData { pushdown, bounds });
+                        *reported_count += 1;
+                        if *reported_count == partitions.len() {
+                            should_update = true;
+                        }
+                    }
                 }
                 // CollectLeft mode (store once, deduplicate across partitions)
                 (
@@ -382,6 +373,7 @@ impl SharedBuildAccumulator {
                     // Deduplicate - all partitions report the same data in CollectLeft
                     if data.is_none() {
                         *data = Some(PartitionData { pushdown, bounds });
+                        should_update = true;
                     }
                 }
                 // Mismatched modes - should never happen
@@ -393,9 +385,8 @@ impl SharedBuildAccumulator {
             }
         }
 
-        // Wait for all partitions to report
-        if self.barrier.wait().await.is_leader() {
-            // All partitions have reported, so we can create and update the filter
+        // If all partitions reported, we can create and update the filter
+        if should_update {
             let inner = self.inner.lock();
 
             match &*inner {
@@ -458,7 +449,7 @@ impl SharedBuildAccumulator {
                     }
                 }
                 // Partitioned: CASE expression routing to per-partition filters
-                AccumulatedBuildData::Partitioned { partitions } => {
+                AccumulatedBuildData::Partitioned { partitions, .. } => {
                     // Collect all partition data (should all be Some at this point)
                     let partition_data: Vec<_> =
                         partitions.iter().filter_map(|p| p.as_ref()).collect();
