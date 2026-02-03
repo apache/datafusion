@@ -23,17 +23,55 @@
 #
 # Note: Duplicate key handling uses LAST_WIN policy (not EXCEPTION which is Spark default)
 
-# Basic test with explicit delimiters
-query ?
-SELECT string_to_map('a:1,b:2,c:3', ',', ':');
-----
-{a: 1, b: 2, c: 3}
-
-# Default delimiters (1-arg form)
+# s0: Basic test with default delimiters
 query ?
 SELECT string_to_map('a:1,b:2,c:3');
 ----
 {a: 1, b: 2, c: 3}
+
+# s1: Preserve spaces in values
+query ?
+SELECT string_to_map('a: ,b:2');
+----
+{a:  , b: 2}
+
+# s2: Custom key-value delimiter '='
+query ?
+SELECT string_to_map('a=1,b=2,c=3', ',', '=');
+----
+{a: 1, b: 2, c: 3}
+
+# s3: Empty string returns map with empty key and NULL value
+query ?
+SELECT string_to_map('', ',', '=');
+----
+{: NULL}
+
+# s4: Custom pair delimiter '_'
+query ?
+SELECT string_to_map('a:1_b:2_c:3', '_', ':');
+----
+{a: 1, b: 2, c: 3}
+
+# s5: Single key without value returns NULL value
+query ?
+SELECT string_to_map('a');
+----
+{a: NULL}
+
+# s6: Custom delimiters '&' and '='
+query ?
+SELECT string_to_map('a=1&b=2&c=3', '&', '=');
+----
+{a: 1, b: 2, c: 3}
+
+# Duplicate keys: last wins (LAST_WIN policy)
+query ?
+SELECT string_to_map('a:1,b:2,a:3');
+----
+{b: 2, a: 3}
+
+# Additional tests (DataFusion-specific)
 
 # Alias str_to_map
 query ?
@@ -41,29 +79,17 @@ SELECT str_to_map('a:1,b:2');
 ----
 {a: 1, b: 2}
 
-# Custom delimiters with '='
-query ?
-SELECT string_to_map('a=1,b=2,c=3', ',', '=');
-----
-{a: 1, b: 2, c: 3}
-
 # NULL input returns NULL
 query ?
 SELECT string_to_map(NULL, ',', ':');
 ----
 NULL
 
-# Empty string returns map with empty key and NULL value
+# Explicit 3-arg form
 query ?
-SELECT string_to_map('', ',', ':');
+SELECT string_to_map('a:1,b:2,c:3', ',', ':');
 ----
-{: NULL}
-
-# Single key without value returns NULL value
-query ?
-SELECT string_to_map('a', ',', ':');
-----
-{a: NULL}
+{a: 1, b: 2, c: 3}
 
 # Missing key-value delimiter results in NULL value
 query ?
@@ -71,15 +97,8 @@ SELECT string_to_map('a,b:2', ',', ':');
 ----
 {a: NULL, b: 2}
 
-# Duplicate keys: last wins (LAST_WIN policy)
-# Note: map order may differ from Spark, but values are correct
 query ?
-SELECT string_to_map('a:1,b:2,a:3', ',', ':');
+SELECT string_to_map('test');
 ----
-{b: 2, a: 3}
+WRONG_EXPECTED
 
-# Preserve spaces in values
-query ?
-SELECT string_to_map('a: ,b:2', ',', ':');
-----
-{a:  , b: 2}
