@@ -97,8 +97,18 @@ SELECT string_to_map('a,b:2', ',', ':');
 ----
 {a: NULL, b: 2}
 
+# Multi-row test
 query ?
-SELECT string_to_map('test');
+SELECT string_to_map(col) FROM (VALUES ('a:1,b:2'), ('x:9'), (NULL)) AS t(col);
 ----
-WRONG_EXPECTED
+{a: 1, b: 2}
+{x: 9}
+NULL
 
+# Multi-row with custom delimiter
+query ?
+SELECT string_to_map(col, ',', '=') FROM (VALUES ('a=1,b=2'), ('x=9'), (NULL)) AS t(col);
+----
+{a: 1, b: 2}
+{x: 9}
+NULL
