@@ -93,6 +93,12 @@ fn criterion_benchmark(c: &mut Criterion) {
             ColumnarValue::Array(Arc::new(bit_lengths)),
         ];
         run_benchmark(c, "sha2/array_binary_256", size, &array_args);
+        
+        let array_scalar_args = vec![
+            ColumnarValue::Array(Arc::new(values)),
+            ColumnarValue::Scalar(ScalarValue::Int32(Some(256))),
+        ];
+        run_benchmark(c, "sha2/array_scalar_binary_256", size, &array_scalar_args);
     }
 }
 
