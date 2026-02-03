@@ -35,11 +35,18 @@ use crate::function::map::utils::{
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#str_to_map>
 ///
 /// Creates a map from a string by splitting on delimiters.
-/// string_to_map(text, pairDelim, keyValueDelim) -> Map<String, String>
+/// str_to_map(text[, pairDelim[, keyValueDelim]]) -> Map<String, String>
 ///
 /// - text: The input string
 /// - pairDelim: Delimiter between key-value pairs (default: ',')
 /// - keyValueDelim: Delimiter between key and value (default: ':')
+///
+/// # Duplicate Key Handling
+/// Currently uses LAST_WIN behavior (last value wins for duplicate keys).
+///
+/// TODO: Support `spark.sql.mapKeyDedupPolicy` config (EXCEPTION vs LAST_WIN).
+/// Spark 3.0+ defaults to EXCEPTION. See:
+/// <https://github.com/apache/spark/blob/v4.0.0/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4502-L4511>
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkStringToMap {
     signature: Signature,
@@ -151,12 +158,11 @@ fn string_to_map_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             continue;
         }
 
+
+        let mut count = 0;
         // Split text into key-value pairs using pair_delim.
         // Example: "a:1,b:2" with pair_delim="," -> ["a:1", "b:2"]
-        let pairs: Vec<&str> = text.split(&pair_delim).collect();
-        let mut count = 0;
-
-        for pair in pairs {
+        for pair in text.split(&pair_delim) {
             // Skip empty pairs (e.g., from "a:1,,b:2" -> ["a:1", "", "b:2"])
             if pair.is_empty() {
                 continue;
