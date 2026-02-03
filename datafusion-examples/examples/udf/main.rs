@@ -28,13 +28,13 @@
 //! - `all` — run all examples included in this module
 //!
 //! - `adv_udaf`
-//!   (file: advanced_udaf.rs, desc: Advanced User Defined Aggregate Function (UDAF))
+//!   (file: advanced_udaf.rs, desc: Advanced User Defined Aggregate Function UDAF)
 //!
 //! - `adv_udf`
-//!   (file: advanced_udf.rs, desc: Advanced User Defined Scalar Function (UDF))
+//!   (file: advanced_udf.rs, desc: Advanced User Defined Scalar Function UDF)
 //!
 //! - `adv_udwf`
-//!   (file: advanced_udwf.rs, desc: Advanced User Defined Window Function (UDWF))
+//!   (file: advanced_udwf.rs, desc: Advanced User Defined Window Function UDWF)
 //!
 //! - `async_udf`
 //!   (file: async_udf.rs, desc: Asynchronous User Defined Scalar Function)

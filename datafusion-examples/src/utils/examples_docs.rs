@@ -395,7 +395,7 @@ pub fn parse_main_rs_docs(path: &Path) -> Result<Vec<ExampleEntry>> {
     let mut seen_subcommands = HashSet::new();
 
     for (line_no, raw_line) in content.lines().enumerate() {
-        let line = raw_line.trim();
+        let line = raw_line.trim_start();
 
         // Try parsing subcommand, excluding `all` because it's not used in README
         if let Ok((_, sub)) = parse_subcommand_line(line) {
@@ -436,10 +436,11 @@ pub fn parse_main_rs_docs(path: &Path) -> Result<Vec<ExampleEntry>> {
             continue;
         }
 
-        // Metadata must immediately follow a subcommand (except for blank doc lines)
-        if matches!(state, ParserState::SeenSubcommand(_)) && is_non_blank_doc_line(line)
-        {
-            state = ParserState::Idle;
+        // If a non-blank doc line interrupts a pending subcommand, reset the state
+        if let ParserState::SeenSubcommand(_) = state {
+            if is_non_blank_doc_line(line) {
+                state = ParserState::Idle;
+            }
         }
     }
 
@@ -462,7 +463,10 @@ fn is_non_blank_doc_line(line: &str) -> bool {
 /// //! - `<subcommand>`
 /// ```
 fn parse_subcommand_line(input: &str) -> IResult<&str, &str> {
-    let parser = delimited(tag("//! - `"), take_until("`"), tag("`"));
+    let parser = preceded(
+        multispace0,
+        delimited(tag("//! - `"), take_until("`"), tag("`")),
+    );
     all_consuming(parser).parse(input)
 }
 
@@ -633,6 +637,7 @@ mod tests {
             "//! file: foo.rs,desc: test",
             "//! (file: foo.rs desc: test)",
             "//! (file: foo.rs,desc: test)",
+            "//! (file: foo.rs, desc: test(FOO))",
             "//! (desc: test, file: foo.rs)",
             "//! ()",
             "//! (file: foo.rs, desc: test) extra",
