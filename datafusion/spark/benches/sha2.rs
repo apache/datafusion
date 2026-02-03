@@ -86,16 +86,17 @@ fn criterion_benchmark(c: &mut Criterion) {
     let null_density = 0.1;
 
     for &size in &sizes {
-        let values = generate_binary_data(size, null_density);
-        let bit_lengths = Int32Array::from(vec![256; size]);
+        let values: ArrayRef = Arc::new(generate_binary_data(size, null_density));
+        let bit_lengths: ArrayRef = Arc::new(Int32Array::from(vec![256; size]));
+
         let array_args = vec![
-            ColumnarValue::Array(Arc::new(values)),
-            ColumnarValue::Array(Arc::new(bit_lengths)),
+            ColumnarValue::Array(Arc::clone(&values)),
+            ColumnarValue::Array(Arc::clone(&bit_lengths)),
         ];
         run_benchmark(c, "sha2/array_binary_256", size, &array_args);
 
         let array_scalar_args = vec![
-            ColumnarValue::Array(Arc::new(values)),
+            ColumnarValue::Array(Arc::clone(&values)),
             ColumnarValue::Scalar(ScalarValue::Int32(Some(256))),
         ];
         run_benchmark(c, "sha2/array_scalar_binary_256", size, &array_scalar_args);
