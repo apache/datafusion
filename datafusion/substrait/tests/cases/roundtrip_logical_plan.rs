@@ -1377,7 +1377,7 @@ async fn roundtrip_literal_named_struct() -> Result<()> {
     assert_snapshot!(
     plan,
     @r#"
-    Projection: Struct({int_field:1,boolean_field:true,string_field:}) AS named_struct(Utf8("int_field"),Int64(1),Utf8("boolean_field"),Boolean(true),Utf8("string_field"),NULL)
+    Projection: CAST(Struct({c0:1,c1:true,c2:}) AS Struct("int_field": Int64, "boolean_field": Boolean, "string_field": Utf8View)) AS named_struct(Utf8("int_field"),Int64(1),Utf8("boolean_field"),Boolean(true),Utf8("string_field"),NULL)
       TableScan: data projection=[]
     "#
             );
@@ -1397,10 +1397,10 @@ async fn roundtrip_literal_renamed_struct() -> Result<()> {
 
     assert_snapshot!(
     plan,
-    @r"
-    Projection: Struct({int_field:1}) AS Struct({c0:1})
+    @r#"
+    Projection: CAST(Struct({c0:1}) AS Struct("int_field": Int32))
       TableScan: data projection=[]
-    "
+    "#
             );
     Ok(())
 }

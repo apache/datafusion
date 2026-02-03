@@ -933,6 +933,21 @@ SELECT id, id + 100 as computed FROM simple_struct ORDER BY id LIMIT 3;
 ###
 
 query TT
+EXPLAIN SELECT (id + s['value']) * (id + s['value']) as id_and_value FROM simple_struct WHERE id > 2;
+----
+logical_plan
+01)Projection: __common_expr_1 * __common_expr_1 AS id_and_value
+02)--Projection: simple_struct.id + get_field(simple_struct.s, Utf8("value")) AS __common_expr_1
+03)----Filter: simple_struct.id > Int64(2)
+04)------TableScan: simple_struct projection=[id, s], partial_filters=[simple_struct.id > Int64(2)]
+physical_plan
+01)ProjectionExec: expr=[__common_expr_1@0 * __common_expr_1@0 as id_and_value]
+02)--ProjectionExec: expr=[id@0 + get_field(s@1, value) as __common_expr_1]
+03)----FilterExec: id@0 > 2
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[id, s], file_type=parquet, predicate=id@0 > 2, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 2, required_guarantees=[]
+
+
+query TT
 EXPLAIN SELECT s['value'] + s['value'] as doubled FROM simple_struct WHERE id > 2;
 ----
 logical_plan
@@ -941,10 +956,9 @@ logical_plan
 03)----Filter: simple_struct.id > Int64(2)
 04)------TableScan: simple_struct projection=[id, s], partial_filters=[simple_struct.id > Int64(2)]
 physical_plan
-01)ProjectionExec: expr=[__common_expr_1@0 + __common_expr_1@0 as doubled]
-02)--ProjectionExec: expr=[get_field(s@0, value) as __common_expr_1]
-03)----FilterExec: id@0 > 2, projection=[s@1]
-04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[id, s], file_type=parquet, predicate=id@0 > 2, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 2, required_guarantees=[]
+01)ProjectionExec: expr=[get_field(s@0, value) + get_field(s@0, value) as doubled]
+02)--FilterExec: id@0 > 2, projection=[s@1]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[id, s], file_type=parquet, predicate=id@0 > 2, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 2, required_guarantees=[]
 
 # Verify correctness
 query I

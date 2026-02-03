@@ -156,6 +156,97 @@ let context = SimplifyContext::default()
 
 See [`SimplifyContext` documentation](https://docs.rs/datafusion-expr/latest/datafusion_expr/simplify/struct.SimplifyContext.html) for more details.
 
+### Struct Casting Now Requires Field Name Overlap
+
+DataFusion's struct casting mechanism previously allowed casting between structs with differing field names if the field counts matched. This "positional fallback" behavior could silently misalign fields and cause data corruption.
+
+**Breaking Change:**
+
+Starting with DataFusion 53.0.0, struct casts now require **at least one overlapping field name** between the source and target structs. Casts without field name overlap are rejected at plan time with a clear error message.
+
+**Who is affected:**
+
+- Applications that cast between structs with no overlapping field names
+- Queries that rely on positional struct field mapping (e.g., casting `struct(x, y)` to `struct(a, b)` based solely on position)
+- Code that constructs or transforms struct columns programmatically
+
+**Migration guide:**
+
+If you encounter an error like:
+
+```text
+Cannot cast struct with 2 fields to 2 fields because there is no field name overlap
+```
+
+You must explicitly rename or map fields to ensure at least one field name matches. Here are common patterns:
+
+**Example 1: Source and target field names already match (Name-based casting)**
+
+**Success case (field names align):**
+
+```sql
+-- source_col has schema: STRUCT<x INT, y INT>
+-- Casting to the same field names succeeds (no-op or type validation only)
+SELECT CAST(source_col AS STRUCT<x INT, y INT>) FROM table1;
+```
+
+**Example 2: Source and target field names differ (Migration scenario)**
+
+**What fails now (no field name overlap):**
+
+```sql
+-- source_col has schema: STRUCT<a INT, b INT>
+-- This FAILS because there is no field name overlap:
+-- ❌ SELECT CAST(source_col AS STRUCT<x INT, y INT>) FROM table1;
+-- Error: Cannot cast struct with 2 fields to 2 fields because there is no field name overlap
+```
+
+**Migration options (must align names):**
+
+**Option A: Use struct constructor for explicit field mapping**
+
+```sql
+-- source_col has schema: STRUCT<a INT, b INT>
+-- Use STRUCT_CONSTRUCT with explicit field names
+SELECT STRUCT_CONSTRUCT(
+    'x', source_col.a,
+    'y', source_col.b
+) AS renamed_struct FROM table1;
+```
+
+**Option B: Rename in the cast target to match source names**
+
+```sql
+-- source_col has schema: STRUCT<a INT, b INT>
+-- Cast to target with matching field names
+SELECT CAST(source_col AS STRUCT<a INT, b INT>) FROM table1;
+```
+
+**Example 3: Using struct constructors in Rust API**
+
+If you need to map fields programmatically, build the target struct explicitly:
+
+```rust,ignore
+// Build the target struct with explicit field names
+let target_struct_type = DataType::Struct(vec![
+    FieldRef::new("x", DataType::Int32),
+    FieldRef::new("y", DataType::Utf8),
+]);
+
+// Use struct constructors rather than casting for field mapping
+// This makes the field mapping explicit and unambiguous
+// Use struct builders or row constructors that preserve your mapping logic
+```
+
+**Why this change:**
+
+1. **Safety:** Field names are now the primary contract for struct compatibility
+2. **Explicitness:** Prevents silent data misalignment caused by positional assumptions
+3. **Consistency:** Matches DuckDB's behavior and aligns with other SQL engines that enforce name-based matching
+4. **Debuggability:** Errors now appear at plan time rather than as silent data corruption
+
+See [Issue #19841](https://github.com/apache/datafusion/issues/19841) and [PR #19955](https://github.com/apache/datafusion/pull/19955) for more details.
+
 ### `FilterExec` builder methods deprecated
 
 The following methods on `FilterExec` have been deprecated in favor of using `FilterExecBuilder`:

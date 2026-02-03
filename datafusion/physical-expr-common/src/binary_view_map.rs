@@ -437,7 +437,7 @@ where
         let views_size = self.views.len() * size_of::<u128>();
         let in_progress_size = self.in_progress.capacity();
         let completed_size: usize = self.completed.iter().map(|b| b.len()).sum();
-        let nulls_size = self.nulls.len() / 8;
+        let nulls_size = self.nulls.allocated_size();
 
         self.map_size
             + views_size

@@ -49,7 +49,7 @@ use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::RecordBatchStream;
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use futures::{FutureExt as _, Stream};
-use log::warn;
+use log::debug;
 
 /// Stream that reads spill files from disk where each batch is read in a spawned blocking task
 /// It will read one batch at a time and will not do any buffering, to buffer data use [`crate::common::spawn_buffered`]
@@ -154,7 +154,7 @@ impl SpillReaderStream {
                                         > max_record_batch_memory
                                             + SPILL_BATCH_MEMORY_MARGIN
                                     {
-                                        warn!(
+                                        debug!(
                                             "Record batch memory usage ({actual_size} bytes) exceeds the expected limit ({max_record_batch_memory} bytes) \n\
                                                 by more than the allowed tolerance ({SPILL_BATCH_MEMORY_MARGIN} bytes).\n\
                                                 This likely indicates a bug in memory accounting during spilling.\n\
