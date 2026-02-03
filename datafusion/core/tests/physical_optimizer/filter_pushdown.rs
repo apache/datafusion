@@ -3721,7 +3721,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_is_used() {
     }
 }
 
-/// related to https://github.com/apache/datafusion/issues/20109
+/// Regression test for https://github.com/apache/datafusion/issues/20109
 #[tokio::test]
 async fn test_filter_with_projection_pushdown() {
     use arrow::array::{Int64Array, RecordBatch, StringArray};
