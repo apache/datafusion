@@ -151,14 +151,29 @@ fn string_to_map_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             continue;
         }
 
+        // Split text into key-value pairs using pair_delim.
+        // Example: "a:1,b:2" with pair_delim="," -> ["a:1", "b:2"]
         let pairs: Vec<&str> = text.split(&pair_delim).collect();
         let mut count = 0;
 
         for pair in pairs {
+            // Skip empty pairs (e.g., from "a:1,,b:2" -> ["a:1", "", "b:2"])
             if pair.is_empty() {
                 continue;
             }
 
+            // Split each pair into key and value using kv_delim.
+            // splitn(2, ...) ensures we only split on the FIRST delimiter.
+            // Example: "a:1:2" with kv_delim=":" -> ["a", "1:2"] (value keeps extra colons)
+            //
+            // kv[0] = key (always present)
+            // kv[1] = value (may not exist if no delimiter found)
+            //
+            // Examples:
+            //   "a:1"   -> kv = ["a", "1"]   -> key="a", value=Some("1")
+            //   "a"     -> kv = ["a"]        -> key="a", value=None
+            //   "a:"    -> kv = ["a", ""]    -> key="a", value=Some("")
+            //   ":1"    -> kv = ["", "1"]    -> key="",  value=Some("1")
             let kv: Vec<&str> = pair.splitn(2, &kv_delim).collect();
             let key = kv[0];
             let value = if kv.len() > 1 { Some(kv[1]) } else { None };
