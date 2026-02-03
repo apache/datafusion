@@ -432,6 +432,16 @@ SELECT chr(CAST(0 AS int))
 statement error DataFusion error: Execution error: invalid Unicode scalar value: 9223372036854775807
 SELECT chr(CAST(9223372036854775807 AS bigint))
 
+statement error DataFusion error: Execution error: invalid Unicode scalar value: 1114112
+SELECT chr(CAST(1114112 AS bigint))
+
+statement error DataFusion error: Execution error: invalid Unicode scalar value: -1
+SELECT chr(CAST(-1 AS bigint))
+
+# surrogate code point (invalid scalar value)
+statement error DataFusion error: Execution error: invalid Unicode scalar value: 55297
+SELECT chr(CAST(55297 AS bigint))
+
 query T
 SELECT concat('a','b','c')
 ----

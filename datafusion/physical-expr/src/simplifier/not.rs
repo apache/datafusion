@@ -44,13 +44,13 @@ use crate::expressions::{BinaryExpr, InListExpr, Literal, NotExpr, in_list, lit}
 /// TreeNodeRewriter, multiple passes will automatically be applied until no more
 /// transformations are possible.
 pub fn simplify_not_expr(
-    expr: &Arc<dyn PhysicalExpr>,
+    expr: Arc<dyn PhysicalExpr>,
     schema: &Schema,
 ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
     // Check if this is a NOT expression
     let not_expr = match expr.as_any().downcast_ref::<NotExpr>() {
         Some(not_expr) => not_expr,
-        None => return Ok(Transformed::no(Arc::clone(expr))),
+        None => return Ok(Transformed::no(expr)),
     };
 
     let inner_expr = not_expr.arg();
@@ -120,5 +120,5 @@ pub fn simplify_not_expr(
     }
 
     // If no simplification possible, return the original expression
-    Ok(Transformed::no(Arc::clone(expr)))
+    Ok(Transformed::no(expr))
 }

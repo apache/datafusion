@@ -189,7 +189,29 @@ pub trait FileSource: Send + Sync {
     /// * `Inexact` - Created a source optimized for ordering (e.g., reversed row groups) but not perfectly sorted
     /// * `Unsupported` - Cannot optimize for this ordering
     ///
-    /// Default implementation returns `Unsupported`.
+    /// # Deprecation / migration notes
+    /// - [`Self::try_reverse_output`] was renamed to this method and deprecated since `53.0.0`.
+    ///   Per DataFusion's deprecation guidelines, it will be removed in `59.0.0` or later
+    ///   (6 major versions or 6 months, whichever is longer).
+    /// - New implementations should override [`Self::try_pushdown_sort`] directly.
+    /// - For backwards compatibility, the default implementation of
+    ///   [`Self::try_pushdown_sort`] delegates to the deprecated
+    ///   [`Self::try_reverse_output`] until it is removed. After that point, the
+    ///   default implementation will return [`SortOrderPushdownResult::Unsupported`].
+    fn try_pushdown_sort(
+        &self,
+        order: &[PhysicalSortExpr],
+        eq_properties: &EquivalenceProperties,
+    ) -> Result<SortOrderPushdownResult<Arc<dyn FileSource>>> {
+        #[expect(deprecated)]
+        self.try_reverse_output(order, eq_properties)
+    }
+
+    /// Deprecated: Renamed to [`Self::try_pushdown_sort`].
+    #[deprecated(
+        since = "53.0.0",
+        note = "Renamed to try_pushdown_sort. This method was never limited to reversing output. It will be removed in 59.0.0 or later."
+    )]
     fn try_reverse_output(
         &self,
         _order: &[PhysicalSortExpr],
@@ -232,7 +254,7 @@ pub trait FileSource: Send + Sync {
     /// `SchemaAdapterFactory` has been removed. Use `PhysicalExprAdapterFactory` instead.
     /// See `upgrading.md` for more details.
     #[deprecated(
-        since = "52.0.0",
+        since = "53.0.0",
         note = "SchemaAdapterFactory has been removed. Use PhysicalExprAdapterFactory instead. See upgrading.md for more details."
     )]
     #[expect(deprecated)]
@@ -250,7 +272,7 @@ pub trait FileSource: Send + Sync {
     /// `SchemaAdapterFactory` has been removed. Use `PhysicalExprAdapterFactory` instead.
     /// See `upgrading.md` for more details.
     #[deprecated(
-        since = "52.0.0",
+        since = "53.0.0",
         note = "SchemaAdapterFactory has been removed. Use PhysicalExprAdapterFactory instead. See upgrading.md for more details."
     )]
     #[expect(deprecated)]
