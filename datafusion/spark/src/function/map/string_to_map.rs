@@ -19,6 +19,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, StringArray, StringBuilder};
+use arrow::buffer::NullBuffer;
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::{Result, internal_err};
 use datafusion_expr::{
@@ -140,12 +141,13 @@ fn string_to_map_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let mut keys_builder = StringBuilder::new();
     let mut values_builder = StringBuilder::new();
     let mut offsets: Vec<i32> = vec![0];
+    let mut current_offset: i32 = 0;
     let mut null_buffer = vec![true; num_rows];
 
     for row_idx in 0..num_rows {
         if text_array.is_null(row_idx) {
             null_buffer[row_idx] = false;
-            offsets.push(*offsets.last().unwrap());
+            offsets.push(current_offset);
             continue;
         }
 
@@ -154,7 +156,8 @@ fn string_to_map_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             // Empty string -> map with empty key and NULL value (Spark behavior)
             keys_builder.append_value("");
             values_builder.append_null();
-            offsets.push(offsets.last().unwrap() + 1);
+            current_offset += 1;
+            offsets.push(current_offset);
             continue;
         }
 
@@ -192,14 +195,15 @@ fn string_to_map_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             count += 1;
         }
 
-        offsets.push(offsets.last().unwrap() + count);
+        current_offset += count;
+        offsets.push(current_offset);
     }
 
     let keys_array: ArrayRef = Arc::new(keys_builder.finish());
     let values_array: ArrayRef = Arc::new(values_builder.finish());
 
     // Create null buffer
-    let null_buffer = arrow::buffer::NullBuffer::from(null_buffer);
+    let null_buffer = NullBuffer::from(null_buffer);
 
     map_from_keys_values_offsets_nulls(
         &keys_array,
@@ -233,6 +237,30 @@ fn extract_delimiter_from_string_array(array: &ArrayRef) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::array::MapArray;
+
+    /// Helper to extract keys and values from MapArray for assertions
+    fn get_map_entries(map_array: &MapArray, row: usize) -> Vec<(String, Option<String>)> {
+        if map_array.is_null(row) {
+            return vec![];
+        }
+        let start = map_array.value_offsets()[row] as usize;
+        let end = map_array.value_offsets()[row + 1] as usize;
+        let keys = map_array.keys().as_any().downcast_ref::<StringArray>().unwrap();
+        let values = map_array.values().as_any().downcast_ref::<StringArray>().unwrap();
+
+        (start..end)
+            .map(|i| {
+                let key = keys.value(i).to_string();
+                let value = if values.is_null(i) {
+                    None
+                } else {
+                    Some(values.value(i).to_string())
+                };
+                (key, value)
+            })
+            .collect()
+    }
 
     #[test]
     fn test_extract_delimiter_from_string_array() {
@@ -251,5 +279,154 @@ mod tests {
         let delim: ArrayRef = Arc::new(StringArray::from(vec!["=", "=", "="]));
         let result = extract_delimiter_from_string_array(&delim).unwrap();
         assert_eq!(result, "=");
+    }
+
+    // Table-driven tests for string_to_map
+    // Test cases derived from Spark ComplexTypeSuite:
+    // https://github.com/apache/spark/blob/v4.0.0/sql/catalyst/src/test/scala/org/apache/spark/sql/catalyst/expressions/ComplexTypeSuite.scala#L525-L618
+    #[test]
+    fn test_string_to_map_cases() {
+        struct TestCase {
+            name: &'static str,
+            input: Option<&'static str>,  // None = NULL input
+            pair_delim: Option<&'static str>,
+            kv_delim: Option<&'static str>,
+            expected: Option<Vec<(&'static str, Option<&'static str>)>>,  // None = NULL output
+        }
+
+        let cases = vec![
+            TestCase {
+                name: "s0: basic default delimiters",
+                input: Some("a:1,b:2,c:3"),
+                pair_delim: None,
+                kv_delim: None,
+                expected: Some(vec![("a", Some("1")), ("b", Some("2")), ("c", Some("3"))]),
+            },
+            TestCase {
+                name: "s1: preserve spaces in values",
+                input: Some("a: ,b:2"),
+                pair_delim: None,
+                kv_delim: None,
+                expected: Some(vec![("a", Some(" ")), ("b", Some("2"))]),
+            },
+            TestCase {
+                name: "s2: custom kv delimiter '='",
+                input: Some("a=1,b=2,c=3"),
+                pair_delim: Some(","),
+                kv_delim: Some("="),
+                expected: Some(vec![("a", Some("1")), ("b", Some("2")), ("c", Some("3"))]),
+            },
+            TestCase {
+                name: "s3: empty string",
+                input: Some(""),
+                pair_delim: Some(","),
+                kv_delim: Some("="),
+                expected: Some(vec![("", None)]),
+            },
+            TestCase {
+                name: "s4: custom pair delimiter '_'",
+                input: Some("a:1_b:2_c:3"),
+                pair_delim: Some("_"),
+                kv_delim: Some(":"),
+                expected: Some(vec![("a", Some("1")), ("b", Some("2")), ("c", Some("3"))]),
+            },
+            TestCase {
+                name: "s5: single key no value",
+                input: Some("a"),
+                pair_delim: None,
+                kv_delim: None,
+                expected: Some(vec![("a", None)]),
+            },
+            TestCase {
+                name: "s6: custom delimiters '&' and '='",
+                input: Some("a=1&b=2&c=3"),
+                pair_delim: Some("&"),
+                kv_delim: Some("="),
+                expected: Some(vec![("a", Some("1")), ("b", Some("2")), ("c", Some("3"))]),
+            },
+            TestCase {
+                name: "null input returns null",
+                input: None,
+                pair_delim: None,
+                kv_delim: None,
+                expected: None,
+            },
+        ];
+
+        for case in cases {
+            let text: ArrayRef = Arc::new(StringArray::from(vec![case.input]));
+            let args: Vec<ArrayRef> = match (case.pair_delim, case.kv_delim) {
+                (Some(p), Some(k)) => vec![
+                    text,
+                    Arc::new(StringArray::from(vec![p])),
+                    Arc::new(StringArray::from(vec![k])),
+                ],
+                _ => vec![text],
+            };
+
+            let result = string_to_map_inner(&args).unwrap();
+            let map_array = result.as_any().downcast_ref::<MapArray>().unwrap();
+
+            assert_eq!(map_array.len(), 1, "case: {}", case.name);
+
+            match case.expected {
+                None => {
+                    // Expected NULL output
+                    assert!(map_array.is_null(0), "case: {} expected NULL", case.name);
+                }
+                Some(expected_entries) => {
+                    assert!(!map_array.is_null(0), "case: {} unexpected NULL", case.name);
+                    let entries = get_map_entries(map_array, 0);
+                    let expected: Vec<(String, Option<String>)> = expected_entries
+                        .iter()
+                        .map(|(k, v)| (k.to_string(), v.map(|s| s.to_string())))
+                        .collect();
+                    assert_eq!(entries, expected, "case: {}", case.name);
+                }
+            }
+        }
+    }
+
+    // Multi-row test showing Arrow array structure
+    // Input: ["a:1,b:2", "x:9", NULL]
+    //
+    // Arrow MapArray internal structure:
+    //   keys:    ["a", "b", "x"]  (flat array of all keys)
+    //   values:  ["1", "2", "9"]  (flat array of all values)
+    //   offsets: [0, 2, 3, 3]    (marks boundaries between rows)
+    //
+    // How to read offsets:
+    //   Row 0: keys[0..2] = ["a", "b"], values[0..2] = ["1", "2"] -> {a: 1, b: 2}
+    //   Row 1: keys[2..3] = ["x"],      values[2..3] = ["9"]      -> {x: 9}
+    //   Row 2: NULL (offset unchanged: 3..3 = empty)
+    #[test]
+    fn test_multi_row_array_structure() {
+        let text: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("a:1,b:2"),
+            Some("x:9"),
+            None,
+        ]));
+
+        let result = string_to_map_inner(&[text]).unwrap();
+        let map_array = result.as_any().downcast_ref::<MapArray>().unwrap();
+
+        // 3 rows in output
+        assert_eq!(map_array.len(), 3);
+
+        // Row 0: {a: 1, b: 2}
+        assert!(!map_array.is_null(0));
+        let entries = get_map_entries(map_array, 0);
+        assert_eq!(entries, vec![
+            ("a".to_string(), Some("1".to_string())),
+            ("b".to_string(), Some("2".to_string())),
+        ]);
+
+        // Row 1: {x: 9}
+        assert!(!map_array.is_null(1));
+        let entries = get_map_entries(map_array, 1);
+        assert_eq!(entries, vec![("x".to_string(), Some("9".to_string()))]);
+
+        // Row 2: NULL
+        assert!(map_array.is_null(2));
     }
 }
