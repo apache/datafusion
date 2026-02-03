@@ -7952,8 +7952,9 @@ logical_plan
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----TableScan: t projection=[]
 physical_plan
-01)ProjectionExec: expr=[2 as count(Int64(1)), 2 as count()]
-02)--PlaceholderRowExec
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(Int64(1)), count(Int64(1))@0 as count()]
+02)--ProjectionExec: expr=[2 as count(Int64(1))]
+03)----PlaceholderRowExec
 
 query II
 select count(1), count(*) from t;
@@ -7968,8 +7969,9 @@ logical_plan
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----TableScan: t projection=[]
 physical_plan
-01)ProjectionExec: expr=[2 as count(Int64(1)), 2 as count(*)]
-02)--PlaceholderRowExec
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(Int64(1)), count(Int64(1))@0 as count(*)]
+02)--ProjectionExec: expr=[2 as count(Int64(1))]
+03)----PlaceholderRowExec
 
 query II
 select count(), count(*) from t;
@@ -7984,8 +7986,9 @@ logical_plan
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----TableScan: t projection=[]
 physical_plan
-01)ProjectionExec: expr=[2 as count(), 2 as count(*)]
-02)--PlaceholderRowExec
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(), count(Int64(1))@0 as count(*)]
+02)--ProjectionExec: expr=[2 as count(Int64(1))]
+03)----PlaceholderRowExec
 
 query TT
 explain select count(1) * count(2) from t;
