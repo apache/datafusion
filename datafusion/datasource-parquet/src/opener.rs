@@ -24,7 +24,7 @@ use crate::{
     apply_file_schema_type_coercions, coerce_int96_to_resolution, row_filter,
 };
 use arrow::array::{RecordBatch, RecordBatchOptions};
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, SchemaBuilder};
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::utils::reassign_expr_columns;
@@ -213,6 +213,7 @@ impl FileOpener for ParquetOpener {
             self.projection
                 .project_schema(self.table_schema.table_schema())?,
         );
+        let virtual_columns = Arc::clone(self.table_schema.virtual_columns());
 
         // Build a combined map for replacing column references with literal values.
         // This includes:
@@ -348,7 +349,10 @@ impl FileOpener for ParquetOpener {
             // unnecessary I/O. We decide later if it is needed to evaluate the
             // pruning predicates. Thus default to not requesting it from the
             // underlying reader.
-            let mut options = ArrowReaderOptions::new().with_page_index(false);
+            let mut options = ArrowReaderOptions::new()
+                .with_page_index(false)
+                .with_virtual_columns(virtual_columns.to_vec())?;
+
             #[cfg(feature = "parquet_encryption")]
             if let Some(fd_val) = file_decryption_properties {
                 options = options.with_file_decryption_properties(Arc::clone(&fd_val));
@@ -461,9 +465,18 @@ impl FileOpener for ParquetOpener {
 
             // Filter pushdown: evaluate predicates during scan
             if let Some(predicate) = pushdown_filters.then_some(predicate).flatten() {
+                // Predicate pushdown (or rather, projection) is not supported for virtual columns,
+                // so we must remove the virtual columns from the schema used for building the row filter
+                let mut schema_builder =
+                    SchemaBuilder::from(physical_file_schema.as_ref());
+                for i in 0..virtual_columns.len() {
+                    schema_builder.remove(physical_file_schema.fields().len() - i - 1);
+                }
+                let pushdown_schema = Arc::new(schema_builder.finish());
+
                 let row_filter = row_filter::build_row_filter(
                     &predicate,
-                    &physical_file_schema,
+                    &pushdown_schema,
                     builder.metadata(),
                     reorder_predicates,
                     &file_metrics,
@@ -601,8 +614,18 @@ impl FileOpener for ParquetOpener {
             // metrics from the arrow reader itself
             let arrow_reader_metrics = ArrowReaderMetrics::enabled();
 
+            // The projection mask should only include physical parquet columns. We know that
+            // projection column indices > the number of root parquet columns must be virtual or
+            // partition columns, since these are after the physical columns in the table schema.
+            let parquet_num_columns =
+                builder.parquet_schema().root_schema().get_fields().len();
             let indices = projection.column_indices();
-            let mask = ProjectionMask::roots(builder.parquet_schema(), indices);
+            let parquet_indices: Vec<usize> = indices
+                .iter()
+                .filter(|&idx| idx < &parquet_num_columns)
+                .copied()
+                .collect();
+            let mask = ProjectionMask::roots(builder.parquet_schema(), parquet_indices);
 
             let stream = builder
                 .with_projection(mask)
@@ -610,13 +633,17 @@ impl FileOpener for ParquetOpener {
                 .with_metrics(arrow_reader_metrics.clone())
                 .build()?;
 
+            // The reader's stream.schema() doesn't include virtual columns, so we add them.
+            let mut schema_builder = SchemaBuilder::from(stream.schema().as_ref());
+            schema_builder.extend(virtual_columns.iter().cloned());
+            let stream_schema = Arc::new(schema_builder.finish());
+
             let files_ranges_pruned_statistics =
                 file_metrics.files_ranges_pruned_statistics.clone();
             let predicate_cache_inner_records =
                 file_metrics.predicate_cache_inner_records.clone();
             let predicate_cache_records = file_metrics.predicate_cache_records.clone();
 
-            let stream_schema = Arc::clone(stream.schema());
             // Check if we need to replace the schema to handle things like differing nullability or metadata.
             // See note below about file vs. output schema.
             let replace_schema = !stream_schema.eq(&output_schema);
@@ -1018,7 +1045,8 @@ mod test {
 
     use super::{ConstantColumns, constant_columns_from_stats};
     use crate::{DefaultParquetFileReaderFactory, RowGroupAccess, opener::ParquetOpener};
-    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+    use arrow::array::{Array, AsArray};
+    use arrow::datatypes::{DataType, Field, Int32Type, Int64Type, Schema, SchemaRef};
     use bytes::{BufMut, BytesMut};
     use datafusion_common::{
         ColumnStatistics, DataFusionError, ScalarValue, Statistics, record_batch,
@@ -1038,7 +1066,7 @@ mod test {
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
     use futures::{Stream, StreamExt};
     use object_store::{ObjectStore, memory::InMemory, path::Path};
-    use parquet::arrow::ArrowWriter;
+    use parquet::arrow::{ArrowWriter, RowNumber};
     use parquet::file::properties::WriterProperties;
 
     /// Builder for creating [`ParquetOpener`] instances with sensible defaults for tests.
@@ -1159,16 +1187,16 @@ mod test {
             let table_schema = self.table_schema.expect(
                 "ParquetOpenerBuilder: table_schema must be set via with_schema() or with_table_schema()",
             );
-            let file_schema = Arc::clone(table_schema.file_schema());
+            let full_schema = table_schema.table_schema();
 
             let projection = if let Some(projection) = self.projection {
                 projection
             } else if let Some(indices) = self.projection_indices {
-                ProjectionExprs::from_indices(&indices, &file_schema)
+                // Use table_schema (which includes virtual columns) for projection
+                ProjectionExprs::from_indices(&indices, full_schema)
             } else {
-                // Default: project all columns
-                let all_indices: Vec<usize> = (0..file_schema.fields().len()).collect();
-                ProjectionExprs::from_indices(&all_indices, &file_schema)
+                let all_indices: Vec<usize> = (0..full_schema.fields().len()).collect();
+                ProjectionExprs::from_indices(&all_indices, full_schema)
             };
 
             ParquetOpener {
@@ -2003,5 +2031,650 @@ mod test {
             vec![7, 5, 1],
             "Reverse scan with non-contiguous row groups should correctly map RowSelection"
         );
+    }
+
+    /// Options for reading parquet files in tests
+    #[derive(Default)]
+    struct ReadOptions {
+        projection: Option<Vec<usize>>,
+        partition_values: Option<Vec<ScalarValue>>,
+        predicate: Option<Arc<dyn PhysicalExpr>>,
+    }
+
+    /// Writes a batch to parquet and reads it back with the given options.
+    /// Returns a single RecordBatch.
+    async fn read_parquet(
+        batch: arrow::record_batch::RecordBatch,
+        table_schema: TableSchema,
+        options: ReadOptions,
+    ) -> arrow::record_batch::RecordBatch {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        let data_size =
+            write_parquet(Arc::clone(&store), "test.parquet", batch.clone()).await;
+
+        let mut file = PartitionedFile::new("test.parquet".to_string(), data_size as u64);
+        if let Some(partition_values) = options.partition_values {
+            file.partition_values = partition_values;
+        }
+
+        let mut builder = ParquetOpenerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_table_schema(table_schema.clone());
+        if let Some(projection) = options.projection {
+            builder = builder.with_projection_indices(&projection);
+        }
+        if let Some(predicate) = options.predicate {
+            builder = builder
+                .with_predicate(predicate)
+                .with_pushdown_filters(true);
+        }
+        let opener = builder.build();
+        let mut stream = opener.open(file).unwrap().await.unwrap();
+
+        let mut batches = vec![];
+        while let Some(Ok(batch)) = stream.next().await {
+            batches.push(batch);
+        }
+        assert_eq!(batches.len(), 1, "Expected exactly one batch");
+        batches.into_iter().next().unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_virtual_columns() {
+        let parquet_data =
+            record_batch!(("a", Int32, vec![Some(1), Some(2), Some(3)])).unwrap();
+        let row_number_field = Arc::new(
+            Field::new("row_index", DataType::Int64, false)
+                .with_extension_type(RowNumber),
+        );
+        let table_schema = TableSchema::new_with_virtual_columns(
+            Arc::clone(&parquet_data.schema()),
+            vec![row_number_field],
+            vec![],
+        );
+        let batch =
+            read_parquet(parquet_data, table_schema, ReadOptions::default()).await;
+
+        let output_schema = batch.schema();
+        assert_eq!(
+            output_schema.fields().len(),
+            2,
+            "Output should have 2 columns (a and row_index)"
+        );
+        assert_eq!(output_schema.field(0).name(), "a");
+        assert_eq!(output_schema.field(1).name(), "row_index");
+
+        let a_values = batch
+            .column(0)
+            .as_primitive::<Int32Type>()
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        assert_eq!(a_values, vec![1, 2, 3]);
+
+        let row_index_values = batch
+            .column(1)
+            .as_primitive::<Int64Type>()
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        assert_eq!(row_index_values, vec![0, 1, 2]);
+    }
+
+    #[tokio::test]
+    async fn test_virtual_columns_with_projections() {
+        let parquet_data =
+            record_batch!(("a", Int32, vec![Some(1), Some(2), Some(3)])).unwrap();
+        let row_number_field = Arc::new(
+            Field::new("row_index", DataType::Int64, false)
+                .with_extension_type(RowNumber),
+        );
+        let table_schema = TableSchema::new_with_virtual_columns(
+            Arc::clone(&parquet_data.schema()),
+            vec![row_number_field],
+            vec![],
+        );
+
+        // Project only the virtual column (index 1)
+        let batch = read_parquet(
+            parquet_data,
+            table_schema,
+            ReadOptions {
+                projection: Some(vec![1]),
+                ..Default::default()
+            },
+        )
+        .await;
+
+        let output_schema = batch.schema();
+        assert_eq!(
+            output_schema.fields().len(),
+            1,
+            "Output should have 1 column (row_index)"
+        );
+        assert_eq!(output_schema.field(0).name(), "row_index");
+
+        let row_index_values = batch
+            .column(0)
+            .as_primitive::<Int64Type>()
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        assert_eq!(row_index_values, vec![0, 1, 2]);
+    }
+
+    #[tokio::test]
+    async fn test_virtual_columns_with_partition_columns() {
+        let parquet_data =
+            record_batch!(("a", Int32, vec![Some(1), Some(2), Some(3)])).unwrap();
+
+        let row_number_field = Arc::new(
+            Field::new("row_index", DataType::Int64, false)
+                .with_extension_type(RowNumber),
+        );
+        let partition_col = Arc::new(Field::new("region", DataType::Utf8, false));
+        let table_schema = TableSchema::new_with_virtual_columns(
+            Arc::clone(&parquet_data.schema()),
+            vec![row_number_field],
+            vec![partition_col],
+        );
+
+        // Project all columns: file column (0), virtual column (1), partition column (2)
+        let batch = read_parquet(
+            parquet_data,
+            table_schema,
+            ReadOptions {
+                partition_values: Some(vec![ScalarValue::Utf8(Some(
+                    "europe".to_string(),
+                ))]),
+                ..Default::default()
+            },
+        )
+        .await;
+
+        let output_schema = batch.schema();
+        assert_eq!(
+            output_schema.fields().len(),
+            3,
+            "Output should have 3 columns (a, row_index, region)"
+        );
+        assert_eq!(output_schema.field(0).name(), "a");
+        assert_eq!(output_schema.field(1).name(), "row_index");
+        assert_eq!(output_schema.field(2).name(), "region");
+
+        let a_values = batch
+            .column(0)
+            .as_primitive::<Int32Type>()
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        assert_eq!(a_values, vec![1, 2, 3], "File column 'a' values");
+
+        let row_index_values = batch
+            .column(1)
+            .as_primitive::<Int64Type>()
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            row_index_values,
+            vec![0, 1, 2],
+            "Virtual column 'row_index' values"
+        );
+
+        let region_values = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<arrow::array::StringArray>()
+            .unwrap()
+            .iter()
+            .map(|v| v.unwrap().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            region_values,
+            vec!["europe", "europe", "europe"],
+            "Partition column 'region' values"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_partition_and_virtual_columns_only() {
+        let parquet_data =
+            record_batch!(("a", Int32, vec![Some(1), Some(2), Some(3)])).unwrap();
+
+        let row_number_field = Arc::new(
+            Field::new("row_index", DataType::Int64, false)
+                .with_extension_type(RowNumber),
+        );
+        let partition_col = Arc::new(Field::new("year", DataType::Int32, false));
+        let table_schema = TableSchema::new_with_virtual_columns(
+            Arc::clone(&parquet_data.schema()),
+            vec![row_number_field],
+            vec![partition_col],
+        );
+
+        let batch = read_parquet(
+            parquet_data,
+            table_schema,
+            ReadOptions {
+                projection: Some(vec![1, 2]),
+                partition_values: Some(vec![ScalarValue::Int32(Some(2026))]),
+                ..Default::default()
+            },
+        )
+        .await;
+
+        let output_schema = batch.schema();
+        assert_eq!(
+            output_schema.fields().len(),
+            2,
+            "Output should have 2 columns (row_index, year)"
+        );
+        assert_eq!(output_schema.field(0).name(), "row_index");
+        assert_eq!(output_schema.field(1).name(), "year");
+
+        let row_index_values = batch
+            .column(0)
+            .as_primitive::<Int64Type>()
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            row_index_values,
+            vec![0, 1, 2],
+            "Virtual column 'row_index' values"
+        );
+
+        let year_values = batch
+            .column(1)
+            .as_primitive::<Int32Type>()
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            year_values,
+            vec![2026, 2026, 2026],
+            "Partition column 'year' values"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_nested_schema_projections() {
+        use arrow::array::{ArrayRef, Int32Array, StructArray};
+        // Create nested schema: a: {b: int32, c: {d: int32, e: int32}}
+        let inner_struct_fields = vec![
+            Field::new("d", DataType::Int32, false),
+            Field::new("e", DataType::Int32, false),
+        ];
+        let inner_struct_type = DataType::Struct(inner_struct_fields.clone().into());
+
+        let outer_struct_fields = vec![
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", inner_struct_type.clone(), false),
+        ];
+        let outer_struct_type = DataType::Struct(outer_struct_fields.clone().into());
+
+        let a_struct = {
+            let d_array: ArrayRef = Arc::new(Int32Array::from(vec![10, 20, 30]));
+            let e_array: ArrayRef = Arc::new(Int32Array::from(vec![100, 200, 300]));
+            let c_struct = StructArray::from(vec![
+                (Arc::new(inner_struct_fields[0].clone()), d_array),
+                (Arc::new(inner_struct_fields[1].clone()), e_array),
+            ]);
+            let b_array: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+            let c_array: ArrayRef = Arc::new(c_struct);
+            Arc::new(StructArray::from(vec![
+                (Arc::new(outer_struct_fields[0].clone()), b_array),
+                (Arc::new(outer_struct_fields[1].clone()), c_array),
+            ]))
+        };
+
+        let row_number_field = Arc::new(
+            Field::new("row_index", DataType::Int64, false)
+                .with_extension_type(RowNumber),
+        );
+
+        // File schema: x: int32, a: {b: int32, c: {d: int32, e: int32}}, y: int32
+        // Table schema: x, a, y, row_index (indices 0, 1, 2, 3)
+        let file_schema = Arc::new(Schema::new(vec![
+            Field::new("x", DataType::Int32, false),
+            Field::new("a", outer_struct_type.clone(), false),
+            Field::new("y", DataType::Int32, false),
+        ]));
+
+        let x_array: ArrayRef = Arc::new(Int32Array::from(vec![100, 200, 300]));
+        let y_array: ArrayRef = Arc::new(Int32Array::from(vec![1000, 2000, 3000]));
+
+        let parquet_data = arrow::record_batch::RecordBatch::try_new(
+            file_schema.clone(),
+            vec![x_array, a_struct, y_array],
+        )
+        .unwrap();
+
+        let table_schema = TableSchema::new_with_virtual_columns(
+            file_schema,
+            vec![row_number_field],
+            vec![],
+        );
+
+        // Test 1: Read all columns including row_index
+        {
+            let batch = read_parquet(
+                parquet_data.clone(),
+                table_schema.clone(),
+                ReadOptions::default(),
+            )
+            .await;
+
+            assert_eq!(batch.schema().fields().len(), 4);
+            assert_eq!(batch.schema().field(0).name(), "x");
+            assert_eq!(batch.schema().field(1).name(), "a");
+            assert_eq!(batch.schema().field(2).name(), "y");
+            assert_eq!(batch.schema().field(3).name(), "row_index");
+
+            let row_index_values = batch
+                .column(3)
+                .as_primitive::<Int64Type>()
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            assert_eq!(row_index_values, vec![0, 1, 2]);
+
+            let a_col = batch.column(1).as_struct();
+            let b_values = a_col
+                .column(0)
+                .as_primitive::<Int32Type>()
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            assert_eq!(b_values, vec![1, 2, 3]);
+        }
+
+        // Test 2: Project nested struct and row_index only
+        {
+            let batch = read_parquet(
+                parquet_data.clone(),
+                table_schema.clone(),
+                ReadOptions {
+                    projection: Some(vec![1, 3]),
+                    ..Default::default()
+                },
+            )
+            .await;
+
+            assert_eq!(batch.schema().fields().len(), 2);
+            assert_eq!(batch.schema().field(0).name(), "a");
+            assert_eq!(batch.schema().field(1).name(), "row_index");
+
+            let row_index_values = batch
+                .column(1)
+                .as_primitive::<Int64Type>()
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            assert_eq!(row_index_values, vec![0, 1, 2]);
+
+            let a_col = batch.column(0).as_struct();
+            let c_col = a_col.column(1).as_struct();
+            let d_values = c_col
+                .column(0)
+                .as_primitive::<Int32Type>()
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            assert_eq!(d_values, vec![10, 20, 30]);
+        }
+
+        // Test 3: Project only primitive columns with row_index (skip nested struct)
+        {
+            let batch = read_parquet(
+                parquet_data.clone(),
+                table_schema.clone(),
+                ReadOptions {
+                    projection: Some(vec![0, 2, 3]), // x, y, row_index - skip 'a'
+                    ..Default::default()
+                },
+            )
+            .await;
+
+            assert_eq!(batch.schema().fields().len(), 3);
+            assert_eq!(batch.schema().field(0).name(), "x");
+            assert_eq!(batch.schema().field(1).name(), "y");
+            assert_eq!(batch.schema().field(2).name(), "row_index");
+
+            let x_values = batch
+                .column(0)
+                .as_primitive::<Int32Type>()
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            let y_values = batch
+                .column(1)
+                .as_primitive::<Int32Type>()
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            let row_index_values = batch
+                .column(2)
+                .as_primitive::<Int64Type>()
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            assert_eq!(x_values, vec![100, 200, 300]);
+            assert_eq!(y_values, vec![1000, 2000, 3000]);
+            assert_eq!(row_index_values, vec![0, 1, 2]);
+        }
+
+        // Test 4: Project only the nested column (without row_index)
+        {
+            let batch = read_parquet(
+                parquet_data.clone(),
+                table_schema.clone(),
+                ReadOptions {
+                    projection: Some(vec![1]),
+                    ..Default::default()
+                },
+            )
+            .await;
+
+            assert_eq!(batch.schema().fields().len(), 1);
+            assert_eq!(batch.schema().field(0).name(), "a");
+
+            let a_col = batch.column(0).as_struct();
+            let b_values = a_col
+                .column(0)
+                .as_primitive::<Int32Type>()
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            assert_eq!(b_values, vec![1, 2, 3]);
+        }
+
+        // Test 5: Project columns in different order with row_index
+        {
+            let batch = read_parquet(
+                parquet_data.clone(),
+                table_schema.clone(),
+                ReadOptions {
+                    projection: Some(vec![3, 2, 0, 1]), // row_index, y, x, a (reordered)
+                    ..Default::default()
+                },
+            )
+            .await;
+
+            assert_eq!(batch.schema().fields().len(), 4);
+            assert_eq!(batch.schema().field(0).name(), "row_index");
+            assert_eq!(batch.schema().field(1).name(), "y");
+            assert_eq!(batch.schema().field(2).name(), "x");
+            assert_eq!(batch.schema().field(3).name(), "a");
+
+            let row_index_values = batch
+                .column(0)
+                .as_primitive::<Int64Type>()
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            let y_values = batch
+                .column(1)
+                .as_primitive::<Int32Type>()
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            let x_values = batch
+                .column(2)
+                .as_primitive::<Int32Type>()
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            assert_eq!(row_index_values, vec![0, 1, 2]);
+            assert_eq!(y_values, vec![1000, 2000, 3000]);
+            assert_eq!(x_values, vec![100, 200, 300]);
+
+            let a_col = batch.column(3).as_struct();
+            let b_values = a_col
+                .column(0)
+                .as_primitive::<Int32Type>()
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            assert_eq!(b_values, vec![1, 2, 3]);
+        }
+
+        // Test 6: Project only row_index
+        {
+            let batch = read_parquet(
+                parquet_data.clone(),
+                table_schema.clone(),
+                ReadOptions {
+                    projection: Some(vec![3]),
+                    ..Default::default()
+                },
+            )
+            .await;
+
+            assert_eq!(batch.schema().fields().len(), 1);
+            assert_eq!(batch.schema().field(0).name(), "row_index");
+
+            let row_index_values = batch
+                .column(0)
+                .as_primitive::<Int64Type>()
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            assert_eq!(row_index_values, vec![0, 1, 2]);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_predicate_with_virtual_columns() {
+        let parquet_data = record_batch!((
+            "a",
+            Int32,
+            vec![Some(10), Some(20), Some(30), Some(40), Some(50)]
+        ))
+        .unwrap();
+
+        let row_number_field = Arc::new(
+            Field::new("row_index", DataType::Int64, false)
+                .with_extension_type(RowNumber),
+        );
+        let table_schema = TableSchema::new_with_virtual_columns(
+            parquet_data.schema(),
+            vec![row_number_field],
+            vec![],
+        );
+
+        // Test 1: Filter on file column (a > 20) with virtual column in schema
+        {
+            let expr = col("a").gt(lit(20));
+            let predicate = logical2physical(&expr, table_schema.table_schema());
+
+            let batch = read_parquet(
+                parquet_data.clone(),
+                table_schema.clone(),
+                ReadOptions {
+                    predicate: Some(predicate),
+                    ..Default::default()
+                },
+            )
+            .await;
+
+            let a_values = batch
+                .column(0)
+                .as_primitive::<Int32Type>()
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            assert_eq!(a_values, vec![30, 40, 50]);
+
+            let row_index_values = batch
+                .column(1)
+                .as_primitive::<Int64Type>()
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            assert_eq!(row_index_values, vec![2, 3, 4]);
+        }
+
+        // Test 2: Filter on virtual column does not have predicate pushdown
+        {
+            let expr = col("row_index").eq(lit(2));
+            let predicate = logical2physical(&expr, table_schema.table_schema());
+
+            let batch = read_parquet(
+                parquet_data.clone(),
+                table_schema.clone(),
+                ReadOptions {
+                    predicate: Some(predicate),
+                    projection: Some(vec![0, 1]), // a and row_index
+                    ..Default::default()
+                },
+            )
+            .await;
+
+            let a_values = batch
+                .column(0)
+                .as_primitive::<Int32Type>()
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            assert_eq!(a_values, vec![10, 20, 30, 40, 50]);
+
+            let row_index_values = batch
+                .column(1)
+                .as_primitive::<Int64Type>()
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            assert_eq!(row_index_values, vec![0, 1, 2, 3, 4]);
+        }
+
+        // Test 3: Project only virtual column with predicate on file column
+        {
+            let expr = col("a").lt(lit(30));
+            let predicate = logical2physical(&expr, table_schema.table_schema());
+
+            let batch = read_parquet(
+                parquet_data.clone(),
+                table_schema.clone(),
+                ReadOptions {
+                    predicate: Some(predicate),
+                    projection: Some(vec![1]), // Only row_index
+                    ..Default::default()
+                },
+            )
+            .await;
+            assert_eq!(batch.num_columns(), 1);
+            assert_eq!(batch.schema().field(0).name(), "row_index");
+
+            let row_index_values = batch
+                .column(0)
+                .as_primitive::<Int64Type>()
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            assert_eq!(row_index_values, vec![0, 1]);
+        }
     }
 }
