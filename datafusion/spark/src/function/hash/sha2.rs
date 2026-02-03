@@ -88,8 +88,7 @@ impl ScalarUDFImpl for SparkSha2 {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let values = &args.args[0];
-        let bit_lengths = &args.args[1];
+        let [values, bit_lengths] = take_function_args(self.name(), args.args.iter())?;
 
         match (values, bit_lengths) {
             (
