@@ -62,5 +62,5 @@ NULL
 NULL
 NULL
 
-query error Error during planning: Failed to coerce arguments to satisfy a call to 'factorial' function
+query error Failed to coerce function call 'factorial\(Int64\)'
 SELECT factorial(5::BIGINT);

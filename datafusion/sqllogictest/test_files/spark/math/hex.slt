@@ -56,7 +56,7 @@ SELECT hex(column1) FROM VALUES (arrow_cast('hello', 'LargeBinary')), (NULL), (a
 NULL
 776F726C64
 
-statement error Function 'hex' expects 1 arguments but received 2
+statement error Failed to coerce function call 'hex\(Int64, Int64\)'
 SELECT hex(1, 2);
 
 query T

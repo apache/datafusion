@@ -23,19 +23,20 @@ use std::sync::Arc;
 
 use crate::expr::{Alias, Sort, WildcardOptions, WindowFunctionParams};
 use crate::expr_rewriter::strip_outer_reference;
+use crate::type_coercion::functions::UDFCoercionExt;
 use crate::{
     BinaryExpr, Expr, ExprSchemable, Filter, GroupingSet, LogicalPlan, Operator, and,
 };
 use datafusion_expr_common::signature::{Signature, TypeSignature};
 
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::utils::get_at_indices;
 use datafusion_common::{
-    Column, DFSchema, DFSchemaRef, HashMap, Result, TableReference, internal_err,
-    plan_err,
+    Column, DFSchema, DFSchemaRef, DataFusionError, HashMap, Result, TableReference,
+    internal_err, plan_datafusion_err, plan_err,
 };
 
 #[cfg(not(feature = "sql"))]
@@ -971,13 +972,57 @@ pub fn generate_signature_error_msg(
 ///     round(Float64)
 ///     round(Float32)
 /// ```
-pub(crate) fn generate_signature_error_message(
-    func_name: &str,
-    func_signature: &Signature,
-    input_expr_types: &[DataType],
-) -> String {
-    #[expect(deprecated)]
-    generate_signature_error_msg(func_name, func_signature.clone(), input_expr_types)
+pub(crate) fn generate_signature_error_message<F: UDFCoercionExt>(
+    function: &F,
+    input_fields: &[FieldRef],
+    original_error: DataFusionError,
+) -> DataFusionError {
+    let data_types = input_fields
+        .iter()
+        .map(|f| f.data_type())
+        .cloned()
+        .collect::<Vec<_>>();
+    let function_call_str = format!(
+        "{}({})",
+        function.name(),
+        TypeSignature::join_types(&data_types, ", "),
+    );
+
+    // UserDefined signatures are better served returning the original error, since
+    // we can't know what went wrong in the custom code
+    if function.signature().type_signature == TypeSignature::UserDefined {
+        let original_error = match original_error {
+            // Since we're returning a Plan error we don't want any double nesting.
+            // TODO: is there a better way to strip backtrace & the planning prefix?
+            err @ DataFusionError::Plan(_) => err
+                .strip_backtrace()
+                .strip_prefix("Error during planning: ")
+                .unwrap()
+                .to_string(),
+            err => err.strip_backtrace(),
+        };
+        return plan_datafusion_err!(
+            "User-defined coercion of function call '{function_call_str}' failed with:\n{original_error}"
+        );
+    }
+
+    // For other signature types, we don't rely on what specifically went wrong;
+    // we will only show the valid signatures to better display what is allowed
+    // (instead of enumerating everything that potentially went wrong).
+    drop(original_error);
+
+    let candidate_signatures = function
+        .signature()
+        .type_signature
+        .to_string_repr_with_names(function.signature().parameter_names.as_deref())
+        .iter()
+        .map(|args_str| format!("\t{}({args_str})", function.name()))
+        .collect::<Vec<String>>()
+        .join("\n");
+
+    plan_datafusion_err!(
+        "Failed to coerce function call '{function_call_str}'. You might need to add explicit type casts.\n\tCandidate functions:\n{candidate_signatures}"
+    )
 }
 
 /// Splits a conjunctive [`Expr`] such as `A AND B AND C` => `[A, B, C]`
@@ -1735,6 +1780,35 @@ mod tests {
         assert!(!can_hash(&list_union_type));
     }
 
+    struct MockUdf(Signature);
+
+    impl UDFCoercionExt for MockUdf {
+        fn name(&self) -> &str {
+            "mock"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.0
+        }
+
+        fn coerce_types(&self, _arg_types: &[DataType]) -> Result<Vec<DataType>> {
+            unimplemented!()
+        }
+    }
+
+    #[test]
+    fn test_generate_signature_error_msg_user_defined() {
+        let error = generate_signature_error_message(
+            &MockUdf(Signature::user_defined(Volatility::Immutable)),
+            &[Field::new("name", DataType::Int32, true).into()],
+            DataFusionError::Plan("Expected 'mock' to fail".to_string()),
+        );
+
+        let expected = "Error during planning: User-defined coercion of function call 'mock(Int32)' failed with:
+Expected 'mock' to fail";
+        assert!(error.to_string().starts_with(expected));
+    }
+
     #[test]
     fn test_generate_signature_error_msg_with_parameter_names() {
         let sig = Signature::one_of(
@@ -1755,18 +1829,17 @@ mod tests {
         ])
         .expect("valid parameter names");
 
-        // Generate error message with only 1 argument provided
-        let error_msg =
-            generate_signature_error_message("substr", &sig, &[DataType::Utf8]);
+        let error = generate_signature_error_message(
+            &MockUdf(sig),
+            &[Field::new("name", DataType::Utf8, true).into()],
+            DataFusionError::Plan("".to_string()),
+        );
 
-        assert!(
-            error_msg.contains("str: Utf8, start_pos: Int64"),
-            "Expected 'str: Utf8, start_pos: Int64' in error message, got: {error_msg}"
-        );
-        assert!(
-            error_msg.contains("str: Utf8, start_pos: Int64, length: Int64"),
-            "Expected 'str: Utf8, start_pos: Int64, length: Int64' in error message, got: {error_msg}"
-        );
+        let expected = "Error during planning: Failed to coerce function call 'mock(Utf8)'. You might need to add explicit type casts.
+\tCandidate functions:
+\tmock(str: Utf8, start_pos: Int64)
+\tmock(str: Utf8, start_pos: Int64, length: Int64)";
+        assert!(error.to_string().starts_with(expected));
     }
 
     #[test]
@@ -1776,12 +1849,16 @@ mod tests {
             Volatility::Immutable,
         );
 
-        let error_msg =
-            generate_signature_error_message("my_func", &sig, &[DataType::Int32]);
-
-        assert!(
-            error_msg.contains("Any, Any"),
-            "Expected 'Any, Any' without parameter names, got: {error_msg}"
+        let error = generate_signature_error_message(
+            &MockUdf(sig),
+            &[Field::new("name", DataType::Int32, true).into()],
+            DataFusionError::Plan("".to_string()),
         );
+
+        let expected = "Error during planning: Failed to coerce function call 'mock(Int32)'. You might need to add explicit type casts.
+\tCandidate functions:
+\tmock(Any, Any)
+\tmock(Any, Any, Any)";
+        assert!(error.to_string().starts_with(expected));
     }
 }

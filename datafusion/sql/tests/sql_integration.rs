@@ -4744,11 +4744,11 @@ fn error_message_test(sql: &str, err_msg_starts_with: &str) {
 fn test_error_message_invalid_scalar_function_signature() {
     error_message_test(
         "select sqrt()",
-        "Error during planning: 'sqrt' does not support zero arguments",
+        "Error during planning: Failed to coerce function call 'sqrt()'",
     );
     error_message_test(
         "select sqrt(1, 2)",
-        "Error during planning: Failed to coerce arguments",
+        "Error during planning: Failed to coerce function call 'sqrt(Int64, Int64)'",
     );
 }
 
@@ -4756,13 +4756,15 @@ fn test_error_message_invalid_scalar_function_signature() {
 fn test_error_message_invalid_aggregate_function_signature() {
     error_message_test(
         "select sum()",
-        "Error during planning: Execution error: Function 'sum' user-defined coercion failed with \"Execution error: sum function requires 1 argument, got 0\"",
+        "Error during planning: User-defined coercion of function call 'sum()' failed with:
+Execution error: sum function requires 1 argument, got 0",
     );
     // We keep two different prefixes because they clarify each other.
     // It might be incorrect, and we should consider keeping only one.
     error_message_test(
         "select max(9, 3)",
-        "Error during planning: Execution error: Function 'max' user-defined coercion failed",
+        "Error during planning: User-defined coercion of function call 'max(Int64, Int64)' failed with:
+Execution error: min/max was called with 2 arguments. It requires only 1.",
     );
 }
 
@@ -4770,7 +4772,7 @@ fn test_error_message_invalid_aggregate_function_signature() {
 fn test_error_message_invalid_window_function_signature() {
     error_message_test(
         "select rank(1) over()",
-        "Error during planning: The function 'rank' expected zero argument but received 1",
+        "Error during planning: Failed to coerce function call 'rank(Int64)'",
     );
 }
 
@@ -4778,7 +4780,8 @@ fn test_error_message_invalid_window_function_signature() {
 fn test_error_message_invalid_window_aggregate_function_signature() {
     error_message_test(
         "select sum() over()",
-        "Error during planning: Execution error: Function 'sum' user-defined coercion failed with \"Execution error: sum function requires 1 argument, got 0\"",
+        "Error during planning: User-defined coercion of function call 'sum()' failed with:
+Execution error: sum function requires 1 argument, got 0",
     );
 }
 

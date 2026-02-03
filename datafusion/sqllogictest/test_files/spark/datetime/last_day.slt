@@ -100,19 +100,19 @@ SELECT last_day(null::DATE);
 NULL
 
 
-statement error Failed to coerce arguments to satisfy a call to 'last_day' function
+statement error Failed to coerce function call 'last_day\(Utf8\)'
 select last_day('foo');
 
 
-statement error Failed to coerce arguments to satisfy a call to 'last_day' function
+statement error Failed to coerce function call 'last_day\(Int64\)'
 select last_day(123);
 
 
-statement error 'last_day' does not support zero arguments
+statement error Failed to coerce function call 'last_day\(\)'
 select last_day();
 
-statement error Failed to coerce arguments to satisfy a call to 'last_day' function
+statement error Failed to coerce function call 'last_day\(Utf8View, Utf8\)'
 select last_day(last_day('2016-02-07'::string, 'foo'));
 
-statement error Failed to coerce arguments to satisfy a call to 'last_day' function
+statement error Failed to coerce function call 'last_day\(Utf8View\)'
 select last_day(last_day('2016-02-31'::string));

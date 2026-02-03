@@ -170,7 +170,7 @@ SELECT parse_url('https://ex.com/?Tag=ok', 'query', 'tag');
 ----
 NULL
 
-statement error 'parse_url' does not support zero arguments
+statement error Failed to coerce function call 'parse_url\(\)'
 SELECT parse_url();
 
 query error DataFusion error: Execution error: The url is invalid: inva lid://spark\.apache\.org/path\?query=1\. Use `try_parse_url` to tolerate invalid URL and return NULL instead\. SQLSTATE: 22P02

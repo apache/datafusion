@@ -38,7 +38,7 @@ SELECT unix_date(NULL::date);
 ----
 NULL
 
-query error Function 'unix_date' requires TypeSignatureClass::Native\(LogicalType\(Native\(Date\), Date\)\), but received String \(DataType: Utf8View\)
+query error Failed to coerce function call 'unix_date\(Utf8View\)'
 SELECT unix_date('1970-01-02'::string);
 
 # Unix Micro Tests
@@ -68,7 +68,7 @@ SELECT unix_micros(NULL::timestamp);
 ----
 NULL
 
-query error Function 'unix_micros' requires TypeSignatureClass::Timestamp, but received String \(DataType: Utf8View\)
+query error Failed to coerce function call 'unix_micros\(Utf8View\)'
 SELECT unix_micros('1970-01-01 00:00:01Z'::string);
 
 
@@ -99,7 +99,7 @@ SELECT unix_millis(NULL::timestamp);
 ----
 NULL
 
-query error Function 'unix_millis' requires TypeSignatureClass::Timestamp, but received String \(DataType: Utf8View\)
+query error Failed to coerce function call 'unix_millis\(Utf8View\)'
 SELECT unix_millis('1970-01-01 00:00:01Z'::string);
 
 
@@ -130,5 +130,5 @@ SELECT unix_seconds(NULL::timestamp);
 ----
 NULL
 
-query error Function 'unix_seconds' requires TypeSignatureClass::Timestamp, but received String \(DataType: Utf8View\)
+query error Failed to coerce function call 'unix_seconds\(Utf8View\)'
 SELECT unix_seconds('1970-01-01 00:00:01Z'::string);

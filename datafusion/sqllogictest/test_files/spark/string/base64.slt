@@ -58,7 +58,7 @@ U3BhcmsgU1E=
 U3BhcmsgUw==
 NULL
 
-query error Function 'base64' requires TypeSignatureClass::Binary, but received Int32 \(DataType: Int32\)
+query error Failed to coerce function call 'base64\(Int32\)'
 SELECT base64(12::integer);
 
 
@@ -111,5 +111,5 @@ SELECT unbase64('123'::string);
 query error Failed to decode value using base64
 SELECT unbase64('123'::bytea);
 
-query error Function 'unbase64' requires TypeSignatureClass::Binary, but received Int32 \(DataType: Int32\)
+query error Failed to coerce function call 'unbase64\(Int32\)'
 SELECT unbase64(12::integer);
