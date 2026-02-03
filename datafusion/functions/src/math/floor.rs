@@ -78,6 +78,42 @@ impl FloorFunc {
     }
 }
 
+// ============ Macro for preimage bounds ============
+/// Generates the code to call the appropriate bounds function and wrap results.
+macro_rules! preimage_bounds {
+    // Float types: call float_preimage_bounds and wrap in ScalarValue
+    (float: $variant:ident, $value:expr) => {
+        float_preimage_bounds($value).map(|(lo, hi)| {
+            (
+                ScalarValue::$variant(Some(lo)),
+                ScalarValue::$variant(Some(hi)),
+            )
+        })
+    };
+
+    // Integer types: call int_preimage_bounds and wrap in ScalarValue
+    (int: $variant:ident, $value:expr) => {
+        int_preimage_bounds($value).map(|(lo, hi)| {
+            (
+                ScalarValue::$variant(Some(lo)),
+                ScalarValue::$variant(Some(hi)),
+            )
+        })
+    };
+
+    // Decimal types: call decimal_preimage_bounds with precision/scale and wrap in ScalarValue
+    (decimal: $variant:ident, $decimal_type:ty, $value:expr, $precision:expr, $scale:expr) => {
+        decimal_preimage_bounds::<$decimal_type>($value, $precision, $scale).map(
+            |(lo, hi)| {
+                (
+                    ScalarValue::$variant(Some(lo), $precision, $scale),
+                    ScalarValue::$variant(Some(hi), $precision, $scale),
+                )
+            },
+        )
+    };
+}
+
 impl ScalarUDFImpl for FloorFunc {
     fn as_any(&self) -> &dyn Any {
         self
@@ -230,78 +266,32 @@ impl ScalarUDFImpl for FloorFunc {
         // Compute lower bound (N) and upper bound (N + 1) using helper functions
         let Some((lower, upper)) = (match lit_value {
             // Floating-point types
-            ScalarValue::Float64(Some(n)) => float_preimage_bounds(*n).map(|(lo, hi)| {
-                (
-                    ScalarValue::Float64(Some(lo)),
-                    ScalarValue::Float64(Some(hi)),
-                )
-            }),
-            ScalarValue::Float32(Some(n)) => float_preimage_bounds(*n).map(|(lo, hi)| {
-                (
-                    ScalarValue::Float32(Some(lo)),
-                    ScalarValue::Float32(Some(hi)),
-                )
-            }),
+            ScalarValue::Float64(Some(n)) => preimage_bounds!(float: Float64, *n),
+            ScalarValue::Float32(Some(n)) => preimage_bounds!(float: Float32, *n),
 
             // Integer types (not reachable from SQL/SLT: floor() only accepts Float64/Float32/Decimal,
             // so the RHS literal is always coerced to one of those before preimage runs; kept for
             // programmatic use and unit tests)
-            ScalarValue::Int8(Some(n)) => int_preimage_bounds(*n).map(|(lo, hi)| {
-                (ScalarValue::Int8(Some(lo)), ScalarValue::Int8(Some(hi)))
-            }),
-            ScalarValue::Int16(Some(n)) => int_preimage_bounds(*n).map(|(lo, hi)| {
-                (ScalarValue::Int16(Some(lo)), ScalarValue::Int16(Some(hi)))
-            }),
-            ScalarValue::Int32(Some(n)) => int_preimage_bounds(*n).map(|(lo, hi)| {
-                (ScalarValue::Int32(Some(lo)), ScalarValue::Int32(Some(hi)))
-            }),
-            ScalarValue::Int64(Some(n)) => int_preimage_bounds(*n).map(|(lo, hi)| {
-                (ScalarValue::Int64(Some(lo)), ScalarValue::Int64(Some(hi)))
-            }),
+            ScalarValue::Int8(Some(n)) => preimage_bounds!(int: Int8, *n),
+            ScalarValue::Int16(Some(n)) => preimage_bounds!(int: Int16, *n),
+            ScalarValue::Int32(Some(n)) => preimage_bounds!(int: Int32, *n),
+            ScalarValue::Int64(Some(n)) => preimage_bounds!(int: Int64, *n),
 
             // Decimal types
             // DECIMAL(precision, scale) where precision ≤ 38 -> Decimal128(precision, scale)
             // DECIMAL(precision, scale) where precision > 38 -> Decimal256(precision, scale)
             // Decimal32 and Decimal64 are unreachable from SQL/SLT.
             ScalarValue::Decimal32(Some(n), precision, scale) => {
-                decimal_preimage_bounds::<Decimal32Type>(*n, *precision, *scale).map(
-                    |(lo, hi)| {
-                        (
-                            ScalarValue::Decimal32(Some(lo), *precision, *scale),
-                            ScalarValue::Decimal32(Some(hi), *precision, *scale),
-                        )
-                    },
-                )
+                preimage_bounds!(decimal: Decimal32, Decimal32Type, *n, *precision, *scale)
             }
             ScalarValue::Decimal64(Some(n), precision, scale) => {
-                decimal_preimage_bounds::<Decimal64Type>(*n, *precision, *scale).map(
-                    |(lo, hi)| {
-                        (
-                            ScalarValue::Decimal64(Some(lo), *precision, *scale),
-                            ScalarValue::Decimal64(Some(hi), *precision, *scale),
-                        )
-                    },
-                )
+                preimage_bounds!(decimal: Decimal64, Decimal64Type, *n, *precision, *scale)
             }
             ScalarValue::Decimal128(Some(n), precision, scale) => {
-                decimal_preimage_bounds::<Decimal128Type>(*n, *precision, *scale).map(
-                    |(lo, hi)| {
-                        (
-                            ScalarValue::Decimal128(Some(lo), *precision, *scale),
-                            ScalarValue::Decimal128(Some(hi), *precision, *scale),
-                        )
-                    },
-                )
+                preimage_bounds!(decimal: Decimal128, Decimal128Type, *n, *precision, *scale)
             }
             ScalarValue::Decimal256(Some(n), precision, scale) => {
-                decimal_preimage_bounds::<Decimal256Type>(*n, *precision, *scale).map(
-                    |(lo, hi)| {
-                        (
-                            ScalarValue::Decimal256(Some(lo), *precision, *scale),
-                            ScalarValue::Decimal256(Some(hi), *precision, *scale),
-                        )
-                    },
-                )
+                preimage_bounds!(decimal: Decimal256, Decimal256Type, *n, *precision, *scale)
             }
 
             // Unsupported types
