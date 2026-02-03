@@ -19,6 +19,7 @@
 
 use std::collections::BTreeSet;
 use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
 
 use arrow::datatypes::DataType;
@@ -39,11 +40,13 @@ use datafusion_common::test_util::batches_to_sort_string;
 use datafusion_execution::config::SessionConfig;
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use chrono::{TimeZone, Utc};
+use futures::StreamExt;
 use futures::stream::{self, BoxStream};
 use insta::assert_snapshot;
 use object_store::{
-    Attributes, CopyOptions, MultipartUpload, PutMultipartOptions, PutPayload,
+    Attributes, CopyOptions, GetRange, MultipartUpload, PutMultipartOptions, PutPayload,
 };
 use object_store::{
     GetOptions, GetResult, GetResultPayload, ListResult, ObjectMeta, ObjectStore,
@@ -619,7 +622,7 @@ async fn create_partitioned_alltypes_parquet_table(
 }
 
 #[derive(Debug)]
-/// An object store implem that is mirrors a given file to multiple paths.
+/// An object store implem that mirrors a given file to multiple paths.
 pub struct MirroringObjectStore {
     /// The `(path,size)` of the files that "exist" in the store
     files: Vec<Path>,
@@ -668,12 +671,13 @@ impl ObjectStore for MirroringObjectStore {
     async fn get_opts(
         &self,
         location: &Path,
-        _options: GetOptions,
+        options: GetOptions,
     ) -> object_store::Result<GetResult> {
         self.files.iter().find(|x| *x == location).unwrap();
         let path = std::path::PathBuf::from(&self.mirrored_file);
         let file = File::open(&path).unwrap();
         let metadata = file.metadata().unwrap();
+
         let meta = ObjectMeta {
             location: location.clone(),
             last_modified: metadata.modified().map(chrono::DateTime::from).unwrap(),
@@ -681,10 +685,31 @@ impl ObjectStore for MirroringObjectStore {
             e_tag: None,
             version: None,
         };
+        if options.head {
+            unimplemented!("Head option not supported in MirroringObjectStore");
+        }
+
+        let payload = if let Some(range) = options.range {
+            let GetRange::Bounded(range) = range else {
+                unimplemented!("Unbounded range not supported in MirroringObjectStore");
+            };
+            let mut file = File::open(path).unwrap();
+            file.seek(SeekFrom::Start(range.start)).unwrap();
+
+            let to_read = range.end - range.start;
+            let to_read: usize = to_read.try_into().unwrap();
+            let mut data = Vec::with_capacity(to_read);
+            let read = file.take(to_read as u64).read_to_end(&mut data).unwrap();
+            assert_eq!(read, to_read);
+            let stream = stream::once(async move { Ok(Bytes::from(data)) }).boxed();
+            GetResultPayload::Stream(stream)
+        } else {
+            GetResultPayload::File(file, path)
+        };
 
         Ok(GetResult {
             range: 0..meta.size,
-            payload: GetResultPayload::File(file, path),
+            payload,
             meta,
             attributes: Attributes::default(),
         })
