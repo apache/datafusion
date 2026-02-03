@@ -99,13 +99,13 @@ impl ScalarUDFImpl for SparkSha2 {
                 }
 
                 // Accept both Binary and Utf8 scalars (depending on coercion)
-                let bytes: Vec<u8> = match value_scalar {
-                    ScalarValue::Binary(Some(b)) => b.clone(),
-                    ScalarValue::LargeBinary(Some(b)) => b.clone(),
-                    ScalarValue::BinaryView(Some(b)) => b.clone(),
+                let bytes = match value_scalar {
+                    ScalarValue::Binary(Some(b)) => b.as_slice(),
+                    ScalarValue::LargeBinary(Some(b)) => b.as_slice(),
+                    ScalarValue::BinaryView(Some(b)) => b.as_slice(),
                     ScalarValue::Utf8(Some(s))
                     | ScalarValue::LargeUtf8(Some(s))
-                    | ScalarValue::Utf8View(Some(s)) => s.clone().into_bytes(),
+                    | ScalarValue::Utf8View(Some(s)) => s.as_bytes(),
                     other => {
                         return internal_err!(
                             "Unsupported scalar datatype for sha2: {}",
