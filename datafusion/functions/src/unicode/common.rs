@@ -166,7 +166,7 @@ fn general_left_right_view<F: LeftRightSlicer>(
                 let result_bytes = &string.as_bytes()[range.clone()];
 
                 let byte_view = ByteView::from(view);
-                // New offsets starts at 0 for left, and at `range.start` for right,
+                // New offset starts at 0 for left, and at `range.start` for right,
                 // which is encoded in the given range
                 let new_offset = byte_view.offset + (range.start as u32);
                 // Reuse buffer
