@@ -180,9 +180,9 @@ fn string_to_map_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             //   "a"     -> kv = ["a"]        -> key="a", value=None
             //   "a:"    -> kv = ["a", ""]    -> key="a", value=Some("")
             //   ":1"    -> kv = ["", "1"]    -> key="",  value=Some("1")
-            let kv: Vec<&str> = pair.splitn(2, &kv_delim).collect();
-            let key = kv[0];
-            let value = if kv.len() > 1 { Some(kv[1]) } else { None };
+            let mut kv_iter = pair.splitn(2, &kv_delim);
+            let key = kv_iter.next().unwrap_or("");
+            let value = kv_iter.next();
 
             keys_builder.append_value(key);
             if let Some(v) = value {
