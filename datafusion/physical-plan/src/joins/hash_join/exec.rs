@@ -5078,11 +5078,6 @@ mod tests {
         let dynamic_filter = HashJoinExec::create_dynamic_filter(&on);
         let dynamic_filter_clone = Arc::clone(&dynamic_filter);
 
-        // Simulate a consumer by creating a transformed copy (what happens during filter pushdown)
-        let _consumer = Arc::clone(&dynamic_filter)
-            .with_new_children(vec![])
-            .unwrap();
-
         // Create HashJoinExec with the dynamic filter
         let mut join = HashJoinExec::try_new(
             left,
@@ -5131,11 +5126,6 @@ mod tests {
         // Create a dynamic filter manually
         let dynamic_filter = HashJoinExec::create_dynamic_filter(&on);
         let dynamic_filter_clone = Arc::clone(&dynamic_filter);
-
-        // Simulate a consumer by creating a transformed copy (what happens during filter pushdown)
-        let _consumer = Arc::clone(&dynamic_filter)
-            .with_new_children(vec![])
-            .unwrap();
 
         // Create HashJoinExec with the dynamic filter
         let mut join = HashJoinExec::try_new(

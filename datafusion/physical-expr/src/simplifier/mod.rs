@@ -21,7 +21,14 @@ use arrow::datatypes::Schema;
 use datafusion_common::{Result, tree_node::TreeNode};
 use std::sync::Arc;
 
-use crate::{PhysicalExpr, simplifier::not::simplify_not_expr};
+use crate::{
+    PhysicalExpr,
+    simplifier::{
+        const_evaluator::{create_dummy_batch, simplify_const_expr_with_dummy},
+        not::simplify_not_expr,
+        unwrap_cast::unwrap_cast_in_comparison,
+    },
+};
 
 pub mod const_evaluator;
 pub mod not;
@@ -50,21 +57,23 @@ impl<'a> PhysicalExprSimplifier<'a> {
         let mut count = 0;
         let schema = self.schema;
 
+        let batch = create_dummy_batch()?;
+
         while count < MAX_LOOP_COUNT {
             count += 1;
             let result = current_expr.transform(|node| {
-                #[cfg(test)]
+                #[cfg(debug_assertions)]
                 let original_type = node.data_type(schema).unwrap();
 
                 // Apply NOT expression simplification first, then unwrap cast optimization,
                 // then constant expression evaluation
-                let rewritten = simplify_not_expr(&node, schema)?
+                let rewritten = simplify_not_expr(node, schema)?
+                    .transform_data(|node| unwrap_cast_in_comparison(node, schema))?
                     .transform_data(|node| {
-                        unwrap_cast::unwrap_cast_in_comparison(node, schema)
-                    })?
-                    .transform_data(|node| const_evaluator::simplify_const_expr(&node))?;
+                        simplify_const_expr_with_dummy(node, &batch)
+                    })?;
 
-                #[cfg(test)]
+                #[cfg(debug_assertions)]
                 assert_eq!(
                     rewritten.data.data_type(schema).unwrap(),
                     original_type,
