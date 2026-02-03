@@ -362,6 +362,16 @@ mod tests {
                     None,
                 ],
             },
+            // TODO: Spark 3.0+ defaults to EXCEPTION for duplicate keys.
+            // Current behavior: LAST_WIN (keeps last value, first 'a' dropped).
+            // See: spark.sql.mapKeyDedupPolicy
+            TestCase {
+                name: "duplicate keys (LAST_WIN)",
+                inputs: vec![Some("a:1,b:2,a:3")],
+                pair_delim: None,
+                kv_delim: None,
+                expected: vec![Some(vec![("b", Some("2")), ("a", Some("3"))])],
+            },
         ];
 
         for case in cases {
