@@ -924,11 +924,11 @@ config_namespace! {
 
         /// When set to true, the optimizer will attempt to push down TopK dynamic filters
         /// into the file scan phase.
-        pub enable_topk_dynamic_filter_pushdown: bool, default = true
+        pub enable_topk_dynamic_filter_pushdown: bool, default = false
 
         /// When set to true, the optimizer will attempt to push down Join dynamic filters
         /// into the file scan phase.
-        pub enable_join_dynamic_filter_pushdown: bool, default = true
+        pub enable_join_dynamic_filter_pushdown: bool, default = false
 
         /// When set to true, the optimizer will attempt to push down Aggregate dynamic filters
         /// into the file scan phase.
@@ -941,7 +941,7 @@ config_namespace! {
         /// any files that only have timestamps in the year 2024 can be skipped / pruned at various stages in the scan.
         /// The config will suppress `enable_join_dynamic_filter_pushdown`, `enable_topk_dynamic_filter_pushdown` & `enable_aggregate_dynamic_filter_pushdown`
         /// So if you disable `enable_topk_dynamic_filter_pushdown`, then enable `enable_dynamic_filter_pushdown`, the `enable_topk_dynamic_filter_pushdown` will be overridden.
-        pub enable_dynamic_filter_pushdown: bool, default = true
+        pub enable_dynamic_filter_pushdown: bool, default = false
 
         /// When set to true, the optimizer will insert filters before a join between
         /// a nullable and non-nullable column to filter out nulls on the nullable side. This
