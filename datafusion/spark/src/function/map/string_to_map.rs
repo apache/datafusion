@@ -112,6 +112,12 @@ impl ScalarUDFImpl for SparkStringToMap {
 }
 
 fn string_to_map_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+    assert!(
+        !args.is_empty() && args.len() <= 3,
+        "string_to_map expects 1-3 arguments, got {}",
+        args.len()
+    );
+
     let text_array = &args[0];
 
     // Get delimiters with defaults
