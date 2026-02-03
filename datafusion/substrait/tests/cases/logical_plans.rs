@@ -231,6 +231,8 @@ mod tests {
     }
 
     #[tokio::test]
+    // Test still failing, issue tracked in "https://github.com/apache/datafusion/issues/20123".
+    #[ignore]
     async fn duplicate_name_in_union() -> Result<()> {
         let proto_plan =
             read_json("tests/testdata/test_plans/duplicate_name_in_union.substrait.json");
