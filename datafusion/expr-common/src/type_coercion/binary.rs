@@ -351,16 +351,6 @@ impl<'a> BinaryTypeCoercer<'a> {
 
 // TODO Move the rest inside of BinaryTypeCoercer
 
-fn is_decimal(data_type: &DataType) -> bool {
-    matches!(
-        data_type,
-        DataType::Decimal32(..)
-            | DataType::Decimal64(..)
-            | DataType::Decimal128(..)
-            | DataType::Decimal256(..)
-    )
-}
-
 /// Returns true if both operands are Date types (Date32 or Date64)
 /// Used to detect Date - Date operations which should return Int64 (days difference)
 fn is_date_minus_date(lhs: &DataType, rhs: &DataType) -> bool {
@@ -402,8 +392,8 @@ fn math_decimal_coercion(
         }
         // Cross-variant decimal coercion - choose larger variant with appropriate precision/scale
         (lhs, rhs)
-            if is_decimal(lhs)
-                && is_decimal(rhs)
+            if lhs.is_decimal()
+                && rhs.is_decimal()
                 && std::mem::discriminant(lhs) != std::mem::discriminant(rhs) =>
         {
             let coerced_type = get_wider_decimal_type_cross_variant(lhs_type, rhs_type)?;
@@ -1018,8 +1008,8 @@ pub fn decimal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Data
     match (lhs_type, rhs_type) {
         // Same decimal types
         (lhs_type, rhs_type)
-            if is_decimal(lhs_type)
-                && is_decimal(rhs_type)
+            if lhs_type.is_decimal()
+                && rhs_type.is_decimal()
                 && std::mem::discriminant(lhs_type)
                     == std::mem::discriminant(rhs_type) =>
         {
@@ -1027,8 +1017,8 @@ pub fn decimal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Data
         }
         // Mismatched decimal types
         (lhs_type, rhs_type)
-            if is_decimal(lhs_type)
-                && is_decimal(rhs_type)
+            if lhs_type.is_decimal()
+                && rhs_type.is_decimal()
                 && std::mem::discriminant(lhs_type)
                     != std::mem::discriminant(rhs_type) =>
         {
