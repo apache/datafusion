@@ -344,12 +344,6 @@ fn get_max_alignment_for_schema(schema: &Schema) -> usize {
 #[cfg(test)]
 const VIEW_SIZE_BYTES: usize = 16;
 
-/// Maximum size of inlined string/binary data in StringView/BinaryView arrays.
-/// Strings/binaries <= 12 bytes are stored inline within the 16-byte view structure.
-/// This matches the Arrow specification for view arrays.
-#[cfg(test)]
-const INLINE_THRESHOLD: usize = 12;
-
 /// Performs garbage collection on StringView and BinaryView arrays before spilling to reduce memory usage.
 ///
 /// # Why GC is needed
@@ -377,11 +371,8 @@ pub(crate) fn gc_view_arrays(batch: &RecordBatch) -> Result<RecordBatch> {
     });
 
     if !has_view_arrays {
-        // Return a new batch to maintain consistent behavior
-        return Ok(RecordBatch::try_new(
-            batch.schema(),
-            batch.columns().to_vec(),
-        )?);
+        // RecordBatch::clone() is cheap - just Arc reference count bumps
+        return Ok(batch.clone());
     }
 
     let mut new_columns: Vec<Arc<dyn Array>> = Vec::with_capacity(batch.num_columns());
@@ -447,10 +438,11 @@ fn should_gc_view_array(data_buffers: &[arrow::buffer::Buffer]) -> bool {
 
 #[cfg(test)]
 fn calculate_string_view_waste_ratio(array: &StringViewArray) -> f64 {
+    use arrow_data::MAX_INLINE_VIEW_LEN;
     calculate_view_waste_ratio(array.len(), array.data_buffers(), |i| {
         if !array.is_null(i) {
             let value = array.value(i);
-            if value.len() > INLINE_THRESHOLD {
+            if value.len() > MAX_INLINE_VIEW_LEN as usize {
                 return value.len();
             }
         }

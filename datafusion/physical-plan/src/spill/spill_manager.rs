@@ -193,7 +193,7 @@ impl SpillManager {
 pub(crate) trait GetSlicedSize {
     /// Returns the size of the `RecordBatch` when sliced.
     /// Note: if multiple arrays or even a single array share the same data buffers, we may double count each buffer.
-    /// Therefore, make sure we call gc() or organize_stringview_arrays() before using this method.
+    /// Therefore, make sure we call gc() or gc_view_arrays() before using this method.
     fn get_sliced_size(&self) -> Result<usize>;
 }
 
