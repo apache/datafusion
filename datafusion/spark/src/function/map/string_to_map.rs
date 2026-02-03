@@ -158,7 +158,6 @@ fn string_to_map_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             continue;
         }
 
-
         let mut count = 0;
         // Split text into key-value pairs using pair_delim.
         // Example: "a:1,b:2" with pair_delim="," -> ["a:1", "b:2"]
@@ -223,9 +222,34 @@ fn extract_delimiter_from_string_array(array: &ArrayRef) -> Result<String> {
             )
         })?;
 
-    if string_array.len() == 0 {
-        return Ok(",".to_string());
-    }
+    assert!(!string_array.is_empty(), "Delimiter array should not be empty");
 
+    // In columnar execution, scalar delimiter is expanded to array to match batch size.
+    // All elements are the same, so we just take the first element.
     Ok(string_array.value(0).to_string())
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_delimiter_from_string_array() {
+        // Normal case - single element
+        let delim: ArrayRef = Arc::new(StringArray::from(vec!["&"]));
+        let result = extract_delimiter_from_string_array(&delim).unwrap();
+        assert_eq!(result, "&");
+
+        // Multi-char delimiter
+        let delim: ArrayRef = Arc::new(StringArray::from(vec!["&&"]));
+        let result = extract_delimiter_from_string_array(&delim).unwrap();
+        assert_eq!(result, "&&");
+
+        // Expanded scalar case - multiple elements (all same value).
+        // This happens when the scalar delimiter is expanded to match batch size
+        let delim: ArrayRef = Arc::new(StringArray::from(vec!["=", "=", "="]));
+        let result = extract_delimiter_from_string_array(&delim).unwrap();
+        assert_eq!(result, "=");
+    }
 }
