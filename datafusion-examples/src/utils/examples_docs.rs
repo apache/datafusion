@@ -531,7 +531,7 @@ mod tests {
     /// validation rules, not full integration behavior.
     fn example_group_from_docs(docs: &str) -> Result<ExampleGroup> {
         let tmp = TempDir::new().map_err(|e| {
-            DataFusionError::Execution(format!("Failed initializating temp dir: {e}"))
+            DataFusionError::Execution(format!("Failed initializing temp dir: {e}"))
         })?;
         let dir = tmp.path().join("group");
         fs::create_dir(&dir).map_err(|e| {
