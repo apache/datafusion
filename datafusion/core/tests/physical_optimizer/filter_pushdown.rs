@@ -3721,19 +3721,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_is_used() {
     }
 }
 
-/// Test that FilterExec with projection correctly handles filter pushdown
-/// This is a regression test for a bug where FilterExec with projection
-/// would create filters with incorrect column indices after pushdown.
-///
-/// Bug scenario:
-/// 1. DataSourceExec with schema [time@0, event@1, size@2]
-/// 2. FilterExec with predicate time@0 < X and projection=[1,2] -> schema [event@0, size@1]
-/// 3. FilterExec with predicate event@0 = Y and projection=[1] -> schema [size@0]
-///
-/// During pushdown, when the second FilterExec's predicate is pushed down to the first,
-/// and the first FilterExec combines filters, column indices must be remapped correctly.
-/// The bug was that event@0 from the projected schema wasn't remapped to event@1 in
-/// the DataSourceExec schema, causing "Invalid comparison operation: Int64 == Utf8".
+/// related to https://github.com/apache/datafusion/issues/20109
 #[tokio::test]
 async fn test_filter_with_projection_pushdown() {
     use arrow::array::{Int64Array, RecordBatch, StringArray};
