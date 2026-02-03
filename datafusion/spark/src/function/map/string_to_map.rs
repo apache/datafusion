@@ -18,7 +18,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, StringBuilder, StringArray};
+use arrow::array::{Array, ArrayRef, StringArray, StringBuilder};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::{Result, internal_err};
 use datafusion_expr::{
