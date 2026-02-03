@@ -97,7 +97,7 @@ impl NthValue {
         Self {
             signature: Signature::one_of(
                 vec![
-                    TypeSignature::Any(0),
+                    TypeSignature::Nullary,
                     TypeSignature::Any(1),
                     TypeSignature::Any(2),
                 ],

@@ -702,6 +702,11 @@ impl CSEController for ExprCSEController<'_> {
         #[expect(deprecated)]
         let is_normal_minus_aggregates = matches!(
             node,
+            // TODO: there's an argument for removing `Literal` from here,
+            // maybe using `Expr::placemement().should_push_to_leaves()` instead
+            // so that we extract common literals and don't broadcast them to num_batch_rows multiple times.
+            // However that currently breaks things like `percentile_cont()` which expect literal arguments
+            // (and would instead be getting `col(__common_expr_n)`).
             Expr::Literal(..)
                 | Expr::Column(..)
                 | Expr::ScalarVariable(..)

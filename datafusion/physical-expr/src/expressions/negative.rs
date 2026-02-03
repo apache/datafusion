@@ -37,7 +37,7 @@ use datafusion_expr::statistics::Distribution::{
 };
 use datafusion_expr::{
     ColumnarValue,
-    type_coercion::{is_interval, is_null, is_signed_numeric, is_timestamp},
+    type_coercion::{is_interval, is_signed_numeric, is_timestamp},
 };
 
 /// Negative expression
@@ -190,7 +190,7 @@ pub fn negative(
     input_schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     let data_type = arg.data_type(input_schema)?;
-    if is_null(&data_type) {
+    if data_type.is_null() {
         Ok(arg)
     } else if !is_signed_numeric(&data_type)
         && !is_interval(&data_type)

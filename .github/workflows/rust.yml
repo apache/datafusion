@@ -45,10 +45,11 @@ jobs:
   # Check crate compiles and base cargo check passes
   linux-build-lib:
     name: linux build test
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository_owner == 'apache' && format('runs-on={0},family=m7a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
     steps:
+      - uses: runs-on/action@cd2b598b0515d39d78c38a02d529db87d2196d1e  # v2.0.3
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
@@ -266,12 +267,13 @@ jobs:
   linux-test:
     name: cargo test (amd64)
     needs: linux-build-lib
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository_owner == 'apache' && format('runs-on={0},family=m7a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
       volumes:
         - /usr/local:/host/usr/local
     steps:
+      - uses: runs-on/action@cd2b598b0515d39d78c38a02d529db87d2196d1e  # v2.0.3
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           submodules: true
@@ -421,7 +423,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq clang
       - name: Setup wasm-pack
-        uses: taiki-e/install-action@710817a1645ef40daad5bcde7431ceccf6cc3528  # v2.67.13
+        uses: taiki-e/install-action@650c5ca14212efbbf3e580844b04bdccf68dac31  # v2.67.18
         with:
           tool: wasm-pack
       - name: Run tests with headless mode
@@ -709,6 +711,11 @@ jobs:
           ./dev/update_function_docs.sh
           git diff --exit-code
 
+# This job ensures `datafusion-examples/README.md` stays in sync with the source code:
+# 1. Generates README automatically using the Rust examples docs generator
+#    (parsing documentation from `examples/<group>/main.rs`)
+# 2. Formats the generated Markdown using DataFusion's standard Prettier setup
+# 3. Compares the result against the committed README.md and fails if out-of-date
   examples-docs-check:
     name: check example README is up-to-date
     needs: linux-build-lib
@@ -721,6 +728,16 @@ jobs:
         with:
           submodules: true
           fetch-depth: 1
+          
+      - name: Mark repository as safe for git
+        # Required for git commands inside container (avoids "dubious ownership" error)
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Set up Node.js (required for prettier)
+        # doc_prettier_check.sh uses npx to run prettier for Markdown formatting
+        uses: actions/setup-node@v6
+        with:
+          node-version: '18'
 
       - name: Run examples docs check script
         run: |
@@ -741,7 +758,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Install cargo-msrv
-        uses: taiki-e/install-action@710817a1645ef40daad5bcde7431ceccf6cc3528  # v2.67.13
+        uses: taiki-e/install-action@650c5ca14212efbbf3e580844b04bdccf68dac31  # v2.67.18
         with:
           tool: cargo-msrv
 

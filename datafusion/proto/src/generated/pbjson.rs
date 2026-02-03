@@ -410,6 +410,7 @@ impl serde::Serialize for AggregateMode {
             Self::FinalPartitioned => "FINAL_PARTITIONED",
             Self::Single => "SINGLE",
             Self::SinglePartitioned => "SINGLE_PARTITIONED",
+            Self::PartialReduce => "PARTIAL_REDUCE",
         };
         serializer.serialize_str(variant)
     }
@@ -426,6 +427,7 @@ impl<'de> serde::Deserialize<'de> for AggregateMode {
             "FINAL_PARTITIONED",
             "SINGLE",
             "SINGLE_PARTITIONED",
+            "PARTIAL_REDUCE",
         ];
 
         struct GeneratedVisitor;
@@ -471,6 +473,7 @@ impl<'de> serde::Deserialize<'de> for AggregateMode {
                     "FINAL_PARTITIONED" => Ok(AggregateMode::FinalPartitioned),
                     "SINGLE" => Ok(AggregateMode::Single),
                     "SINGLE_PARTITIONED" => Ok(AggregateMode::SinglePartitioned),
+                    "PARTIAL_REDUCE" => Ok(AggregateMode::PartialReduce),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }
@@ -1853,6 +1856,118 @@ impl<'de> serde::Deserialize<'de> for BinaryExprNode {
             }
         }
         deserializer.deserialize_struct("datafusion.BinaryExprNode", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for BufferExecNode {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.input.is_some() {
+            len += 1;
+        }
+        if self.capacity != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.BufferExecNode", len)?;
+        if let Some(v) = self.input.as_ref() {
+            struct_ser.serialize_field("input", v)?;
+        }
+        if self.capacity != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("capacity", ToString::to_string(&self.capacity).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for BufferExecNode {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "input",
+            "capacity",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Input,
+            Capacity,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl serde::de::Visitor<'_> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "input" => Ok(GeneratedField::Input),
+                            "capacity" => Ok(GeneratedField::Capacity),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = BufferExecNode;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.BufferExecNode")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<BufferExecNode, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut input__ = None;
+                let mut capacity__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Input => {
+                            if input__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("input"));
+                            }
+                            input__ = map_.next_value()?;
+                        }
+                        GeneratedField::Capacity => {
+                            if capacity__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("capacity"));
+                            }
+                            capacity__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                    }
+                }
+                Ok(BufferExecNode {
+                    input: input__,
+                    capacity: capacity__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.BufferExecNode", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for CaseNode {
@@ -5960,6 +6075,80 @@ impl<'de> serde::Deserialize<'de> for FileGroup {
         deserializer.deserialize_struct("datafusion.FileGroup", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for FileOutputMode {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let variant = match self {
+            Self::Automatic => "FILE_OUTPUT_MODE_AUTOMATIC",
+            Self::SingleFile => "FILE_OUTPUT_MODE_SINGLE_FILE",
+            Self::Directory => "FILE_OUTPUT_MODE_DIRECTORY",
+        };
+        serializer.serialize_str(variant)
+    }
+}
+impl<'de> serde::Deserialize<'de> for FileOutputMode {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "FILE_OUTPUT_MODE_AUTOMATIC",
+            "FILE_OUTPUT_MODE_SINGLE_FILE",
+            "FILE_OUTPUT_MODE_DIRECTORY",
+        ];
+
+        struct GeneratedVisitor;
+
+        impl serde::de::Visitor<'_> for GeneratedVisitor {
+            type Value = FileOutputMode;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(formatter, "expected one of: {:?}", &FIELDS)
+            }
+
+            fn visit_i64<E>(self, v: i64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Signed(v), &self)
+                    })
+            }
+
+            fn visit_u64<E>(self, v: u64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Unsigned(v), &self)
+                    })
+            }
+
+            fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                match value {
+                    "FILE_OUTPUT_MODE_AUTOMATIC" => Ok(FileOutputMode::Automatic),
+                    "FILE_OUTPUT_MODE_SINGLE_FILE" => Ok(FileOutputMode::SingleFile),
+                    "FILE_OUTPUT_MODE_DIRECTORY" => Ok(FileOutputMode::Directory),
+                    _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
+                }
+            }
+        }
+        deserializer.deserialize_any(GeneratedVisitor)
+    }
+}
 impl serde::Serialize for FileRange {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -6382,6 +6571,9 @@ impl serde::Serialize for FileSinkConfig {
         if !self.file_extension.is_empty() {
             len += 1;
         }
+        if self.file_output_mode != 0 {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.FileSinkConfig", len)?;
         if !self.object_store_url.is_empty() {
             struct_ser.serialize_field("objectStoreUrl", &self.object_store_url)?;
@@ -6409,6 +6601,11 @@ impl serde::Serialize for FileSinkConfig {
         if !self.file_extension.is_empty() {
             struct_ser.serialize_field("fileExtension", &self.file_extension)?;
         }
+        if self.file_output_mode != 0 {
+            let v = FileOutputMode::try_from(self.file_output_mode)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.file_output_mode)))?;
+            struct_ser.serialize_field("fileOutputMode", &v)?;
+        }
         struct_ser.end()
     }
 }
@@ -6435,6 +6632,8 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
             "insertOp",
             "file_extension",
             "fileExtension",
+            "file_output_mode",
+            "fileOutputMode",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -6447,6 +6646,7 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
             KeepPartitionByColumns,
             InsertOp,
             FileExtension,
+            FileOutputMode,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -6476,6 +6676,7 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
                             "keepPartitionByColumns" | "keep_partition_by_columns" => Ok(GeneratedField::KeepPartitionByColumns),
                             "insertOp" | "insert_op" => Ok(GeneratedField::InsertOp),
                             "fileExtension" | "file_extension" => Ok(GeneratedField::FileExtension),
+                            "fileOutputMode" | "file_output_mode" => Ok(GeneratedField::FileOutputMode),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -6503,6 +6704,7 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
                 let mut keep_partition_by_columns__ = None;
                 let mut insert_op__ = None;
                 let mut file_extension__ = None;
+                let mut file_output_mode__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::ObjectStoreUrl => {
@@ -6553,6 +6755,12 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
                             }
                             file_extension__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::FileOutputMode => {
+                            if file_output_mode__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("fileOutputMode"));
+                            }
+                            file_output_mode__ = Some(map_.next_value::<FileOutputMode>()? as i32);
+                        }
                     }
                 }
                 Ok(FileSinkConfig {
@@ -6564,6 +6772,7 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
                     keep_partition_by_columns: keep_partition_by_columns__.unwrap_or_default(),
                     insert_op: insert_op__.unwrap_or_default(),
                     file_extension: file_extension__.unwrap_or_default(),
+                    file_output_mode: file_output_mode__.unwrap_or_default(),
                 })
             }
         }
@@ -15932,10 +16141,18 @@ impl serde::Serialize for PhysicalExprNode {
     {
         use serde::ser::SerializeStruct;
         let mut len = 0;
+        if self.expr_id.is_some() {
+            len += 1;
+        }
         if self.expr_type.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalExprNode", len)?;
+        if let Some(v) = self.expr_id.as_ref() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("exprId", ToString::to_string(&v).as_str())?;
+        }
         if let Some(v) = self.expr_type.as_ref() {
             match v {
                 physical_expr_node::ExprType::Column(v) => {
@@ -16007,6 +16224,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
+            "expr_id",
+            "exprId",
             "column",
             "literal",
             "binary_expr",
@@ -16043,6 +16262,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
+            ExprId,
             Column,
             Literal,
             BinaryExpr,
@@ -16083,6 +16303,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
                         E: serde::de::Error,
                     {
                         match value {
+                            "exprId" | "expr_id" => Ok(GeneratedField::ExprId),
                             "column" => Ok(GeneratedField::Column),
                             "literal" => Ok(GeneratedField::Literal),
                             "binaryExpr" | "binary_expr" => Ok(GeneratedField::BinaryExpr),
@@ -16121,9 +16342,18 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
                 where
                     V: serde::de::MapAccess<'de>,
             {
+                let mut expr_id__ = None;
                 let mut expr_type__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
+                        GeneratedField::ExprId => {
+                            if expr_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("exprId"));
+                            }
+                            expr_id__ = 
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
+                            ;
+                        }
                         GeneratedField::Column => {
                             if expr_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("column"));
@@ -16260,6 +16490,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
                     }
                 }
                 Ok(PhysicalExprNode {
+                    expr_id: expr_id__,
                     expr_type: expr_type__,
                 })
             }
@@ -17549,6 +17780,9 @@ impl serde::Serialize for PhysicalPlanNode {
                 physical_plan_node::PhysicalPlanType::AsyncFunc(v) => {
                     struct_ser.serialize_field("asyncFunc", v)?;
                 }
+                physical_plan_node::PhysicalPlanType::Buffer(v) => {
+                    struct_ser.serialize_field("buffer", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -17616,6 +17850,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
             "memoryScan",
             "async_func",
             "asyncFunc",
+            "buffer",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -17655,6 +17890,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
             SortMergeJoin,
             MemoryScan,
             AsyncFunc,
+            Buffer,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -17711,6 +17947,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
                             "sortMergeJoin" | "sort_merge_join" => Ok(GeneratedField::SortMergeJoin),
                             "memoryScan" | "memory_scan" => Ok(GeneratedField::MemoryScan),
                             "asyncFunc" | "async_func" => Ok(GeneratedField::AsyncFunc),
+                            "buffer" => Ok(GeneratedField::Buffer),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -17976,6 +18213,13 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
                                 return Err(serde::de::Error::duplicate_field("asyncFunc"));
                             }
                             physical_plan_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_plan_node::PhysicalPlanType::AsyncFunc)
+;
+                        }
+                        GeneratedField::Buffer => {
+                            if physical_plan_type__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("buffer"));
+                            }
+                            physical_plan_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_plan_node::PhysicalPlanType::Buffer)
 ;
                         }
                     }

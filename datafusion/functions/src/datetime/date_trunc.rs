@@ -38,7 +38,7 @@ use arrow::datatypes::{Field, FieldRef};
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::types::{NativeType, logical_date, logical_string};
 use datafusion_common::{
-    DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err,
+    DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err, internal_err,
 };
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
@@ -223,27 +223,21 @@ impl ScalarUDFImpl for DateTruncFunc {
         &self.signature
     }
 
-    // keep return_type implementation for information schema generation
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types[1].is_null() {
-            Ok(Timestamp(Nanosecond, None))
-        } else {
-            Ok(arg_types[1].clone())
-        }
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!("return_field_from_args should be called instead")
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let data_types = args
-            .arg_fields
-            .iter()
-            .map(|f| f.data_type())
-            .cloned()
-            .collect::<Vec<_>>();
-        let return_type = self.return_type(&data_types)?;
+        let field = &args.arg_fields[1];
+        let return_type = if field.data_type().is_null() {
+            Timestamp(Nanosecond, None)
+        } else {
+            field.data_type().clone()
+        };
         Ok(Arc::new(Field::new(
             self.name(),
             return_type,
-            args.arg_fields[1].is_nullable(),
+            field.is_nullable(),
         )))
     }
 
