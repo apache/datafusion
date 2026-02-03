@@ -115,13 +115,13 @@ fn string_to_map_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     // Get delimiters with defaults
     let pair_delim = if args.len() > 1 {
-        get_scalar_string(&args[1])?
+        extract_delimiter_from_string_array(&args[1])?
     } else {
         ",".to_string()
     };
 
     let kv_delim = if args.len() > 2 {
-        get_scalar_string(&args[2])?
+        extract_delimiter_from_string_array(&args[2])?
     } else {
         ":".to_string()
     };
@@ -212,8 +212,8 @@ fn string_to_map_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     )
 }
 
-/// Extract scalar string value from array (assumes all values are the same)
-fn get_scalar_string(array: &ArrayRef) -> Result<String> {
+/// Extract delimiter value from [`StringArray`].
+fn extract_delimiter_from_string_array(array: &ArrayRef) -> Result<String> {
     let string_array = array
         .as_any()
         .downcast_ref::<StringArray>()
