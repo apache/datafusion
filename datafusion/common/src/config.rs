@@ -670,10 +670,12 @@ config_namespace! {
         /// `false` — ANSI SQL mode is disabled by default.
         pub enable_ansi_mode: bool, default = false
 
-        /// Prefix to use when generating file name in multi file output
+        /// Prefix to use when generating file name in multi file output.
         ///
         /// When prefix is non-empty string, this prefix will be used to generate file name as
-        /// `{partitioned_file_prefix_name}{datafusion generated suffix}`
+        /// `{partitioned_file_prefix_name}{datafusion generated suffix}`.
+        ///
+        /// Defaults to empty string.
         pub partitioned_file_prefix_name: String, default = String::new()
     }
 }
