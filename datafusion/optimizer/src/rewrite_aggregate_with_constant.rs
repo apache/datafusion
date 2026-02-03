@@ -21,7 +21,7 @@ use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::tree_node::Transformed;
-use datafusion_common::{ExprSchema, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::expr::{AggregateFunctionParams, Sort};
 use datafusion_expr::{
     Aggregate, BinaryExpr, Expr, LogicalPlan, LogicalPlanBuilder, Operator, binary_expr,

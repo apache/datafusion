@@ -18,9 +18,11 @@
 ##########
 ## Aggregate Rewrite With Constant Optimizer Tests
 ## Tests for the optimizer rule that rewrites SUM(col ± constant) to SUM(col) ± constant * COUNT(*)
+## Rule only applies when there are 2+ SUM expressions on the SAME base column
 ##########
 
-# Setup test table
+# ==== Test 1: Basic addition with multiple sum expressions ====
+
 statement ok
 CREATE TABLE test_table (
     a INT,
@@ -34,8 +36,6 @@ CREATE TABLE test_table (
     (5, 50, 500);
 
 # Test: Multiple SUM expressions with constants should be rewritten
-# This query should be optimized to compute SUM(a) and COUNT(a) once,
-# then derive SUM(a+1), SUM(a+2), SUM(a+3) from those base aggregates
 query TT
 EXPLAIN SELECT 
     SUM(a) as sum_a, 
@@ -55,7 +55,6 @@ physical_plan
 03)----ProjectionExec: expr=[CAST(a@0 AS Int64) as __common_expr_1]
 04)------DataSourceExec: partitions=1, partition_sizes=[1]
 
-# Verify the query produces correct results
 query IIII
 SELECT 
     SUM(a) as sum_a, 
@@ -66,6 +65,315 @@ FROM test_table;
 ----
 15 20 25 30
 
-# Cleanup
+# ==== Test 2: Subtraction operations ====
+
+query TT
+EXPLAIN SELECT 
+    SUM(a) as sum_a, 
+    SUM(a - 1) as sum_a_minus_1, 
+    SUM(a - 2) as sum_a_minus_2, 
+    SUM(a - 3) as sum_a_minus_3 
+FROM test_table;
+----
+logical_plan
+01)Projection: sum(test_table.a) AS sum_a, sum(test_table.a) - count(test_table.a) AS sum_a_minus_1, sum(test_table.a) - Int64(2) * count(test_table.a) AS sum_a_minus_2, sum(test_table.a) - Int64(3) * count(test_table.a) AS sum_a_minus_3
+02)--Aggregate: groupBy=[[]], aggr=[[sum(__common_expr_1 AS test_table.a), count(__common_expr_1 AS test_table.a)]]
+03)----Projection: CAST(test_table.a AS Int64) AS __common_expr_1
+04)------TableScan: test_table projection=[a]
+physical_plan
+01)ProjectionExec: expr=[sum(test_table.a)@0 as sum_a, sum(test_table.a)@0 - count(test_table.a)@1 as sum_a_minus_1, sum(test_table.a)@0 - 2 * count(test_table.a)@1 as sum_a_minus_2, sum(test_table.a)@0 - 3 * count(test_table.a)@1 as sum_a_minus_3]
+02)--AggregateExec: mode=Single, gby=[], aggr=[sum(test_table.a), count(test_table.a)]
+03)----ProjectionExec: expr=[CAST(a@0 AS Int64) as __common_expr_1]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query IIII
+SELECT 
+    SUM(a) as sum_a, 
+    SUM(a - 1) as sum_a_minus_1, 
+    SUM(a - 2) as sum_a_minus_2, 
+    SUM(a - 3) as sum_a_minus_3 
+FROM test_table;
+----
+15 10 5 0
+
+# ==== Test 3: With GROUP BY ====
+
+statement ok
+CREATE TABLE group_test (
+    category VARCHAR,
+    value INT
+) AS VALUES
+    ('A', 1),
+    ('A', 2),
+    ('A', 3),
+    ('B', 4),
+    ('B', 5),
+    ('B', 6);
+
+query TT
+EXPLAIN SELECT 
+    category,
+    SUM(value) as sum_val,
+    SUM(value + 1) as sum_val_plus_1,
+    SUM(value - 2) as sum_val_minus_2
+FROM group_test
+GROUP BY category;
+----
+logical_plan
+01)Projection: group_test.category, sum(group_test.value) AS sum_val, sum(group_test.value) + count(group_test.value) AS sum_val_plus_1, sum(group_test.value) - Int64(2) * count(group_test.value) AS sum_val_minus_2
+02)--Aggregate: groupBy=[[group_test.category]], aggr=[[sum(__common_expr_1 AS group_test.value), count(__common_expr_1 AS group_test.value)]]
+03)----Projection: CAST(group_test.value AS Int64) AS __common_expr_1, group_test.category
+04)------TableScan: group_test projection=[category, value]
+physical_plan
+01)ProjectionExec: expr=[category@0 as category, sum(group_test.value)@1 as sum_val, sum(group_test.value)@1 + count(group_test.value)@2 as sum_val_plus_1, sum(group_test.value)@1 - 2 * count(group_test.value)@2 as sum_val_minus_2]
+02)--AggregateExec: mode=FinalPartitioned, gby=[category@0 as category], aggr=[sum(group_test.value), count(group_test.value)]
+03)----RepartitionExec: partitioning=Hash([category@0], 4), input_partitions=1
+04)------AggregateExec: mode=Partial, gby=[category@1 as category], aggr=[sum(group_test.value), count(group_test.value)]
+05)--------ProjectionExec: expr=[CAST(value@1 AS Int64) as __common_expr_1, category@0 as category]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TIII rowsort
+SELECT 
+    category,
+    SUM(value) as sum_val,
+    SUM(value + 1) as sum_val_plus_1,
+    SUM(value - 2) as sum_val_minus_2
+FROM group_test
+GROUP BY category;
+----
+A 6 9 0
+B 15 18 9
+
+# ==== Test 4: With nullable columns (SHOULD NOT rewrite - only 1 SUM per column) ====
+
+statement ok
+CREATE TABLE nullable_test (
+    id INT,
+    a INT,
+    b INT
+) AS VALUES
+    (1, 10, NULL),
+    (2, 20, 200),
+    (3, NULL, 300),
+    (4, 40, 400),
+    (5, 50, NULL);
+
+# This should NOT be rewritten because each column has only 1 SUM with a constant
+query TT
+EXPLAIN SELECT 
+    SUM(a) as sum_a,
+    SUM(a + 5) as sum_a_plus_5,
+    SUM(b) as sum_b,
+    SUM(b - 10) as sum_b_minus_10
+FROM nullable_test;
+----
+logical_plan
+01)Projection: sum(nullable_test.a) AS sum_a, sum(nullable_test.a + Int64(5)) AS sum_a_plus_5, sum(nullable_test.b) AS sum_b, sum(nullable_test.b - Int64(10)) AS sum_b_minus_10
+02)--Aggregate: groupBy=[[]], aggr=[[sum(__common_expr_1 AS nullable_test.a), sum(__common_expr_1 AS nullable_test.a + Int64(5)), sum(__common_expr_2 AS nullable_test.b), sum(__common_expr_2 AS nullable_test.b - Int64(10))]]
+03)----Projection: CAST(nullable_test.a AS Int64) AS __common_expr_1, CAST(nullable_test.b AS Int64) AS __common_expr_2
+04)------TableScan: nullable_test projection=[a, b]
+physical_plan
+01)ProjectionExec: expr=[sum(nullable_test.a)@0 as sum_a, sum(nullable_test.a + Int64(5))@1 as sum_a_plus_5, sum(nullable_test.b)@2 as sum_b, sum(nullable_test.b - Int64(10))@3 as sum_b_minus_10]
+02)--AggregateExec: mode=Single, gby=[], aggr=[sum(nullable_test.a), sum(nullable_test.a + Int64(5)), sum(nullable_test.b), sum(nullable_test.b - Int64(10))]
+03)----ProjectionExec: expr=[CAST(a@0 AS Int64) as __common_expr_1, CAST(b@1 AS Int64) as __common_expr_2]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query IIII
+SELECT 
+    SUM(a) as sum_a,
+    SUM(a + 5) as sum_a_plus_5,
+    SUM(b) as sum_b,
+    SUM(b - 10) as sum_b_minus_10
+FROM nullable_test;
+----
+120 140 900 870
+
+# Test with multiple SUMs on nullable column
+query TT
+EXPLAIN SELECT 
+    SUM(a) as sum_a,
+    SUM(a + 5) as sum_a_plus_5,
+    SUM(a + 10) as sum_a_plus_10
+FROM nullable_test;
+----
+logical_plan
+01)Projection: sum(nullable_test.a) AS sum_a, sum(nullable_test.a) + Int64(5) * count(nullable_test.a) AS sum_a_plus_5, sum(nullable_test.a) + Int64(10) * count(nullable_test.a) AS sum_a_plus_10
+02)--Aggregate: groupBy=[[]], aggr=[[sum(__common_expr_1 AS nullable_test.a), count(__common_expr_1 AS nullable_test.a)]]
+03)----Projection: CAST(nullable_test.a AS Int64) AS __common_expr_1
+04)------TableScan: nullable_test projection=[a]
+physical_plan
+01)ProjectionExec: expr=[sum(nullable_test.a)@0 as sum_a, sum(nullable_test.a)@0 + 5 * count(nullable_test.a)@1 as sum_a_plus_5, sum(nullable_test.a)@0 + 10 * count(nullable_test.a)@1 as sum_a_plus_10]
+02)--AggregateExec: mode=Single, gby=[], aggr=[sum(nullable_test.a), count(nullable_test.a)]
+03)----ProjectionExec: expr=[CAST(a@0 AS Int64) as __common_expr_1]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query III
+SELECT 
+    SUM(a) as sum_a,
+    SUM(a + 5) as sum_a_plus_5,
+    SUM(a + 10) as sum_a_plus_10
+FROM nullable_test;
+----
+120 140 160
+
+# ==== Test 5: Negative constants ====
+
+query TT
+EXPLAIN SELECT 
+    SUM(a) as sum_a,
+    SUM(a + (-1)) as sum_a_minus_1,
+    SUM(a - (-2)) as sum_a_plus_2,
+    SUM(a + (-3)) as sum_a_minus_3
+FROM test_table;
+----
+logical_plan
+01)Projection: sum(test_table.a) AS sum_a, sum(test_table.a) + Int64(-1) * count(test_table.a) AS sum_a_minus_1, sum(test_table.a) - Int64(-2) * count(test_table.a) AS sum_a_plus_2, sum(test_table.a) + Int64(-3) * count(test_table.a) AS sum_a_minus_3
+02)--Aggregate: groupBy=[[]], aggr=[[sum(__common_expr_1 AS test_table.a), count(__common_expr_1 AS test_table.a)]]
+03)----Projection: CAST(test_table.a AS Int64) AS __common_expr_1
+04)------TableScan: test_table projection=[a]
+physical_plan
+01)ProjectionExec: expr=[sum(test_table.a)@0 as sum_a, sum(test_table.a)@0 + -1 * count(test_table.a)@1 as sum_a_minus_1, sum(test_table.a)@0 - -2 * count(test_table.a)@1 as sum_a_plus_2, sum(test_table.a)@0 + -3 * count(test_table.a)@1 as sum_a_minus_3]
+02)--AggregateExec: mode=Single, gby=[], aggr=[sum(test_table.a), count(test_table.a)]
+03)----ProjectionExec: expr=[CAST(a@0 AS Int64) as __common_expr_1]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query IIII
+SELECT 
+    SUM(a) as sum_a,
+    SUM(a + (-1)) as sum_a_minus_1,
+    SUM(a - (-2)) as sum_a_plus_2,
+    SUM(a + (-3)) as sum_a_minus_3
+FROM test_table;
+----
+15 10 25 0
+
+# ==== Test 6: No matching rewrite patterns ====
+
+# Should not rewrite - only one sum with constant
+query TT
+EXPLAIN SELECT SUM(a + 1) FROM test_table;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[sum(CAST(test_table.a AS Int64) + Int64(1))]]
+02)--TableScan: test_table projection=[a]
+physical_plan
+01)AggregateExec: mode=Single, gby=[], aggr=[sum(test_table.a + Int64(1))]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Should not rewrite - different base columns
+query TT
+EXPLAIN SELECT SUM(a + 1), SUM(b + 2) FROM test_table;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[sum(CAST(test_table.a AS Int64) + Int64(1)), sum(CAST(test_table.b AS Int64) + Int64(2))]]
+02)--TableScan: test_table projection=[a, b]
+physical_plan
+01)AggregateExec: mode=Single, gby=[], aggr=[sum(test_table.a + Int64(1)), sum(test_table.b + Int64(2))]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# ==== Test 7: Mixed sum types (rewrites a and b, not c) ====
+
+query TT
+EXPLAIN SELECT 
+    SUM(a) as sum_a,
+    SUM(a + 1) as sum_a_plus_1,
+    SUM(b) as sum_b,
+    SUM(b + 2) as sum_b_plus_2,
+    SUM(c + 3) as sum_c_plus_3
+FROM test_table;
+----
+logical_plan
+01)Projection: sum(test_table.a) AS sum_a, sum(test_table.a + Int64(1)) AS sum_a_plus_1, sum(test_table.b) AS sum_b, sum(test_table.b + Int64(2)) AS sum_b_plus_2, sum(test_table.c + Int64(3)) AS sum_c_plus_3
+02)--Aggregate: groupBy=[[]], aggr=[[sum(__common_expr_1 AS test_table.a), sum(__common_expr_1 AS test_table.a + Int64(1)), sum(__common_expr_2 AS test_table.b), sum(__common_expr_2 AS test_table.b + Int64(2)), sum(CAST(test_table.c AS Int64) + Int64(3))]]
+03)----Projection: CAST(test_table.a AS Int64) AS __common_expr_1, CAST(test_table.b AS Int64) AS __common_expr_2, test_table.c
+04)------TableScan: test_table projection=[a, b, c]
+physical_plan
+01)ProjectionExec: expr=[sum(test_table.a)@0 as sum_a, sum(test_table.a + Int64(1))@1 as sum_a_plus_1, sum(test_table.b)@2 as sum_b, sum(test_table.b + Int64(2))@3 as sum_b_plus_2, sum(test_table.c + Int64(3))@4 as sum_c_plus_3]
+02)--AggregateExec: mode=Single, gby=[], aggr=[sum(test_table.a), sum(test_table.a + Int64(1)), sum(test_table.b), sum(test_table.b + Int64(2)), sum(test_table.c + Int64(3))]
+03)----ProjectionExec: expr=[CAST(a@0 AS Int64) as __common_expr_1, CAST(b@1 AS Int64) as __common_expr_2, c@2 as c]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query IIIII
+SELECT 
+    SUM(a) as sum_a,
+    SUM(a + 1) as sum_a_plus_1,
+    SUM(b) as sum_b,
+    SUM(b + 2) as sum_b_plus_2,
+    SUM(c + 3) as sum_c_plus_3
+FROM test_table;
+----
+15 20 150 160 1515
+
+# ==== Test 8: Aliased expressions (should NOT rewrite - only 1 SUM with constant per column) ====
+
+# This has SUM(a), SUM(a+10), SUM(b), SUM(b-5)
+# Each column has only 1 SUM WITH a constant, so no rewrite
+query TT
+EXPLAIN SELECT 
+    SUM(a) AS total_a,
+    SUM(a + 10) AS total_a_plus_10,
+    SUM(b) AS total_b,
+    SUM(b - 5) AS total_b_minus_5
+FROM test_table;
+----
+logical_plan
+01)Projection: sum(test_table.a) AS total_a, sum(test_table.a + Int64(10)) AS total_a_plus_10, sum(test_table.b) AS total_b, sum(test_table.b - Int64(5)) AS total_b_minus_5
+02)--Aggregate: groupBy=[[]], aggr=[[sum(__common_expr_1 AS test_table.a), sum(__common_expr_1 AS test_table.a + Int64(10)), sum(__common_expr_2 AS test_table.b), sum(__common_expr_2 AS test_table.b - Int64(5))]]
+03)----Projection: CAST(test_table.a AS Int64) AS __common_expr_1, CAST(test_table.b AS Int64) AS __common_expr_2
+04)------TableScan: test_table projection=[a, b]
+physical_plan
+01)ProjectionExec: expr=[sum(test_table.a)@0 as total_a, sum(test_table.a + Int64(10))@1 as total_a_plus_10, sum(test_table.b)@2 as total_b, sum(test_table.b - Int64(5))@3 as total_b_minus_5]
+02)--AggregateExec: mode=Single, gby=[], aggr=[sum(test_table.a), sum(test_table.a + Int64(10)), sum(test_table.b), sum(test_table.b - Int64(5))]
+03)----ProjectionExec: expr=[CAST(a@0 AS Int64) as __common_expr_1, CAST(b@1 AS Int64) as __common_expr_2]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query IIII
+SELECT 
+    SUM(a) AS total_a,
+    SUM(a + 10) AS total_a_plus_10,
+    SUM(b) AS total_b,
+    SUM(b - 5) AS total_b_minus_5
+FROM test_table;
+----
+15 65 150 125
+
+# Now test with 2+ SUMs with constants on same columns
+query TT
+EXPLAIN SELECT 
+    SUM(a + 5) AS sum_a_plus_5,
+    SUM(a + 10) AS sum_a_plus_10,
+    SUM(b - 3) AS sum_b_minus_3,
+    SUM(b - 5) AS sum_b_minus_5
+FROM test_table;
+----
+logical_plan
+01)Projection: sum(test_table.a) + Int64(5) * count(test_table.a) AS sum_a_plus_5, sum(test_table.a) + Int64(10) * count(test_table.a) AS sum_a_plus_10, sum(test_table.b) - Int64(3) * count(test_table.b) AS sum_b_minus_3, sum(test_table.b) - Int64(5) * count(test_table.b) AS sum_b_minus_5
+02)--Aggregate: groupBy=[[]], aggr=[[sum(__common_expr_1 AS test_table.a), count(__common_expr_1 AS test_table.a), sum(__common_expr_2 AS test_table.b), count(__common_expr_2 AS test_table.b)]]
+03)----Projection: CAST(test_table.a AS Int64) AS __common_expr_1, CAST(test_table.b AS Int64) AS __common_expr_2
+04)------TableScan: test_table projection=[a, b]
+physical_plan
+01)ProjectionExec: expr=[sum(test_table.a)@0 + 5 * count(test_table.a)@1 as sum_a_plus_5, sum(test_table.a)@0 + 10 * count(test_table.a)@1 as sum_a_plus_10, sum(test_table.b)@2 - 3 * count(test_table.b)@3 as sum_b_minus_3, sum(test_table.b)@2 - 5 * count(test_table.b)@3 as sum_b_minus_5]
+02)--AggregateExec: mode=Single, gby=[], aggr=[sum(test_table.a), count(test_table.a), sum(test_table.b), count(test_table.b)]
+03)----ProjectionExec: expr=[CAST(a@0 AS Int64) as __common_expr_1, CAST(b@1 AS Int64) as __common_expr_2]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query IIII
+SELECT 
+    SUM(a + 5) AS sum_a_plus_5,
+    SUM(a + 10) AS sum_a_plus_10,
+    SUM(b - 3) AS sum_b_minus_3,
+    SUM(b - 5) AS sum_b_minus_5
+FROM test_table;
+----
+40 65 135 125
+
+# ==== Cleanup ====
+
 statement ok
 DROP TABLE test_table;
+
+statement ok
+DROP TABLE group_test;
+
+statement ok
+DROP TABLE nullable_test;
