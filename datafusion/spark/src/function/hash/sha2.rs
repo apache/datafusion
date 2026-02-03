@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, AsArray, BinaryArrayType, Int32Array, StringArray};
+use arrow::array::{
+    ArrayRef, AsArray, BinaryArrayType, Int32Array, StringArray, new_null_array,
+};
 use arrow::datatypes::{DataType, Int32Type};
 use datafusion_common::types::{
     NativeType, logical_binary, logical_int32, logical_string,
@@ -117,22 +119,22 @@ impl ScalarUDFImpl for SparkSha2 {
                 let out = match bit_length {
                     224 => {
                         let mut digest = sha2::Sha224::default();
-                        digest.update(&bytes);
+                        digest.update(bytes);
                         Some(hex_encode(digest.finalize()))
                     }
                     0 | 256 => {
                         let mut digest = sha2::Sha256::default();
-                        digest.update(&bytes);
+                        digest.update(bytes);
                         Some(hex_encode(digest.finalize()))
                     }
                     384 => {
                         let mut digest = sha2::Sha384::default();
-                        digest.update(&bytes);
+                        digest.update(bytes);
                         Some(hex_encode(digest.finalize()))
                     }
                     512 => {
                         let mut digest = sha2::Sha512::default();
-                        digest.update(&bytes);
+                        digest.update(bytes);
                         Some(hex_encode(digest.finalize()))
                     }
                     _ => None,
@@ -140,10 +142,39 @@ impl ScalarUDFImpl for SparkSha2 {
 
                 Ok(ColumnarValue::Scalar(ScalarValue::Utf8(out)))
             }
+            // Array values + scalar bit length (common case: sha2(col, 256))
+            (
+                ColumnarValue::Array(values_array),
+                ColumnarValue::Scalar(ScalarValue::Int32(Some(bit_length))),
+            ) => {
+                let output: ArrayRef = match values_array.data_type() {
+                    DataType::Binary => sha2_binary_scalar_bitlen(
+                        &values_array.as_binary::<i32>(),
+                        *bit_length,
+                    ),
+                    DataType::LargeBinary => sha2_binary_scalar_bitlen(
+                        &values_array.as_binary::<i64>(),
+                        *bit_length,
+                    ),
+                    DataType::BinaryView => sha2_binary_scalar_bitlen(
+                        &values_array.as_binary_view(),
+                        *bit_length,
+                    ),
+                    dt => return internal_err!("Unsupported datatype for sha2: {dt}"),
+                };
+                Ok(ColumnarValue::Array(output))
+            }
             (
                 ColumnarValue::Scalar(_),
                 ColumnarValue::Scalar(ScalarValue::Int32(None)),
             ) => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None))),
+            (
+                ColumnarValue::Array(_),
+                ColumnarValue::Scalar(ScalarValue::Int32(None)),
+            ) => Ok(ColumnarValue::Array(new_null_array(
+                &DataType::Utf8,
+                args.number_rows,
+            ))),
             _ => {
                 // Fallback to existing behavior for any array/mixed cases
                 make_scalar_function(sha2_impl, vec![])(&args.args)
@@ -174,9 +205,30 @@ fn sha2_binary_impl<'a, BinaryArrType>(
 where
     BinaryArrType: BinaryArrayType<'a>,
 {
+    sha2_binary_bitlen_iter(values, bit_lengths.iter())
+}
+
+fn sha2_binary_scalar_bitlen<'a, BinaryArrType>(
+    values: &BinaryArrType,
+    bit_length: i32,
+) -> ArrayRef
+where
+    BinaryArrType: BinaryArrayType<'a>,
+{
+    sha2_binary_bitlen_iter(values, std::iter::repeat(Some(bit_length)))
+}
+
+fn sha2_binary_bitlen_iter<'a, BinaryArrType, I>(
+    values: &BinaryArrType,
+    bit_lengths: I,
+) -> ArrayRef
+where
+    BinaryArrType: BinaryArrayType<'a>,
+    I: Iterator<Item = Option<i32>>,
+{
     let array = values
         .iter()
-        .zip(bit_lengths.iter())
+        .zip(bit_lengths)
         .map(|(value, bit_length)| match (value, bit_length) {
             (Some(value), Some(224)) => {
                 let mut digest = sha2::Sha224::default();
@@ -212,8 +264,10 @@ fn hex_encode<T: AsRef<[u8]>>(data: T) -> String {
     let bytes = data.as_ref();
     let mut out = Vec::with_capacity(bytes.len() * 2);
     for &b in bytes {
-        out.push(HEX_CHARS[(b >> 4) as usize]);
-        out.push(HEX_CHARS[(b & 0x0F) as usize]);
+        let hi = b >> 4;
+        let lo = b & 0x0F;
+        out.push(HEX_CHARS[hi as usize]);
+        out.push(HEX_CHARS[lo as usize]);
     }
     // SAFETY: out contains only ASCII
     unsafe { String::from_utf8_unchecked(out) }
