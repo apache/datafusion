@@ -66,97 +66,61 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     for function in [left_function, right_function] {
         for is_string_view in [false, true] {
-            for size in [1024, 4096] {
-                let function_name = function.name();
-                let mut group = c.benchmark_group(format!("{function_name} size={size}"));
+            for is_negative in [false, true] {
+                for size in [1024, 4096] {
+                    let function_name = function.name();
+                    let mut group =
+                        c.benchmark_group(format!("{function_name} size={size}"));
 
-                // Benchmark with positive n (no optimization needed)
-                let mut bench_name = if is_string_view {
-                    "string_view_array positive n"
-                } else {
-                    "string_array positive n"
-                };
-                let return_type = if is_string_view {
-                    DataType::Utf8View
-                } else {
-                    DataType::Utf8
-                };
+                    let bench_name = format!(
+                        "{} {} n",
+                        if is_string_view {
+                            "string_view_array"
+                        } else {
+                            "string_array"
+                        },
+                        if is_negative { "negative" } else { "positive" },
+                    );
+                    let return_type = if is_string_view {
+                        DataType::Utf8View
+                    } else {
+                        DataType::Utf8
+                    };
 
-                let args = create_args(size, 32, false, is_string_view);
-                group.bench_function(BenchmarkId::new(bench_name, size), |b| {
-                    let arg_fields = args
-                        .iter()
-                        .enumerate()
-                        .map(|(idx, arg)| {
-                            Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+                    let args = create_args(size, 32, is_negative, is_string_view);
+                    group.bench_function(BenchmarkId::new(bench_name, size), |b| {
+                        let arg_fields = args
+                            .iter()
+                            .enumerate()
+                            .map(|(idx, arg)| {
+                                Field::new(format!("arg_{idx}"), arg.data_type(), true)
+                                    .into()
+                            })
+                            .collect::<Vec<_>>();
+                        let config_options = Arc::new(ConfigOptions::default());
+
+                        b.iter(|| {
+                            black_box(
+                                function
+                                    .invoke_with_args(ScalarFunctionArgs {
+                                        args: args.clone(),
+                                        arg_fields: arg_fields.clone(),
+                                        number_rows: size,
+                                        return_field: Field::new(
+                                            "f",
+                                            return_type.clone(),
+                                            true,
+                                        )
+                                        .into(),
+                                        config_options: Arc::clone(&config_options),
+                                    })
+                                    .expect("should work"),
+                            )
                         })
-                        .collect::<Vec<_>>();
-                    let config_options = Arc::new(ConfigOptions::default());
+                    });
 
-                    b.iter(|| {
-                        black_box(
-                            function
-                                .invoke_with_args(ScalarFunctionArgs {
-                                    args: args.clone(),
-                                    arg_fields: arg_fields.clone(),
-                                    number_rows: size,
-                                    return_field: Field::new(
-                                        "f",
-                                        return_type.clone(),
-                                        true,
-                                    )
-                                    .into(),
-                                    config_options: Arc::clone(&config_options),
-                                })
-                                .expect("should work"),
-                        )
-                    })
-                });
-
-                // Benchmark with negative n (triggers optimization)
-                bench_name = if is_string_view {
-                    "string_view_array negative n"
-                } else {
-                    "string_array negative n"
-                };
-                let return_type = if is_string_view {
-                    DataType::Utf8View
-                } else {
-                    DataType::Utf8
-                };
-
-                let args = create_args(size, 32, true, is_string_view);
-                group.bench_function(BenchmarkId::new(bench_name, size), |b| {
-                    let arg_fields = args
-                        .iter()
-                        .enumerate()
-                        .map(|(idx, arg)| {
-                            Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
-                        })
-                        .collect::<Vec<_>>();
-                    let config_options = Arc::new(ConfigOptions::default());
-
-                    b.iter(|| {
-                        black_box(
-                            function
-                                .invoke_with_args(ScalarFunctionArgs {
-                                    args: args.clone(),
-                                    arg_fields: arg_fields.clone(),
-                                    number_rows: size,
-                                    return_field: Field::new(
-                                        "f",
-                                        return_type.clone(),
-                                        true,
-                                    )
-                                    .into(),
-                                    config_options: Arc::clone(&config_options),
-                                })
-                                .expect("should work"),
-                        )
-                    })
-                });
-
-                group.finish();
+                    group.finish();
+                }
             }
         }
     }
