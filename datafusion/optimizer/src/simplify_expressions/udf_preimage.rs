@@ -346,6 +346,14 @@ mod test {
     }
 
     #[test]
+    fn test_preimage_in_list_long_list_no_rewrite() {
+        let schema = test_schema();
+        let expr = preimage_udf_expr().in_list((1..100).map(lit).collect(), false);
+
+        assert_eq!(optimize_test(expr.clone(), &schema), expr);
+    }
+
+    #[test]
     fn test_preimage_non_literal_rhs_no_rewrite() {
         // Non-literal RHS should not be rewritten.
         let schema = test_schema_xy();
