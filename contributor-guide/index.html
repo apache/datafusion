@@ -560,6 +560,11 @@ Commenting on the PR will remove the <code class="docutils literal notranslate">
 <h3>Better ways to contribute than an “AI dump”<a class="headerlink" href="#better-ways-to-contribute-than-an-ai-dump" title="Link to this heading">#</a></h3>
 <p>It’s recommended to write a high-quality issue with a clear problem statement and a minimal, reproducible example. This can make it easier for others to contribute.</p>
 </section>
+<section id="ci-runners">
+<h3>CI Runners<a class="headerlink" href="#ci-runners" title="Link to this heading">#</a></h3>
+<p>We use <a class="reference external" href="https://runs-on.com/">Runs-On</a> for some actions in the main repository, which run in the ASF AWS account to speed up CI time. In forks, these actions run on the default GitHub runners since forks do not have access to ASF infrastructure.</p>
+<p>We also use standard GitHub runners for some actions in the main repository; these are also runnable in forks.</p>
+</section>
 </section>
 </section>
 
@@ -629,6 +634,7 @@ Commenting on the PR will remove the <code class="docutils literal notranslate">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#ai-assisted-contributions">AI-Assisted contributions</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#why-fully-ai-generated-prs-without-understanding-are-not-helpful">Why fully AI-generated PRs without understanding are not helpful</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#better-ways-to-contribute-than-an-ai-dump">Better ways to contribute than an “AI dump”</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#ci-runners">CI Runners</a></li>
 </ul>
 </li>
 </ul>
