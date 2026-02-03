@@ -245,29 +245,6 @@ mod tests {
     use super::*;
     use arrow::array::MapArray;
 
-    /// Helper to extract keys and values from MapArray for assertions
-    fn get_map_entries(map_array: &MapArray, row: usize) -> Vec<(String, Option<String>)> {
-        if map_array.is_null(row) {
-            return vec![];
-        }
-        let start = map_array.value_offsets()[row] as usize;
-        let end = map_array.value_offsets()[row + 1] as usize;
-        let keys = map_array.keys().as_any().downcast_ref::<StringArray>().unwrap();
-        let values = map_array.values().as_any().downcast_ref::<StringArray>().unwrap();
-
-        (start..end)
-            .map(|i| {
-                let key = keys.value(i).to_string();
-                let value = if values.is_null(i) {
-                    None
-                } else {
-                    Some(values.value(i).to_string())
-                };
-                (key, value)
-            })
-            .collect()
-    }
-
     #[test]
     fn test_extract_delimiter_from_string_array() {
         // Normal case - single element
@@ -413,5 +390,29 @@ mod tests {
                 }
             }
         }
+    }
+
+
+    /// Helper to extract keys and values from MapArray for assertions
+    fn get_map_entries(map_array: &MapArray, row: usize) -> Vec<(String, Option<String>)> {
+        if map_array.is_null(row) {
+            return vec![];
+        }
+        let start = map_array.value_offsets()[row] as usize;
+        let end = map_array.value_offsets()[row + 1] as usize;
+        let keys = map_array.keys().as_any().downcast_ref::<StringArray>().unwrap();
+        let values = map_array.values().as_any().downcast_ref::<StringArray>().unwrap();
+
+        (start..end)
+            .map(|i| {
+                let key = keys.value(i).to_string();
+                let value = if values.is_null(i) {
+                    None
+                } else {
+                    Some(values.value(i).to_string())
+                };
+                (key, value)
+            })
+            .collect()
     }
 }
