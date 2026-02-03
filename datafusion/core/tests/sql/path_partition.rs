@@ -685,11 +685,11 @@ impl ObjectStore for MirroringObjectStore {
             e_tag: None,
             version: None,
         };
-        if options.head {
-            unimplemented!("Head option not supported in MirroringObjectStore");
-        }
 
-        let payload = if let Some(range) = options.range {
+        let payload = if options.head {
+            // no content for head requests
+            GetResultPayload::Stream(stream::empty().boxed())
+        } else if let Some(range) = options.range {
             let GetRange::Bounded(range) = range else {
                 unimplemented!("Unbounded range not supported in MirroringObjectStore");
             };
