@@ -21,13 +21,17 @@
 //!
 //! ## Usage
 //! ```bash
-//! cargo run --example proto -- [all|composed_extension_codec]
+//! cargo run --example proto -- [all|composed_extension_codec|expression_deduplication]
 //! ```
 //!
 //! Each subcommand runs a corresponding example:
 //! - `all` — run all examples included in this module
-//! - `composed_extension_codec` — example of using multiple extension codecs for serialization / deserialization
-//! - `expression_deduplication` — example of expression caching/deduplication using the codec decorator pattern
+//!
+//! - `composed_extension_codec`
+//!   (file: composed_extension_codec.rs, desc: Use multiple extension codecs for serialization/deserialization)
+//!
+//! - `expression_deduplication`
+//!   (file: expression_deduplication.rs, desc: Example of expression caching/deduplication using the codec decorator pattern)
 
 mod composed_extension_codec;
 mod expression_deduplication;

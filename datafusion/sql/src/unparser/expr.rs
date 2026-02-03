@@ -1441,6 +1441,7 @@ impl Unparser<'_> {
             ScalarValue::Map(_) => not_impl_err!("Unsupported scalar: {v:?}"),
             ScalarValue::Union(..) => not_impl_err!("Unsupported scalar: {v:?}"),
             ScalarValue::Dictionary(_k, v) => self.scalar_to_sql(v),
+            ScalarValue::RunEndEncoded(_, _, v) => self.scalar_to_sql(v),
         }
     }
 
@@ -1790,6 +1791,9 @@ impl Unparser<'_> {
                 not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
             DataType::Dictionary(_, val) => self.arrow_dtype_to_ast_dtype(val),
+            DataType::RunEndEncoded(_, val) => {
+                self.arrow_dtype_to_ast_dtype(val.data_type())
+            }
             DataType::Decimal32(precision, scale)
             | DataType::Decimal64(precision, scale)
             | DataType::Decimal128(precision, scale)
@@ -1809,9 +1813,6 @@ impl Unparser<'_> {
                 ))
             }
             DataType::Map(_, _) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type}")
-            }
-            DataType::RunEndEncoded(_, _) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
         }
@@ -2310,6 +2311,17 @@ mod tests {
                 Expr::Literal(
                     ScalarValue::Dictionary(
                         Box::new(DataType::Int32),
+                        Box::new(ScalarValue::Utf8(Some("foo".into()))),
+                    ),
+                    None,
+                ),
+                "'foo'",
+            ),
+            (
+                Expr::Literal(
+                    ScalarValue::RunEndEncoded(
+                        Field::new("run_ends", DataType::Int32, false).into(),
+                        Field::new("values", DataType::Utf8, true).into(),
                         Box::new(ScalarValue::Utf8(Some("foo".into()))),
                     ),
                     None,
@@ -3178,6 +3190,22 @@ mod tests {
         let ast_dtype = unparser.arrow_dtype_to_ast_dtype(&DataType::Dictionary(
             Box::new(DataType::Int32),
             Box::new(DataType::Utf8),
+        ))?;
+
+        assert_eq!(ast_dtype, ast::DataType::Varchar(None));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_run_end_encoded_to_sql() -> Result<()> {
+        let dialect = CustomDialectBuilder::new().build();
+
+        let unparser = Unparser::new(&dialect);
+
+        let ast_dtype = unparser.arrow_dtype_to_ast_dtype(&DataType::RunEndEncoded(
+            Field::new("run_ends", DataType::Int32, false).into(),
+            Field::new("values", DataType::Utf8, true).into(),
         ))?;
 
         assert_eq!(ast_dtype, ast::DataType::Varchar(None));
