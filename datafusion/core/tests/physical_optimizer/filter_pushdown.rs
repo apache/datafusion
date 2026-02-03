@@ -3720,3 +3720,90 @@ async fn test_hashjoin_dynamic_filter_pushdown_is_used() {
         );
     }
 }
+
+/// Regression test for https://github.com/apache/datafusion/issues/20109
+#[tokio::test]
+async fn test_filter_with_projection_pushdown() {
+    use arrow::array::{Int64Array, RecordBatch, StringArray};
+    use datafusion_physical_plan::collect;
+    use datafusion_physical_plan::filter::FilterExecBuilder;
+
+    // Create schema: [time, event, size]
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("time", DataType::Int64, false),
+        Field::new("event", DataType::Utf8, false),
+        Field::new("size", DataType::Int64, false),
+    ]));
+
+    // Create sample data
+    let timestamps = vec![100i64, 200, 300, 400, 500];
+    let events = vec!["Ingestion", "Ingestion", "Query", "Ingestion", "Query"];
+    let sizes = vec![10i64, 20, 30, 40, 50];
+
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int64Array::from(timestamps)),
+            Arc::new(StringArray::from(events)),
+            Arc::new(Int64Array::from(sizes)),
+        ],
+    )
+    .unwrap();
+
+    // Create data source
+    let memory_exec = datafusion_datasource::memory::MemorySourceConfig::try_new_exec(
+        &[vec![batch]],
+        schema.clone(),
+        None,
+    )
+    .unwrap();
+
+    // First FilterExec: time < 350 with projection=[event@1, size@2]
+    let time_col = col("time", &memory_exec.schema()).unwrap();
+    let time_filter = Arc::new(BinaryExpr::new(
+        time_col,
+        Operator::Lt,
+        Arc::new(Literal::new(ScalarValue::Int64(Some(350)))),
+    ));
+    let filter1 = Arc::new(
+        FilterExecBuilder::new(time_filter, memory_exec)
+            .apply_projection(Some(vec![1, 2]))
+            .unwrap()
+            .build()
+            .unwrap(),
+    );
+
+    // Second FilterExec: event = 'Ingestion' with projection=[size@1]
+    let event_col = col("event", &filter1.schema()).unwrap();
+    let event_filter = Arc::new(BinaryExpr::new(
+        event_col,
+        Operator::Eq,
+        Arc::new(Literal::new(ScalarValue::Utf8(Some(
+            "Ingestion".to_string(),
+        )))),
+    ));
+    let filter2 = Arc::new(
+        FilterExecBuilder::new(event_filter, filter1)
+            .apply_projection(Some(vec![1]))
+            .unwrap()
+            .build()
+            .unwrap(),
+    );
+
+    // Apply filter pushdown optimization
+    let config = ConfigOptions::default();
+    let optimized_plan = FilterPushdown::new()
+        .optimize(Arc::clone(&filter2) as Arc<dyn ExecutionPlan>, &config)
+        .unwrap();
+
+    // Execute the optimized plan - this should not error
+    let ctx = SessionContext::new();
+    let result = collect(optimized_plan, ctx.task_ctx()).await.unwrap();
+
+    // Verify results: should return rows where time < 350 AND event = 'Ingestion'
+    // That's rows with time=100,200 (both have event='Ingestion'), so sizes 10,20
+    let expected = [
+        "+------+", "| size |", "+------+", "| 10   |", "| 20   |", "+------+",
+    ];
+    assert_batches_eq!(expected, &result);
+}
