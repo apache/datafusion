@@ -17,48 +17,57 @@
 # specific language governing permissions and limitations
 # under the License.
 
+# Generates documentation for DataFusion examples using the Rust-based
+# documentation generator and verifies that the committed README.md
+# is up to date.
+#
+# The README is generated from documentation comments in:
+#   datafusion-examples/examples/<group>/main.rs
+#
+# This script is intended to be run in CI to ensure that example
+# documentation stays in sync with the code.
+#
+# To update the README locally, run this script and replace README.md
+# with the generated output.
+
 set -euo pipefail
 
-EXAMPLES_DIR="datafusion-examples/examples"
-README="datafusion-examples/README.md"
+ROOT_DIR="$(git rev-parse --show-toplevel)"
+EXAMPLES_DIR="$ROOT_DIR/datafusion-examples"
+README="$EXAMPLES_DIR/README.md"
+README_NEW="$EXAMPLES_DIR/README-NEW.md"
 
-# ffi examples are skipped because they were not part of the recent example
-# consolidation work and do not follow the new grouping and execution pattern.
-# They are not documented in the README using the new structure, so including
-# them here would cause false CI failures.
-SKIP_LIST=("ffi")
+echo "▶ Generating examples README (Rust generator)…"
+cargo run --quiet \
+  --manifest-path "$EXAMPLES_DIR/Cargo.toml" \
+  --bin examples-docs \
+  > "$README_NEW"
 
-missing=0
+echo "▶ Formatting generated README with Prettier…"
+npx prettier@2.7.1 \
+  --parser markdown \
+  --write "$README_NEW"
 
-skip() {
-    local value="$1"
-    for item in "${SKIP_LIST[@]}"; do
-        if [[ "$item" == "$value" ]]; then
-            return 0
-        fi
-    done
-    return 1
-}
+echo "▶ Comparing generated README with committed version…"
 
-# collect folder names
-folders=$(find "$EXAMPLES_DIR" -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
-
-# collect group names from README headers
-groups=$(grep "^### Group:" "$README" | sed -E 's/^### Group: `([^`]+)`.*/\1/')
-
-for folder in $folders; do
-    if skip "$folder"; then
-        echo "Skipped group: $folder"
-        continue
-    fi
-
-    if ! echo "$groups" | grep -qx "$folder"; then
-        echo "Missing README entry for example group: $folder"
-        missing=1
-    fi
-done
-
-if [[ $missing -eq 1 ]]; then
-    echo "README is out of sync with examples"
-    exit 1
+if ! diff -u "$README" "$README_NEW" > /tmp/examples-readme.diff; then
+  echo ""
+  echo "❌ Examples README is out of date."
+  echo ""
+  echo "The examples documentation is generated automatically from:"
+  echo "  - datafusion-examples/examples/<group>/main.rs"
+  echo ""
+  echo "To update the README locally, run:"
+  echo ""
+  echo "  cargo run --bin examples-docs \\"
+  echo "    | npx prettier@2.7.1 --parser markdown --write \\"
+  echo "    > datafusion-examples/README.md"
+  echo ""
+  echo "Diff:"
+  echo "------------------------------------------------------------"
+  cat /tmp/examples-readme.diff
+  echo "------------------------------------------------------------"
+  exit 1
 fi
+
+echo "✅ Examples README is up-to-date."
