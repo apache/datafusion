@@ -232,13 +232,15 @@ fn extract_delimiter_from_string_array(array: &ArrayRef) -> Result<String> {
             )
         })?;
 
-    assert!(!string_array.is_empty(), "Delimiter array should not be empty");
+    assert!(
+        !string_array.is_empty(),
+        "Delimiter array should not be empty"
+    );
 
     // In columnar execution, scalar delimiter is expanded to array to match batch size.
     // All elements are the same, so we just take the first element.
     Ok(string_array.value(0).to_string())
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -283,7 +285,11 @@ mod tests {
                 inputs: vec![Some("a:1,b:2,c:3")],
                 pair_delim: None,
                 kv_delim: None,
-                expected: vec![Some(vec![("a", Some("1")), ("b", Some("2")), ("c", Some("3"))])],
+                expected: vec![Some(vec![
+                    ("a", Some("1")),
+                    ("b", Some("2")),
+                    ("c", Some("3")),
+                ])],
             },
             TestCase {
                 name: "s1: preserve spaces in values",
@@ -297,7 +303,11 @@ mod tests {
                 inputs: vec![Some("a=1,b=2,c=3")],
                 pair_delim: Some(","),
                 kv_delim: Some("="),
-                expected: vec![Some(vec![("a", Some("1")), ("b", Some("2")), ("c", Some("3"))])],
+                expected: vec![Some(vec![
+                    ("a", Some("1")),
+                    ("b", Some("2")),
+                    ("c", Some("3")),
+                ])],
             },
             TestCase {
                 name: "s3: empty string",
@@ -311,7 +321,11 @@ mod tests {
                 inputs: vec![Some("a:1_b:2_c:3")],
                 pair_delim: Some("_"),
                 kv_delim: Some(":"),
-                expected: vec![Some(vec![("a", Some("1")), ("b", Some("2")), ("c", Some("3"))])],
+                expected: vec![Some(vec![
+                    ("a", Some("1")),
+                    ("b", Some("2")),
+                    ("c", Some("3")),
+                ])],
             },
             TestCase {
                 name: "s5: single key no value",
@@ -325,7 +339,11 @@ mod tests {
                 inputs: vec![Some("a=1&b=2&c=3")],
                 pair_delim: Some("&"),
                 kv_delim: Some("="),
-                expected: vec![Some(vec![("a", Some("1")), ("b", Some("2")), ("c", Some("3"))])],
+                expected: vec![Some(vec![
+                    ("a", Some("1")),
+                    ("b", Some("2")),
+                    ("c", Some("3")),
+                ])],
             },
             TestCase {
                 name: "null input returns null",
@@ -376,32 +394,56 @@ mod tests {
             for (row_idx, expected_row) in case.expected.iter().enumerate() {
                 match expected_row {
                     None => {
-                        assert!(map_array.is_null(row_idx), "case: {} row {} expected NULL", case.name, row_idx);
+                        assert!(
+                            map_array.is_null(row_idx),
+                            "case: {} row {} expected NULL",
+                            case.name,
+                            row_idx
+                        );
                     }
                     Some(expected_entries) => {
-                        assert!(!map_array.is_null(row_idx), "case: {} row {} unexpected NULL", case.name, row_idx);
+                        assert!(
+                            !map_array.is_null(row_idx),
+                            "case: {} row {} unexpected NULL",
+                            case.name,
+                            row_idx
+                        );
                         let entries = get_map_entries(map_array, row_idx);
                         let expected: Vec<(String, Option<String>)> = expected_entries
                             .iter()
                             .map(|(k, v)| (k.to_string(), v.map(|s| s.to_string())))
                             .collect();
-                        assert_eq!(entries, expected, "case: {} row {}", case.name, row_idx);
+                        assert_eq!(
+                            entries, expected,
+                            "case: {} row {}",
+                            case.name, row_idx
+                        );
                     }
                 }
             }
         }
     }
 
-
     /// Helper to extract keys and values from MapArray for assertions
-    fn get_map_entries(map_array: &MapArray, row: usize) -> Vec<(String, Option<String>)> {
+    fn get_map_entries(
+        map_array: &MapArray,
+        row: usize,
+    ) -> Vec<(String, Option<String>)> {
         if map_array.is_null(row) {
             return vec![];
         }
         let start = map_array.value_offsets()[row] as usize;
         let end = map_array.value_offsets()[row + 1] as usize;
-        let keys = map_array.keys().as_any().downcast_ref::<StringArray>().unwrap();
-        let values = map_array.values().as_any().downcast_ref::<StringArray>().unwrap();
+        let keys = map_array
+            .keys()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        let values = map_array
+            .values()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
 
         (start..end)
             .map(|i| {
