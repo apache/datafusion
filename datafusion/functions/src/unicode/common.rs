@@ -40,12 +40,7 @@ pub(crate) struct LeftSlicer {}
 
 impl LeftRightSlicer for LeftSlicer {
     fn slice(string: &str, n: i64) -> Range<usize> {
-        if n == 0 {
-            // Return nothing for `n=0`
-            0..0
-        } else {
-            0..left_right_byte_length(string, n)
-        }
+        0..left_right_byte_length(string, n)
     }
 }
 
