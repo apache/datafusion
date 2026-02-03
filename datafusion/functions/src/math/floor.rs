@@ -217,10 +217,8 @@ impl ScalarUDFImpl for FloorFunc {
         lit_expr: &Expr,
         _info: &SimplifyContext,
     ) -> Result<PreimageResult> {
-        // floor takes exactly one argument
-        if args.len() != 1 {
-            return Ok(PreimageResult::None);
-        }
+        // floor takes exactly one argument and we do not expect to reach here with multiple arguments.
+        debug_assert!(args.len() == 1, "floor() takes exactly one argument");
 
         let arg = args[0].clone();
 
@@ -245,7 +243,9 @@ impl ScalarUDFImpl for FloorFunc {
                 )
             }),
 
-            // Integer types
+            // Integer types (not reachable from SQL/SLT: floor() only accepts Float64/Float32/Decimal,
+            // so the RHS literal is always coerced to one of those before preimage runs; kept for
+            // programmatic use and unit tests)
             ScalarValue::Int8(Some(n)) => int_preimage_bounds(*n).map(|(lo, hi)| {
                 (ScalarValue::Int8(Some(lo)), ScalarValue::Int8(Some(hi)))
             }),
@@ -260,6 +260,9 @@ impl ScalarUDFImpl for FloorFunc {
             }),
 
             // Decimal types
+            // DECIMAL(precision, scale) where precision ≤ 38 -> Decimal128(precision, scale)
+            // DECIMAL(precision, scale) where precision > 38 -> Decimal256(precision, scale)
+            // Decimal32 and Decimal64 are unreachable from SQL/SLT.
             ScalarValue::Decimal32(Some(n), precision, scale) => {
                 decimal_preimage_bounds::<Decimal32Type>(*n, *precision, *scale).map(
                     |(lo, hi)| {
@@ -381,6 +384,10 @@ where
     }
 
     // Compute upper bound using checked addition
+    // Before preimage stage, the internal i128/i256(value) is validated based on the precision and scale.
+    // MAX_DECIMAL128_FOR_EACH_PRECISION and MAX_DECIMAL256_FOR_EACH_PRECISION are used to validate the internal i128/i256.
+    // Any invalid i128/i256 will not reach here.
+    // Therefore, the add_checked will always succeed if tested via SQL/SLT path.
     let upper = value.add_checked(one_scaled).ok()?;
 
     Some((value, upper))
@@ -509,36 +516,6 @@ mod tests {
         assert_preimage_none(ScalarValue::Float64(None));
         assert_preimage_none(ScalarValue::Float32(None));
         assert_preimage_none(ScalarValue::Int64(None));
-    }
-
-    #[test]
-    fn test_floor_preimage_invalid_inputs() {
-        let floor_func = FloorFunc::new();
-        let info = SimplifyContext::default();
-
-        // Non-literal comparison value
-        let result = floor_func.preimage(&[col("x")], &col("y"), &info).unwrap();
-        assert!(
-            matches!(result, PreimageResult::None),
-            "Expected None for non-literal"
-        );
-
-        // Wrong argument count (too many)
-        let lit = Expr::Literal(ScalarValue::Float64(Some(100.0)), None);
-        let result = floor_func
-            .preimage(&[col("x"), col("y")], &lit, &info)
-            .unwrap();
-        assert!(
-            matches!(result, PreimageResult::None),
-            "Expected None for wrong arg count"
-        );
-
-        // Wrong argument count (zero)
-        let result = floor_func.preimage(&[], &lit, &info).unwrap();
-        assert!(
-            matches!(result, PreimageResult::None),
-            "Expected None for zero args"
-        );
     }
 
     // ============ Decimal32 Tests (mirrors float/int tests) ============

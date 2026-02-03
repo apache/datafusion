@@ -169,6 +169,19 @@ logical_plan
 01)Filter: floor(test_data.float_val) = Float64(5.5)
 02)--TableScan: test_data projection=[id, float_val, int_val, decimal_val]
 
+# 8. Non-optimizable: extreme float literal (2^53) where n+1 loses precision, so preimage returns None
+query TT
+EXPLAIN SELECT * FROM test_data WHERE floor(float_val) = 9007199254740992;
+----
+logical_plan
+01)Filter: floor(test_data.float_val) = Float64(9007199254740992)
+02)--TableScan: test_data projection=[id, float_val, int_val, decimal_val]
+
+# Data correctness: floor(col) = 2^53 returns no rows (no value in test_data has floor exactly 2^53)
+query I rowsort
+SELECT id FROM test_data WHERE floor(float_val) = 9007199254740992;
+----
+
 ##########
 ## Other Comparison Operators
 ##
