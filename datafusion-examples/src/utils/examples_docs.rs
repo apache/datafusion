@@ -395,7 +395,7 @@ pub fn parse_main_rs_docs(path: &Path) -> Result<Vec<ExampleEntry>> {
     let mut seen_subcommands = HashSet::new();
 
     for (line_no, raw_line) in content.lines().enumerate() {
-        let line = raw_line.trim_start();
+        let line = raw_line.trim();
 
         // Try parsing subcommand, excluding `all` because it's not used in README
         if let Ok((_, sub)) = parse_subcommand_line(line) {
@@ -437,10 +437,10 @@ pub fn parse_main_rs_docs(path: &Path) -> Result<Vec<ExampleEntry>> {
         }
 
         // If a non-blank doc line interrupts a pending subcommand, reset the state
-        if let ParserState::SeenSubcommand(_) = state {
-            if is_non_blank_doc_line(line) {
-                state = ParserState::Idle;
-            }
+        if let ParserState::SeenSubcommand(_) = state
+            && is_non_blank_doc_line(line)
+        {
+            state = ParserState::Idle;
         }
     }
 
