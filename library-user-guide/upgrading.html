@@ -519,6 +519,76 @@ literals must initialize this field.</p>
 </div>
 <p>See <a class="reference external" href="https://docs.rs/datafusion-expr/latest/datafusion_expr/simplify/struct.SimplifyContext.html"><code class="docutils literal notranslate"><span class="pre">SimplifyContext</span></code> documentation</a> for more details.</p>
 </section>
+<section id="struct-casting-now-requires-field-name-overlap">
+<h3>Struct Casting Now Requires Field Name Overlap<a class="headerlink" href="#struct-casting-now-requires-field-name-overlap" title="Link to this heading">#</a></h3>
+<p>DataFusion’s struct casting mechanism previously allowed casting between structs with differing field names if the field counts matched. This “positional fallback” behavior could silently misalign fields and cause data corruption.</p>
+<p><strong>Breaking Change:</strong></p>
+<p>Starting with DataFusion 53.0.0, struct casts now require <strong>at least one overlapping field name</strong> between the source and target structs. Casts without field name overlap are rejected at plan time with a clear error message.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Applications that cast between structs with no overlapping field names</p></li>
+<li><p>Queries that rely on positional struct field mapping (e.g., casting <code class="docutils literal notranslate"><span class="pre">struct(x,</span> <span class="pre">y)</span></code> to <code class="docutils literal notranslate"><span class="pre">struct(a,</span> <span class="pre">b)</span></code> based solely on position)</p></li>
+<li><p>Code that constructs or transforms struct columns programmatically</p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<p>If you encounter an error like:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>Cannot cast struct with 2 fields to 2 fields because there is no field name overlap
+</pre></div>
+</div>
+<p>You must explicitly rename or map fields to ensure at least one field name matches. Here are common patterns:</p>
+<p><strong>Example 1: Source and target field names already match (Name-based casting)</strong></p>
+<p><strong>Success case (field names align):</strong></p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- source_col has schema: STRUCT&lt;x INT, y INT&gt;</span>
+<span class="c1">-- Casting to the same field names succeeds (no-op or type validation only)</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="k">CAST</span><span class="p">(</span><span class="n">source_col</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">STRUCT</span><span class="o">&lt;</span><span class="n">x</span><span class="w"> </span><span class="nb">INT</span><span class="p">,</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="nb">INT</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">table1</span><span class="p">;</span>
+</pre></div>
+</div>
+<p><strong>Example 2: Source and target field names differ (Migration scenario)</strong></p>
+<p><strong>What fails now (no field name overlap):</strong></p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- source_col has schema: STRUCT&lt;a INT, b INT&gt;</span>
+<span class="c1">-- This FAILS because there is no field name overlap:</span>
+<span class="c1">-- ❌ SELECT CAST(source_col AS STRUCT&lt;x INT, y INT&gt;) FROM table1;</span>
+<span class="c1">-- Error: Cannot cast struct with 2 fields to 2 fields because there is no field name overlap</span>
+</pre></div>
+</div>
+<p><strong>Migration options (must align names):</strong></p>
+<p><strong>Option A: Use struct constructor for explicit field mapping</strong></p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- source_col has schema: STRUCT&lt;a INT, b INT&gt;</span>
+<span class="c1">-- Use STRUCT_CONSTRUCT with explicit field names</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="n">STRUCT_CONSTRUCT</span><span class="p">(</span>
+<span class="w">    </span><span class="s1">&#39;x&#39;</span><span class="p">,</span><span class="w"> </span><span class="n">source_col</span><span class="p">.</span><span class="n">a</span><span class="p">,</span>
+<span class="w">    </span><span class="s1">&#39;y&#39;</span><span class="p">,</span><span class="w"> </span><span class="n">source_col</span><span class="p">.</span><span class="n">b</span>
+<span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">renamed_struct</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">table1</span><span class="p">;</span>
+</pre></div>
+</div>
+<p><strong>Option B: Rename in the cast target to match source names</strong></p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- source_col has schema: STRUCT&lt;a INT, b INT&gt;</span>
+<span class="c1">-- Cast to target with matching field names</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="k">CAST</span><span class="p">(</span><span class="n">source_col</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">STRUCT</span><span class="o">&lt;</span><span class="n">a</span><span class="w"> </span><span class="nb">INT</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="nb">INT</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">table1</span><span class="p">;</span>
+</pre></div>
+</div>
+<p><strong>Example 3: Using struct constructors in Rust API</strong></p>
+<p>If you need to map fields programmatically, build the target struct explicitly:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Build the target struct with explicit field names</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">target_struct_type</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DataType</span><span class="p">::</span><span class="n">Struct</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span>
+<span class="w">    </span><span class="n">FieldRef</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="s">&quot;x&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">DataType</span><span class="p">::</span><span class="n">Int32</span><span class="p">),</span>
+<span class="w">    </span><span class="n">FieldRef</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="s">&quot;y&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">DataType</span><span class="p">::</span><span class="n">Utf8</span><span class="p">),</span>
+<span class="p">]);</span>
+
+<span class="c1">// Use struct constructors rather than casting for field mapping</span>
+<span class="c1">// This makes the field mapping explicit and unambiguous</span>
+<span class="c1">// Use struct builders or row constructors that preserve your mapping logic</span>
+</pre></div>
+</div>
+<p><strong>Why this change:</strong></p>
+<ol class="arabic simple">
+<li><p><strong>Safety:</strong> Field names are now the primary contract for struct compatibility</p></li>
+<li><p><strong>Explicitness:</strong> Prevents silent data misalignment caused by positional assumptions</p></li>
+<li><p><strong>Consistency:</strong> Matches DuckDB’s behavior and aligns with other SQL engines that enforce name-based matching</p></li>
+<li><p><strong>Debuggability:</strong> Errors now appear at plan time rather than as silent data corruption</p></li>
+</ol>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/19841">Issue #19841</a> and <a class="reference external" href="https://github.com/apache/datafusion/pull/19955">PR #19955</a> for more details.</p>
+</section>
 <section id="filterexec-builder-methods-deprecated">
 <h3><code class="docutils literal notranslate"><span class="pre">FilterExec</span></code> builder methods deprecated<a class="headerlink" href="#filterexec-builder-methods-deprecated" title="Link to this heading">#</a></h3>
 <p>The following methods on <code class="docutils literal notranslate"><span class="pre">FilterExec</span></code> have been deprecated in favor of using <code class="docutils literal notranslate"><span class="pre">FilterExecBuilder</span></code>:</p>
@@ -2339,6 +2409,7 @@ take care of constructing the <code class="docutils literal notranslate"><span c
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-53-0-0">DataFusion <code class="docutils literal notranslate"><span class="pre">53.0.0</span></code></a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#filesinkconfig-adds-file-output-mode"><code class="docutils literal notranslate"><span class="pre">FileSinkConfig</span></code> adds <code class="docutils literal notranslate"><span class="pre">file_output_mode</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#simplifyinfo-trait-removed-simplifycontext-now-uses-builder-style-api"><code class="docutils literal notranslate"><span class="pre">SimplifyInfo</span></code> trait removed, <code class="docutils literal notranslate"><span class="pre">SimplifyContext</span></code> now uses builder-style API</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#struct-casting-now-requires-field-name-overlap">Struct Casting Now Requires Field Name Overlap</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#filterexec-builder-methods-deprecated"><code class="docutils literal notranslate"><span class="pre">FilterExec</span></code> builder methods deprecated</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#protobuf-conversion-trait-added">Protobuf conversion trait added</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#generate-series-and-range-table-functions-changed"><code class="docutils literal notranslate"><span class="pre">generate_series</span></code> and <code class="docutils literal notranslate"><span class="pre">range</span></code> table functions changed</a></li>
