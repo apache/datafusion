@@ -2474,6 +2474,7 @@ name = "datafusion-physical-plan"
 version = "53.0.0"
 dependencies = [
  "arrow",
+ "arrow-data",
  "arrow-ord",
  "arrow-schema",
  "async-trait",
