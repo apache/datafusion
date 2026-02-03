@@ -1,0 +1,71 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+## Aggregate Rewrite With Constant Optimizer Tests
+## Tests for the optimizer rule that rewrites SUM(col ± constant) to SUM(col) ± constant * COUNT(*)
+##########
+
+# Setup test table
+statement ok
+CREATE TABLE test_table (
+    a INT,
+    b INT,
+    c INT
+) AS VALUES
+    (1, 10, 100),
+    (2, 20, 200),
+    (3, 30, 300),
+    (4, 40, 400),
+    (5, 50, 500);
+
+# Test: Multiple SUM expressions with constants should be rewritten
+# This query should be optimized to compute SUM(a) and COUNT(a) once,
+# then derive SUM(a+1), SUM(a+2), SUM(a+3) from those base aggregates
+query TT
+EXPLAIN SELECT 
+    SUM(a) as sum_a, 
+    SUM(a + 1) as sum_a_plus_1, 
+    SUM(a + 2) as sum_a_plus_2, 
+    SUM(a + 3) as sum_a_plus_3 
+FROM test_table;
+----
+logical_plan
+01)Projection: sum(test_table.a) AS sum_a, sum(test_table.a) + count(test_table.a) AS sum_a_plus_1, sum(test_table.a) + Int64(2) * count(test_table.a) AS sum_a_plus_2, sum(test_table.a) + Int64(3) * count(test_table.a) AS sum_a_plus_3
+02)--Aggregate: groupBy=[[]], aggr=[[sum(__common_expr_1 AS test_table.a), count(__common_expr_1 AS test_table.a)]]
+03)----Projection: CAST(test_table.a AS Int64) AS __common_expr_1
+04)------TableScan: test_table projection=[a]
+physical_plan
+01)ProjectionExec: expr=[sum(test_table.a)@0 as sum_a, sum(test_table.a)@0 + count(test_table.a)@1 as sum_a_plus_1, sum(test_table.a)@0 + 2 * count(test_table.a)@1 as sum_a_plus_2, sum(test_table.a)@0 + 3 * count(test_table.a)@1 as sum_a_plus_3]
+02)--AggregateExec: mode=Single, gby=[], aggr=[sum(test_table.a), count(test_table.a)]
+03)----ProjectionExec: expr=[CAST(a@0 AS Int64) as __common_expr_1]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Verify the query produces correct results
+query IIII
+SELECT 
+    SUM(a) as sum_a, 
+    SUM(a + 1) as sum_a_plus_1, 
+    SUM(a + 2) as sum_a_plus_2, 
+    SUM(a + 3) as sum_a_plus_3 
+FROM test_table;
+----
+15 20 25 30
+
+# Cleanup
+statement ok
+DROP TABLE test_table;
