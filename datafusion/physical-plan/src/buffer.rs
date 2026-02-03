@@ -50,6 +50,8 @@ use std::task::{Context, Poll};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
+/// WARNING: EXPERIMENTAL
+///
 /// Decouples production and consumption of record batches with an internal queue per partition,
 /// eagerly filling up the capacity of the queues even before any message is requested.
 ///
