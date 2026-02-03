@@ -34,10 +34,7 @@
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Schema};
-use datafusion_common::{
-    Result, ScalarValue,
-    tree_node::{Transformed, TreeNode},
-};
+use datafusion_common::{Result, ScalarValue, tree_node::Transformed};
 use datafusion_expr::Operator;
 use datafusion_expr_common::casts::try_cast_literal_to_type;
 
@@ -49,14 +46,12 @@ pub(crate) fn unwrap_cast_in_comparison(
     expr: Arc<dyn PhysicalExpr>,
     schema: &Schema,
 ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
-    expr.transform_down(|e| {
-        if let Some(binary) = e.as_any().downcast_ref::<BinaryExpr>()
-            && let Some(unwrapped) = try_unwrap_cast_binary(binary, schema)?
-        {
-            return Ok(Transformed::yes(unwrapped));
-        }
-        Ok(Transformed::no(e))
-    })
+    if let Some(binary) = expr.as_any().downcast_ref::<BinaryExpr>()
+        && let Some(unwrapped) = try_unwrap_cast_binary(binary, schema)?
+    {
+        return Ok(Transformed::yes(unwrapped));
+    }
+    Ok(Transformed::no(expr))
 }
 
 /// Try to unwrap casts in binary expressions
@@ -144,7 +139,7 @@ mod tests {
     use super::*;
     use crate::expressions::{col, lit};
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::ScalarValue;
+    use datafusion_common::{ScalarValue, tree_node::TreeNode};
     use datafusion_expr::Operator;
 
     /// Check if an expression is a cast expression
@@ -484,8 +479,10 @@ mod tests {
 
         let and_expr = Arc::new(BinaryExpr::new(compare1, Operator::And, compare2));
 
-        // Apply unwrap cast optimization
-        let result = unwrap_cast_in_comparison(and_expr, &schema).unwrap();
+        // Apply unwrap cast optimization recursively
+        let result = (and_expr as Arc<dyn PhysicalExpr>)
+            .transform_down(|node| unwrap_cast_in_comparison(node, &schema))
+            .unwrap();
 
         // Should be transformed
         assert!(result.transformed);
@@ -602,8 +599,10 @@ mod tests {
         // Create AND expression
         let and_expr = Arc::new(BinaryExpr::new(c1_binary, Operator::And, c2_binary));
 
-        // Apply unwrap cast optimization
-        let result = unwrap_cast_in_comparison(and_expr, &schema).unwrap();
+        // Apply unwrap cast optimization recursively
+        let result = (and_expr as Arc<dyn PhysicalExpr>)
+            .transform_down(|node| unwrap_cast_in_comparison(node, &schema))
+            .unwrap();
 
         // Should be transformed
         assert!(result.transformed);
