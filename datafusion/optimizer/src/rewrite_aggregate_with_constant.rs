@@ -22,7 +22,7 @@ use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::{ExprSchema, Result, ScalarValue};
-use datafusion_expr::expr::{AggregateFunctionParams, NullTreatment, Sort};
+use datafusion_expr::expr::{AggregateFunctionParams, Sort};
 use datafusion_expr::{
     Aggregate, BinaryExpr, Expr, LogicalPlan, LogicalPlanBuilder, Operator, binary_expr,
     col, lit,
@@ -103,10 +103,6 @@ struct SumWithConstant {
     original_index: usize,
     /// ORDER BY clause if present
     order_by: Vec<Sort>,
-    /// NULL treatment
-    _null_treatment: Option<NullTreatment>,
-    /// Whether the base column is nullable
-    _is_nullable: bool,
 }
 
 /// Information about groups of SUMs that can be rewritten
@@ -117,7 +113,7 @@ fn analyze_aggregate(aggregate: &Aggregate) -> Result<RewriteGroups> {
     let mut groups: RewriteGroups = HashMap::new();
 
     for (idx, expr) in aggregate.aggr_expr.iter().enumerate() {
-        if let Some(sum_info) = extract_sum_with_constant(expr, idx, aggregate)? {
+        if let Some(sum_info) = extract_sum_with_constant(expr, idx)? {
             let key = sum_info.base_expr.schema_name().to_string();
             groups.entry(key).or_default().push(sum_info);
         }
@@ -130,11 +126,7 @@ fn analyze_aggregate(aggregate: &Aggregate) -> Result<RewriteGroups> {
 }
 
 /// Extract SUM(base_expr ± constant) pattern from an expression
-fn extract_sum_with_constant(
-    expr: &Expr,
-    idx: usize,
-    aggregate: &Aggregate,
-) -> Result<Option<SumWithConstant>> {
+fn extract_sum_with_constant(expr: &Expr, idx: usize) -> Result<Option<SumWithConstant>> {
     match expr {
         Expr::AggregateFunction(agg_fn) => {
             // Must be SUM function
@@ -147,7 +139,7 @@ fn extract_sum_with_constant(
                 distinct,
                 filter,
                 order_by,
-                null_treatment,
+                null_treatment: _,
             } = &agg_fn.params;
 
             // Skip if DISTINCT or FILTER present
@@ -163,42 +155,34 @@ fn extract_sum_with_constant(
             let arg = &args[0];
 
             // Try to match: base_expr +/- constant
-            if let Expr::BinaryExpr(BinaryExpr { left, op, right }) = arg {
-                if matches!(op, Operator::Plus | Operator::Minus) {
-                    // Check if right side is a literal constant
-                    if let Expr::Literal(constant, _) = right.as_ref() {
-                        // Check if it's a numeric constant
-                        if is_numeric_constant(constant) {
-                            let is_nullable = is_expr_nullable(left, aggregate)?;
+            if let Expr::BinaryExpr(BinaryExpr { left, op, right }) = arg
+                && matches!(op, Operator::Plus | Operator::Minus)
+            {
+                // Check if right side is a literal constant
+                if let Expr::Literal(constant, _) = right.as_ref()
+                    && is_numeric_constant(constant)
+                {
+                    return Ok(Some(SumWithConstant {
+                        base_expr: (**left).clone(),
+                        constant: constant.clone(),
+                        operator: *op,
+                        original_index: idx,
+                        order_by: order_by.clone(),
+                    }));
+                }
 
-                            return Ok(Some(SumWithConstant {
-                                base_expr: (**left).clone(),
-                                constant: constant.clone(),
-                                operator: *op,
-                                original_index: idx,
-                                order_by: order_by.clone(),
-                                _null_treatment: *null_treatment,
-                                _is_nullable: is_nullable,
-                            }));
-                        }
-                    }
-
-                    // Also check left side (for patterns like: constant + base_expr)
-                    if let Expr::Literal(constant, _) = left.as_ref() {
-                        if is_numeric_constant(constant) && *op == Operator::Plus {
-                            let is_nullable = is_expr_nullable(right, aggregate)?;
-
-                            return Ok(Some(SumWithConstant {
-                                base_expr: (**right).clone(),
-                                constant: constant.clone(),
-                                operator: Operator::Plus,
-                                original_index: idx,
-                                order_by: order_by.clone(),
-                                _null_treatment: *null_treatment,
-                                _is_nullable: is_nullable,
-                            }));
-                        }
-                    }
+                // Also check left side (for patterns like: constant + base_expr)
+                if let Expr::Literal(constant, _) = left.as_ref()
+                    && is_numeric_constant(constant)
+                    && *op == Operator::Plus
+                {
+                    return Ok(Some(SumWithConstant {
+                        base_expr: (**right).clone(),
+                        constant: constant.clone(),
+                        operator: Operator::Plus,
+                        original_index: idx,
+                        order_by: order_by.clone(),
+                    }));
                 }
             }
 
@@ -225,20 +209,6 @@ fn is_numeric_constant(value: &ScalarValue) -> bool {
             | ScalarValue::Decimal128(_, _, _)
             | ScalarValue::Decimal256(_, _, _)
     )
-}
-
-/// Check if an expression references a nullable column
-fn is_expr_nullable(expr: &Expr, aggregate: &Aggregate) -> Result<bool> {
-    // For simple column references, check the input schema
-    if let Expr::Column(col_ref) = expr {
-        let input_schema = aggregate.input.schema();
-        if let Ok(field) = input_schema.field_from_column(col_ref) {
-            return Ok(field.is_nullable());
-        }
-    }
-
-    // For more complex expressions, assume nullable to be safe
-    Ok(true)
 }
 
 /// Check if an expression is a plain SUM(base_expr) that matches one of our rewrite groups
@@ -281,8 +251,7 @@ fn transform_aggregate(
     let mut sum_names: HashMap<String, String> = HashMap::new();
     let mut count_names: HashMap<String, String> = HashMap::new();
 
-    #[allow(clippy::needless_borrows_for_generic_args)]
-    for (base_key, sums) in rewrite_groups.iter() {
+    for (base_key, sums) in rewrite_groups {
         // Find a representative SUM (prefer one with ORDER BY if any)
         let representative = sums
             .iter()
