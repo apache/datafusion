@@ -1123,6 +1123,7 @@ enum PartitionMode {
   COLLECT_LEFT = 0;
   PARTITIONED = 1;
   AUTO = 2;
+  LAZY_PARTITIONED = 3;
 }
 
 message HashJoinExecNode {

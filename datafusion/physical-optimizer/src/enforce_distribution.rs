@@ -327,6 +327,34 @@ pub fn adjust_input_keys_ordering(
                 )
                 .map(Transformed::yes);
             }
+            PartitionMode::LazyPartitioned => {
+                // LazyPartitioned mode uses the same key reordering as Partitioned,
+                // but with LazyPartitioned mode preserved
+                let join_constructor = |new_conditions: (
+                    Vec<(PhysicalExprRef, PhysicalExprRef)>,
+                    Vec<SortOptions>,
+                )| {
+                    HashJoinExec::try_new(
+                        Arc::clone(left),
+                        Arc::clone(right),
+                        new_conditions.0,
+                        filter.clone(),
+                        join_type,
+                        projection.clone(),
+                        PartitionMode::LazyPartitioned,
+                        *null_equality,
+                        *null_aware,
+                    )
+                    .map(|e| Arc::new(e) as _)
+                };
+                return reorder_partitioned_join_keys(
+                    requirements,
+                    on,
+                    &[],
+                    &join_constructor,
+                )
+                .map(Transformed::yes);
+            }
             PartitionMode::CollectLeft => {
                 // Push down requirements to the right side
                 requirements.children[1].data = match join_type {
@@ -624,7 +652,10 @@ pub fn reorder_join_keys_to_inputs(
         ..
     }) = plan_any.downcast_ref::<HashJoinExec>()
     {
-        if matches!(mode, PartitionMode::Partitioned) {
+        if matches!(
+            mode,
+            PartitionMode::Partitioned | PartitionMode::LazyPartitioned
+        ) {
             let (join_keys, positions) = reorder_current_join_keys(
                 extract_join_keys(on),
                 Some(left.output_partitioning()),
@@ -645,7 +676,7 @@ pub fn reorder_join_keys_to_inputs(
                     filter.clone(),
                     join_type,
                     projection.clone(),
-                    PartitionMode::Partitioned,
+                    *mode,
                     *null_equality,
                     *null_aware,
                 )?));
@@ -1257,6 +1288,10 @@ pub fn ensure_distribution(
     //
     // CollectLeft/CollectRight modes are safe because one side is collected
     // to a single partition which eliminates partition-to-partition mapping.
+    //
+    // LazyPartitioned mode is also safe from this issue because the build side
+    // is not pre-partitioned; instead, rows are filtered locally during hash
+    // table construction. Only the probe side is hash-partitioned.
     let is_partitioned_join = plan
         .as_any()
         .downcast_ref::<HashJoinExec>()

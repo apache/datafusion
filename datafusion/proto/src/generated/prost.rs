@@ -2342,6 +2342,7 @@ pub enum PartitionMode {
     CollectLeft = 0,
     Partitioned = 1,
     Auto = 2,
+    LazyPartitioned = 3,
 }
 impl PartitionMode {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2353,6 +2354,7 @@ impl PartitionMode {
             Self::CollectLeft => "COLLECT_LEFT",
             Self::Partitioned => "PARTITIONED",
             Self::Auto => "AUTO",
+            Self::LazyPartitioned => "LAZY_PARTITIONED",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2361,6 +2363,7 @@ impl PartitionMode {
             "COLLECT_LEFT" => Some(Self::CollectLeft),
             "PARTITIONED" => Some(Self::Partitioned),
             "AUTO" => Some(Self::Auto),
+            "LAZY_PARTITIONED" => Some(Self::LazyPartitioned),
             _ => None,
         }
     }
