@@ -87,7 +87,7 @@ message ListingTableScanNode {
   TableReference table_name = 14;
   repeated string paths = 2;
   string file_extension = 3;
-  ProjectionColumns projection = 4;
+  ProjectionColumns projection = 4;  // Deprecated: use projection_exprs instead
   datafusion_common.Schema schema = 5;
   repeated LogicalExprNode filters = 6;
   repeated PartitionColumn table_partition_cols = 7;
@@ -101,6 +101,7 @@ message ListingTableScanNode {
     datafusion_common.ArrowFormat arrow = 16;
   }
   repeated SortExprNodeCollection file_sort_order = 13;
+  repeated LogicalExprNode projection_exprs = 17;  // Full projection expressions
 }
 
 message ViewTableScanNode {
@@ -108,18 +109,20 @@ message ViewTableScanNode {
   TableReference table_name = 6;
   LogicalPlanNode input = 2;
   datafusion_common.Schema schema = 3;
-  ProjectionColumns projection = 4;
+  ProjectionColumns projection = 4;  // Deprecated: use projection_exprs instead
   string definition = 5;
+  repeated LogicalExprNode projection_exprs = 7;  // Full projection expressions
 }
 
 // Logical Plan to Scan a CustomTableProvider registered at runtime
 message CustomTableScanNode {
   reserved 1; // was string table_name
   TableReference table_name = 6;
-  ProjectionColumns projection = 2;
+  ProjectionColumns projection = 2;  // Deprecated: use projection_exprs instead
   datafusion_common.Schema schema = 3;
   repeated LogicalExprNode filters = 4;
   bytes custom_table_data = 5;
+  repeated LogicalExprNode projection_exprs = 7;  // Full projection expressions
 }
 
 message ProjectionNode {

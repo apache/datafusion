@@ -22,9 +22,7 @@ create table t(a int, b string) as values (1, 'a'), (2, NULL), (NULL, 'c');
 query TT
 explain select a from t where a BETWEEN 3 and 3
 ----
-logical_plan
-01)Filter: t.a = Int32(3)
-02)--TableScan: t projection=[a]
+logical_plan TableScan: t projection=[a], unsupported_filters=[t.a = Int32(3)]
 physical_plan
 01)FilterExec: a@0 = 3
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
@@ -33,9 +31,7 @@ physical_plan
 query TT
 explain select b from t where b ~ '.*'
 ----
-logical_plan
-01)Filter: t.b ~ Utf8View(".*")
-02)--TableScan: t projection=[b]
+logical_plan TableScan: t projection=[b], unsupported_filters=[t.b ~ Utf8View(".*")]
 physical_plan
 01)FilterExec: b@0 ~ .*
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
@@ -43,9 +39,7 @@ physical_plan
 query TT
 explain select b from t where b !~ '.*'
 ----
-logical_plan
-01)Filter: t.b !~ Utf8View(".*")
-02)--TableScan: t projection=[b]
+logical_plan TableScan: t projection=[b], unsupported_filters=[t.b !~ Utf8View(".*")]
 physical_plan
 01)FilterExec: b@0 !~ .*
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
@@ -63,9 +57,7 @@ select b from t where b !~ '.*'
 query TT
 explain select * from t where a = a;
 ----
-logical_plan
-01)Filter: t.a IS NOT NULL OR Boolean(NULL)
-02)--TableScan: t projection=[a, b]
+logical_plan TableScan: t projection=[a, b], unsupported_filters=[t.a IS NOT NULL OR Boolean(NULL)]
 physical_plan
 01)FilterExec: a@0 IS NOT NULL OR NULL
 02)--DataSourceExec: partitions=1, partition_sizes=[1]

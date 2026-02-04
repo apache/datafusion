@@ -1304,6 +1304,24 @@ pub fn collect_subquery_cols(
     })
 }
 
+/// Compute projection indices from expressions, returning None if any expression
+/// is not a simple column reference or cannot be resolved in the schema.
+pub fn projection_indices_from_exprs(
+    exprs: &[Expr],
+    schema: &Schema,
+) -> Option<Vec<usize>> {
+    exprs
+        .iter()
+        .map(|expr| {
+            if let Expr::Column(col) = expr {
+                schema.index_of(col.name()).ok()
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -125,19 +125,13 @@ logical_plan
 05)--------Union
 06)----------Projection: Utf8("store") AS channel, sales.brand, sum(sales.amount) AS total
 07)------------Aggregate: groupBy=[[sales.brand]], aggr=[[sum(CAST(sales.amount AS Int64))]]
-08)--------------Projection: sales.brand, sales.amount
-09)----------------Filter: sales.channel = Utf8View("store")
-10)------------------TableScan: sales projection=[channel, brand, amount], partial_filters=[sales.channel = Utf8View("store")]
-11)----------Projection: Utf8("web") AS channel, sales.brand, sum(sales.amount) AS total
-12)------------Aggregate: groupBy=[[sales.brand]], aggr=[[sum(CAST(sales.amount AS Int64))]]
-13)--------------Projection: sales.brand, sales.amount
-14)----------------Filter: sales.channel = Utf8View("web")
-15)------------------TableScan: sales projection=[channel, brand, amount], partial_filters=[sales.channel = Utf8View("web")]
-16)----------Projection: Utf8("catalog") AS channel, sales.brand, sum(sales.amount) AS total
-17)------------Aggregate: groupBy=[[sales.brand]], aggr=[[sum(CAST(sales.amount AS Int64))]]
-18)--------------Projection: sales.brand, sales.amount
-19)----------------Filter: sales.channel = Utf8View("catalog")
-20)------------------TableScan: sales projection=[channel, brand, amount], partial_filters=[sales.channel = Utf8View("catalog")]
+08)--------------TableScan: sales projection=[brand, amount], partial_filters=[sales.channel = Utf8View("store")]
+09)----------Projection: Utf8("web") AS channel, sales.brand, sum(sales.amount) AS total
+10)------------Aggregate: groupBy=[[sales.brand]], aggr=[[sum(CAST(sales.amount AS Int64))]]
+11)--------------TableScan: sales projection=[brand, amount], partial_filters=[sales.channel = Utf8View("web")]
+12)----------Projection: Utf8("catalog") AS channel, sales.brand, sum(sales.amount) AS total
+13)------------Aggregate: groupBy=[[sales.brand]], aggr=[[sum(CAST(sales.amount AS Int64))]]
+14)--------------TableScan: sales projection=[brand, amount], partial_filters=[sales.channel = Utf8View("catalog")]
 physical_plan
 01)SortPreservingMergeExec: [channel@0 ASC, brand@1 ASC]
 02)--SortExec: expr=[channel@0 ASC, brand@1 ASC], preserve_partitioning=[true]

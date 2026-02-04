@@ -57,8 +57,7 @@ pub async fn optimizer_rule() -> Result<()> {
     // has been rewritten to `my_eq`
     assert_eq!(
         plan.display_indent().to_string(),
-        "Filter: my_eq(person.age, Int32(22))\
-        \n  TableScan: person projection=[name, age]"
+        "TableScan: person projection=[name, age], unsupported_filters=[my_eq(person.age, Int32(22))]"
     );
 
     // The query below doesn't respect a filter `where age = 22` because

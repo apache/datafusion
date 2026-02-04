@@ -74,30 +74,24 @@ logical_plan
 09)----------------Inner Join: partsupp.ps_suppkey = supplier.s_suppkey
 10)------------------Projection: part.p_partkey, part.p_mfgr, partsupp.ps_suppkey, partsupp.ps_supplycost
 11)--------------------Inner Join: part.p_partkey = partsupp.ps_partkey
-12)----------------------Projection: part.p_partkey, part.p_mfgr
-13)------------------------Filter: part.p_size = Int32(15) AND part.p_type LIKE Utf8View("%BRASS")
-14)--------------------------TableScan: part projection=[p_partkey, p_mfgr, p_type, p_size], partial_filters=[part.p_size = Int32(15), part.p_type LIKE Utf8View("%BRASS")]
-15)----------------------TableScan: partsupp projection=[ps_partkey, ps_suppkey, ps_supplycost]
-16)------------------TableScan: supplier projection=[s_suppkey, s_name, s_address, s_nationkey, s_phone, s_acctbal, s_comment]
-17)--------------TableScan: nation projection=[n_nationkey, n_name, n_regionkey]
-18)----------Projection: region.r_regionkey
-19)------------Filter: region.r_name = Utf8View("EUROPE")
-20)--------------TableScan: region projection=[r_regionkey, r_name], partial_filters=[region.r_name = Utf8View("EUROPE")]
-21)------SubqueryAlias: __scalar_sq_1
-22)--------Projection: min(partsupp.ps_supplycost), partsupp.ps_partkey
-23)----------Aggregate: groupBy=[[partsupp.ps_partkey]], aggr=[[min(partsupp.ps_supplycost)]]
-24)------------Projection: partsupp.ps_partkey, partsupp.ps_supplycost
-25)--------------Inner Join: nation.n_regionkey = region.r_regionkey
-26)----------------Projection: partsupp.ps_partkey, partsupp.ps_supplycost, nation.n_regionkey
-27)------------------Inner Join: supplier.s_nationkey = nation.n_nationkey
-28)--------------------Projection: partsupp.ps_partkey, partsupp.ps_supplycost, supplier.s_nationkey
-29)----------------------Inner Join: partsupp.ps_suppkey = supplier.s_suppkey
-30)------------------------TableScan: partsupp projection=[ps_partkey, ps_suppkey, ps_supplycost]
-31)------------------------TableScan: supplier projection=[s_suppkey, s_nationkey]
-32)--------------------TableScan: nation projection=[n_nationkey, n_regionkey]
-33)----------------Projection: region.r_regionkey
-34)------------------Filter: region.r_name = Utf8View("EUROPE")
-35)--------------------TableScan: region projection=[r_regionkey, r_name], partial_filters=[region.r_name = Utf8View("EUROPE")]
+12)----------------------TableScan: part projection=[p_partkey, p_mfgr], partial_filters=[part.p_size = Int32(15), part.p_type LIKE Utf8View("%BRASS")]
+13)----------------------TableScan: partsupp projection=[ps_partkey, ps_suppkey, ps_supplycost]
+14)------------------TableScan: supplier projection=[s_suppkey, s_name, s_address, s_nationkey, s_phone, s_acctbal, s_comment]
+15)--------------TableScan: nation projection=[n_nationkey, n_name, n_regionkey]
+16)----------TableScan: region projection=[r_regionkey], partial_filters=[region.r_name = Utf8View("EUROPE")]
+17)------SubqueryAlias: __scalar_sq_1
+18)--------Projection: min(partsupp.ps_supplycost), partsupp.ps_partkey
+19)----------Aggregate: groupBy=[[partsupp.ps_partkey]], aggr=[[min(partsupp.ps_supplycost)]]
+20)------------Projection: partsupp.ps_partkey, partsupp.ps_supplycost
+21)--------------Inner Join: nation.n_regionkey = region.r_regionkey
+22)----------------Projection: partsupp.ps_partkey, partsupp.ps_supplycost, nation.n_regionkey
+23)------------------Inner Join: supplier.s_nationkey = nation.n_nationkey
+24)--------------------Projection: partsupp.ps_partkey, partsupp.ps_supplycost, supplier.s_nationkey
+25)----------------------Inner Join: partsupp.ps_suppkey = supplier.s_suppkey
+26)------------------------TableScan: partsupp projection=[ps_partkey, ps_suppkey, ps_supplycost]
+27)------------------------TableScan: supplier projection=[s_suppkey, s_nationkey]
+28)--------------------TableScan: nation projection=[n_nationkey, n_regionkey]
+29)----------------TableScan: region projection=[r_regionkey], partial_filters=[region.r_name = Utf8View("EUROPE")]
 physical_plan
 01)SortPreservingMergeExec: [s_acctbal@0 DESC, n_name@2 ASC NULLS LAST, s_name@1 ASC NULLS LAST, p_partkey@3 ASC NULLS LAST], fetch=10
 02)--SortExec: TopK(fetch=10), expr=[s_acctbal@0 DESC, n_name@2 ASC NULLS LAST, s_name@1 ASC NULLS LAST, p_partkey@3 ASC NULLS LAST], preserve_partitioning=[true]

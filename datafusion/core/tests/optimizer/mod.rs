@@ -77,11 +77,7 @@ fn timestamp_nano_ts_none_predicates() -> Result<()> {
     let plan = test_sql(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: test.col_int32
-      Filter: test.col_ts_nano_none < TimestampNanosecond(1666612093000000000, None)
-        TableScan: test projection=[col_int32, col_ts_nano_none]
-    "
+        @"TableScan: test projection=[col_int32], unsupported_filters=[test.col_ts_nano_none < TimestampNanosecond(1666612093000000000, None)]"
     );
     Ok(())
 }
@@ -97,11 +93,7 @@ fn timestamp_nano_ts_utc_predicates() {
     let plan = test_sql(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r#"
-    Projection: test.col_int32
-      Filter: test.col_ts_nano_utc < TimestampNanosecond(1666612093000000000, Some("+00:00"))
-        TableScan: test projection=[col_int32, col_ts_nano_utc]
-    "#
+        @r#"TableScan: test projection=[col_int32], unsupported_filters=[test.col_ts_nano_utc < TimestampNanosecond(1666612093000000000, Some("+00:00"))]"#
     );
 }
 

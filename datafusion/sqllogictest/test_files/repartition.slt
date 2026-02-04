@@ -115,8 +115,7 @@ EXPLAIN SELECT c1, c2, c3 FROM sink_table WHERE c3 > 0 LIMIT 5;
 ----
 logical_plan
 01)Limit: skip=0, fetch=5
-02)--Filter: sink_table.c3 > Int16(0)
-03)----TableScan: sink_table projection=[c1, c2, c3]
+02)--TableScan: sink_table projection=[c1, c2, c3], unsupported_filters=[sink_table.c3 > Int16(0)], fetch=5
 physical_plan
 01)CoalescePartitionsExec: fetch=5
 02)--FilterExec: c3@2 > 0, fetch=5

@@ -59,17 +59,13 @@ logical_plan
 07)----------SubqueryAlias: revenue0
 08)------------Projection: lineitem.l_suppkey AS supplier_no, sum(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount) AS total_revenue
 09)--------------Aggregate: groupBy=[[lineitem.l_suppkey]], aggr=[[sum(lineitem.l_extendedprice * (Decimal128(Some(1),20,0) - lineitem.l_discount)) AS sum(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)]]
-10)----------------Projection: lineitem.l_suppkey, lineitem.l_extendedprice, lineitem.l_discount
-11)------------------Filter: lineitem.l_shipdate >= Date32("1996-01-01") AND lineitem.l_shipdate < Date32("1996-04-01")
-12)--------------------TableScan: lineitem projection=[l_suppkey, l_extendedprice, l_discount, l_shipdate], partial_filters=[lineitem.l_shipdate >= Date32("1996-01-01"), lineitem.l_shipdate < Date32("1996-04-01")]
-13)------SubqueryAlias: __scalar_sq_1
-14)--------Aggregate: groupBy=[[]], aggr=[[max(revenue0.total_revenue)]]
-15)----------SubqueryAlias: revenue0
-16)------------Projection: sum(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount) AS total_revenue
-17)--------------Aggregate: groupBy=[[lineitem.l_suppkey]], aggr=[[sum(lineitem.l_extendedprice * (Decimal128(Some(1),20,0) - lineitem.l_discount)) AS sum(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)]]
-18)----------------Projection: lineitem.l_suppkey, lineitem.l_extendedprice, lineitem.l_discount
-19)------------------Filter: lineitem.l_shipdate >= Date32("1996-01-01") AND lineitem.l_shipdate < Date32("1996-04-01")
-20)--------------------TableScan: lineitem projection=[l_suppkey, l_extendedprice, l_discount, l_shipdate], partial_filters=[lineitem.l_shipdate >= Date32("1996-01-01"), lineitem.l_shipdate < Date32("1996-04-01")]
+10)----------------TableScan: lineitem projection=[l_suppkey, l_extendedprice, l_discount], partial_filters=[lineitem.l_shipdate >= Date32("1996-01-01"), lineitem.l_shipdate < Date32("1996-04-01")]
+11)------SubqueryAlias: __scalar_sq_1
+12)--------Aggregate: groupBy=[[]], aggr=[[max(revenue0.total_revenue)]]
+13)----------SubqueryAlias: revenue0
+14)------------Projection: sum(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount) AS total_revenue
+15)--------------Aggregate: groupBy=[[lineitem.l_suppkey]], aggr=[[sum(lineitem.l_extendedprice * (Decimal128(Some(1),20,0) - lineitem.l_discount)) AS sum(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)]]
+16)----------------TableScan: lineitem projection=[l_suppkey, l_extendedprice, l_discount], partial_filters=[lineitem.l_shipdate >= Date32("1996-01-01"), lineitem.l_shipdate < Date32("1996-04-01")]
 physical_plan
 01)SortPreservingMergeExec: [s_suppkey@0 ASC NULLS LAST]
 02)--SortExec: expr=[s_suppkey@0 ASC NULLS LAST], preserve_partitioning=[true]

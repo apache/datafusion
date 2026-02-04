@@ -18,7 +18,7 @@
 //! Planner for [`LogicalPlan`] to [`ExecutionPlan`]
 
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::datasource::file_format::file_type_to_format;
@@ -84,7 +84,7 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
-use datafusion_expr::utils::split_conjunction;
+use datafusion_expr::utils::{conjunction, split_conjunction};
 use datafusion_expr::{
     Analyze, BinaryExpr, DescribeTable, DmlStatement, Explain, ExplainFormat, Extension,
     FetchType, Filter, JoinType, Operator, RecursiveQuery, SkipType, StringifiedPlan,
@@ -455,25 +455,8 @@ impl DefaultPhysicalPlanner {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let exec_node: Arc<dyn ExecutionPlan> = match node {
             // Leaves (no children)
-            LogicalPlan::TableScan(TableScan {
-                source,
-                projection,
-                filters,
-                fetch,
-                ..
-            }) => {
-                let source = source_as_provider(source)?;
-                // Remove all qualifiers from the scan as the provider
-                // doesn't know (nor should care) how the relation was
-                // referred to in the query
-                let filters = unnormalize_cols(filters.iter().cloned());
-                let filters_vec = filters.into_iter().collect::<Vec<_>>();
-                let opts = ScanArgs::default()
-                    .with_projection(projection.as_deref())
-                    .with_filters(Some(&filters_vec))
-                    .with_limit(*fetch);
-                let res = source.scan_with_args(session_state, opts).await?;
-                Arc::clone(res.plan())
+            LogicalPlan::TableScan(scan) => {
+                self.plan_table_scan(scan, session_state).await?
             }
             LogicalPlan::Values(Values { values, schema }) => {
                 let exprs = values
@@ -636,7 +619,13 @@ impl DefaultPhysicalPlanner {
                 if let Some(provider) =
                     target.as_any().downcast_ref::<DefaultTableSource>()
                 {
-                    let filters = extract_dml_filters(input)?;
+                    // Create a DFSchema with the table name as qualifier so we can
+                    // properly match qualified column references from the input plan
+                    let target_schema = DFSchema::try_from_qualified_schema(
+                        table_name.clone(),
+                        &target.schema(),
+                    )?;
+                    let filters = extract_dml_filters(input, &target_schema)?;
                     provider
                         .table_provider
                         .delete_from(session_state, filters)
@@ -662,9 +651,15 @@ impl DefaultPhysicalPlanner {
                 {
                     // For UPDATE, the assignments are encoded in the projection of input
                     // We pass the filters and let the provider handle the projection
-                    let filters = extract_dml_filters(input)?;
+                    // Create a DFSchema with the table name as qualifier so we can
+                    // properly match qualified column references from the input plan
+                    let target_schema = DFSchema::try_from_qualified_schema(
+                        table_name.clone(),
+                        &target.schema(),
+                    )?;
+                    let filters = extract_dml_filters(input, &target_schema)?;
                     // Extract assignments from the projection in input plan
-                    let assignments = extract_update_assignments(input)?;
+                    let assignments = extract_update_assignments(input, table_name)?;
                     provider
                         .table_provider
                         .update(session_state, assignments, filters)
@@ -974,57 +969,13 @@ impl DefaultPhysicalPlanner {
             }) => {
                 let physical_input = children.one()?;
                 let input_dfschema = input.schema();
-
-                let runtime_expr =
-                    self.create_physical_expr(predicate, input_dfschema, session_state)?;
-
-                let input_schema = input.schema();
-                let filter = match self.try_plan_async_exprs(
-                    input_schema.fields().len(),
-                    PlannedExprResult::Expr(vec![runtime_expr]),
-                    input_schema.as_arrow(),
-                )? {
-                    PlanAsyncExpr::Sync(PlannedExprResult::Expr(runtime_expr)) => {
-                        FilterExecBuilder::new(
-                            Arc::clone(&runtime_expr[0]),
-                            physical_input,
-                        )
-                        .with_batch_size(session_state.config().batch_size())
-                        .build()?
-                    }
-                    PlanAsyncExpr::Async(
-                        async_map,
-                        PlannedExprResult::Expr(runtime_expr),
-                    ) => {
-                        let async_exec = AsyncFuncExec::try_new(
-                            async_map.async_exprs,
-                            physical_input,
-                        )?;
-                        FilterExecBuilder::new(
-                            Arc::clone(&runtime_expr[0]),
-                            Arc::new(async_exec),
-                        )
-                        // project the output columns excluding the async functions
-                        // The async functions are always appended to the end of the schema.
-                        .apply_projection(Some(
-                            (0..input.schema().fields().len()).collect(),
-                        ))?
-                        .with_batch_size(session_state.config().batch_size())
-                        .build()?
-                    }
-                    _ => {
-                        return internal_err!(
-                            "Unexpected result from try_plan_async_exprs"
-                        );
-                    }
-                };
-
-                let selectivity = session_state
-                    .config()
-                    .options()
-                    .optimizer
-                    .default_filter_selectivity;
-                Arc::new(filter.with_default_selectivity(selectivity)?)
+                self.create_filter_exec(
+                    predicate,
+                    physical_input,
+                    input_dfschema,
+                    session_state,
+                    input_dfschema.fields().len(),
+                )?
             }
             LogicalPlan::Repartition(Repartition {
                 input,
@@ -1671,6 +1622,212 @@ impl DefaultPhysicalPlanner {
         Ok(exec_node)
     }
 
+    /// Plan a TableScan node, handling filter pushdown classification and
+    /// wrapping with FilterExec/ProjectionExec as needed.
+    async fn plan_table_scan(
+        &self,
+        scan: &TableScan,
+        session_state: &SessionState,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_expr::TableProviderFilterPushDown;
+
+        let provider = source_as_provider(&scan.source)?;
+        let source_schema = scan.source.schema();
+
+        // Remove all qualifiers from filters as the provider doesn't know
+        // (nor should care) how the relation was referred to in the query
+        let filters: Vec<Expr> = unnormalize_cols(scan.filters.iter().cloned());
+
+        // Separate volatile filters (they should never be pushed down)
+        let (volatile_filters, non_volatile_filters): (Vec<Expr>, Vec<Expr>) = filters
+            .into_iter()
+            .partition(|pred: &Expr| pred.is_volatile());
+
+        // Classify filters using supports_filters_pushdown
+        let filter_refs: Vec<&Expr> = non_volatile_filters.iter().collect();
+        let supported = provider.supports_filters_pushdown(&filter_refs)?;
+
+        assert_eq_or_internal_err!(
+            non_volatile_filters.len(),
+            supported.len(),
+            "supports_filters_pushdown returned {} results for {} filters",
+            supported.len(),
+            non_volatile_filters.len()
+        );
+
+        // Separate filters into:
+        // - pushable_filters: Exact or Inexact filters to pass to the provider
+        // - post_scan_filters: Inexact, Unsupported, and volatile filters for FilterExec
+        let mut pushable_filters = Vec::new();
+        let mut post_scan_filters = Vec::new();
+
+        for (filter, support) in non_volatile_filters.into_iter().zip(supported.iter()) {
+            match support {
+                TableProviderFilterPushDown::Exact => {
+                    pushable_filters.push(filter);
+                }
+                TableProviderFilterPushDown::Inexact => {
+                    pushable_filters.push(filter.clone());
+                    post_scan_filters.push(filter);
+                }
+                TableProviderFilterPushDown::Unsupported => {
+                    post_scan_filters.push(filter);
+                }
+            }
+        }
+
+        // Add volatile filters to post_scan_filters
+        post_scan_filters.extend(volatile_filters);
+
+        // Compute required column indices for the scan
+        // We need columns from both projection expressions and post-scan filters
+        let scan_projection = self.compute_scan_projection(
+            &scan.projection,
+            &post_scan_filters,
+            &source_schema,
+        )?;
+
+        // Check if we have inexact filters - if so, we can't push limit
+        let has_inexact = supported.contains(&TableProviderFilterPushDown::Inexact);
+        let scan_limit = if has_inexact || !post_scan_filters.is_empty() {
+            None // Can't push limit when post-filtering is needed
+        } else {
+            scan.fetch
+        };
+
+        // Create the scan
+        let scan_args = ScanArgs::default()
+            .with_projection(scan_projection.as_deref())
+            .with_filters(if pushable_filters.is_empty() {
+                None
+            } else {
+                Some(&pushable_filters)
+            })
+            .with_limit(scan_limit);
+
+        let scan_result = provider.scan_with_args(session_state, scan_args).await?;
+        let mut plan: Arc<dyn ExecutionPlan> = Arc::clone(scan_result.plan());
+
+        // Create a DFSchema from the scan output for filter and projection creation
+        // The scan output schema is the physical plan's schema
+        let scan_output_schema = plan.schema();
+        let scan_df_schema = DFSchema::try_from(scan_output_schema.as_ref().clone())?;
+
+        // Wrap with FilterExec if needed
+        if !post_scan_filters.is_empty()
+            && let Some(filter_expr) = conjunction(post_scan_filters)
+        {
+            let num_scan_columns = scan_output_schema.fields().len();
+            plan = self.create_filter_exec(
+                &filter_expr,
+                plan,
+                &scan_df_schema,
+                session_state,
+                num_scan_columns,
+            )?;
+        }
+
+        // Wrap with ProjectionExec if projection is present and differs from scan output
+        // (either non-identity, or fewer columns due to filter-only columns)
+        if let Some(ref proj_exprs) = scan.projection {
+            let needs_projection = !self
+                .is_identity_column_projection(proj_exprs, &source_schema)
+                || scan_output_schema.fields().len() != proj_exprs.len();
+
+            if needs_projection {
+                // Unnormalize projection expressions to match the scan output schema
+                let unnormalized_proj_exprs =
+                    unnormalize_cols(proj_exprs.iter().cloned());
+                plan = self.create_projection_exec(
+                    &unnormalized_proj_exprs,
+                    plan,
+                    &scan_df_schema,
+                    session_state,
+                )?;
+            }
+        }
+
+        // Apply limit if it wasn't pushed to scan
+        if let Some(fetch) = scan.fetch
+            && scan_limit.is_none()
+        {
+            plan = Arc::new(GlobalLimitExec::new(plan, 0, Some(fetch)));
+        }
+
+        Ok(plan)
+    }
+
+    /// Compute the column indices needed for the scan based on projection
+    /// expressions and post-scan filters.
+    fn compute_scan_projection(
+        &self,
+        projection: &Option<Vec<Expr>>,
+        post_filters: &[Expr],
+        source_schema: &Schema,
+    ) -> Result<Option<Vec<usize>>> {
+        // Collect all columns needed
+        let mut required_columns = HashSet::new();
+
+        // Add columns from projection expressions
+        if let Some(exprs) = projection {
+            for expr in exprs {
+                expr.apply(|e| {
+                    if let Expr::Column(col) = e {
+                        required_columns.insert(col.name().to_string());
+                    }
+                    Ok(TreeNodeRecursion::Continue)
+                })?;
+            }
+        }
+
+        // Add columns from post-scan filters
+        for filter in post_filters {
+            filter.apply(|e| {
+                if let Expr::Column(col) = e {
+                    required_columns.insert(col.name().to_string());
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })?;
+        }
+
+        // If no projection specified and no filters, return None (all columns)
+        if projection.is_none() && post_filters.is_empty() {
+            return Ok(None);
+        }
+
+        // If projection is None but we have filters, we need all columns
+        if projection.is_none() {
+            return Ok(None);
+        }
+
+        // Convert column names to indices
+        let indices: Vec<usize> = required_columns
+            .iter()
+            .filter_map(|name| source_schema.index_of(name).ok())
+            .sorted()
+            .collect();
+
+        // Return Some(vec![]) for empty projections (e.g., `SELECT 1 FROM wide_table`)
+        // rather than None, which would scan all columns
+        Ok(Some(indices))
+    }
+
+    /// Check if projection expressions form an identity projection
+    /// (just selecting columns in order without transformation).
+    fn is_identity_column_projection(&self, exprs: &[Expr], schema: &Schema) -> bool {
+        if exprs.len() != schema.fields().len() {
+            return false;
+        }
+
+        exprs.iter().enumerate().all(|(i, expr)| {
+            if let Expr::Column(col) = expr {
+                schema.index_of(col.name()).ok() == Some(i)
+            } else {
+                false
+            }
+        })
+    }
+
     fn create_grouping_physical_expr(
         &self,
         group_expr: &[Expr],
@@ -1961,22 +2118,49 @@ fn get_physical_expr_pair(
 /// Extract filter predicates from a DML input plan (DELETE/UPDATE).
 /// Walks the logical plan tree and collects Filter predicates,
 /// splitting AND conjunctions into individual expressions.
+/// Only predicates that exclusively reference columns from the target table are included.
 /// Column qualifiers are stripped so expressions can be evaluated against
 /// the TableProvider's schema.
 ///
-fn extract_dml_filters(input: &Arc<LogicalPlan>) -> Result<Vec<Expr>> {
+fn extract_dml_filters(
+    input: &Arc<LogicalPlan>,
+    target_schema: &DFSchema,
+) -> Result<Vec<Expr>> {
     let mut filters = Vec::new();
 
     input.apply(|node| {
-        if let LogicalPlan::Filter(filter) = node {
-            // Split AND predicates into individual expressions
-            filters.extend(split_conjunction(&filter.predicate).into_iter().cloned());
+        match node {
+            LogicalPlan::Filter(filter) => {
+                // Split AND predicates into individual expressions
+                filters.extend(split_conjunction(&filter.predicate).into_iter().cloned());
+            }
+            LogicalPlan::TableScan(scan) => {
+                // Also extract filters from TableScan (where they may be pushed down)
+                filters.extend(scan.filters.iter().cloned());
+            }
+            _ => {}
         }
         Ok(TreeNodeRecursion::Continue)
     })?;
 
+    // Only keep predicates that ONLY reference target table columns.
+    // This prevents issues where predicates like `t2.x = 1` (from a join)
+    // would become `x = 1` after stripping qualifiers and incorrectly
+    // match a column in the target table.
+    let target_filters: Vec<Expr> = filters
+        .into_iter()
+        .filter(|pred| {
+            pred.column_refs()
+                .iter()
+                .all(|col| target_schema.has_column(col))
+        })
+        .collect();
+
     // Strip table qualifiers from column references
-    filters.into_iter().map(strip_column_qualifiers).collect()
+    target_filters
+        .into_iter()
+        .map(strip_column_qualifiers)
+        .collect()
 }
 
 /// Strip table qualifiers from column references in an expression.
@@ -2002,7 +2186,10 @@ fn strip_column_qualifiers(expr: Expr) -> Result<Expr> {
 /// over the source table. This function extracts column name and expression pairs
 /// from the projection. Column qualifiers are stripped from the expressions.
 ///
-fn extract_update_assignments(input: &Arc<LogicalPlan>) -> Result<Vec<(String, Expr)>> {
+fn extract_update_assignments(
+    input: &Arc<LogicalPlan>,
+    target_table: &TableReference,
+) -> Result<Vec<(String, Expr)>> {
     // The UPDATE input plan structure is:
     // Projection(updated columns as expressions with aliases)
     //   Filter(optional WHERE clause)
@@ -2020,7 +2207,7 @@ fn extract_update_assignments(input: &Arc<LogicalPlan>) -> Result<Vec<(String, E
                 let column_name = alias.name.clone();
                 // Only include if it's not just a column reference to itself
                 // (those are columns that aren't being updated)
-                if !is_identity_assignment(&alias.expr, &column_name) {
+                if !is_identity_assignment(&alias.expr, &column_name, target_table) {
                     // Strip qualifiers from the assignment expression
                     let stripped_expr = strip_column_qualifiers((*alias.expr).clone())?;
                     assignments.push((column_name, stripped_expr));
@@ -2034,7 +2221,7 @@ fn extract_update_assignments(input: &Arc<LogicalPlan>) -> Result<Vec<(String, E
                 for expr in &projection.expr {
                     if let Expr::Alias(alias) = expr {
                         let column_name = alias.name.clone();
-                        if !is_identity_assignment(&alias.expr, &column_name) {
+                        if !is_identity_assignment(&alias.expr, &column_name, target_table) {
                             let stripped_expr =
                                 strip_column_qualifiers((*alias.expr).clone())?;
                             assignments.push((column_name, stripped_expr));
@@ -2051,10 +2238,28 @@ fn extract_update_assignments(input: &Arc<LogicalPlan>) -> Result<Vec<(String, E
 }
 
 /// Check if an assignment is an identity assignment (column = column)
-/// These are columns that are not being modified in the UPDATE
-fn is_identity_assignment(expr: &Expr, column_name: &str) -> bool {
+/// These are columns that are not being modified in the UPDATE.
+/// An assignment like `b = t2.b` (from a different table in a join) is NOT identity
+/// even though the column names match - the qualifier indicates it comes from
+/// a different relation.
+fn is_identity_assignment(
+    expr: &Expr,
+    column_name: &str,
+    target_table: &TableReference,
+) -> bool {
     match expr {
-        Expr::Column(col) => col.name == column_name,
+        Expr::Column(col) => {
+            // Check if the column name matches
+            if col.name != column_name {
+                return false;
+            }
+            // If there's no qualifier, it's identity (references the default table)
+            // If there IS a qualifier, it must match the target table to be identity
+            match &col.relation {
+                None => true,
+                Some(qualifier) => qualifier == target_table,
+            }
+        }
         _ => false,
     }
 }
@@ -2677,6 +2882,113 @@ impl DefaultPhysicalPlanner {
             }
             _ => internal_err!("Unexpected PlanAsyncExpressions variant"),
         }
+    }
+
+    /// Creates a ProjectionExec from logical expressions, handling async UDF expressions.
+    ///
+    /// This method encapsulates the full "logical projection → physical projection" conversion,
+    /// including async expression handling via `try_plan_async_exprs` and `AsyncFuncExec`.
+    /// Output names are derived from each expression's `schema_name()`.
+    fn create_projection_exec(
+        &self,
+        exprs: &[Expr],
+        input: Arc<dyn ExecutionPlan>,
+        input_dfschema: &DFSchema,
+        session_state: &SessionState,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        // Convert logical expressions to physical expressions with names
+        let physical_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = exprs
+            .iter()
+            .map(|e| {
+                let physical =
+                    self.create_physical_expr(e, input_dfschema, session_state)?;
+                let name = e.schema_name().to_string();
+                Ok((physical, name))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let num_input_columns = input.schema().fields().len();
+        let input_schema = input.schema();
+
+        match self.try_plan_async_exprs(
+            num_input_columns,
+            PlannedExprResult::ExprWithName(physical_exprs),
+            input_schema.as_ref(),
+        )? {
+            PlanAsyncExpr::Sync(PlannedExprResult::ExprWithName(physical_exprs)) => {
+                let proj_exprs: Vec<ProjectionExpr> = physical_exprs
+                    .into_iter()
+                    .map(|(expr, alias)| ProjectionExpr { expr, alias })
+                    .collect();
+                Ok(Arc::new(ProjectionExec::try_new(proj_exprs, input)?))
+            }
+            PlanAsyncExpr::Async(
+                async_map,
+                PlannedExprResult::ExprWithName(physical_exprs),
+            ) => {
+                let async_exec = AsyncFuncExec::try_new(async_map.async_exprs, input)?;
+                let proj_exprs: Vec<ProjectionExpr> = physical_exprs
+                    .into_iter()
+                    .map(|(expr, alias)| ProjectionExpr { expr, alias })
+                    .collect();
+                Ok(Arc::new(ProjectionExec::try_new(
+                    proj_exprs,
+                    Arc::new(async_exec),
+                )?))
+            }
+            _ => internal_err!("Unexpected PlanAsyncExpressions variant"),
+        }
+    }
+
+    /// Creates a FilterExec from a logical filter expression, handling async UDF expressions.
+    ///
+    /// This method encapsulates the full "logical filter → physical filter" conversion,
+    /// including async expression handling via `try_plan_async_exprs` and `AsyncFuncExec`.
+    fn create_filter_exec(
+        &self,
+        filter_expr: &Expr,
+        input: Arc<dyn ExecutionPlan>,
+        input_dfschema: &DFSchema,
+        session_state: &SessionState,
+        num_output_columns: usize,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        // Convert logical expression to physical expression
+        let runtime_expr =
+            self.create_physical_expr(filter_expr, input_dfschema, session_state)?;
+
+        // Check for async expressions
+        let filter = match self.try_plan_async_exprs(
+            num_output_columns,
+            PlannedExprResult::Expr(vec![runtime_expr]),
+            input_dfschema.as_arrow(),
+        )? {
+            // Sync case - simple FilterExec
+            PlanAsyncExpr::Sync(PlannedExprResult::Expr(runtime_expr)) => {
+                FilterExecBuilder::new(Arc::clone(&runtime_expr[0]), input)
+                    .with_batch_size(session_state.config().batch_size())
+                    .build()?
+            }
+            // Async case - AsyncFuncExec + FilterExec with projection
+            PlanAsyncExpr::Async(async_map, PlannedExprResult::Expr(runtime_expr)) => {
+                let async_exec = AsyncFuncExec::try_new(async_map.async_exprs, input)?;
+                FilterExecBuilder::new(Arc::clone(&runtime_expr[0]), Arc::new(async_exec))
+                    // project the output columns excluding the async functions
+                    // The async functions are always appended to the end of the schema.
+                    .apply_projection(Some((0..num_output_columns).collect()))?
+                    .with_batch_size(session_state.config().batch_size())
+                    .build()?
+            }
+            _ => return internal_err!("Unexpected result from try_plan_async_exprs"),
+        };
+
+        // Apply default selectivity from config
+        let selectivity = session_state
+            .config()
+            .options()
+            .optimizer
+            .default_filter_selectivity;
+
+        Ok(Arc::new(filter.with_default_selectivity(selectivity)?))
     }
 
     fn try_plan_async_exprs(
@@ -3769,7 +4081,8 @@ mod tests {
             self: Arc<Self>,
             _children: Vec<Arc<dyn ExecutionPlan>>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
-            unimplemented!("NoOpExecutionPlan::with_new_children");
+            // NoOpExecutionPlan has no children, so just return self
+            Ok(self)
         }
 
         fn execute(
@@ -3812,13 +4125,21 @@ mod tests {
                 LogicalPlan::TableScan(ref scan) => {
                     let mut scan = scan.clone();
                     let table_reference = TableReference::from(name);
-                    scan.table_name = table_reference;
+                    scan.table_name = table_reference.clone();
                     let new_schema = scan
                         .projected_schema
                         .as_ref()
                         .clone()
                         .replace_qualifier(name.to_string());
                     scan.projected_schema = Arc::new(new_schema);
+                    // Also update projection expressions to use the new qualifier
+                    if let Some(ref mut proj_exprs) = scan.projection {
+                        for expr in proj_exprs.iter_mut() {
+                            if let Expr::Column(col) = expr {
+                                col.relation = Some(table_reference.clone());
+                            }
+                        }
+                    }
                     LogicalPlan::TableScan(scan)
                 }
                 _ => unimplemented!(),
@@ -4247,20 +4568,21 @@ digraph {
     }
 
     #[tokio::test]
-    // When schemas match, planning proceeds past the schema_satisfied_by check.
-    // It then panics on unimplemented error in NoOpExecutionPlan.
-    #[should_panic(expected = "NoOpExecutionPlan")]
+    // When schemas match, planning should succeed.
     async fn test_aggregate_schema_check_passes() {
         let schema =
             Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
 
-        plan_with_schemas(
+        let plan = plan_with_schemas(
             Arc::clone(&schema),
             schema,
             "SELECT count(*) FROM test GROUP BY c1",
         )
         .await
-        .unwrap();
+        .expect("planning should succeed when schemas match");
+
+        // Verify we got a valid plan
+        assert_eq!(plan.schema().fields().len(), 1);
     }
 
     #[tokio::test]
@@ -4284,6 +4606,8 @@ digraph {
     }
 
     #[tokio::test]
+    // With the new physical planner that adds ProjectionExec to handle schema
+    // mismatches, planning should succeed when there are extra fields.
     async fn test_aggregate_schema_mismatch_field_count() {
         let logical_schema =
             Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
@@ -4292,15 +4616,16 @@ digraph {
             Field::new("c2", DataType::Int32, false),
         ]));
 
-        let err = plan_with_schemas(
+        let plan = plan_with_schemas(
             logical_schema,
             physical_schema,
             "SELECT count(*) FROM test GROUP BY c1",
         )
         .await
-        .unwrap_err();
+        .expect("planning should succeed - ProjectionExec handles field count mismatch");
 
-        assert_contains!(err.to_string(), "Different number of fields");
+        // Verify we got a valid plan with the expected output schema
+        assert_eq!(plan.schema().fields().len(), 1);
     }
 
     #[tokio::test]
