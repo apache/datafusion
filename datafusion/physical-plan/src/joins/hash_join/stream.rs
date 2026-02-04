@@ -125,8 +125,6 @@ impl BuildSide {
 pub(super) enum HashJoinStreamState {
     /// Initial state for HashJoinStream indicating that build-side data not collected yet
     WaitBuildSide,
-    /// Waiting for bounds to be reported by all partitions
-    WaitPartitionBoundsReport,
     /// Indicates that build-side has been collected, and stream is ready for fetching probe-side
     FetchProbeBatch,
     /// Indicates that non-empty batch has been fetched from probe-side, and is ready to be processed
@@ -216,9 +214,6 @@ pub(super) struct HashJoinStream {
     right_side_ordered: bool,
     /// Shared build accumulator for coordinating dynamic filter updates (collects hash maps and/or bounds, optional)
     build_accumulator: Option<Arc<SharedBuildAccumulator>>,
-    /// Optional future to signal when build information has been reported by all partitions
-    /// and the dynamic filter has been updated
-    build_waiter: Option<OnceFut<()>>,
     /// Partitioning mode to use
     mode: PartitionMode,
     /// Output buffer for coalescing small batches into larger ones.
@@ -403,7 +398,6 @@ impl HashJoinStream {
             build_indices_buffer: Vec::with_capacity(batch_size),
             right_side_ordered,
             build_accumulator,
-            build_waiter: None,
             mode,
             output_buffer,
             null_aware,
@@ -429,9 +423,6 @@ impl HashJoinStream {
                 HashJoinStreamState::WaitBuildSide => {
                     handle_state!(ready!(self.collect_build_side(cx)))
                 }
-                HashJoinStreamState::WaitPartitionBoundsReport => {
-                    handle_state!(ready!(self.wait_for_partition_bounds_report(cx)))
-                }
                 HashJoinStreamState::FetchProbeBatch => {
                     handle_state!(ready!(self.fetch_probe_batch(cx)))
                 }
@@ -450,26 +441,6 @@ impl HashJoinStream {
                 HashJoinStreamState::Completed => Poll::Ready(None),
             };
         }
-    }
-
-    /// Optional step to wait until build-side information (hash maps or bounds) has been reported by all partitions.
-    /// This state is only entered if a build accumulator is present.
-    ///
-    /// ## Why wait?
-    ///
-    /// The dynamic filter is only built once all partitions have reported their information (hash maps or bounds).
-    /// If we do not wait here, the probe-side scan may start before the filter is ready.
-    /// This can lead to the probe-side scan missing the opportunity to apply the filter
-    /// and skip reading unnecessary data.
-    fn wait_for_partition_bounds_report(
-        &mut self,
-        cx: &mut std::task::Context<'_>,
-    ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
-        if let Some(ref mut fut) = self.build_waiter {
-            ready!(fut.get_shared(cx))?;
-        }
-        self.state = HashJoinStreamState::FetchProbeBatch;
-        Poll::Ready(Ok(StatefulStreamResult::Continue))
     }
 
     /// Collects build-side data by polling `OnceFut` future from initialized build-side
@@ -534,10 +505,8 @@ impl HashJoinStream {
                 ),
             };
 
-            self.build_waiter = Some(OnceFut::new(async move {
-                build_accumulator.report_build_data(build_data).await
-            }));
-            self.state = HashJoinStreamState::WaitPartitionBoundsReport;
+            build_accumulator.report_build_data(build_data)?;
+            self.state = HashJoinStreamState::FetchProbeBatch;
         } else {
             self.state = HashJoinStreamState::FetchProbeBatch;
         }
