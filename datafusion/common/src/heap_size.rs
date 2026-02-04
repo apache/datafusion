@@ -125,6 +125,7 @@ impl DFHeapSize for ScalarValue {
             DurationNanosecond(d) => d.heap_size(),
             Union(a, b, c) => a.heap_size() + b.heap_size() + c.heap_size(),
             Dictionary(a, b) => a.heap_size() + b.heap_size(),
+            RunEndEncoded(a, b, c) => a.heap_size() + b.heap_size() + c.heap_size(),
         }
     }
 }
@@ -314,7 +315,7 @@ impl DFHeapSize for String {
 
 impl DFHeapSize for str {
     fn heap_size(&self) -> usize {
-        self.as_bytes().len()
+        self.len()
     }
 }
 
