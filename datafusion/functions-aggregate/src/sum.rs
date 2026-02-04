@@ -146,8 +146,7 @@ macro_rules! downcast_sum {
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Sum {
     signature: Signature,
-    // If true then returns null on overflows
-    try_sum_mode: bool,
+    return_null_on_overflow: bool,
 }
 
 impl Sum {
@@ -196,14 +195,14 @@ impl Sum {
     pub fn new() -> Self {
         Self {
             signature: Self::signature(),
-            try_sum_mode: false,
+            return_null_on_overflow: false,
         }
     }
 
     pub fn try_sum() -> Self {
         Self {
             signature: Self::signature(),
-            try_sum_mode: true,
+            return_null_on_overflow: true,
         }
     }
 }
@@ -256,7 +255,7 @@ impl AggregateUDFImpl for Sum {
         if args.expr_fields[0].data_type() == &DataType::Null {
             return Ok(Box::new(NoopAccumulator::new(ScalarValue::Float64(None))));
         }
-        match (args.is_distinct, self.try_sum_mode) {
+        match (args.is_distinct, self.return_null_on_overflow) {
             (true, false) => {
                 macro_rules! helper {
                     ($t:ty, $dt:expr) => {
@@ -326,7 +325,7 @@ impl AggregateUDFImpl for Sum {
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-        match (args.is_distinct, self.try_sum_mode) {
+        match (args.is_distinct, self.return_null_on_overflow) {
             (true, false) => {
                 Ok(vec![
                     Field::new_list(
@@ -367,7 +366,7 @@ impl AggregateUDFImpl for Sum {
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
-        !args.is_distinct && !self.try_sum_mode
+        !args.is_distinct && !self.return_null_on_overflow
     }
 
     fn create_groups_accumulator(
@@ -389,7 +388,7 @@ impl AggregateUDFImpl for Sum {
         &self,
         args: AccumulatorArgs,
     ) -> Result<Box<dyn Accumulator>> {
-        if self.try_sum_mode {
+        if self.return_null_on_overflow {
             return not_impl_err!(
                 "Try sum mode not supported for sum sliding accumulators"
             );
@@ -425,7 +424,7 @@ impl AggregateUDFImpl for Sum {
 
     fn set_monotonicity(&self, data_type: &DataType) -> SetMonotonicity {
         // Can overflow into null
-        if self.try_sum_mode {
+        if self.return_null_on_overflow {
             return SetMonotonicity::NotMonotonic;
         }
         // `SUM` is only monotonically increasing when its input is unsigned.
