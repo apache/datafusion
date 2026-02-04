@@ -44,8 +44,12 @@ mod tests {
         serializer::deserialize(path).await?;
 
         // Test case 2: serializing to an existing file should fail.
-        let got = serializer::serialize(sql, &ctx, path).await.unwrap_err();
-        assert_contains!(got.to_string(), "File exists");
+        let got = serializer::serialize(sql, &ctx, path).await.unwrap_err().to_string();
+        assert!(
+            ["File exists", "os error 80"]
+                .iter()
+                .any(|s| got.contains(s))
+        );
 
         fs::remove_file(path)?;
 
