@@ -70,17 +70,20 @@ use arrow_schema::DataType;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
-    JoinSide, JoinType, NullEquality, Result, assert_or_internal_err, internal_err,
-    plan_err, project_schema,
+    JoinSide, JoinType, NullEquality, Result, ScalarValue, assert_or_internal_err,
+    internal_err, plan_err, project_schema,
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_expr::Accumulator;
+use datafusion_expr::Operator;
 use datafusion_functions_aggregate_common::min_max::{MaxAccumulator, MinAccumulator};
 use datafusion_physical_expr::equivalence::{
     ProjectionMapping, join_equivalence_properties,
 };
-use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
+use datafusion_physical_expr::expressions::{
+    BinaryExpr, CaseExpr, DynamicFilterPhysicalExpr, lit,
+};
 use datafusion_physical_expr::projection::{ProjectionRef, combine_projections};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 
@@ -90,7 +93,7 @@ use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::TryStreamExt;
 use parking_lot::Mutex;
 
-use super::partitioned_hash_eval::SeededRandomState;
+use super::partitioned_hash_eval::{HashExpr, SeededRandomState};
 
 /// Hard-coded seed to ensure hash values from the hash join differ from `RepartitionExec`, avoiding collisions.
 pub(crate) const HASH_JOIN_SEED: SeededRandomState =
@@ -407,6 +410,7 @@ impl HashJoinExecBuilder {
             cache,
             dynamic_filter: None,
             fetch,
+            pending_partition_filters: Mutex::new(None),
         })
     }
 }
@@ -663,12 +667,18 @@ pub struct HashJoinExec {
     dynamic_filter: Option<HashJoinExecDynamicFilter>,
     /// Maximum number of rows to return
     fetch: Option<usize>,
+    /// Temporary storage for per-partition DynamicFilters during filter pushdown.
+    /// Set in gather_filters_for_pushdown, consumed in handle_child_pushdown_result.
+    /// Uses Mutex because gather_filters_for_pushdown takes &self and may be called
+    /// multiple times on the same node (e.g., when optimizations are re-run).
+    pending_partition_filters: Mutex<Option<Vec<Arc<DynamicFilterPhysicalExpr>>>>,
 }
 
 #[derive(Clone)]
 struct HashJoinExecDynamicFilter {
-    /// Dynamic filter that we'll update with the results of the build side once that is done.
-    filter: Arc<DynamicFilterPhysicalExpr>,
+    /// Per-partition DynamicFilters that will be updated during execution.
+    /// CollectLeft: single filter. Partitioned: N filters.
+    partition_filters: Vec<Arc<DynamicFilterPhysicalExpr>>,
     /// Build accumulator to collect build-side information (hash maps and/or bounds) from each partition.
     /// It is lazily initialized during execution to make sure we use the actual execution time partition counts.
     build_accumulator: OnceLock<Arc<SharedBuildAccumulator>>,
@@ -728,12 +738,79 @@ impl HashJoinExec {
             .build()
     }
 
-    fn create_dynamic_filter(on: &JoinOn) -> Arc<DynamicFilterPhysicalExpr> {
-        // Extract the right-side keys (probe side keys) from the `on` clauses
-        // Dynamic filter will be created from build side values (left side) and applied to probe side (right side)
+    /// Creates per-partition DynamicFilters and the expression to push down to the scan.
+    ///
+    /// Returns `(expression_to_push_down, partition_filters)`:
+    /// - CollectLeft or single partition: returns a single DynamicFilter as both
+    /// - Partitioned N>1: creates N DynamicFilters, builds a CASE expression,
+    ///   returns (case_expr, vec_of_filters)
+    fn create_partition_filters(
+        on: &JoinOn,
+        mode: PartitionMode,
+        num_build_partitions: usize,
+        repartition_random_state: SeededRandomState,
+    ) -> (Arc<dyn PhysicalExpr>, Vec<Arc<DynamicFilterPhysicalExpr>>) {
         let right_keys: Vec<_> = on.iter().map(|(_, r)| Arc::clone(r)).collect();
-        // Initialize with a placeholder expression (true) that will be updated when the hash table is built
-        Arc::new(DynamicFilterPhysicalExpr::new(right_keys, lit(true)))
+
+        if mode == PartitionMode::CollectLeft || num_build_partitions == 1 {
+            // Single filter: used directly as the pushed-down expression
+            let filter = Arc::new(DynamicFilterPhysicalExpr::new(right_keys, lit(true)));
+            let push_expr = Arc::clone(&filter) as Arc<dyn PhysicalExpr>;
+            (push_expr, vec![filter])
+        } else {
+            // Create N per-partition DynamicFilterPhysicalExpr instances,
+            // each starting with lit(true) as a pass-through.
+            let partition_filters: Vec<Arc<DynamicFilterPhysicalExpr>> = (0
+                ..num_build_partitions)
+                .map(|_| {
+                    Arc::new(DynamicFilterPhysicalExpr::new(
+                        right_keys.clone(),
+                        lit(true),
+                    ))
+                })
+                .collect();
+
+            // Build the static CASE expression:
+            // CASE (hash_repartition(join_keys) % N)
+            //   WHEN 0 THEN partition_filters[0]
+            //   WHEN 1 THEN partition_filters[1]
+            //   ...
+            //   ELSE false
+            // END
+            let routing_hash_expr = Arc::new(HashExpr::new(
+                right_keys,
+                repartition_random_state,
+                "hash_repartition".to_string(),
+            )) as Arc<dyn PhysicalExpr>;
+
+            let modulo_expr = Arc::new(BinaryExpr::new(
+                routing_hash_expr,
+                Operator::Modulo,
+                lit(ScalarValue::UInt64(Some(num_build_partitions as u64))),
+            )) as Arc<dyn PhysicalExpr>;
+
+            let when_then_branches: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)> =
+                partition_filters
+                    .iter()
+                    .enumerate()
+                    .map(|(i, pf)| {
+                        let when_expr = lit(ScalarValue::UInt64(Some(i as u64)));
+                        let then_expr = Arc::clone(pf) as Arc<dyn PhysicalExpr>;
+                        (when_expr, then_expr)
+                    })
+                    .collect();
+
+            let case_expr = Arc::new(
+                CaseExpr::try_new(
+                    Some(modulo_expr),
+                    when_then_branches,
+                    Some(lit(false)),
+                )
+                .expect("Failed to create CASE expression for per-partition filters"),
+            ) as Arc<dyn PhysicalExpr>;
+
+            (case_expr, partition_filters)
+        }
     }
 
     fn allow_join_dynamic_filter_pushdown(&self, config: &ConfigOptions) -> bool {
@@ -797,13 +874,15 @@ impl HashJoinExec {
         self.null_equality
     }
 
-    /// Get the dynamic filter expression for testing purposes.
+    /// Get the partition filters for testing purposes.
     /// Returns `None` if no dynamic filter has been set.
     ///
     /// This method is intended for testing only and should not be used in production code.
     #[doc(hidden)]
-    pub fn dynamic_filter_for_test(&self) -> Option<&Arc<DynamicFilterPhysicalExpr>> {
-        self.dynamic_filter.as_ref().map(|df| &df.filter)
+    pub fn partition_filters_for_test(
+        &self,
+    ) -> Option<&Vec<Arc<DynamicFilterPhysicalExpr>>> {
+        self.dynamic_filter.as_ref().map(|df| &df.partition_filters)
     }
 
     /// Calculate order preservation flags for this hash join.
@@ -1170,6 +1249,10 @@ impl ExecutionPlan for HashJoinExec {
             // Keep the dynamic filter, bounds accumulator will be reset
             dynamic_filter: self.dynamic_filter.clone(),
             fetch: self.fetch,
+            // Propagate pending partition filters so handle_child_pushdown_result can find them
+            pending_partition_filters: Mutex::new(
+                self.pending_partition_filters.lock().clone(),
+            ),
         }))
     }
 
@@ -1194,6 +1277,7 @@ impl ExecutionPlan for HashJoinExec {
             // Reset dynamic filter and bounds accumulator to initial state
             dynamic_filter: None,
             fetch: self.fetch,
+            pending_partition_filters: Mutex::new(None),
         }))
     }
 
@@ -1225,17 +1309,10 @@ impl ExecutionPlan for HashJoinExec {
 
         // Only enable dynamic filter pushdown if:
         // - The session config enables dynamic filter pushdown
-        // - A dynamic filter exists
-        // - At least one consumer is holding a reference to it, this avoids expensive filter
-        //   computation when disabled or when no consumer will use it.
+        // - A dynamic filter exists (it was pushed down successfully)
         let enable_dynamic_filter_pushdown = self
             .allow_join_dynamic_filter_pushdown(context.session_config().options())
-            && self
-                .dynamic_filter
-                .as_ref()
-                .map(|df| df.filter.is_used())
-                .unwrap_or(false);
-
+            && self.dynamic_filter.is_some();
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
 
         let array_map_created_count = MetricBuilder::new(&self.metrics)
@@ -1294,25 +1371,20 @@ impl ExecutionPlan for HashJoinExec {
         let batch_size = context.session_config().batch_size();
 
         // Initialize build_accumulator lazily with runtime partition counts (only if enabled)
-        // Use RepartitionExec's random state (seeds: 0,0,0,0) for partition routing
-        let repartition_random_state = REPARTITION_RANDOM_STATE;
         let build_accumulator = enable_dynamic_filter_pushdown
             .then(|| {
                 self.dynamic_filter.as_ref().map(|df| {
-                    let filter = Arc::clone(&df.filter);
                     let on_right = self
                         .on
                         .iter()
                         .map(|(_, right_expr)| Arc::clone(right_expr))
                         .collect::<Vec<_>>();
                     Some(Arc::clone(df.build_accumulator.get_or_init(|| {
-                        Arc::new(SharedBuildAccumulator::new_from_partition_mode(
+                        Arc::new(SharedBuildAccumulator::new(
                             self.mode,
-                            self.left.as_ref(),
-                            self.right.as_ref(),
-                            filter,
+                            df.partition_filters.clone(),
                             on_right,
-                            repartition_random_state,
+                            self.right.schema(),
                         ))
                     })))
                 })
@@ -1464,9 +1536,20 @@ impl ExecutionPlan for HashJoinExec {
         if matches!(phase, FilterPushdownPhase::Post)
             && self.allow_join_dynamic_filter_pushdown(config)
         {
-            // Add actual dynamic filter to right side (probe side)
-            let dynamic_filter = Self::create_dynamic_filter(&self.on);
-            right_child = right_child.with_self_filter(dynamic_filter);
+            let num_build_partitions = match self.mode {
+                PartitionMode::Partitioned => {
+                    self.left.output_partitioning().partition_count()
+                }
+                _ => 1,
+            };
+            let (push_expr, partition_filters) = Self::create_partition_filters(
+                &self.on,
+                self.mode,
+                num_build_partitions,
+                REPARTITION_RANDOM_STATE,
+            );
+            *self.pending_partition_filters.lock() = Some(partition_filters);
+            right_child = right_child.with_self_filter(push_expr);
         }
 
         Ok(FilterDescription::new()
@@ -1496,39 +1579,36 @@ impl ExecutionPlan for HashJoinExec {
         let mut result = FilterPushdownPropagation::if_any(child_pushdown_result.clone());
         assert_eq!(child_pushdown_result.self_filters.len(), 2); // Should always be 2, we have 2 children
         let right_child_self_filters = &child_pushdown_result.self_filters[1]; // We only push down filters to the right child
-        // We expect 0 or 1 self filters
-        if let Some(filter) = right_child_self_filters.first() {
-            // Note that we don't check PushdDownPredicate::discrimnant because even if nothing said
-            // "yes, I can fully evaluate this filter" things might still use it for statistics -> it's worth updating
-            let predicate = Arc::clone(&filter.predicate);
-            if let Ok(dynamic_filter) =
-                Arc::downcast::<DynamicFilterPhysicalExpr>(predicate)
-            {
-                // We successfully pushed down our self filter - we need to make a new node with the dynamic filter
-                let new_node = Arc::new(HashJoinExec {
-                    left: Arc::clone(&self.left),
-                    right: Arc::clone(&self.right),
-                    on: self.on.clone(),
-                    filter: self.filter.clone(),
-                    join_type: self.join_type,
-                    join_schema: Arc::clone(&self.join_schema),
-                    left_fut: Arc::clone(&self.left_fut),
-                    random_state: self.random_state.clone(),
-                    mode: self.mode,
-                    metrics: ExecutionPlanMetricsSet::new(),
-                    projection: self.projection.clone(),
-                    column_indices: self.column_indices.clone(),
-                    null_equality: self.null_equality,
-                    null_aware: self.null_aware,
-                    cache: self.cache.clone(),
-                    dynamic_filter: Some(HashJoinExecDynamicFilter {
-                        filter: dynamic_filter,
-                        build_accumulator: OnceLock::new(),
-                    }),
-                    fetch: self.fetch,
-                });
-                result = result.with_updated_node(new_node as Arc<dyn ExecutionPlan>);
-            }
+
+        // Check if our self-filter was pushed (pending_partition_filters was set in gather_filters_for_pushdown)
+        if let Some(partition_filters) = self.pending_partition_filters.lock().take()
+            && !right_child_self_filters.is_empty()
+        {
+            // Self-filter was pushed — create a new node with the partition filters
+            let new_node = Arc::new(HashJoinExec {
+                left: Arc::clone(&self.left),
+                right: Arc::clone(&self.right),
+                on: self.on.clone(),
+                filter: self.filter.clone(),
+                join_type: self.join_type,
+                join_schema: Arc::clone(&self.join_schema),
+                left_fut: Arc::clone(&self.left_fut),
+                random_state: self.random_state.clone(),
+                mode: self.mode,
+                metrics: ExecutionPlanMetricsSet::new(),
+                projection: self.projection.clone(),
+                column_indices: self.column_indices.clone(),
+                null_equality: self.null_equality,
+                null_aware: self.null_aware,
+                cache: self.cache.clone(),
+                dynamic_filter: Some(HashJoinExecDynamicFilter {
+                    partition_filters,
+                    build_accumulator: OnceLock::new(),
+                }),
+                fetch: self.fetch,
+                pending_partition_filters: Mutex::new(None),
+            });
+            result = result.with_updated_node(new_node as Arc<dyn ExecutionPlan>);
         }
         Ok(result)
     }
@@ -5241,9 +5321,14 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
-        // Create a dynamic filter manually
-        let dynamic_filter = HashJoinExec::create_dynamic_filter(&on);
-        let dynamic_filter_clone = Arc::clone(&dynamic_filter);
+        // Create partition filters manually using create_partition_filters
+        let (_push_expr, partition_filters) = HashJoinExec::create_partition_filters(
+            &on,
+            PartitionMode::CollectLeft,
+            1,
+            REPARTITION_RANDOM_STATE,
+        );
+        let filter_to_wait = Arc::clone(&partition_filters[0]);
 
         // Create HashJoinExec with the dynamic filter
         let mut join = HashJoinExec::try_new(
@@ -5258,7 +5343,7 @@ mod tests {
             false,
         )?;
         join.dynamic_filter = Some(HashJoinExecDynamicFilter {
-            filter: dynamic_filter,
+            partition_filters,
             build_accumulator: OnceLock::new(),
         });
 
@@ -5266,9 +5351,9 @@ mod tests {
         let stream = join.execute(0, task_ctx)?;
         let _batches = common::collect(stream).await?;
 
-        // After the join completes, the dynamic filter should be marked as complete
+        // After the join completes, the partition filter should be marked as complete
         // wait_complete() should return immediately
-        dynamic_filter_clone.wait_complete().await;
+        filter_to_wait.wait_complete().await;
 
         Ok(())
     }
@@ -5290,9 +5375,14 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
-        // Create a dynamic filter manually
-        let dynamic_filter = HashJoinExec::create_dynamic_filter(&on);
-        let dynamic_filter_clone = Arc::clone(&dynamic_filter);
+        // Create partition filters manually using create_partition_filters
+        let (_push_expr, partition_filters) = HashJoinExec::create_partition_filters(
+            &on,
+            PartitionMode::CollectLeft,
+            1,
+            REPARTITION_RANDOM_STATE,
+        );
+        let filter_to_wait = Arc::clone(&partition_filters[0]);
 
         // Create HashJoinExec with the dynamic filter
         let mut join = HashJoinExec::try_new(
@@ -5307,7 +5397,7 @@ mod tests {
             false,
         )?;
         join.dynamic_filter = Some(HashJoinExecDynamicFilter {
-            filter: dynamic_filter,
+            partition_filters,
             build_accumulator: OnceLock::new(),
         });
 
@@ -5315,9 +5405,9 @@ mod tests {
         let stream = join.execute(0, task_ctx)?;
         let _batches = common::collect(stream).await?;
 
-        // Even with empty build side, the dynamic filter should be marked as complete
+        // Even with empty build side, the partition filter should be marked as complete
         // wait_complete() should return immediately
-        dynamic_filter_clone.wait_complete().await;
+        filter_to_wait.wait_complete().await;
 
         Ok(())
     }
