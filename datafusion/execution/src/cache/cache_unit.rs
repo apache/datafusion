@@ -575,11 +575,9 @@ mod tests {
         assert_eq!(cache.len(), 1);
         assert_eq!(cache.memory_used(), value_3.heap_size());
 
-
         cache.clear();
         assert_eq!(cache.len(), 0);
         assert_eq!(cache.memory_used(), 0);
-
     }
 
     #[test]
