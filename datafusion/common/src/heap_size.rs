@@ -314,7 +314,7 @@ impl DFHeapSize for String {
 
 impl DFHeapSize for str {
     fn heap_size(&self) -> usize {
-        self.to_string().capacity()
+        self.as_bytes().len()
     }
 }
 
