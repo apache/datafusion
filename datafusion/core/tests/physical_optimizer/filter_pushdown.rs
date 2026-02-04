@@ -1808,6 +1808,67 @@ fn test_filter_pushdown_through_union() {
     );
 }
 
+#[test]
+fn test_filter_pushdown_through_union_mixed_support() {
+    // Test case where one child supports filter pushdown and one doesn't
+    let scan1 = TestScanBuilder::new(schema()).with_support(true).build();
+    let scan2 = TestScanBuilder::new(schema()).with_support(false).build();
+
+    let union = UnionExec::try_new(vec![scan1, scan2]).unwrap();
+
+    let predicate = col_lit_predicate("a", "foo", &schema());
+    let plan = Arc::new(FilterExec::try_new(predicate, union).unwrap());
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: a@0 = foo
+        -   UnionExec
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+      output:
+        Ok:
+          - UnionExec
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
+          -   FilterExec: a@0 = foo
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+    "
+    );
+}
+
+#[test]
+fn test_filter_pushdown_through_union_does_not_support() {
+    // Test case where one child supports filter pushdown and one doesn't
+    let scan1 = TestScanBuilder::new(schema()).with_support(false).build();
+    let scan2 = TestScanBuilder::new(schema()).with_support(false).build();
+
+    let union = UnionExec::try_new(vec![scan1, scan2]).unwrap();
+
+    let predicate = col_lit_predicate("a", "foo", &schema());
+    let plan = Arc::new(FilterExec::try_new(predicate, union).unwrap());
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
+        @"
+    OptimizationTest:
+      input:
+        - FilterExec: a@0 = foo
+        -   UnionExec
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+      output:
+        Ok:
+          - UnionExec
+          -   FilterExec: a@0 = foo
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+          -   FilterExec: a@0 = foo
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+    "
+    );
+}
+
 /// Schema:
 /// a: String
 /// b: String

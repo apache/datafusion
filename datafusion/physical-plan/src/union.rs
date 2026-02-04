@@ -36,7 +36,11 @@ use crate::execution_plan::{
     InvariantLevel, boundedness_from_children, check_default_invariants,
     emission_type_from_children,
 };
-use crate::filter_pushdown::{FilterDescription, FilterPushdownPhase};
+use crate::filter::FilterExec;
+use crate::filter_pushdown::{
+    ChildPushdownResult, FilterDescription, FilterPushdownPhase,
+    FilterPushdownPropagation, PushedDown,
+};
 use crate::metrics::BaselineMetrics;
 use crate::projection::{ProjectionExec, make_with_child};
 use crate::stream::ObservedStream;
@@ -49,7 +53,9 @@ use datafusion_common::{
     Result, assert_or_internal_err, exec_err, internal_datafusion_err,
 };
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr, calculate_union};
+use datafusion_physical_expr::{
+    EquivalenceProperties, PhysicalExpr, calculate_union, conjunction,
+};
 
 use futures::Stream;
 use itertools::Itertools;
@@ -369,6 +375,66 @@ impl ExecutionPlan for UnionExec {
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
         FilterDescription::from_children(parent_filters, &self.children())
+    }
+
+    fn handle_child_pushdown_result(
+        &self,
+        phase: FilterPushdownPhase,
+        child_pushdown_result: ChildPushdownResult,
+        _config: &ConfigOptions,
+    ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+        // For non-Pre phase, use default behavior
+        if !matches!(phase, FilterPushdownPhase::Pre) {
+            return Ok(FilterPushdownPropagation::if_all(child_pushdown_result));
+        }
+
+        // Collect unsupported filters for each child
+        let mut unsupported_filters_per_child = vec![Vec::new(); self.inputs.len()];
+
+        for parent_filter_result in child_pushdown_result.parent_filters.iter() {
+            for (child_idx, &child_result) in
+                parent_filter_result.child_results.iter().enumerate()
+            {
+                if matches!(child_result, PushedDown::No) {
+                    unsupported_filters_per_child[child_idx]
+                        .push(Arc::clone(&parent_filter_result.filter));
+                }
+            }
+        }
+
+        // Wrap children that have unsupported filters with FilterExec
+        let mut new_children = self.inputs.clone();
+        for (child_idx, unsupported_filters) in
+            unsupported_filters_per_child.iter().enumerate()
+        {
+            if !unsupported_filters.is_empty() {
+                let combined_filter = conjunction(unsupported_filters.clone());
+                new_children[child_idx] = Arc::new(FilterExec::try_new(
+                    combined_filter,
+                    Arc::clone(&self.inputs[child_idx]),
+                )?);
+            }
+        }
+
+        // Check if any children were modified
+        let children_modified = new_children
+            .iter()
+            .zip(self.inputs.iter())
+            .any(|(new, old)| !Arc::ptr_eq(new, old));
+
+        let all_filters_pushed =
+            vec![PushedDown::Yes; child_pushdown_result.parent_filters.len()];
+        let propagation = if children_modified {
+            let updated_node = UnionExec::try_new(new_children)?;
+            FilterPushdownPropagation::with_parent_pushdown_result(all_filters_pushed)
+                .with_updated_node(updated_node)
+        } else {
+            FilterPushdownPropagation::with_parent_pushdown_result(all_filters_pushed)
+        };
+
+        // Report all parent filters as supported since we've ensured they're applied
+        // on all children (either pushed down or via FilterExec)
+        Ok(propagation)
     }
 }
 
