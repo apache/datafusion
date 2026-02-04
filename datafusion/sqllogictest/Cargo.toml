@@ -45,7 +45,7 @@ async-trait = { workspace = true }
 bigdecimal = { workspace = true }
 bytes = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }
-clap = { version = "4.5.53", features = ["derive", "env"] }
+clap = { version = "4.5.56", features = ["derive", "env"] }
 datafusion = { workspace = true, default-features = true, features = ["avro"] }
 datafusion-spark = { workspace = true, features = ["core"] }
 datafusion-substrait = { workspace = true, default-features = true }
