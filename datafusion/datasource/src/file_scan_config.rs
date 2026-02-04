@@ -152,6 +152,11 @@ pub struct FileScanConfig {
     /// The maximum number of records to read from this plan. If `None`,
     /// all records after filtering are returned.
     pub limit: Option<usize>,
+    /// Whether the scan's limit is order sensitive
+    /// When `true`, files must be read in the exact order specified to produce
+    /// correct results (e.g., for `ORDER BY ... LIMIT` queries). When `false`,
+    /// DataFusion may reorder file processing for optimization without affecting correctness.
+    pub preserve_order: bool,
     /// All equivalent lexicographical orderings that describe the schema.
     pub output_ordering: Vec<LexOrdering>,
     /// File compression type
@@ -240,6 +245,7 @@ pub struct FileScanConfigBuilder {
     object_store_url: ObjectStoreUrl,
     file_source: Arc<dyn FileSource>,
     limit: Option<usize>,
+    preserve_order: bool,
     constraints: Option<Constraints>,
     file_groups: Vec<FileGroup>,
     statistics: Option<Statistics>,
@@ -269,6 +275,7 @@ impl FileScanConfigBuilder {
             output_ordering: vec![],
             file_compression_type: None,
             limit: None,
+            preserve_order: false,
             constraints: None,
             batch_size: None,
             expr_adapter_factory: None,
@@ -280,6 +287,15 @@ impl FileScanConfigBuilder {
     /// all records after filtering are returned.
     pub fn with_limit(mut self, limit: Option<usize>) -> Self {
         self.limit = limit;
+        self
+    }
+
+    /// Set whether the limit should be order-sensitive.
+    /// When `true`, files must be read in the exact order specified to produce
+    /// correct results (e.g., for `ORDER BY ... LIMIT` queries). When `false`,
+    /// DataFusion may reorder file processing for optimization without affecting correctness.
+    pub fn with_preserve_order(mut self, order_sensitive: bool) -> Self {
+        self.preserve_order = order_sensitive;
         self
     }
 
@@ -450,6 +466,7 @@ impl FileScanConfigBuilder {
             object_store_url,
             file_source,
             limit,
+            preserve_order,
             constraints,
             file_groups,
             statistics,
@@ -467,10 +484,14 @@ impl FileScanConfigBuilder {
         let file_compression_type =
             file_compression_type.unwrap_or(FileCompressionType::UNCOMPRESSED);
 
+        // If there is an output ordering, we should preserve it.
+        let preserve_order = preserve_order || !output_ordering.is_empty();
+
         FileScanConfig {
             object_store_url,
             file_source,
             limit,
+            preserve_order,
             constraints,
             file_groups,
             output_ordering,
@@ -493,6 +514,7 @@ impl From<FileScanConfig> for FileScanConfigBuilder {
             output_ordering: config.output_ordering,
             file_compression_type: Some(config.file_compression_type),
             limit: config.limit,
+            preserve_order: config.preserve_order,
             constraints: Some(config.constraints),
             batch_size: config.batch_size,
             expr_adapter_factory: config.expr_adapter_factory,
@@ -829,26 +851,38 @@ impl DataSource for FileScanConfig {
         &self,
         order: &[PhysicalSortExpr],
     ) -> Result<SortOrderPushdownResult<Arc<dyn DataSource>>> {
-        // Delegate to FileSource to check if reverse scanning can satisfy the request.
+        // Delegate to FileSource to see if it can optimize for the requested ordering.
         let pushdown_result = self
             .file_source
-            .try_reverse_output(order, &self.eq_properties())?;
+            .try_pushdown_sort(order, &self.eq_properties())?;
 
         match pushdown_result {
             SortOrderPushdownResult::Exact { inner } => {
                 Ok(SortOrderPushdownResult::Exact {
-                    inner: self.rebuild_with_source(inner, true)?,
+                    inner: self.rebuild_with_source(inner, true, order)?,
                 })
             }
             SortOrderPushdownResult::Inexact { inner } => {
                 Ok(SortOrderPushdownResult::Inexact {
-                    inner: self.rebuild_with_source(inner, false)?,
+                    inner: self.rebuild_with_source(inner, false, order)?,
                 })
             }
             SortOrderPushdownResult::Unsupported => {
                 Ok(SortOrderPushdownResult::Unsupported)
             }
         }
+    }
+
+    fn with_preserve_order(&self, preserve_order: bool) -> Option<Arc<dyn DataSource>> {
+        if self.preserve_order == preserve_order {
+            return Some(Arc::new(self.clone()));
+        }
+
+        let new_config = FileScanConfig {
+            preserve_order,
+            ..self.clone()
+        };
+        Some(Arc::new(new_config))
     }
 }
 
@@ -1123,19 +1157,44 @@ impl FileScanConfig {
         &self,
         new_file_source: Arc<dyn FileSource>,
         is_exact: bool,
+        order: &[PhysicalSortExpr],
     ) -> Result<Arc<dyn DataSource>> {
         let mut new_config = self.clone();
 
-        // Reverse file groups (FileScanConfig's responsibility)
-        new_config.file_groups = new_config
-            .file_groups
-            .into_iter()
-            .map(|group| {
-                let mut files = group.into_inner();
-                files.reverse();
-                files.into()
-            })
-            .collect();
+        // Reverse file order (within each group) if the caller is requesting a reversal of this
+        // scan's declared output ordering.
+        //
+        // Historically this function always reversed `file_groups` because it was only reached
+        // via `FileSource::try_reverse_output` (where a reversal was the only supported
+        // optimization).
+        //
+        // Now that `FileSource::try_pushdown_sort` is generic, we must not assume reversal: other
+        // optimizations may become possible (e.g. already-sorted data, statistics-based file
+        // reordering). Therefore we only reverse files when it is known to help satisfy the
+        // requested ordering.
+        let reverse_file_groups = if self.output_ordering.is_empty() {
+            false
+        } else if let Some(requested) = LexOrdering::new(order.iter().cloned()) {
+            let projected_schema = self.projected_schema()?;
+            let orderings = project_orderings(&self.output_ordering, &projected_schema);
+            orderings
+                .iter()
+                .any(|ordering| ordering.is_reverse(&requested))
+        } else {
+            false
+        };
+
+        if reverse_file_groups {
+            new_config.file_groups = new_config
+                .file_groups
+                .into_iter()
+                .map(|group| {
+                    let mut files = group.into_inner();
+                    files.reverse();
+                    files.into()
+                })
+                .collect();
+        }
 
         new_config.file_source = new_file_source;
 
@@ -1357,6 +1416,62 @@ mod tests {
     use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
     use datafusion_physical_expr::projection::ProjectionExpr;
     use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+
+    #[derive(Clone)]
+    struct InexactSortPushdownSource {
+        metrics: ExecutionPlanMetricsSet,
+        table_schema: TableSchema,
+    }
+
+    impl InexactSortPushdownSource {
+        fn new(table_schema: TableSchema) -> Self {
+            Self {
+                metrics: ExecutionPlanMetricsSet::new(),
+                table_schema,
+            }
+        }
+    }
+
+    impl FileSource for InexactSortPushdownSource {
+        fn create_file_opener(
+            &self,
+            _object_store: Arc<dyn object_store::ObjectStore>,
+            _base_config: &FileScanConfig,
+            _partition: usize,
+        ) -> Result<Arc<dyn crate::file_stream::FileOpener>> {
+            unimplemented!()
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn table_schema(&self) -> &TableSchema {
+            &self.table_schema
+        }
+
+        fn with_batch_size(&self, _batch_size: usize) -> Arc<dyn FileSource> {
+            Arc::new(self.clone())
+        }
+
+        fn metrics(&self) -> &ExecutionPlanMetricsSet {
+            &self.metrics
+        }
+
+        fn file_type(&self) -> &str {
+            "mock"
+        }
+
+        fn try_pushdown_sort(
+            &self,
+            _order: &[PhysicalSortExpr],
+            _eq_properties: &EquivalenceProperties,
+        ) -> Result<SortOrderPushdownResult<Arc<dyn FileSource>>> {
+            Ok(SortOrderPushdownResult::Inexact {
+                inner: Arc::new(self.clone()) as Arc<dyn FileSource>,
+            })
+        }
+    }
 
     #[test]
     fn physical_plan_config_no_projection_tab_cols_as_field() {
@@ -1661,43 +1776,40 @@ mod tests {
 
         impl From<File> for PartitionedFile {
             fn from(file: File) -> Self {
-                PartitionedFile {
-                    object_meta: ObjectMeta {
-                        location: Path::from(format!(
-                            "data/date={}/{}.parquet",
-                            file.date, file.name
-                        )),
-                        last_modified: chrono::Utc.timestamp_nanos(0),
-                        size: 0,
-                        e_tag: None,
-                        version: None,
-                    },
-                    partition_values: vec![ScalarValue::from(file.date)],
-                    range: None,
-                    statistics: Some(Arc::new(Statistics {
-                        num_rows: Precision::Absent,
-                        total_byte_size: Precision::Absent,
-                        column_statistics: file
-                            .statistics
-                            .into_iter()
-                            .map(|stats| {
-                                stats
-                                    .map(|(min, max)| ColumnStatistics {
-                                        min_value: Precision::Exact(
-                                            ScalarValue::Float64(min),
-                                        ),
-                                        max_value: Precision::Exact(
-                                            ScalarValue::Float64(max),
-                                        ),
-                                        ..Default::default()
-                                    })
-                                    .unwrap_or_default()
-                            })
-                            .collect::<Vec<_>>(),
-                    })),
-                    extensions: None,
-                    metadata_size_hint: None,
-                }
+                let object_meta = ObjectMeta {
+                    location: Path::from(format!(
+                        "data/date={}/{}.parquet",
+                        file.date, file.name
+                    )),
+                    last_modified: chrono::Utc.timestamp_nanos(0),
+                    size: 0,
+                    e_tag: None,
+                    version: None,
+                };
+                let statistics = Arc::new(Statistics {
+                    num_rows: Precision::Absent,
+                    total_byte_size: Precision::Absent,
+                    column_statistics: file
+                        .statistics
+                        .into_iter()
+                        .map(|stats| {
+                            stats
+                                .map(|(min, max)| ColumnStatistics {
+                                    min_value: Precision::Exact(ScalarValue::Float64(
+                                        min,
+                                    )),
+                                    max_value: Precision::Exact(ScalarValue::Float64(
+                                        max,
+                                    )),
+                                    ..Default::default()
+                                })
+                                .unwrap_or_default()
+                        })
+                        .collect::<Vec<_>>(),
+                });
+                PartitionedFile::new_from_meta(object_meta)
+                    .with_partition_values(vec![ScalarValue::from(file.date)])
+                    .with_statistics(statistics)
             }
         }
     }
@@ -2305,5 +2417,57 @@ mod tests {
             }
             _ => panic!("Expected Hash partitioning"),
         }
+    }
+
+    #[test]
+    fn try_pushdown_sort_reverses_file_groups_only_when_requested_is_reverse()
+    -> Result<()> {
+        let file_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+
+        let table_schema = TableSchema::new(Arc::clone(&file_schema), vec![]);
+        let file_source = Arc::new(InexactSortPushdownSource::new(table_schema));
+
+        let file_groups = vec![FileGroup::new(vec![
+            PartitionedFile::new("file1", 1),
+            PartitionedFile::new("file2", 1),
+        ])];
+
+        let sort_expr_asc = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
+        let config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+                .with_file_groups(file_groups)
+                .with_output_ordering(vec![
+                    LexOrdering::new(vec![sort_expr_asc.clone()]).unwrap(),
+                ])
+                .build();
+
+        let requested_asc = vec![sort_expr_asc.clone()];
+        let result = config.try_pushdown_sort(&requested_asc)?;
+        let SortOrderPushdownResult::Inexact { inner } = result else {
+            panic!("Expected Inexact result");
+        };
+        let pushed_config = inner
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .expect("Expected FileScanConfig");
+        let pushed_files = pushed_config.file_groups[0].files();
+        assert_eq!(pushed_files[0].object_meta.location.as_ref(), "file1");
+        assert_eq!(pushed_files[1].object_meta.location.as_ref(), "file2");
+
+        let requested_desc = vec![sort_expr_asc.reverse()];
+        let result = config.try_pushdown_sort(&requested_desc)?;
+        let SortOrderPushdownResult::Inexact { inner } = result else {
+            panic!("Expected Inexact result");
+        };
+        let pushed_config = inner
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .expect("Expected FileScanConfig");
+        let pushed_files = pushed_config.file_groups[0].files();
+        assert_eq!(pushed_files[0].object_meta.location.as_ref(), "file2");
+        assert_eq!(pushed_files[1].object_meta.location.as_ref(), "file1");
+
+        Ok(())
     }
 }

@@ -304,13 +304,16 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
                 };
                 let union_fields = parse_proto_fields_to_fields(&union.union_types)?;
 
-                // Default to index based type ids if not provided
-                let type_ids: Vec<_> = match union.type_ids.is_empty() {
-                    true => (0..union_fields.len() as i8).collect(),
-                    false => union.type_ids.iter().map(|i| *i as i8).collect(),
+                // Default to index based type ids if not explicitly provided
+                let union_fields = if union.type_ids.is_empty() {
+                    UnionFields::from_fields(union_fields)
+                } else {
+                    let type_ids = union.type_ids.iter().map(|i| *i as i8);
+                    UnionFields::try_new(type_ids, union_fields).map_err(|e| {
+                        DataFusionError::from(e).context("Deserializing Union DataType")
+                    })?
                 };
-
-                DataType::Union(UnionFields::new(type_ids, union_fields), union_mode)
+                DataType::Union(union_fields, union_mode)
             }
             arrow_type::ArrowTypeEnum::Dictionary(dict) => {
                 let key_datatype = dict.as_ref().key.as_deref().required("key")?;
@@ -322,6 +325,19 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
                     map.as_ref().field_type.as_deref().required("field_type")?;
                 let keys_sorted = map.keys_sorted;
                 DataType::Map(Arc::new(field), keys_sorted)
+            }
+            arrow_type::ArrowTypeEnum::RunEndEncoded(run_end_encoded) => {
+                let run_ends_field: Field = run_end_encoded
+                    .as_ref()
+                    .run_ends_field
+                    .as_deref()
+                    .required("run_ends_field")?;
+                let value_field: Field = run_end_encoded
+                    .as_ref()
+                    .values_field
+                    .as_deref()
+                    .required("values_field")?;
+                DataType::RunEndEncoded(run_ends_field.into(), value_field.into())
             }
         })
     }
@@ -575,6 +591,32 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
 
                 Self::Dictionary(Box::new(index_type), Box::new(value))
             }
+            Value::RunEndEncodedValue(v) => {
+                let run_ends_field: Field = v
+                    .run_ends_field
+                    .as_ref()
+                    .ok_or_else(|| Error::required("run_ends_field"))?
+                    .try_into()?;
+
+                let values_field: Field = v
+                    .values_field
+                    .as_ref()
+                    .ok_or_else(|| Error::required("values_field"))?
+                    .try_into()?;
+
+                let value: Self = v
+                    .value
+                    .as_ref()
+                    .ok_or_else(|| Error::required("value"))?
+                    .as_ref()
+                    .try_into()?;
+
+                Self::RunEndEncoded(
+                    run_ends_field.into(),
+                    values_field.into(),
+                    Box::new(value),
+                )
+            }
             Value::BinaryValue(v) => Self::Binary(Some(v.clone())),
             Value::BinaryViewValue(v) => Self::BinaryView(Some(v.clone())),
             Value::LargeBinaryValue(v) => Self::LargeBinary(Some(v.clone())),
@@ -602,7 +644,9 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                     .collect::<Option<Vec<_>>>();
                 let fields = fields.ok_or_else(|| Error::required("UnionField"))?;
                 let fields = parse_proto_fields_to_fields(&fields)?;
-                let fields = UnionFields::new(ids, fields);
+                let union_fields = UnionFields::try_new(ids, fields).map_err(|e| {
+                    DataFusionError::from(e).context("Deserializing Union ScalarValue")
+                })?;
                 let v_id = val.value_id as i8;
                 let val = match &val.value {
                     None => None,
@@ -614,7 +658,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                         Some((v_id, Box::new(val)))
                     }
                 };
-                Self::Union(val, fields, mode)
+                Self::Union(val, union_fields, mode)
             }
             Value::FixedSizeBinaryValue(v) => {
                 Self::FixedSizeBinary(v.length, Some(v.clone().values))
@@ -951,7 +995,9 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             force_filter_selections: value.force_filter_selections,
             data_pagesize_limit: value.data_pagesize_limit as usize,
             write_batch_size: value.write_batch_size as usize,
-            writer_version: value.writer_version.clone(),
+            writer_version: value.writer_version.parse().map_err(|e| {
+                DataFusionError::Internal(format!("Failed to parse writer_version: {e}"))
+            })?,
             compression: value.compression_opt.clone().map(|opt| match opt {
                 protobuf::parquet_options::CompressionOpt::Compression(v) => Some(v),
             }).unwrap_or(None),

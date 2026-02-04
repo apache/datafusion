@@ -30,6 +30,7 @@ use arrow::{
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Result, internal_err, plan_err};
 use datafusion_expr::ColumnarValue;
+use datafusion_expr_common::placement::ExpressionPlacement;
 
 /// Represents the column at a given index in a RecordBatch
 ///
@@ -145,6 +146,10 @@ impl PhysicalExpr for Column {
 
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.name)
+    }
+
+    fn placement(&self) -> ExpressionPlacement {
+        ExpressionPlacement::Column
     }
 }
 

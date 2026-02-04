@@ -95,7 +95,7 @@ mod tests {
             .schema()
             .fields()
             .iter()
-            .map(|f| format!("{}: {:?}", f.name(), f.data_type()))
+            .map(|f| format!("{}: {}", f.name(), f.data_type()))
             .collect();
         assert_eq!(
             vec![
@@ -109,7 +109,7 @@ mod tests {
                 "double_col: Float64",
                 "date_string_col: Binary",
                 "string_col: Binary",
-                "timestamp_col: Timestamp(Microsecond, None)",
+                "timestamp_col: Timestamp(µs)",
             ],
             x
         );

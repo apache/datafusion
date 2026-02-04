@@ -31,6 +31,7 @@ use datafusion::datasource::listing::{
 use datafusion::execution::options::ArrowReadOptions;
 use datafusion::optimizer::Optimizer;
 use datafusion::optimizer::optimize_unions::OptimizeUnions;
+use datafusion_common::parquet_config::DFParquetWriterVersion;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_functions_aggregate::sum::sum_distinct;
 use prost::Message;
@@ -412,6 +413,7 @@ async fn roundtrip_logical_plan_dml() -> Result<()> {
         "DELETE FROM T1",
         "UPDATE T1 SET a = 1",
         "CREATE TABLE T2 AS SELECT * FROM T1",
+        "TRUNCATE TABLE T1",
     ];
     for query in queries {
         let plan = ctx.sql(query).await?.into_optimized_plan()?;
@@ -464,7 +466,7 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
 
     parquet_format.global.bloom_filter_on_read = true;
     parquet_format.global.created_by = "DataFusion Test".to_string();
-    parquet_format.global.writer_version = "PARQUET_2_0".to_string();
+    parquet_format.global.writer_version = DFParquetWriterVersion::V2_0;
     parquet_format.global.write_batch_size = 111;
     parquet_format.global.data_pagesize_limit = 222;
     parquet_format.global.data_page_row_count_limit = 333;
@@ -1532,6 +1534,16 @@ fn round_trip_scalar_values_and_data_types() {
             Box::new(DataType::Int32),
             Box::new(ScalarValue::Utf8(None)),
         ),
+        ScalarValue::RunEndEncoded(
+            Field::new("run_ends", DataType::Int32, false).into(),
+            Field::new("values", DataType::Utf8, true).into(),
+            Box::new(ScalarValue::from("foo")),
+        ),
+        ScalarValue::RunEndEncoded(
+            Field::new("run_ends", DataType::Int32, false).into(),
+            Field::new("values", DataType::Utf8, true).into(),
+            Box::new(ScalarValue::Utf8(None)),
+        ),
         ScalarValue::Binary(Some(b"bar".to_vec())),
         ScalarValue::Binary(None),
         ScalarValue::LargeBinary(Some(b"bar".to_vec())),
@@ -1779,19 +1791,20 @@ fn round_trip_datatype() {
             ),
         ])),
         DataType::Union(
-            UnionFields::new(
+            UnionFields::try_new(
                 vec![7, 5, 3],
                 vec![
                     Field::new("nullable", DataType::Boolean, false),
                     Field::new("name", DataType::Utf8, false),
                     Field::new("datatype", DataType::Binary, false),
                 ],
-            ),
+            )
+            .unwrap(),
             UnionMode::Sparse,
         ),
         DataType::Union(
-            UnionFields::new(
-                vec![5, 8, 1],
+            UnionFields::try_new(
+                vec![5, 8, 1, 100],
                 vec![
                     Field::new("nullable", DataType::Boolean, false),
                     Field::new("name", DataType::Utf8, false),
@@ -1806,7 +1819,8 @@ fn round_trip_datatype() {
                         true,
                     ),
                 ],
-            ),
+            )
+            .unwrap(),
             UnionMode::Dense,
         ),
         DataType::Dictionary(

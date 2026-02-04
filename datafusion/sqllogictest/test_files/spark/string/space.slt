@@ -15,13 +15,27 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# This file was originally created by a porting script from:
-#   https://github.com/lakehq/sail/tree/43b6ed8221de5c4c4adbedbb267ae1351158b43c/crates/sail-spark-connect/tests/gold_data/function
-# This file is part of the implementation of the datafusion-spark function library.
-# For more information, please see:
-#   https://github.com/apache/datafusion/issues/15914
+query T
+SELECT concat(space(1::INT), 'Spark');
+----
+ Spark
 
-## Original Query: SELECT unbase64('U3BhcmsgU1FM');
-## PySpark 3.5.5 Result: {'unbase64(U3BhcmsgU1FM)': bytearray(b'Spark SQL'), 'typeof(unbase64(U3BhcmsgU1FM))': 'binary', 'typeof(U3BhcmsgU1FM)': 'string'}
-#query
-#SELECT unbase64('U3BhcmsgU1FM'::string);
+query T
+SELECT concat(space(5::INT), 'Spark');
+----
+     Spark
+
+query T
+SELECT space(0::INT);
+----
+(empty)
+
+query T
+SELECT space(-1::INT);
+----
+(empty)
+
+query T
+SELECT space(NULL);
+----
+NULL
