@@ -66,6 +66,13 @@ impl MockSource {
     }
 }
 
+/// Convenience method to create a MockSource as a dynamic FileSource
+pub(crate) fn mock_source(
+    table_schema: impl Into<crate::table_schema::TableSchema>,
+) -> Arc<dyn FileSource> {
+    Arc::new(MockSource::new(table_schema))
+}
+
 impl FileSource for MockSource {
     fn create_file_opener(
         &self,
