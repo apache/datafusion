@@ -21,6 +21,7 @@ use super::{CastExpr, Column, Literal};
 use crate::PhysicalExpr;
 use crate::expressions::{BinaryExpr, lit, try_cast};
 use arrow::array::*;
+use arrow::compute::kernels::numeric::div;
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::{
     FilterBuilder, FilterPredicate, is_not_null, not, nullif, prep_null_mask_filter,
@@ -1277,7 +1278,10 @@ impl CaseExpr {
     }
 
     fn divide_by_zero_protection(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        let then_expr = &self.body.when_then_expr[0].1;
+        let (when_expr, then_expr) = &self.body.when_then_expr[0];
+
+        let when_value = when_expr.evaluate(batch)?;
+
         let binary = then_expr
             .as_any()
             .downcast_ref::<BinaryExpr>()
@@ -1286,7 +1290,15 @@ impl CaseExpr {
         let numerator = binary.left().evaluate(batch)?;
         let divisor = binary.right().evaluate(batch)?;
 
-        safe_divide(&numerator, &divisor)
+        let num_rows = batch.num_rows();
+        let num_array = numerator.into_array(num_rows)?;
+        let div_array = divisor.into_array(num_rows)?;
+        let condition_array = when_value.into_array(num_rows)?;
+        let condition = as_boolean_array(&condition_array)?;
+
+        let result = safe_divide_with_mask(&num_array, &div_array, condition)?;
+
+        Ok(ColumnarValue::Array(result))
     }
 }
 
@@ -1508,76 +1520,16 @@ fn replace_with_null(
     Ok(with_null)
 }
 
-fn safe_divide(
-    numerator: &ColumnarValue,
-    divisor: &ColumnarValue,
-) -> Result<ColumnarValue> {
-    if let ColumnarValue::Scalar(div_scalar) = divisor
-        && is_scalar_zero(div_scalar)
-    {
-        let data_type = numerator.data_type();
-        return match numerator {
-            ColumnarValue::Array(arr) => {
-                Ok(ColumnarValue::Array(new_null_array(&data_type, arr.len())))
-            }
-            ColumnarValue::Scalar(_) => Ok(ColumnarValue::Scalar(
-                ScalarValue::try_new_null(&data_type)?,
-            )),
-        };
-    }
-
-    let num_rows = match (numerator, divisor) {
-        (ColumnarValue::Array(arr), _) => arr.len(),
-        (_, ColumnarValue::Array(arr)) => arr.len(),
-        _ => 1,
-    };
-
-    let num_array = numerator.clone().into_array(num_rows)?;
-    let div_array = divisor.clone().into_array(num_rows)?;
-
-    let result = safe_divide_arrays(&num_array, &div_array)?;
-
-    if matches!(numerator, ColumnarValue::Scalar(_))
-        && matches!(divisor, ColumnarValue::Scalar(_))
-    {
-        Ok(ColumnarValue::Scalar(ScalarValue::try_from_array(
-            &result, 0,
-        )?))
-    } else {
-        Ok(ColumnarValue::Array(result))
-    }
-}
-
-fn safe_divide_arrays(numerator: &ArrayRef, divisor: &ArrayRef) -> Result<ArrayRef> {
-    use arrow::compute::kernels::cmp::eq;
-    use arrow::compute::kernels::numeric::div;
-
-    let zero = ScalarValue::new_zero(divisor.data_type())?.to_scalar()?;
-    let zero_mask = eq(divisor, &zero)?;
-
+fn safe_divide_with_mask(
+    numerator: &ArrayRef,
+    divisor: &ArrayRef,
+    condition: &BooleanArray,
+) -> Result<ArrayRef> {
+    let not_condition = not(condition)?;
     let ones = ScalarValue::new_one(divisor.data_type())?.to_scalar()?;
-    let safe_divisor = zip(&zero_mask, &ones, divisor)?;
-
-    let result = div(&numerator, &safe_divisor)?;
-
-    Ok(nullif(&result, &zero_mask)?)
-}
-
-fn is_scalar_zero(scalar: &ScalarValue) -> bool {
-    match scalar {
-        ScalarValue::Int8(Some(0))
-        | ScalarValue::Int16(Some(0))
-        | ScalarValue::Int32(Some(0))
-        | ScalarValue::Int64(Some(0))
-        | ScalarValue::UInt8(Some(0))
-        | ScalarValue::UInt16(Some(0))
-        | ScalarValue::UInt32(Some(0))
-        | ScalarValue::UInt64(Some(0)) => true,
-        ScalarValue::Float16(Some(v)) if v.to_f32() == 0.0 => true,
-        ScalarValue::Float32(Some(v)) if *v == 0.0 => true,
-        ScalarValue::Float64(Some(v)) if *v == 0.0 => true,
-        _ => false,
-    }
+    let safe_divisor = zip(&not_condition, &ones, &divisor)?;
+    let result = div(numerator, &safe_divisor)?;
+    Ok(nullif(&result, &not_condition)?)
 }
 
 /// Create a CASE expression
