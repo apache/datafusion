@@ -17,7 +17,6 @@
 
 #[cfg(test)]
 mod tests {
-    use datafusion::common::assert_contains;
     use datafusion::datasource::provider_as_source;
     use datafusion::logical_expr::LogicalPlanBuilder;
     use datafusion_substrait::logical_plan::consumer::from_substrait_plan;
