@@ -1588,22 +1588,23 @@ ORDER BY simple_struct.id;
 4 300 8
 5 250 NULL
 
-
 #####################
-# Section 13: Cleanup
+# Section 13: RepartitionExec tests
 #####################
 
+# Set target partitions to 32 -> this forces a RepartitionExec
 statement ok
-DROP TABLE simple_struct;
+SET datafusion.execution.target_partitions = 32;
 
-statement ok
-DROP TABLE nested_struct;
-
-statement ok
-DROP TABLE nullable_struct;
-
-statement ok
-DROP TABLE multi_struct;
-
-statement ok
-DROP TABLE join_right;
+query TT
+EXPLAIN SELECT s['value'] FROM simple_struct WHERE id > 2;
+----
+logical_plan
+01)Projection: get_field(simple_struct.s, Utf8("value"))
+02)--Filter: simple_struct.id > Int64(2)
+03)----TableScan: simple_struct projection=[id, s], partial_filters=[simple_struct.id > Int64(2)]
+physical_plan
+01)ProjectionExec: expr=[get_field(s@0, value) as simple_struct.s[value]]
+02)--FilterExec: id@0 > 2, projection=[s@1]
+03)----RepartitionExec: partitioning=RoundRobinBatch(32), input_partitions=1
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[id, s], file_type=parquet, predicate=id@0 > 2, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 2, required_guarantees=[]
