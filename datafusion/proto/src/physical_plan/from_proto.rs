@@ -821,6 +821,17 @@ impl TryFrom<&protobuf::FileSinkConfig> for FileSinkConfig {
             protobuf::InsertOp::Overwrite => InsertOp::Overwrite,
             protobuf::InsertOp::Replace => InsertOp::Replace,
         };
+        let file_output_mode = match conf.file_output_mode() {
+            protobuf::FileOutputMode::Automatic => {
+                datafusion_datasource::file_sink_config::FileOutputMode::Automatic
+            }
+            protobuf::FileOutputMode::SingleFile => {
+                datafusion_datasource::file_sink_config::FileOutputMode::SingleFile
+            }
+            protobuf::FileOutputMode::Directory => {
+                datafusion_datasource::file_sink_config::FileOutputMode::Directory
+            }
+        };
         Ok(Self {
             original_url: String::default(),
             object_store_url: ObjectStoreUrl::parse(&conf.object_store_url)?,
@@ -831,6 +842,7 @@ impl TryFrom<&protobuf::FileSinkConfig> for FileSinkConfig {
             insert_op,
             keep_partition_by_columns: conf.keep_partition_by_columns,
             file_extension: conf.file_extension.clone(),
+            file_output_mode,
         })
     }
 }

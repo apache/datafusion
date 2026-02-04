@@ -22,14 +22,29 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int64Array};
 use arrow::datatypes::{DataType, Field};
-use arrow::util::bench_util::create_string_array_with_len;
+use arrow::util::bench_util::{
+    create_string_array_with_len, create_string_view_array_with_len,
+};
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::unicode::left;
 
-fn create_args(size: usize, str_len: usize, use_negative: bool) -> Vec<ColumnarValue> {
-    let string_array = Arc::new(create_string_array_with_len::<i32>(size, 0.1, str_len));
+fn create_args(
+    size: usize,
+    str_len: usize,
+    use_negative: bool,
+    is_string_view: bool,
+) -> Vec<ColumnarValue> {
+    let string_arg = if is_string_view {
+        ColumnarValue::Array(Arc::new(create_string_view_array_with_len(
+            size, 0.1, str_len, true,
+        )))
+    } else {
+        ColumnarValue::Array(Arc::new(create_string_array_with_len::<i32>(
+            size, 0.1, str_len,
+        )))
+    };
 
     // For negative n, we want to trigger the double-iteration code path
     let n_values: Vec<i64> = if use_negative {
@@ -40,70 +55,84 @@ fn create_args(size: usize, str_len: usize, use_negative: bool) -> Vec<ColumnarV
     let n_array = Arc::new(Int64Array::from(n_values));
 
     vec![
-        ColumnarValue::Array(string_array),
+        string_arg,
         ColumnarValue::Array(Arc::clone(&n_array) as ArrayRef),
     ]
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    for size in [1024, 4096] {
-        let mut group = c.benchmark_group(format!("left size={size}"));
+    for is_string_view in [false, true] {
+        for size in [1024, 4096] {
+            let mut group = c.benchmark_group(format!("left size={size}"));
 
-        // Benchmark with positive n (no optimization needed)
-        let args = create_args(size, 32, false);
-        group.bench_function(BenchmarkId::new("positive n", size), |b| {
-            let arg_fields = args
-                .iter()
-                .enumerate()
-                .map(|(idx, arg)| {
-                    Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+            // Benchmark with positive n (no optimization needed)
+            let mut function_name = if is_string_view {
+                "string_view_array positive n"
+            } else {
+                "string_array positive n"
+            };
+            let args = create_args(size, 32, false, is_string_view);
+            group.bench_function(BenchmarkId::new(function_name, size), |b| {
+                let arg_fields = args
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, arg)| {
+                        Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+                    })
+                    .collect::<Vec<_>>();
+                let config_options = Arc::new(ConfigOptions::default());
+
+                b.iter(|| {
+                    black_box(
+                        left()
+                            .invoke_with_args(ScalarFunctionArgs {
+                                args: args.clone(),
+                                arg_fields: arg_fields.clone(),
+                                number_rows: size,
+                                return_field: Field::new("f", DataType::Utf8, true)
+                                    .into(),
+                                config_options: Arc::clone(&config_options),
+                            })
+                            .expect("left should work"),
+                    )
                 })
-                .collect::<Vec<_>>();
-            let config_options = Arc::new(ConfigOptions::default());
+            });
 
-            b.iter(|| {
-                black_box(
-                    left()
-                        .invoke_with_args(ScalarFunctionArgs {
-                            args: args.clone(),
-                            arg_fields: arg_fields.clone(),
-                            number_rows: size,
-                            return_field: Field::new("f", DataType::Utf8, true).into(),
-                            config_options: Arc::clone(&config_options),
-                        })
-                        .expect("left should work"),
-                )
-            })
-        });
+            // Benchmark with negative n (triggers optimization)
+            function_name = if is_string_view {
+                "string_view_array negative n"
+            } else {
+                "string_array negative n"
+            };
+            let args = create_args(size, 32, true, is_string_view);
+            group.bench_function(BenchmarkId::new(function_name, size), |b| {
+                let arg_fields = args
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, arg)| {
+                        Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+                    })
+                    .collect::<Vec<_>>();
+                let config_options = Arc::new(ConfigOptions::default());
 
-        // Benchmark with negative n (triggers optimization)
-        let args = create_args(size, 32, true);
-        group.bench_function(BenchmarkId::new("negative n", size), |b| {
-            let arg_fields = args
-                .iter()
-                .enumerate()
-                .map(|(idx, arg)| {
-                    Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+                b.iter(|| {
+                    black_box(
+                        left()
+                            .invoke_with_args(ScalarFunctionArgs {
+                                args: args.clone(),
+                                arg_fields: arg_fields.clone(),
+                                number_rows: size,
+                                return_field: Field::new("f", DataType::Utf8, true)
+                                    .into(),
+                                config_options: Arc::clone(&config_options),
+                            })
+                            .expect("left should work"),
+                    )
                 })
-                .collect::<Vec<_>>();
-            let config_options = Arc::new(ConfigOptions::default());
+            });
 
-            b.iter(|| {
-                black_box(
-                    left()
-                        .invoke_with_args(ScalarFunctionArgs {
-                            args: args.clone(),
-                            arg_fields: arg_fields.clone(),
-                            number_rows: size,
-                            return_field: Field::new("f", DataType::Utf8, true).into(),
-                            config_options: Arc::clone(&config_options),
-                        })
-                        .expect("left should work"),
-                )
-            })
-        });
-
-        group.finish();
+            group.finish();
+        }
     }
 }
 

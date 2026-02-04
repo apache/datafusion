@@ -88,3 +88,7 @@ name = "map"
 [[bench]]
 harness = false
 name = "array_remove"
+
+[[bench]]
+harness = false
+name = "array_repeat"

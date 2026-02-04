@@ -26,9 +26,15 @@
 //!
 //! Each subcommand runs a corresponding example:
 //! - `all` — run all examples included in this module
-//! - `mem_pool_exec_plan` — shows how to implement memory-aware ExecutionPlan with memory reservation and spilling
-//! - `mem_pool_tracking` — demonstrates TrackConsumersPool for memory tracking and debugging with enhanced error messages
-//! - `tracing` — demonstrates the tracing injection feature for the DataFusion runtime
+//!
+//! - `mem_pool_exec_plan`
+//!   (file: memory_pool_execution_plan.rs, desc: Memory-aware ExecutionPlan with spilling)
+//!
+//! - `mem_pool_tracking`
+//!   (file: memory_pool_tracking.rs, desc: Demonstrates memory tracking)
+//!
+//! - `tracing`
+//!   (file: tracing.rs, desc: Demonstrates tracing integration)
 
 mod memory_pool_execution_plan;
 mod memory_pool_tracking;

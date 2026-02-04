@@ -571,6 +571,16 @@ SELECT covar(c2, c12) FROM aggregate_test_100
 ----
 -0.079969012479
 
+query R
+SELECT covar_pop(arrow_cast(c2, 'Float16'), arrow_cast(c12, 'Float16')) FROM aggregate_test_100
+----
+-0.079163311005
+
+query R
+SELECT covar(arrow_cast(c2, 'Float16'), arrow_cast(c12, 'Float16')) FROM aggregate_test_100
+----
+-0.079962940409
+
 # single_row_query_covar_1
 query R
 select covar_samp(sq.column1, sq.column2) from (values (1.1, 2.2)) as sq
@@ -1313,6 +1323,24 @@ select approx_median(arrow_cast(col_f32, 'Float16')), arrow_typeof(approx_median
 ----
 2.75 Float16
 
+# This shouldn't be NaN, see:
+# https://github.com/apache/datafusion/issues/18945
+query RT
+select
+  percentile_cont(0.5) within group (order by arrow_cast(col_f32, 'Float16')),
+  arrow_typeof(percentile_cont(0.5) within group (order by arrow_cast(col_f32, 'Float16')))
+from median_table;
+----
+NaN Float16
+
+query RT
+select
+  approx_percentile_cont(0.5) within group (order by arrow_cast(col_f32, 'Float16')),
+  arrow_typeof(approx_percentile_cont(0.5) within group (order by arrow_cast(col_f32, 'Float16')))
+from median_table;
+----
+2.75 Float16
+
 query ?T
 select approx_median(NULL), arrow_typeof(approx_median(NULL)) from median_table;
 ----
@@ -2029,11 +2057,12 @@ statement ok
 INSERT INTO t1 VALUES (TRUE);
 
 # ISSUE: https://github.com/apache/datafusion/issues/12716
-# This test verifies that approx_percentile_cont_with_weight does not panic when given 'NaN' and returns 'inf'
+# This test verifies that approx_percentile_cont_with_weight does not panic when given 'NaN'
+# With weight=0, the data point does not contribute, so result is NULL
 query R
 SELECT approx_percentile_cont_with_weight(0, 0) WITHIN GROUP (ORDER BY 'NaN'::DOUBLE) FROM t1 WHERE t1.v1;
 ----
-Infinity
+NULL
 
 statement ok
 DROP TABLE t1;
@@ -2352,21 +2381,21 @@ e 115
 query TI
 SELECT c1, approx_percentile_cont_with_weight(c2, 0.95) WITHIN GROUP (ORDER BY c3) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
-a 74
+a 65
 b 68
-c 123
-d 124
-e 115
+c 122
+d 123
+e 110
 
 # approx_percentile_cont_with_weight with centroids
 query TI
 SELECT c1, approx_percentile_cont_with_weight(c2, 0.95, 200) WITHIN GROUP (ORDER BY c3) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
-a 74
+a 65
 b 68
-c 123
-d 124
-e 115
+c 122
+d 123
+e 110
 
 # csv_query_sum_crossjoin
 query TTI
@@ -6718,7 +6747,12 @@ from aggregate_test_100;
 ----
 0.051534002628 0.48427355347 100 0.001929150558 0.479274948239 0.508972509913 6.707779292571 9.234223721582 0.345678715695
 
-
+query R
+select
+    regr_slope(arrow_cast(c12, 'Float16'), arrow_cast(c11, 'Float16'))
+from aggregate_test_100;
+----
+0.051477733249
 
 # regr_*() functions ignore NULLs
 query RRIRRRRRR
@@ -7951,8 +7985,9 @@ logical_plan
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----TableScan: t projection=[]
 physical_plan
-01)ProjectionExec: expr=[2 as count(Int64(1)), 2 as count()]
-02)--PlaceholderRowExec
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(Int64(1)), count(Int64(1))@0 as count()]
+02)--ProjectionExec: expr=[2 as count(Int64(1))]
+03)----PlaceholderRowExec
 
 query II
 select count(1), count(*) from t;
@@ -7967,8 +8002,9 @@ logical_plan
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----TableScan: t projection=[]
 physical_plan
-01)ProjectionExec: expr=[2 as count(Int64(1)), 2 as count(*)]
-02)--PlaceholderRowExec
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(Int64(1)), count(Int64(1))@0 as count(*)]
+02)--ProjectionExec: expr=[2 as count(Int64(1))]
+03)----PlaceholderRowExec
 
 query II
 select count(), count(*) from t;
@@ -7983,8 +8019,9 @@ logical_plan
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----TableScan: t projection=[]
 physical_plan
-01)ProjectionExec: expr=[2 as count(), 2 as count(*)]
-02)--PlaceholderRowExec
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(), count(Int64(1))@0 as count(*)]
+02)--ProjectionExec: expr=[2 as count(Int64(1))]
+03)----PlaceholderRowExec
 
 query TT
 explain select count(1) * count(2) from t;

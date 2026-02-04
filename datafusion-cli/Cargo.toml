@@ -40,7 +40,7 @@ async-trait = { workspace = true }
 aws-config = "1.8.12"
 aws-credential-types = "1.2.7"
 chrono = { workspace = true }
-clap = { version = "4.5.53", features = ["cargo", "derive"] }
+clap = { version = "4.5.56", features = ["cargo", "derive"] }
 datafusion = { workspace = true, features = [
     "avro",
     "compression",

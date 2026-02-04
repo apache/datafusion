@@ -58,11 +58,6 @@ pub fn is_signed_numeric(dt: &DataType) -> bool {
     )
 }
 
-/// Determine whether the given data type `dt` is `Null`.
-pub fn is_null(dt: &DataType) -> bool {
-    *dt == DataType::Null
-}
-
 /// Determine whether the given data type `dt` is a `Timestamp`.
 pub fn is_timestamp(dt: &DataType) -> bool {
     matches!(dt, DataType::Timestamp(_, _))
@@ -78,24 +73,5 @@ pub fn is_datetime(dt: &DataType) -> bool {
     matches!(
         dt,
         DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _)
-    )
-}
-
-/// Determine whether the given data type `dt` is a `Utf8` or `Utf8View` or `LargeUtf8`.
-pub fn is_utf8_or_utf8view_or_large_utf8(dt: &DataType) -> bool {
-    matches!(
-        dt,
-        DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8
-    )
-}
-
-/// Determine whether the given data type `dt` is a `Decimal`.
-pub fn is_decimal(dt: &DataType) -> bool {
-    matches!(
-        dt,
-        DataType::Decimal32(_, _)
-            | DataType::Decimal64(_, _)
-            | DataType::Decimal128(_, _)
-            | DataType::Decimal256(_, _)
     )
 }
