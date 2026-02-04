@@ -48,9 +48,12 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(
-            ["File exists", "os error 80"]
-                .iter()
-                .any(|s| got.contains(s))
+            [
+                "File exists", // unix
+                "os error 80"  // windows
+            ]
+            .iter()
+            .any(|s| got.contains(s))
         );
 
         fs::remove_file(path)?;
