@@ -112,7 +112,12 @@ impl DefaultFileStatisticsCacheState {
     }
 
     fn remove(&mut self, k: &Path) -> Option<CachedFileMetadata> {
-        self.lru_queue.remove(k)
+        if let Some(old_entry) = self.lru_queue.remove(k) {
+            self.memory_used -= old_entry.heap_size();
+            Some(old_entry)
+        } else {
+            None
+        }
     }
 
     fn contains_key(&self, k: &Path) -> bool {
@@ -567,11 +572,14 @@ mod tests {
         assert_eq!(result_3.unwrap(), value_3);
 
         cache.remove(&meta_2.location);
-
         assert_eq!(cache.len(), 1);
+        assert_eq!(cache.memory_used(), value_3.heap_size());
+
 
         cache.clear();
         assert_eq!(cache.len(), 0);
+        assert_eq!(cache.memory_used(), 0);
+
     }
 
     #[test]
