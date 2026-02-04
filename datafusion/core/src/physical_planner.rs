@@ -1162,17 +1162,15 @@ impl DefaultPhysicalPlanner {
                     let (left, left_col_keys, left_projected) =
                         wrap_projection_for_join_if_necessary(
                             &left_keys,
-                            original_left.as_ref().clone(),
+                            Arc::clone(original_left),
                         )?;
                     let (right, right_col_keys, right_projected) =
                         wrap_projection_for_join_if_necessary(
                             &right_keys,
-                            original_right.as_ref().clone(),
+                            Arc::clone(original_right),
                         )?;
-                    let column_on = (left_col_keys, right_col_keys);
 
-                    let left = Arc::new(left);
-                    let right = Arc::new(right);
+                    let column_on = (left_col_keys, right_col_keys);
                     let (new_join, requalified) = Join::try_new_with_project_input(
                         node,
                         Arc::clone(&left),
