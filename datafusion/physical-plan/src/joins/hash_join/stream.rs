@@ -619,10 +619,10 @@ impl HashJoinStream {
                     .store(true, Ordering::Relaxed);
             }
 
-            // Check if probe side (RIGHT) contains NULL
-            // Since null_aware validation ensures single column join, we only check the first column
-            let probe_key_column = &state.values[0];
-            if probe_key_column.null_count() > 0 {
+            // Check if probe side (RIGHT) contains NULL in ANY column
+            // For multi-column joins, if any column has NULL, the entire tuple is considered NULL
+            let has_null = state.values.iter().any(|col| col.null_count() > 0);
+            if has_null {
                 // Found NULL in probe side - set shared flag to prevent any output
                 build_side
                     .left_data
@@ -849,15 +849,19 @@ impl HashJoinStream {
                 .probe_side_non_empty
                 .load(Ordering::Relaxed)
         {
-            // Since null_aware validation ensures single column join, we only check the first column
-            let build_key_column = &build_side.left_data.values()[0];
+            // Filter out indices where ANY key column is NULL
+            // For multi-column joins, if any column has NULL, the entire tuple should be filtered
+            let build_key_columns = build_side.left_data.values();
 
             // Filter out indices where the key is NULL
             let filtered_indices: Vec<u64> = left_side
                 .iter()
                 .filter_map(|idx| {
                     let idx_usize = idx.unwrap() as usize;
-                    if build_key_column.is_null(idx_usize) {
+                    // Check if any column has NULL at this index
+                    let has_null =
+                        build_key_columns.iter().any(|col| col.is_null(idx_usize));
+                    if has_null {
                         None // Skip rows with NULL keys
                     } else {
                         Some(idx.unwrap())
