@@ -684,6 +684,9 @@ physical_plan
 statement ok
 set datafusion.execution.parquet.pushdown_filters = true;
 
+statement ok
+set datafusion.optimizer.max_passes = 0;
+
 # Create memory table with matching schema (a: VARCHAR, b: BIGINT)
 statement ok
 CREATE TABLE t_union_mem(a VARCHAR, b BIGINT) AS VALUES ('qux', 4), ('quux', 5);
@@ -715,11 +718,13 @@ EXPLAIN SELECT b FROM (
 ) WHERE b > 2;
 ----
 logical_plan
-01)Union
-02)--Filter: t_union_mem.b > Int64(2)
-03)----TableScan: t_union_mem projection=[b]
-04)--Filter: t_union_parquet.b > Int64(2)
-05)----TableScan: t_union_parquet projection=[b], partial_filters=[t_union_parquet.b > Int64(2)]
+01)Projection: b
+02)--Filter: b > Int64(2)
+03)----Union
+04)------Projection: t_union_mem.a, t_union_mem.b
+05)--------TableScan: t_union_mem
+06)------Projection: t_union_parquet.a, t_union_parquet.b
+07)--------TableScan: t_union_parquet
 physical_plan
 01)UnionExec
 02)--FilterExec: b@0 > 2
