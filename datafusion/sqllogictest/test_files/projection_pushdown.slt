@@ -118,10 +118,6 @@ SELECT id, s['value'] FROM simple_struct ORDER BY id;
 4 300
 5 250
 
-###
-# Test 2.1b: Projection-only get_field (potential optimization target)
-###
-
 query TT
 EXPLAIN SELECT s['label'] FROM simple_struct;
 ----
