@@ -289,7 +289,7 @@ pub struct PiecewiseMergeJoinExec {
     /// number of partitions are tracked.
     ///
     /// Number of output partitions for buffered side
-    #[allow(unused)]
+    #[expect(unused)]
     buffered_partitions: usize,
     /// Number of output partitions for streamed side
     streamed_partitions: usize,

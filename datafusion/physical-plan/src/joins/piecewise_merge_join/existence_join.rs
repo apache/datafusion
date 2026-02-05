@@ -86,7 +86,7 @@ impl RecordBatchStream for ExistencePWMJStream {
 //      which rows match the join condition and produce output batches.
 //  4. `Completed` - All data has been processed.
 impl ExistencePWMJStream {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn try_new(
         schema: Arc<Schema>,
         on_streamed: PhysicalExprRef,
