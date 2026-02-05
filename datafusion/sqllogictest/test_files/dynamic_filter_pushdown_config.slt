@@ -158,7 +158,7 @@ physical_plan
 01)ProjectionExec: expr=[id@1 as id, data@2 as data, info@0 as info]
 02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0)], projection=[info@1, id@2, data@3]
 03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id, info], file_type=parquet
-04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet, predicate=DynamicFilter [ empty ]
+04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet, predicate=AdaptiveSelectivity [ DynamicFilter [ empty ] ]
 
 # Disable Join dynamic filter pushdown
 statement ok
@@ -213,7 +213,7 @@ physical_plan
 01)ProjectionExec: expr=[id@1 as id, data@2 as data, info@0 as info]
 02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0)], projection=[info@1, id@2, data@3]
 03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id, info], file_type=parquet
-04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet, predicate=DynamicFilter [ empty ]
+04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet, predicate=AdaptiveSelectivity [ DynamicFilter [ empty ] ]
 
 # Enable TopK, disable Join
 statement ok
@@ -436,7 +436,7 @@ physical_plan
 01)ProjectionExec: expr=[id@1 as id, data@2 as data, info@0 as info]
 02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0)], projection=[info@1, id@2, data@3]
 03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id, info], file_type=parquet
-04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet, predicate=DynamicFilter [ empty ]
+04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet, predicate=AdaptiveSelectivity [ DynamicFilter [ empty ] ]
 
 # Cleanup
 
@@ -488,19 +488,19 @@ query T
 SELECT value FROM information_schema.df_settings
 WHERE name = 'datafusion.optimizer.enable_adaptive_filter_selectivity_tracking';
 ----
-false
+true
 
 query T
 SELECT value FROM information_schema.df_settings
 WHERE name = 'datafusion.optimizer.adaptive_filter_selectivity_threshold';
 ----
-0.95
+0.85
 
 query T
 SELECT value FROM information_schema.df_settings
 WHERE name = 'datafusion.optimizer.adaptive_filter_min_rows_for_selectivity';
 ----
-10000
+50000
 
 # Enable adaptive selectivity tracking
 statement ok

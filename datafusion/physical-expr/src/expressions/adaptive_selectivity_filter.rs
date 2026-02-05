@@ -253,7 +253,7 @@ impl PhysicalExpr for AdaptiveSelectivityFilterExpr {
         match self.state.load(Ordering::Relaxed) as u8 {
             STATE_DISABLED => {
                 // If disabled, we can return a literal true expression instead
-                return Ok(Some(lit(true)));
+                Ok(Some(lit(true) as Arc<dyn PhysicalExpr>))
             }
             _ => {
                 // Return the inner expression directly to strip the wrapper during snapshotting.
