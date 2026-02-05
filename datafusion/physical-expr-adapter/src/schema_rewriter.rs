@@ -430,8 +430,6 @@ impl DefaultPhysicalExprAdapterRewriter {
         let column = self.resolve_column(
             column,
             physical_column_index,
-            logical_field.data_type(),
-            physical_field.data_type(),
         )?;
 
         if logical_field.data_type() == physical_field.data_type() {
@@ -455,8 +453,6 @@ impl DefaultPhysicalExprAdapterRewriter {
         &self,
         column: &Column,
         physical_column_index: usize,
-        _logical_type: &DataType,
-        _physical_type: &DataType,
     ) -> Result<Column> {
         if column.index() == physical_column_index {
             Ok(column.clone())
@@ -510,7 +506,7 @@ impl DefaultPhysicalExprAdapterRewriter {
 
         let cast_expr = Arc::new(CastColumnExpr::new(
             Arc::new(column),
-            Arc::new(actual_physical_field.as_ref().clone()),
+            Arc::new(actual_physical_field.clone()),
             Arc::new(logical_field.clone()),
             None,
         ));
@@ -1457,5 +1453,49 @@ mod tests {
         // Both should work correctly
         assert!(format!("{:?}", adapter1).contains("BatchAdapter"));
         assert!(format!("{:?}", adapter2).contains("BatchAdapter"));
+    }
+
+    #[test]
+    fn test_rewrite_column_index_and_type_mismatch() {
+        let physical_schema = Schema::new(vec![
+            Field::new("b", DataType::Utf8, true),
+            Field::new("a", DataType::Int32, false), // Index 1
+        ]);
+
+        let logical_schema = Schema::new(vec![
+            Field::new("a", DataType::Int64, false), // Index 0, Different Type
+            Field::new("b", DataType::Utf8, true),
+        ]);
+
+        let factory = DefaultPhysicalExprAdapterFactory;
+        let adapter = factory
+            .create(Arc::new(logical_schema), Arc::new(physical_schema))
+            .unwrap();
+
+        // Logical column "a" is at index 0
+        let column_expr = Arc::new(Column::new("a", 0));
+
+        let result = adapter.rewrite(column_expr).unwrap();
+
+        // Should be a CastColumnExpr
+        let cast_expr = result
+            .as_any()
+            .downcast_ref::<CastColumnExpr>()
+            .expect("Expected CastColumnExpr");
+
+        // Verify the inner column points to the correct physical index (1)
+        let inner_col = cast_expr
+            .expr()
+            .as_any()
+            .downcast_ref::<Column>()
+            .expect("Expected inner Column");
+        assert_eq!(inner_col.name(), "a");
+        assert_eq!(inner_col.index(), 1); // Physical index is 1
+
+        // Verify cast types
+        assert_eq!(
+            cast_expr.data_type(&Schema::empty()).unwrap(),
+            DataType::Int64
+        );
     }
 }
