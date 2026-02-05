@@ -2547,6 +2547,15 @@ impl DefaultPhysicalPlanner {
         // to verify that the plan is executable.
         InvariantChecker(InvariantLevel::Executable).check(&new_plan)?;
 
+        #[cfg(debug_assertions)]
+        {
+            use datafusion_physical_plan::execution_plan::check_physical_expressions;
+            new_plan.apply(|p| {
+                check_physical_expressions(Arc::clone(p))?;
+                Ok(TreeNodeRecursion::Continue)
+            })?;
+        }
+
         debug!(
             "Optimized physical plan:\n{}\n",
             displayable(new_plan.as_ref()).indent(false)

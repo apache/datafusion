@@ -23,7 +23,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use super::utils::create_schema;
-use crate::execution_plan::EmissionType;
+use crate::execution_plan::{EmissionType, ReplacePhysicalExpr};
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::windows::{
     calc_requirements, get_ordered_partition_by_indices, get_partition_by_sort_exprs,
@@ -292,6 +292,49 @@ impl ExecutionPlan for WindowAggExec {
             column_statistics,
             total_byte_size: Precision::Absent,
         })
+    }
+
+    fn physical_expressions<'a>(
+        &'a self,
+    ) -> Option<Box<dyn Iterator<Item = Arc<dyn PhysicalExpr>> + 'a>> {
+        Some(Box::new(
+            self.window_expr
+                .iter()
+                .flat_map(|expr| expr.inner_expressions_iter()),
+        ))
+    }
+
+    fn with_physical_expressions(
+        &self,
+        params: ReplacePhysicalExpr,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let exprs_count = params.exprs.len();
+        let mut expected_count = 0;
+
+        let mut exprs_iter = params.exprs.into_iter();
+        let mut window_exprs = Vec::with_capacity(self.window_expr.len());
+
+        for expr in self.window_expr.iter() {
+            let window_expr_count = expr.inner_expressions_count();
+            let new_exprs = exprs_iter.by_ref().take(window_expr_count).collect();
+            let window_expr = expr.with_inner_expressions(new_exprs)?;
+
+            expected_count += window_expr_count;
+            window_exprs.push(window_expr);
+        }
+
+        assert_eq_or_internal_err!(
+            expected_count,
+            exprs_count,
+            "Inconsistent number of physical expressions for {}",
+            self.name()
+        );
+
+        Ok(Some(Arc::new(Self {
+            window_expr: window_exprs,
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..self.clone()
+        })))
     }
 }
 
