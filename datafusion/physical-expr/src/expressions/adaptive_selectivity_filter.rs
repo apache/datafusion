@@ -95,6 +95,7 @@ impl AdaptiveSelectivityFilterExpr {
     /// Get the current selectivity information for observability.
     ///
     /// Returns `(rows_passed, rows_total, is_disabled)`.
+    #[cfg(test)]
     fn selectivity_info(&self) -> (usize, usize, bool) {
         let state = self.state.load(Ordering::Relaxed) as u8;
         match state {
@@ -174,22 +175,7 @@ impl AdaptiveSelectivityFilterExpr {
 
 impl Display for AdaptiveSelectivityFilterExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let (passed, total, disabled) = self.selectivity_info();
-        if disabled {
-            write!(f, "AdaptiveSelectivity(DISABLED) [ {} ]", self.inner)
-        } else if total > 0 {
-            let selectivity = passed as f64 / total as f64;
-            write!(
-                f,
-                "AdaptiveSelectivity({:.1}%, {}/{}) [ {} ]",
-                selectivity * 100.0,
-                passed,
-                total,
-                self.inner
-            )
-        } else {
-            write!(f, "AdaptiveSelectivity [ {} ]", self.inner)
-        }
+        write!(f, "AdaptiveSelectivity [ {} ]", self.inner)
     }
 }
 
@@ -392,7 +378,10 @@ mod tests {
 
         // Should return scalar true when disabled
         let ColumnarValue::Scalar(ScalarValue::Boolean(Some(true))) = result else {
-            panic!("Expected scalar true result when disabled, got: {:?}", result);
+            panic!(
+                "Expected scalar true result when disabled, got: {:?}",
+                result
+            );
         };
     }
 

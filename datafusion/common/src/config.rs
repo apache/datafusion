@@ -1130,7 +1130,7 @@ config_namespace! {
         ///
         /// For example, 0.95 means if 95% or more of rows pass the filter, it will be disabled.
         /// Only used when `enable_adaptive_filter_selectivity_tracking` is true.
-        pub adaptive_filter_selectivity_threshold: f64, default = 0.95
+        pub adaptive_filter_selectivity_threshold: f64, default = 0.85
 
         /// Enable selectivity-based disabling of dynamic filters from joins.
         ///
