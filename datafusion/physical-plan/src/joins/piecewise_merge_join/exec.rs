@@ -22,8 +22,7 @@ use arrow::{
     util::bit_util,
 };
 use arrow_schema::{SchemaRef, SortOptions};
-use datafusion_common::not_impl_err;
-use datafusion_common::{JoinSide, Result, internal_err};
+use datafusion_common::{JoinSide, Result, ScalarValue, internal_err};
 use datafusion_execution::{
     SendableRecordBatchStream,
     memory_pool::{MemoryConsumer, MemoryReservation},
@@ -55,7 +54,6 @@ use crate::joins::piecewise_merge_join::utils::{
 use crate::joins::utils::{
     asymmetric_join_output_partitioning, reorder_output_after_swap,
 };
-use crate::joins::utils::asymmetric_join_output_partitioning;
 use crate::metrics::MetricsSet;
 use crate::{DisplayAs, DisplayFormatType, ExecutionPlanProperties};
 use crate::{
@@ -336,6 +334,17 @@ impl PiecewiseMergeJoinExec {
             );
         };
 
+        let right_batch_required_orders =
+            vec![PhysicalSortExpr::new(Arc::clone(&on.1), sort_options)];
+
+        let Some(right_batch_required_orders) =
+            LexOrdering::new(right_batch_required_orders)
+        else {
+            return internal_err!(
+                "PiecewiseMergeJoinExec requires valid sort expressions for its right side"
+            );
+        };
+
         let buffered_schema = buffered.schema();
         let streamed_schema = streamed.schema();
 
@@ -360,6 +369,7 @@ impl PiecewiseMergeJoinExec {
             buffered_fut: Default::default(),
             metrics: ExecutionPlanMetricsSet::new(),
             left_child_plan_required_order,
+            right_batch_required_orders,
             sort_options,
             cache,
             buffered_partitions,

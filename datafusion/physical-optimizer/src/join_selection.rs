@@ -34,7 +34,7 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_plan::execution_plan::EmissionType;
 use datafusion_physical_plan::joins::utils::ColumnIndex;
 use datafusion_physical_plan::joins::{
-    CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode,
+    CrossJoinExec, HashJoinExec, HashJoinExecBuilder, NestedLoopJoinExec, PartitionMode,
     PiecewiseMergeJoinExec, StreamJoinPartitionMode, SymmetricHashJoinExec,
 };
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
@@ -276,25 +276,19 @@ fn statistical_join_selection_subrule(
                     || partitioned_hash_join(hash_join).map(Some),
                     |v| Ok(Some(v)),
                 )?,
-                PartitionMode::CollectLeft => try_collect_left(hash_join, true, 0, 0)?
-                    .map_or_else(
-                        || partitioned_hash_join(hash_join).map(Some),
-                        |v| Ok(Some(v)),
-                    )?,
-                PartitionMode::Partitioned => {
-                    let left = hash_join.left();
-                    let right = hash_join.right();
-                    // Don't swap null-aware anti joins as they have specific side requirements
-                    if hash_join.join_type().supports_swap()
-                        && !hash_join.null_aware
-                        && should_swap_join_order(&**left, &**right)?
-                    {
-                        hash_join
-                            .swap_inputs(PartitionMode::Partitioned)
-                            .map(Some)?
-                    } else {
-                        None
-                    }
+            PartitionMode::Partitioned => {
+                let left = hash_join.left();
+                let right = hash_join.right();
+                // Don't swap null-aware anti joins as they have specific side requirements
+                if hash_join.join_type().supports_swap()
+                    && !hash_join.null_aware
+                    && should_swap_join_order(&**left, &**right)?
+                {
+                    hash_join
+                        .swap_inputs(PartitionMode::Partitioned)
+                        .map(Some)?
+                } else {
+                    None
                 }
             }
         }

@@ -22,7 +22,7 @@ use arrow::array::{ArrayRef, RecordBatch};
 use arrow::compute::BatchCoalescer;
 use arrow_schema::{Schema, SchemaRef, SortOptions};
 use datafusion_common::NullEquality;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, internal_err};
 use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 use datafusion_expr::Accumulator;
 use datafusion_expr::{JoinType, Operator};
@@ -137,11 +137,12 @@ impl ExistencePWMJStream {
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
         let build_timer = self.join_metrics.build_time.timer();
-        let buffered_data = ready!(self
-            .buffered_side
-            .try_as_initial_mut()?
-            .buffered_fut
-            .get_shared(cx))?;
+        let buffered_data = ready!(
+            self.buffered_side
+                .try_as_initial_mut()?
+                .buffered_fut
+                .get_shared(cx)
+        )?;
         build_timer.done();
 
         // Start fetching stream batches for classic joins
@@ -415,17 +416,16 @@ impl BatchProcessState {
 mod tests {
     use super::*;
     use crate::{
-        common,
+        ExecutionPlan, common,
         joins::PiecewiseMergeJoinExec,
-        test::{build_table_i32, TestMemoryExec},
-        ExecutionPlan,
+        test::{TestMemoryExec, build_table_i32},
     };
     use arrow::array::{Date32Array, Int32Array};
     use arrow_schema::{DataType, Field};
     use datafusion_common::test_util::batches_to_string;
     use datafusion_execution::TaskContext;
     use datafusion_expr::JoinType;
-    use datafusion_physical_expr::{expressions::Column, PhysicalExpr};
+    use datafusion_physical_expr::{PhysicalExpr, expressions::Column};
     use insta::assert_snapshot;
     use std::sync::Arc;
 

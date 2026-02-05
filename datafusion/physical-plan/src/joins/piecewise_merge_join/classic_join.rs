@@ -247,7 +247,7 @@ impl ClassicPWMJStream {
 
                 // Reset BatchProcessState before processing a new stream batch
                 self.batch_process_state.reset();
-                self.state = PiecewiseMergeJoinStreamState::ProcessStreamBatch(
+                self.state = ClassicPWMJStreamState::ProcessStreamBatch(
                     SortedStreamBatch::new(stream_batch, vec![stream_values]),
                 );
             }
