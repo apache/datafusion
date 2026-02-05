@@ -664,6 +664,8 @@ C prod 2017.6
 # TEST 12: Partitioned Join with Matching Partition Counts - With Optimization
 # Both tables have 3 partitions matching target_partitions=3
 # No RepartitionExec needed for join - partitions already satisfy the requirement
+# Dynamic filter pushdown is disabled in this mode because preserve_file_partitions
+# reports Hash partitioning for Hive-style file groups, which are not hash-routed.
 ##########
 
 statement ok
