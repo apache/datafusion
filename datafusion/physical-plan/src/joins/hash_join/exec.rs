@@ -83,7 +83,6 @@ use datafusion_physical_expr::equivalence::{
 use datafusion_physical_expr::expressions::{
     DynamicFilterPhysicalExpr, SelectivityAwareFilterExpr, SelectivityConfig, lit,
 };
-use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
 use datafusion_physical_expr::projection::{ProjectionRef, combine_projections};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 
