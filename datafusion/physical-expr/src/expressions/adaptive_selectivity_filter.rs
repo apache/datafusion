@@ -22,7 +22,7 @@ use std::any::Any;
 use std::fmt::Display;
 use std::hash::Hash;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use arrow::array::BooleanArray;
 use arrow::datatypes::{DataType, Schema};
@@ -65,10 +65,6 @@ const STATE_DISABLED: u8 = 2;
 /// It monitors how many rows pass through the filter, and if the filter
 /// is found to be ineffective (passes most rows), it automatically disables
 /// itself to avoid evaluation overhead.
-///
-/// The wrapper resets its statistics when the inner filter's generation changes,
-/// which happens when the dynamic filter is updated (e.g., when the hash table
-/// is built in a hash join).
 #[derive(Debug)]
 pub struct AdaptiveSelectivityFilterExpr {
     /// The inner filter expression (typically DynamicFilterPhysicalExpr).
@@ -80,9 +76,6 @@ pub struct AdaptiveSelectivityFilterExpr {
     rows_passed: AtomicUsize,
     /// Total rows processed (only used in Tracking state).
     rows_total: AtomicUsize,
-    /// The generation of the inner filter when we started tracking.
-    /// If this changes, we need to reset our state.
-    tracked_generation: AtomicU64,
     /// Configuration for selectivity tracking.
     config: SelectivityConfig,
 }
@@ -90,13 +83,11 @@ pub struct AdaptiveSelectivityFilterExpr {
 impl AdaptiveSelectivityFilterExpr {
     /// Create a new `AdaptiveSelectivityFilterExpr` wrapping the given inner expression.
     pub fn new(inner: Arc<dyn PhysicalExpr>, config: SelectivityConfig) -> Self {
-        let current_generation = inner.snapshot_generation();
         Self {
             inner,
             state: AtomicUsize::new(STATE_TRACKING as usize),
             rows_passed: AtomicUsize::new(0),
             rows_total: AtomicUsize::new(0),
-            tracked_generation: AtomicU64::new(current_generation),
             config,
         }
     }
@@ -252,25 +243,9 @@ impl PhysicalExpr for AdaptiveSelectivityFilterExpr {
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         // Fast path: check state first
         let state = self.state.load(Ordering::Relaxed) as u8;
-        match state {
-            STATE_DISABLED => {
-                // Fast path: filter is disabled, return all-true
-                return Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(true))));
-            }
-            STATE_TRACKING => {
-                // Need to do tracking - check generation first
-                let current_gen = self.inner.snapshot_generation();
-                let tracked_gen = self.tracked_generation.load(Ordering::Relaxed);
-                if current_gen != tracked_gen {
-                    // Generation changed - reset tracking
-                    self.rows_passed.store(0, Ordering::Relaxed);
-                    self.rows_total.store(0, Ordering::Relaxed);
-                    self.tracked_generation
-                        .store(current_gen, Ordering::Relaxed);
-                    self.state.store(STATE_TRACKING as usize, Ordering::Relaxed);
-                }
-            }
-            _ => {}
+        if state == STATE_DISABLED {
+            // Fast path: filter is disabled, return all-true
+            return Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(true))));
         }
 
         // Evaluate inner expression
@@ -310,17 +285,12 @@ impl PhysicalExpr for AdaptiveSelectivityFilterExpr {
 
     fn snapshot_generation(&self) -> u64 {
         let state = self.state.load(Ordering::Relaxed) as u8;
-        match state {
-            STATE_TRACKING => {
-                let inner = self.inner.snapshot_generation();
-                // Update our tracked generation to match inner
-                self.tracked_generation.store(inner, Ordering::Relaxed);
-                inner
-            }
-            // Defer to inner expression's generation since we are basically a pass-through now
-            STATE_ACTIVE => self.inner.snapshot_generation(),
-            // Add 1 to distinguish from active state, we evaluate to all-true now
-            _disabled => self.tracked_generation.load(Ordering::Relaxed) + 1,
+        if state == STATE_DISABLED {
+            // When disabled, return 0 to indicate static behavior
+            0
+        } else {
+            // Pass through to inner expression's generation
+            self.inner.snapshot_generation()
         }
     }
 }
@@ -416,17 +386,14 @@ mod tests {
         assert!(wrapper.is_disabled(), "Filter should be disabled");
 
         // Now create a batch where the original filter would return some false
-        // But since we're disabled, we should get all true
+        // But since we're disabled, we should get scalar true (efficient bypass)
         let batch2 = create_batch(vec![200, 201, 202]); // These would fail a < 100
         let result = wrapper.evaluate(&batch2).unwrap();
 
-        let ColumnarValue::Array(arr) = result else {
-            panic!("Expected array result");
+        // Should return scalar true when disabled
+        let ColumnarValue::Scalar(ScalarValue::Boolean(Some(true))) = result else {
+            panic!("Expected scalar true result when disabled, got: {:?}", result);
         };
-        let bool_arr = arr.as_any().downcast_ref::<BooleanArray>().unwrap();
-
-        // All values should be true because the filter is disabled
-        assert_eq!(bool_arr.true_count(), 3);
     }
 
     #[test]
