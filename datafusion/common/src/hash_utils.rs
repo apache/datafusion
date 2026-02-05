@@ -57,19 +57,6 @@ pub fn combine_hashes(l: u64, r: u64) -> u64 {
     hash.wrapping_mul(37).wrapping_add(r)
 }
 
-/// Applies `row_hash` into `dst` according to `rehash` semantics.
-///
-/// - `rehash = false`: initialize/overwrite `dst`
-/// - `rehash = true`: combine `row_hash` into `dst`
-#[inline]
-fn apply_row_hash(dst: &mut u64, row_hash: u64, rehash: bool) {
-    if rehash {
-        *dst = combine_hashes(row_hash, *dst);
-    } else {
-        *dst = row_hash;
-    }
-}
-
 /// Maximum size for the thread-local hash buffer before truncation (4MB = 524,288 u64 elements).
 /// The goal of this is to avoid unbounded memory growth that would appear as a memory leak.
 /// We allow temporary allocations beyond this size, but after use the buffer is truncated
@@ -495,8 +482,14 @@ fn hash_struct_array(
     let mut values_hashes = vec![0u64; row_len];
     create_hashes(array.columns(), random_state, &mut values_hashes)?;
 
-    for i in valid_row_indices {
-        apply_row_hash(&mut hashes_buffer[i], values_hashes[i], rehash);
+    if rehash {
+        for i in valid_row_indices {
+            hashes_buffer[i] = combine_hashes(values_hashes[i], hashes_buffer[i]);
+        }
+    } else {
+        for i in valid_row_indices {
+            hashes_buffer[i] = values_hashes[i];
+        }
     }
 
     // Hash null struct values consistently with other array types
@@ -542,7 +535,7 @@ fn hash_map_array(
                     for values_hash in &values_hashes[start.as_usize()..stop.as_usize()] {
                         row_hash = combine_hashes(*values_hash, row_hash);
                     }
-                    apply_row_hash(&mut hashes_buffer[i], row_hash, rehash);
+                    hashes_buffer[i] = row_hash;
                 }
             } else {
                 hash_null(
@@ -564,7 +557,7 @@ fn hash_map_array(
                 for values_hash in &values_hashes[start.as_usize()..stop.as_usize()] {
                     row_hash = combine_hashes(*values_hash, row_hash);
                 }
-                apply_row_hash(&mut hashes_buffer[i], row_hash, rehash);
+                hashes_buffer[i] = row_hash;
             }
         }
     }
@@ -615,7 +608,7 @@ where
                     {
                         row_hash = combine_hashes(*values_hash, row_hash);
                     }
-                    apply_row_hash(&mut hashes_buffer[i], row_hash, rehash);
+                    hashes_buffer[i] = row_hash;
                 }
             } else {
                 hash_null(
@@ -645,7 +638,7 @@ where
                 {
                     row_hash = combine_hashes(*values_hash, row_hash);
                 }
-                apply_row_hash(hash, row_hash, rehash);
+                *hash = row_hash;
             }
         }
     }
@@ -685,7 +678,7 @@ where
                     for values_hash in &values_hashes[start..end] {
                         row_hash = combine_hashes(*values_hash, row_hash);
                     }
-                    apply_row_hash(&mut hashes_buffer[i], row_hash, rehash);
+                    hashes_buffer[i] = row_hash;
                 }
             } else {
                 hash_null(
@@ -709,7 +702,7 @@ where
                 for values_hash in &values_hashes[start..end] {
                     row_hash = combine_hashes(*values_hash, row_hash);
                 }
-                apply_row_hash(&mut hashes_buffer[i], row_hash, rehash);
+                hashes_buffer[i] = row_hash;
             }
         }
     }
@@ -741,13 +734,24 @@ fn hash_union_array(
         child_hashes.insert(type_id, child_hash_buffer);
     }
 
-    #[expect(clippy::needless_range_loop)]
-    for i in 0..array.len() {
-        let type_id = array.type_id(i);
-        let child_offset = array.value_offset(i);
+    if rehash {
+        #[expect(clippy::needless_range_loop)]
+        for i in 0..array.len() {
+            let type_id = array.type_id(i);
+            let child_offset = array.value_offset(i);
 
-        let child_hash = child_hashes.get(&type_id).expect("invalid type_id");
-        apply_row_hash(&mut hashes_buffer[i], child_hash[child_offset], rehash);
+            let child_hash = child_hashes.get(&type_id).expect("invalid type_id");
+            hashes_buffer[i] = combine_hashes(child_hash[child_offset], hashes_buffer[i]);
+        }
+    } else {
+        #[expect(clippy::needless_range_loop)]
+        for i in 0..array.len() {
+            let type_id = array.type_id(i);
+            let child_offset = array.value_offset(i);
+
+            let child_hash = child_hashes.get(&type_id).expect("invalid type_id");
+            hashes_buffer[i] = child_hash[child_offset];
+        }
     }
 
     Ok(())
@@ -784,7 +788,7 @@ fn hash_fixed_list_array(
                     {
                         row_hash = combine_hashes(*values_hash, row_hash);
                     }
-                    apply_row_hash(&mut hashes_buffer[i], row_hash, rehash);
+                    hashes_buffer[i] = row_hash;
                 }
             } else {
                 hash_null(
@@ -810,7 +814,7 @@ fn hash_fixed_list_array(
                 {
                     row_hash = combine_hashes(*values_hash, row_hash);
                 }
-                apply_row_hash(&mut hashes_buffer[i], row_hash, rehash);
+                hashes_buffer[i] = row_hash;
             }
         }
     }
