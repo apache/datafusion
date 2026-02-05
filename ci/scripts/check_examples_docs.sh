@@ -36,6 +36,7 @@ ROOT_DIR="$(git rev-parse --show-toplevel)"
 EXAMPLES_DIR="$ROOT_DIR/datafusion-examples"
 README="$EXAMPLES_DIR/README.md"
 README_NEW="$EXAMPLES_DIR/README-NEW.md"
+PRETTIER_VERSION="2.7.1"
 
 echo "▶ Generating examples README (Rust generator)…"
 cargo run --quiet \
@@ -43,8 +44,8 @@ cargo run --quiet \
   --bin examples-docs \
   > "$README_NEW"
 
-echo "▶ Formatting generated README with Prettier…"
-npx prettier@2.7.1 \
+echo "▶ Formatting generated README with prettier ${PRETTIER_VERSION}…"
+npx "prettier@${PRETTIER_VERSION}" \
   --parser markdown \
   --write "$README_NEW"
 
@@ -60,7 +61,7 @@ if ! diff -u "$README" "$README_NEW" > /tmp/examples-readme.diff; then
   echo "To update the README locally, run:"
   echo ""
   echo "  cargo run --bin examples-docs \\"
-  echo "    | npx prettier@2.7.1 --parser markdown --write \\"
+  echo "    | npx prettier@${PRETTIER_VERSION} --parser markdown --write \\"
   echo "    > datafusion-examples/README.md"
   echo ""
   echo "Diff:"
