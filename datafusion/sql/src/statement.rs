@@ -342,6 +342,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 refresh_mode,
                 initialize,
                 require_user,
+                partition_of: _,
+                for_values: _,
             }) => {
                 if temporary {
                     return not_impl_err!("Temporary tables not supported")?;
@@ -990,6 +992,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 settings,
                 format_clause,
                 insert_token: _insert_token, // record the location the `INSERT` token
+                optimizer_hint: _,
             }) => {
                 let table_name = match table {
                     TableObject::TableName(table_name) => table_name,
@@ -1059,6 +1062,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 or,
                 limit,
                 update_token: _,
+                optimizer_hint: _,
             }) => {
                 let from_clauses =
                     from.map(|update_table_from_kind| match update_table_from_kind {
@@ -1091,6 +1095,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 order_by,
                 limit,
                 delete_token: _,
+                optimizer_hint: _,
             }) => {
                 if !tables.is_empty() {
                     plan_err!("DELETE <TABLE> not supported")?;
@@ -1397,6 +1402,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 cascade,
                 on_cluster,
                 table,
+                if_exists: _,
             }) => {
                 let _ = table; // Support TRUNCATE TABLE and TRUNCATE syntax
                 if table_names.len() != 1 {

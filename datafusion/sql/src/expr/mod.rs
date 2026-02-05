@@ -272,6 +272,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 expr,
                 data_type,
                 format,
+                array: _,
             } => {
                 self.sql_cast_to_expr(*expr, &data_type, format, schema, planner_context)
             }
@@ -281,6 +282,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 expr,
                 data_type,
                 format,
+                array: _,
             } => {
                 if let Some(format) = format {
                     return not_impl_err!("CAST with format is not supported: {format}");
