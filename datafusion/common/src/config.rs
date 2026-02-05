@@ -1121,7 +1121,7 @@ config_namespace! {
         /// The filter will remain in a tracking state until this many rows have been
         /// processed. This ensures statistical stability before making the disable decision.
         /// Only used when `enable_adaptive_filter_selectivity_tracking` is true.
-        pub adaptive_filter_min_rows_for_selectivity: usize, default = 50_000
+        pub adaptive_filter_min_rows_for_selectivity: usize, default = 100_000
 
         /// Selectivity threshold for adaptive disabling of join dynamic filters.
         ///
@@ -1130,7 +1130,7 @@ config_namespace! {
         ///
         /// For example, 0.95 means if 95% or more of rows pass the filter, it will be disabled.
         /// Only used when `enable_adaptive_filter_selectivity_tracking` is true.
-        pub adaptive_filter_selectivity_threshold: f64, default = 0.85
+        pub adaptive_filter_selectivity_threshold: f64, default = 0.50
 
         /// Enable selectivity-based disabling of dynamic filters from joins.
         ///
