@@ -32,6 +32,7 @@ mod literal;
 mod negative;
 mod no_op;
 mod not;
+mod placeholder;
 mod try_cast;
 mod unknown_column;
 
@@ -54,5 +55,6 @@ pub use literal::{Literal, lit};
 pub use negative::{NegativeExpr, negative};
 pub use no_op::NoOp;
 pub use not::{NotExpr, not};
+pub use placeholder::{PlaceholderExpr, has_placeholders, placeholder};
 pub use try_cast::{TryCastExpr, try_cast};
 pub use unknown_column::UnKnownColumn;

@@ -42,7 +42,7 @@ use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion_physical_plan::expressions::{
     BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, LikeExpr, Literal,
-    NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn, in_list,
+    NegativeExpr, NotExpr, PlaceholderExpr, TryCastExpr, UnKnownColumn, in_list,
 };
 use datafusion_physical_plan::joins::{HashExpr, SeededRandomState};
 use datafusion_physical_plan::windows::{create_window_expr, schema_add_window_field};
@@ -495,6 +495,13 @@ pub fn parse_physical_expr_with_converter(
                 hash_expr.description.clone(),
             ))
         }
+        ExprType::PlaceholderExpr(placeholder_expr) => match placeholder_expr.field {
+            Some(ref field) => Arc::new(PlaceholderExpr::new_with_field(
+                placeholder_expr.id.clone(),
+                Arc::new(field.try_into()?),
+            )),
+            None => Arc::new(PlaceholderExpr::new(placeholder_expr.id.clone())),
+        },
         ExprType::Extension(extension) => {
             let inputs: Vec<Arc<dyn PhysicalExpr>> = extension
                 .inputs

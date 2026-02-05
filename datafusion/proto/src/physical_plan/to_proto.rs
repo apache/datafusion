@@ -37,7 +37,8 @@ use datafusion_physical_expr_common::physical_expr::snapshot_physical_expr;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_plan::expressions::{
     BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr,
-    LikeExpr, Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
+    LikeExpr, Literal, NegativeExpr, NotExpr, PlaceholderExpr, TryCastExpr,
+    UnKnownColumn,
 };
 use datafusion_physical_plan::joins::{HashExpr, HashTableLookupExpr};
 use datafusion_physical_plan::udaf::AggregateFunctionExpr;
@@ -504,6 +505,20 @@ pub fn serialize_physical_expr_with_converter(
                     seed2: s2,
                     seed3: s3,
                     description: expr.description().to_string(),
+                },
+            )),
+        })
+    } else if let Some(expr) = expr.downcast_ref::<PlaceholderExpr>() {
+        Ok(protobuf::PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(protobuf::physical_expr_node::ExprType::PlaceholderExpr(
+                protobuf::PhysicalPlaceholderNode {
+                    id: expr.id.clone(),
+                    field: expr
+                        .field
+                        .as_ref()
+                        .map(|f| f.as_ref().try_into())
+                        .transpose()?,
                 },
             )),
         })
