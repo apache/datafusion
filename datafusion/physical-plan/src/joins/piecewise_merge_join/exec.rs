@@ -22,11 +22,11 @@ use arrow::{
     util::bit_util,
 };
 use arrow_schema::{SchemaRef, SortOptions};
-use datafusion_common::ScalarValue;
-use datafusion_common::{internal_err, JoinSide, Result};
+use datafusion_common::not_impl_err;
+use datafusion_common::{JoinSide, Result, internal_err};
 use datafusion_execution::{
-    memory_pool::{MemoryConsumer, MemoryReservation},
     SendableRecordBatchStream,
+    memory_pool::{MemoryConsumer, MemoryReservation},
 };
 use datafusion_expr::{JoinType, Operator};
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
@@ -38,10 +38,10 @@ use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use futures::TryStreamExt;
 use parking_lot::Mutex;
 use std::fmt::Formatter;
-use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
 
-use crate::execution_plan::{boundedness_from_children, EmissionType};
+use crate::execution_plan::{EmissionType, boundedness_from_children};
 
 use crate::joins::piecewise_merge_join::classic_join::{
     ClassicPWMJStream, ClassicPWMJStreamState,
@@ -55,16 +55,18 @@ use crate::joins::piecewise_merge_join::utils::{
 use crate::joins::utils::{
     asymmetric_join_output_partitioning, reorder_output_after_swap,
 };
+use crate::joins::utils::asymmetric_join_output_partitioning;
+use crate::metrics::MetricsSet;
+use crate::{DisplayAs, DisplayFormatType, ExecutionPlanProperties};
 use crate::{
+    ExecutionPlan, PlanProperties,
     joins::{
-        utils::{build_join_schema, BuildProbeJoinMetrics, OnceAsync, OnceFut},
         SharedBitmapBuilder,
+        utils::{BuildProbeJoinMetrics, OnceAsync, OnceFut, build_join_schema},
     },
     metrics::ExecutionPlanMetricsSet,
     spill::get_record_batch_memory_size,
-    ExecutionPlan, PlanProperties,
 };
-use crate::{DisplayAs, DisplayFormatType, ExecutionPlanProperties};
 
 /// `PiecewiseMergeJoinExec` is a join execution plan that only evaluates single range filter and show much
 /// better performance for these workloads than `NestedLoopJoin`
@@ -275,6 +277,10 @@ pub struct PiecewiseMergeJoinExec {
     ///
     /// The left sort order, descending for `<`, `<=` operations + ascending for `>`, `>=` operations
     left_child_plan_required_order: LexOrdering,
+    /// The right sort order, descending for `<`, `<=` operations + ascending for `>`, `>=` operations
+    /// Unsorted for mark joins
+    #[expect(dead_code)]
+    right_batch_required_orders: LexOrdering,
 
     /// This determines the sort order of all join columns used in sorting the stream and buffered execution plans.
     sort_options: SortOptions,
@@ -314,7 +320,7 @@ impl PiecewiseMergeJoinExec {
             _ => {
                 return internal_err!(
                     "Cannot contain non-range operator in PiecewiseMergeJoinExec"
-                )
+                );
             }
         };
 
@@ -585,6 +591,10 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
             )))
         }
     }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
+    }
 }
 
 impl DisplayAs for PiecewiseMergeJoinExec {
@@ -628,7 +638,7 @@ async fn build_buffered_data(
 
     // Combine batches and record number of rows
     let initial = (Vec::new(), 0, metrics, reservation);
-    let (batches, num_rows, metrics, mut reservation) = buffered
+    let (batches, num_rows, metrics, reservation) = buffered
         .try_fold(initial, |mut acc, batch| async {
             let batch_size = get_record_batch_memory_size(&batch);
             acc.3.try_grow(batch_size)?;

@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use crate::protobuf_common as protobuf;
 use crate::protobuf_common::{
-    arrow_type::ArrowTypeEnum, scalar_value::Value, EmptyMessage,
+    EmptyMessage, arrow_type::ArrowTypeEnum, scalar_value::Value,
 };
 use arrow::array::{ArrayRef, RecordBatch};
 use arrow::csv::WriterBuilder;
@@ -32,6 +32,8 @@ use arrow::ipc::writer::{
     CompressionContext, DictionaryTracker, IpcDataGenerator, IpcWriteOptions,
 };
 use datafusion_common::{
+    Column, ColumnStatistics, Constraint, Constraints, DFSchema, DFSchemaRef,
+    DataFusionError, JoinSide, ScalarValue, Statistics,
     config::{
         CsvOptions, JsonOptions, ParquetColumnOptions, ParquetOptions,
         TableParquetOptions,
@@ -40,8 +42,6 @@ use datafusion_common::{
     parsers::CompressionTypeVariant,
     plan_datafusion_err,
     stats::Precision,
-    Column, ColumnStatistics, Constraint, Constraints, DFSchema, DFSchemaRef,
-    DataFusionError, JoinSide, ScalarValue, Statistics,
 };
 
 #[derive(Debug)]
@@ -180,7 +180,9 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
                     UnionMode::Dense => protobuf::UnionMode::Dense,
                 };
                 Self::Union(protobuf::Union {
-                    union_types: convert_arc_fields_to_proto_fields(fields.iter().map(|(_, item)|item))?,
+                    union_types: convert_arc_fields_to_proto_fields(
+                        fields.iter().map(|(_, item)| item),
+                    )?,
                     union_mode: union_mode.into(),
                     type_ids: fields.iter().map(|(x, _)| x as i32).collect(),
                 })
@@ -191,37 +193,44 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
                     value: Some(Box::new(value_type.as_ref().try_into()?)),
                 }))
             }
-            DataType::Decimal32(precision, scale) => Self::Decimal32(protobuf::Decimal32Type {
-                precision: *precision as u32,
-                scale: *scale as i32,
-            }),
-            DataType::Decimal64(precision, scale) => Self::Decimal64(protobuf::Decimal64Type {
-                precision: *precision as u32,
-                scale: *scale as i32,
-            }),
-            DataType::Decimal128(precision, scale) => Self::Decimal128(protobuf::Decimal128Type {
-                precision: *precision as u32,
-                scale: *scale as i32,
-            }),
-            DataType::Decimal256(precision, scale) => Self::Decimal256(protobuf::Decimal256Type {
-                precision: *precision as u32,
-                scale: *scale as i32,
-            }),
-            DataType::Map(field, sorted) => {
-                Self::Map(Box::new(
-                    protobuf::Map {
-                        field_type: Some(Box::new(field.as_ref().try_into()?)),
-                        keys_sorted: *sorted,
-                    }
-                ))
+            DataType::Decimal32(precision, scale) => {
+                Self::Decimal32(protobuf::Decimal32Type {
+                    precision: *precision as u32,
+                    scale: *scale as i32,
+                })
             }
-            DataType::RunEndEncoded(_, _) => {
-                return Err(Error::General(
-                    "Proto serialization error: The RunEndEncoded data type is not yet supported".to_owned()
-                ))
+            DataType::Decimal64(precision, scale) => {
+                Self::Decimal64(protobuf::Decimal64Type {
+                    precision: *precision as u32,
+                    scale: *scale as i32,
+                })
+            }
+            DataType::Decimal128(precision, scale) => {
+                Self::Decimal128(protobuf::Decimal128Type {
+                    precision: *precision as u32,
+                    scale: *scale as i32,
+                })
+            }
+            DataType::Decimal256(precision, scale) => {
+                Self::Decimal256(protobuf::Decimal256Type {
+                    precision: *precision as u32,
+                    scale: *scale as i32,
+                })
+            }
+            DataType::Map(field, sorted) => Self::Map(Box::new(protobuf::Map {
+                field_type: Some(Box::new(field.as_ref().try_into()?)),
+                keys_sorted: *sorted,
+            })),
+            DataType::RunEndEncoded(run_ends_field, values_field) => {
+                Self::RunEndEncoded(Box::new(protobuf::RunEndEncoded {
+                    run_ends_field: Some(Box::new(run_ends_field.as_ref().try_into()?)),
+                    values_field: Some(Box::new(values_field.as_ref().try_into()?)),
+                }))
             }
             DataType::ListView(_) | DataType::LargeListView(_) => {
-                return Err(Error::General(format!("Proto serialization error: {val} not yet supported")))
+                return Err(Error::General(format!(
+                    "Proto serialization error: {val} not yet supported"
+                )));
             }
         };
 
@@ -680,6 +689,18 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     ))),
                 })
             }
+
+            ScalarValue::RunEndEncoded(run_ends_field, values_field, val) => {
+                Ok(protobuf::ScalarValue {
+                    value: Some(Value::RunEndEncodedValue(Box::new(
+                        protobuf::ScalarRunEndEncodedValue {
+                            run_ends_field: Some(run_ends_field.as_ref().try_into()?),
+                            values_field: Some(values_field.as_ref().try_into()?),
+                            value: Some(Box::new(val.as_ref().try_into()?)),
+                        },
+                    ))),
+                })
+            }
         }
     }
 }
@@ -795,6 +816,7 @@ impl From<&ColumnStatistics> for protobuf::ColumnStats {
             sum_value: Some(protobuf::Precision::from(&s.sum_value)),
             null_count: Some(protobuf::Precision::from(&s.null_count)),
             distinct_count: Some(protobuf::Precision::from(&s.distinct_count)),
+            byte_size: Some(protobuf::Precision::from(&s.byte_size)),
         }
     }
 }
@@ -856,9 +878,10 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             metadata_size_hint_opt: value.metadata_size_hint.map(|v| protobuf::parquet_options::MetadataSizeHintOpt::MetadataSizeHint(v as u64)),
             pushdown_filters: value.pushdown_filters,
             reorder_filters: value.reorder_filters,
+            force_filter_selections: value.force_filter_selections,
             data_pagesize_limit: value.data_pagesize_limit as u64,
             write_batch_size: value.write_batch_size as u64,
-            writer_version: value.writer_version.clone(),
+            writer_version: value.writer_version.to_string(),
             compression_opt: value.compression.clone().map(protobuf::parquet_options::CompressionOpt::Compression),
             dictionary_enabled_opt: value.dictionary_enabled.map(protobuf::parquet_options::DictionaryEnabledOpt::DictionaryEnabled),
             dictionary_page_size_limit: value.dictionary_page_size_limit as u64,
@@ -974,6 +997,7 @@ impl TryFrom<&CsvOptions> for protobuf::CsvOptions {
             null_regex: opts.null_regex.clone().unwrap_or_default(),
             comment: opts.comment.map_or_else(Vec::new, |h| vec![h]),
             truncated_rows: opts.truncated_rows.map_or_else(Vec::new, |h| vec![h as u8]),
+            compression_level: opts.compression_level,
         })
     }
 }
@@ -986,6 +1010,7 @@ impl TryFrom<&JsonOptions> for protobuf::JsonOptions {
         Ok(protobuf::JsonOptions {
             compression: compression.into(),
             schema_infer_max_rec: opts.schema_infer_max_rec.map(|h| h as u64),
+            compression_level: opts.compression_level,
         })
     }
 }
@@ -1006,7 +1031,7 @@ fn create_proto_scalar<I, T: FnOnce(&I) -> protobuf::scalar_value::Value>(
     Ok(protobuf::ScalarValue { value: Some(value) })
 }
 
-// ScalarValue::List / FixedSizeList / LargeList / Struct / Map are serialized using
+// Nested ScalarValue types (List / FixedSizeList / LargeList / Struct / Map) are serialized using
 // Arrow IPC messages as a single column RecordBatch
 fn encode_scalar_nested_value(
     arr: ArrayRef,
@@ -1014,15 +1039,22 @@ fn encode_scalar_nested_value(
 ) -> Result<protobuf::ScalarValue, Error> {
     let batch = RecordBatch::try_from_iter(vec![("field_name", arr)]).map_err(|e| {
         Error::General(format!(
-            "Error creating temporary batch while encoding ScalarValue::List: {e}"
+            "Error creating temporary batch while encoding nested ScalarValue: {e}"
         ))
     })?;
 
-    let gen = IpcDataGenerator {};
+    let ipc_gen = IpcDataGenerator {};
     let mut dict_tracker = DictionaryTracker::new(false);
     let write_options = IpcWriteOptions::default();
+    // The IPC writer requires pre-allocated dictionary IDs (normally assigned when
+    // serializing the schema). Populate `dict_tracker` by encoding the schema first.
+    ipc_gen.schema_to_bytes_with_dictionary_tracker(
+        batch.schema().as_ref(),
+        &mut dict_tracker,
+        &write_options,
+    );
     let mut compression_context = CompressionContext::default();
-    let (encoded_dictionaries, encoded_message) = gen
+    let (encoded_dictionaries, encoded_message) = ipc_gen
         .encode(
             &batch,
             &mut dict_tracker,
@@ -1030,7 +1062,7 @@ fn encode_scalar_nested_value(
             &mut compression_context,
         )
         .map_err(|e| {
-            Error::General(format!("Error encoding ScalarValue::List as IPC: {e}"))
+            Error::General(format!("Error encoding nested ScalarValue as IPC: {e}"))
         })?;
 
     let schema: protobuf::Schema = batch.schema().try_into()?;

@@ -17,8 +17,8 @@
 
 //! Stream Implementation for PiecewiseMergeJoin's Classic Join (Left, Right, Full, Inner)
 
-use arrow::array::{new_null_array, Array, PrimitiveBuilder};
-use arrow::compute::{take, BatchCoalescer};
+use arrow::array::{Array, PrimitiveBuilder, new_null_array};
+use arrow::compute::{BatchCoalescer, take};
 use arrow::datatypes::UInt32Type;
 use arrow::{
     array::{ArrayRef, RecordBatch, UInt32Array},
@@ -26,7 +26,7 @@ use arrow::{
 };
 use arrow_schema::{Schema, SchemaRef, SortOptions};
 use datafusion_common::NullEquality;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, internal_err};
 use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 use datafusion_expr::{JoinType, Operator};
 use datafusion_physical_expr::PhysicalExprRef;
@@ -37,8 +37,8 @@ use std::{sync::Arc, task::Poll};
 use crate::handle_state;
 use crate::joins::piecewise_merge_join::exec::{BufferedSide, BufferedSideReadyState};
 use crate::joins::piecewise_merge_join::utils::need_produce_result_in_final;
-use crate::joins::utils::{compare_join_arrays, get_final_indices_from_shared_bitmap};
 use crate::joins::utils::{BuildProbeJoinMetrics, StatefulStreamResult};
+use crate::joins::utils::{compare_join_arrays, get_final_indices_from_shared_bitmap};
 
 pub(super) enum ClassicPWMJStreamState {
     WaitBufferedSide,
@@ -70,7 +70,6 @@ pub(super) struct SortedStreamBatch {
 }
 
 impl SortedStreamBatch {
-    #[allow(dead_code)]
     fn new(batch: RecordBatch, compare_key_values: Vec<ArrayRef>) -> Self {
         Self {
             batch,
@@ -132,7 +131,7 @@ impl RecordBatchStream for ClassicPWMJStream {
 //      `Completed` however for Full and Right we will need to process the unmatched buffered rows.
 impl ClassicPWMJStream {
     // Creates a new `PiecewiseMergeJoinStream` instance
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn try_new(
         schema: Arc<Schema>,
         on_streamed: PhysicalExprRef,
@@ -189,11 +188,12 @@ impl ClassicPWMJStream {
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
         let build_timer = self.join_metrics.build_time.timer();
-        let buffered_data = ready!(self
-            .buffered_side
-            .try_as_initial_mut()?
-            .buffered_fut
-            .get_shared(cx))?;
+        let buffered_data = ready!(
+            self.buffered_side
+                .try_as_initial_mut()?
+                .buffered_fut
+                .get_shared(cx)
+        )?;
         build_timer.done();
 
         // We will start fetching stream batches for classic joins
@@ -247,11 +247,9 @@ impl ClassicPWMJStream {
 
                 // Reset BatchProcessState before processing a new stream batch
                 self.batch_process_state.reset();
-                self.state =
-                    ClassicPWMJStreamState::ProcessStreamBatch(SortedStreamBatch {
-                        batch: stream_batch,
-                        compare_key_values: vec![stream_values],
-                    });
+                self.state = PiecewiseMergeJoinStreamState::ProcessStreamBatch(
+                    SortedStreamBatch::new(stream_batch, vec![stream_values]),
+                );
             }
             Some(Err(err)) => return Poll::Ready(Err(err)),
         };
@@ -279,7 +277,7 @@ impl ClassicPWMJStream {
         let batch = resolve_classic_join(
             buffered_side,
             stream_batch,
-            Arc::clone(&self.schema),
+            &self.schema,
             self.operator,
             self.sort_option,
             self.join_type,
@@ -450,11 +448,10 @@ impl Stream for ClassicPWMJStream {
 }
 
 // For Left, Right, Full, and Inner joins, incoming stream batches will already be sorted.
-#[allow(clippy::too_many_arguments)]
 fn resolve_classic_join(
     buffered_side: &mut BufferedSideReadyState,
     stream_batch: &SortedStreamBatch,
-    join_schema: Arc<Schema>,
+    join_schema: &SchemaRef,
     operator: Operator,
     sort_options: SortOptions,
     join_type: JoinType,
@@ -503,7 +500,7 @@ fn resolve_classic_join(
                             buffered_side,
                             stream_batch,
                             join_type,
-                            Arc::clone(&join_schema),
+                            join_schema,
                         )?;
 
                         batch_process_state.output_batches.push_batch(batch)?;
@@ -531,7 +528,7 @@ fn resolve_classic_join(
                             buffered_side,
                             stream_batch,
                             join_type,
-                            Arc::clone(&join_schema),
+                            join_schema,
                         )?;
 
                         // Flush batch and update pointers if we have a completed batch
@@ -552,7 +549,7 @@ fn resolve_classic_join(
                     return internal_err!(
                         "PiecewiseMergeJoin should not contain operator, {}",
                         operator
-                    )
+                    );
                 }
             };
 
@@ -578,14 +575,14 @@ fn resolve_classic_join(
         let batch = create_unmatched_batch(
             &mut batch_process_state.unmatched_indices,
             stream_batch,
-            Arc::clone(&join_schema),
+            join_schema,
         )?;
 
         batch_process_state.output_batches.push_batch(batch)?;
     }
 
     batch_process_state.continue_process = false;
-    Ok(RecordBatch::new_empty(Arc::clone(&join_schema)))
+    Ok(RecordBatch::new_empty(Arc::clone(join_schema)))
 }
 
 // Builds a record batch from indices ranges on the buffered and streamed side.
@@ -598,7 +595,7 @@ fn build_matched_indices_and_set_buffered_bitmap(
     buffered_side: &mut BufferedSideReadyState,
     stream_batch: &SortedStreamBatch,
     join_type: JoinType,
-    join_schema: Arc<Schema>,
+    join_schema: &SchemaRef,
 ) -> Result<RecordBatch> {
     // Mark the buffered indices as visited
     if need_produce_result_in_final(join_type) {
@@ -621,7 +618,7 @@ fn build_matched_indices_and_set_buffered_bitmap(
     buffered_columns.extend(streamed_columns);
 
     Ok(RecordBatch::try_new(
-        Arc::clone(&join_schema),
+        Arc::clone(join_schema),
         buffered_columns,
     )?)
 }
@@ -630,7 +627,7 @@ fn build_matched_indices_and_set_buffered_bitmap(
 fn create_unmatched_batch(
     streamed_indices: &mut PrimitiveBuilder<UInt32Type>,
     stream_batch: &SortedStreamBatch,
-    join_schema: Arc<Schema>,
+    join_schema: &SchemaRef,
 ) -> Result<RecordBatch> {
     let streamed_indices = streamed_indices.finish();
     let new_stream_batch = take_record_batch(&stream_batch.batch, &streamed_indices)?;
@@ -648,7 +645,7 @@ fn create_unmatched_batch(
     buffered_columns.extend(streamed_columns);
 
     Ok(RecordBatch::try_new(
-        Arc::clone(&join_schema),
+        Arc::clone(join_schema),
         buffered_columns,
     )?)
 }
@@ -657,17 +654,16 @@ fn create_unmatched_batch(
 mod tests {
     use super::*;
     use crate::{
-        common,
+        ExecutionPlan, common,
         joins::PiecewiseMergeJoinExec,
-        test::{build_table_i32, TestMemoryExec},
-        ExecutionPlan,
+        test::{TestMemoryExec, build_table_i32},
     };
     use arrow::array::{Date32Array, Date64Array};
     use arrow_schema::{DataType, Field};
     use datafusion_common::test_util::batches_to_string;
     use datafusion_execution::TaskContext;
     use datafusion_expr::JoinType;
-    use datafusion_physical_expr::{expressions::Column, PhysicalExpr};
+    use datafusion_physical_expr::{PhysicalExpr, expressions::Column};
     use insta::assert_snapshot;
     use std::sync::Arc;
 
@@ -807,7 +803,7 @@ mod tests {
         let (_, batches) =
             join_collect(left, right, on, Operator::Lt, JoinType::Inner).await?;
 
-        assert_snapshot!(batches_to_string(&batches), @r#"
+        assert_snapshot!(batches_to_string(&batches), @r"
         +----+----+----+----+----+----+
         | a1 | b1 | c1 | a2 | b1 | c2 |
         +----+----+----+----+----+----+
@@ -818,7 +814,7 @@ mod tests {
         | 3  | 1  | 9  | 20 | 3  | 80 |
         | 3  | 1  | 9  | 10 | 2  | 70 |
         +----+----+----+----+----+----+
-        "#);
+        ");
         Ok(())
     }
 
@@ -858,18 +854,18 @@ mod tests {
         let (_, batches) =
             join_collect(left, right, on, Operator::Lt, JoinType::Inner).await?;
 
-        assert_snapshot!(batches_to_string(&batches), @r#"
-            +----+----+----+----+----+----+
-            | a1 | b1 | c1 | a2 | b1 | c2 |
-            +----+----+----+----+----+----+
-            | 1  | 3  | 7  | 30 | 4  | 90 |
-            | 2  | 2  | 8  | 30 | 4  | 90 |
-            | 3  | 1  | 9  | 30 | 4  | 90 |
-            | 2  | 2  | 8  | 10 | 3  | 70 |
-            | 3  | 1  | 9  | 10 | 3  | 70 |
-            | 3  | 1  | 9  | 20 | 2  | 80 |
-            +----+----+----+----+----+----+
-        "#);
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +----+----+----+----+----+----+
+        | a1 | b1 | c1 | a2 | b1 | c2 |
+        +----+----+----+----+----+----+
+        | 1  | 3  | 7  | 30 | 4  | 90 |
+        | 2  | 2  | 8  | 30 | 4  | 90 |
+        | 3  | 1  | 9  | 30 | 4  | 90 |
+        | 2  | 2  | 8  | 10 | 3  | 70 |
+        | 3  | 1  | 9  | 10 | 3  | 70 |
+        | 3  | 1  | 9  | 20 | 2  | 80 |
+        +----+----+----+----+----+----+
+        ");
         Ok(())
     }
 
@@ -909,7 +905,7 @@ mod tests {
         let (_, batches) =
             join_collect(left, right, on, Operator::GtEq, JoinType::Inner).await?;
 
-        assert_snapshot!(batches_to_string(&batches), @r#"
+        assert_snapshot!(batches_to_string(&batches), @r"
         +----+----+----+----+----+----+
         | a1 | b1 | c1 | a2 | b1 | c2 |
         +----+----+----+----+----+----+
@@ -922,7 +918,7 @@ mod tests {
         | 2  | 3  | 8  | 10 | 3  | 70 |
         | 3  | 4  | 9  | 10 | 3  | 70 |
         +----+----+----+----+----+----+
-        "#);
+        ");
         Ok(())
     }
 
@@ -957,12 +953,12 @@ mod tests {
         );
         let (_, batches) =
             join_collect(left, right, on, Operator::LtEq, JoinType::Inner).await?;
-        assert_snapshot!(batches_to_string(&batches), @r#"
+        assert_snapshot!(batches_to_string(&batches), @r"
         +----+----+----+----+----+----+
         | a1 | b1 | c1 | a2 | b1 | c2 |
         +----+----+----+----+----+----+
         +----+----+----+----+----+----+
-        "#);
+        ");
         Ok(())
     }
 
@@ -1000,7 +996,7 @@ mod tests {
         let (_, batches) =
             join_collect(left, right, on, Operator::GtEq, JoinType::Full).await?;
 
-        assert_snapshot!(batches_to_string(&batches), @r#"
+        assert_snapshot!(batches_to_string(&batches), @r"
         +----+----+-----+----+----+-----+
         | a1 | b1 | c1  | a2 | b1 | c2  |
         +----+----+-----+----+----+-----+
@@ -1008,7 +1004,7 @@ mod tests {
         |    |    |     | 10 | 3  | 300 |
         | 1  | 1  | 100 |    |    |     |
         +----+----+-----+----+----+-----+
-        "#);
+        ");
 
         Ok(())
     }
@@ -1049,7 +1045,7 @@ mod tests {
         let (_, batches) =
             join_collect(left, right, on, Operator::Gt, JoinType::Left).await?;
 
-        assert_snapshot!(batches_to_string(&batches), @r#"
+        assert_snapshot!(batches_to_string(&batches), @r"
         +----+----+----+----+----+----+
         | a1 | b1 | c1 | a2 | b1 | c2 |
         +----+----+----+----+----+----+
@@ -1060,7 +1056,7 @@ mod tests {
         | 3  | 4  | 9  | 10 | 3  | 70 |
         | 1  | 1  | 7  |    |    |    |
         +----+----+----+----+----+----+
-        "#);
+        ");
         Ok(())
     }
 
@@ -1100,7 +1096,7 @@ mod tests {
         let (_, batches) =
             join_collect(left, right, on, Operator::Gt, JoinType::Right).await?;
 
-        assert_snapshot!(batches_to_string(&batches), @r#"
+        assert_snapshot!(batches_to_string(&batches), @r"
         +----+----+----+----+----+----+
         | a1 | b1 | c1 | a2 | b1 | c2 |
         +----+----+----+----+----+----+
@@ -1109,7 +1105,7 @@ mod tests {
         | 3  | 4  | 9  | 20 | 3  | 80 |
         |    |    |    | 10 | 5  | 70 |
         +----+----+----+----+----+----+
-        "#);
+        ");
         Ok(())
     }
 
@@ -1149,7 +1145,7 @@ mod tests {
         let (_, batches) =
             join_collect(left, right, on, Operator::Lt, JoinType::Right).await?;
 
-        assert_snapshot!(batches_to_string(&batches), @r#"
+        assert_snapshot!(batches_to_string(&batches), @r"
         +----+----+----+----+----+----+
         | a1 | b1 | c1 | a2 | b1 | c2 |
         +----+----+----+----+----+----+
@@ -1159,7 +1155,7 @@ mod tests {
         | 3  | 1  | 9  | 20 | 3  | 80 |
         | 3  | 1  | 9  | 10 | 2  | 70 |
         +----+----+----+----+----+----+
-        "#);
+        ");
         Ok(())
     }
 
@@ -1200,7 +1196,7 @@ mod tests {
             join_collect(left, right, on, Operator::LtEq, JoinType::Inner).await?;
 
         // Expected grouping follows right.b1 descending (4, 3, 2)
-        assert_snapshot!(batches_to_string(&batches), @r#"
+        assert_snapshot!(batches_to_string(&batches), @r"
         +----+----+----+----+----+----+
         | a1 | b1 | c1 | a2 | b1 | c2 |
         +----+----+----+----+----+----+
@@ -1210,7 +1206,7 @@ mod tests {
         | 3  | 2  | 9  | 20 | 3  | 80 |
         | 3  | 2  | 9  | 30 | 2  | 90 |
         +----+----+----+----+----+----+
-        "#);
+        ");
         Ok(())
     }
 
@@ -1251,7 +1247,7 @@ mod tests {
             join_collect(left, right, on, Operator::Gt, JoinType::Inner).await?;
 
         // Grouped by right in ascending evaluation for > (1,2,3)
-        assert_snapshot!(batches_to_string(&batches), @r#"
+        assert_snapshot!(batches_to_string(&batches), @r"
         +----+----+----+----+----+----+
         | a1 | b1 | c1 | a2 | b1 | c2 |
         +----+----+----+----+----+----+
@@ -1260,7 +1256,7 @@ mod tests {
         | 3  | 4  | 9  | 30 | 2  | 90 |
         | 3  | 4  | 9  | 10 | 3  | 70 |
         +----+----+----+----+----+----+
-        "#);
+        ");
         Ok(())
     }
 
@@ -1294,7 +1290,7 @@ mod tests {
         let (_, batches) =
             join_collect(left, right, on, Operator::LtEq, JoinType::Left).await?;
 
-        assert_snapshot!(batches_to_string(&batches), @r#"
+        assert_snapshot!(batches_to_string(&batches), @r"
         +----+----+----+----+----+----+
         | a1 | b1 | c1 | a2 | b1 | c2 |
         +----+----+----+----+----+----+
@@ -1302,7 +1298,7 @@ mod tests {
         | 1  | 5  | 7  |    |    |    |
         | 2  | 4  | 8  |    |    |    |
         +----+----+----+----+----+----+
-        "#);
+        ");
         Ok(())
     }
 
@@ -1340,14 +1336,14 @@ mod tests {
         let (_, batches) =
             join_collect(left, right, on, Operator::GtEq, JoinType::Right).await?;
 
-        assert_snapshot!(batches_to_string(&batches), @r#"
+        assert_snapshot!(batches_to_string(&batches), @r"
         +----+----+----+----+----+----+
         | a1 | b1 | c1 | a2 | b1 | c2 |
         +----+----+----+----+----+----+
         |    |    |    | 10 | 3  | 70 |
         |    |    |    | 20 | 5  | 80 |
         +----+----+----+----+----+----+
-        "#);
+        ");
         Ok(())
     }
 
@@ -1369,13 +1365,13 @@ mod tests {
         let (_, batches) =
             join_collect(left, right, on, Operator::Lt, JoinType::Inner).await?;
 
-        assert_snapshot!(batches_to_string(&batches), @r#"
+        assert_snapshot!(batches_to_string(&batches), @r"
         +----+----+-----+----+----+----+
         | a1 | b1 | c1  | a2 | b1 | c2 |
         +----+----+-----+----+----+----+
         | 42 | 5  | 999 | 30 | 7  | 90 |
         +----+----+-----+----+----+----+
-        "#);
+        ");
         Ok(())
     }
 
@@ -1401,12 +1397,12 @@ mod tests {
         let (_, batches) =
             join_collect(left, right, on, Operator::Gt, JoinType::Inner).await?;
 
-        assert_snapshot!(batches_to_string(&batches), @r#"
+        assert_snapshot!(batches_to_string(&batches), @r"
         +----+----+----+----+----+----+
         | a1 | b1 | c1 | a2 | b1 | c2 |
         +----+----+----+----+----+----+
         +----+----+----+----+----+----+
-        "#);
+        ");
         Ok(())
     }
 
@@ -1446,13 +1442,13 @@ mod tests {
         let (_, batches) =
             join_collect(left, right, on, Operator::Lt, JoinType::Inner).await?;
 
-        assert_snapshot!(batches_to_string(&batches), @r#"
-    +------------+------------+------------+------------+------------+------------+
-    | a1         | b1         | c1         | a2         | b1         | c2         |
-    +------------+------------+------------+------------+------------+------------+
-    | 1970-01-04 | 2022-04-23 | 1970-01-10 | 1970-01-31 | 2022-04-25 | 1970-04-01 |
-    +------------+------------+------------+------------+------------+------------+
-    "#);
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +------------+------------+------------+------------+------------+------------+
+        | a1         | b1         | c1         | a2         | b1         | c2         |
+        +------------+------------+------------+------------+------------+------------+
+        | 1970-01-04 | 2022-04-23 | 1970-01-10 | 1970-01-31 | 2022-04-25 | 1970-04-01 |
+        +------------+------------+------------+------------+------------+------------+
+        ");
         Ok(())
     }
 
@@ -1492,13 +1488,13 @@ mod tests {
         let (_, batches) =
             join_collect(left, right, on, Operator::Lt, JoinType::Inner).await?;
 
-        assert_snapshot!(batches_to_string(&batches), @r#"
+        assert_snapshot!(batches_to_string(&batches), @r"
         +-------------------------+---------------------+-------------------------+-------------------------+---------------------+-------------------------+
         | a1                      | b1                  | c1                      | a2                      | b1                  | c2                      |
         +-------------------------+---------------------+-------------------------+-------------------------+---------------------+-------------------------+
         | 1970-01-01T00:00:00.003 | 2022-04-23T08:44:01 | 1970-01-01T00:00:00.009 | 1970-01-01T00:00:00.030 | 2022-04-25T16:17:21 | 1970-01-01T00:00:00.090 |
         +-------------------------+---------------------+-------------------------+-------------------------+---------------------+-------------------------+
-        "#);
+        ");
         Ok(())
     }
 
@@ -1536,14 +1532,14 @@ mod tests {
         let (_, batches) =
             join_collect(left, right, on, Operator::Lt, JoinType::Right).await?;
 
-        assert_snapshot!(batches_to_string(&batches), @r#"
-    +-------------------------+---------------------+-------------------------+-------------------------+---------------------+-------------------------+
-    | a1                      | b1                  | c1                      | a2                      | b1                  | c2                      |
-    +-------------------------+---------------------+-------------------------+-------------------------+---------------------+-------------------------+
-    | 1970-01-01T00:00:00.002 | 2022-04-23T08:44:01 | 1970-01-01T00:00:00.008 | 1970-01-01T00:00:00.020 | 2022-04-25T16:17:21 | 1970-01-01T00:00:00.090 |
-    |                         |                     |                         | 1970-01-01T00:00:00.010 | 2022-04-23T08:44:01 | 1970-01-01T00:00:00.080 |
-    +-------------------------+---------------------+-------------------------+-------------------------+---------------------+-------------------------+
-"#);
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +-------------------------+---------------------+-------------------------+-------------------------+---------------------+-------------------------+
+        | a1                      | b1                  | c1                      | a2                      | b1                  | c2                      |
+        +-------------------------+---------------------+-------------------------+-------------------------+---------------------+-------------------------+
+        | 1970-01-01T00:00:00.002 | 2022-04-23T08:44:01 | 1970-01-01T00:00:00.008 | 1970-01-01T00:00:00.020 | 2022-04-25T16:17:21 | 1970-01-01T00:00:00.090 |
+        |                         |                     |                         | 1970-01-01T00:00:00.010 | 2022-04-23T08:44:01 | 1970-01-01T00:00:00.080 |
+        +-------------------------+---------------------+-------------------------+-------------------------+---------------------+-------------------------+
+        ");
         Ok(())
     }
 }

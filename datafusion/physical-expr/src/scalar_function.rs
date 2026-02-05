@@ -34,19 +34,19 @@ use std::fmt::{self, Debug, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use crate::expressions::Literal;
 use crate::PhysicalExpr;
+use crate::expressions::Literal;
 
 use arrow::array::{Array, RecordBatch};
 use arrow::datatypes::{DataType, FieldRef, Schema};
 use datafusion_common::config::{ConfigEntry, ConfigOptions};
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
-use datafusion_expr::type_coercion::functions::data_types_with_scalar_udf;
+use datafusion_expr::type_coercion::functions::fields_with_udf;
 use datafusion_expr::{
-    expr_vec_fmt, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
-    Volatility,
+    ColumnarValue, ExpressionPlacement, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
+    Volatility, expr_vec_fmt,
 };
 
 /// Physical expression of a scalar function
@@ -101,11 +101,7 @@ impl ScalarFunctionExpr {
             .collect::<Result<Vec<_>>>()?;
 
         // verify that input data types is consistent with function's `TypeSignature`
-        let arg_types = arg_fields
-            .iter()
-            .map(|f| f.data_type().clone())
-            .collect::<Vec<_>>();
-        data_types_with_scalar_udf(&arg_types, &fun)?;
+        fields_with_udf(&arg_fields, fun.as_ref())?;
 
         let arguments = args
             .iter()
@@ -283,19 +279,22 @@ impl PhysicalExpr for ScalarFunctionExpr {
             config_options: Arc::clone(&self.config_options),
         })?;
 
-        if let ColumnarValue::Array(array) = &output {
-            if array.len() != batch.num_rows() {
-                // If the arguments are a non-empty slice of scalar values, we can assume that
-                // returning a one-element array is equivalent to returning a scalar.
-                let preserve_scalar =
-                    array.len() == 1 && !input_empty && input_all_scalar;
-                return if preserve_scalar {
-                    ScalarValue::try_from_array(array, 0).map(ColumnarValue::Scalar)
-                } else {
-                    internal_err!("UDF {} returned a different number of rows than expected. Expected: {}, Got: {}",
-                            self.name, batch.num_rows(), array.len())
-                };
-            }
+        if let ColumnarValue::Array(array) = &output
+            && array.len() != batch.num_rows()
+        {
+            // If the arguments are a non-empty slice of scalar values, we can assume that
+            // returning a one-element array is equivalent to returning a scalar.
+            let preserve_scalar = array.len() == 1 && !input_empty && input_all_scalar;
+            return if preserve_scalar {
+                ScalarValue::try_from_array(array, 0).map(ColumnarValue::Scalar)
+            } else {
+                internal_err!(
+                    "UDF {} returned a different number of rows than expected. Expected: {}, Got: {}",
+                    self.name,
+                    batch.num_rows(),
+                    array.len()
+                )
+            };
         }
         Ok(output)
     }
@@ -362,6 +361,12 @@ impl PhysicalExpr for ScalarFunctionExpr {
 
     fn is_volatile_node(&self) -> bool {
         self.fun.signature().volatility == Volatility::Volatile
+    }
+
+    fn placement(&self) -> ExpressionPlacement {
+        let arg_placements: Vec<_> =
+            self.args.iter().map(|arg| arg.placement()).collect();
+        self.fun.placement(&arg_placements)
     }
 }
 

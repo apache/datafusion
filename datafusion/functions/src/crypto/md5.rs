@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! "crypto" DataFusion functions
-use crate::crypto::basic::md5;
-use arrow::datatypes::DataType;
+use arrow::{array::StringViewArray, datatypes::DataType};
 use datafusion_common::{
-    plan_err,
-    types::{logical_binary, logical_string, NativeType},
-    Result,
+    Result, ScalarValue,
+    cast::as_binary_array,
+    internal_err,
+    types::{logical_binary, logical_string},
+    utils::take_function_args,
 };
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -29,7 +29,9 @@ use datafusion_expr::{
 };
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
-use std::any::Any;
+use std::{any::Any, sync::Arc};
+
+use crate::crypto::basic::{DigestAlgorithm, digest_process};
 
 #[user_doc(
     doc_section(label = "Hashing Functions"),
@@ -37,11 +39,11 @@ use std::any::Any;
     syntax_example = "md5(expression)",
     sql_example = r#"```sql
 > select md5('foo');
-+-------------------------------------+
-| md5(Utf8("foo"))                    |
-+-------------------------------------+
-| <md5_checksum_result>               |
-+-------------------------------------+
++----------------------------------+
+| md5(Utf8("foo"))                 |
++----------------------------------+
+| acbd18db4cc2f85cedef654fccc4a4d8 |
++----------------------------------+
 ```"#,
     standard_argument(name = "expression", prefix = "String")
 )]
@@ -49,6 +51,7 @@ use std::any::Any;
 pub struct Md5Func {
     signature: Signature,
 }
+
 impl Default for Md5Func {
     fn default() -> Self {
         Self::new()
@@ -60,15 +63,11 @@ impl Md5Func {
         Self {
             signature: Signature::one_of(
                 vec![
-                    TypeSignature::Coercible(vec![Coercion::new_implicit(
-                        TypeSignatureClass::Native(logical_binary()),
-                        vec![TypeSignatureClass::Native(logical_string())],
-                        NativeType::String,
+                    TypeSignature::Coercible(vec![Coercion::new_exact(
+                        TypeSignatureClass::Native(logical_string()),
                     )]),
-                    TypeSignature::Coercible(vec![Coercion::new_implicit(
+                    TypeSignature::Coercible(vec![Coercion::new_exact(
                         TypeSignatureClass::Native(logical_binary()),
-                        vec![TypeSignatureClass::Native(logical_binary())],
-                        NativeType::Binary,
                     )]),
                 ],
                 Volatility::Immutable,
@@ -76,6 +75,7 @@ impl Md5Func {
         }
     }
 }
+
 impl ScalarUDFImpl for Md5Func {
     fn as_any(&self) -> &dyn Any {
         self
@@ -89,30 +89,10 @@ impl ScalarUDFImpl for Md5Func {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        use DataType::*;
-        Ok(match &arg_types[0] {
-            LargeUtf8 | LargeBinary => Utf8View,
-            Utf8View | Utf8 | Binary | BinaryView => Utf8View,
-            Null => Null,
-            Dictionary(_, t) => match **t {
-                LargeUtf8 | LargeBinary => Utf8View,
-                Utf8 | Binary | BinaryView => Utf8View,
-                Null => Null,
-                _ => {
-                    return plan_err!(
-                        "the md5 can only accept strings but got {:?}",
-                        **t
-                    );
-                }
-            },
-            other => {
-                return plan_err!(
-                    "The md5 function can only accept strings. Got {other}"
-                );
-            }
-        })
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Utf8View)
     }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         md5(&args.args)
     }
@@ -120,4 +100,39 @@ impl ScalarUDFImpl for Md5Func {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+}
+
+/// Hex encoding lookup table for fast byte-to-hex conversion
+const HEX_CHARS_LOWER: &[u8; 16] = b"0123456789abcdef";
+
+/// Fast hex encoding using a lookup table instead of format strings.
+/// This is significantly faster than using `write!("{:02x}")` for each byte.
+#[inline]
+fn hex_encode(data: impl AsRef<[u8]>) -> String {
+    let bytes = data.as_ref();
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for &b in bytes {
+        s.push(HEX_CHARS_LOWER[(b >> 4) as usize] as char);
+        s.push(HEX_CHARS_LOWER[(b & 0x0f) as usize] as char);
+    }
+    s
+}
+
+fn md5(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    let [data] = take_function_args("md5", args)?;
+    let value = digest_process(data, DigestAlgorithm::Md5)?;
+
+    // md5 requires special handling because of its unique utf8view return type
+    Ok(match value {
+        ColumnarValue::Array(array) => {
+            let binary_array = as_binary_array(&array)?;
+            let string_array: StringViewArray =
+                binary_array.iter().map(|opt| opt.map(hex_encode)).collect();
+            ColumnarValue::Array(Arc::new(string_array))
+        }
+        ColumnarValue::Scalar(ScalarValue::Binary(opt)) => {
+            ColumnarValue::Scalar(ScalarValue::Utf8View(opt.map(hex_encode)))
+        }
+        _ => return internal_err!("Impossibly got invalid results from digest"),
+    })
 }

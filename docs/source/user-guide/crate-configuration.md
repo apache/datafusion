@@ -24,6 +24,7 @@ your Rust project. The [Configuration Settings] section lists options that
 control additional aspects DataFusion's runtime behavior.
 
 [configuration settings]: configs.md
+[support for adding dependencies]: https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#specifying-dependencies
 
 ## Using the nightly DataFusion builds
 
@@ -92,6 +93,36 @@ lto = true
 codegen-units = 1
 ```
 
+### Profile Guided Optimization (PGO)
+
+Profile Guided Optimization can improve DataFusion performance by up to 25%. It works by compiling with instrumentation, running representative workloads to collect profile data, then recompiling with optimizations based on that data.
+
+Build with instrumentation:
+
+```shell
+RUSTFLAGS="-C profile-generate=/tmp/pgo-data" cargo build --release
+```
+
+Run your workloads to collect profile data. Use benchmarks like TPCH or Clickbench, or your actual production queries:
+
+```shell
+./target/release/your-datafusion-app --benchmark
+```
+
+Rebuild using the collected profile:
+
+```shell
+RUSTFLAGS="-C profile-use=/tmp/pgo-data" cargo build --release
+```
+
+Tips:
+
+- Use workloads that match your production patterns
+- Run multiple iterations during profiling for better coverage
+- Combine with LTO and CPU-specific optimizations for best results
+
+See the [Rust compiler guide](https://rustc-dev-guide.rust-lang.org/building/optimized-build.html#profile-guided-optimization) for more details. Discussion and results in [issue #9507](https://github.com/apache/datafusion/issues/9507).
+
 ### Alternate Allocator: `snmalloc`
 
 You can also use [snmalloc-rs](https://crates.io/crates/snmalloc-rs) crate as
@@ -125,7 +156,7 @@ By default, Datafusion returns errors as a plain text message. You can enable mo
 such as backtraces by enabling the `backtrace` feature to your `Cargo.toml` file like this:
 
 ```toml
-datafusion = { version = "31.0.0", features = ["backtrace"]}
+datafusion = { version = "52.0.0", features = ["backtrace"]}
 ```
 
 Set environment [variables](https://doc.rust-lang.org/std/backtrace/index.html#environment-variables)

@@ -15,11 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#![cfg_attr(test, allow(clippy::needless_pass_by_value))]
+
 mod file_pruner;
 mod pruning_predicate;
 
 pub use file_pruner::FilePruner;
 pub use pruning_predicate::{
-    build_pruning_predicate, PredicateRewriter, PruningPredicate, PruningStatistics,
-    RequiredColumns, UnhandledPredicateHook,
+    PredicateRewriter, PruningPredicate, PruningStatistics, RequiredColumns,
+    UnhandledPredicateHook, build_pruning_predicate,
 };

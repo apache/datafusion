@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! See `main.rs` for how to run it.
+
 use std::{any::Any, sync::Arc};
 
 use arrow::{
@@ -25,13 +27,13 @@ use datafusion::{
     catalog::Session,
     common::{GetExt, Statistics},
     datasource::{
+        MemTable,
         file_format::{
-            csv::CsvFormatFactory, file_compression_type::FileCompressionType,
-            FileFormat, FileFormatFactory,
+            FileFormat, FileFormatFactory, csv::CsvFormatFactory,
+            file_compression_type::FileCompressionType,
         },
         physical_plan::{FileScanConfig, FileSinkConfig, FileSource},
         table_schema::TableSchema,
-        MemTable,
     },
     error::Result,
     execution::session_state::SessionStateBuilder,

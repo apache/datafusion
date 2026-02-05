@@ -23,8 +23,6 @@
 // Make sure fast / cheap clones on Arc are explicit:
 // https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
-// https://github.com/apache/datafusion/issues/18503
-#![deny(clippy::needless_pass_by_value)]
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
 //! [DataFusion](https://github.com/apache/datafusion)
@@ -63,6 +61,10 @@ pub mod interval_arithmetic {
     pub use datafusion_expr_common::interval_arithmetic::*;
 }
 pub mod logical_plan;
+pub mod dml {
+    //! DML (Data Manipulation Language) types for DELETE, UPDATE operations.
+    pub use crate::logical_plan::dml::*;
+}
 pub mod planner;
 pub mod registry;
 pub mod simplify;
@@ -73,6 +75,8 @@ pub mod async_udf;
 pub mod statistics {
     pub use datafusion_expr_common::statistics::*;
 }
+mod predicate_bounds;
+pub mod preimage;
 pub mod ptr_eq;
 pub mod test;
 pub mod tree_node;
@@ -84,16 +88,17 @@ pub mod window_frame;
 pub mod window_state;
 
 pub use datafusion_doc::{
-    aggregate_doc_sections, scalar_doc_sections, window_doc_sections, DocSection,
-    Documentation, DocumentationBuilder,
+    DocSection, Documentation, DocumentationBuilder, aggregate_doc_sections,
+    scalar_doc_sections, window_doc_sections,
 };
 pub use datafusion_expr_common::accumulator::Accumulator;
 pub use datafusion_expr_common::columnar_value::ColumnarValue;
 pub use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 pub use datafusion_expr_common::operator::Operator;
+pub use datafusion_expr_common::placement::ExpressionPlacement;
 pub use datafusion_expr_common::signature::{
-    ArrayFunctionArgument, ArrayFunctionSignature, Coercion, Signature, TypeSignature,
-    TypeSignatureClass, Volatility, TIMEZONE_WILDCARD,
+    ArrayFunctionArgument, ArrayFunctionSignature, Coercion, Signature,
+    TIMEZONE_WILDCARD, TypeSignature, TypeSignatureClass, Volatility,
 };
 pub use datafusion_expr_common::type_coercion::binary;
 pub use expr::{
@@ -107,7 +112,7 @@ pub use function::{
     ScalarFunctionImplementation, StateTypeFunction,
 };
 pub use literal::{
-    lit, lit_timestamp_nano, lit_with_metadata, Literal, TimestampLiteral,
+    Literal, TimestampLiteral, lit, lit_timestamp_nano, lit_with_metadata,
 };
 pub use logical_plan::*;
 pub use partition_evaluator::PartitionEvaluator;
@@ -115,10 +120,10 @@ pub use partition_evaluator::PartitionEvaluator;
 pub use sqlparser;
 pub use table_source::{TableProviderFilterPushDown, TableSource, TableType};
 pub use udaf::{
+    AggregateUDF, AggregateUDFImpl, ReversedUDAF, SetMonotonicity, StatisticsArgs,
     udaf_default_display_name, udaf_default_human_display, udaf_default_return_field,
     udaf_default_schema_name, udaf_default_window_function_display_name,
-    udaf_default_window_function_schema_name, AggregateUDF, AggregateUDFImpl,
-    ReversedUDAF, SetMonotonicity, StatisticsArgs,
+    udaf_default_window_function_schema_name,
 };
 pub use udf::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl};
 pub use udwf::{LimitEffect, ReversedUDWF, WindowUDF, WindowUDFImpl};

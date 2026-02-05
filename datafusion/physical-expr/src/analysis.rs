@@ -20,17 +20,18 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
+use crate::PhysicalExpr;
 use crate::expressions::Column;
 use crate::intervals::cp_solver::{ExprIntervalGraph, PropagationResult};
 use crate::utils::collect_columns;
-use crate::PhysicalExpr;
 
 use arrow::datatypes::Schema;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, ColumnStatistics, Result, ScalarValue,
+    ColumnStatistics, Result, ScalarValue, assert_or_internal_err,
+    internal_datafusion_err, internal_err,
 };
-use datafusion_expr::interval_arithmetic::{cardinality_ratio, Interval};
+use datafusion_expr::interval_arithmetic::{Interval, cardinality_ratio};
 
 /// The shared context used during the analysis of an expression. Includes
 /// the boundaries for all known columns.
@@ -170,27 +171,24 @@ pub fn analyze(
         .iter()
         .all(|bound| bound.interval.is_none())
     {
-        if initial_boundaries
-            .iter()
-            .any(|bound| bound.distinct_count != Precision::Exact(0))
-        {
-            return internal_err!(
-                "ExprBoundaries has a non-zero distinct count although it represents an empty table"
-            );
-        }
-        if context.selectivity != Some(0.0) {
-            return internal_err!(
-                "AnalysisContext has a non-zero selectivity although it represents an empty table"
-            );
-        }
+        assert_or_internal_err!(
+            !initial_boundaries
+                .iter()
+                .any(|bound| bound.distinct_count != Precision::Exact(0)),
+            "ExprBoundaries has a non-zero distinct count although it represents an empty table"
+        );
+        assert_or_internal_err!(
+            context.selectivity == Some(0.0),
+            "AnalysisContext has a non-zero selectivity although it represents an empty table"
+        );
         Ok(context)
     } else if initial_boundaries
         .iter()
         .any(|bound| bound.interval.is_none())
     {
         internal_err!(
-                "AnalysisContext is an inconsistent state. Some columns represent empty table while others don't"
-            )
+            "AnalysisContext is an inconsistent state. Some columns represent empty table while others don't"
+        )
     } else {
         let mut target_boundaries = context.boundaries;
         let mut graph = ExprIntervalGraph::try_new(Arc::clone(expr), schema)?;
@@ -203,20 +201,17 @@ pub fn analyze(
         let target_expr_and_indices = graph.gather_node_indices(columns.as_slice());
 
         for (expr, index) in &target_expr_and_indices {
-            if let Some(column) = expr.as_any().downcast_ref::<Column>() {
-                if let Some(bound) =
+            if let Some(column) = expr.as_any().downcast_ref::<Column>()
+                && let Some(bound) =
                     target_boundaries.iter().find(|b| b.column == *column)
-                {
-                    // Now, it's safe to unwrap
-                    target_indices_and_boundaries
-                        .push((*index, bound.interval.as_ref().unwrap().clone()));
-                }
+            {
+                // Now, it's safe to unwrap
+                target_indices_and_boundaries
+                    .push((*index, bound.interval.as_ref().unwrap().clone()));
             }
         }
 
-        match graph
-            .update_ranges(&mut target_indices_and_boundaries, Interval::CERTAINLY_TRUE)?
-        {
+        match graph.update_ranges(&mut target_indices_and_boundaries, Interval::TRUE)? {
             PropagationResult::Success => {
                 shrink_boundaries(&graph, target_boundaries, &target_expr_and_indices)
             }
@@ -245,21 +240,21 @@ fn shrink_boundaries(
 ) -> Result<AnalysisContext> {
     let initial_boundaries = target_boundaries.clone();
     target_expr_and_indices.iter().for_each(|(expr, i)| {
-        if let Some(column) = expr.as_any().downcast_ref::<Column>() {
-            if let Some(bound) = target_boundaries
+        if let Some(column) = expr.as_any().downcast_ref::<Column>()
+            && let Some(bound) = target_boundaries
                 .iter_mut()
                 .find(|bound| bound.column.eq(column))
-            {
-                bound.interval = Some(graph.get_interval(*i));
-            };
-        }
+        {
+            bound.interval = Some(graph.get_interval(*i));
+        };
     });
 
     let selectivity = calculate_selectivity(&target_boundaries, &initial_boundaries)?;
 
-    if !(0.0..=1.0).contains(&selectivity) {
-        return internal_err!("Selectivity is out of limit: {}", selectivity);
-    }
+    assert_or_internal_err!(
+        (0.0..=1.0).contains(&selectivity),
+        "Selectivity is out of limit: {selectivity}",
+    );
 
     Ok(AnalysisContext::new(target_boundaries).with_selectivity(selectivity))
 }
@@ -287,8 +282,8 @@ fn calculate_selectivity(
             }
             (None, Some(_)) => {
                 return internal_err!(
-                "Initial boundary cannot be None while having a Some() target boundary"
-            );
+                    "Initial boundary cannot be None while having a Some() target boundary"
+                );
             }
             _ => return Ok(0.0),
         }
@@ -302,14 +297,14 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::{assert_contains, DFSchema};
+    use datafusion_common::{DFSchema, assert_contains};
     use datafusion_expr::{
-        col, execution_props::ExecutionProps, interval_arithmetic::Interval, lit, Expr,
+        Expr, col, execution_props::ExecutionProps, interval_arithmetic::Interval, lit,
     };
 
-    use crate::{create_physical_expr, AnalysisContext};
+    use crate::{AnalysisContext, create_physical_expr};
 
-    use super::{analyze, ExprBoundaries};
+    use super::{ExprBoundaries, analyze};
 
     fn make_field(name: &str, data_type: DataType) -> Field {
         let nullable = false;
@@ -376,7 +371,9 @@ mod tests {
             )
             .unwrap();
             let Some(actual) = &analysis_result.boundaries[0].interval else {
-                panic!("The analysis result should contain non-empty intervals for all columns");
+                panic!(
+                    "The analysis result should contain non-empty intervals for all columns"
+                );
             };
             let expected = Interval::make(lower, upper).unwrap();
             assert_eq!(

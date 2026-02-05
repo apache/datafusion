@@ -17,7 +17,7 @@
   under the License.
 -->
 
-# DataFusion Query Optimizer
+# Query Optimizer
 
 [DataFusion][df] is an extensible query execution framework, written in Rust, that uses Apache Arrow as its in-memory
 format.
@@ -25,8 +25,21 @@ format.
 DataFusion has modular design, allowing individual crates to be re-used in other projects.
 
 This crate is a submodule of DataFusion that provides a query optimizer for logical plans, and
-contains an extensive set of OptimizerRules that may rewrite the plan and/or its expressions so
+contains an extensive set of [`OptimizerRule`]s and [`PhysicalOptimizerRule`]s that may rewrite the plan and/or its expressions so
 they execute more quickly while still computing the same result.
+
+For a deeper background on optimizer architecture and rule types and predicates, see
+[Optimizing SQL (and DataFrames) in DataFusion, Part 1], [Part 2],
+[Using Ordering for Better Plans in Apache DataFusion], and
+[Dynamic Filters: Passing Information Between Operators During Execution for 25x Faster Queries].
+
+[`optimizerrule`]: https://docs.rs/datafusion/latest/datafusion/optimizer/trait.OptimizerRule.html
+[`physicaloptimizerrule`]: https://docs.rs/datafusion/latest/datafusion/physical_optimizer/trait.PhysicalOptimizerRule.html
+[optimizing sql (and dataframes) in datafusion, part 1]: https://datafusion.apache.org/blog/2025/06/15/optimizing-sql-dataframes-part-one
+[part 2]: https://datafusion.apache.org/blog/2025/06/15/optimizing-sql-dataframes-part-two
+[using ordering for better plans in apache datafusion]: https://datafusion.apache.org/blog/2025/03/11/ordering-analysis
+[dynamic filters: passing information between operators during execution for 25x faster queries]: https://datafusion.apache.org/blog/2025/09/10/dynamic-filters
+[`logicalplan`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/enum.LogicalPlan.html
 
 ## Running the Optimizer
 
@@ -68,11 +81,11 @@ fn observer(plan: &LogicalPlan, rule: &dyn OptimizerRule) {
 ## Writing Optimization Rules
 
 Please refer to the
-[optimizer_rule.rs](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/optimizer_rule.rs)
+[optimizer_rule.rs](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/query_planning/optimizer_rule.rs)
 example to learn more about the general approach to writing optimizer rules and
 then move onto studying the existing rules.
 
-`OptimizerRule` transforms one ['LogicalPlan'] into another which
+`OptimizerRule` transforms one [`LogicalPlan`] into another which
 computes the same results, but in a potentially more efficient
 way. If there are no suitable transformations for the input plan,
 the optimizer can simply return it as is.
@@ -478,13 +491,10 @@ fn analyze_filter_example() -> Result<()> {
     let schema = Arc::new(Schema::new(vec![age]));
 
     // Define column statistics
-    let column_stats = ColumnStatistics {
-        null_count: Precision::Exact(0),
-        max_value: Precision::Exact(ScalarValue::Int64(Some(79))),
-        min_value: Precision::Exact(ScalarValue::Int64(Some(14))),
-        distinct_count: Precision::Absent,
-        sum_value: Precision::Absent,
-    };
+    let column_stats = ColumnStatistics::default()
+        .with_min_value(Precision::Exact(ScalarValue::Int64(Some(14))))
+        .with_max_value(Precision::Exact(ScalarValue::Int64(Some(79))))
+        .with_null_count(Precision::Exact(0));
 
     // Create expression: age > 18 AND age <= 25
     let expr = col("age")
@@ -504,3 +514,5 @@ fn analyze_filter_example() -> Result<()> {
     Ok(())
 }
 ```
+
+[treenode api]: https://docs.rs/datafusion/latest/datafusion/common/tree_node/trait.TreeNode.html

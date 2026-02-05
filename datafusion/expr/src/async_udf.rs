@@ -146,8 +146,8 @@ mod tests {
     use datafusion_expr_common::{columnar_value::ColumnarValue, signature::Signature};
 
     use crate::{
-        async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl},
         ScalarFunctionArgs, ScalarUDFImpl,
+        async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl},
     };
 
     #[derive(Debug, PartialEq, Eq, Hash, Clone)]

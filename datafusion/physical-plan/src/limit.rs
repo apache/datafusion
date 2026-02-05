@@ -32,9 +32,10 @@ use crate::{DisplayFormatType, Distribution, ExecutionPlan, Partitioning};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, assert_eq_or_internal_err, internal_err};
 use datafusion_execution::TaskContext;
 
+use datafusion_physical_expr::LexOrdering;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -51,6 +52,9 @@ pub struct GlobalLimitExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     cache: PlanProperties,
+    /// Does the limit have to preserve the order of its input, and if so what is it?
+    /// Some optimizations may reorder the input if no particular sort is required
+    required_ordering: Option<LexOrdering>,
 }
 
 impl GlobalLimitExec {
@@ -63,6 +67,7 @@ impl GlobalLimitExec {
             fetch,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
+            required_ordering: None,
         }
     }
 
@@ -90,6 +95,16 @@ impl GlobalLimitExec {
             // Limit operations are always bounded since they output a finite number of rows
             Boundedness::Bounded,
         )
+    }
+
+    /// Get the required ordering from limit
+    pub fn required_ordering(&self) -> &Option<LexOrdering> {
+        &self.required_ordering
+    }
+
+    /// Set the required ordering for limit
+    pub fn set_required_ordering(&mut self, required_ordering: Option<LexOrdering>) {
+        self.required_ordering = required_ordering;
     }
 }
 
@@ -167,14 +182,18 @@ impl ExecutionPlan for GlobalLimitExec {
     ) -> Result<SendableRecordBatchStream> {
         trace!("Start GlobalLimitExec::execute for partition: {partition}");
         // GlobalLimitExec has a single output partition
-        if 0 != partition {
-            return internal_err!("GlobalLimitExec invalid partition {partition}");
-        }
+        assert_eq_or_internal_err!(
+            partition,
+            0,
+            "GlobalLimitExec invalid partition {partition}"
+        );
 
         // GlobalLimitExec requires a single input partition
-        if 1 != self.input.output_partitioning().partition_count() {
-            return internal_err!("GlobalLimitExec requires a single input partition");
-        }
+        assert_eq_or_internal_err!(
+            self.input.output_partitioning().partition_count(),
+            1,
+            "GlobalLimitExec requires a single input partition"
+        );
 
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
         let stream = self.input.execute(0, context)?;
@@ -219,6 +238,9 @@ pub struct LocalLimitExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     cache: PlanProperties,
+    /// If the child plan is a sort node, after the sort node is removed during
+    /// physical optimization, we should add the required ordering to the limit node
+    required_ordering: Option<LexOrdering>,
 }
 
 impl LocalLimitExec {
@@ -230,6 +252,7 @@ impl LocalLimitExec {
             fetch,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
+            required_ordering: None,
         }
     }
 
@@ -252,6 +275,16 @@ impl LocalLimitExec {
             // Limit operations are always bounded since they output a finite number of rows
             Boundedness::Bounded,
         )
+    }
+
+    /// Get the required ordering from limit
+    pub fn required_ordering(&self) -> &Option<LexOrdering> {
+        &self.required_ordering
+    }
+
+    /// Set the required ordering for limit
+    pub fn set_required_ordering(&mut self, required_ordering: Option<LexOrdering>) {
+        self.required_ordering = required_ordering;
     }
 }
 
@@ -316,7 +349,12 @@ impl ExecutionPlan for LocalLimitExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        trace!("Start LocalLimitExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
+        trace!(
+            "Start LocalLimitExec::execute for partition {} of context session_id {} and task_id {:?}",
+            partition,
+            context.session_id(),
+            context.task_id()
+        );
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
         let stream = self.input.execute(partition, context)?;
         Ok(Box::pin(LimitStream::new(
@@ -490,8 +528,8 @@ mod tests {
     use arrow::array::RecordBatchOptions;
     use arrow::datatypes::Schema;
     use datafusion_common::stats::Precision;
-    use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr::PhysicalExpr;
+    use datafusion_physical_expr::expressions::col;
 
     #[tokio::test]
     async fn limit() -> Result<()> {

@@ -287,9 +287,8 @@ EXPLAIN SELECT * FROM numeric_types
 WHERE  int64 < 5 AND uint64 < 5 AND float64 < 5 AND decimal < 5;
 ----
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: int64@3 < 5 AND uint64@7 < 5 AND float64@9 < 5 AND decimal@10 < Some(500),5,2
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
+01)FilterExec: int64@3 < 5 AND uint64@7 < 5 AND float64@9 < 5 AND decimal@10 < Some(500),5,2
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 ## < negative  integer (expect no casts)
 query TT
@@ -297,9 +296,8 @@ EXPLAIN SELECT * FROM numeric_types
 WHERE  int64 < -5 AND uint64 < -5 AND float64 < -5 AND decimal < -5;
 ----
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: int64@3 < -5 AND CAST(uint64@7 AS Decimal128(20, 0)) < Some(-5),20,0 AND float64@9 < -5 AND decimal@10 < Some(-500),5,2
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
+01)FilterExec: int64@3 < -5 AND CAST(uint64@7 AS Decimal128(20, 0)) < Some(-5),20,0 AND float64@9 < -5 AND decimal@10 < Some(-500),5,2
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 ## < decimal (expect casts for integers to float)
 query TT
@@ -307,9 +305,8 @@ EXPLAIN SELECT * FROM numeric_types
 WHERE  int64 < 5.1 AND uint64 < 5.1 AND float64 < 5.1 AND decimal < 5.1;
 ----
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: CAST(int64@3 AS Float64) < 5.1 AND CAST(uint64@7 AS Float64) < 5.1 AND float64@9 < 5.1 AND decimal@10 < Some(510),5,2
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
+01)FilterExec: CAST(int64@3 AS Float64) < 5.1 AND CAST(uint64@7 AS Float64) < 5.1 AND float64@9 < 5.1 AND decimal@10 < Some(510),5,2
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 ## < negative decimal (expect casts for integers to float)
 query TT
@@ -317,9 +314,8 @@ EXPLAIN SELECT * FROM numeric_types
 WHERE  int64 < -5.1 AND uint64 < -5.1 AND float64 < -5.1 AND decimal < -5.1;
 ----
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: CAST(int64@3 AS Float64) < -5.1 AND CAST(uint64@7 AS Float64) < -5.1 AND float64@9 < -5.1 AND decimal@10 < Some(-510),5,2
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
+01)FilterExec: CAST(int64@3 AS Float64) < -5.1 AND CAST(uint64@7 AS Float64) < -5.1 AND float64@9 < -5.1 AND decimal@10 < Some(-510),5,2
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 
 ############### Equality ###############
@@ -330,9 +326,8 @@ EXPLAIN SELECT * FROM numeric_types
 WHERE  int64 = 5 AND uint64 = 5 AND float64 = 5 AND decimal = 5;
 ----
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: int64@3 = 5 AND uint64@7 = 5 AND float64@9 = 5 AND decimal@10 = Some(500),5,2
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
+01)FilterExec: int64@3 = 5 AND uint64@7 = 5 AND float64@9 = 5 AND decimal@10 = Some(500),5,2
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 ## = negative  integer (expect no casts)
 query TT
@@ -340,9 +335,8 @@ EXPLAIN SELECT * FROM numeric_types
 WHERE  int64 = -5 AND uint64 = -5 AND float64 = -5 AND decimal = -5;
 ----
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: int64@3 = -5 AND CAST(uint64@7 AS Decimal128(20, 0)) = Some(-5),20,0 AND float64@9 = -5 AND decimal@10 = Some(-500),5,2
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
+01)FilterExec: int64@3 = -5 AND CAST(uint64@7 AS Decimal128(20, 0)) = Some(-5),20,0 AND float64@9 = -5 AND decimal@10 = Some(-500),5,2
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 ## = decimal (expect casts for integers to float)
 query TT
@@ -350,9 +344,8 @@ EXPLAIN SELECT * FROM numeric_types
 WHERE  int64 = 5.1 AND uint64 = 5.1 AND float64 = 5.1 AND decimal = 5.1;
 ----
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: CAST(int64@3 AS Float64) = 5.1 AND CAST(uint64@7 AS Float64) = 5.1 AND float64@9 = 5.1 AND decimal@10 = Some(510),5,2
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
+01)FilterExec: CAST(int64@3 AS Float64) = 5.1 AND CAST(uint64@7 AS Float64) = 5.1 AND float64@9 = 5.1 AND decimal@10 = Some(510),5,2
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 ## = negative decimal (expect casts for integers to float)
 query TT
@@ -360,9 +353,8 @@ EXPLAIN SELECT * FROM numeric_types
 WHERE  int64 = -5.1 AND uint64 = -5.1 AND float64 = -5.1 AND decimal = -5.1;
 ----
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: CAST(int64@3 AS Float64) = -5.1 AND CAST(uint64@7 AS Float64) = -5.1 AND float64@9 = -5.1 AND decimal@10 = Some(-510),5,2
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
+01)FilterExec: CAST(int64@3 AS Float64) = -5.1 AND CAST(uint64@7 AS Float64) = -5.1 AND float64@9 = -5.1 AND decimal@10 = Some(-510),5,2
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 
 statement ok

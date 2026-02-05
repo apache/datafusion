@@ -25,27 +25,27 @@ use sqlparser::ast::{
 use std::sync::Arc;
 use std::vec;
 
-use super::dialect::IntervalStyle;
 use super::Unparser;
+use super::dialect::IntervalStyle;
 use arrow::array::{
+    ArrayRef, Date32Array, Date64Array, PrimitiveArray,
     types::{
         ArrowTemporalType, Time32MillisecondType, Time32SecondType,
         Time64MicrosecondType, Time64NanosecondType, TimestampMicrosecondType,
         TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
     },
-    ArrayRef, Date32Array, Date64Array, PrimitiveArray,
 };
 use arrow::datatypes::{
-    DataType, Decimal128Type, Decimal256Type, Decimal32Type, Decimal64Type, DecimalType,
+    DataType, Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, DecimalType,
 };
 use arrow::util::display::array_value_to_string;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, not_impl_err, plan_err, Column, Result,
-    ScalarValue,
+    Column, Result, ScalarValue, assert_eq_or_internal_err, assert_or_internal_err,
+    internal_datafusion_err, internal_err, not_impl_err, plan_err,
 };
 use datafusion_expr::{
-    expr::{Alias, Exists, InList, ScalarFunction, Sort, WindowFunction},
     Between, BinaryExpr, Case, Cast, Expr, GroupingSet, Like, Operator, TryCast,
+    expr::{Alias, Exists, InList, ScalarFunction, SetQuantifier, Sort, WindowFunction},
 };
 use sqlparser::ast::helpers::attached_token::AttachedToken;
 use sqlparser::tokenizer::Span;
@@ -393,6 +393,33 @@ impl Unparser<'_> {
                     negated: insubq.negated,
                 })
             }
+            Expr::SetComparison(set_cmp) => {
+                let left = Box::new(self.expr_to_sql_inner(set_cmp.expr.as_ref())?);
+                let sub_statement =
+                    self.plan_to_sql(set_cmp.subquery.subquery.as_ref())?;
+                let sub_query = if let ast::Statement::Query(inner_query) = sub_statement
+                {
+                    inner_query
+                } else {
+                    return plan_err!(
+                        "Subquery must be a Query, but found {sub_statement:?}"
+                    );
+                };
+                let compare_op = self.op_to_sql(&set_cmp.op)?;
+                match set_cmp.quantifier {
+                    SetQuantifier::Any => Ok(ast::Expr::AnyOp {
+                        left,
+                        compare_op,
+                        right: Box::new(ast::Expr::Subquery(sub_query)),
+                        is_some: false,
+                    }),
+                    SetQuantifier::All => Ok(ast::Expr::AllOp {
+                        left,
+                        compare_op,
+                        right: Box::new(ast::Expr::Subquery(sub_query)),
+                    }),
+                }
+            }
             Expr::Exists(Exists { subquery, negated }) => {
                 let sub_statement = self.plan_to_sql(subquery.subquery.as_ref())?;
                 let sub_query = if let ast::Statement::Query(inner_query) = sub_statement
@@ -447,9 +474,7 @@ impl Unparser<'_> {
                 })
             }
             Expr::ScalarVariable(_, ids) => {
-                if ids.is_empty() {
-                    return internal_err!("Not a valid ScalarVariable");
-                }
+                assert_or_internal_err!(!ids.is_empty(), "Not a valid ScalarVariable");
 
                 Ok(if ids.len() == 1 {
                     ast::Expr::Identifier(
@@ -593,9 +618,11 @@ impl Unparser<'_> {
     }
 
     fn array_element_to_sql(&self, args: &[Expr]) -> Result<ast::Expr> {
-        if args.len() != 2 {
-            return internal_err!("array_element must have exactly 2 arguments");
-        }
+        assert_eq_or_internal_err!(
+            args.len(),
+            2,
+            "array_element must have exactly 2 arguments"
+        );
         let array = self.expr_to_sql(&args[0])?;
         let index = self.expr_to_sql(&args[1])?;
         Ok(ast::Expr::CompoundFieldAccess {
@@ -605,9 +632,10 @@ impl Unparser<'_> {
     }
 
     fn named_struct_to_sql(&self, args: &[Expr]) -> Result<ast::Expr> {
-        if !args.len().is_multiple_of(2) {
-            return internal_err!("named_struct must have an even number of arguments");
-        }
+        assert_or_internal_err!(
+            args.len().is_multiple_of(2),
+            "named_struct must have an even number of arguments"
+        );
 
         let args = args
             .chunks_exact(2)
@@ -628,38 +656,53 @@ impl Unparser<'_> {
     }
 
     fn get_field_to_sql(&self, args: &[Expr]) -> Result<ast::Expr> {
-        if args.len() != 2 {
-            return internal_err!("get_field must have exactly 2 arguments");
+        if args.len() < 2 {
+            return internal_err!(
+                "get_field must have at least 2 arguments, got {}",
+                args.len()
+            );
         }
 
-        let field = match &args[1] {
-            Expr::Literal(lit, _) => self.new_ident_quoted_if_needs(lit.to_string()),
-            _ => {
-                return internal_err!(
-                "get_field expects second argument to be a string, but received: {:?}",
-                &args[1]
-            )
-            }
-        };
+        // Extract all field names (args[1..])
+        let mut fields = Vec::with_capacity(args.len() - 1);
+        for arg in &args[1..] {
+            let field = match arg {
+                Expr::Literal(lit, _) => self.new_ident_quoted_if_needs(lit.to_string()),
+                _ => {
+                    return internal_err!(
+                        "get_field expects field arguments to be strings, but received: {:?}",
+                        arg
+                    );
+                }
+            };
+            fields.push(field);
+        }
 
         match &args[0] {
             Expr::Column(col) => {
                 let mut id = match self.col_to_sql(col)? {
                     ast::Expr::Identifier(ident) => vec![ident],
                     ast::Expr::CompoundIdentifier(idents) => idents,
-                    other => return internal_err!("expected col_to_sql to return an Identifier or CompoundIdentifier, but received: {:?}", other),
+                    other => {
+                        return internal_err!(
+                            "expected col_to_sql to return an Identifier or CompoundIdentifier, but received: {:?}",
+                            other
+                        );
+                    }
                 };
-                id.push(field);
+                id.extend(fields);
                 Ok(ast::Expr::CompoundIdentifier(id))
             }
             Expr::ScalarFunction(struct_expr) => {
                 let root = self
                     .scalar_function_to_sql(struct_expr.func.name(), &struct_expr.args)?;
+                let access_chain = fields
+                    .into_iter()
+                    .map(|field| ast::AccessExpr::Dot(ast::Expr::Identifier(field)))
+                    .collect();
                 Ok(ast::Expr::CompoundFieldAccess {
                     root: Box::new(root),
-                    access_chain: vec![ast::AccessExpr::Dot(ast::Expr::Identifier(
-                        field,
-                    ))],
+                    access_chain,
                 })
             }
             _ => {
@@ -672,9 +715,7 @@ impl Unparser<'_> {
     }
 
     fn map_to_sql(&self, args: &[Expr]) -> Result<ast::Expr> {
-        if args.len() != 2 {
-            return internal_err!("map must have exactly 2 arguments");
-        }
+        assert_eq_or_internal_err!(args.len(), 2, "map must have exactly 2 arguments");
 
         let ast::Expr::Array(Array { elem: keys, .. }) = self.expr_to_sql(&args[0])?
         else {
@@ -1069,7 +1110,7 @@ impl Unparser<'_> {
                 return Err(internal_datafusion_err!(
                     "Expected Timestamp, got {:?}",
                     T::DATA_TYPE
-                ))
+                ));
             }
         };
 
@@ -1400,6 +1441,7 @@ impl Unparser<'_> {
             ScalarValue::Map(_) => not_impl_err!("Unsupported scalar: {v:?}"),
             ScalarValue::Union(..) => not_impl_err!("Unsupported scalar: {v:?}"),
             ScalarValue::Dictionary(_k, v) => self.scalar_to_sql(v),
+            ScalarValue::RunEndEncoded(_, _, v) => self.scalar_to_sql(v),
         }
     }
 
@@ -1429,7 +1471,9 @@ impl Unparser<'_> {
             };
             return Ok(ast::Expr::Interval(interval));
         } else if months != 0 {
-            return not_impl_err!("Unsupported Interval scalar with both Month and DayTime for IntervalStyle::MySQL");
+            return not_impl_err!(
+                "Unsupported Interval scalar with both Month and DayTime for IntervalStyle::MySQL"
+            );
         }
 
         // DAY only
@@ -1617,7 +1661,9 @@ impl Unparser<'_> {
                         };
                         Ok(ast::Expr::Interval(interval))
                     } else {
-                        not_impl_err!("Unsupported IntervalMonthDayNano scalar with both Month and DayTime for IntervalStyle::SQLStandard")
+                        not_impl_err!(
+                            "Unsupported IntervalMonthDayNano scalar with both Month and DayTime for IntervalStyle::SQLStandard"
+                        )
                     }
                 }
                 _ => not_impl_err!(
@@ -1745,6 +1791,9 @@ impl Unparser<'_> {
                 not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
             DataType::Dictionary(_, val) => self.arrow_dtype_to_ast_dtype(val),
+            DataType::RunEndEncoded(_, val) => {
+                self.arrow_dtype_to_ast_dtype(val.data_type())
+            }
             DataType::Decimal32(precision, scale)
             | DataType::Decimal64(precision, scale)
             | DataType::Decimal128(precision, scale)
@@ -1766,9 +1815,6 @@ impl Unparser<'_> {
             DataType::Map(_, _) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
-            DataType::RunEndEncoded(_, _) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type}")
-            }
         }
     }
 }
@@ -1782,15 +1828,16 @@ mod tests {
     use arrow::array::{LargeListArray, ListArray};
     use arrow::datatypes::{DataType::Int8, Field, Int32Type, Schema, TimeUnit};
     use ast::ObjectName;
+    use datafusion_common::datatype::DataTypeExt;
     use datafusion_common::{Spans, TableReference};
     use datafusion_expr::expr::WildcardOptions;
     use datafusion_expr::{
-        case, cast, col, cube, exists, grouping_set, interval_datetime_lit,
-        interval_year_month_lit, lit, not, not_exists, out_ref_col, placeholder, rollup,
-        table_scan, try_cast, when, ColumnarValue, ScalarFunctionArgs, ScalarUDF,
-        ScalarUDFImpl, Signature, Volatility, WindowFrame, WindowFunctionDefinition,
+        ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+        Volatility, WindowFrame, WindowFunctionDefinition, case, cast, col, cube, exists,
+        grouping_set, interval_datetime_lit, interval_year_month_lit, lit, not,
+        not_exists, out_ref_col, placeholder, rollup, table_scan, try_cast, when,
     };
-    use datafusion_expr::{interval_month_day_nano_lit, ExprFunctionExt};
+    use datafusion_expr::{ExprFunctionExt, interval_month_day_nano_lit};
     use datafusion_functions::datetime::from_unixtime::FromUnixtimeFunc;
     use datafusion_functions::expr_fn::{get_field, named_struct};
     use datafusion_functions_aggregate::count::count_udaf;
@@ -2168,12 +2215,15 @@ mod tests {
                 r#"TRY_CAST(a AS INTEGER UNSIGNED)"#,
             ),
             (
-                Expr::ScalarVariable(Int8, vec![String::from("@a")]),
+                Expr::ScalarVariable(
+                    Int8.into_nullable_field_ref(),
+                    vec![String::from("@a")],
+                ),
                 r#"@a"#,
             ),
             (
                 Expr::ScalarVariable(
-                    Int8,
+                    Int8.into_nullable_field_ref(),
                     vec![String::from("@root"), String::from("foo")],
                 ),
                 r#"@root.foo"#,
@@ -2261,6 +2311,17 @@ mod tests {
                 Expr::Literal(
                     ScalarValue::Dictionary(
                         Box::new(DataType::Int32),
+                        Box::new(ScalarValue::Utf8(Some("foo".into()))),
+                    ),
+                    None,
+                ),
+                "'foo'",
+            ),
+            (
+                Expr::Literal(
+                    ScalarValue::RunEndEncoded(
+                        Field::new("run_ends", DataType::Int32, false).into(),
+                        Field::new("values", DataType::Utf8, true).into(),
                         Box::new(ScalarValue::Utf8(Some("foo".into()))),
                     ),
                     None,
@@ -3129,6 +3190,22 @@ mod tests {
         let ast_dtype = unparser.arrow_dtype_to_ast_dtype(&DataType::Dictionary(
             Box::new(DataType::Int32),
             Box::new(DataType::Utf8),
+        ))?;
+
+        assert_eq!(ast_dtype, ast::DataType::Varchar(None));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_run_end_encoded_to_sql() -> Result<()> {
+        let dialect = CustomDialectBuilder::new().build();
+
+        let unparser = Unparser::new(&dialect);
+
+        let ast_dtype = unparser.arrow_dtype_to_ast_dtype(&DataType::RunEndEncoded(
+            Field::new("run_ends", DataType::Int32, false).into(),
+            Field::new("values", DataType::Utf8, true).into(),
         ))?;
 
         assert_eq!(ast_dtype, ast::DataType::Varchar(None));

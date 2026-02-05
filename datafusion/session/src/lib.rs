@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#![cfg_attr(test, allow(clippy::needless_pass_by_value))]
+
 //! Session management for DataFusion query execution environment
 //!
 //! This module provides the core session management functionality for DataFusion,

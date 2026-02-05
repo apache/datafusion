@@ -35,6 +35,9 @@
     )
 )]
 #![warn(missing_docs, clippy::needless_borrow)]
+// Use `allow` instead of `expect` for test configuration to explicitly
+// disable the lint for all test code rather than expecting violations
+#![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
 //! [DataFusion] is an extensible query engine written in Rust that
 //! uses [Apache Arrow] as its in-memory format. DataFusion's target users are
@@ -358,7 +361,7 @@
 //! [`TreeNode`]: datafusion_common::tree_node::TreeNode
 //! [`tree_node module`]: datafusion_expr::logical_plan::tree_node
 //! [`ExprSimplifier`]: crate::optimizer::simplify_expressions::ExprSimplifier
-//! [`expr_api`.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/expr_api.rs
+//! [`expr_api`.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/query_planning/expr_api.rs
 //!
 //! ### Physical Plans
 //!
@@ -647,7 +650,7 @@
 //!
 //! [Tokio]:  https://tokio.rs
 //! [`Runtime`]: tokio::runtime::Runtime
-//! [thread_pools example]: https://github.com/apache/datafusion/tree/main/datafusion-examples/examples/thread_pools.rs
+//! [thread_pools example]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/query_planning/thread_pools.rs
 //! [`task`]: tokio::task
 //! [Using Rustlang’s Async Tokio Runtime for CPU-Bound Tasks]: https://thenewstack.io/using-rustlangs-async-tokio-runtime-for-cpu-bound-tasks/
 //! [`RepartitionExec`]: physical_plan::repartition::RepartitionExec

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::common::{exec_datafusion_err, Result};
+use datafusion::common::{Result, exec_datafusion_err};
 use itertools::Itertools;
 use log::Level::Warn;
 use log::{info, log_enabled, warn};
@@ -44,7 +44,7 @@ pub fn setup_scratch_dir(name: &Path) -> Result<()> {
 /// Trailing whitespace from lines in SLT will typically be removed, but do not fail if it is not
 /// If particular test wants to cover trailing whitespace on a value,
 /// it should project additional non-whitespace column on the right.
-#[allow(clippy::ptr_arg)]
+#[expect(clippy::ptr_arg)]
 pub fn value_normalizer(s: &String) -> String {
     s.trim_end().to_string()
 }
@@ -82,12 +82,42 @@ pub fn df_value_validator(
     actual: &[Vec<String>],
     expected: &[String],
 ) -> bool {
+    // Support ignore marker <slt:ignore> to skip volatile parts of output.
+    const IGNORE_MARKER: &str = "<slt:ignore>";
+    let contains_ignore_marker = expected.iter().any(|line| line.contains(IGNORE_MARKER));
+
     let normalized_expected = expected.iter().map(normalizer).collect::<Vec<_>>();
     let normalized_actual = actual
         .iter()
         .map(|strs| strs.iter().join(" "))
         .map(|str| str.trim_end().to_string())
         .collect_vec();
+
+    // If ignore marker present, perform fragment-based matching on the full snapshot.
+    if contains_ignore_marker {
+        let expected_snapshot = normalized_expected.join("\n");
+        let actual_snapshot = normalized_actual.join("\n");
+        let fragments: Vec<&str> = expected_snapshot.split(IGNORE_MARKER).collect();
+        let mut pos = 0;
+        for (i, frag) in fragments.iter().enumerate() {
+            if frag.is_empty() {
+                continue;
+            }
+            if let Some(idx) = actual_snapshot[pos..].find(frag) {
+                // Edge case: The following example is expected to fail
+                // Actual - 'foo bar baz'
+                // Expected - 'bar <slt:ignore>'
+                if (i == 0) && (idx != 0) {
+                    return false;
+                }
+
+                pos += idx + frag.len();
+            } else {
+                return false;
+            }
+        }
+        return true;
+    }
 
     if log_enabled!(Warn) && normalized_actual != normalized_expected {
         warn!("df validation failed. actual vs expected:");
@@ -109,4 +139,21 @@ pub fn df_value_validator(
 
 pub fn is_spark_path(relative_path: &Path) -> bool {
     relative_path.starts_with("spark/")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Validation should fail for the below case:
+    // Actual - 'foo bar baz'
+    // Expected - 'bar <slt:ignore>'
+    #[test]
+    fn ignore_marker_does_not_skip_leading_text() {
+        // Actual snapshot contains unexpected prefix before the expected fragment.
+        let actual = vec![vec!["foo bar baz".to_string()]];
+        let expected = vec!["bar <slt:ignore>".to_string()];
+
+        assert!(!df_value_validator(value_normalizer, &actual, &expected));
+    }
 }

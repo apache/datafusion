@@ -95,8 +95,11 @@ SELECT arrow_cast('1', 'Int16')
 query error
 SELECT arrow_cast('1')
 
-query error DataFusion error: Execution error: arrow_cast requires its second argument to be a non\-empty constant string
+query error DataFusion error: Error during planning: Function 'arrow_cast' requires TypeSignatureClass::Native\(LogicalType\(Native\(String\), String\)\), but received Int64 \(DataType: Int64\)
 SELECT arrow_cast('1', 43)
+
+query error DataFusion error: Execution error: arrow_cast requires its second argument to be a non\-empty constant string
+SELECT arrow_cast('1', arrow_cast('Utf8', 'Utf8'))
 
 query error DataFusion error: Execution error: Unsupported type 'unknown'\. Must be a supported arrow type name such as 'Int32' or 'Timestamp\(ns\)'\. Error unknown token: unknown
 SELECT arrow_cast('1', 'unknown')
@@ -120,10 +123,10 @@ SELECT
   arrow_typeof(arrow_cast('foo', 'Utf8View')) as col_utf8_view,
   arrow_typeof(arrow_cast('foo', 'Binary')) as col_binary,
   arrow_typeof(arrow_cast('foo', 'LargeBinary')) as col_large_binary,
-  arrow_typeof(arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Second, None)')) as col_ts_s,
-  arrow_typeof(arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Millisecond, None)')) as col_ts_ms,
-  arrow_typeof(arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Microsecond, None)')) as col_ts_us,
-  arrow_typeof(arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Nanosecond, None)')) as col_ts_ns,
+  arrow_typeof(arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(s)')) as col_ts_s,
+  arrow_typeof(arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(ms)')) as col_ts_ms,
+  arrow_typeof(arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(µs)')) as col_ts_us,
+  arrow_typeof(arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(ns)')) as col_ts_ns,
   arrow_typeof(arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Second, Some("+08:00"))')) as col_tstz_s,
   arrow_typeof(arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Millisecond, Some("+08:00"))')) as col_tstz_ms,
   arrow_typeof(arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Microsecond, Some("+08:00"))')) as col_tstz_us,
@@ -239,10 +242,10 @@ drop table foo
 
 statement ok
 create table foo as select
-  arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Second, None)') as col_ts_s,
-  arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Millisecond, None)') as col_ts_ms,
-  arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Microsecond, None)') as col_ts_us,
-  arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Nanosecond, None)') as col_ts_ns
+  arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(s)') as col_ts_s,
+  arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(ms)') as col_ts_ms,
+  arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(µs)') as col_ts_us,
+  arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(ns)') as col_ts_ns
 ;
 
 ## Ensure each column in the table has the expected type
@@ -357,12 +360,12 @@ select arrow_cast(make_array(1, 2, 3), 'List(Int64)');
 query T
 select arrow_typeof(arrow_cast(make_array(1, 2, 3), 'List(Int64)'));
 ----
-List(nullable Int64)
+List(Int64)
 
 query T
 select arrow_typeof(arrow_cast(arrow_cast(make_array([1, 2, 3]), 'LargeList(LargeList(Int64))'), 'List(List(Int64))'));
 ----
-List(nullable List(nullable Int64))
+List(List(Int64))
 
 ## LargeList
 
@@ -380,12 +383,12 @@ select arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)');
 query T
 select arrow_typeof(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'));
 ----
-LargeList(nullable Int64)
+LargeList(Int64)
 
 query T
 select arrow_typeof(arrow_cast(make_array([1, 2, 3]), 'LargeList(LargeList(Int64))'));
 ----
-LargeList(nullable LargeList(nullable Int64))
+LargeList(LargeList(Int64))
 
 ## FixedSizeList
 
@@ -417,7 +420,7 @@ select arrow_cast(make_array(1, 2, 3), 'FixedSizeList(3, Int64)');
 query T
 select arrow_typeof(arrow_cast(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'), 'FixedSizeList(3, Int64)'));
 ----
-FixedSizeList(3 x nullable Int64)
+FixedSizeList(3 x Int64)
 
 query ?
 select arrow_cast([1, 2, 3], 'FixedSizeList(3, Int64)');

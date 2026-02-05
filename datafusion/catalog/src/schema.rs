@@ -19,7 +19,7 @@
 //! representing collections of named tables.
 
 use async_trait::async_trait;
-use datafusion_common::{exec_err, DataFusionError};
+use datafusion_common::{DataFusionError, exec_err};
 use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -68,7 +68,7 @@ pub trait SchemaProvider: Debug + Sync + Send {
     ///
     /// If a table of the same name was already registered, returns "Table
     /// already exists" error.
-    #[allow(unused_variables)]
+    #[expect(unused_variables)]
     fn register_table(
         &self,
         name: String,
@@ -81,7 +81,7 @@ pub trait SchemaProvider: Debug + Sync + Send {
     /// schema and returns the previously registered [`TableProvider`], if any.
     ///
     /// If no `name` table exists, returns Ok(None).
-    #[allow(unused_variables)]
+    #[expect(unused_variables)]
     fn deregister_table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
         exec_err!("schema provider does not support deregistering tables")
     }

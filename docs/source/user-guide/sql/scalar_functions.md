@@ -294,7 +294,7 @@ ceil(numeric_expression)
 #### Example
 
 ```sql
-    > SELECT ceil(3.14);
+> SELECT ceil(3.14);
 +------------+
 | ceil(3.14) |
 +------------+
@@ -2125,7 +2125,7 @@ upper(str)
 
 ### `uuid`
 
-Returns [`UUID v4`](<https://en.wikipedia.org/wiki/Universally_unique_identifier#Version_4_(random)>) string value which is unique per row.
+Returns [`UUID v4`](https://en.wikipedia.org/wiki/Universally_unique_identifier#Version_4_%28random%29) string value which is unique per row.
 
 ```sql
 uuid()
@@ -2175,7 +2175,7 @@ encode(expression, format)
 #### Arguments
 
 - **expression**: Expression containing string or binary data
-- **format**: Supported formats are: `base64`, `hex`
+- **format**: Supported formats are: `base64`, `base64pad`, `hex`
 
 **Related functions**:
 
@@ -2294,7 +2294,7 @@ SELECT regexp_like('aBc', '(b|d)', 'i');
 +--------------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/regexp.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/regexp.rs)
 
 ### `regexp_match`
 
@@ -2333,7 +2333,7 @@ regexp_match(str, regexp[, flags])
             +---------------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/regexp.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/regexp.rs)
 
 ### `regexp_replace`
 
@@ -2374,7 +2374,7 @@ SELECT regexp_replace('aBc', '(b|d)', 'Ab\\1a', 'i');
 +-------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/regexp.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/regexp.rs)
 
 ## Time and Date Functions
 
@@ -2389,10 +2389,12 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 - [datetrunc](#datetrunc)
 - [from_unixtime](#from_unixtime)
 - [make_date](#make_date)
+- [make_time](#make_time)
 - [now](#now)
 - [to_char](#to_char)
 - [to_date](#to_date)
 - [to_local_time](#to_local_time)
+- [to_time](#to_time)
 - [to_timestamp](#to_timestamp)
 - [to_timestamp_micros](#to_timestamp_micros)
 - [to_timestamp_millis](#to_timestamp_millis)
@@ -2487,6 +2489,17 @@ FROM VALUES ('2023-01-01T18:18:18Z'), ('2023-01-03T19:00:03Z')  t(time);
 | 2023-01-03T03:00:00 |
 +---------------------+
 2 row(s) fetched.
+
+-- Bin the time into 15 minute intervals starting at 1 min
+>  SELECT date_bin(interval '15 minutes', time, TIME '00:01:00') as bin
+FROM VALUES (TIME '02:18:18'), (TIME '19:00:03')  t(time);
++----------+
+| bin      |
++----------+
+| 02:16:00 |
+| 18:46:00 |
++----------+
+2 row(s) fetched.
 ```
 
 ### `date_format`
@@ -2506,6 +2519,7 @@ date_part(part, expression)
 - **part**: Part of the date to return. The following date parts are supported:
 
   - year
+  - isoyear (ISO 8601 week-numbering year)
   - quarter (emits value in inclusive range [1, 4] based on which quartile of the year the date is in)
   - month
   - week (week of the year)
@@ -2518,7 +2532,7 @@ date_part(part, expression)
   - nanosecond
   - dow (day of the week where Sunday is 0)
   - doy (day of the year)
-  - epoch (seconds since Unix epoch)
+  - epoch (seconds since Unix epoch for timestamps/dates, total seconds for intervals)
   - isodow (day of the week where Monday is 0)
 
 - **expression**: Time expression to operate on. Can be a constant, column, or function.
@@ -2535,7 +2549,7 @@ extract(field FROM source)
 
 ### `date_trunc`
 
-Truncates a timestamp value to a specified precision.
+Truncates a timestamp or time value to a specified precision.
 
 ```sql
 date_trunc(precision, expression)
@@ -2544,6 +2558,8 @@ date_trunc(precision, expression)
 #### Arguments
 
 - **precision**: Time precision to truncate to. The following precisions are supported:
+
+  For Timestamp types:
 
   - year / YEAR
   - quarter / QUARTER
@@ -2556,7 +2572,15 @@ date_trunc(precision, expression)
   - millisecond / MILLISECOND
   - microsecond / MICROSECOND
 
-- **expression**: Time expression to operate on. Can be a constant, column, or function.
+  For Time types (hour, minute, second, millisecond, microsecond only):
+
+  - hour / HOUR
+  - minute / MINUTE
+  - second / SECOND
+  - millisecond / MILLISECOND
+  - microsecond / MICROSECOND
+
+- **expression**: Timestamp or time expression to operate on. Can be a constant, column, or function.
 
 #### Aliases
 
@@ -2625,7 +2649,40 @@ make_date(year, month, day)
 +-----------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
+
+### `make_time`
+
+Make a time from hour/minute/second component parts.
+
+```sql
+make_time(hour, minute, second)
+```
+
+#### Arguments
+
+- **hour**: Hour to use when making the time. Can be a constant, column or function, and any combination of arithmetic operators.
+- **minute**: Minute to use when making the time. Can be a constant, column or function, and any combination of arithmetic operators.
+- **second**: Second to use when making the time. Can be a constant, column or function, and any combination of arithmetic operators.
+
+#### Example
+
+```sql
+> select make_time(13, 23, 1);
++-------------------------------------------+
+| make_time(Int64(13),Int64(23),Int64(1))   |
++-------------------------------------------+
+| 13:23:01                                  |
++-------------------------------------------+
+> select make_time('23', '01', '31');
++-----------------------------------------------+
+| make_time(Utf8("23"),Utf8("01"),Utf8("31"))   |
++-----------------------------------------------+
+| 23:01:31                                      |
++-----------------------------------------------+
+```
+
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 
 ### `now`
 
@@ -2666,7 +2723,7 @@ to_char(expression, format)
 +----------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 
 #### Aliases
 
@@ -2675,7 +2732,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 ### `to_date`
 
 Converts a value to a date (`YYYY-MM-DD`).
-Supports strings, integer and double types as input.
+Supports strings, numeric and timestamp types as input.
 Strings are parsed as YYYY-MM-DD (e.g. '2023-07-20') if no [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html)s are provided.
 Integers and doubles are interpreted as days since the unix epoch (`1970-01-01T00:00:00Z`).
 Returns the corresponding date.
@@ -2710,7 +2767,7 @@ to_date('2017-05-31', '%Y-%m-%d')
 +---------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 
 ### `to_local_time`
 
@@ -2773,11 +2830,68 @@ FROM (
 +---------------------------+
 ```
 
+### `to_time`
+
+Converts a value to a time (`HH:MM:SS.nnnnnnnnn`).
+Supports strings and timestamps as input.
+Strings are parsed as `HH:MM:SS`, `HH:MM:SS.nnnnnnnnn`, or `HH:MM` if no [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html)s are provided.
+Timestamps will have the time portion extracted.
+Returns the corresponding time.
+
+Note: `to_time` returns Time64(Nanosecond), which represents the time of day in nanoseconds since midnight.
+
+```sql
+to_time('12:30:45', '%H:%M:%S')
+```
+
+#### Arguments
+
+- **expression**: String or Timestamp expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **format_n**: Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order
+  they appear with the first successful one being returned. If none of the formats successfully parse the expression
+  an error will be returned.
+
+#### Example
+
+```sql
+> select to_time('12:30:45');
++---------------------------+
+| to_time(Utf8("12:30:45")) |
++---------------------------+
+| 12:30:45                  |
++---------------------------+
+> select to_time('12-30-45', '%H-%M-%S');
++--------------------------------------------+
+| to_time(Utf8("12-30-45"),Utf8("%H-%M-%S")) |
++--------------------------------------------+
+| 12:30:45                                   |
++--------------------------------------------+
+> select to_time('2024-01-15 14:30:45'::timestamp);
++--------------------------------------------------+
+| to_time(Utf8("2024-01-15 14:30:45"))             |
++--------------------------------------------------+
+| 14:30:45                                         |
++--------------------------------------------------+
+```
+
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
+
 ### `to_timestamp`
 
-Converts a value to a timestamp (`YYYY-MM-DDT00:00:00Z`). Supports strings, integer, unsigned integer, and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono formats] are provided. Integers, unsigned integers, and doubles are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`). Returns the corresponding timestamp.
+Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000<TZ>`) in the session time zone. Supports strings,
+integer, unsigned integer, and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
+if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided.
+Strings that parse without a time zone are treated as if they are in the
+session time zone, or UTC if no session time zone is set.
+Integers, unsigned integers, and doubles are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`).
 
-Note: `to_timestamp` returns `Timestamp(ns)`. The supported range for integer input is between `-9223372037` and `9223372036`. Supported range for string input is between `1677-09-21T00:12:44.0` and `2262-04-11T23:47:16.0`. Please use `to_timestamp_seconds` for the input outside of supported bounds.
+Note: `to_timestamp` returns `Timestamp(ns, TimeZone)` where the time zone is the session time zone. The supported range
+for integer input is between`-9223372037` and `9223372036`. Supported range for string input is between
+`1677-09-21T00:12:44.0` and `2262-04-11T23:47:16.0`. Please use `to_timestamp_seconds`
+for the input outside of supported bounds.
+
+The session time zone can be set using the statement `SET TIMEZONE = 'desired time zone'`.
+The time zone can be a value like +00:00, 'Europe/London' etc.
 
 ```sql
 to_timestamp(expression[, ..., format_n])
@@ -2786,7 +2900,11 @@ to_timestamp(expression[, ..., format_n])
 #### Arguments
 
 - **expression**: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
-- **format_n**: Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully parse the expression an error will be returned.
+- **format_n**:
+  Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression.
+  Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully
+  parse the expression an error will be returned. Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
+  only supported at the end of the string preceded by a space.
 
 #### Example
 
@@ -2805,11 +2923,19 @@ to_timestamp(expression[, ..., format_n])
 +--------------------------------------------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 
 ### `to_timestamp_micros`
 
-Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000Z`). Supports strings, integer, and unsigned integer types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html)s are provided. Integers and unsigned integers are interpreted as microseconds since the unix epoch (`1970-01-01T00:00:00Z`) Returns the corresponding timestamp.
+Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000<TZ>`) in the session time zone. Supports strings,
+integer, unsigned integer, and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
+if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided.
+Strings that parse without a time zone are treated as if they are in the
+session time zone, or UTC if no session time zone is set.
+Integers, unsigned integers, and doubles are interpreted as microseconds since the unix epoch (`1970-01-01T00:00:00Z`).
+
+The session time zone can be set using the statement `SET TIMEZONE = 'desired time zone'`.
+The time zone can be a value like +00:00, 'Europe/London' etc.
 
 ```sql
 to_timestamp_micros(expression[, ..., format_n])
@@ -2818,7 +2944,11 @@ to_timestamp_micros(expression[, ..., format_n])
 #### Arguments
 
 - **expression**: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
-- **format_n**: Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully parse the expression an error will be returned.
+- **format_n**:
+  Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression.
+  Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully
+  parse the expression an error will be returned. Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
+  only supported at the end of the string preceded by a space.
 
 #### Example
 
@@ -2837,11 +2967,19 @@ to_timestamp_micros(expression[, ..., format_n])
 +---------------------------------------------------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 
 ### `to_timestamp_millis`
 
-Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000Z`). Supports strings, integer, and unsigned integer types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided. Integers and unsigned integers are interpreted as milliseconds since the unix epoch (`1970-01-01T00:00:00Z`). Returns the corresponding timestamp.
+Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000<TZ>`) in the session time zone. Supports strings,
+integer, unsigned integer, and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
+if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided.
+Strings that parse without a time zone are treated as if they are in the
+session time zone, or UTC if no session time zone is set.
+Integers, unsigned integers, and doubles are interpreted as milliseconds since the unix epoch (`1970-01-01T00:00:00Z`).
+
+The session time zone can be set using the statement `SET TIMEZONE = 'desired time zone'`.
+The time zone can be a value like +00:00, 'Europe/London' etc.
 
 ```sql
 to_timestamp_millis(expression[, ..., format_n])
@@ -2850,7 +2988,11 @@ to_timestamp_millis(expression[, ..., format_n])
 #### Arguments
 
 - **expression**: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
-- **format_n**: Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully parse the expression an error will be returned.
+- **format_n**:
+  Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression.
+  Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully
+  parse the expression an error will be returned. Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
+  only supported at the end of the string preceded by a space.
 
 #### Example
 
@@ -2869,11 +3011,18 @@ to_timestamp_millis(expression[, ..., format_n])
 +---------------------------------------------------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 
 ### `to_timestamp_nanos`
 
-Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000000Z`). Supports strings, integer, and unsigned integer types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html)s are provided. Integers and unsigned integers are interpreted as nanoseconds since the unix epoch (`1970-01-01T00:00:00Z`). Returns the corresponding timestamp.
+Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000000<TZ>`) in the session time zone. Supports strings,
+integer, unsigned integer, and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
+if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided.
+Strings that parse without a time zone are treated as if they are in the
+session time zone. Integers, unsigned integers, and doubles are interpreted as nanoseconds since the unix epoch (`1970-01-01T00:00:00Z`).
+
+The session time zone can be set using the statement `SET TIMEZONE = 'desired time zone'`.
+The time zone can be a value like +00:00, 'Europe/London' etc.
 
 ```sql
 to_timestamp_nanos(expression[, ..., format_n])
@@ -2882,7 +3031,11 @@ to_timestamp_nanos(expression[, ..., format_n])
 #### Arguments
 
 - **expression**: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
-- **format_n**: Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully parse the expression an error will be returned.
+- **format_n**:
+  Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression.
+  Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully
+  parse the expression an error will be returned. Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
+  only supported at the end of the string preceded by a space.
 
 #### Example
 
@@ -2901,11 +3054,19 @@ to_timestamp_nanos(expression[, ..., format_n])
 +---------------------------------------------------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 
 ### `to_timestamp_seconds`
 
-Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000Z`). Supports strings, integer, and unsigned integer types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html)s are provided. Integers and unsigned integers are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`). Returns the corresponding timestamp.
+Converts a value to a timestamp (`YYYY-MM-DDT00:00:00<TZ>`) in the session time zone. Supports strings,
+integer, unsigned integer, and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
+if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided.
+Strings that parse without a time zone are treated as if they are in the
+session time zone, or UTC if no session time zone is set.
+Integers, unsigned integers, and doubles are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`).
+
+The session time zone can be set using the statement `SET TIMEZONE = 'desired time zone'`.
+The time zone can be a value like +00:00, 'Europe/London' etc.
 
 ```sql
 to_timestamp_seconds(expression[, ..., format_n])
@@ -2914,7 +3075,11 @@ to_timestamp_seconds(expression[, ..., format_n])
 #### Arguments
 
 - **expression**: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
-- **format_n**: Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully parse the expression an error will be returned.
+- **format_n**:
+  Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression.
+  Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully
+  parse the expression an error will be returned. Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
+  only supported at the end of the string preceded by a space.
 
 #### Example
 
@@ -2933,11 +3098,15 @@ to_timestamp_seconds(expression[, ..., format_n])
 +----------------------------------------------------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 
 ### `to_unixtime`
 
-Converts a value to seconds since the unix epoch (`1970-01-01T00:00:00Z`). Supports strings, dates, timestamps and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided.
+Converts a value to seconds since the unix epoch (`1970-01-01T00:00:00`).
+Supports strings, dates, timestamps, integer, unsigned integer, and float types as input.
+Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
+if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided.
+Integers, unsigned integers, and floats are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00`).
 
 ```sql
 to_unixtime(expression[, ..., format_n])
@@ -4062,7 +4231,7 @@ array_to_string(array, delimiter[, null_string])
 
 ### `array_union`
 
-Returns an array of elements that are present in both arrays (all elements from both arrays) with out duplicates.
+Returns an array of elements that are present in both arrays (all elements from both arrays) without duplicates.
 
 ```sql
 array_union(array1, array2)
@@ -4767,11 +4936,11 @@ digest(expression, algorithm)
 
 ```sql
 > select digest('foo', 'sha256');
-+------------------------------------------+
-| digest(Utf8("foo"), Utf8("sha256"))      |
-+------------------------------------------+
-| <binary_hash_result>                     |
-+------------------------------------------+
++------------------------------------------------------------------+
+| digest(Utf8("foo"),Utf8("sha256"))                               |
++------------------------------------------------------------------+
+| 2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae |
++------------------------------------------------------------------+
 ```
 
 ### `md5`
@@ -4790,11 +4959,11 @@ md5(expression)
 
 ```sql
 > select md5('foo');
-+-------------------------------------+
-| md5(Utf8("foo"))                    |
-+-------------------------------------+
-| <md5_checksum_result>               |
-+-------------------------------------+
++----------------------------------+
+| md5(Utf8("foo"))                 |
++----------------------------------+
+| acbd18db4cc2f85cedef654fccc4a4d8 |
++----------------------------------+
 ```
 
 ### `sha224`
@@ -4813,11 +4982,11 @@ sha224(expression)
 
 ```sql
 > select sha224('foo');
-+------------------------------------------+
-| sha224(Utf8("foo"))                      |
-+------------------------------------------+
-| <sha224_hash_result>                     |
-+------------------------------------------+
++----------------------------------------------------------+
+| sha224(Utf8("foo"))                                      |
++----------------------------------------------------------+
+| 0808f64e60d58979fcb676c96ec938270dea42445aeefcd3a4e6f8db |
++----------------------------------------------------------+
 ```
 
 ### `sha256`
@@ -4836,11 +5005,11 @@ sha256(expression)
 
 ```sql
 > select sha256('foo');
-+--------------------------------------+
-| sha256(Utf8("foo"))                  |
-+--------------------------------------+
-| <sha256_hash_result>                 |
-+--------------------------------------+
++------------------------------------------------------------------+
+| sha256(Utf8("foo"))                                              |
++------------------------------------------------------------------+
+| 2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae |
++------------------------------------------------------------------+
 ```
 
 ### `sha384`
@@ -4859,11 +5028,11 @@ sha384(expression)
 
 ```sql
 > select sha384('foo');
-+-----------------------------------------+
-| sha384(Utf8("foo"))                     |
-+-----------------------------------------+
-| <sha384_hash_result>                    |
-+-----------------------------------------+
++--------------------------------------------------------------------------------------------------+
+| sha384(Utf8("foo"))                                                                              |
++--------------------------------------------------------------------------------------------------+
+| 98c11ffdfdd540676b1a137cb1a22b2a70350c9a44171d6b1180c6be5cbb2ee3f79d532c8a1dd9ef2e8e08e752a3babb |
++--------------------------------------------------------------------------------------------------+
 ```
 
 ### `sha512`
@@ -4882,11 +5051,11 @@ sha512(expression)
 
 ```sql
 > select sha512('foo');
-+-------------------------------------------+
-| sha512(Utf8("foo"))                       |
-+-------------------------------------------+
-| <sha512_hash_result>                      |
-+-------------------------------------------+
++----------------------------------------------------------------------------------------------------------------------------------+
+| sha512(Utf8("foo"))                                                                                                              |
++----------------------------------------------------------------------------------------------------------------------------------+
+| f7fbba6e0636f890e56fbbf3283e524c6fa3204ae298382d624741d0dc6638326e282c41be5e4254d8820772c5518a2c5a8c0c7f7eda19594a7eb539453e1ed7 |
++----------------------------------------------------------------------------------------------------------------------------------+
 ```
 
 ## Union Functions
@@ -4954,6 +5123,7 @@ union_tag(union_expression)
 ## Other Functions
 
 - [arrow_cast](#arrow_cast)
+- [arrow_metadata](#arrow_metadata)
 - [arrow_typeof](#arrow_typeof)
 - [get_field](#get_field)
 - [version](#version)
@@ -4996,6 +5166,36 @@ arrow_cast(expression, datatype)
 +---------------------------+---------------------+
 ```
 
+### `arrow_metadata`
+
+Returns the metadata of the input expression. If a key is provided, returns the value for that key. If no key is provided, returns a Map of all metadata.
+
+```sql
+arrow_metadata(expression[, key])
+```
+
+#### Arguments
+
+- **expression**: The expression to retrieve metadata from. Can be a column or other expression.
+- **key**: Optional. The specific metadata key to retrieve.
+
+#### Example
+
+```sql
+> select arrow_metadata(col) from table;
++----------------------------+
+| arrow_metadata(table.col)  |
++----------------------------+
+| {k: v}                     |
++----------------------------+
+> select arrow_metadata(col, 'k') from table;
++-------------------------------+
+| arrow_metadata(table.col, 'k')|
++-------------------------------+
+| v                             |
++-------------------------------+
+```
+
 ### `arrow_typeof`
 
 Returns the name of the underlying [Arrow data type](https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html) of the expression.
@@ -5022,44 +5222,53 @@ arrow_typeof(expression)
 ### `get_field`
 
 Returns a field within a map or a struct with the given key.
+Supports nested field access by providing multiple field names.
 Note: most users invoke `get_field` indirectly via field access
 syntax such as `my_struct_col['field_name']` which results in a call to
 `get_field(my_struct_col, 'field_name')`.
+Nested access like `my_struct['a']['b']` is optimized to a single call:
+`get_field(my_struct, 'a', 'b')`.
 
 ```sql
-get_field(expression1, expression2)
+get_field(expression, field_name[, field_name2, ...])
 ```
 
 #### Arguments
 
-- **expression1**: The map or struct to retrieve a field for.
-- **expression2**: The field name in the map or struct to retrieve data for. Must evaluate to a string.
+- **expression**: The map or struct to retrieve a field from.
+- **field_name**: The field name(s) to access, in order for nested access. Must evaluate to strings.
 
 #### Example
 
 ```sql
-> create table t (idx varchar, v varchar) as values ('data','fusion'), ('apache', 'arrow');
-> select struct(idx, v) from t as c;
-+-------------------------+
-| struct(c.idx,c.v)       |
-+-------------------------+
-| {c0: data, c1: fusion}  |
-| {c0: apache, c1: arrow} |
-+-------------------------+
-> select get_field((select struct(idx, v) from t), 'c0');
-+-----------------------+
-| struct(t.idx,t.v)[c0] |
-+-----------------------+
-| data                  |
-| apache                |
-+-----------------------+
-> select get_field((select struct(idx, v) from t), 'c1');
-+-----------------------+
-| struct(t.idx,t.v)[c1] |
-+-----------------------+
-| fusion                |
-| arrow                 |
-+-----------------------+
+> -- Access a field from a struct column
+> create table test( struct_col) as values
+    ({name: 'Alice', age: 30}),
+    ({name: 'Bob', age: 25});
+> select struct_col from test;
++-----------------------------+
+| struct_col                  |
++-----------------------------+
+| {name: Alice, age: 30}      |
+| {name: Bob, age: 25}        |
++-----------------------------+
+> select struct_col['name'] as name from test;
++-------+
+| name  |
++-------+
+| Alice |
+| Bob   |
++-------+
+
+> -- Nested field access with multiple arguments
+> create table test(struct_col) as values
+    ({outer: {inner_val: 42}});
+> select struct_col['outer']['inner_val'] as result from test;
++--------+
+| result |
++--------+
+| 42     |
++--------+
 ```
 
 ### `version`

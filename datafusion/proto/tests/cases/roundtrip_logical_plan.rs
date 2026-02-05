@@ -19,9 +19,9 @@ use arrow::array::{
     ArrayRef, FixedSizeListArray, Int32Builder, MapArray, MapBuilder, StringBuilder,
 };
 use arrow::datatypes::{
-    DataType, Field, FieldRef, Fields, Int32Type, IntervalDayTimeType,
-    IntervalMonthDayNanoType, IntervalUnit, Schema, SchemaRef, TimeUnit, UnionFields,
-    UnionMode, DECIMAL256_MAX_PRECISION,
+    DECIMAL256_MAX_PRECISION, DataType, Field, FieldRef, Fields, Int32Type,
+    IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, Schema, SchemaRef,
+    TimeUnit, UnionFields, UnionMode,
 };
 use arrow::util::pretty::pretty_format_batches;
 use datafusion::datasource::file_format::json::{JsonFormat, JsonFormatFactory};
@@ -29,8 +29,9 @@ use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
 use datafusion::execution::options::ArrowReadOptions;
-use datafusion::optimizer::eliminate_nested_union::EliminateNestedUnion;
 use datafusion::optimizer::Optimizer;
+use datafusion::optimizer::optimize_unions::OptimizeUnions;
+use datafusion_common::parquet_config::DFParquetWriterVersion;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_functions_aggregate::sum::sum_distinct;
 use prost::Message;
@@ -42,13 +43,13 @@ use std::sync::Arc;
 use std::vec;
 
 use datafusion::catalog::{TableProvider, TableProviderFactory};
+use datafusion::datasource::DefaultTableSource;
 use datafusion::datasource::file_format::arrow::ArrowFormatFactory;
 use datafusion::datasource::file_format::csv::CsvFormatFactory;
 use datafusion::datasource::file_format::parquet::ParquetFormatFactory;
-use datafusion::datasource::file_format::{format_as_file_type, DefaultFileType};
-use datafusion::datasource::DefaultTableSource;
-use datafusion::execution::session_state::SessionStateBuilder;
+use datafusion::datasource::file_format::{DefaultFileType, format_as_file_type};
 use datafusion::execution::FunctionRegistry;
+use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::functions_aggregate::count::count_udaf;
 use datafusion::functions_aggregate::expr_fn::{
     approx_median, approx_percentile_cont, approx_percentile_cont_with_weight, count,
@@ -68,8 +69,8 @@ use datafusion::test_util::{TestTableFactory, TestTableProvider};
 use datafusion_common::config::TableOptions;
 use datafusion_common::scalar::ScalarStructBuilder;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema, DFSchemaRef,
-    DataFusionError, Result, ScalarValue, TableReference,
+    DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, TableReference,
+    internal_datafusion_err, internal_err, not_impl_err, plan_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_expr::dml::CopyTo;
@@ -102,7 +103,7 @@ use datafusion_proto::logical_plan::file_formats::{
 };
 use datafusion_proto::logical_plan::to_proto::serialize_expr;
 use datafusion_proto::logical_plan::{
-    from_proto, DefaultLogicalExtensionCodec, LogicalExtensionCodec,
+    DefaultLogicalExtensionCodec, LogicalExtensionCodec, from_proto,
 };
 use datafusion_proto::protobuf;
 
@@ -412,6 +413,7 @@ async fn roundtrip_logical_plan_dml() -> Result<()> {
         "DELETE FROM T1",
         "UPDATE T1 SET a = 1",
         "CREATE TABLE T2 AS SELECT * FROM T1",
+        "TRUNCATE TABLE T1",
     ];
     for query in queries {
         let plan = ctx.sql(query).await?.into_optimized_plan()?;
@@ -464,7 +466,7 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
 
     parquet_format.global.bloom_filter_on_read = true;
     parquet_format.global.created_by = "DataFusion Test".to_string();
-    parquet_format.global.writer_version = "PARQUET_2_0".to_string();
+    parquet_format.global.writer_version = DFParquetWriterVersion::V2_0;
     parquet_format.global.write_batch_size = 111;
     parquet_format.global.data_pagesize_limit = 222;
     parquet_format.global.data_page_row_count_limit = 333;
@@ -549,6 +551,8 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
     csv_format.timestamp_format = Some("HH:mm:ss.SSSSSS".to_string());
     csv_format.time_format = Some("HH:mm:ss".to_string());
     csv_format.null_value = Some("NIL".to_string());
+    csv_format.compression = CompressionTypeVariant::GZIP;
+    csv_format.compression_level = Some(6);
 
     let file_type = format_as_file_type(Arc::new(CsvFormatFactory::new_with_options(
         csv_format.clone(),
@@ -593,7 +597,9 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
             assert_eq!(csv_format.datetime_format, csv_config.datetime_format);
             assert_eq!(csv_format.timestamp_format, csv_config.timestamp_format);
             assert_eq!(csv_format.time_format, csv_config.time_format);
-            assert_eq!(csv_format.null_value, csv_config.null_value)
+            assert_eq!(csv_format.null_value, csv_config.null_value);
+            assert_eq!(csv_format.compression, csv_config.compression);
+            assert_eq!(csv_format.compression_level, csv_config.compression_level);
         }
         _ => panic!(),
     }
@@ -1088,11 +1094,13 @@ async fn roundtrip_logical_plan_prepared_statement_with_metadata() -> Result<()>
     let prepared = LogicalPlanBuilder::new(plan)
         .prepare(
             "".to_string(),
-            vec![Field::new("", DataType::Int32, true)
-                .with_metadata(
-                    [("some_key".to_string(), "some_value".to_string())].into(),
-                )
-                .into()],
+            vec![
+                Field::new("", DataType::Int32, true)
+                    .with_metadata(
+                        [("some_key".to_string(), "some_value".to_string())].into(),
+                    )
+                    .into(),
+            ],
         )
         .unwrap()
         .plan()
@@ -1526,6 +1534,16 @@ fn round_trip_scalar_values_and_data_types() {
             Box::new(DataType::Int32),
             Box::new(ScalarValue::Utf8(None)),
         ),
+        ScalarValue::RunEndEncoded(
+            Field::new("run_ends", DataType::Int32, false).into(),
+            Field::new("values", DataType::Utf8, true).into(),
+            Box::new(ScalarValue::from("foo")),
+        ),
+        ScalarValue::RunEndEncoded(
+            Field::new("run_ends", DataType::Int32, false).into(),
+            Field::new("values", DataType::Utf8, true).into(),
+            Box::new(ScalarValue::Utf8(None)),
+        ),
         ScalarValue::Binary(Some(b"bar".to_vec())),
         ScalarValue::Binary(None),
         ScalarValue::LargeBinary(Some(b"bar".to_vec())),
@@ -1773,19 +1791,20 @@ fn round_trip_datatype() {
             ),
         ])),
         DataType::Union(
-            UnionFields::new(
+            UnionFields::try_new(
                 vec![7, 5, 3],
                 vec![
                     Field::new("nullable", DataType::Boolean, false),
                     Field::new("name", DataType::Utf8, false),
                     Field::new("datatype", DataType::Binary, false),
                 ],
-            ),
+            )
+            .unwrap(),
             UnionMode::Sparse,
         ),
         DataType::Union(
-            UnionFields::new(
-                vec![5, 8, 1],
+            UnionFields::try_new(
+                vec![5, 8, 1, 100],
                 vec![
                     Field::new("nullable", DataType::Boolean, false),
                     Field::new("name", DataType::Utf8, false),
@@ -1800,7 +1819,8 @@ fn round_trip_datatype() {
                         true,
                     ),
                 ],
-            ),
+            )
+            .unwrap(),
             UnionMode::Dense,
         ),
         DataType::Dictionary(
@@ -1981,6 +2001,10 @@ fn roundtrip_binary_op() {
     test(Operator::RegexNotMatch);
     test(Operator::RegexIMatch);
     test(Operator::RegexMatch);
+    test(Operator::LikeMatch);
+    test(Operator::ILikeMatch);
+    test(Operator::NotLikeMatch);
+    test(Operator::NotILikeMatch);
     test(Operator::BitwiseShiftRight);
     test(Operator::BitwiseShiftLeft);
     test(Operator::BitwiseAnd);
@@ -2744,7 +2768,7 @@ async fn roundtrip_union_query() -> Result<()> {
     let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     // proto deserialization only supports 2-way union, hence this plan has nested unions
     // apply the flatten unions optimizer rule to be able to compare
-    let optimizer = Optimizer::with_rules(vec![Arc::new(EliminateNestedUnion::new())]);
+    let optimizer = Optimizer::with_rules(vec![Arc::new(OptimizeUnions::new())]);
     let unnested = optimizer.optimize(logical_round_trip, &(ctx.state()), |_x, _y| {})?;
     assert_eq!(
         format!("{}", plan.display_indent_schema()),

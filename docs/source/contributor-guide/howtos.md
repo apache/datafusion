@@ -64,10 +64,10 @@ function types (e.g. scalar, nested, aggregate) are grouped together in the sing
 [`partitionevaluator`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/trait.PartitionEvaluator.html
 [`tablefunctionimpl`]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableFunctionImpl.html
 [`tableprovider`]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableProvider.html
-[`advanced_udf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
-[`advanced_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
-[`advanced_udwf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udwf.rs
-[`simple_udtf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udtf.rs
+[`advanced_udf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udf.rs
+[`advanced_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udaf.rs
+[`advanced_udwf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udwf.rs
+[`simple_udtf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/simple_udtf.rs
 [rust feature]: https://doc.rust-lang.org/cargo/reference/features.html
 
 **Testing**
@@ -187,4 +187,4 @@ valid installation of [protoc] (see [installation instructions] for details).
 ```
 
 [protoc]: https://github.com/protocolbuffers/protobuf#protocol-compiler-installation
-[installation instructions]: https://datafusion.apache.org/contributor-guide/getting_started.html#protoc-installation
+[installation instructions]: https://datafusion.apache.org/contributor-guide/development_environment.html#protoc-installation

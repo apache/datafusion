@@ -28,7 +28,8 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::{
-    internal_err, plan_err, qualified_name, Column, DFSchema, Result,
+    Column, DFSchema, Result, assert_eq_or_internal_err, assert_or_internal_err,
+    internal_err, plan_err, qualified_name,
 };
 use datafusion_expr::expr::WindowFunction;
 use datafusion_expr::expr_rewriter::replace_col;
@@ -37,7 +38,7 @@ use datafusion_expr::utils::{
     conjunction, expr_to_columns, split_conjunction, split_conjunction_owned,
 };
 use datafusion_expr::{
-    and, or, BinaryExpr, Expr, Filter, Operator, Projection, TableProviderFilterPushDown,
+    BinaryExpr, Expr, Filter, Operator, Projection, TableProviderFilterPushDown, and, or,
 };
 
 use crate::optimizer::ApplyOrder;
@@ -262,6 +263,7 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         | Expr::ScalarVariable(_, _) => Ok(TreeNodeRecursion::Jump),
         Expr::Exists { .. }
         | Expr::InSubquery(_)
+        | Expr::SetComparison(_)
         | Expr::ScalarSubquery(_)
         | Expr::OuterReferenceColumn(_, _)
         | Expr::Unnest(_) => {
@@ -453,11 +455,11 @@ fn push_down_all_join(
         }
     }
 
-    // For infer predicates, if they can not push through join, just drop them
+    // Push predicates inferred from the join expression
     for predicate in inferred_join_predicates {
-        if left_preserved && checker.is_left_only(&predicate) {
+        if checker.is_left_only(&predicate) {
             left_push.push(predicate);
-        } else if right_preserved && checker.is_right_only(&predicate) {
+        } else if checker.is_right_only(&predicate) {
             right_push.push(predicate);
         }
     }
@@ -765,8 +767,9 @@ impl OptimizerRule for PushDownFilter {
     fn rewrite(
         &self,
         plan: LogicalPlan,
-        _config: &dyn OptimizerConfig,
+        config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
+        let _ = config.options();
         if let LogicalPlan::Join(join) = plan {
             return push_down_join(join, None);
         };
@@ -810,8 +813,7 @@ impl OptimizerRule for PushDownFilter {
                     new_predicate,
                     child_filter.input,
                 )?);
-                #[allow(clippy::used_underscore_binding)]
-                self.rewrite(new_filter, _config)
+                self.rewrite(new_filter, config)
             }
             LogicalPlan::Repartition(repartition) => {
                 let new_filter =
@@ -1135,12 +1137,13 @@ impl OptimizerRule for PushDownFilter {
                 let supported_filters = scan
                     .source
                     .supports_filters_pushdown(non_volatile_filters.as_slice())?;
-                if non_volatile_filters.len() != supported_filters.len() {
-                    return internal_err!(
-                        "Vec returned length: {} from supports_filters_pushdown is not the same size as the filters passed, which length is: {}",
-                        supported_filters.len(),
-                        non_volatile_filters.len());
-                }
+                assert_eq_or_internal_err!(
+                    non_volatile_filters.len(),
+                    supported_filters.len(),
+                    "Vec returned length: {} from supports_filters_pushdown is not the same size as the filters passed, which length is: {}",
+                    supported_filters.len(),
+                    non_volatile_filters.len()
+                );
 
                 // Compose scan filters from non-volatile filters of `Exact` or `Inexact` pushdown type
                 let zip = non_volatile_filters.into_iter().zip(supported_filters);
@@ -1370,15 +1373,13 @@ fn insert_below(
     })?;
 
     // make sure we did the actual replacement
-    if new_child.is_some() {
-        return internal_err!("node had no  inputs");
-    }
+    assert_or_internal_err!(new_child.is_none(), "node had no inputs");
 
     Ok(transformed_plan)
 }
 
 impl PushDownFilter {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
@@ -1435,17 +1436,17 @@ mod tests {
     use datafusion_expr::expr::{ScalarFunction, WindowFunction};
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
-        col, in_list, in_subquery, lit, ColumnarValue, ExprFunctionExt, Extension,
-        LogicalPlanBuilder, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
-        TableSource, TableType, UserDefinedLogicalNodeCore, Volatility,
-        WindowFunctionDefinition,
+        ColumnarValue, ExprFunctionExt, Extension, LogicalPlanBuilder,
+        ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TableSource, TableType,
+        UserDefinedLogicalNodeCore, Volatility, WindowFunctionDefinition, col, in_list,
+        in_subquery, lit,
     };
 
+    use crate::OptimizerContext;
     use crate::assert_optimized_plan_eq_snapshot;
     use crate::optimizer::Optimizer;
     use crate::simplify_expressions::SimplifyExpressions;
     use crate::test::*;
-    use crate::OptimizerContext;
     use datafusion_expr::test::function_stub::sum;
     use insta::assert_snapshot;
 
@@ -2331,7 +2332,7 @@ mod tests {
             plan,
             @r"
         Projection: test.a, test1.d
-          Cross Join: 
+          Cross Join:
             Projection: test.a, test.b, test.c
               TableScan: test, full_filters=[test.a = Int32(1)]
             Projection: test1.d, test1.e, test1.f
@@ -2361,7 +2362,7 @@ mod tests {
             plan,
             @r"
         Projection: test.a, test1.a
-          Cross Join: 
+          Cross Join:
             Projection: test.a, test.b, test.c
               TableScan: test, full_filters=[test.a = Int32(1)]
             Projection: test1.a, test1.b, test1.c
@@ -2720,8 +2721,7 @@ mod tests {
         )
     }
 
-    /// post-left-join predicate on a column common to both sides is only pushed to the left side
-    /// i.e. - not duplicated to the right side
+    /// post-left-join predicate on a column common to both sides is pushed to both sides
     #[test]
     fn filter_using_left_join_on_common() -> Result<()> {
         let table_scan = test_table_scan()?;
@@ -2749,20 +2749,19 @@ mod tests {
               TableScan: test2
         ",
         );
-        // filter sent to left side of the join, not the right
+        // filter sent to left side of the join and to the right
         assert_optimized_plan_equal!(
             plan,
             @r"
         Left Join: Using test.a = test2.a
           TableScan: test, full_filters=[test.a <= Int64(1)]
           Projection: test2.a
-            TableScan: test2
+            TableScan: test2, full_filters=[test2.a <= Int64(1)]
         "
         )
     }
 
-    /// post-right-join predicate on a column common to both sides is only pushed to the right side
-    /// i.e. - not duplicated to the left side.
+    /// post-right-join predicate on a column common to both sides is pushed to both sides
     #[test]
     fn filter_using_right_join_on_common() -> Result<()> {
         let table_scan = test_table_scan()?;
@@ -2790,12 +2789,12 @@ mod tests {
               TableScan: test2
         ",
         );
-        // filter sent to right side of join, not duplicated to the left
+        // filter sent to right side of join, sent to the left as well
         assert_optimized_plan_equal!(
             plan,
             @r"
         Right Join: Using test.a = test2.a
-          TableScan: test
+          TableScan: test, full_filters=[test.a <= Int64(1)]
           Projection: test2.a
             TableScan: test2, full_filters=[test2.a <= Int64(1)]
         "
@@ -2977,7 +2976,7 @@ mod tests {
           Projection: test.a, test.b, test.c
             TableScan: test
           Projection: test2.a, test2.b, test2.c
-            TableScan: test2, full_filters=[test2.c > UInt32(4)]
+            TableScan: test2, full_filters=[test2.a > UInt32(1), test2.c > UInt32(4)]
         "
         )
     }

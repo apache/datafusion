@@ -25,9 +25,9 @@ use crate::datasource::file_format::avro::AvroFormat;
 #[cfg(feature = "parquet")]
 use crate::datasource::file_format::parquet::ParquetFormat;
 
+use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
 use crate::datasource::file_format::arrow::ArrowFormat;
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
-use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
 use crate::datasource::listing::ListingTableUrl;
 use crate::datasource::{file_format::csv::CsvFormat, listing::ListingOptions};
 use crate::error::Result;
@@ -521,6 +521,12 @@ impl<'a> NdJsonReadOptions<'a> {
     /// Configure if file has known sort order
     pub fn file_sort_order(mut self, file_sort_order: Vec<Vec<SortExpr>>) -> Self {
         self.file_sort_order = file_sort_order;
+        self
+    }
+
+    /// Specify how many rows to read for schema inference
+    pub fn schema_infer_max_records(mut self, schema_infer_max_records: usize) -> Self {
+        self.schema_infer_max_records = schema_infer_max_records;
         self
     }
 }

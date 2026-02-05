@@ -23,8 +23,6 @@
 // Make sure fast / cheap clones on Arc are explicit:
 // https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
-// https://github.com/apache/datafusion/issues/18503
-#![deny(clippy::needless_pass_by_value)]
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
 //! Physical Expr Common packages for [DataFusion]
@@ -35,6 +33,7 @@
 pub mod binary_map;
 pub mod binary_view_map;
 pub mod datum;
+pub mod metrics;
 pub mod physical_expr;
 pub mod sort_expr;
 pub mod tree_node;

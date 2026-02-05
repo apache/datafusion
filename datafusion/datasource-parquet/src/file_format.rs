@@ -27,12 +27,12 @@ use std::{fmt, vec};
 
 use arrow::array::RecordBatch;
 use arrow::datatypes::{Fields, Schema, SchemaRef, TimeUnit};
+use datafusion_datasource::TableSchema;
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
 use datafusion_datasource::write::{
-    get_writer_schema, ObjectWriterBuilder, SharedBuffer,
+    ObjectWriterBuilder, SharedBuffer, get_writer_schema,
 };
-use datafusion_datasource::TableSchema;
 
 use datafusion_datasource::file_format::{FileFormat, FileFormatFactory};
 use datafusion_datasource::write::demux::DemuxedStreamReceiver;
@@ -42,8 +42,8 @@ use datafusion_common::config::{ConfigField, ConfigFileType, TableParquetOptions
 use datafusion_common::encryption::FileDecryptionProperties;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, not_impl_err, DataFusionError, GetExt,
-    HashSet, Result, DEFAULT_PARQUET_EXTENSION,
+    DEFAULT_PARQUET_EXTENSION, DataFusionError, GetExt, HashSet, Result,
+    internal_datafusion_err, internal_err, not_impl_err,
 };
 use datafusion_common::{HashMap, Statistics};
 use datafusion_common_runtime::{JoinSet, SpawnedTask};
@@ -54,13 +54,13 @@ use datafusion_datasource::sink::{DataSink, DataSinkExec};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
-use datafusion_physical_expr_common::sort_expr::LexRequirement;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 use datafusion_session::Session;
 
-use crate::metadata::DFParquetMetadata;
+use crate::metadata::{DFParquetMetadata, lex_ordering_to_sorting_columns};
 use crate::reader::CachedParquetFileReaderFactory;
-use crate::source::{parse_coerce_int96_string, ParquetSource};
+use crate::source::{ParquetSource, parse_coerce_int96_string};
 use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion_datasource::source::DataSourceExec;
@@ -72,8 +72,8 @@ use object_store::buffered::BufWriter;
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
 use parquet::arrow::arrow_writer::{
-    compute_leaves, ArrowColumnChunk, ArrowColumnWriter, ArrowLeafColumn,
-    ArrowRowGroupWriterFactory, ArrowWriterOptions,
+    ArrowColumnChunk, ArrowColumnWriter, ArrowLeafColumn, ArrowRowGroupWriterFactory,
+    ArrowWriterOptions, compute_leaves,
 };
 use parquet::arrow::async_reader::MetadataFetch;
 use parquet::arrow::{ArrowWriter, AsyncArrowWriter};
@@ -81,7 +81,7 @@ use parquet::basic::Type;
 #[cfg(feature = "parquet_encryption")]
 use parquet::encryption::encrypt::FileEncryptionProperties;
 use parquet::errors::ParquetError;
-use parquet::file::metadata::ParquetMetaData;
+use parquet::file::metadata::{ParquetMetaData, SortingColumn};
 use parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
 use parquet::file::writer::SerializedFileWriter;
 use parquet::schema::types::SchemaDescriptor;
@@ -449,6 +449,57 @@ impl FileFormat for ParquetFormat {
             .await
     }
 
+    async fn infer_ordering(
+        &self,
+        state: &dyn Session,
+        store: &Arc<dyn ObjectStore>,
+        table_schema: SchemaRef,
+        object: &ObjectMeta,
+    ) -> Result<Option<LexOrdering>> {
+        let file_decryption_properties =
+            get_file_decryption_properties(state, &self.options, &object.location)
+                .await?;
+        let file_metadata_cache =
+            state.runtime_env().cache_manager.get_file_metadata_cache();
+        let metadata = DFParquetMetadata::new(store, object)
+            .with_metadata_size_hint(self.metadata_size_hint())
+            .with_decryption_properties(file_decryption_properties)
+            .with_file_metadata_cache(Some(file_metadata_cache))
+            .fetch_metadata()
+            .await?;
+        crate::metadata::ordering_from_parquet_metadata(&metadata, &table_schema)
+    }
+
+    async fn infer_stats_and_ordering(
+        &self,
+        state: &dyn Session,
+        store: &Arc<dyn ObjectStore>,
+        table_schema: SchemaRef,
+        object: &ObjectMeta,
+    ) -> Result<datafusion_datasource::file_format::FileMeta> {
+        let file_decryption_properties =
+            get_file_decryption_properties(state, &self.options, &object.location)
+                .await?;
+        let file_metadata_cache =
+            state.runtime_env().cache_manager.get_file_metadata_cache();
+        let metadata = DFParquetMetadata::new(store, object)
+            .with_metadata_size_hint(self.metadata_size_hint())
+            .with_decryption_properties(file_decryption_properties)
+            .with_file_metadata_cache(Some(file_metadata_cache))
+            .fetch_metadata()
+            .await?;
+        let statistics = DFParquetMetadata::statistics_from_parquet_metadata(
+            &metadata,
+            &table_schema,
+        )?;
+        let ordering =
+            crate::metadata::ordering_from_parquet_metadata(&metadata, &table_schema)?;
+        Ok(
+            datafusion_datasource::file_format::FileMeta::new(statistics)
+                .with_ordering(ordering),
+        )
+    }
+
     async fn create_physical_plan(
         &self,
         state: &dyn Session,
@@ -460,12 +511,13 @@ impl FileFormat for ParquetFormat {
             metadata_size_hint = Some(metadata);
         }
 
-        let table_schema = TableSchema::new(
-            Arc::clone(conf.file_schema()),
-            conf.table_partition_cols().clone(),
-        );
-        let mut source = ParquetSource::new(table_schema)
-            .with_table_parquet_options(self.options.clone());
+        let mut source = conf
+            .file_source()
+            .as_any()
+            .downcast_ref::<ParquetSource>()
+            .cloned()
+            .ok_or_else(|| internal_datafusion_err!("Expected ParquetSource"))?;
+        source = source.with_table_parquet_options(self.options.clone());
 
         // Use the CachedParquetFileReaderFactory
         let metadata_cache = state.runtime_env().cache_manager.get_file_metadata_cache();
@@ -482,11 +534,8 @@ impl FileFormat for ParquetFormat {
 
         source = self.set_source_encryption_factory(source, state)?;
 
-        // Apply schema adapter factory before building the new config
-        let file_source = source.apply_schema_adapter(&conf)?;
-
         let conf = FileScanConfigBuilder::from(conf)
-            .with_source(file_source)
+            .with_source(Arc::new(source))
             .build();
         Ok(DataSourceExec::from_data_source(conf))
     }
@@ -502,7 +551,22 @@ impl FileFormat for ParquetFormat {
             return not_impl_err!("Overwrites are not implemented yet for Parquet");
         }
 
-        let sink = Arc::new(ParquetSink::new(conf, self.options.clone()));
+        // Convert ordering requirements to Parquet SortingColumns for file metadata
+        let sorting_columns = if let Some(ref requirements) = order_requirements {
+            let ordering: LexOrdering = requirements.clone().into();
+            // In cases like `COPY (... ORDER BY ...) TO ...` the ORDER BY clause
+            // may not be compatible with Parquet sorting columns (e.g. ordering on `random()`).
+            // So if we cannot create a Parquet sorting column from the ordering requirement,
+            // we skip setting sorting columns on the Parquet sink.
+            lex_ordering_to_sorting_columns(&ordering).ok()
+        } else {
+            None
+        };
+
+        let sink = Arc::new(
+            ParquetSink::new(conf, self.options.clone())
+                .with_sorting_columns(sorting_columns),
+        );
 
         Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
     }
@@ -542,8 +606,9 @@ impl ParquetFormat {
         _state: &dyn Session,
     ) -> Result<ParquetSource> {
         if let Some(encryption_factory_id) = &self.options.crypto.factory_id {
-            Err(DataFusionError::Configuration(
-                format!("Parquet encryption factory id is set to '{encryption_factory_id}' but the parquet_encryption feature is disabled")))
+            Err(DataFusionError::Configuration(format!(
+                "Parquet encryption factory id is set to '{encryption_factory_id}' but the parquet_encryption feature is disabled"
+            )))
         } else {
             Ok(source)
         }
@@ -1072,6 +1137,7 @@ pub async fn fetch_statistics(
     since = "50.0.0",
     note = "Use `DFParquetMetadata::statistics_from_parquet_metadata` instead"
 )]
+#[expect(clippy::needless_pass_by_value)]
 pub fn statistics_from_parquet_meta_calc(
     metadata: &ParquetMetaData,
     table_schema: SchemaRef,
@@ -1088,6 +1154,8 @@ pub struct ParquetSink {
     /// File metadata from successfully produced parquet files. The Mutex is only used
     /// to allow inserting to HashMap from behind borrowed reference in DataSink::write_all.
     written: Arc<parking_lot::Mutex<HashMap<Path, ParquetMetaData>>>,
+    /// Optional sorting columns to write to Parquet metadata
+    sorting_columns: Option<Vec<SortingColumn>>,
 }
 
 impl Debug for ParquetSink {
@@ -1119,7 +1187,17 @@ impl ParquetSink {
             config,
             parquet_options,
             written: Default::default(),
+            sorting_columns: None,
         }
+    }
+
+    /// Set sorting columns for the Parquet file metadata.
+    pub fn with_sorting_columns(
+        mut self,
+        sorting_columns: Option<Vec<SortingColumn>>,
+    ) -> Self {
+        self.sorting_columns = sorting_columns;
+        self
     }
 
     /// Retrieve the file metadata for the written files, keyed to the path
@@ -1145,6 +1223,12 @@ impl ParquetSink {
         }
 
         let mut builder = WriterPropertiesBuilder::try_from(&parquet_opts)?;
+
+        // Set sorting columns if configured
+        if let Some(ref sorting_columns) = self.sorting_columns {
+            builder = builder.set_sorting_columns(Some(sorting_columns.clone()));
+        }
+
         builder = set_writer_encryption_properties(
             builder,
             runtime,
@@ -1276,7 +1360,7 @@ impl FileSink for ParquetSink {
                         parquet_props.clone(),
                     )
                     .await?;
-                let mut reservation = MemoryConsumer::new(format!("ParquetSink[{path}]"))
+                let reservation = MemoryConsumer::new(format!("ParquetSink[{path}]"))
                     .register(context.memory_pool());
                 file_write_tasks.spawn(async move {
                     while let Some(batch) = rx.recv().await {
@@ -1381,7 +1465,7 @@ impl DataSink for ParquetSink {
 async fn column_serializer_task(
     mut rx: Receiver<ArrowLeafColumn>,
     mut writer: ArrowColumnWriter,
-    mut reservation: MemoryReservation,
+    reservation: MemoryReservation,
 ) -> Result<(ArrowColumnWriter, MemoryReservation)> {
     while let Some(col) = rx.recv().await {
         writer.write(&col)?;
@@ -1466,7 +1550,7 @@ fn spawn_rg_join_and_finalize_task(
     rg_rows: usize,
     pool: &Arc<dyn MemoryPool>,
 ) -> SpawnedTask<RBStreamSerializeResult> {
-    let mut rg_reservation =
+    let rg_reservation =
         MemoryConsumer::new("ParquetSink(SerializedRowGroupWriter)").register(pool);
 
     SpawnedTask::spawn(async move {
@@ -1500,7 +1584,7 @@ fn spawn_parquet_parallel_serialization_task(
     serialize_tx: Sender<SpawnedTask<RBStreamSerializeResult>>,
     schema: Arc<Schema>,
     writer_props: Arc<WriterProperties>,
-    parallel_options: ParallelParquetWriterOptions,
+    parallel_options: Arc<ParallelParquetWriterOptions>,
     pool: Arc<dyn MemoryPool>,
 ) -> SpawnedTask<Result<(), DataFusionError>> {
     SpawnedTask::spawn(async move {
@@ -1598,12 +1682,12 @@ async fn concatenate_parallel_row_groups(
     mut object_store_writer: Box<dyn AsyncWrite + Send + Unpin>,
     pool: Arc<dyn MemoryPool>,
 ) -> Result<ParquetMetaData> {
-    let mut file_reservation =
+    let file_reservation =
         MemoryConsumer::new("ParquetSink(SerializedFileWriter)").register(&pool);
 
     while let Some(task) = serialize_rx.recv().await {
         let result = task.join_unwind().await;
-        let (serialized_columns, mut rg_reservation, _cnt) =
+        let (serialized_columns, rg_reservation, _cnt) =
             result.map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??;
 
         let mut rg_out = parquet_writer.next_row_group()?;
@@ -1671,7 +1755,7 @@ async fn output_single_parquet_file_parallelized(
         serialize_tx,
         Arc::clone(&output_schema),
         Arc::clone(&arc_props),
-        parallel_options,
+        parallel_options.into(),
         Arc::clone(&pool),
     );
     let parquet_meta_data = concatenate_parallel_row_groups(

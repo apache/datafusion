@@ -19,8 +19,8 @@
 
 use arrow::error::ArrowError;
 use regex::Regex;
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::sync::Arc;
 pub mod regexpcount;
 pub mod regexpinstr;

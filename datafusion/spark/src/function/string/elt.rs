@@ -25,7 +25,7 @@ use arrow::compute::{can_cast_types, cast};
 use arrow::datatypes::DataType::{Int64, Utf8};
 use arrow::datatypes::{DataType, Int64Type};
 use datafusion_common::cast::as_string_array;
-use datafusion_common::{plan_datafusion_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, plan_datafusion_err};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
