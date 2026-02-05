@@ -392,24 +392,58 @@ fn hash_generic_byte_view_array<T: ByteViewType>(
     }
 }
 
-/// Helper function to update hash for a dictionary key if the value is valid
-#[cfg(not(feature = "force_hash_collisions"))]
-#[inline]
-fn update_hash_for_dict_key(
-    hash: &mut u64,
-    dict_hashes: &[u64],
-    dict_values: &dyn Array,
-    idx: usize,
-    multi_col: bool,
-) {
-    if dict_values.is_valid(idx) {
-        if multi_col {
-            *hash = combine_hashes(dict_hashes[idx], *hash);
-        } else {
-            *hash = dict_hashes[idx];
+/// Hash dictionary array with compile-time specialization for null handling.
+///
+/// Uses const generics to eliminate runtim branching in the hot loop:
+/// - `HAS_NULL_KEYS`: Whether to check for null dictionary keys
+/// - `HAS_NULL_VALUES`: Whether to check for null dictionary values
+/// - `MULTI_COL`: Whether to combine with existing hash (true) or initialize (false)
+#[inline(never)]
+fn hash_dictionary_inner<
+    K: ArrowDictionaryKeyType,
+    const HAS_NULL_KEYS: bool,
+    const HAS_NULL_VALUES: bool,
+    const MULTI_COL: bool,
+>(
+    array: &DictionaryArray<K>,
+    random_state: &RandomState,
+    hashes_buffer: &mut [u64],
+) -> Result<()> {
+    // Hash each dictionary value once, and then use that computed
+    // hash for each key value to avoid a potentially expensive
+    // redundant hashing for large dictionary elements (e.g. strings)
+    let dict_values = array.values();
+    let mut dict_hashes = vec![0; dict_values.len()];
+    create_hashes([dict_values], random_state, &mut dict_hashes)?;
+
+    if HAS_NULL_KEYS {
+        for (hash, key) in hashes_buffer.iter_mut().zip(array.keys().iter()) {
+            if let Some(key) = key {
+                let idx = key.as_usize();
+                if !HAS_NULL_VALUES || dict_values.is_valid(idx) {
+                    if MULTI_COL {
+                        *hash = combine_hashes(dict_hashes[idx], *hash);
+                    } else {
+                        *hash = dict_hashes[idx];
+                    }
+                }
+            }
+        }
+    } else {
+        for (hash, key) in hashes_buffer.iter_mut().zip(array.keys().iter()) {
+            // SAFETY: Keys are guaranteed to be non-null because we checked nucll_count = 0
+            let key = key.unwrap();
+            let idx = key.as_usize();
+            if !HAS_NULL_VALUES || dict_values.is_valid(idx) {
+                if MULTI_COL {
+                    *hash = combine_hashes(dict_hashes[idx], *hash);
+                } else {
+                    *hash = dict_hashes[idx];
+                }
+            }
         }
     }
-    // no update for invalid dictionary value
+    Ok(())
 }
 
 /// Hash the values in a dictionary array
@@ -420,27 +454,53 @@ fn hash_dictionary<K: ArrowDictionaryKeyType>(
     hashes_buffer: &mut [u64],
     multi_col: bool,
 ) -> Result<()> {
-    // Hash each dictionary value once, and then use that computed
-    // hash for each key value to avoid a potentially expensive
-    // redundant hashing for large dictionary elements (e.g. strings)
-    let dict_values = array.values();
-    let mut dict_hashes = vec![0; dict_values.len()];
-    create_hashes([dict_values], random_state, &mut dict_hashes)?;
+    let has_null_keys = array.keys().null_count() != 0;
+    let has_null_values = array.values().null_count() != 0;
 
-    // combine hash for each index in values
-    for (hash, key) in hashes_buffer.iter_mut().zip(array.keys().iter()) {
-        if let Some(key) = key {
-            let idx = key.as_usize();
-            update_hash_for_dict_key(
-                hash,
-                &dict_hashes,
-                dict_values.as_ref(),
-                idx,
-                multi_col,
-            );
-        } // no update for Null key
+    // Dispatcher based on null presence and multi-column mode
+    // Should reduce branching within hot loops
+    match (has_null_keys, has_null_values, multi_col) {
+        (false, false, false) => hash_dictionary_inner::<K, false, false, false>(
+            array,
+            random_state,
+            hashes_buffer,
+        ),
+        (false, false, true) => hash_dictionary_inner::<K, false, false, true>(
+            array,
+            random_state,
+            hashes_buffer,
+        ),
+        (false, true, false) => hash_dictionary_inner::<K, false, true, false>(
+            array,
+            random_state,
+            hashes_buffer,
+        ),
+        (false, true, true) => hash_dictionary_inner::<K, false, true, true>(
+            array,
+            random_state,
+            hashes_buffer,
+        ),
+        (true, false, false) => hash_dictionary_inner::<K, true, false, false>(
+            array,
+            random_state,
+            hashes_buffer,
+        ),
+        (true, false, true) => hash_dictionary_inner::<K, true, false, true>(
+            array,
+            random_state,
+            hashes_buffer,
+        ),
+        (true, true, false) => hash_dictionary_inner::<K, true, true, false>(
+            array,
+            random_state,
+            hashes_buffer,
+        ),
+        (true, true, true) => hash_dictionary_inner::<K, true, true, true>(
+            array,
+            random_state,
+            hashes_buffer,
+        ),
     }
-    Ok(())
 }
 
 #[cfg(not(feature = "force_hash_collisions"))]
