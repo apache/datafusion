@@ -30,7 +30,6 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::physical_expr::DynHash;
-use parking_lot::RwLock;
 
 use crate::PhysicalExpr;
 
@@ -53,28 +52,10 @@ impl Default for SelectivityConfig {
     }
 }
 
-/// State machine for selectivity tracking.
-#[derive(Debug)]
-enum SelectivityState {
-    /// Collecting statistics, not yet enough data.
-    Tracking {
-        rows_passed: AtomicUsize,
-        rows_total: AtomicUsize,
-    },
-    /// Filter is sufficiently selective, keep active.
-    Active,
-    /// Filter has been disabled due to poor selectivity.
-    Disabled,
-}
-
-impl SelectivityState {
-    fn new_tracking() -> Self {
-        Self::Tracking {
-            rows_passed: AtomicUsize::new(0),
-            rows_total: AtomicUsize::new(0),
-        }
-    }
-}
+// State values for the atomic state machine
+const STATE_TRACKING: u8 = 0;
+const STATE_ACTIVE: u8 = 1;
+const STATE_DISABLED: u8 = 2;
 
 /// A wrapper [`PhysicalExpr`] that tracks selectivity and can disable filters
 /// that pass too many rows.
@@ -91,8 +72,13 @@ impl SelectivityState {
 pub struct AdaptiveSelectivityFilterExpr {
     /// The inner filter expression (typically DynamicFilterPhysicalExpr).
     inner: Arc<dyn PhysicalExpr>,
-    /// Selectivity tracking state.
-    state: RwLock<SelectivityState>,
+    /// Simple atomic state: 0 = Tracking, 1 = Active, 2 = Disabled
+    /// This allows the hot path to be a single atomic load with no locks.
+    state: AtomicUsize,
+    /// Rows that passed the filter (only used in Tracking state).
+    rows_passed: AtomicUsize,
+    /// Total rows processed (only used in Tracking state).
+    rows_total: AtomicUsize,
     /// The generation of the inner filter when we started tracking.
     /// If this changes, we need to reset our state.
     tracked_generation: AtomicU64,
@@ -106,7 +92,9 @@ impl AdaptiveSelectivityFilterExpr {
         let current_generation = inner.snapshot_generation();
         Self {
             inner,
-            state: RwLock::new(SelectivityState::new_tracking()),
+            state: AtomicUsize::new(STATE_TRACKING as usize),
+            rows_passed: AtomicUsize::new(0),
+            rows_total: AtomicUsize::new(0),
             tracked_generation: AtomicU64::new(current_generation),
             config,
         }
@@ -116,24 +104,23 @@ impl AdaptiveSelectivityFilterExpr {
     ///
     /// Returns `(rows_passed, rows_total, is_disabled)`.
     pub fn selectivity_info(&self) -> (usize, usize, bool) {
-        let state = self.state.read();
-        match &*state {
-            SelectivityState::Tracking {
-                rows_passed,
-                rows_total,
-            } => {
-                let passed = rows_passed.load(Ordering::Relaxed);
-                let total = rows_total.load(Ordering::Relaxed);
+        let state = self.state.load(Ordering::Relaxed) as u8;
+        match state {
+            STATE_TRACKING => {
+                let passed = self.rows_passed.load(Ordering::Relaxed);
+                let total = self.rows_total.load(Ordering::Relaxed);
                 (passed, total, false)
             }
-            SelectivityState::Active => (0, 0, false),
-            SelectivityState::Disabled => (0, 0, true),
+            STATE_ACTIVE => (0, 0, false),
+            STATE_DISABLED => (0, 0, true),
+            _ => (0, 0, false),
         }
     }
 
     /// Check if the filter is disabled.
+    #[inline]
     pub fn is_disabled(&self) -> bool {
-        matches!(*self.state.read(), SelectivityState::Disabled)
+        self.state.load(Ordering::Relaxed) as u8 == STATE_DISABLED
     }
 
     /// Get the inner expression.
@@ -141,83 +128,97 @@ impl AdaptiveSelectivityFilterExpr {
         &self.inner
     }
 
-    /// Check if the inner generation has changed and reset state if needed.
-    fn check_and_reset_if_needed(&self) {
-        let current_generation = self.inner.snapshot_generation();
-        let tracked = self.tracked_generation.load(Ordering::Relaxed);
+    /// Create an all-true boolean array of the given length.
+    #[inline]
+    fn all_true_array(len: usize) -> ArrayRef {
+        Arc::new(BooleanArray::from(vec![true; len]))
+    }
 
-        if current_generation != tracked {
-            // Generation changed - reset to tracking state
-            let mut state = self.state.write();
-            *state = SelectivityState::new_tracking();
-            self.tracked_generation
-                .store(current_generation, Ordering::Relaxed);
+    /// Fast path evaluation - just check the atomic state.
+    /// Returns Some(result) if we can short-circuit, None if we need to do full evaluation.
+    #[inline]
+    fn try_fast_path(&self, batch: &RecordBatch) -> Option<ColumnarValue> {
+        let state = self.state.load(Ordering::Relaxed) as u8;
+        match state {
+            STATE_DISABLED => {
+                // Fast path: filter is disabled, return all-true
+                Some(ColumnarValue::Array(Self::all_true_array(batch.num_rows())))
+            }
+            STATE_ACTIVE => {
+                // Fast path: filter is active and we've finished tracking
+                // Just evaluate the inner expression, no tracking overhead
+                None
+            }
+            STATE_TRACKING => {
+                // Need to do tracking - check generation first
+                let current_gen = self.inner.snapshot_generation();
+                let tracked_gen = self.tracked_generation.load(Ordering::Relaxed);
+                if current_gen != tracked_gen {
+                    // Generation changed - reset tracking
+                    self.rows_passed.store(0, Ordering::Relaxed);
+                    self.rows_total.store(0, Ordering::Relaxed);
+                    self.tracked_generation
+                        .store(current_gen, Ordering::Relaxed);
+                    self.state.store(STATE_TRACKING as usize, Ordering::Relaxed);
+                }
+                None
+            }
+            _ => None,
         }
     }
 
-    /// Count the number of true values in a boolean array.
-    fn count_true_values(array: &BooleanArray) -> usize {
-        array.true_count()
-    }
+    /// Update tracking statistics after evaluating a batch.
+    /// Only called when in TRACKING state.
+    #[inline]
+    fn update_tracking(&self, result: &ColumnarValue) {
+        // Only update if still in tracking state
+        if self.state.load(Ordering::Relaxed) as u8 != STATE_TRACKING {
+            return;
+        }
 
-    /// Process the result and update selectivity statistics.
-    fn process_result(&self, result: &ColumnarValue) -> Result<()> {
-        // Only track selectivity for array results
         let (true_count, total_count) = match result {
             ColumnarValue::Array(array) => {
                 let bool_array = array
                     .as_any()
                     .downcast_ref::<BooleanArray>()
                     .expect("Filter expression should return BooleanArray");
-                (Self::count_true_values(bool_array), array.len())
+                (bool_array.true_count(), array.len())
             }
             ColumnarValue::Scalar(scalar) => {
-                // Scalar result - we can't track selectivity meaningfully
-                // Just skip tracking for this batch
                 if let datafusion_common::ScalarValue::Boolean(Some(v)) = scalar {
                     if *v { (1, 1) } else { (0, 1) }
                 } else {
-                    return Ok(());
+                    return;
                 }
             }
         };
 
-        let state = self.state.read();
-        if let SelectivityState::Tracking {
-            rows_passed,
-            rows_total,
-        } = &*state
-        {
-            rows_passed.fetch_add(true_count, Ordering::Relaxed);
-            let new_total =
-                rows_total.fetch_add(total_count, Ordering::Relaxed) + total_count;
-            let passed = rows_passed.load(Ordering::Relaxed);
+        // Update counters
+        self.rows_passed.fetch_add(true_count, Ordering::Relaxed);
+        let new_total =
+            self.rows_total.fetch_add(total_count, Ordering::Relaxed) + total_count;
 
-            // Check if we've seen enough rows to make a decision
-            if new_total >= self.config.min_rows {
-                // Calculate selectivity
-                let selectivity = passed as f64 / new_total as f64;
-                drop(state);
+        // Check if we've seen enough rows to make a decision
+        if new_total >= self.config.min_rows {
+            let passed = self.rows_passed.load(Ordering::Relaxed);
+            let selectivity = passed as f64 / new_total as f64;
 
-                // Decide whether to disable or keep active
-                let mut state = self.state.write();
-                // Re-check in case another thread already updated
-                if matches!(*state, SelectivityState::Tracking { .. }) {
-                    if selectivity >= self.config.threshold {
-                        *state = SelectivityState::Disabled;
-                    } else {
-                        *state = SelectivityState::Active;
-                    }
-                }
-            }
+            // Use compare_exchange to ensure only one thread makes the transition
+            let new_state = if selectivity >= self.config.threshold {
+                STATE_DISABLED
+            } else {
+                STATE_ACTIVE
+            };
+
+            // Try to transition from TRACKING to the new state
+            // If this fails, another thread already did the transition, which is fine
+            let _ = self.state.compare_exchange(
+                STATE_TRACKING as usize,
+                new_state as usize,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            );
         }
-
-        Ok(())
-    }
-
-    /// Create an all-true boolean array of the given length.
-    fn all_true_array(len: usize) -> ArrayRef {
-        Arc::new(BooleanArray::from(vec![true; len]))
     }
 }
 
@@ -225,19 +226,19 @@ impl Display for AdaptiveSelectivityFilterExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let (passed, total, disabled) = self.selectivity_info();
         if disabled {
-            write!(f, "SelectivityAware(DISABLED) [ {} ]", self.inner)
+            write!(f, "AdaptiveSelectivity(DISABLED) [ {} ]", self.inner)
         } else if total > 0 {
             let selectivity = passed as f64 / total as f64;
             write!(
                 f,
-                "SelectivityAware({:.1}%, {}/{}) [ {} ]",
+                "AdaptiveSelectivity({:.1}%, {}/{}) [ {} ]",
                 selectivity * 100.0,
                 passed,
                 total,
                 self.inner
             )
         } else {
-            write!(f, "SelectivityAware [ {} ]", self.inner)
+            write!(f, "AdaptiveSelectivity [ {} ]", self.inner)
         }
     }
 }
@@ -289,24 +290,20 @@ impl PhysicalExpr for AdaptiveSelectivityFilterExpr {
         self.inner.nullable(input_schema)
     }
 
+    #[inline]
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        // Check if the inner generation has changed
-        self.check_and_reset_if_needed();
-
-        // Check if we're disabled
-        {
-            let state = self.state.read();
-            if matches!(*state, SelectivityState::Disabled) {
-                // Return all-true to bypass the filter
-                return Ok(ColumnarValue::Array(Self::all_true_array(batch.num_rows())));
-            }
+        // Fast path: single atomic load to check state
+        if let Some(result) = self.try_fast_path(batch) {
+            return Ok(result);
         }
 
         // Evaluate the inner expression
         let result = self.inner.evaluate(batch)?;
 
-        // Update selectivity statistics
-        self.process_result(&result)?;
+        // Update tracking if in tracking state (cheap check + possible update)
+        if self.state.load(Ordering::Relaxed) as u8 == STATE_TRACKING {
+            self.update_tracking(&result);
+        }
 
         Ok(result)
     }
@@ -371,10 +368,10 @@ mod tests {
         assert_eq!(arr.len(), 100);
 
         // After enough rows, the filter should be disabled
-        let (passed, total, disabled) = wrapper.selectivity_info();
-        assert_eq!(passed, 0); // Moved to Disabled state, counters reset conceptually
-        assert_eq!(total, 0);
-        assert!(disabled, "Filter should be disabled after high selectivity");
+        assert!(
+            wrapper.is_disabled(),
+            "Filter should be disabled after high selectivity"
+        );
     }
 
     #[test]
@@ -394,8 +391,10 @@ mod tests {
         let _result = wrapper.evaluate(&batch).unwrap();
 
         // Filter should stay active (not disabled)
-        let (_, _, disabled) = wrapper.selectivity_info();
-        assert!(!disabled, "Low selectivity filter should stay active");
+        assert!(
+            !wrapper.is_disabled(),
+            "Low selectivity filter should stay active"
+        );
     }
 
     #[test]
@@ -459,7 +458,7 @@ mod tests {
 
         let display = format!("{wrapper}");
         assert!(
-            display.contains("SelectivityAware"),
+            display.contains("AdaptiveSelectivity"),
             "Display should show wrapper name"
         );
     }
@@ -482,5 +481,46 @@ mod tests {
             .downcast_ref::<AdaptiveSelectivityFilterExpr>()
             .unwrap();
         assert!(!new_wrapper.is_disabled());
+    }
+
+    #[test]
+    fn test_active_state_no_tracking_overhead() {
+        // Test that once in Active state, there's minimal overhead
+        let filter = create_filter_expr(50); // ~50% pass rate
+        let config = SelectivityConfig {
+            threshold: 0.95,
+            min_rows: 100,
+        };
+        let wrapper = AdaptiveSelectivityFilterExpr::new(filter, config);
+
+        // Process enough rows to transition to Active
+        let batch = create_batch((0..100).collect());
+        let _ = wrapper.evaluate(&batch).unwrap();
+
+        // Should be in Active state now
+        assert!(!wrapper.is_disabled());
+        let state = wrapper.state.load(Ordering::Relaxed) as u8;
+        assert_eq!(state, STATE_ACTIVE, "Should be in Active state");
+
+        // Further evaluations should not update tracking counters
+        let initial_passed = wrapper.rows_passed.load(Ordering::Relaxed);
+        let initial_total = wrapper.rows_total.load(Ordering::Relaxed);
+
+        // Evaluate more batches
+        for _ in 0..10 {
+            let _ = wrapper.evaluate(&batch).unwrap();
+        }
+
+        // Counters should NOT have changed (no tracking in Active state)
+        assert_eq!(
+            wrapper.rows_passed.load(Ordering::Relaxed),
+            initial_passed,
+            "Counters should not change in Active state"
+        );
+        assert_eq!(
+            wrapper.rows_total.load(Ordering::Relaxed),
+            initial_total,
+            "Counters should not change in Active state"
+        );
     }
 }
