@@ -427,10 +427,7 @@ impl DefaultPhysicalExprAdapterRewriter {
             return Ok(Transformed::no(expr));
         }
 
-        let column = self.resolve_column(
-            column,
-            physical_column_index,
-        )?;
+        let column = self.resolve_column(column, physical_column_index)?;
 
         if logical_field.data_type() == physical_field.data_type() {
             // If the data types match, we can use the column as is
@@ -457,10 +454,7 @@ impl DefaultPhysicalExprAdapterRewriter {
         if column.index() == physical_column_index {
             Ok(column.clone())
         } else {
-            Column::new_with_schema(
-                column.name(),
-                self.physical_file_schema.as_ref(),
-            )
+            Column::new_with_schema(column.name(), self.physical_file_schema.as_ref())
         }
     }
 
