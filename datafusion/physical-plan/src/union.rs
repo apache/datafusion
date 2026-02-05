@@ -388,9 +388,23 @@ impl ExecutionPlan for UnionExec {
             return Ok(FilterPushdownPropagation::if_all(child_pushdown_result));
         }
 
+        // UnionExec needs specialized filter pushdown handling when children have
+        // heterogeneous pushdown support. Without this, when some children support
+        // pushdown and others don't, the default behavior would leave FilterExec
+        // above UnionExec, re-applying filters to outputs of all children—including
+        // those that already applied the filters via pushdown. This specialized
+        // implementation adds FilterExec only to children that don't support
+        // pushdown, avoiding redundant filtering and improving performance.
+        //
+        // Example: Given Child1 (no pushdown support) and Child2 (has pushdown support)
+        //   Default behavior:          This implementation:
+        //   FilterExec                 UnionExec
+        //     UnionExec                  FilterExec
+        //       Child1                     Child1
+        //       Child2(filter)           Child2(filter)
+
         // Collect unsupported filters for each child
         let mut unsupported_filters_per_child = vec![Vec::new(); self.inputs.len()];
-
         for parent_filter_result in child_pushdown_result.parent_filters.iter() {
             for (child_idx, &child_result) in
                 parent_filter_result.child_results.iter().enumerate()
