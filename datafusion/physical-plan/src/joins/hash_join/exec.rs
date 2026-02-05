@@ -81,7 +81,7 @@ use datafusion_physical_expr::equivalence::{
     ProjectionMapping, join_equivalence_properties,
 };
 use datafusion_physical_expr::expressions::{
-    DynamicFilterPhysicalExpr, SelectivityAwareFilterExpr, SelectivityConfig, lit,
+    AdaptiveSelectivityFilterExpr, DynamicFilterPhysicalExpr, SelectivityConfig, lit,
 };
 use datafusion_physical_expr::projection::{ProjectionRef, combine_projections};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
@@ -1472,13 +1472,13 @@ impl ExecutionPlan for HashJoinExec {
             // Optionally wrap with selectivity tracking
             let filter_expr: Arc<dyn PhysicalExpr> = if config
                 .optimizer
-                .enable_dynamic_filter_selectivity_tracking
+                .enable_adaptive_filter_selectivity_tracking
             {
                 let selectivity_config = SelectivityConfig {
-                    threshold: config.optimizer.dynamic_filter_selectivity_threshold,
-                    min_rows: config.optimizer.dynamic_filter_min_rows_for_selectivity,
+                    threshold: config.optimizer.adaptive_filter_selectivity_threshold,
+                    min_rows: config.optimizer.adaptive_filter_min_rows_for_selectivity,
                 };
-                Arc::new(SelectivityAwareFilterExpr::new(
+                Arc::new(AdaptiveSelectivityFilterExpr::new(
                     dynamic_filter,
                     selectivity_config,
                 ))
@@ -1520,22 +1520,26 @@ impl ExecutionPlan for HashJoinExec {
         if let Some(filter) = right_child_self_filters.first() {
             // Note that we don't check PushdDownPredicate::discrimnant because even if nothing said
             // "yes, I can fully evaluate this filter" things might still use it for statistics -> it's worth updating
-            let predicate = Arc::clone(&filter.predicate);
 
-            // Try to extract the DynamicFilterPhysicalExpr, either directly or from a SelectivityAwareFilterExpr wrapper
-            let maybe_dynamic_filter: Option<Arc<DynamicFilterPhysicalExpr>> =
+            // Try to extract the DynamicFilterPhysicalExpr, either directly or from a AdaptiveSelectivityFilterExpr wrapper
+            let maybe_dynamic_filter: Option<Arc<DynamicFilterPhysicalExpr>> = {
+                let predicate = Arc::clone(&filter.predicate);
                 // First, try direct downcast to DynamicFilterPhysicalExpr
+                // Using .clone() instead of Arc::clone because it enables implicit coercion to Arc<dyn Any>
+                #[expect(clippy::clone_on_ref_ptr)]
                 if let Ok(df) = Arc::downcast::<DynamicFilterPhysicalExpr>(predicate.clone()) {
                     Some(df)
                 } else if let Some(wrapper) = predicate
                     .as_any()
-                    .downcast_ref::<SelectivityAwareFilterExpr>()
+                    .downcast_ref::<AdaptiveSelectivityFilterExpr>()
                 {
-                    // Try to get it from a SelectivityAwareFilterExpr wrapper
+                    // Try to get it from a AdaptiveSelectivityFilterExpr wrapper
+                    #[expect(clippy::clone_on_ref_ptr)]
                     Arc::downcast::<DynamicFilterPhysicalExpr>(wrapper.inner().clone()).ok()
                 } else {
                     None
-                };
+                }
+            };
 
             if let Some(dynamic_filter) = maybe_dynamic_filter {
                 // We successfully pushed down our self filter - we need to make a new node with the dynamic filter

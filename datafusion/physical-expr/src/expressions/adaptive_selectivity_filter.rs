@@ -88,7 +88,7 @@ impl SelectivityState {
 /// which happens when the dynamic filter is updated (e.g., when the hash table
 /// is built in a hash join).
 #[derive(Debug)]
-pub struct SelectivityAwareFilterExpr {
+pub struct AdaptiveSelectivityFilterExpr {
     /// The inner filter expression (typically DynamicFilterPhysicalExpr).
     inner: Arc<dyn PhysicalExpr>,
     /// Selectivity tracking state.
@@ -100,8 +100,8 @@ pub struct SelectivityAwareFilterExpr {
     config: SelectivityConfig,
 }
 
-impl SelectivityAwareFilterExpr {
-    /// Create a new `SelectivityAwareFilterExpr` wrapping the given inner expression.
+impl AdaptiveSelectivityFilterExpr {
+    /// Create a new `AdaptiveSelectivityFilterExpr` wrapping the given inner expression.
     pub fn new(inner: Arc<dyn PhysicalExpr>, config: SelectivityConfig) -> Self {
         let current_generation = inner.snapshot_generation();
         Self {
@@ -221,7 +221,7 @@ impl SelectivityAwareFilterExpr {
     }
 }
 
-impl Display for SelectivityAwareFilterExpr {
+impl Display for AdaptiveSelectivityFilterExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let (passed, total, disabled) = self.selectivity_info();
         if disabled {
@@ -242,22 +242,22 @@ impl Display for SelectivityAwareFilterExpr {
     }
 }
 
-impl Hash for SelectivityAwareFilterExpr {
+impl Hash for AdaptiveSelectivityFilterExpr {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         // Hash based on the inner expression
         self.inner.dyn_hash(state);
     }
 }
 
-impl PartialEq for SelectivityAwareFilterExpr {
+impl PartialEq for AdaptiveSelectivityFilterExpr {
     fn eq(&self, other: &Self) -> bool {
         self.inner.eq(&other.inner)
     }
 }
 
-impl Eq for SelectivityAwareFilterExpr {}
+impl Eq for AdaptiveSelectivityFilterExpr {}
 
-impl PhysicalExpr for SelectivityAwareFilterExpr {
+impl PhysicalExpr for AdaptiveSelectivityFilterExpr {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -272,7 +272,7 @@ impl PhysicalExpr for SelectivityAwareFilterExpr {
     ) -> Result<Arc<dyn PhysicalExpr>> {
         if children.len() != 1 {
             return Err(datafusion_common::DataFusionError::Internal(
-                "SelectivityAwareFilterExpr expects exactly one child".to_string(),
+                "AdaptiveSelectivityFilterExpr expects exactly one child".to_string(),
             ));
         }
         Ok(Arc::new(Self::new(
@@ -358,7 +358,7 @@ mod tests {
             threshold: 0.95,
             min_rows: 100,
         };
-        let wrapper = SelectivityAwareFilterExpr::new(filter, config);
+        let wrapper = AdaptiveSelectivityFilterExpr::new(filter, config);
 
         // Create batches where all rows pass the filter
         let batch = create_batch((0..100).collect());
@@ -385,7 +385,7 @@ mod tests {
             threshold: 0.95,
             min_rows: 100,
         };
-        let wrapper = SelectivityAwareFilterExpr::new(filter, config);
+        let wrapper = AdaptiveSelectivityFilterExpr::new(filter, config);
 
         // Create batch where ~50% pass
         let batch = create_batch((0..100).collect());
@@ -406,7 +406,7 @@ mod tests {
             threshold: 0.95,
             min_rows: 10,
         };
-        let wrapper = SelectivityAwareFilterExpr::new(filter, config);
+        let wrapper = AdaptiveSelectivityFilterExpr::new(filter, config);
 
         // First batch - get it disabled
         let batch = create_batch((0..100).collect());
@@ -435,7 +435,7 @@ mod tests {
             threshold: 0.95,
             min_rows: 1000, // High threshold
         };
-        let wrapper = SelectivityAwareFilterExpr::new(filter, config);
+        let wrapper = AdaptiveSelectivityFilterExpr::new(filter, config);
 
         // Process less than min_rows
         let batch = create_batch((0..100).collect());
@@ -455,7 +455,7 @@ mod tests {
     fn test_display() {
         let filter = create_filter_expr(50);
         let config = SelectivityConfig::default();
-        let wrapper = SelectivityAwareFilterExpr::new(filter, config);
+        let wrapper = AdaptiveSelectivityFilterExpr::new(filter, config);
 
         let display = format!("{wrapper}");
         assert!(
@@ -471,7 +471,7 @@ mod tests {
             threshold: 0.80,
             min_rows: 5000,
         };
-        let wrapper = Arc::new(SelectivityAwareFilterExpr::new(filter, config));
+        let wrapper = Arc::new(AdaptiveSelectivityFilterExpr::new(filter, config));
 
         let new_filter = create_filter_expr(75);
         let new_wrapper = wrapper.with_new_children(vec![new_filter]).unwrap();
@@ -479,7 +479,7 @@ mod tests {
         // Should create a new wrapper with the new child
         let new_wrapper = new_wrapper
             .as_any()
-            .downcast_ref::<SelectivityAwareFilterExpr>()
+            .downcast_ref::<AdaptiveSelectivityFilterExpr>()
             .unwrap();
         assert!(!new_wrapper.is_disabled());
     }
