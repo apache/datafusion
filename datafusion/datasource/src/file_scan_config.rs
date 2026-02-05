@@ -158,6 +158,9 @@ pub struct FileScanConfig {
     /// DataFusion may reorder file processing for optimization without affecting correctness.
     pub preserve_order: bool,
     /// All equivalent lexicographical orderings that describe the schema.
+    ///
+    /// Note these orderings are with respect to projected schema (i.e., after
+    /// applying [`FileSource::projection`]`).
     pub output_ordering: Vec<LexOrdering>,
     /// File compression type
     pub file_compression_type: FileCompressionType,
