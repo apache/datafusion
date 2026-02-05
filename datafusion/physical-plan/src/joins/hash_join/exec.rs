@@ -1527,15 +1527,18 @@ impl ExecutionPlan for HashJoinExec {
                 // First, try direct downcast to DynamicFilterPhysicalExpr
                 // Using .clone() instead of Arc::clone because it enables implicit coercion to Arc<dyn Any>
                 #[expect(clippy::clone_on_ref_ptr)]
-                if let Ok(df) = Arc::downcast::<DynamicFilterPhysicalExpr>(predicate.clone()) {
+                if let Ok(df) =
+                    Arc::downcast::<DynamicFilterPhysicalExpr>(predicate.clone())
+                {
                     Some(df)
                 } else if let Some(wrapper) = predicate
                     .as_any()
-                    .downcast_ref::<AdaptiveSelectivityFilterExpr>()
-                {
+                    .downcast_ref::<AdaptiveSelectivityFilterExpr>(
+                ) {
                     // Try to get it from a AdaptiveSelectivityFilterExpr wrapper
                     #[expect(clippy::clone_on_ref_ptr)]
-                    Arc::downcast::<DynamicFilterPhysicalExpr>(wrapper.inner().clone()).ok()
+                    Arc::downcast::<DynamicFilterPhysicalExpr>(wrapper.inner().clone())
+                        .ok()
                 } else {
                     None
                 }
