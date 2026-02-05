@@ -26,8 +26,8 @@ use super::order::GroupOrdering;
 use crate::aggregates::group_values::{GroupByMetrics, GroupValues, new_group_values};
 use crate::aggregates::order::GroupOrderingFull;
 use crate::aggregates::{
-    AggregateMode, PhysicalGroupBy, create_schema, evaluate_group_by, evaluate_many,
-    evaluate_optional,
+    AggregateInputMode, AggregateMode, AggregateOutputMode, PhysicalGroupBy,
+    create_schema, evaluate_group_by, evaluate_many, evaluate_optional,
 };
 use crate::metrics::{BaselineMetrics, MetricBuilder, RecordOutput};
 use crate::sorts::sort::sort_batch;
@@ -377,10 +377,10 @@ pub(crate) struct GroupedHashAggregateStream {
     ///
     /// For example, for an aggregate like `SUM(x) FILTER (WHERE x >= 100)`,
     /// the filter expression is  `x > 100`.
-    filter_expressions: Vec<Option<Arc<dyn PhysicalExpr>>>,
+    filter_expressions: Arc<[Option<Arc<dyn PhysicalExpr>>]>,
 
     /// GROUP BY expressions
-    group_by: PhysicalGroupBy,
+    group_by: Arc<PhysicalGroupBy>,
 
     /// max rows in output RecordBatches
     batch_size: usize,
@@ -465,8 +465,8 @@ impl GroupedHashAggregateStream {
     ) -> Result<Self> {
         debug!("Creating GroupedHashAggregateStream");
         let agg_schema = Arc::clone(&agg.schema);
-        let agg_group_by = agg.group_by.clone();
-        let agg_filter_expr = agg.filter_expr.clone();
+        let agg_group_by = Arc::clone(&agg.group_by);
+        let agg_filter_expr = Arc::clone(&agg.filter_expr);
 
         let batch_size = context.session_config().batch_size();
         let input = agg.input.execute(partition, Arc::clone(context))?;
@@ -475,7 +475,7 @@ impl GroupedHashAggregateStream {
 
         let timer = baseline_metrics.elapsed_compute().timer();
 
-        let aggregate_exprs = agg.aggr_expr.clone();
+        let aggregate_exprs = Arc::clone(&agg.aggr_expr);
 
         // arguments for each aggregate, one vec of expressions per
         // aggregate
@@ -491,13 +491,9 @@ impl GroupedHashAggregateStream {
             agg_group_by.num_group_exprs(),
         )?;
 
-        let filter_expressions = match agg.mode {
-            AggregateMode::Partial
-            | AggregateMode::Single
-            | AggregateMode::SinglePartitioned => agg_filter_expr,
-            AggregateMode::Final | AggregateMode::FinalPartitioned => {
-                vec![None; agg.aggr_expr.len()]
-            }
+        let filter_expressions = match agg.mode.input_mode() {
+            AggregateInputMode::Raw => agg_filter_expr,
+            AggregateInputMode::Partial => vec![None; agg.aggr_expr.len()].into(),
         };
 
         // Instantiate the accumulators
@@ -982,29 +978,24 @@ impl GroupedHashAggregateStream {
 
                 // Call the appropriate method on each aggregator with
                 // the entire input row and the relevant group indexes
-                match self.mode {
-                    AggregateMode::Partial
-                    | AggregateMode::Single
-                    | AggregateMode::SinglePartitioned
-                        if !self.spill_state.is_stream_merging =>
-                    {
-                        acc.update_batch(
-                            values,
-                            group_indices,
-                            opt_filter,
-                            total_num_groups,
-                        )?;
-                    }
-                    _ => {
-                        assert_or_internal_err!(
-                            opt_filter.is_none(),
-                            "aggregate filter should be applied in partial stage, there should be no filter in final stage"
-                        );
+                if self.mode.input_mode() == AggregateInputMode::Raw
+                    && !self.spill_state.is_stream_merging
+                {
+                    acc.update_batch(
+                        values,
+                        group_indices,
+                        opt_filter,
+                        total_num_groups,
+                    )?;
+                } else {
+                    assert_or_internal_err!(
+                        opt_filter.is_none(),
+                        "aggregate filter should be applied in partial stage, there should be no filter in final stage"
+                    );
 
-                        // if aggregation is over intermediate states,
-                        // use merge
-                        acc.merge_batch(values, group_indices, None, total_num_groups)?;
-                    }
+                    // if aggregation is over intermediate states,
+                    // use merge
+                    acc.merge_batch(values, group_indices, None, total_num_groups)?;
                 }
                 self.group_by_metrics
                     .aggregation_time
@@ -1092,17 +1083,12 @@ impl GroupedHashAggregateStream {
 
         // Next output each aggregate value
         for acc in self.accumulators.iter_mut() {
-            match self.mode {
-                AggregateMode::Partial => output.extend(acc.state(emit_to)?),
-                _ if spilling => {
-                    // If spilling, output partial state because the spilled data will be
-                    // merged and re-evaluated later.
-                    output.extend(acc.state(emit_to)?)
-                }
-                AggregateMode::Final
-                | AggregateMode::FinalPartitioned
-                | AggregateMode::Single
-                | AggregateMode::SinglePartitioned => output.push(acc.evaluate(emit_to)?),
+            if self.mode.output_mode() == AggregateOutputMode::Final && !spilling {
+                output.push(acc.evaluate(emit_to)?)
+            } else {
+                // Output partial state: either because we're in a non-final mode,
+                // or because we're spilling and will merge/re-evaluate later.
+                output.extend(acc.state(emit_to)?)
             }
         }
         drop(timer);

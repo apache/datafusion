@@ -49,7 +49,7 @@ use datafusion_physical_plan::aggregates::{
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::execution_plan::EmissionType;
 use datafusion_physical_plan::joins::{
-    CrossJoinExec, HashJoinExec, PartitionMode, SortMergeJoinExec,
+    CrossJoinExec, HashJoinExec, HashJoinExecBuilder, PartitionMode, SortMergeJoinExec,
 };
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::repartition::RepartitionExec;
@@ -305,18 +305,19 @@ pub fn adjust_input_keys_ordering(
                     Vec<(PhysicalExprRef, PhysicalExprRef)>,
                     Vec<SortOptions>,
                 )| {
-                    HashJoinExec::try_new(
+                    HashJoinExecBuilder::new(
                         Arc::clone(left),
                         Arc::clone(right),
                         new_conditions.0,
-                        filter.clone(),
-                        join_type,
-                        // TODO: although projection is not used in the join here, because projection pushdown is after enforce_distribution. Maybe we need to handle it later. Same as filter.
-                        projection.clone(),
-                        PartitionMode::Partitioned,
-                        *null_equality,
-                        *null_aware,
+                        *join_type,
                     )
+                    .with_filter(filter.clone())
+                    // TODO: although projection is not used in the join here, because projection pushdown is after enforce_distribution. Maybe we need to handle it later. Same as filter.
+                    .with_projection_ref(projection.clone())
+                    .with_partition_mode(PartitionMode::Partitioned)
+                    .with_null_equality(*null_equality)
+                    .with_null_aware(*null_aware)
+                    .build()
                     .map(|e| Arc::new(e) as _)
                 };
                 return reorder_partitioned_join_keys(
@@ -638,17 +639,20 @@ pub fn reorder_join_keys_to_inputs(
                     right_keys,
                 } = join_keys;
                 let new_join_on = new_join_conditions(&left_keys, &right_keys);
-                return Ok(Arc::new(HashJoinExec::try_new(
-                    Arc::clone(left),
-                    Arc::clone(right),
-                    new_join_on,
-                    filter.clone(),
-                    join_type,
-                    projection.clone(),
-                    PartitionMode::Partitioned,
-                    *null_equality,
-                    *null_aware,
-                )?));
+                return Ok(Arc::new(
+                    HashJoinExecBuilder::new(
+                        Arc::clone(left),
+                        Arc::clone(right),
+                        new_join_on,
+                        *join_type,
+                    )
+                    .with_filter(filter.clone())
+                    .with_projection_ref(projection.clone())
+                    .with_partition_mode(PartitionMode::Partitioned)
+                    .with_null_equality(*null_equality)
+                    .with_null_aware(*null_aware)
+                    .build()?,
+                ));
             }
         }
     } else if let Some(SortMergeJoinExec {

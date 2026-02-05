@@ -32,7 +32,7 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::{JoinSide, JoinType, Result};
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, is_volatile};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::joins::NestedLoopJoinExec;
 use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
@@ -135,7 +135,7 @@ fn try_push_down_join_filter(
     );
 
     let new_lhs_length = lhs_rewrite.data.0.schema().fields.len();
-    let projections = match projections {
+    let projections = match projections.as_ref() {
         None => match join.join_type() {
             JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
                 // Build projections that ignore the newly projected columns.
@@ -349,8 +349,7 @@ impl<'a> JoinFilterRewriter<'a> {
         // Recurse if there is a dependency to both sides or if the entire expression is volatile.
         let depends_on_other_side =
             self.depends_on_join_side(&expr, self.join_side.negate())?;
-        let is_volatile = is_volatile_expression_tree(expr.as_ref());
-        if depends_on_other_side || is_volatile {
+        if depends_on_other_side || is_volatile(&expr) {
             return expr.map_children(|expr| self.rewrite(expr));
         }
 
@@ -429,18 +428,6 @@ impl<'a> JoinFilterRewriter<'a> {
 
         Ok(result)
     }
-}
-
-fn is_volatile_expression_tree(expr: &dyn PhysicalExpr) -> bool {
-    if expr.is_volatile_node() {
-        return true;
-    }
-
-    expr.children()
-        .iter()
-        .map(|expr| is_volatile_expression_tree(expr.as_ref()))
-        .reduce(|lhs, rhs| lhs || rhs)
-        .unwrap_or(false)
 }
 
 #[cfg(test)]
