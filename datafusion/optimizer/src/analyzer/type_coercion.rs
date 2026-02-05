@@ -1441,7 +1441,7 @@ mod test {
             true,
             plan.clone(),
             @r"
-        Projection: CAST(a AS LargeUtf8) AS a
+        Projection: CAST(a AS LargeUtf8)
           EmptyRelation: rows=0
         "
         )?;
@@ -1477,7 +1477,7 @@ mod test {
             true,
             plan.clone(),
             @r"
-        Projection: CAST(a AS LargeUtf8) AS a
+        Projection: CAST(a AS LargeUtf8)
           EmptyRelation: rows=0
         "
         )?;
@@ -1507,7 +1507,7 @@ mod test {
             true,
             sort_plan.clone(),
             @r"
-        Projection: CAST(a AS LargeUtf8) AS a
+        Projection: CAST(a AS LargeUtf8)
           Sort: a ASC NULLS FIRST
             Projection: a
               EmptyRelation: rows=0
@@ -1536,7 +1536,7 @@ mod test {
             true,
             plan.clone(),
             @r"
-        Projection: CAST(a AS LargeUtf8) AS a
+        Projection: CAST(a AS LargeUtf8)
           Sort: a ASC NULLS FIRST
             Projection: a
               EmptyRelation: rows=0
@@ -1572,7 +1572,7 @@ mod test {
             true,
             plan.clone(),
             @r"
-        Projection: CAST(a AS LargeBinary) AS a
+        Projection: CAST(a AS LargeBinary)
           EmptyRelation: rows=0
         "
         )?;
@@ -1629,7 +1629,7 @@ mod test {
             true,
             sort_plan.clone(),
             @r"
-        Projection: CAST(a AS LargeBinary) AS a
+        Projection: CAST(a AS LargeBinary)
           Sort: a ASC NULLS FIRST
             Projection: a
               EmptyRelation: rows=0
@@ -1660,7 +1660,7 @@ mod test {
             true,
             plan.clone(),
             @r"
-        Projection: CAST(a AS LargeBinary) AS a
+        Projection: CAST(a AS LargeBinary)
           Sort: a ASC NULLS FIRST
             Projection: a
               EmptyRelation: rows=0
