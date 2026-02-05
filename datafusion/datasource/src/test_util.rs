@@ -16,7 +16,8 @@
 // under the License.
 
 use crate::{
-    file::FileSource, file_scan_config::FileScanConfig, file_stream::FileOpener,
+    TableSchema, file::FileSource, file_scan_config::FileScanConfig,
+    file_stream::FileOpener,
 };
 
 use std::sync::Arc;
@@ -32,14 +33,13 @@ use object_store::ObjectStore;
 pub(crate) struct MockSource {
     metrics: ExecutionPlanMetricsSet,
     filter: Option<Arc<dyn PhysicalExpr>>,
-    table_schema: crate::table_schema::TableSchema,
+    table_schema: TableSchema,
     projection: crate::projection::SplitProjection,
 }
 
 impl Default for MockSource {
     fn default() -> Self {
-        let table_schema =
-            crate::table_schema::TableSchema::new(Arc::new(Schema::empty()), vec![]);
+        let table_schema = TableSchema::new(Arc::new(Schema::empty()), vec![]);
         Self {
             metrics: ExecutionPlanMetricsSet::new(),
             filter: None,
@@ -50,7 +50,7 @@ impl Default for MockSource {
 }
 
 impl MockSource {
-    pub fn new(table_schema: impl Into<crate::table_schema::TableSchema>) -> Self {
+    pub fn new(table_schema: impl Into<TableSchema>) -> Self {
         let table_schema = table_schema.into();
         Self {
             metrics: ExecutionPlanMetricsSet::new(),
@@ -67,9 +67,7 @@ impl MockSource {
 }
 
 /// Convenience method to create a MockSource as a dynamic FileSource
-pub(crate) fn mock_source(
-    table_schema: impl Into<crate::table_schema::TableSchema>,
-) -> Arc<dyn FileSource> {
+pub(crate) fn mock_source(table_schema: impl Into<TableSchema>) -> Arc<dyn FileSource> {
     Arc::new(MockSource::new(table_schema))
 }
 
@@ -103,7 +101,7 @@ impl FileSource for MockSource {
         "mock"
     }
 
-    fn table_schema(&self) -> &crate::table_schema::TableSchema {
+    fn table_schema(&self) -> &TableSchema {
         &self.table_schema
     }
 
