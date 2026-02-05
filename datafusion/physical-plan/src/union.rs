@@ -383,7 +383,10 @@ impl ExecutionPlan for UnionExec {
         child_pushdown_result: ChildPushdownResult,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
-        // For non-Pre phase, use default behavior
+        // Pre phase: handle heterogeneous pushdown by wrapping individual
+        // children with FilterExec and reporting all filters as handled.
+        // Post phase: use default behavior to let the filter creator decide how to handle
+        // filters that weren't fully pushed down.
         if !matches!(phase, FilterPushdownPhase::Pre) {
             return Ok(FilterPushdownPropagation::if_all(child_pushdown_result));
         }
