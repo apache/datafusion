@@ -476,3 +476,104 @@ SET datafusion.optimizer.enable_aggregate_dynamic_filter_pushdown = true;
 
 statement ok
 SET datafusion.optimizer.enable_dynamic_filter_pushdown = true;
+
+# Test 6: Selectivity-based dynamic filter disabling configuration
+# These options control automatic disabling of dynamic filters that pass most rows
+
+statement ok
+set datafusion.catalog.information_schema = true
+
+# Verify default values for selectivity tracking config options
+query T
+SELECT value FROM information_schema.df_settings
+WHERE name = 'datafusion.optimizer.enable_dynamic_filter_selectivity_tracking';
+----
+false
+
+query T
+SELECT value FROM information_schema.df_settings
+WHERE name = 'datafusion.optimizer.dynamic_filter_selectivity_threshold';
+----
+0.95
+
+query T
+SELECT value FROM information_schema.df_settings
+WHERE name = 'datafusion.optimizer.dynamic_filter_min_rows_for_selectivity';
+----
+10000
+
+# Enable selectivity tracking
+statement ok
+SET datafusion.optimizer.enable_dynamic_filter_selectivity_tracking = true;
+
+# Verify it's enabled
+query T
+SELECT value FROM information_schema.df_settings
+WHERE name = 'datafusion.optimizer.enable_dynamic_filter_selectivity_tracking';
+----
+true
+
+# Set custom threshold and min_rows
+statement ok
+SET datafusion.optimizer.dynamic_filter_selectivity_threshold = 0.80;
+
+statement ok
+SET datafusion.optimizer.dynamic_filter_min_rows_for_selectivity = 5000;
+
+# Verify custom values
+query T
+SELECT value FROM information_schema.df_settings
+WHERE name = 'datafusion.optimizer.dynamic_filter_selectivity_threshold';
+----
+0.8
+
+query T
+SELECT value FROM information_schema.df_settings
+WHERE name = 'datafusion.optimizer.dynamic_filter_min_rows_for_selectivity';
+----
+5000
+
+statement ok
+set datafusion.catalog.information_schema = false
+
+# Test that join queries still work correctly with selectivity tracking enabled
+statement ok
+CREATE TABLE sel_left(id INT, data VARCHAR) AS VALUES
+(1, 'left1'),
+(2, 'left2'),
+(3, 'left3'),
+(4, 'left4'),
+(5, 'left5');
+
+statement ok
+CREATE TABLE sel_right(id INT, info VARCHAR) AS VALUES
+(1, 'right1'),
+(3, 'right3'),
+(5, 'right5');
+
+# Verify join returns correct results with selectivity tracking enabled
+query ITT rowsort
+SELECT l.id, l.data, r.info
+FROM sel_left l
+INNER JOIN sel_right r ON l.id = r.id;
+----
+1 left1 right1
+3 left3 right3
+5 left5 right5
+
+# Cleanup selectivity test tables
+statement ok
+DROP TABLE sel_left;
+
+statement ok
+DROP TABLE sel_right;
+
+# Reset selectivity tracking configs to defaults
+statement ok
+SET datafusion.optimizer.enable_dynamic_filter_selectivity_tracking = false;
+
+statement ok
+SET datafusion.optimizer.dynamic_filter_selectivity_threshold = 0.95;
+
+statement ok
+SET datafusion.optimizer.dynamic_filter_min_rows_for_selectivity = 10000;
