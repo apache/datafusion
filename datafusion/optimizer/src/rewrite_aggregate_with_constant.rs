@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`RewriteAggregateWithConstant`] rewrites `SUM(column ± constant)` to `SUM(column) ± constant * COUNT(*)`
+//! [`RewriteAggregateWithConstant`] rewrites `SUM(column ± constant)` to `SUM(column) ± constant * COUNT(column)`
 
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
@@ -31,7 +31,7 @@ use datafusion_functions_aggregate::expr_fn::{count, sum};
 use std::collections::HashMap;
 
 /// Optimizer rule that rewrites `SUM(column ± constant)` expressions
-/// into `SUM(column) ± constant * COUNT(*)` when multiple such expressions
+/// into `SUM(column) ± constant * COUNT(column)` when multiple such expressions
 /// exist for the same base column.
 ///
 /// This reduces computation by calculating SUM once and deriving other values.
@@ -40,9 +40,11 @@ use std::collections::HashMap;
 /// ```sql
 /// SELECT SUM(a), SUM(a + 1), SUM(a + 2) FROM t;
 /// ```
-/// is rewritten to:
+/// is rewritten into a Projection on top of an Aggregate:
 /// ```sql
+/// -- New Projection Node
 /// SELECT sum_a, sum_a + 1 * count_a, sum_a + 2 * count_a
+/// -- New Aggregate Node
 /// FROM (SELECT SUM(a) as sum_a, COUNT(a) as count_a FROM t);
 /// ```
 #[derive(Default, Debug)]
@@ -65,18 +67,20 @@ impl OptimizerRule for RewriteAggregateWithConstant {
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
         match plan {
+            // This rule specifically targets Aggregate nodes
             LogicalPlan::Aggregate(aggregate) => {
-                // Check if we can apply the transformation
+                // Step 1: Identify which expressions can be rewritten and group them by base column
                 let rewrite_info = analyze_aggregate(&aggregate)?;
 
                 if rewrite_info.is_empty() {
-                    // No transformation possible
+                    // No groups found with 2+ matching SUM expressions, return original plan
                     return Ok(Transformed::no(LogicalPlan::Aggregate(aggregate)));
                 }
 
-                // Build the transformed plan
+                // Step 2: Perform the actual transformation into Aggregate + Projection
                 transform_aggregate(aggregate, &rewrite_info)
             }
+            // Non-aggregate plans are passed through unchanged
             _ => Ok(Transformed::no(plan)),
         }
     }
@@ -86,40 +90,44 @@ impl OptimizerRule for RewriteAggregateWithConstant {
     }
 
     fn apply_order(&self) -> Option<ApplyOrder> {
+        // Bottom-up ensures we optimize subqueries before the outer query
         Some(ApplyOrder::BottomUp)
     }
 }
 
-/// Information about a SUM expression with a constant offset
+/// Internal structure to track metadata for a SUM expression that qualifies for rewrite
 #[derive(Debug, Clone)]
 struct SumWithConstant {
-    /// The base expression (e.g., column 'a' in SUM(a + 1))
+    /// The inner expression being manipulated (e.g., the 'a' in SUM(a + 1))
     base_expr: Expr,
     /// The constant value being added/subtracted
     constant: ScalarValue,
     /// The operator (+ or -)
     operator: Operator,
-    /// Original index in the aggregate expressions
+    /// The index in the original Aggregate's aggr_expr list, used to maintain output order
     original_index: usize,
-    /// ORDER BY clause if present
+    /// Any ORDER BY clause inside the aggregate (e.g., SUM(a+1 ORDER BY b))
     order_by: Vec<Sort>,
 }
 
-/// Information about groups of SUMs that can be rewritten
+/// Maps a base expression's schema name to all its SUM(base ± const) variants
 type RewriteGroups = HashMap<String, Vec<SumWithConstant>>;
 
-/// Analyze the aggregate to find groups of SUM(col ± constant) that can be rewritten
+/// Scans the aggregate expressions to find candidates for the rewrite.
 fn analyze_aggregate(aggregate: &Aggregate) -> Result<RewriteGroups> {
     let mut groups: RewriteGroups = HashMap::new();
 
     for (idx, expr) in aggregate.aggr_expr.iter().enumerate() {
+        // Try to match the pattern SUM(col ± lit)
         if let Some(sum_info) = extract_sum_with_constant(expr, idx)? {
             let key = sum_info.base_expr.schema_name().to_string();
             groups.entry(key).or_default().push(sum_info);
         }
     }
 
-    // Only keep groups with 2 or more SUMs on the same base column
+    // Optimization: Only rewrite if we have at least 2 expressions for the same column.
+    // If there's only one SUM(a + 1), rewriting it to SUM(a) + 1*COUNT(a) 
+    // actually increases the work (1 agg -> 2 aggs).
     groups.retain(|_, v| v.len() >= 2);
 
     Ok(groups)
@@ -129,7 +137,7 @@ fn analyze_aggregate(aggregate: &Aggregate) -> Result<RewriteGroups> {
 fn extract_sum_with_constant(expr: &Expr, idx: usize) -> Result<Option<SumWithConstant>> {
     match expr {
         Expr::AggregateFunction(agg_fn) => {
-            // Must be SUM function
+            // Rule only applies to SUM
             if agg_fn.func.name().to_lowercase() != "sum" {
                 return Ok(None);
             }
@@ -142,12 +150,14 @@ fn extract_sum_with_constant(expr: &Expr, idx: usize) -> Result<Option<SumWithCo
                 null_treatment: _,
             } = &agg_fn.params;
 
-            // Skip if DISTINCT or FILTER present
+            // We cannot easily rewrite SUM(DISTINCT a + 1) or SUM(a + 1) FILTER (...)
+            // as the math SUM(a) + k*COUNT(a) wouldn't hold correctly with these modifiers.
             if *distinct || filter.is_some() {
                 return Ok(None);
             }
-
-            // Must have exactly one argument
+            
+            // SUM must have exactly one argument (e.g. SUM(a + 1)).
+            // This rejects invalid calls like SUM() or non-standard multi-argument variations.
             if args.len() != 1 {
                 return Ok(None);
             }
@@ -155,6 +165,9 @@ fn extract_sum_with_constant(expr: &Expr, idx: usize) -> Result<Option<SumWithCo
             let arg = &args[0];
 
             // Try to match: base_expr +/- constant
+            // Note: If the base_expr is complex (e.g., SUM(a + b + 1)), base_expr will be "a + b".
+            // The rule will still work if multiple SUMs have the exact same complex base_expr,
+            // as they will be grouped by the string representation of that expression.
             if let Expr::BinaryExpr(BinaryExpr { left, op, right }) = arg
                 && matches!(op, Operator::Plus | Operator::Minus)
             {
@@ -244,15 +257,16 @@ fn transform_aggregate(
         .collect();
     all_sums.sort_by_key(|s| s.original_index);
 
-    // Track which base expressions we've already added SUM/COUNT for
+    // Maps base column names to the indices of their new SUM/COUNT in the new Aggregate node
     let mut base_expr_indices: HashMap<String, (usize, usize)> = HashMap::new();
 
     // Process each group to determine what to add to the aggregate
     let mut sum_names: HashMap<String, String> = HashMap::new();
     let mut count_names: HashMap<String, String> = HashMap::new();
 
+    // For every group (e.g., all SUMs involving column 'a'), add one SUM(a) and one COUNT(a)
     for (base_key, sums) in rewrite_groups {
-        // Find a representative SUM (prefer one with ORDER BY if any)
+        // If any original SUM had an ORDER BY, we try to preserve it in our new base SUM.
         let representative = sums
             .iter()
             .find(|s| !s.order_by.is_empty())
@@ -262,16 +276,16 @@ fn transform_aggregate(
         let sum_expr = sum(representative.base_expr.clone());
         // Note: ORDER BY is not needed for SUM as it's commutative
         let sum_name = sum_expr.schema_name().to_string();
-
         let sum_index = new_aggr_exprs.len();
         new_aggr_exprs.push(sum_expr);
         sum_names.insert(base_key.clone(), sum_name);
 
-        // Add COUNT - use COUNT(col) for nullable columns
-        // For nullable columns, COUNT(col) correctly excludes NULLs
+        // Add the base COUNT(a)
+        // We use COUNT(col) rather than COUNT(*) because if 'col' is NULL, 
+        // SUM(col + 1) should be NULL, and COUNT(col) correctly returns 0 for NULLs,
+        // whereas COUNT(*) would count the row.
         let count_expr = count(representative.base_expr.clone());
         let count_name = count_expr.schema_name().to_string();
-
         let count_index = new_aggr_exprs.len();
         new_aggr_exprs.push(count_expr);
         count_names.insert(base_key.clone(), count_name);
@@ -279,7 +293,7 @@ fn transform_aggregate(
         base_expr_indices.insert(base_key.clone(), (sum_index, count_index));
     }
 
-    // Now build projection expressions for all original aggregate expressions
+    // Now iterate through the ORIGINAL aggregate expressions to build the PROJECTION
     for (idx, orig_expr) in aggregate.aggr_expr.iter().enumerate() {
         // Check if this expression should be rewritten
         let rewritten = all_sums.iter().find(|s| s.original_index == idx);
@@ -287,7 +301,7 @@ fn transform_aggregate(
         let projection_expr = if let Some(sum_info) = rewritten {
             let base_key = sum_info.base_expr.schema_name().to_string();
 
-            // Build: SUM(col) ± constant * COUNT(...)
+            // Construct the math: SUM(col) [±] (constant * COUNT(col))
             let sum_ref = col(&sum_names[&base_key]);
             let count_ref = col(&count_names[&base_key]);
 
@@ -299,13 +313,14 @@ fn transform_aggregate(
 
             let result = binary_expr(sum_ref, sum_info.operator, multiplied);
 
-            // Preserve original alias if present
+            // Ensure the output column name matches the original (aliased or generated)
             match orig_expr {
                 Expr::Alias(alias) => result.alias(alias.name.clone()),
                 _ => result.alias(orig_expr.schema_name().to_string()),
             }
         } else {
-            // Check if this is a plain SUM(base_expr) that we're already computing
+            // Special case: If the user had a plain SUM(a) alongside SUM(a+1),
+            // we should reuse the SUM(a) we just added instead of adding another one.
             let is_plain_sum_in_group =
                 check_plain_sum_in_group(orig_expr, &base_expr_indices);
 
@@ -322,9 +337,11 @@ fn transform_aggregate(
                     _ => sum_ref.alias(orig_expr.schema_name().to_string()),
                 }
             } else {
-                // Keep non-rewritten expressions as-is
+                // This expression is unrelated to our rewrites (e.g., AVG(b) or MAX(c)).
+                // We just pass it through to the new Aggregate node.
                 new_aggr_exprs.push(orig_expr.clone());
 
+                // And reference it in the projection by name.
                 match orig_expr {
                     Expr::Alias(alias) => col(alias.name.clone()),
                     _ => col(orig_expr.schema_name().to_string()),
@@ -335,7 +352,7 @@ fn transform_aggregate(
         projection_exprs.push(projection_expr);
     }
 
-    // Also add group by expressions to projection
+    // Handle GROUP BY columns: they must be passed through the Aggregate and Projection
     let group_exprs: Vec<Expr> = aggregate
         .group_expr
         .iter()
@@ -346,18 +363,18 @@ fn transform_aggregate(
         })
         .collect();
 
-    // Prepend group expressions to projection
+    // Final projection includes [Group Columns] + [Aggregated/Rewritten Columns]
     let mut final_projection = group_exprs;
     final_projection.extend(projection_exprs);
 
-    // Create new aggregate with rewritten expressions
+    // Create the new Aggregate plan node
     let new_aggregate = LogicalPlan::Aggregate(Aggregate::try_new(
         aggregate.input,
         aggregate.group_expr,
         new_aggr_exprs,
     )?);
 
-    // Wrap with projection
+    // Wrap the Aggregate with the Projection
     let projection = LogicalPlanBuilder::from(new_aggregate)
         .project(final_projection)?
         .build()?;
