@@ -698,7 +698,7 @@ impl DFSchema {
         // check nested fields
         match (dt1, dt2) {
             (DataType::Dictionary(_, v1), DataType::Dictionary(_, v2)) => {
-                v1.as_ref() == v2.as_ref()
+                Self::datatype_is_logically_equal(v1.as_ref(), v2.as_ref())
             }
             (DataType::Dictionary(_, v1), othertype)
             | (othertype, DataType::Dictionary(_, v1)) => {
@@ -1805,6 +1805,21 @@ mod tests {
         assert!(DFSchema::datatype_is_logically_equal(
             &DataType::Utf8View,
             &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
+        ));
+
+        assert!(DFSchema::datatype_is_logically_equal(
+            &DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(DataType::List(
+                    Field::new("element", DataType::Utf8, false).into()
+                ))
+            ),
+            &DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(DataType::List(
+                    Field::new("element", DataType::Utf8View, false).into()
+                ))
+            )
         ));
     }
 
