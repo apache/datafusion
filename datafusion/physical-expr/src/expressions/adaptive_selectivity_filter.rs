@@ -292,16 +292,17 @@ impl PhysicalExpr for AdaptiveSelectivityFilterExpr {
 
     #[inline]
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        // Fast path: single atomic load to check state
+        // Fast path: check state first
         if let Some(result) = self.try_fast_path(batch) {
             return Ok(result);
         }
 
-        // Evaluate the inner expression
+        // Evaluate inner expression
         let result = self.inner.evaluate(batch)?;
 
-        // Update tracking if in tracking state (cheap check + possible update)
-        if self.state.load(Ordering::Relaxed) as u8 == STATE_TRACKING {
+        // Update tracking if still in tracking state
+        let state = self.state.load(Ordering::Relaxed) as u8;
+        if state == STATE_TRACKING {
             self.update_tracking(&result);
         }
 
@@ -313,8 +314,16 @@ impl PhysicalExpr for AdaptiveSelectivityFilterExpr {
     }
 
     fn snapshot(&self) -> Result<Option<Arc<dyn PhysicalExpr>>> {
-        // Return the inner's snapshot
-        self.inner.snapshot()
+        // Return the inner expression directly to strip the wrapper during snapshotting.
+        // This is important for PruningPredicate which needs to pattern-match on the
+        // underlying expression types (BinaryExpr, InListExpr, etc.) to build pruning
+        // predicates. If we return None, the wrapper would be preserved and
+        // PruningPredicate wouldn't recognize it, falling back to lit(true) which
+        // disables pruning entirely.
+        //
+        // Note: at this point in tree transformation, the inner has already been
+        // snapshotted via with_new_children, so self.inner is the snapshotted expression.
+        Ok(Some(Arc::clone(&self.inner)))
     }
 
     fn snapshot_generation(&self) -> u64 {
