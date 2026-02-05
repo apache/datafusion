@@ -16304,6 +16304,9 @@ impl serde::Serialize for PhysicalExprNode {
                 physical_expr_node::ExprType::HashExpr(v) => {
                     struct_ser.serialize_field("hashExpr", v)?;
                 }
+                physical_expr_node::ExprType::PlaceholderExpr(v) => {
+                    struct_ser.serialize_field("placeholderExpr", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -16350,6 +16353,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
             "unknownColumn",
             "hash_expr",
             "hashExpr",
+            "placeholder_expr",
+            "placeholderExpr",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -16374,6 +16379,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
             Extension,
             UnknownColumn,
             HashExpr,
+            PlaceholderExpr,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -16415,6 +16421,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
                             "extension" => Ok(GeneratedField::Extension),
                             "unknownColumn" | "unknown_column" => Ok(GeneratedField::UnknownColumn),
                             "hashExpr" | "hash_expr" => Ok(GeneratedField::HashExpr),
+                            "placeholderExpr" | "placeholder_expr" => Ok(GeneratedField::PlaceholderExpr),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -16577,6 +16584,13 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
                                 return Err(serde::de::Error::duplicate_field("hashExpr"));
                             }
                             expr_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_expr_node::ExprType::HashExpr)
+;
+                        }
+                        GeneratedField::PlaceholderExpr => {
+                            if expr_type__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("placeholderExpr"));
+                            }
+                            expr_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_expr_node::ExprType::PlaceholderExpr)
 ;
                         }
                     }
@@ -17751,6 +17765,114 @@ impl<'de> serde::Deserialize<'de> for PhysicalNot {
             }
         }
         deserializer.deserialize_struct("datafusion.PhysicalNot", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for PhysicalPlaceholderNode {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.id.is_empty() {
+            len += 1;
+        }
+        if self.field.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalPlaceholderNode", len)?;
+        if !self.id.is_empty() {
+            struct_ser.serialize_field("id", &self.id)?;
+        }
+        if let Some(v) = self.field.as_ref() {
+            struct_ser.serialize_field("field", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for PhysicalPlaceholderNode {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "id",
+            "field",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Id,
+            Field,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl serde::de::Visitor<'_> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "id" => Ok(GeneratedField::Id),
+                            "field" => Ok(GeneratedField::Field),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = PhysicalPlaceholderNode;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.PhysicalPlaceholderNode")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<PhysicalPlaceholderNode, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut id__ = None;
+                let mut field__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Id => {
+                            if id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("id"));
+                            }
+                            id__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Field => {
+                            if field__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("field"));
+                            }
+                            field__ = map_.next_value()?;
+                        }
+                    }
+                }
+                Ok(PhysicalPlaceholderNode {
+                    id: id__.unwrap_or_default(),
+                    field: field__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.PhysicalPlaceholderNode", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for PhysicalPlanNode {

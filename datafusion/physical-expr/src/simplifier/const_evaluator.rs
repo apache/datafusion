@@ -27,7 +27,7 @@ use datafusion_common::{Result, ScalarValue};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 
 use crate::PhysicalExpr;
-use crate::expressions::{Column, Literal};
+use crate::expressions::{Column, Literal, PlaceholderExpr};
 
 /// Simplify expressions that consist only of literals by evaluating them.
 ///
@@ -81,7 +81,10 @@ fn can_evaluate_as_constant(expr: &Arc<dyn PhysicalExpr>) -> bool {
     let mut can_evaluate = true;
 
     expr.apply(|e| {
-        if e.as_any().is::<Column>() || e.is_volatile_node() {
+        if e.as_any().is::<Column>()
+            || e.is_volatile_node()
+            || e.as_any().is::<PlaceholderExpr>()
+        {
             can_evaluate = false;
             Ok(TreeNodeRecursion::Stop)
         } else {
