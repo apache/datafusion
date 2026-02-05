@@ -1141,7 +1141,7 @@ config_namespace! {
         ///
         /// The selectivity tracking resets when the dynamic filter is updated (e.g., when
         /// the hash table is built), allowing the filter to be re-evaluated with new data.
-        pub enable_adaptive_filter_selectivity_tracking: bool, default = false
+        pub enable_adaptive_filter_selectivity_tracking: bool, default = true
 
         /// The default filter selectivity used by Filter Statistics
         /// when an exact selectivity cannot be determined. Valid values are
