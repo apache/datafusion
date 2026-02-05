@@ -24,14 +24,15 @@ use std::hash::Hash;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
-use arrow::array::{ArrayRef, BooleanArray};
+use arrow::array::BooleanArray;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::Result;
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::physical_expr::DynHash;
 
 use crate::PhysicalExpr;
+use crate::expressions::lit;
 
 /// Configuration for selectivity-based filter disabling.
 #[derive(Debug, Clone)]
@@ -103,7 +104,7 @@ impl AdaptiveSelectivityFilterExpr {
     /// Get the current selectivity information for observability.
     ///
     /// Returns `(rows_passed, rows_total, is_disabled)`.
-    pub fn selectivity_info(&self) -> (usize, usize, bool) {
+    fn selectivity_info(&self) -> (usize, usize, bool) {
         let state = self.state.load(Ordering::Relaxed) as u8;
         match state {
             STATE_TRACKING => {
@@ -118,8 +119,8 @@ impl AdaptiveSelectivityFilterExpr {
     }
 
     /// Check if the filter is disabled.
-    #[inline]
-    pub fn is_disabled(&self) -> bool {
+    #[cfg(test)]
+    fn is_disabled(&self) -> bool {
         self.state.load(Ordering::Relaxed) as u8 == STATE_DISABLED
     }
 
@@ -128,79 +129,37 @@ impl AdaptiveSelectivityFilterExpr {
         &self.inner
     }
 
-    /// Create an all-true boolean array of the given length.
-    #[inline]
-    fn all_true_array(len: usize) -> ArrayRef {
-        Arc::new(BooleanArray::from(vec![true; len]))
-    }
-
-    /// Fast path evaluation - just check the atomic state.
-    /// Returns Some(result) if we can short-circuit, None if we need to do full evaluation.
-    #[inline]
-    fn try_fast_path(&self, batch: &RecordBatch) -> Option<ColumnarValue> {
-        let state = self.state.load(Ordering::Relaxed) as u8;
-        match state {
-            STATE_DISABLED => {
-                // Fast path: filter is disabled, return all-true
-                Some(ColumnarValue::Array(Self::all_true_array(batch.num_rows())))
-            }
-            STATE_ACTIVE => {
-                // Fast path: filter is active and we've finished tracking
-                // Just evaluate the inner expression, no tracking overhead
-                None
-            }
-            STATE_TRACKING => {
-                // Need to do tracking - check generation first
-                let current_gen = self.inner.snapshot_generation();
-                let tracked_gen = self.tracked_generation.load(Ordering::Relaxed);
-                if current_gen != tracked_gen {
-                    // Generation changed - reset tracking
-                    self.rows_passed.store(0, Ordering::Relaxed);
-                    self.rows_total.store(0, Ordering::Relaxed);
-                    self.tracked_generation
-                        .store(current_gen, Ordering::Relaxed);
-                    self.state.store(STATE_TRACKING as usize, Ordering::Relaxed);
-                }
-                None
-            }
-            _ => None,
-        }
-    }
-
     /// Update tracking statistics after evaluating a batch.
     /// Only called when in TRACKING state.
-    #[inline]
     fn update_tracking(&self, result: &ColumnarValue) {
-        // Only update if still in tracking state
-        if self.state.load(Ordering::Relaxed) as u8 != STATE_TRACKING {
-            return;
-        }
-
         let (true_count, total_count) = match result {
             ColumnarValue::Array(array) => {
-                let bool_array = array
-                    .as_any()
-                    .downcast_ref::<BooleanArray>()
-                    .expect("Filter expression should return BooleanArray");
+                let Some(bool_array) = array.as_any().downcast_ref::<BooleanArray>()
+                else {
+                    // TODO: should this handle / propagate errors instead?
+                    // Can this be a dictionary array or other wrapper type?
+                    return;
+                };
                 (bool_array.true_count(), array.len())
             }
             ColumnarValue::Scalar(scalar) => {
-                if let datafusion_common::ScalarValue::Boolean(Some(v)) = scalar {
+                if let ScalarValue::Boolean(Some(v)) = scalar {
                     if *v { (1, 1) } else { (0, 1) }
                 } else {
+                    // Similarly, should this error?
                     return;
                 }
             }
         };
 
         // Update counters
-        self.rows_passed.fetch_add(true_count, Ordering::Relaxed);
+        let passed =
+            self.rows_passed.fetch_add(true_count, Ordering::Relaxed) + true_count;
         let new_total =
             self.rows_total.fetch_add(total_count, Ordering::Relaxed) + total_count;
 
         // Check if we've seen enough rows to make a decision
         if new_total >= self.config.min_rows {
-            let passed = self.rows_passed.load(Ordering::Relaxed);
             let selectivity = passed as f64 / new_total as f64;
 
             // Use compare_exchange to ensure only one thread makes the transition
@@ -290,18 +249,34 @@ impl PhysicalExpr for AdaptiveSelectivityFilterExpr {
         self.inner.nullable(input_schema)
     }
 
-    #[inline]
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         // Fast path: check state first
-        if let Some(result) = self.try_fast_path(batch) {
-            return Ok(result);
+        let state = self.state.load(Ordering::Relaxed) as u8;
+        match state {
+            STATE_DISABLED => {
+                // Fast path: filter is disabled, return all-true
+                return Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(true))));
+            }
+            STATE_TRACKING => {
+                // Need to do tracking - check generation first
+                let current_gen = self.inner.snapshot_generation();
+                let tracked_gen = self.tracked_generation.load(Ordering::Relaxed);
+                if current_gen != tracked_gen {
+                    // Generation changed - reset tracking
+                    self.rows_passed.store(0, Ordering::Relaxed);
+                    self.rows_total.store(0, Ordering::Relaxed);
+                    self.tracked_generation
+                        .store(current_gen, Ordering::Relaxed);
+                    self.state.store(STATE_TRACKING as usize, Ordering::Relaxed);
+                }
+            }
+            _ => {}
         }
 
         // Evaluate inner expression
         let result = self.inner.evaluate(batch)?;
 
         // Update tracking if still in tracking state
-        let state = self.state.load(Ordering::Relaxed) as u8;
         if state == STATE_TRACKING {
             self.update_tracking(&result);
         }
@@ -314,21 +289,39 @@ impl PhysicalExpr for AdaptiveSelectivityFilterExpr {
     }
 
     fn snapshot(&self) -> Result<Option<Arc<dyn PhysicalExpr>>> {
-        // Return the inner expression directly to strip the wrapper during snapshotting.
-        // This is important for PruningPredicate which needs to pattern-match on the
-        // underlying expression types (BinaryExpr, InListExpr, etc.) to build pruning
-        // predicates. If we return None, the wrapper would be preserved and
-        // PruningPredicate wouldn't recognize it, falling back to lit(true) which
-        // disables pruning entirely.
-        //
-        // Note: at this point in tree transformation, the inner has already been
-        // snapshotted via with_new_children, so self.inner is the snapshotted expression.
-        Ok(Some(Arc::clone(&self.inner)))
+        match self.state.load(Ordering::Relaxed) as u8 {
+            STATE_DISABLED => {
+                // If disabled, we can return a literal true expression instead
+                return Ok(Some(lit(true)));
+            }
+            _ => {
+                // Return the inner expression directly to strip the wrapper during snapshotting.
+                // This is important for PruningPredicate which needs to pattern-match on the
+                // underlying expression types (BinaryExpr, InListExpr, etc.) to build pruning
+                // predicates. If we return None, the wrapper would be preserved and
+                // PruningPredicate wouldn't recognize it, falling back to lit(true) which
+                // disables pruning entirely.
+                // Note: at this point in tree transformation, the inner has already been
+                // snapshotted via with_new_children, so self.inner is the snapshotted expression.
+                Ok(Some(Arc::clone(&self.inner)))
+            }
+        }
     }
 
     fn snapshot_generation(&self) -> u64 {
-        // Return the inner's generation
-        self.inner.snapshot_generation()
+        let state = self.state.load(Ordering::Relaxed) as u8;
+        match state {
+            STATE_TRACKING => {
+                let inner = self.inner.snapshot_generation();
+                // Update our tracked generation to match inner
+                self.tracked_generation.store(inner, Ordering::Relaxed);
+                inner
+            }
+            // Defer to inner expression's generation since we are basically a pass-through now
+            STATE_ACTIVE => self.inner.snapshot_generation(),
+            // Add 1 to distinguish from active state, we evaluate to all-true now
+            _disabled => self.tracked_generation.load(Ordering::Relaxed) + 1,
+        }
     }
 }
 
@@ -336,7 +329,7 @@ impl PhysicalExpr for AdaptiveSelectivityFilterExpr {
 mod tests {
     use super::*;
     use crate::expressions::{BinaryExpr, col, lit};
-    use arrow::array::Int32Array;
+    use arrow::array::{ArrayRef, Int32Array};
     use arrow::datatypes::Field;
     use datafusion_expr::Operator;
 
