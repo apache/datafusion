@@ -20,8 +20,10 @@ use std::sync::Arc;
 use arrow::array::RecordBatch;
 use arrow::datatypes::Schema;
 use arrow::ipc::writer::StreamWriter;
+use arrow::util::display::{DurationFormat, FormatOptions as ArrowFormatOptions};
 use datafusion_common::{
-    DataFusionError, Result, internal_datafusion_err, internal_err, not_impl_err,
+    DataFusionError, OwnedCastOptions, OwnedFormatOptions, Result,
+    format::DEFAULT_CAST_OPTIONS, internal_datafusion_err, internal_err, not_impl_err,
 };
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
@@ -36,8 +38,8 @@ use datafusion_physical_expr::window::{SlidingAggregateWindowExpr, StandardWindo
 use datafusion_physical_expr_common::physical_expr::snapshot_physical_expr;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_plan::expressions::{
-    BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr,
-    LikeExpr, Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
+    BinaryExpr, CaseExpr, CastColumnExpr, CastExpr, Column, InListExpr, IsNotNullExpr,
+    IsNullExpr, LikeExpr, Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
 };
 use datafusion_physical_plan::joins::{HashExpr, HashTableLookupExpr};
 use datafusion_physical_plan::udaf::AggregateFunctionExpr;
@@ -430,6 +432,7 @@ pub fn serialize_physical_expr_with_converter(
             )),
         })
     } else if let Some(cast) = expr.downcast_ref::<CastExpr>() {
+        let cast_options = serialize_cast_options(cast.cast_options())?;
         Ok(protobuf::PhysicalExprNode {
             expr_id: None,
             expr_type: Some(protobuf::physical_expr_node::ExprType::Cast(Box::new(
@@ -438,8 +441,30 @@ pub fn serialize_physical_expr_with_converter(
                         proto_converter.physical_expr_to_proto(cast.expr(), codec)?,
                     )),
                     arrow_type: Some(cast.cast_type().try_into()?),
+                    cast_options: Some(cast_options),
                 },
             ))),
+        })
+    } else if let Some(cast_column) = expr.downcast_ref::<CastColumnExpr>() {
+        let cast_options = serialize_cast_options(cast_column.cast_options())?;
+        let format_options = match cast_options.format_options.clone() {
+            Some(format_options) => format_options,
+            None => serialize_format_options(&DEFAULT_CAST_OPTIONS.format_options)?,
+        };
+        Ok(protobuf::PhysicalExprNode {
+            expr_type: Some(protobuf::physical_expr_node::ExprType::CastColumn(
+                Box::new(protobuf::PhysicalCastColumnNode {
+                    expr: Some(Box::new(serialize_physical_expr(
+                        cast_column.expr(),
+                        codec,
+                    )?)),
+                    input_field: Some(cast_column.input_field().as_ref().try_into()?),
+                    target_field: Some(cast_column.target_field().as_ref().try_into()?),
+                    safe: cast_column.cast_options().safe,
+                    format_options: Some(format_options),
+                    cast_options: Some(cast_options),
+                }),
+            )),
         })
     } else if let Some(cast) = expr.downcast_ref::<TryCastExpr>() {
         Ok(protobuf::PhysicalExprNode {
@@ -596,6 +621,55 @@ impl TryFrom<&PartitionedFile> for protobuf::PartitionedFile {
             range: pf.range.as_ref().map(|r| r.try_into()).transpose()?,
             statistics: pf.statistics.as_ref().map(|s| s.as_ref().into()),
         })
+    }
+}
+
+fn serialize_format_options(
+    options: &ArrowFormatOptions<'_>,
+) -> Result<protobuf::FormatOptions> {
+    Ok(protobuf::FormatOptions {
+        safe: options.safe(),
+        null: options.null().to_string(),
+        date_format: options.date_format().map(ToString::to_string),
+        datetime_format: options.datetime_format().map(ToString::to_string),
+        timestamp_format: options.timestamp_format().map(ToString::to_string),
+        timestamp_tz_format: options.timestamp_tz_format().map(ToString::to_string),
+        time_format: options.time_format().map(ToString::to_string),
+        duration_format: duration_format_to_proto(options.duration_format()) as i32,
+        types_info: options.types_info(),
+    })
+}
+
+fn serialize_cast_options(
+    options: &OwnedCastOptions,
+) -> Result<protobuf::PhysicalCastOptions> {
+    Ok(protobuf::PhysicalCastOptions {
+        safe: options.safe,
+        format_options: Some(serialize_owned_format_options(&options.format_options)?),
+    })
+}
+
+fn serialize_owned_format_options(
+    options: &OwnedFormatOptions,
+) -> Result<protobuf::FormatOptions> {
+    Ok(protobuf::FormatOptions {
+        safe: false, // safe is stored in CastOptions, not FormatOptions
+        null: options.null.clone(),
+        date_format: options.date_format.clone(),
+        datetime_format: options.datetime_format.clone(),
+        timestamp_format: options.timestamp_format.clone(),
+        timestamp_tz_format: options.timestamp_tz_format.clone(),
+        time_format: options.time_format.clone(),
+        duration_format: duration_format_to_proto(options.duration_format) as i32,
+        types_info: options.types_info,
+    })
+}
+
+fn duration_format_to_proto(format: DurationFormat) -> protobuf::DurationFormat {
+    match format {
+        DurationFormat::ISO8601 => protobuf::DurationFormat::Iso8601,
+        DurationFormat::Pretty => protobuf::DurationFormat::Pretty,
+        _ => protobuf::DurationFormat::Unspecified,
     }
 }
 

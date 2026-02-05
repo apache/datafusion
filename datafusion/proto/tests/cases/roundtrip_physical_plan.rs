@@ -24,6 +24,7 @@ use std::vec;
 use arrow::array::RecordBatch;
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{Fields, TimeUnit};
+use arrow::util::display::DurationFormat;
 use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::compute::kernels::sort::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema};
@@ -62,7 +63,8 @@ use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::{
-    BinaryExpr, Column, NotExpr, PhysicalSortExpr, binary, cast, col, in_list, like, lit,
+    BinaryExpr, CastColumnExpr, Column, NotExpr, PhysicalSortExpr, binary, cast, col,
+    in_list, like, lit,
 };
 use datafusion::physical_plan::filter::{FilterExec, FilterExecBuilder};
 use datafusion::physical_plan::joins::{
@@ -92,7 +94,8 @@ use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    DataFusionError, NullEquality, Result, UnnestOptions, exec_datafusion_err,
+    DataFusionError, NullEquality, OwnedCastOptions, OwnedFormatOptions, Result,
+    UnnestOptions, exec_datafusion_err, format::DEFAULT_CAST_OPTIONS,
     internal_datafusion_err, internal_err, not_impl_err,
 };
 use datafusion_datasource::TableSchema;
@@ -211,6 +214,204 @@ async fn all_types_context() -> Result<SessionContext> {
     .await?;
 
     Ok(ctx)
+}
+
+fn cast_fields(
+    name: &str,
+    input_type: DataType,
+    target_type: DataType,
+) -> (Field, Field) {
+    let input_field = field_with_origin(name, input_type, false, "input");
+    let target_field = field_with_origin(name, target_type, false, "target");
+    (input_field, target_field)
+}
+
+fn field_with_origin(
+    name: &str,
+    data_type: DataType,
+    nullable: bool,
+    origin: &str,
+) -> Field {
+    let mut metadata = HashMap::new();
+    metadata.insert("origin".to_string(), origin.to_string());
+    Field::new(name, data_type, nullable).with_metadata(metadata)
+}
+
+fn round_trip_cast_expr(
+    expr: Arc<dyn PhysicalExpr>,
+    input_schema: &Schema,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let proto = serialize_cast_expr(&expr)?;
+    parse_cast_expr(&proto, input_schema)
+}
+
+fn serialize_cast_expr(
+    expr: &Arc<dyn PhysicalExpr>,
+) -> Result<protobuf::PhysicalExprNode> {
+    let codec = DefaultPhysicalExtensionCodec {};
+    datafusion_proto::physical_plan::to_proto::serialize_physical_expr(expr, &codec)
+}
+
+fn parse_cast_expr(
+    proto: &protobuf::PhysicalExprNode,
+    input_schema: &Schema,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    datafusion_proto::physical_plan::from_proto::parse_physical_expr(
+        proto,
+        &ctx.task_ctx(),
+        input_schema,
+        &codec,
+    )
+}
+
+fn downcast_cast_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<&CastColumnExpr> {
+    expr.as_any()
+        .downcast_ref::<CastColumnExpr>()
+        .ok_or_else(|| internal_datafusion_err!("Expected CastColumnExpr"))
+}
+
+#[test]
+fn roundtrip_cast_column_expr() -> Result<()> {
+    let (input_field, target_field) = cast_fields("a", DataType::Int32, DataType::Int64);
+    let cast_options = OwnedCastOptions {
+        safe: true,
+        format_options: OwnedFormatOptions {
+            null: "NULL".to_string(),
+            date_format: Some("%Y/%m/%d".to_string()),
+            datetime_format: None,
+            timestamp_format: None,
+            timestamp_tz_format: None,
+            time_format: None,
+            duration_format: DurationFormat::ISO8601,
+            types_info: false,
+        },
+    };
+    let input_schema = Schema::new(vec![input_field.clone()]);
+
+    let expr = Arc::new(CastColumnExpr::new_with_schema(
+        Arc::new(Column::new("a", 0)),
+        Arc::new(input_field.clone()),
+        Arc::new(target_field.clone()),
+        Some(cast_options.clone()),
+        Arc::new(input_schema.clone()),
+    )?);
+
+    let round_trip = round_trip_cast_expr(expr.clone(), &input_schema)?;
+    let cast_expr = downcast_cast_expr(&round_trip)?;
+
+    let expected = CastColumnExpr::new_with_schema(
+        Arc::new(Column::new("a", 0)),
+        Arc::new(input_field.clone()),
+        Arc::new(target_field.clone()),
+        Some(cast_options),
+        Arc::new(input_schema.clone()),
+    )?;
+
+    assert_eq!(cast_expr, &expected);
+    assert_eq!(cast_expr.input_field().as_ref(), &input_field);
+    assert_eq!(cast_expr.target_field().as_ref(), &target_field);
+    assert_eq!(
+        cast_expr.data_type(&input_schema)?,
+        target_field.data_type().clone()
+    );
+
+    Ok(())
+}
+
+#[test]
+fn roundtrip_cast_column_expr_with_missing_format_options() -> Result<()> {
+    let input_field = Field::new("a", DataType::Int32, true);
+    let target_field = Field::new("a", DataType::Int64, true);
+
+    let cast_options = OwnedCastOptions {
+        safe: true,
+        format_options: OwnedFormatOptions::default(),
+    };
+    let expr: Arc<dyn PhysicalExpr> = Arc::new(CastColumnExpr::new(
+        Arc::new(Column::new("a", 0)),
+        Arc::new(input_field.clone()),
+        Arc::new(target_field.clone()),
+        Some(cast_options),
+    )?);
+
+    let mut proto = serialize_cast_expr(&expr)?;
+    let cast_column = match proto.expr_type.as_mut() {
+        Some(protobuf::physical_expr_node::ExprType::CastColumn(cast_column)) => {
+            cast_column.as_mut()
+        }
+        _ => {
+            return Err(internal_datafusion_err!(
+                "Expected PhysicalCastColumnNode in proto"
+            ));
+        }
+    };
+    cast_column.format_options = None;
+    match cast_column.cast_options.as_mut() {
+        Some(cast_options) => {
+            cast_options.format_options = None;
+        }
+        None => {
+            cast_column.cast_options = Some(protobuf::PhysicalCastOptions {
+                safe: DEFAULT_CAST_OPTIONS.safe,
+                format_options: None,
+            });
+        }
+    }
+    let input_schema = Schema::new(vec![input_field.clone()]);
+    let round_trip = parse_cast_expr(&proto, &input_schema)?;
+
+    let cast_expr = round_trip
+        .as_any()
+        .downcast_ref::<CastColumnExpr>()
+        .ok_or_else(|| internal_datafusion_err!("Expected CastColumnExpr"))?;
+
+    assert_eq!(
+        cast_expr.cast_options().format_options,
+        OwnedFormatOptions::default()
+    );
+
+    Ok(())
+}
+
+#[test]
+fn roundtrip_cast_column_expr_with_target_field_change() -> Result<()> {
+    let input_field = field_with_origin("payload", DataType::Int32, false, "input");
+    let target_field = field_with_origin("payload_cast", DataType::Utf8, false, "target");
+
+    let input_schema = Schema::new(vec![input_field.clone()]);
+    let expr: Arc<dyn PhysicalExpr> = Arc::new(CastColumnExpr::new_with_schema(
+        Arc::new(Column::new("payload", 0)),
+        Arc::new(input_field.clone()),
+        Arc::new(target_field.clone()),
+        None,
+        Arc::new(input_schema.clone()),
+    )?);
+
+    let proto = serialize_cast_expr(&expr)?;
+    let round_trip = parse_cast_expr(&proto, &input_schema)?;
+
+    let cast_expr = round_trip
+        .as_any()
+        .downcast_ref::<CastColumnExpr>()
+        .ok_or_else(|| internal_datafusion_err!("Expected CastColumnExpr"))?;
+
+    assert_eq!(cast_expr.target_field().name(), "payload_cast");
+    assert_eq!(
+        cast_expr.target_field().data_type(),
+        target_field.data_type()
+    );
+
+    let column_expr = cast_expr
+        .expr()
+        .as_any()
+        .downcast_ref::<Column>()
+        .ok_or_else(|| internal_datafusion_err!("Expected Column"))?;
+    assert_eq!(column_expr.name(), "payload");
+    assert_eq!(column_expr.index(), 0);
+
+    Ok(())
 }
 
 #[test]
