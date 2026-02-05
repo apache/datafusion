@@ -31,9 +31,6 @@
 //! [`create_hashes`] sets `rehash` to `false` for the first column and `true` for all following
 //! columns, which avoids an unnecessary `combine_hashes` on the first column for performance.
 //!
-//! Note: some nested-type hashers currently always combine into `hashes_buffer` (see the note in
-//! `hash_single_array`). This is intentional to preserve existing behavior.
-
 use ahash::RandomState;
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::*;
@@ -58,6 +55,19 @@ use std::cell::RefCell;
 pub fn combine_hashes(l: u64, r: u64) -> u64 {
     let hash = (17 * 37u64).wrapping_add(l);
     hash.wrapping_mul(37).wrapping_add(r)
+}
+
+/// Applies `row_hash` into `dst` according to `rehash` semantics.
+///
+/// - `rehash = false`: initialize/overwrite `dst`
+/// - `rehash = true`: combine `row_hash` into `dst`
+#[inline]
+fn apply_row_hash(dst: &mut u64, row_hash: u64, rehash: bool) {
+    if rehash {
+        *dst = combine_hashes(row_hash, *dst);
+    } else {
+        *dst = row_hash;
+    }
 }
 
 /// Maximum size for the thread-local hash buffer before truncation (4MB = 524,288 u64 elements).
@@ -149,8 +159,8 @@ where
 }
 
 #[cfg(not(feature = "force_hash_collisions"))]
-fn hash_null(random_state: &RandomState, hashes_buffer: &'_ mut [u64], mul_col: bool) {
-    if mul_col {
+fn hash_null(random_state: &RandomState, hashes_buffer: &'_ mut [u64], rehash: bool) {
+    if rehash {
         hashes_buffer.iter_mut().for_each(|hash| {
             // stable hash for null value
             *hash = combine_hashes(random_state.hash_one(1), *hash);
@@ -417,12 +427,10 @@ fn update_hash_for_dict_key(
     dict_hashes: &[u64],
     dict_values: &dyn Array,
     idx: usize,
-    // `multi_col` is the historical name for what is now referred to as `rehash` elsewhere
-    // in this module: if true, combine into an existing per-row hash; if false, initialize.
-    multi_col: bool,
+    rehash: bool,
 ) {
     if dict_values.is_valid(idx) {
-        if multi_col {
+        if rehash {
             *hash = combine_hashes(dict_hashes[idx], *hash);
         } else {
             *hash = dict_hashes[idx];
@@ -432,16 +440,12 @@ fn update_hash_for_dict_key(
 }
 
 /// Hash the values in a dictionary array
-///
-/// Note: `multi_col` is equivalent to `rehash` used by other hashing helpers:
-/// - `multi_col = false`: initialize/overwrite `hashes_buffer` for this column
-/// - `multi_col = true`: combine into existing per-row hashes
 #[cfg(not(feature = "force_hash_collisions"))]
 fn hash_dictionary<K: ArrowDictionaryKeyType>(
     array: &DictionaryArray<K>,
     random_state: &RandomState,
     hashes_buffer: &mut [u64],
-    multi_col: bool,
+    rehash: bool,
 ) -> Result<()> {
     // Hash each dictionary value once, and then use that computed
     // hash for each key value to avoid a potentially expensive
@@ -459,7 +463,7 @@ fn hash_dictionary<K: ArrowDictionaryKeyType>(
                 &dict_hashes,
                 dict_values.as_ref(),
                 idx,
-                multi_col,
+                rehash,
             );
         } // no update for Null key
     }
@@ -471,14 +475,12 @@ fn hash_struct_array(
     array: &StructArray,
     random_state: &RandomState,
     hashes_buffer: &mut [u64],
+    rehash: bool,
 ) -> Result<()> {
-    // This nested-type hasher currently always combines its computed struct-row hash
-    // into `hashes_buffer` (equivalent to `rehash=true`). This preserves existing
-    // behavior for single-column hashing of nested types.
-    //
-    // If we were to add a `rehash` flag here and make `rehash=false` overwrite the
-    // buffer, it would change the numeric hash values produced for standalone
-    // Struct columns.
+    // Hashing for nested types follows the same initialize-vs-combine convention as
+    // primitive types:
+    // - `rehash=false`: initialize `hashes_buffer` for this column
+    // - `rehash=true`: combine into existing per-row hashes
 
     let nulls = array.nulls();
     let row_len = array.len();
@@ -494,8 +496,16 @@ fn hash_struct_array(
     create_hashes(array.columns(), random_state, &mut values_hashes)?;
 
     for i in valid_row_indices {
-        let hash = &mut hashes_buffer[i];
-        *hash = combine_hashes(*hash, values_hashes[i]);
+        apply_row_hash(&mut hashes_buffer[i], values_hashes[i], rehash);
+    }
+
+    // Hash null struct values consistently with other array types
+    if let Some(nulls) = array.nulls() {
+        for (i, hash) in hashes_buffer.iter_mut().enumerate().take(row_len) {
+            if !nulls.is_valid(i) {
+                hash_null(random_state, std::slice::from_mut(hash), rehash);
+            }
+        }
     }
 
     Ok(())
@@ -507,9 +517,9 @@ fn hash_map_array(
     array: &MapArray,
     random_state: &RandomState,
     hashes_buffer: &mut [u64],
+    rehash: bool,
 ) -> Result<()> {
-    // This nested-type hasher currently always combines entry hashes into
-    // `hashes_buffer` (equivalent to `rehash=true`) to preserve existing behavior.
+    // Nested types follow the same initialize-vs-combine convention as other hashers.
 
     let nulls = array.nulls();
     let offsets = array.offsets();
@@ -522,17 +532,39 @@ fn hash_map_array(
     if let Some(nulls) = nulls {
         for (i, (start, stop)) in offsets.iter().zip(offsets.iter().skip(1)).enumerate() {
             if nulls.is_valid(i) {
-                let hash = &mut hashes_buffer[i];
-                for values_hash in &values_hashes[start.as_usize()..stop.as_usize()] {
-                    *hash = combine_hashes(*hash, *values_hash);
+                if rehash {
+                    let hash = &mut hashes_buffer[i];
+                    for values_hash in &values_hashes[start.as_usize()..stop.as_usize()] {
+                        *hash = combine_hashes(*values_hash, *hash);
+                    }
+                } else {
+                    let mut row_hash = 0u64;
+                    for values_hash in &values_hashes[start.as_usize()..stop.as_usize()] {
+                        row_hash = combine_hashes(*values_hash, row_hash);
+                    }
+                    apply_row_hash(&mut hashes_buffer[i], row_hash, rehash);
                 }
+            } else {
+                hash_null(
+                    random_state,
+                    std::slice::from_mut(&mut hashes_buffer[i]),
+                    rehash,
+                );
             }
         }
     } else {
         for (i, (start, stop)) in offsets.iter().zip(offsets.iter().skip(1)).enumerate() {
-            let hash = &mut hashes_buffer[i];
-            for values_hash in &values_hashes[start.as_usize()..stop.as_usize()] {
-                *hash = combine_hashes(*hash, *values_hash);
+            if rehash {
+                let hash = &mut hashes_buffer[i];
+                for values_hash in &values_hashes[start.as_usize()..stop.as_usize()] {
+                    *hash = combine_hashes(*values_hash, *hash);
+                }
+            } else {
+                let mut row_hash = 0u64;
+                for values_hash in &values_hashes[start.as_usize()..stop.as_usize()] {
+                    row_hash = combine_hashes(*values_hash, row_hash);
+                }
+                apply_row_hash(&mut hashes_buffer[i], row_hash, rehash);
             }
         }
     }
@@ -545,12 +577,12 @@ fn hash_list_array<OffsetSize>(
     array: &GenericListArray<OffsetSize>,
     random_state: &RandomState,
     hashes_buffer: &mut [u64],
+    rehash: bool,
 ) -> Result<()>
 where
     OffsetSize: OffsetSizeTrait,
 {
-    // This nested-type hasher currently always combines element hashes into
-    // `hashes_buffer` (equivalent to `rehash=true`) to preserve existing behavior.
+    // Nested types follow the same initialize-vs-combine convention as other hashers.
 
     // In case values is sliced, hash only the bytes used by the offsets of this ListArray
     let first_offset = array.value_offsets().first().cloned().unwrap_or_default();
@@ -569,12 +601,28 @@ where
         for (i, (start, stop)) in array.value_offsets().iter().tuple_windows().enumerate()
         {
             if array.is_valid(i) {
-                let hash = &mut hashes_buffer[i];
-                for values_hash in &values_hashes[(*start - first_offset).as_usize()
-                    ..(*stop - first_offset).as_usize()]
-                {
-                    *hash = combine_hashes(*hash, *values_hash);
+                if rehash {
+                    let hash = &mut hashes_buffer[i];
+                    for values_hash in &values_hashes[(*start - first_offset).as_usize()
+                        ..(*stop - first_offset).as_usize()]
+                    {
+                        *hash = combine_hashes(*values_hash, *hash);
+                    }
+                } else {
+                    let mut row_hash = 0u64;
+                    for values_hash in &values_hashes[(*start - first_offset).as_usize()
+                        ..(*stop - first_offset).as_usize()]
+                    {
+                        row_hash = combine_hashes(*values_hash, row_hash);
+                    }
+                    apply_row_hash(&mut hashes_buffer[i], row_hash, rehash);
                 }
+            } else {
+                hash_null(
+                    random_state,
+                    std::slice::from_mut(&mut hashes_buffer[i]),
+                    rehash,
+                );
             }
         }
     } else {
@@ -584,10 +632,20 @@ where
             .tuple_windows()
             .zip(hashes_buffer.iter_mut())
         {
-            for values_hash in &values_hashes
-                [(*start - first_offset).as_usize()..(*stop - first_offset).as_usize()]
-            {
-                *hash = combine_hashes(*hash, *values_hash);
+            if rehash {
+                for values_hash in &values_hashes[(*start - first_offset).as_usize()
+                    ..(*stop - first_offset).as_usize()]
+                {
+                    *hash = combine_hashes(*values_hash, *hash);
+                }
+            } else {
+                let mut row_hash = 0u64;
+                for values_hash in &values_hashes[(*start - first_offset).as_usize()
+                    ..(*stop - first_offset).as_usize()]
+                {
+                    row_hash = combine_hashes(*values_hash, row_hash);
+                }
+                apply_row_hash(hash, row_hash, rehash);
             }
         }
     }
@@ -599,12 +657,12 @@ fn hash_list_view_array<OffsetSize>(
     array: &GenericListViewArray<OffsetSize>,
     random_state: &RandomState,
     hashes_buffer: &mut [u64],
+    rehash: bool,
 ) -> Result<()>
 where
     OffsetSize: OffsetSizeTrait,
 {
-    // This nested-type hasher currently always combines element hashes into
-    // `hashes_buffer` (equivalent to `rehash=true`) to preserve existing behavior.
+    // Nested types follow the same initialize-vs-combine convention as other hashers.
 
     let values = array.values();
     let offsets = array.value_offsets();
@@ -615,21 +673,43 @@ where
     if let Some(nulls) = nulls {
         for (i, (offset, size)) in offsets.iter().zip(sizes.iter()).enumerate() {
             if nulls.is_valid(i) {
-                let hash = &mut hashes_buffer[i];
                 let start = offset.as_usize();
                 let end = start + size.as_usize();
-                for values_hash in &values_hashes[start..end] {
-                    *hash = combine_hashes(*hash, *values_hash);
+                if rehash {
+                    let hash = &mut hashes_buffer[i];
+                    for values_hash in &values_hashes[start..end] {
+                        *hash = combine_hashes(*values_hash, *hash);
+                    }
+                } else {
+                    let mut row_hash = 0u64;
+                    for values_hash in &values_hashes[start..end] {
+                        row_hash = combine_hashes(*values_hash, row_hash);
+                    }
+                    apply_row_hash(&mut hashes_buffer[i], row_hash, rehash);
                 }
+            } else {
+                hash_null(
+                    random_state,
+                    std::slice::from_mut(&mut hashes_buffer[i]),
+                    rehash,
+                );
             }
         }
     } else {
         for (i, (offset, size)) in offsets.iter().zip(sizes.iter()).enumerate() {
-            let hash = &mut hashes_buffer[i];
             let start = offset.as_usize();
             let end = start + size.as_usize();
-            for values_hash in &values_hashes[start..end] {
-                *hash = combine_hashes(*hash, *values_hash);
+            if rehash {
+                let hash = &mut hashes_buffer[i];
+                for values_hash in &values_hashes[start..end] {
+                    *hash = combine_hashes(*values_hash, *hash);
+                }
+            } else {
+                let mut row_hash = 0u64;
+                for values_hash in &values_hashes[start..end] {
+                    row_hash = combine_hashes(*values_hash, row_hash);
+                }
+                apply_row_hash(&mut hashes_buffer[i], row_hash, rehash);
             }
         }
     }
@@ -641,9 +721,9 @@ fn hash_union_array(
     array: &UnionArray,
     random_state: &RandomState,
     hashes_buffer: &mut [u64],
+    rehash: bool,
 ) -> Result<()> {
-    // This nested-type hasher currently always combines the chosen child hash into
-    // `hashes_buffer` (equivalent to `rehash=true`) to preserve existing behavior.
+    // Nested types follow the same initialize-vs-combine convention as other hashers.
 
     use std::collections::HashMap;
 
@@ -667,7 +747,7 @@ fn hash_union_array(
         let child_offset = array.value_offset(i);
 
         let child_hash = child_hashes.get(&type_id).expect("invalid type_id");
-        hashes_buffer[i] = combine_hashes(hashes_buffer[i], child_hash[child_offset]);
+        apply_row_hash(&mut hashes_buffer[i], child_hash[child_offset], rehash);
     }
 
     Ok(())
@@ -678,9 +758,9 @@ fn hash_fixed_list_array(
     array: &FixedSizeListArray,
     random_state: &RandomState,
     hashes_buffer: &mut [u64],
+    rehash: bool,
 ) -> Result<()> {
-    // This nested-type hasher currently always combines element hashes into
-    // `hashes_buffer` (equivalent to `rehash=true`) to preserve existing behavior.
+    // Nested types follow the same initialize-vs-combine convention as other hashers.
 
     let values = array.values();
     let value_length = array.value_length() as usize;
@@ -690,19 +770,47 @@ fn hash_fixed_list_array(
     if let Some(nulls) = nulls {
         for i in 0..array.len() {
             if nulls.is_valid(i) {
-                let hash = &mut hashes_buffer[i];
-                for values_hash in
-                    &values_hashes[i * value_length..(i + 1) * value_length]
-                {
-                    *hash = combine_hashes(*hash, *values_hash);
+                if rehash {
+                    let hash = &mut hashes_buffer[i];
+                    for values_hash in
+                        &values_hashes[i * value_length..(i + 1) * value_length]
+                    {
+                        *hash = combine_hashes(*values_hash, *hash);
+                    }
+                } else {
+                    let mut row_hash = 0u64;
+                    for values_hash in
+                        &values_hashes[i * value_length..(i + 1) * value_length]
+                    {
+                        row_hash = combine_hashes(*values_hash, row_hash);
+                    }
+                    apply_row_hash(&mut hashes_buffer[i], row_hash, rehash);
                 }
+            } else {
+                hash_null(
+                    random_state,
+                    std::slice::from_mut(&mut hashes_buffer[i]),
+                    rehash,
+                );
             }
         }
     } else {
         for i in 0..array.len() {
-            let hash = &mut hashes_buffer[i];
-            for values_hash in &values_hashes[i * value_length..(i + 1) * value_length] {
-                *hash = combine_hashes(*hash, *values_hash);
+            if rehash {
+                let hash = &mut hashes_buffer[i];
+                for values_hash in
+                    &values_hashes[i * value_length..(i + 1) * value_length]
+                {
+                    *hash = combine_hashes(*values_hash, *hash);
+                }
+            } else {
+                let mut row_hash = 0u64;
+                for values_hash in
+                    &values_hashes[i * value_length..(i + 1) * value_length]
+                {
+                    row_hash = combine_hashes(*values_hash, row_hash);
+                }
+                apply_row_hash(&mut hashes_buffer[i], row_hash, rehash);
             }
         }
     }
@@ -806,44 +914,37 @@ fn hash_single_array(
             array => hash_dictionary(array, random_state, hashes_buffer, rehash)?,
             _ => unreachable!()
         }
-        // NOTE: The nested-type hashers below currently always *combine* their computed
-        // nested-value hash into `hashes_buffer` (i.e. they effectively behave as if
-        // `rehash=true`). This preserves existing hash values for these types.
-        //
-        // In other words, unlike primitive-like arrays, nested types do not currently
-        // "initialize" the buffer when they are the first/only column.
-        // Changing that would be a behavioral change for single-column hashing.
         DataType::Struct(_) => {
             let array = as_struct_array(array)?;
-            hash_struct_array(array, random_state, hashes_buffer)?;
+            hash_struct_array(array, random_state, hashes_buffer, rehash)?;
         }
         DataType::List(_) => {
             let array = as_list_array(array)?;
-            hash_list_array(array, random_state, hashes_buffer)?;
+            hash_list_array(array, random_state, hashes_buffer, rehash)?;
         }
         DataType::LargeList(_) => {
             let array = as_large_list_array(array)?;
-            hash_list_array(array, random_state, hashes_buffer)?;
+            hash_list_array(array, random_state, hashes_buffer, rehash)?;
         }
         DataType::ListView(_) => {
             let array = as_list_view_array(array)?;
-            hash_list_view_array(array, random_state, hashes_buffer)?;
+            hash_list_view_array(array, random_state, hashes_buffer, rehash)?;
         }
         DataType::LargeListView(_) => {
             let array = as_large_list_view_array(array)?;
-            hash_list_view_array(array, random_state, hashes_buffer)?;
+            hash_list_view_array(array, random_state, hashes_buffer, rehash)?;
         }
         DataType::Map(_, _) => {
             let array = as_map_array(array)?;
-            hash_map_array(array, random_state, hashes_buffer)?;
+            hash_map_array(array, random_state, hashes_buffer, rehash)?;
         }
         DataType::FixedSizeList(_,_) => {
             let array = as_fixed_size_list_array(array)?;
-            hash_fixed_list_array(array, random_state, hashes_buffer)?;
+            hash_fixed_list_array(array, random_state, hashes_buffer, rehash)?;
         }
         DataType::Union(_, _) => {
             let array = as_union_array(array)?;
-            hash_union_array(array, random_state, hashes_buffer)?;
+            hash_union_array(array, random_state, hashes_buffer, rehash)?;
         }
         DataType::RunEndEncoded(_, _) => downcast_run_array! {
             array => hash_run_array(array, random_state, hashes_buffer, rehash)?,
@@ -1247,7 +1348,7 @@ mod tests {
         assert_eq!(hashes[0], hashes[5]);
         assert_eq!(hashes[1], hashes[4]);
         assert_eq!(hashes[2], hashes[3]);
-        assert_eq!(hashes[1], hashes[6]); // null vs empty list
+        assert_ne!(hashes[1], hashes[6]); // null vs empty list
     }
 
     #[test]
@@ -1360,7 +1461,7 @@ mod tests {
         assert_eq!(hashes[0], hashes[5]); // same content [0, 1, 2]
         assert_eq!(hashes[1], hashes[4]); // both null
         assert_eq!(hashes[2], hashes[3]); // same content [3, null, 5]
-        assert_eq!(hashes[1], hashes[6]); // null vs empty list
+        assert_ne!(hashes[1], hashes[6]); // null vs empty list
 
         // Negative tests: different content should produce different hashes
         assert_ne!(hashes[0], hashes[2]); // [0, 1, 2] vs [3, null, 5]
@@ -1410,7 +1511,7 @@ mod tests {
         assert_eq!(hashes[0], hashes[5]); // same content [0, 1, 2]
         assert_eq!(hashes[1], hashes[4]); // both null
         assert_eq!(hashes[2], hashes[3]); // same content [3, null, 5]
-        assert_eq!(hashes[1], hashes[6]); // null vs empty list
+        assert_ne!(hashes[1], hashes[6]); // null vs empty list
 
         // Negative tests: different content should produce different hashes
         assert_ne!(hashes[0], hashes[2]); // [0, 1, 2] vs [3, null, 5]
@@ -1582,7 +1683,7 @@ mod tests {
         assert_ne!(hashes[0], hashes[3]); // different key
         assert_ne!(hashes[0], hashes[4]); // missing an entry
         assert_ne!(hashes[4], hashes[5]); // filled vs null value
-        assert_eq!(hashes[6], hashes[7]); // empty vs null map
+        assert_ne!(hashes[6], hashes[7]); // empty vs null map
     }
 
     #[test]
