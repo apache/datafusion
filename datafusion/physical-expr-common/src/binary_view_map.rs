@@ -292,8 +292,8 @@ where
 
             // Extract length from the view (first 4 bytes of u128 in little-endian)
             let len = view_u128 as u32;
-
             // Check if value already exists
+            let mut value: Option<&[u8]> = None;
             let maybe_payload = {
                 // Borrow completed and in_progress for comparison
                 let completed = &self.completed;
@@ -329,8 +329,9 @@ where
                         } else {
                             &in_progress[offset..offset + stored_len]
                         };
-                        let input_value: &[u8] = values.value(i).as_ref();
-                        stored_value == input_value
+                        let input_value =
+                            value.get_or_insert_with(|| values.value(i).as_ref());
+                        stored_value == *input_value
                     })
                     .map(|entry| entry.payload)
             };
@@ -339,7 +340,7 @@ where
                 payload
             } else {
                 // no existing value, make a new one
-                let value: &[u8] = values.value(i).as_ref();
+                let value = value.unwrap_or_else(|| values.value(i).as_ref());
                 let payload = make_payload_fn(Some(value));
 
                 // Create view pointing to our buffers
