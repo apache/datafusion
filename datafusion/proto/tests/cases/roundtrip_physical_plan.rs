@@ -37,7 +37,7 @@ use datafusion::datasource::listing::{
 };
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
-    FileGroup, FileScanConfigBuilder, FileSinkConfig, ParquetSource,
+    FileGroup, FileOutputMode, FileScanConfigBuilder, FileSinkConfig, ParquetSource,
     wrap_partition_type_in_dict, wrap_partition_value_in_dict,
 };
 use datafusion::datasource::sink::DataSinkExec;
@@ -1699,6 +1699,7 @@ fn roundtrip_json_sink() -> Result<()> {
         insert_op: InsertOp::Overwrite,
         keep_partition_by_columns: true,
         file_extension: "json".into(),
+        file_output_mode: FileOutputMode::Automatic,
     };
     let data_sink = Arc::new(JsonSink::new(
         file_sink_config,
@@ -1737,6 +1738,7 @@ fn roundtrip_csv_sink() -> Result<()> {
         insert_op: InsertOp::Overwrite,
         keep_partition_by_columns: true,
         file_extension: "csv".into(),
+        file_output_mode: FileOutputMode::Automatic,
     };
     let data_sink = Arc::new(CsvSink::new(
         file_sink_config,
@@ -1796,6 +1798,7 @@ fn roundtrip_parquet_sink() -> Result<()> {
         insert_op: InsertOp::Overwrite,
         keep_partition_by_columns: true,
         file_extension: "parquet".into(),
+        file_output_mode: FileOutputMode::Automatic,
     };
     let data_sink = Arc::new(ParquetSink::new(
         file_sink_config,
