@@ -20,10 +20,13 @@
 use ahash::RandomState;
 use arrow::array::{
     Array, ArrayRef, ArrowPrimitiveType, DictionaryArray, GenericStringArray,
-    NullBufferBuilder, OffsetSizeTrait, PrimitiveArray, StringViewArray, make_array,
+    NullBufferBuilder, OffsetSizeTrait, PrimitiveArray, RunArray, StringArray,
+    StringViewArray, StructArray, make_array,
 };
 use arrow::buffer::NullBuffer;
-use arrow::datatypes::{ArrowDictionaryKeyType, Int32Type, Int64Type};
+use arrow::datatypes::{
+    ArrowDictionaryKeyType, DataType, Field, Fields, Int32Type, Int64Type,
+};
 use criterion::{Bencher, Criterion, criterion_group, criterion_main};
 use datafusion_common::hash_utils::with_hashes;
 use rand::Rng;
@@ -68,11 +71,25 @@ fn criterion_benchmark(c: &mut Criterion) {
             name: "dictionary_utf8_int32",
             array: pool.dictionary_array::<Int32Type>(BATCH_SIZE),
         },
+        BenchData {
+            name: "struct_array",
+            array: create_struct_array(BATCH_SIZE),
+        },
+        BenchData {
+            name: "run_array_int32",
+            array: create_run_array::<Int32Type>(BATCH_SIZE),
+        },
     ];
 
     for BenchData { name, array } in cases {
         // with_hash has different code paths for single vs multiple arrays and nulls vs no nulls
-        let nullable_array = add_nulls(&array);
+        // RunArray encodes nulls in the values array, not at the array level
+        let nullable_array = if name.starts_with("run_array") {
+            create_run_array_with_null_values::<Int32Type>(BATCH_SIZE)
+        } else {
+            add_nulls(&array)
+        };
+
         c.bench_function(&format!("{name}: single, no nulls"), |b| {
             do_hash_test(b, std::slice::from_ref(&array));
         });
@@ -203,6 +220,124 @@ where
         .map(|_| Some(rng.random::<T::Native>()))
         .collect();
     Arc::new(array)
+}
+
+/// Create a StructArray with multiple columns
+fn create_struct_array(array_len: usize) -> ArrayRef {
+    let mut rng = make_rng();
+
+    // Create 4 columns of different types for our struct array
+    let bool_array: ArrayRef = Arc::new(
+        (0..array_len)
+            .map(|_| Some(rng.random::<bool>()))
+            .collect::<arrow::array::BooleanArray>(),
+    );
+
+    let int32_array: ArrayRef = Arc::new(
+        (0..array_len)
+            .map(|_| Some(rng.random::<i32>()))
+            .collect::<PrimitiveArray<Int32Type>>(),
+    );
+
+    let int64_array: ArrayRef = Arc::new(
+        (0..array_len)
+            .map(|_| Some(rng.random::<i64>()))
+            .collect::<PrimitiveArray<Int64Type>>(),
+    );
+
+    let string_array: ArrayRef = {
+        let strings: Vec<String> = (0..array_len)
+            .map(|_| {
+                let len = rng.random_range(5..20);
+                let value: Vec<u8> =
+                    rng.clone().sample_iter(&Alphanumeric).take(len).collect();
+                String::from_utf8(value).unwrap()
+            })
+            .collect();
+        Arc::new(StringArray::from(strings))
+    };
+
+    let fields = Fields::from(vec![
+        Field::new("bool_col", DataType::Boolean, false),
+        Field::new("int32_col", DataType::Int32, false),
+        Field::new("int64_col", DataType::Int64, false),
+        Field::new("string_col", DataType::Utf8, false),
+    ]);
+
+    Arc::new(StructArray::new(
+        fields,
+        vec![bool_array, int32_array, int64_array, string_array],
+        None,
+    ))
+}
+
+/// Create a RunArray to test run array hashing.
+fn create_run_array<T>(array_len: usize) -> ArrayRef
+where
+    T: ArrowPrimitiveType,
+    StandardUniform: Distribution<T::Native>,
+{
+    let mut rng = make_rng();
+
+    // Create runs of varying lengths
+    let mut run_ends = Vec::new();
+    let mut values = Vec::new();
+    let mut current_end = 0;
+
+    while current_end < array_len {
+        // Random run length between 1 and 50
+        let run_length = rng.random_range(1..=50).min(array_len - current_end);
+        current_end += run_length;
+        run_ends.push(current_end as i32);
+        values.push(Some(rng.random::<T::Native>()));
+    }
+
+    let run_ends_array = Arc::new(PrimitiveArray::<Int32Type>::from(run_ends));
+    let values_array: Arc<dyn Array> =
+        Arc::new(values.into_iter().collect::<PrimitiveArray<T>>());
+
+    Arc::new(
+        RunArray::try_new(&run_ends_array, values_array.as_ref())
+            .expect("Failed to create RunArray"),
+    )
+}
+
+/// Create a RunArray with null values
+fn create_run_array_with_null_values<T>(array_len: usize) -> ArrayRef
+where
+    T: ArrowPrimitiveType,
+    StandardUniform: Distribution<T::Native>,
+{
+    let mut rng = make_rng();
+    let null_density = 0.03; // Same as create_null_mask()
+
+    // Create runs of varying lengths
+    let mut run_ends = Vec::new();
+    let mut values = Vec::new();
+    let mut current_end = 0;
+
+    while current_end < array_len {
+        // Random run length between 1 and 50
+        let run_length = rng.random_range(1..=50).min(array_len - current_end);
+        current_end += run_length;
+        run_ends.push(current_end as i32);
+
+        // Randomly make some values null based on null_density
+        if rng.random::<f32>() < null_density {
+            values.push(None);
+        } else {
+            values.push(Some(rng.random::<T::Native>()));
+        }
+    }
+
+    let run_ends_array = Arc::new(PrimitiveArray::<Int32Type>::from(run_ends));
+    let values_array: Arc<dyn Array> =
+        Arc::new(values.into_iter().collect::<PrimitiveArray<T>>());
+
+    Arc::new(
+        RunArray::try_new(&run_ends_array, values_array.as_ref())
+            .expect("Failed to create RunArray with null values"),
+    )
 }
 
 criterion_group!(benches, criterion_benchmark);
