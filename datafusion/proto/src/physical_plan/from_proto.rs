@@ -36,7 +36,7 @@ use datafusion_common::{
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
-use datafusion_datasource::file_sink_config::FileSinkConfig;
+use datafusion_datasource::file_sink_config::{FileOutputMode, FileSinkConfig};
 use datafusion_datasource::{FileRange, ListingTableUrl, PartitionedFile, TableSchema};
 use datafusion_datasource_csv::file_format::CsvSink;
 use datafusion_datasource_json::file_format::JsonSink;
@@ -865,6 +865,7 @@ impl TryFrom<&protobuf::FileSinkConfig> for FileSinkConfig {
             insert_op,
             keep_partition_by_columns: conf.keep_partition_by_columns,
             file_extension: conf.file_extension.clone(),
+            file_output_mode: FileOutputMode::Automatic,
         })
     }
 }

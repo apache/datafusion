@@ -410,6 +410,7 @@ impl serde::Serialize for AggregateMode {
             Self::FinalPartitioned => "FINAL_PARTITIONED",
             Self::Single => "SINGLE",
             Self::SinglePartitioned => "SINGLE_PARTITIONED",
+            Self::PartialReduce => "PARTIAL_REDUCE",
         };
         serializer.serialize_str(variant)
     }
@@ -426,6 +427,7 @@ impl<'de> serde::Deserialize<'de> for AggregateMode {
             "FINAL_PARTITIONED",
             "SINGLE",
             "SINGLE_PARTITIONED",
+            "PARTIAL_REDUCE",
         ];
 
         struct GeneratedVisitor;
@@ -471,6 +473,7 @@ impl<'de> serde::Deserialize<'de> for AggregateMode {
                     "FINAL_PARTITIONED" => Ok(AggregateMode::FinalPartitioned),
                     "SINGLE" => Ok(AggregateMode::Single),
                     "SINGLE_PARTITIONED" => Ok(AggregateMode::SinglePartitioned),
+                    "PARTIAL_REDUCE" => Ok(AggregateMode::PartialReduce),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }
