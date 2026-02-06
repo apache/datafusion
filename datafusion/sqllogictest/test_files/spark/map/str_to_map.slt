@@ -66,6 +66,7 @@ SELECT str_to_map('a=1&b=2&c=3', '&', '=');
 {a: 1, b: 2, c: 3}
 
 # Duplicate keys: EXCEPTION policy (Spark 3.0+ default)
+# TODO: Add LAST_WIN policy tests when spark.sql.mapKeyDedupPolicy config is supported
 statement error
 Duplicate map key
 SELECT str_to_map('a:1,b:2,a:3');

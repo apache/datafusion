@@ -31,6 +31,9 @@ use datafusion_expr::{
 
 use crate::function::map::utils::map_type_from_key_value_types;
 
+const DEFAULT_PAIR_DELIM: &str = ",";
+const DEFAULT_KV_DELIM: &str = ":";
+
 /// Spark-compatible `str_to_map` expression
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#str_to_map>
 ///
@@ -45,6 +48,8 @@ use crate::function::map::utils::map_type_from_key_value_types;
 /// Uses EXCEPTION behavior (Spark 3.0+ default): errors on duplicate keys.
 /// See `spark.sql.mapKeyDedupPolicy`:
 /// <https://github.com/apache/spark/blob/v4.0.0/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4502-L4511>
+///
+/// TODO: Support configurable `spark.sql.mapKeyDedupPolicy` (LAST_WIN) in a follow-up PR.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkStrToMap {
     signature: Signature,
@@ -212,8 +217,8 @@ fn str_to_map_impl<'a, V: StringArrayType<'a> + Copy>(
         }
 
         // Per-row delimiter extraction
-        let pair_delim = pair_delim_array.map_or(",", |a| a.value(row_idx));
-        let kv_delim = kv_delim_array.map_or(":", |a| a.value(row_idx));
+        let pair_delim = pair_delim_array.map_or(DEFAULT_PAIR_DELIM, |a| a.value(row_idx));
+        let kv_delim = kv_delim_array.map_or(DEFAULT_KV_DELIM, |a| a.value(row_idx));
 
         let text = text_array.value(row_idx);
         if text.is_empty() {
@@ -234,12 +239,14 @@ fn str_to_map_impl<'a, V: StringArrayType<'a> + Copy>(
             let key = kv_iter.next().unwrap_or("");
             let value = kv_iter.next();
 
+            // TODO: Support LAST_WIN policy via spark.sql.mapKeyDedupPolicy config
             // EXCEPTION policy: error on duplicate keys (Spark 3.0+ default)
             if !seen_keys.insert(key) {
                 return exec_err!(
                     "Duplicate map key '{key}' was found, please check the input data. \
-                    If you want to remove the duplicates, you can set \
-                    spark.sql.mapKeyDedupPolicy to LAST_WIN"
+                    If you want to remove the duplicated keys, you can set \
+                    spark.sql.mapKeyDedupPolicy to \"LAST_WIN\" so that the key \
+                    inserted at last takes precedence."
                 );
             }
 
@@ -253,232 +260,4 @@ fn str_to_map_impl<'a, V: StringArrayType<'a> + Copy>(
     }
 
     Ok(Arc::new(map_builder.finish()))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use arrow::array::{Array, MapArray, StringArray};
-
-    // Table-driven tests for str_to_map
-    // Test cases derived from Spark ComplexTypeSuite:
-    // https://github.com/apache/spark/blob/v4.0.0/sql/catalyst/src/test/scala/org/apache/spark/sql/catalyst/expressions/ComplexTypeSuite.scala#L525-L618
-    #[test]
-    fn test_str_to_map_cases() {
-        struct TestCase {
-            name: &'static str,
-            inputs: Vec<Option<&'static str>>,
-            pair_delim: Option<&'static str>,
-            kv_delim: Option<&'static str>,
-            expected: Vec<Option<Vec<(&'static str, Option<&'static str>)>>>,
-        }
-
-        let cases = vec![
-            TestCase {
-                name: "s0: basic default delimiters",
-                inputs: vec![Some("a:1,b:2,c:3")],
-                pair_delim: None,
-                kv_delim: None,
-                expected: vec![Some(vec![
-                    ("a", Some("1")),
-                    ("b", Some("2")),
-                    ("c", Some("3")),
-                ])],
-            },
-            TestCase {
-                name: "s1: preserve spaces in values",
-                inputs: vec![Some("a: ,b:2")],
-                pair_delim: None,
-                kv_delim: None,
-                expected: vec![Some(vec![("a", Some(" ")), ("b", Some("2"))])],
-            },
-            TestCase {
-                name: "s2: custom kv delimiter '='",
-                inputs: vec![Some("a=1,b=2,c=3")],
-                pair_delim: Some(","),
-                kv_delim: Some("="),
-                expected: vec![Some(vec![
-                    ("a", Some("1")),
-                    ("b", Some("2")),
-                    ("c", Some("3")),
-                ])],
-            },
-            TestCase {
-                name: "s3: empty string",
-                inputs: vec![Some("")],
-                pair_delim: Some(","),
-                kv_delim: Some("="),
-                expected: vec![Some(vec![("", None)])],
-            },
-            TestCase {
-                name: "s4: custom pair delimiter '_'",
-                inputs: vec![Some("a:1_b:2_c:3")],
-                pair_delim: Some("_"),
-                kv_delim: Some(":"),
-                expected: vec![Some(vec![
-                    ("a", Some("1")),
-                    ("b", Some("2")),
-                    ("c", Some("3")),
-                ])],
-            },
-            TestCase {
-                name: "s5: single key no value",
-                inputs: vec![Some("a")],
-                pair_delim: None,
-                kv_delim: None,
-                expected: vec![Some(vec![("a", None)])],
-            },
-            TestCase {
-                name: "s6: custom delimiters '&' and '='",
-                inputs: vec![Some("a=1&b=2&c=3")],
-                pair_delim: Some("&"),
-                kv_delim: Some("="),
-                expected: vec![Some(vec![
-                    ("a", Some("1")),
-                    ("b", Some("2")),
-                    ("c", Some("3")),
-                ])],
-            },
-            TestCase {
-                name: "null input returns null",
-                inputs: vec![None],
-                pair_delim: None,
-                kv_delim: None,
-                expected: vec![None],
-            },
-            TestCase {
-                name: "multi-row",
-                inputs: vec![Some("a:1,b:2"), Some("x:9"), None],
-                pair_delim: None,
-                kv_delim: None,
-                expected: vec![
-                    Some(vec![("a", Some("1")), ("b", Some("2"))]),
-                    Some(vec![("x", Some("9"))]),
-                    None,
-                ],
-            },
-        ];
-
-        for case in cases {
-            let text: ArrayRef = Arc::new(StringArray::from(case.inputs));
-            let args: Vec<ArrayRef> = match (case.pair_delim, case.kv_delim) {
-                (Some(p), Some(k)) => vec![
-                    text.clone(),
-                    Arc::new(StringArray::from(vec![p; text.len()])),
-                    Arc::new(StringArray::from(vec![k; text.len()])),
-                ],
-                _ => vec![text],
-            };
-
-            let result = str_to_map_inner(&args).unwrap();
-            let map_array = result.as_any().downcast_ref::<MapArray>().unwrap();
-
-            assert_eq!(map_array.len(), case.expected.len(), "case: {}", case.name);
-
-            for (row_idx, expected_row) in case.expected.iter().enumerate() {
-                match expected_row {
-                    None => {
-                        assert!(
-                            map_array.is_null(row_idx),
-                            "case: {} row {} expected NULL",
-                            case.name,
-                            row_idx
-                        );
-                    }
-                    Some(expected_entries) => {
-                        assert!(
-                            !map_array.is_null(row_idx),
-                            "case: {} row {} unexpected NULL",
-                            case.name,
-                            row_idx
-                        );
-                        let entries = get_map_entries(map_array, row_idx);
-                        let expected: Vec<(String, Option<String>)> = expected_entries
-                            .iter()
-                            .map(|(k, v)| (k.to_string(), v.map(|s| s.to_string())))
-                            .collect();
-                        assert_eq!(
-                            entries, expected,
-                            "case: {} row {}",
-                            case.name, row_idx
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn test_duplicate_keys_exception() {
-        let text: ArrayRef = Arc::new(StringArray::from(vec!["a:1,b:2,a:3"]));
-        let result = str_to_map_inner(&[text]);
-        assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("Duplicate map key"),
-            "expected duplicate key error, got: {err_msg}"
-        );
-    }
-
-    #[test]
-    fn test_per_row_delimiters() {
-        // Each row has its own delimiters
-        let text: ArrayRef =
-            Arc::new(StringArray::from(vec![Some("a=1,b=2"), Some("x#9")]));
-        let pair_delim: ArrayRef =
-            Arc::new(StringArray::from(vec![Some(","), Some(",")]));
-        let kv_delim: ArrayRef = Arc::new(StringArray::from(vec![Some("="), Some("#")]));
-
-        let result = str_to_map_inner(&[text, pair_delim, kv_delim]).unwrap();
-        let map_array = result.as_any().downcast_ref::<MapArray>().unwrap();
-
-        assert_eq!(map_array.len(), 2);
-
-        // Row 0: "a=1,b=2" with pair=",", kv="="
-        let entries0 = get_map_entries(map_array, 0);
-        assert_eq!(
-            entries0,
-            vec![
-                ("a".to_string(), Some("1".to_string())),
-                ("b".to_string(), Some("2".to_string())),
-            ]
-        );
-
-        // Row 1: "x#9" with pair=",", kv="#"
-        let entries1 = get_map_entries(map_array, 1);
-        assert_eq!(entries1, vec![("x".to_string(), Some("9".to_string()))]);
-    }
-
-    fn get_map_entries(
-        map_array: &MapArray,
-        row: usize,
-    ) -> Vec<(String, Option<String>)> {
-        if map_array.is_null(row) {
-            return vec![];
-        }
-        let start = map_array.value_offsets()[row] as usize;
-        let end = map_array.value_offsets()[row + 1] as usize;
-        let keys = map_array
-            .keys()
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap();
-        let values = map_array
-            .values()
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap();
-
-        (start..end)
-            .map(|i| {
-                let key = keys.value(i).to_string();
-                let value = if values.is_null(i) {
-                    None
-                } else {
-                    Some(values.value(i).to_string())
-                };
-                (key, value)
-            })
-            .collect()
-    }
 }
