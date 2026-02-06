@@ -24,8 +24,8 @@ use arrow::compute::take;
 use arrow::datatypes::*;
 #[cfg(not(feature = "force_hash_collisions"))]
 use arrow::{downcast_dictionary_array, downcast_primitive_array};
-use std::collections::HashMap;
 use itertools::Itertools;
+use std::collections::HashMap;
 
 #[cfg(not(feature = "force_hash_collisions"))]
 use crate::cast::{
