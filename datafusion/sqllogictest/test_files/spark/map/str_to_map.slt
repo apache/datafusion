@@ -20,8 +20,6 @@
 #
 # Test cases derived from Spark test("StringToMap"):
 # https://github.com/apache/spark/blob/v4.0.0/sql/catalyst/src/test/scala/org/apache/spark/sql/catalyst/expressions/ComplexTypeSuite.scala#L525-L618
-#
-# Duplicate key handling uses EXCEPTION policy (Spark 3.0+ default)
 
 # s0: Basic test with default delimiters
 query ?

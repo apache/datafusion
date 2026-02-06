@@ -19,10 +19,14 @@ use std::any::Any;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, MapBuilder, MapFieldNames, StringBuilder, StringArrayType};
+use arrow::array::{
+    Array, ArrayRef, MapBuilder, MapFieldNames, StringArrayType, StringBuilder,
+};
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
+use datafusion_common::cast::{
+    as_large_string_array, as_string_array, as_string_view_array,
+};
 use datafusion_common::{Result, exec_err, internal_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -112,9 +116,7 @@ impl ScalarUDFImpl for SparkStrToMap {
 fn str_to_map_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args.len() {
         1 => match args[0].data_type() {
-            DataType::Utf8 => {
-                str_to_map_impl(as_string_array(&args[0])?, None, None)
-            }
+            DataType::Utf8 => str_to_map_impl(as_string_array(&args[0])?, None, None),
             DataType::LargeUtf8 => {
                 str_to_map_impl(as_large_string_array(&args[0])?, None, None)
             }
@@ -217,7 +219,8 @@ fn str_to_map_impl<'a, V: StringArrayType<'a> + Copy>(
         }
 
         // Per-row delimiter extraction
-        let pair_delim = pair_delim_array.map_or(DEFAULT_PAIR_DELIM, |a| a.value(row_idx));
+        let pair_delim =
+            pair_delim_array.map_or(DEFAULT_PAIR_DELIM, |a| a.value(row_idx));
         let kv_delim = kv_delim_array.map_or(DEFAULT_KV_DELIM, |a| a.value(row_idx));
 
         let text = text_array.value(row_idx);
