@@ -494,13 +494,13 @@ query T
 SELECT value FROM information_schema.df_settings
 WHERE name = 'datafusion.optimizer.adaptive_filter_selectivity_threshold';
 ----
-0.85
+0.5
 
 query T
 SELECT value FROM information_schema.df_settings
 WHERE name = 'datafusion.optimizer.adaptive_filter_min_rows_for_selectivity';
 ----
-50000
+100000
 
 # Enable adaptive selectivity tracking
 statement ok

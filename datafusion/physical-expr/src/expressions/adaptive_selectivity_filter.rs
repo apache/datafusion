@@ -378,10 +378,7 @@ mod tests {
 
         // Should return scalar true when disabled
         let ColumnarValue::Scalar(ScalarValue::Boolean(Some(true))) = result else {
-            panic!(
-                "Expected scalar true result when disabled, got: {:?}",
-                result
-            );
+            panic!("Expected scalar true result when disabled, got: {result:?}");
         };
     }
 
