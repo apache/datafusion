@@ -232,18 +232,18 @@ impl Debug for SessionState {
 #[async_trait]
 impl Session for SessionState {
     fn session_id(&self) -> &str {
-        self.session_id()
+        SessionState::session_id(self)
     }
 
     fn config(&self) -> &SessionConfig {
-        self.config()
+        SessionState::config(self)
     }
 
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
     ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
-        self.create_physical_plan(logical_plan).await
+        SessionState::create_physical_plan(self, logical_plan).await
     }
 
     fn create_physical_expr(
@@ -251,43 +251,27 @@ impl Session for SessionState {
         expr: Expr,
         df_schema: &DFSchema,
     ) -> datafusion_common::Result<Arc<dyn PhysicalExpr>> {
-        self.create_physical_expr(expr, df_schema)
-    }
-
-    fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>> {
-        &self.scalar_functions
-    }
-
-    fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>> {
-        &self.aggregate_functions
-    }
-
-    fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>> {
-        &self.window_functions
+        SessionState::create_physical_expr(self, expr, df_schema)
     }
 
     fn runtime_env(&self) -> &Arc<RuntimeEnv> {
-        self.runtime_env()
+        SessionState::runtime_env(self)
     }
 
     fn execution_props(&self) -> &ExecutionProps {
-        self.execution_props()
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
+        SessionState::execution_props(self)
     }
 
     fn table_options(&self) -> &TableOptions {
-        self.table_options()
+        SessionState::table_options(self)
     }
 
     fn table_options_mut(&mut self) -> &mut TableOptions {
-        self.table_options_mut()
+        SessionState::table_options_mut(self)
     }
 
     fn task_ctx(&self) -> Arc<TaskContext> {
-        self.task_ctx()
+        SessionState::task_ctx(self)
     }
 }
 
