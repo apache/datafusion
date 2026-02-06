@@ -21,7 +21,7 @@
 # Test cases derived from Spark test("StringToMap"):
 # https://github.com/apache/spark/blob/v4.0.0/sql/catalyst/src/test/scala/org/apache/spark/sql/catalyst/expressions/ComplexTypeSuite.scala#L525-L618
 #
-# Note: Duplicate key handling uses LAST_WIN policy (not EXCEPTION which is Spark default)
+# Duplicate key handling uses EXCEPTION policy (Spark 3.0+ default)
 
 # s0: Basic test with default delimiters
 query ?
@@ -65,19 +65,12 @@ SELECT str_to_map('a=1&b=2&c=3', '&', '=');
 ----
 {a: 1, b: 2, c: 3}
 
-# Duplicate keys: last wins (LAST_WIN policy)
-query ?
+# Duplicate keys: EXCEPTION policy (Spark 3.0+ default)
+statement error
+Duplicate map key
 SELECT str_to_map('a:1,b:2,a:3');
-----
-{b: 2, a: 3}
 
 # Additional tests (DataFusion-specific)
-
-# Alias str_to_map
-query ?
-SELECT str_to_map('a:1,b:2');
-----
-{a: 1, b: 2}
 
 # NULL input returns NULL
 query ?

@@ -16,21 +16,18 @@
 // under the License.
 
 use std::any::Any;
+use std::collections::HashSet;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, StringArray, StringBuilder};
-use arrow::buffer::NullBuffer;
+use arrow::array::{Array, ArrayRef, AsArray, MapBuilder, MapFieldNames, StringBuilder};
 use arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::{Result, internal_err};
+use datafusion_common::{Result, exec_err, internal_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     TypeSignature, Volatility,
 };
-use datafusion_functions::utils::make_scalar_function;
 
-use crate::function::map::utils::{
-    map_from_keys_values_offsets_nulls, map_type_from_key_value_types,
-};
+use crate::function::map::utils::map_type_from_key_value_types;
 
 /// Spark-compatible `str_to_map` expression
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#str_to_map>
@@ -43,10 +40,8 @@ use crate::function::map::utils::{
 /// - keyValueDelim: Delimiter between key and value (default: ':')
 ///
 /// # Duplicate Key Handling
-/// Currently uses LAST_WIN behavior (last value wins for duplicate keys).
-///
-/// TODO: Support `spark.sql.mapKeyDedupPolicy` config (EXCEPTION vs LAST_WIN).
-/// Spark 3.0+ defaults to EXCEPTION. See:
+/// Uses EXCEPTION behavior (Spark 3.0+ default): errors on duplicate keys.
+/// See `spark.sql.mapKeyDedupPolicy`:
 /// <https://github.com/apache/spark/blob/v4.0.0/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4502-L4511>
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkStrToMap {
@@ -101,7 +96,9 @@ impl ScalarUDFImpl for SparkStrToMap {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(str_to_map_inner, vec![])(&args.args)
+        let arrays: Vec<ArrayRef> = ColumnarValue::values_to_arrays(&args.args)?;
+        let result = str_to_map_inner(&arrays)?;
+        Ok(ColumnarValue::Array(result))
     }
 }
 
@@ -112,153 +109,88 @@ fn str_to_map_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         args.len()
     );
 
-    let text_array = &args[0];
-
-    // Get delimiters with defaults
-    let pair_delim = if args.len() > 1 {
-        extract_delimiter_from_string_array(&args[1])?
+    let text_array = args[0].as_string::<i32>();
+    let pair_delim_array = if args.len() > 1 {
+        Some(args[1].as_string::<i32>())
     } else {
-        ",".to_string()
+        None
     };
-
-    let kv_delim = if args.len() > 2 {
-        extract_delimiter_from_string_array(&args[2])?
+    let kv_delim_array = if args.len() > 2 {
+        Some(args[2].as_string::<i32>())
     } else {
-        ":".to_string()
+        None
     };
-
-    // Process each row
-    let text_array = text_array
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .ok_or_else(|| {
-            datafusion_common::DataFusionError::Internal(
-                "Expected StringArray for text argument".to_string(),
-            )
-        })?;
 
     let num_rows = text_array.len();
-    let mut keys_builder = StringBuilder::new();
-    let mut values_builder = StringBuilder::new();
-    let mut offsets: Vec<i32> = vec![0];
-    let mut current_offset: i32 = 0;
-    let mut null_buffer = vec![true; num_rows];
+    // Use field names matching map_type_from_key_value_types: "key" and "value"
+    let field_names = MapFieldNames {
+        entry: "entries".to_string(),
+        key: "key".to_string(),
+        value: "value".to_string(),
+    };
+    let mut map_builder = MapBuilder::new(
+        Some(field_names),
+        StringBuilder::new(),
+        StringBuilder::new(),
+    );
 
     for row_idx in 0..num_rows {
-        if text_array.is_null(row_idx) {
-            null_buffer[row_idx] = false;
-            offsets.push(current_offset);
+        if text_array.is_null(row_idx)
+            || pair_delim_array.is_some_and(|a| a.is_null(row_idx))
+            || kv_delim_array.is_some_and(|a| a.is_null(row_idx))
+        {
+            map_builder.append(false)?;
             continue;
         }
+
+        // Per-row delimiter extraction
+        let pair_delim = pair_delim_array.map_or(",", |a| a.value(row_idx));
+        let kv_delim = kv_delim_array.map_or(":", |a| a.value(row_idx));
 
         let text = text_array.value(row_idx);
         if text.is_empty() {
             // Empty string -> map with empty key and NULL value (Spark behavior)
-            keys_builder.append_value("");
-            values_builder.append_null();
-            current_offset += 1;
-            offsets.push(current_offset);
+            map_builder.keys().append_value("");
+            map_builder.values().append_null();
+            map_builder.append(true)?;
             continue;
         }
 
-        let mut count = 0;
-        // Split text into key-value pairs using pair_delim.
-        // Example: "a:1,b:2" with pair_delim="," -> ["a:1", "b:2"]
-        for pair in text.split(&pair_delim) {
-            // Skip empty pairs (e.g., from "a:1,,b:2" -> ["a:1", "", "b:2"])
+        let mut seen_keys = HashSet::new();
+        for pair in text.split(pair_delim) {
             if pair.is_empty() {
                 continue;
             }
 
-            // Split each pair into key and value using kv_delim.
-            // splitn(2, ...) ensures we only split on the FIRST delimiter.
-            // Example: "a:1:2" with kv_delim=":" -> ["a", "1:2"] (value keeps extra colons)
-            //
-            // kv[0] = key (always present)
-            // kv[1] = value (may not exist if no delimiter found)
-            //
-            // Examples:
-            //   "a:1"   -> kv = ["a", "1"]   -> key="a", value=Some("1")
-            //   "a"     -> kv = ["a"]        -> key="a", value=None
-            //   "a:"    -> kv = ["a", ""]    -> key="a", value=Some("")
-            //   ":1"    -> kv = ["", "1"]    -> key="",  value=Some("1")
-            let mut kv_iter = pair.splitn(2, &kv_delim);
+            let mut kv_iter = pair.splitn(2, kv_delim);
             let key = kv_iter.next().unwrap_or("");
             let value = kv_iter.next();
 
-            keys_builder.append_value(key);
-            if let Some(v) = value {
-                values_builder.append_value(v);
-            } else {
-                values_builder.append_null();
+            // EXCEPTION policy: error on duplicate keys (Spark 3.0+ default)
+            if !seen_keys.insert(key) {
+                return exec_err!(
+                    "Duplicate map key '{key}' was found, please check the input data. \
+                    If you want to remove the duplicates, you can set \
+                    spark.sql.mapKeyDedupPolicy to LAST_WIN"
+                );
             }
-            count += 1;
-        }
 
-        current_offset += count;
-        offsets.push(current_offset);
+            map_builder.keys().append_value(key);
+            match value {
+                Some(v) => map_builder.values().append_value(v),
+                None => map_builder.values().append_null(),
+            }
+        }
+        map_builder.append(true)?;
     }
 
-    let keys_array: ArrayRef = Arc::new(keys_builder.finish());
-    let values_array: ArrayRef = Arc::new(values_builder.finish());
-
-    // Create null buffer
-    let null_buffer = NullBuffer::from(null_buffer);
-
-    map_from_keys_values_offsets_nulls(
-        &keys_array,
-        &values_array,
-        &offsets,
-        &offsets,
-        Some(&null_buffer),
-        Some(&null_buffer),
-    )
-}
-
-/// Extract delimiter value from [`StringArray`].
-fn extract_delimiter_from_string_array(array: &ArrayRef) -> Result<String> {
-    let string_array = array
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .ok_or_else(|| {
-            datafusion_common::DataFusionError::Internal(
-                "Expected StringArray for delimiter".to_string(),
-            )
-        })?;
-
-    assert!(
-        !string_array.is_empty(),
-        "Delimiter array should not be empty"
-    );
-
-    // In columnar execution, scalar delimiter is expanded to array to match batch size.
-    // All elements are the same, so we just take the first element.
-    Ok(string_array.value(0).to_string())
+    Ok(Arc::new(map_builder.finish()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::MapArray;
-
-    #[test]
-    fn test_extract_delimiter_from_string_array() {
-        // Normal case - single element
-        let delim: ArrayRef = Arc::new(StringArray::from(vec!["&"]));
-        let result = extract_delimiter_from_string_array(&delim).unwrap();
-        assert_eq!(result, "&");
-
-        // Multi-char delimiter
-        let delim: ArrayRef = Arc::new(StringArray::from(vec!["&&"]));
-        let result = extract_delimiter_from_string_array(&delim).unwrap();
-        assert_eq!(result, "&&");
-
-        // Expanded scalar case - multiple elements (all same value).
-        // This happens when the scalar delimiter is expanded to match batch size
-        let delim: ArrayRef = Arc::new(StringArray::from(vec!["=", "=", "="]));
-        let result = extract_delimiter_from_string_array(&delim).unwrap();
-        assert_eq!(result, "=");
-    }
+    use arrow::array::{MapArray, StringArray};
 
     // Table-driven tests for str_to_map
     // Test cases derived from Spark ComplexTypeSuite:
@@ -357,16 +289,6 @@ mod tests {
                     None,
                 ],
             },
-            // TODO: Spark 3.0+ defaults to EXCEPTION for duplicate keys.
-            // Current behavior: LAST_WIN (keeps last value, first 'a' dropped).
-            // See: spark.sql.mapKeyDedupPolicy
-            TestCase {
-                name: "duplicate keys (LAST_WIN)",
-                inputs: vec![Some("a:1,b:2,a:3")],
-                pair_delim: None,
-                kv_delim: None,
-                expected: vec![Some(vec![("b", Some("2")), ("a", Some("3"))])],
-            },
         ];
 
         for case in cases {
@@ -418,7 +340,47 @@ mod tests {
         }
     }
 
-    /// Helper to extract keys and values from MapArray for assertions
+    #[test]
+    fn test_duplicate_keys_exception() {
+        let text: ArrayRef = Arc::new(StringArray::from(vec!["a:1,b:2,a:3"]));
+        let result = str_to_map_inner(&[text]);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("Duplicate map key"),
+            "expected duplicate key error, got: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn test_per_row_delimiters() {
+        // Each row has its own delimiters
+        let text: ArrayRef =
+            Arc::new(StringArray::from(vec![Some("a=1,b=2"), Some("x#9")]));
+        let pair_delim: ArrayRef =
+            Arc::new(StringArray::from(vec![Some(","), Some(",")]));
+        let kv_delim: ArrayRef = Arc::new(StringArray::from(vec![Some("="), Some("#")]));
+
+        let result = str_to_map_inner(&[text, pair_delim, kv_delim]).unwrap();
+        let map_array = result.as_any().downcast_ref::<MapArray>().unwrap();
+
+        assert_eq!(map_array.len(), 2);
+
+        // Row 0: "a=1,b=2" with pair=",", kv="="
+        let entries0 = get_map_entries(map_array, 0);
+        assert_eq!(
+            entries0,
+            vec![
+                ("a".to_string(), Some("1".to_string())),
+                ("b".to_string(), Some("2".to_string())),
+            ]
+        );
+
+        // Row 1: "x#9" with pair=",", kv="#"
+        let entries1 = get_map_entries(map_array, 1);
+        assert_eq!(entries1, vec![("x".to_string(), Some("9".to_string()))]);
+    }
+
     fn get_map_entries(
         map_array: &MapArray,
         row: usize,
