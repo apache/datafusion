@@ -18,8 +18,9 @@
 //! Aggregate without grouping columns
 
 use crate::aggregates::{
-    AccumulatorItem, AggrDynFilter, AggregateMode, DynamicFilterAggregateType,
-    aggregate_expressions, create_accumulators, finalize_aggregation,
+    AccumulatorItem, AggrDynFilter, AggregateInputMode, AggregateMode,
+    DynamicFilterAggregateType, aggregate_expressions, create_accumulators,
+    finalize_aggregation,
 };
 use crate::metrics::{BaselineMetrics, RecordOutput};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
@@ -61,7 +62,7 @@ struct AggregateStreamInner {
     mode: AggregateMode,
     input: SendableRecordBatchStream,
     aggregate_expressions: Vec<Vec<Arc<dyn PhysicalExpr>>>,
-    filter_expressions: Vec<Option<Arc<dyn PhysicalExpr>>>,
+    filter_expressions: Arc<[Option<Arc<dyn PhysicalExpr>>]>,
 
     // ==== Runtime States/Buffers ====
     accumulators: Vec<AccumulatorItem>,
@@ -276,19 +277,15 @@ impl AggregateStream {
         partition: usize,
     ) -> Result<Self> {
         let agg_schema = Arc::clone(&agg.schema);
-        let agg_filter_expr = agg.filter_expr.clone();
+        let agg_filter_expr = Arc::clone(&agg.filter_expr);
 
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
         let input = agg.input.execute(partition, Arc::clone(context))?;
 
         let aggregate_expressions = aggregate_expressions(&agg.aggr_expr, &agg.mode, 0)?;
-        let filter_expressions = match agg.mode {
-            AggregateMode::Partial
-            | AggregateMode::Single
-            | AggregateMode::SinglePartitioned => agg_filter_expr,
-            AggregateMode::Final | AggregateMode::FinalPartitioned => {
-                vec![None; agg.aggr_expr.len()]
-            }
+        let filter_expressions = match agg.mode.input_mode() {
+            AggregateInputMode::Raw => agg_filter_expr,
+            AggregateInputMode::Partial => vec![None; agg.aggr_expr.len()].into(),
         };
         let accumulators = create_accumulators(&agg.aggr_expr)?;
 
@@ -455,13 +452,9 @@ fn aggregate_batch(
 
             // 1.4
             let size_pre = accum.size();
-            let res = match mode {
-                AggregateMode::Partial
-                | AggregateMode::Single
-                | AggregateMode::SinglePartitioned => accum.update_batch(&values),
-                AggregateMode::Final | AggregateMode::FinalPartitioned => {
-                    accum.merge_batch(&values)
-                }
+            let res = match mode.input_mode() {
+                AggregateInputMode::Raw => accum.update_batch(&values),
+                AggregateInputMode::Partial => accum.merge_batch(&values),
             };
             let size_post = accum.size();
             allocated += size_post.saturating_sub(size_pre);

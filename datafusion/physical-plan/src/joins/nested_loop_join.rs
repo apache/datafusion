@@ -71,6 +71,7 @@ use datafusion_physical_expr::equivalence::{
     ProjectionMapping, join_equivalence_properties,
 };
 
+use datafusion_physical_expr::projection::{ProjectionRef, combine_projections};
 use futures::{Stream, StreamExt, TryStreamExt};
 use log::debug;
 use parking_lot::Mutex;
@@ -192,12 +193,104 @@ pub struct NestedLoopJoinExec {
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,
     /// Projection to apply to the output of the join
-    projection: Option<Vec<usize>>,
+    projection: Option<ProjectionRef>,
 
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
+}
+
+/// Helps to build [`NestedLoopJoinExec`].
+pub struct NestedLoopJoinExecBuilder {
+    left: Arc<dyn ExecutionPlan>,
+    right: Arc<dyn ExecutionPlan>,
+    join_type: JoinType,
+    filter: Option<JoinFilter>,
+    projection: Option<ProjectionRef>,
+}
+
+impl NestedLoopJoinExecBuilder {
+    /// Make a new [`NestedLoopJoinExecBuilder`].
+    pub fn new(
+        left: Arc<dyn ExecutionPlan>,
+        right: Arc<dyn ExecutionPlan>,
+        join_type: JoinType,
+    ) -> Self {
+        Self {
+            left,
+            right,
+            join_type,
+            filter: None,
+            projection: None,
+        }
+    }
+
+    /// Set projection from the vector.
+    pub fn with_projection(self, projection: Option<Vec<usize>>) -> Self {
+        self.with_projection_ref(projection.map(Into::into))
+    }
+
+    /// Set projection from the shared reference.
+    pub fn with_projection_ref(mut self, projection: Option<ProjectionRef>) -> Self {
+        self.projection = projection;
+        self
+    }
+
+    /// Set optional filter.
+    pub fn with_filter(mut self, filter: Option<JoinFilter>) -> Self {
+        self.filter = filter;
+        self
+    }
+
+    /// Build resulting execution plan.
+    pub fn build(self) -> Result<NestedLoopJoinExec> {
+        let Self {
+            left,
+            right,
+            join_type,
+            filter,
+            projection,
+        } = self;
+
+        let left_schema = left.schema();
+        let right_schema = right.schema();
+        check_join_is_valid(&left_schema, &right_schema, &[])?;
+        let (join_schema, column_indices) =
+            build_join_schema(&left_schema, &right_schema, &join_type);
+        let join_schema = Arc::new(join_schema);
+        let cache = NestedLoopJoinExec::compute_properties(
+            &left,
+            &right,
+            &join_schema,
+            join_type,
+            projection.as_deref(),
+        )?;
+        Ok(NestedLoopJoinExec {
+            left,
+            right,
+            filter,
+            join_type,
+            join_schema,
+            build_side_data: Default::default(),
+            column_indices,
+            projection,
+            metrics: Default::default(),
+            cache,
+        })
+    }
+}
+
+impl From<&NestedLoopJoinExec> for NestedLoopJoinExecBuilder {
+    fn from(exec: &NestedLoopJoinExec) -> Self {
+        Self {
+            left: Arc::clone(exec.left()),
+            right: Arc::clone(exec.right()),
+            join_type: exec.join_type,
+            filter: exec.filter.clone(),
+            projection: exec.projection.clone(),
+        }
+    }
 }
 
 impl NestedLoopJoinExec {
@@ -209,32 +302,10 @@ impl NestedLoopJoinExec {
         join_type: &JoinType,
         projection: Option<Vec<usize>>,
     ) -> Result<Self> {
-        let left_schema = left.schema();
-        let right_schema = right.schema();
-        check_join_is_valid(&left_schema, &right_schema, &[])?;
-        let (join_schema, column_indices) =
-            build_join_schema(&left_schema, &right_schema, join_type);
-        let join_schema = Arc::new(join_schema);
-        let cache = Self::compute_properties(
-            &left,
-            &right,
-            &join_schema,
-            *join_type,
-            projection.as_ref(),
-        )?;
-
-        Ok(NestedLoopJoinExec {
-            left,
-            right,
-            filter,
-            join_type: *join_type,
-            join_schema,
-            build_side_data: Default::default(),
-            column_indices,
-            projection,
-            metrics: Default::default(),
-            cache,
-        })
+        NestedLoopJoinExecBuilder::new(left, right, *join_type)
+            .with_projection(projection)
+            .with_filter(filter)
+            .build()
     }
 
     /// left side
@@ -257,8 +328,8 @@ impl NestedLoopJoinExec {
         &self.join_type
     }
 
-    pub fn projection(&self) -> Option<&Vec<usize>> {
-        self.projection.as_ref()
+    pub fn projection(&self) -> &Option<ProjectionRef> {
+        &self.projection
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
@@ -267,7 +338,7 @@ impl NestedLoopJoinExec {
         right: &Arc<dyn ExecutionPlan>,
         schema: &SchemaRef,
         join_type: JoinType,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
     ) -> Result<PlanProperties> {
         // Calculate equivalence properties:
         let mut eq_properties = join_equivalence_properties(
@@ -310,7 +381,7 @@ impl NestedLoopJoinExec {
         if let Some(projection) = projection {
             // construct a map from the input expressions to the output expression of the Projection
             let projection_mapping = ProjectionMapping::from_indices(projection, schema)?;
-            let out_schema = project_schema(schema, Some(projection))?;
+            let out_schema = project_schema(schema, Some(&projection))?;
             output_partitioning =
                 output_partitioning.project(&projection_mapping, &eq_properties);
             eq_properties = eq_properties.project(&projection_mapping, out_schema);
@@ -334,22 +405,14 @@ impl NestedLoopJoinExec {
     }
 
     pub fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
+        let projection = projection.map(Into::into);
         // check if the projection is valid
-        can_project(&self.schema(), projection.as_ref())?;
-        let projection = match projection {
-            Some(projection) => match &self.projection {
-                Some(p) => Some(projection.iter().map(|i| p[*i]).collect()),
-                None => Some(projection),
-            },
-            None => None,
-        };
-        Self::try_new(
-            Arc::clone(&self.left),
-            Arc::clone(&self.right),
-            self.filter.clone(),
-            &self.join_type,
-            projection,
-        )
+        can_project(&self.schema(), projection.as_deref())?;
+        let projection =
+            combine_projections(projection.as_ref(), self.projection.as_ref())?;
+        NestedLoopJoinExecBuilder::from(self)
+            .with_projection_ref(projection)
+            .build()
     }
 
     /// Returns a new `ExecutionPlan` that runs NestedLoopsJoins with the left
@@ -371,7 +434,7 @@ impl NestedLoopJoinExec {
             swap_join_projection(
                 left.schema().fields().len(),
                 right.schema().fields().len(),
-                self.projection.as_ref(),
+                self.projection.as_deref(),
                 self.join_type(),
             ),
         )?;
@@ -476,13 +539,16 @@ impl ExecutionPlan for NestedLoopJoinExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(NestedLoopJoinExec::try_new(
-            Arc::clone(&children[0]),
-            Arc::clone(&children[1]),
-            self.filter.clone(),
-            &self.join_type,
-            self.projection.clone(),
-        )?))
+        Ok(Arc::new(
+            NestedLoopJoinExecBuilder::new(
+                Arc::clone(&children[0]),
+                Arc::clone(&children[1]),
+                self.join_type,
+            )
+            .with_filter(self.filter.clone())
+            .with_projection_ref(self.projection.clone())
+            .build()?,
+        ))
     }
 
     fn execute(
@@ -521,7 +587,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
         let probe_side_data = self.right.execute(partition, context)?;
 
         // update column indices to reflect the projection
-        let column_indices_after_projection = match &self.projection {
+        let column_indices_after_projection = match self.projection.as_ref() {
             Some(projection) => projection
                 .iter()
                 .map(|i| self.column_indices[*i].clone())

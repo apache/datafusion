@@ -1674,7 +1674,7 @@ fn swap_reverting_projection(
 pub fn swap_join_projection(
     left_schema_len: usize,
     right_schema_len: usize,
-    projection: Option<&Vec<usize>>,
+    projection: Option<&[usize]>,
     join_type: &JoinType,
 ) -> Option<Vec<usize>> {
     match join_type {
@@ -1685,7 +1685,7 @@ pub fn swap_join_projection(
         | JoinType::RightAnti
         | JoinType::RightSemi
         | JoinType::LeftMark
-        | JoinType::RightMark => projection.cloned(),
+        | JoinType::RightMark => projection.map(|p| p.to_vec()),
         _ => projection.map(|p| {
             p.iter()
                 .map(|i| {

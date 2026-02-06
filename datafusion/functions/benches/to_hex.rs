@@ -21,6 +21,7 @@ use arrow::array::Int64Array;
 use arrow::datatypes::{DataType, Field, Int32Type, Int64Type};
 use arrow::util::bench_util::create_primitive_array;
 use criterion::{Criterion, SamplingMode, criterion_group, criterion_main};
+use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::string;
@@ -31,6 +32,42 @@ use std::time::Duration;
 fn criterion_benchmark(c: &mut Criterion) {
     let hex = string::to_hex();
     let config_options = Arc::new(ConfigOptions::default());
+
+    c.bench_function("to_hex/scalar_i32", |b| {
+        let args = vec![ColumnarValue::Scalar(ScalarValue::Int32(Some(2147483647)))];
+        let arg_fields = vec![Field::new("a", DataType::Int32, true).into()];
+        b.iter(|| {
+            black_box(
+                hex.invoke_with_args(ScalarFunctionArgs {
+                    args: args.clone(),
+                    arg_fields: arg_fields.clone(),
+                    number_rows: 1,
+                    return_field: Field::new("f", DataType::Utf8, true).into(),
+                    config_options: Arc::clone(&config_options),
+                })
+                .unwrap(),
+            )
+        })
+    });
+
+    c.bench_function("to_hex/scalar_i64", |b| {
+        let args = vec![ColumnarValue::Scalar(ScalarValue::Int64(Some(
+            9223372036854775807,
+        )))];
+        let arg_fields = vec![Field::new("a", DataType::Int64, true).into()];
+        b.iter(|| {
+            black_box(
+                hex.invoke_with_args(ScalarFunctionArgs {
+                    args: args.clone(),
+                    arg_fields: arg_fields.clone(),
+                    number_rows: 1,
+                    return_field: Field::new("f", DataType::Utf8, true).into(),
+                    config_options: Arc::clone(&config_options),
+                })
+                .unwrap(),
+            )
+        })
+    });
 
     for size in [1024, 4096, 8192] {
         let mut group = c.benchmark_group(format!("to_hex size={size}"));

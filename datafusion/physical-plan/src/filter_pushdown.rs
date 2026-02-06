@@ -221,13 +221,13 @@ pub struct ChildPushdownResult {
 /// Returned from [`ExecutionPlan::handle_child_pushdown_result`] to communicate
 /// to the optimizer:
 ///
-/// 1. What to do with any parent filters that were could not be pushed down into the children.
+/// 1. What to do with any parent filters that could not be pushed down into the children.
 /// 2. If the node needs to be replaced in the execution plan with a new node or not.
 ///
 /// [`ExecutionPlan::handle_child_pushdown_result`]: crate::ExecutionPlan::handle_child_pushdown_result
 #[derive(Debug, Clone)]
 pub struct FilterPushdownPropagation<T> {
-    /// What filters were pushed into the parent node.
+    /// Which parent filters were pushed down into this node's children.
     pub filters: Vec<PushedDown>,
     /// The updated node, if it was updated during pushdown
     pub updated_node: Option<T>,
