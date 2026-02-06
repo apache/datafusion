@@ -110,11 +110,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         )?;
 
         // Having and group by clause may reference aliases defined in select projection
-        let projected_plan = self.project(base_plan.clone(), select_exprs)?;
-        let select_exprs = projected_plan.expressions();
+        let projected_plan = self.project(base_plan.clone(), select_exprs.clone())?;
 
+        let projected_plan_exprs = projected_plan.expressions();
         let order_by =
-            to_order_by_exprs_with_select(query_order_by, Some(&select_exprs))?;
+            to_order_by_exprs_with_select(query_order_by, Some(&projected_plan_exprs))?;
 
         // Place the fields of the base plan at the front so that when there are references
         // with the same name, the fields of the base plan will be searched first.
@@ -129,13 +129,57 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             projected_plan.schema().as_ref(),
             planner_context,
             true,
-            Some(base_plan.schema().as_ref()),
         )?;
-        let order_by_rex = normalize_sorts(order_by_rex, &projected_plan)?;
+        let mut order_by_rex = normalize_sorts(order_by_rex, &projected_plan)?;
+
+        // Check if there are any Wildcards in select_exprs
+        let has_wildcard = select_exprs.iter().any(|e| {
+            matches!(
+                e,
+                SelectExpr::Wildcard(_) | SelectExpr::QualifiedWildcard(_, _)
+            )
+        });
+
+        // Convert SelectExpr to Expr for add_missing_order_by_exprs
+        // If there's a wildcard, we need to use the expanded expressions from the projected plan
+        // Otherwise, we filter out non-Expression items
+        let mut projected_select_exprs: Vec<Expr> = if has_wildcard {
+            projected_plan.expressions()
+        } else {
+            select_exprs
+                .iter()
+                .filter_map(|e| match e {
+                    SelectExpr::Expression(expr) => Some(expr.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+
+        // Check if we need strict mode: GROUP BY present or aggregates in SELECT/ORDER BY
+        // Note: GroupByExpr::Expressions(vec![], _) means no GROUP BY, so we need to check
+        // if the expressions list is non-empty
+        let has_group_by = match &select.group_by {
+            GroupByExpr::Expressions(exprs, _) => !exprs.is_empty(),
+            GroupByExpr::All(_) => true,
+        };
+        let has_aggregates = {
+            let select_aggrs = find_aggregate_exprs(projected_select_exprs.iter());
+            let order_by_aggrs =
+                find_aggregate_exprs(order_by_rex.iter().map(|s| &s.expr));
+            !select_aggrs.is_empty() || !order_by_aggrs.is_empty()
+        };
+        let strict = has_group_by || has_aggregates;
+
+        let added = Self::add_missing_order_by_exprs(
+            &mut projected_select_exprs,
+            projected_plan.schema(),
+            matches!(select.distinct, Some(Distinct::Distinct)),
+            strict,
+            &mut order_by_rex,
+        )?;
 
         // This alias map is resolved and looked up in both having exprs and group by exprs
-        let alias_map = extract_aliases(&select_exprs);
-
+        let alias_map = extract_aliases(&projected_select_exprs);
         // Optionally the HAVING expression.
         let having_expr_opt = select
             .having
@@ -181,8 +225,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     }
                     let group_by_expr =
                         resolve_aliases_to_exprs(group_by_expr, &alias_map)?;
-                    let group_by_expr =
-                        resolve_positions_to_exprs(group_by_expr, &select_exprs)?;
+                    let group_by_expr = resolve_positions_to_exprs(
+                        group_by_expr,
+                        &projected_select_exprs,
+                    )?;
                     let group_by_expr = normalize_col(group_by_expr, &projected_plan)?;
                     self.validate_schema_satisfies_exprs(
                         base_plan.schema(),
@@ -194,7 +240,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         } else {
             // 'group by all' groups wrt. all select expressions except 'AggregateFunction's.
             // Filter and collect non-aggregate select expressions
-            select_exprs
+            projected_select_exprs
                 .iter()
                 .filter(|select_expr| match select_expr {
                     Expr::AggregateFunction(_) => false,
@@ -237,7 +283,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // The outer expressions we will search through for aggregates.
         // First, find aggregates in SELECT, HAVING, and QUALIFY
         let select_having_qualify_aggrs = find_aggregate_exprs(
-            select_exprs
+            projected_select_exprs
                 .iter()
                 .chain(having_expr_opt.iter())
                 .chain(qualify_expr_opt.iter()),
@@ -265,7 +311,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         } = if !group_by_exprs.is_empty() || !aggr_exprs.is_empty() {
             self.aggregate(
                 &base_plan,
-                &select_exprs,
+                projected_select_exprs.as_slice(),
                 having_expr_opt.as_ref(),
                 qualify_expr_opt.as_ref(),
                 &order_by_rex,
@@ -281,7 +327,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
                 None => AggregatePlanResult {
                     plan: base_plan.clone(),
-                    select_exprs: select_exprs.clone(),
+                    select_exprs: projected_select_exprs.clone(),
                     having_expr: having_expr_opt,
                     qualify_expr: qualify_expr_opt,
                     order_by_exprs: order_by_rex,
@@ -383,7 +429,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
                 // Build the final plan
                 LogicalPlanBuilder::from(base_plan)
-                    .distinct_on(on_expr, select_exprs, None)?
+                    .distinct_on(on_expr, projected_select_exprs.clone(), None)?
                     .build()
             }
         }?;
@@ -409,7 +455,20 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         };
 
         let plan = self.order_by(plan, order_by_rex)?;
-        Ok(plan)
+        // if add missing columns, we MUST remove unused columns in project
+        if added {
+            LogicalPlanBuilder::from(plan)
+                .project(
+                    projected_plan
+                        .schema()
+                        .columns()
+                        .into_iter()
+                        .map(Expr::Column),
+                )?
+                .build()
+        } else {
+            Ok(plan)
+        }
     }
 
     /// Try converting Expr(Unnest(Expr)) to Projection/Unnest/Projection
@@ -428,8 +487,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .iter()
             .any(has_unnest_expr_recursively)
         {
+            // Explicitly convert Expr to SelectExpr to ensure all expressions are properly included
+            let select_exprs: Vec<SelectExpr> = intermediate_select_exprs
+                .into_iter()
+                .map(SelectExpr::Expression)
+                .collect();
             return LogicalPlanBuilder::from(intermediate_plan)
-                .project(intermediate_select_exprs)?
+                .project(select_exprs)?
                 .build();
         }
 
@@ -459,7 +523,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 // The original expr does not contain any unnest
                 if i == 0 {
                     return LogicalPlanBuilder::from(intermediate_plan)
-                        .project(intermediate_select_exprs)?
+                        .project(
+                            intermediate_select_exprs
+                                .iter()
+                                .cloned()
+                                .map(SelectExpr::Expression),
+                        )?
                         .build();
                 }
                 break;

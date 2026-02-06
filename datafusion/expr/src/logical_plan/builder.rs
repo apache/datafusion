@@ -801,9 +801,30 @@ impl LogicalPlanBuilder {
         sorts: impl IntoIterator<Item = impl Into<SortExpr>> + Clone,
         fetch: Option<usize>,
     ) -> Result<Self> {
+        self.sort_with_limit_inner(sorts, fetch, false)
+    }
+
+    /// Apply a sort with option to skip adding missing columns
+    ///
+    /// This is used by SELECT statements where missing ORDER BY columns are
+    /// already added by `add_missing_order_by_exprs`.
+    pub fn sort_with_limit_skip_missing(
+        self,
+        sorts: impl IntoIterator<Item = impl Into<SortExpr>> + Clone,
+        fetch: Option<usize>,
+    ) -> Result<Self> {
+        self.sort_with_limit_inner(sorts, fetch, true)
+    }
+
+    fn sort_with_limit_inner(
+        self,
+        sorts: impl IntoIterator<Item = impl Into<SortExpr>> + Clone,
+        fetch: Option<usize>,
+        skip_add_missing_columns: bool,
+    ) -> Result<Self> {
         let sorts = rewrite_sort_cols_by_aggs(sorts, &self.plan)?;
 
-        let schema = self.plan.schema();
+        let schema = Arc::clone(self.plan.schema());
 
         // Collect sort columns that are missing in the input plan's schema
         let mut missing_cols: IndexSet<Column> = IndexSet::new();
@@ -820,7 +841,16 @@ impl LogicalPlanBuilder {
             Ok(())
         })?;
 
-        if missing_cols.is_empty() {
+        // For DISTINCT queries, ORDER BY expressions must appear in the select list
+        // This check ensures consistent behavior between SQL and DataFrame API paths
+        if !missing_cols.is_empty() && matches!(&*self.plan, LogicalPlan::Distinct(_)) {
+            return plan_err!(
+                "For SELECT DISTINCT, ORDER BY expressions {} must appear in select list",
+                missing_cols.iter().next().unwrap()
+            );
+        }
+
+        if missing_cols.is_empty() || skip_add_missing_columns {
             return Ok(Self::new(LogicalPlan::Sort(Sort {
                 expr: normalize_sorts(sorts, &self.plan)?,
                 input: self.plan,
@@ -828,15 +858,16 @@ impl LogicalPlanBuilder {
             })));
         }
 
-        // remove pushed down sort columns
-        let new_expr = schema.columns().into_iter().map(Expr::Column).collect();
-
+        // Add missing columns to downstream projection
         let is_distinct = false;
         let plan = Self::add_missing_columns(
             Arc::unwrap_or_clone(self.plan),
             &missing_cols,
             is_distinct,
         )?;
+
+        // remove pushed down sort columns
+        let new_expr = schema.columns().into_iter().map(Expr::Column).collect();
 
         let sort_plan = LogicalPlan::Sort(Sort {
             expr: normalize_sorts(sorts, &plan)?,

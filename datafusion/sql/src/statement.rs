@@ -1322,7 +1322,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let function_body = match function_body {
                     Some(r) => Some(self.sql_to_expr(
                         match r {
-                            // `link_symbol` indicates if the primary expression contains the name of shared library file. 
+                            // `link_symbol` indicates if the primary expression contains the name of shared library file.
                             ast::CreateFunctionBody::AsBeforeOptions{body: expr, link_symbol: _link_symbol} => expr,
                             ast::CreateFunctionBody::AsAfterOptions(expr) => expr,
                             ast::CreateFunctionBody::Return(expr) => expr,
@@ -1468,7 +1468,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     &table_schema,
                     planner_context,
                     false,
-                    None,
                 )?;
                 Ok(LogicalPlan::Ddl(DdlStatement::CreateIndex(
                     PlanCreateIndex {
@@ -1661,7 +1660,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         for expr in order_exprs {
             // Convert each OrderByExpr to a SortExpr:
             let expr_vec =
-                self.order_by_to_sort_expr(expr, schema, planner_context, true, None)?;
+                self.order_by_to_sort_expr(expr, schema, planner_context, true)?;
             // Verify that columns of all SortExprs exist in the schema:
             for sort in expr_vec.iter() {
                 for column in sort.expr.column_refs().iter() {
