@@ -23,5 +23,257 @@
 
 ## Original Query: SELECT negative(1);
 ## PySpark 3.5.5 Result: {'negative(1)': -1, 'typeof(negative(1))': 'int', 'typeof(1)': 'int'}
-#query
-#SELECT negative(1::int);
+
+# Test negative with integer
+query I
+SELECT negative(1::int);
+----
+-1
+
+# Test negative with positive integer
+query I
+SELECT negative(42::int);
+----
+-42
+
+# Test negative with negative integer
+query I
+SELECT negative(-10::int);
+----
+10
+
+# Test negative with zero
+query I
+SELECT negative(0::int);
+----
+0
+
+# Test negative with bigint
+query I
+SELECT negative(9223372036854775807::bigint);
+----
+-9223372036854775807
+
+# Test negative with negative bigint
+query I
+SELECT negative(-100::bigint);
+----
+100
+
+# Test negative with smallint
+query I
+SELECT negative(32767::smallint);
+----
+-32767
+
+# Test negative with float
+query R
+SELECT negative(3.14::float);
+----
+-3.14
+
+# Test negative with negative float
+query R
+SELECT negative(-2.5::float);
+----
+2.5
+
+# Test negative with double
+query R
+SELECT negative(3.14159265358979::double);
+----
+-3.14159265358979
+
+# Test negative with negative double
+query R
+SELECT negative(-1.5::double);
+----
+1.5
+
+# Test negative with decimal
+query R
+SELECT negative(123.456::decimal(10,3));
+----
+-123.456
+
+# Test negative with negative decimal
+query R
+SELECT negative(-99.99::decimal(10,2));
+----
+99.99
+
+# Test negative with NULL
+query I
+SELECT negative(NULL::int);
+----
+NULL
+
+# Test negative with column values
+statement ok
+CREATE TABLE test_negative (id int, value int) AS VALUES (1, 10), (2, -20), (3, 0), (4, NULL);
+
+query II rowsort
+SELECT id, negative(value) FROM test_negative;
+----
+1 -10
+2 20
+3 0
+4 NULL
+
+statement ok
+DROP TABLE test_negative;
+
+# Test negative in expressions
+query I
+SELECT negative(5) + 3;
+----
+-2
+
+# Test nested negative
+query I
+SELECT negative(negative(7));
+----
+7
+
+# Test negative with large numbers
+query R
+SELECT negative(1234567890.123456::double);
+----
+-1234567890.123456
+
+# Test wrap-around: negative of minimum int (should wrap to same value)
+# Using table to avoid constant folding overflow during optimization
+statement ok
+CREATE TABLE min_values_int AS VALUES (-2147483648);
+
+query I
+SELECT negative(column1::int) FROM min_values_int;
+----
+-2147483648
+
+statement ok
+DROP TABLE min_values_int;
+
+# Test wrap-around: negative of minimum bigint (should wrap to same value)
+statement ok
+CREATE TABLE min_values_bigint AS VALUES (-9223372036854775808);
+
+query I
+SELECT negative(column1::bigint) FROM min_values_bigint;
+----
+-9223372036854775808
+
+statement ok
+DROP TABLE min_values_bigint;
+
+# Test wrap-around: negative of minimum smallint (should wrap to same value)
+statement ok
+CREATE TABLE min_values_smallint AS VALUES (-32768);
+
+query I
+SELECT negative(column1::smallint) FROM min_values_smallint;
+----
+-32768
+
+statement ok
+DROP TABLE min_values_smallint;
+
+# Test wrap-around: negative of minimum tinyint (should wrap to same value)
+statement ok
+CREATE TABLE min_values_tinyint AS VALUES (-128);
+
+query I
+SELECT negative(column1::tinyint) FROM min_values_tinyint;
+----
+-128
+
+statement ok
+DROP TABLE min_values_tinyint;
+
+# Test overflow: negative of positive infinity (float)
+query R
+SELECT negative('Infinity'::float);
+----
+-Infinity
+
+# Test overflow: negative of negative infinity (float)
+query R
+SELECT negative('-Infinity'::float);
+----
+Infinity
+
+# Test overflow: negative of positive infinity (double)
+query R
+SELECT negative('Infinity'::double);
+----
+-Infinity
+
+# Test overflow: negative of negative infinity (double)
+query R
+SELECT negative('-Infinity'::double);
+----
+Infinity
+
+# Test overflow: negative of NaN (float)
+query R
+SELECT negative('NaN'::float);
+----
+NaN
+
+# Test overflow: negative of NaN (double)
+query R
+SELECT negative('NaN'::double);
+----
+NaN
+
+# Test overflow: negative of maximum float value
+query R
+SELECT negative(3.4028235e38::float);
+----
+-340282350000000000000000000000000000000
+
+# Test overflow: negative of minimum float value
+query R
+SELECT negative(-3.4028235e38::float);
+----
+340282350000000000000000000000000000000
+
+# Test overflow: negative of maximum double value
+query R
+SELECT negative(1.7976931348623157e308::double);
+----
+-179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+
+# Test overflow: negative of minimum double value
+query R
+SELECT negative(-1.7976931348623157e308::double);
+----
+179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+
+# Test negative with CalendarIntervalType (IntervalMonthDayNano)
+# Spark make_interval creates CalendarInterval
+query ?
+SELECT negative(make_interval(1, 2, 3, 4, 5, 6, 7.5));
+----
+-14 mons -25 days -5 hours -6 mins -7.500000000 secs
+
+# Test negative with negative CalendarIntervalType
+query ?
+SELECT negative(make_interval(-2, -5, -1, -10, -3, -30, -15.25));
+----
+29 mons 17 days 3 hours 30 mins 15.250000000 secs
+
+# Test negative with CalendarInterval from table
+statement ok
+CREATE TABLE interval_test AS VALUES
+  (make_interval(1, 2, 0, 5, 0, 0, 0.0)),
+  (make_interval(-3, -1, 0, -2, 0, 0, 0.0));
+
+query ? rowsort
+SELECT negative(column1) FROM interval_test;
+----
+-14 mons -5 days
+37 mons 2 days
+
+statement ok
+DROP TABLE interval_test;
