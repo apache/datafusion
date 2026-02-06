@@ -496,11 +496,14 @@ fn hash_map_array(
     create_hashes(&sliced_columns, random_state, &mut values_hashes)?;
 
     // Combine the hashes for entries on each row with each other and previous hash for that row
+    // Adjust indices by first_offset since values_hashes is sliced starting from first_offset
     if let Some(nulls) = nulls {
         for (i, (start, stop)) in offsets.iter().zip(offsets.iter().skip(1)).enumerate() {
             if nulls.is_valid(i) {
                 let hash = &mut hashes_buffer[i];
-                for values_hash in &values_hashes[start.as_usize()..stop.as_usize()] {
+                for values_hash in &values_hashes
+                    [start.as_usize() - first_offset..stop.as_usize() - first_offset]
+                {
                     *hash = combine_hashes(*hash, *values_hash);
                 }
             }
@@ -508,7 +511,9 @@ fn hash_map_array(
     } else {
         for (i, (start, stop)) in offsets.iter().zip(offsets.iter().skip(1)).enumerate() {
             let hash = &mut hashes_buffer[i];
-            for values_hash in &values_hashes[start.as_usize()..stop.as_usize()] {
+            for values_hash in &values_hashes
+                [start.as_usize() - first_offset..stop.as_usize() - first_offset]
+            {
                 *hash = combine_hashes(*hash, *values_hash);
             }
         }
