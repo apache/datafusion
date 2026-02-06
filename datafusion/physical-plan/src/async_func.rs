@@ -22,14 +22,16 @@ use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
 use arrow::array::RecordBatch;
-use arrow_schema::{Fields, Schema, SchemaRef};
+use arrow_schema::{Field, Fields, Schema, SchemaRef};
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
+use datafusion_physical_expr::expressions::Column;
+
 use datafusion_common::{Result, assert_eq_or_internal_err};
 use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::ScalarFunctionExpr;
 use datafusion_physical_expr::async_scalar_function::AsyncFuncExpr;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
-use datafusion_physical_expr::expressions::Column;
+
 use datafusion_physical_expr_common::metrics::{BaselineMetrics, RecordOutput};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use futures::Stream;
@@ -59,10 +61,14 @@ impl AsyncFuncExec {
         async_exprs: Vec<Arc<AsyncFuncExpr>>,
         input: Arc<dyn ExecutionPlan>,
     ) -> Result<Self> {
-        let async_fields = async_exprs
-            .iter()
-            .map(|async_expr| async_expr.field(input.schema().as_ref()))
-            .collect::<Result<Vec<_>>>()?;
+        let mut current_fields = input.schema().fields().to_vec();
+        let mut async_fields = Vec::with_capacity(async_exprs.len());
+        for async_expr in &async_exprs {
+            let current_schema = Schema::new(current_fields.clone());
+            let field = async_expr.field(&current_schema)?;
+            current_fields.push(Arc::new(field.clone()));
+            async_fields.push(field);
+        }
 
         // compute the output schema: input schema then async expressions
         let fields: Fields = input
@@ -74,10 +80,25 @@ impl AsyncFuncExec {
             .collect();
 
         let schema = Arc::new(Schema::new(fields));
-        let tuples = async_exprs
-            .iter()
-            .map(|expr| (Arc::clone(&expr.func), expr.name().to_string()))
-            .collect::<Vec<_>>();
+
+        // Only include expressions that map to input columns in the ProjectionMapping
+        // Expressions referencing newly created async columns cannot be verified against input schema
+        let input_len = input.schema().fields().len();
+        let mut tuples = Vec::new();
+        for expr in &async_exprs {
+            let mut refers_to_new_cols = false;
+            expr.func.apply(&mut |e: &Arc<dyn PhysicalExpr>| {
+                if let Some(col) = e.as_any().downcast_ref::<Column>() {
+                    refers_to_new_cols |= col.index() >= input_len;
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })?;
+
+            if !refers_to_new_cols {
+                tuples.push((Arc::clone(&expr.func), expr.name().to_string()));
+            }
+        }
+
         let async_expr_mapping = ProjectionMapping::try_new(tuples, &input.schema())?;
         let cache =
             AsyncFuncExec::compute_properties(&input, schema, &async_expr_mapping)?;
@@ -216,14 +237,38 @@ impl ExecutionPlan for AsyncFuncExec {
             async move {
                 let batch = batch?;
                 // append the result of evaluating the async expressions to the output
-                let mut output_arrays = batch.columns().to_vec();
-                for async_expr in async_exprs_captured.iter() {
+                // We must evaluate them in order, adding the results to the batch
+                // so that subsequent async expressions can access the results of previous ones
+                let mut output_arrays = Vec::with_capacity(async_exprs_captured.len());
+                let input_columns = batch.columns().len();
+
+                for (i, async_expr) in async_exprs_captured.iter().enumerate() {
+                    // Create a batch with the input columns and the async columns evaluated so far
+                    // We need to construct a schema for this intermediate batch
+                    let current_schema_fields: Vec<_> = schema_captured
+                        .fields()
+                        .iter()
+                        .take(input_columns + i)
+                        .cloned()
+                        .collect();
+                    let current_schema = Arc::new(Schema::new(current_schema_fields));
+
+                    let mut current_columns = batch.columns().to_vec();
+                    current_columns.extend_from_slice(&output_arrays);
+
+                    let current_batch =
+                        RecordBatch::try_new(current_schema, current_columns)?;
+
                     let output = async_expr
-                        .invoke_with_args(&batch, Arc::clone(&config_options))
+                        .invoke_with_args(&current_batch, Arc::clone(&config_options))
                         .await?;
                     output_arrays.push(output.to_array(batch.num_rows())?);
                 }
-                let batch = RecordBatch::try_new(schema_captured, output_arrays)?;
+
+                let mut final_columns = batch.columns().to_vec();
+                final_columns.extend(output_arrays);
+
+                let batch = RecordBatch::try_new(schema_captured, final_columns)?;
 
                 Ok(batch.record_output(&baseline_metrics_captured))
             }
@@ -296,6 +341,8 @@ pub struct AsyncMapper {
     num_input_columns: usize,
     /// the expressions to map
     pub async_exprs: Vec<Arc<AsyncFuncExpr>>,
+    /// the output fields of the async expressions
+    output_fields: Vec<Field>,
 }
 
 impl AsyncMapper {
@@ -303,6 +350,7 @@ impl AsyncMapper {
         Self {
             num_input_columns,
             async_exprs: Vec::new(),
+            output_fields: Vec::new(),
         }
     }
 
@@ -315,58 +363,49 @@ impl AsyncMapper {
     }
 
     /// Finds any references to async functions in the expression and adds them to the map
-    pub fn find_references(
+    /// AND rewrites the expression to use the mapped columns.
+    pub fn find_and_map(
         &mut self,
         physical_expr: &Arc<dyn PhysicalExpr>,
         schema: &Schema,
-    ) -> Result<()> {
-        // recursively look for references to async functions
-        physical_expr.apply(|expr| {
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        let transformed = Arc::clone(physical_expr).transform_up(|expr| {
             if let Some(scalar_func_expr) =
                 expr.as_any().downcast_ref::<ScalarFunctionExpr>()
                 && scalar_func_expr.fun().as_async().is_some()
             {
                 let next_name = self.next_column_name();
-                self.async_exprs.push(Arc::new(AsyncFuncExpr::try_new(
-                    next_name,
-                    Arc::clone(expr),
-                    schema,
-                )?));
+
+                // Construct extended schema including previously mapped async fields
+                let mut current_fields = schema.fields().to_vec();
+                current_fields.extend(
+                    self.output_fields
+                        .iter()
+                        .map(|f: &Field| Arc::new(f.clone())),
+                );
+                let current_schema = Schema::new(current_fields);
+
+                // We use the expression with its children already transformed
+                let async_expr = Arc::new(AsyncFuncExpr::try_new(
+                    next_name.clone(),
+                    Arc::clone(&expr),
+                    &current_schema,
+                )?);
+
+                // Store the output field for subsequent expressions
+                self.output_fields.push(async_expr.field(&current_schema)?);
+                self.async_exprs.push(async_expr);
+
+                // Replace with Column
+                let output_idx = self.num_input_columns + self.async_exprs.len() - 1;
+                Ok(Transformed::yes(Arc::new(Column::new(
+                    &next_name, output_idx,
+                ))))
+            } else {
+                Ok(Transformed::no(expr))
             }
-            Ok(TreeNodeRecursion::Continue)
         })?;
-        Ok(())
-    }
-
-    /// If the expression matches any of the async functions, return the new column
-    pub fn map_expr(
-        &self,
-        expr: Arc<dyn PhysicalExpr>,
-    ) -> Transformed<Arc<dyn PhysicalExpr>> {
-        // find the first matching async function if any
-        let Some(idx) =
-            self.async_exprs
-                .iter()
-                .enumerate()
-                .find_map(|(idx, async_expr)| {
-                    if async_expr.func == Arc::clone(&expr) {
-                        Some(idx)
-                    } else {
-                        None
-                    }
-                })
-        else {
-            return Transformed::no(expr);
-        };
-        // rewrite in terms of the output column
-        Transformed::yes(self.output_column(idx))
-    }
-
-    /// return the output column for the async function at index idx
-    pub fn output_column(&self, idx: usize) -> Arc<dyn PhysicalExpr> {
-        let async_expr = &self.async_exprs[idx];
-        let output_idx = self.num_input_columns + idx;
-        Arc::new(Column::new(async_expr.name(), output_idx))
+        Ok(transformed.data)
     }
 }
 
