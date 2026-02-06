@@ -204,6 +204,7 @@ fn str_to_map_impl<'a, V: StringArrayType<'a> + Copy>(
         StringBuilder::new(),
     );
 
+    let mut seen_keys = HashSet::new();
     for row_idx in 0..num_rows {
         if combined_nulls.as_ref().is_some_and(|n| n.is_null(row_idx)) {
             map_builder.append(false)?;
@@ -223,7 +224,7 @@ fn str_to_map_impl<'a, V: StringArrayType<'a> + Copy>(
             continue;
         }
 
-        let mut seen_keys = HashSet::new();
+        seen_keys.clear();
         for pair in text.split(pair_delim) {
             if pair.is_empty() {
                 continue;
