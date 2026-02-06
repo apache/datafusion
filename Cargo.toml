@@ -182,7 +182,7 @@ regex = "1.12"
 rstest = "0.26.1"
 serde_json = "1"
 sha2 = "^0.10.9"
-sqlparser = { version = "0.60.0", default-features = false, features = ["std", "visitor"] }
+sqlparser = { version = "0.61.0", default-features = false, features = ["std", "visitor"] }
 strum = "0.27.2"
 strum_macros = "0.27.2"
 tempfile = "3"
@@ -275,3 +275,6 @@ incremental = false
 inherits = "release"
 debug = true
 strip = false
+
+[patch.crates-io]
+sqlparser = { git = "https://github.com/apache/datafusion-sqlparser-rs.git", rev = "ce678990397f81c621d2df079ad552baae0cdfda" }

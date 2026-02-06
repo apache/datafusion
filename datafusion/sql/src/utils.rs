@@ -331,6 +331,8 @@ pub(crate) fn value_to_string(value: &Value) -> Option<String> {
         Value::Number(_, _) | Value::Boolean(_) => Some(value.to_string()),
         Value::UnicodeStringLiteral(s) => Some(s.to_string()),
         Value::EscapedStringLiteral(s) => Some(s.to_string()),
+        Value::QuoteDelimitedStringLiteral(s)
+        | Value::NationalQuoteDelimitedStringLiteral(s) => Some(s.value.to_string()),
         Value::DoubleQuotedString(_)
         | Value::NationalStringLiteral(_)
         | Value::SingleQuotedByteStringLiteral(_)

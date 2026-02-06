@@ -494,6 +494,7 @@ impl Unparser<'_> {
                     kind: ast::CastKind::TryCast,
                     expr: Box::new(inner_expr),
                     data_type: self.arrow_dtype_to_ast_dtype(data_type)?,
+                    array: false,
                     format: None,
                 })
             }
@@ -1145,6 +1146,7 @@ impl Unparser<'_> {
             kind: ast::CastKind::Cast,
             expr: Box::new(ast::Expr::value(SingleQuotedString(ts))),
             data_type: self.dialect.timestamp_cast_dtype(&time_unit, &None),
+            array: false,
             format: None,
         })
     }
@@ -1167,6 +1169,7 @@ impl Unparser<'_> {
             kind: ast::CastKind::Cast,
             expr: Box::new(ast::Expr::value(SingleQuotedString(time))),
             data_type: ast::DataType::Time(None, TimezoneInfo::None),
+            array: false,
             format: None,
         })
     }
@@ -1184,6 +1187,7 @@ impl Unparser<'_> {
                     kind: ast::CastKind::Cast,
                     expr: Box::new(inner_expr),
                     data_type: self.arrow_dtype_to_ast_dtype(data_type)?,
+                    array: false,
                     format: None,
                 }),
             },
@@ -1191,6 +1195,7 @@ impl Unparser<'_> {
                 kind: ast::CastKind::Cast,
                 expr: Box::new(inner_expr),
                 data_type: self.arrow_dtype_to_ast_dtype(data_type)?,
+                array: false,
                 format: None,
             }),
         }
@@ -1332,6 +1337,7 @@ impl Unparser<'_> {
                         date.to_string(),
                     ))),
                     data_type: ast::DataType::Date,
+                    array: false,
                     format: None,
                 })
             }
@@ -1355,6 +1361,7 @@ impl Unparser<'_> {
                         datetime.to_string(),
                     ))),
                     data_type: self.ast_type_for_date64_in_cast(),
+                    array: false,
                     format: None,
                 })
             }

@@ -361,6 +361,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // Process distinct clause
         let plan = match select.distinct {
             None => Ok(plan),
+            Some(Distinct::All) => Ok(plan),
             Some(Distinct::Distinct) => {
                 LogicalPlanBuilder::from(plan).distinct()?.build()
             }
