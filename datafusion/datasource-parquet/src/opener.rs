@@ -120,6 +120,10 @@ pub(super) struct ParquetOpener {
     pub max_predicate_cache_size: Option<usize>,
     /// Whether to read row groups in reverse order
     pub reverse_row_groups: bool,
+    /// Whether to read pages in reverse order within row groups
+    /// Phase 1: Infrastructure flag for future page-level reverse support
+    #[expect(dead_code)]
+    pub reverse_pages: bool,
 }
 
 /// Represents a prepared access plan with optional row selection
@@ -1063,6 +1067,7 @@ mod test {
         coerce_int96: Option<arrow::datatypes::TimeUnit>,
         max_predicate_cache_size: Option<usize>,
         reverse_row_groups: bool,
+        reverse_pages: bool,
         preserve_order: bool,
     }
 
@@ -1089,6 +1094,7 @@ mod test {
                 coerce_int96: None,
                 max_predicate_cache_size: None,
                 reverse_row_groups: false,
+                reverse_pages: false,
                 preserve_order: false,
             }
         }
@@ -1147,6 +1153,13 @@ mod test {
             self
         }
 
+        /// Set reverse pages flag.
+        #[expect(dead_code)]
+        fn with_reverse_pages(mut self, enable: bool) -> Self {
+            self.reverse_pages = enable;
+            self
+        }
+
         /// Build the ParquetOpener instance.
         ///
         /// # Panics
@@ -1197,6 +1210,7 @@ mod test {
                 encryption_factory: None,
                 max_predicate_cache_size: self.max_predicate_cache_size,
                 reverse_row_groups: self.reverse_row_groups,
+                reverse_pages: self.reverse_pages,
                 preserve_order: self.preserve_order,
             }
         }
