@@ -19,7 +19,8 @@ use std::any::Any;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, MapBuilder, MapFieldNames, StringBuilder, StringArrayType};
+use arrow::array::{Array, ArrayRef, MapBuilder, MapFieldNames, StringBuilder, StringArrayType};
+use arrow::buffer::NullBuffer;
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
 use datafusion_common::{Result, exec_err, internal_err};
@@ -180,6 +181,17 @@ fn str_to_map_impl<'a, V: StringArrayType<'a> + Copy>(
     kv_delim_array: Option<V>,
 ) -> Result<ArrayRef> {
     let num_rows = text_array.len();
+
+    // Precompute combined null buffer from all input arrays.
+    // NullBuffer::union performs a bitmap-level AND, which is more efficient
+    // than checking per-row nullability inline.
+    let text_nulls = text_array.nulls().cloned();
+    let pair_nulls = pair_delim_array.and_then(|a| a.nulls().cloned());
+    let kv_nulls = kv_delim_array.and_then(|a| a.nulls().cloned());
+    let combined_nulls = [text_nulls.as_ref(), pair_nulls.as_ref(), kv_nulls.as_ref()]
+        .into_iter()
+        .fold(None, |acc, nulls| NullBuffer::union(acc.as_ref(), nulls));
+
     // Use field names matching map_type_from_key_value_types: "key" and "value"
     let field_names = MapFieldNames {
         entry: "entries".to_string(),
@@ -193,10 +205,7 @@ fn str_to_map_impl<'a, V: StringArrayType<'a> + Copy>(
     );
 
     for row_idx in 0..num_rows {
-        if text_array.is_null(row_idx)
-            || pair_delim_array.is_some_and(|a| a.is_null(row_idx))
-            || kv_delim_array.is_some_and(|a| a.is_null(row_idx))
-        {
+        if combined_nulls.as_ref().is_some_and(|n| n.is_null(row_idx)) {
             map_builder.append(false)?;
             continue;
         }
