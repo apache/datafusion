@@ -291,15 +291,26 @@ impl ColumnarValue {
         cast_options: Option<&CastOptions<'_>>,
     ) -> Result<ColumnarValue> {
         // Use provided options when available; otherwise fallback to global default
-        let cast_options = cast_options.unwrap_or(&DEFAULT_CAST_OPTIONS);
-        match self {
-            ColumnarValue::Array(array) => {
-                let casted = cast_array_by_name(array, cast_type, cast_options)?;
-                Ok(ColumnarValue::Array(casted))
-            }
-            ColumnarValue::Scalar(scalar) => Ok(ColumnarValue::Scalar(
-                scalar.cast_to_with_options(cast_type, cast_options)?,
-            )),
+        match cast_options {
+            Some(cast_options) => match self {
+                ColumnarValue::Array(array) => {
+                    let casted = cast_array_by_name(array, cast_type, cast_options)?;
+                    Ok(ColumnarValue::Array(casted))
+                }
+                ColumnarValue::Scalar(scalar) => Ok(ColumnarValue::Scalar(
+                    scalar.cast_to_with_options(cast_type, cast_options)?,
+                )),
+            },
+            None => match self {
+                ColumnarValue::Array(array) => {
+                    let casted =
+                        cast_array_by_name(array, cast_type, &DEFAULT_CAST_OPTIONS)?;
+                    Ok(ColumnarValue::Array(casted))
+                }
+                ColumnarValue::Scalar(scalar) => Ok(ColumnarValue::Scalar(
+                    scalar.cast_to_with_options(cast_type, &DEFAULT_CAST_OPTIONS)?,
+                )),
+            },
         }
     }
 }
