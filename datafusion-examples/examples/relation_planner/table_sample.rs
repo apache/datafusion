@@ -101,7 +101,9 @@ use futures::{
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use tonic::async_trait;
 
-use datafusion::optimizer::simplify_expressions::simplify_literal::parse_literal;
+use datafusion::{
+    catalog::Session, optimizer::simplify_expressions::simplify_literal::parse_literal,
+};
 use datafusion::{
     execution::{
         RecordBatchStream, SendableRecordBatchStream, SessionState, SessionStateBuilder,
@@ -116,8 +118,8 @@ use datafusion::{
     prelude::*,
 };
 use datafusion_common::{
-    DFSchemaRef, DataFusionError, Result, Statistics, internal_err, not_impl_err,
-    plan_datafusion_err, plan_err,
+    DFSchemaRef, DataFusionError, Result, Statistics, exec_datafusion_err, internal_err,
+    not_impl_err, plan_datafusion_err, plan_err,
 };
 use datafusion_expr::{
     UserDefinedLogicalNode, UserDefinedLogicalNodeCore,
@@ -564,8 +566,16 @@ impl QueryPlanner for TableSampleQueryPlanner {
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
-        session_state: &SessionState,
+        session: &dyn Session,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let session_state =
+            session
+                .as_any()
+                .downcast_ref::<SessionState>()
+                .ok_or_else(|| {
+                    exec_datafusion_err!("Failed to downcast Session to SessionState")
+                })?;
+
         let planner = DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(
             TableSampleExtensionPlanner,
         )]);
