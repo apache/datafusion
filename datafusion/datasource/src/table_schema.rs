@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Helper struct to manage table schemas with partition columns
+//! Helper struct to manage table schemas with partition columns and virtual columns
 
 use arrow::datatypes::{FieldRef, SchemaBuilder, SchemaRef};
 use std::sync::Arc;
@@ -23,10 +23,12 @@ use std::sync::Arc;
 /// Helper to hold table schema information for partitioned data sources.
 ///
 /// When reading partitioned data (such as Hive-style partitioning), a table's schema
-/// consists of two parts:
+/// consists of multiple parts:
 /// 1. **File schema**: The schema of the actual data files on disk
 /// 2. **Partition columns**: Columns that are encoded in the directory structure,
 ///    not stored in the files themselves
+/// 3. **Virtual columns**: Columns computed during read (e.g., row numbers),
+///    not stored in the files
 ///
 /// # Example: Partitioned Table
 ///
@@ -38,14 +40,16 @@ use std::sync::Arc;
 ///
 /// In this case:
 /// - **File schema**: The schema of `data.parquet` files (e.g., `[user_id, amount]`)
+/// - **Virtual columns**: Computed columns like `row_index` for row numbers
 /// - **Partition columns**: `[date, region]` extracted from the directory path
-/// - **Table schema**: The full schema combining both (e.g., `[user_id, amount, date, region]`)
+/// - **Table schema**: The full schema combining all (e.g., `[user_id, amount, row_index, date, region]`)
 ///
 /// # When to Use
 ///
 /// Use `TableSchema` when:
 /// - Reading partitioned data sources (Parquet, CSV, etc. with Hive-style partitioning)
 /// - You need to efficiently access different schema representations without reconstructing them
+/// - You need virtual columns like row numbers computed during read
 /// - You want to avoid repeatedly concatenating file and partition schemas
 ///
 /// For non-partitioned data or when working with a single schema representation,
@@ -57,11 +61,18 @@ use std::sync::Arc;
 /// to any representation without repeated allocations or reconstructions.
 #[derive(Debug, Clone)]
 pub struct TableSchema {
-    /// The schema of the data files themselves, without partition columns.
+    /// The schema of the data files themselves, without virtual columns or partition columns.
     ///
     /// For example, if your Parquet files contain `[user_id, amount]`,
     /// this field holds that schema.
     file_schema: SchemaRef,
+
+    /// Virtual columns that are computed during read.
+    ///
+    /// These columns are not stored in the data files but are generated during
+    /// query execution. Examples include row index (0-based) using parquet's
+    /// RowNumber extension type.
+    virtual_columns: Arc<Vec<FieldRef>>,
 
     /// Columns that are derived from the directory structure (partitioning scheme).
     ///
@@ -72,10 +83,11 @@ pub struct TableSchema {
     /// row during query execution based on the file's location.
     table_partition_cols: Arc<Vec<FieldRef>>,
 
-    /// The complete table schema: file_schema columns followed by partition columns.
+    /// The complete table schema: file_schema columns followed by virtual columns
+    /// and partition columns.
     ///
-    /// This is pre-computed during construction by concatenating `file_schema`
-    /// and `table_partition_cols`, so it can be returned as a cheap reference.
+    /// This is pre-computed during construction by concatenating `file_schema`,
+    /// `virtual_columns`, and `table_partition_cols`, so it can be returned as a cheap reference.
     table_schema: SchemaRef,
 }
 
@@ -121,12 +133,63 @@ impl TableSchema {
         builder.extend(table_partition_cols.iter().cloned());
         Self {
             file_schema,
+            virtual_columns: Arc::new(vec![]),
             table_partition_cols: Arc::new(table_partition_cols),
             table_schema: Arc::new(builder.finish()),
         }
     }
 
-    /// Create a new TableSchema with no partition columns.
+    /// Create a new TableSchema from a file schema and virtual columns.
+    ///
+    /// The table schema is automatically computed by appending the virtual columns
+    /// to the file schema.
+    ///
+    /// # Arguments
+    ///
+    /// * `file_schema` - Schema of the data files (without virtual columns)
+    /// * `virtual_columns` - Virtual columns to append to each row
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use arrow::datatypes::{Schema, Field, DataType};
+    /// # use datafusion_datasource::TableSchema;
+    /// let file_schema = Arc::new(Schema::new(vec![
+    ///     Field::new("user_id", DataType::Int64, false),
+    /// ]));
+    ///
+    /// let virtual_cols = vec![
+    ///     Arc::new(Field::new("row_index", DataType::Int64, false)),
+    /// ];
+    ///
+    /// let partition_cols = vec![
+    ///     Arc::new(Field::new("date", DataType::Utf8, false)),
+    ///     Arc::new(Field::new("region", DataType::Utf8, false)),
+    /// ];
+    ///
+    /// let table_schema = TableSchema::new_with_virtual_columns(file_schema, virtual_cols, partition_cols);
+    ///
+    /// // Table schema will have 2 columns: user_id, row_index
+    /// assert_eq!(table_schema.table_schema().fields().len(), 2);
+    /// ```
+    pub fn new_with_virtual_columns(
+        file_schema: SchemaRef,
+        virtual_columns: Vec<FieldRef>,
+        table_partition_cols: Vec<FieldRef>,
+    ) -> Self {
+        let mut builder = SchemaBuilder::from(file_schema.as_ref());
+        builder.extend(virtual_columns.iter().cloned());
+        builder.extend(table_partition_cols.iter().cloned());
+        Self {
+            file_schema,
+            virtual_columns: Arc::new(virtual_columns),
+            table_partition_cols: Arc::new(table_partition_cols),
+            table_schema: Arc::new(builder.finish()),
+        }
+    }
+
+    /// Create a new TableSchema with no partition columns or virtual columns.
     ///
     /// You should prefer calling [`TableSchema::new`] if you have partition columns at
     /// construction time since it avoids re-computing the table schema.
@@ -149,17 +212,49 @@ impl TableSchema {
             );
             table_partition_cols.extend(partition_cols);
         }
-        let mut builder = SchemaBuilder::from(self.file_schema.as_ref());
-        builder.extend(self.table_partition_cols.iter().cloned());
-        self.table_schema = Arc::new(builder.finish());
+        self.recompute_table_schema();
         self
     }
 
-    /// Get the file schema (without partition columns).
+    /// Add virtual columns to an existing TableSchema, returning a new instance.
+    ///
+    /// Virtual columns are computed during read (e.g., row numbers) and are not
+    /// stored in the data files.
+    pub fn with_virtual_columns(mut self, virtual_cols: Vec<FieldRef>) -> Self {
+        if self.virtual_columns.is_empty() {
+            self.virtual_columns = Arc::new(virtual_cols);
+        } else {
+            // Append to existing virtual columns
+            let virtual_columns = Arc::get_mut(&mut self.virtual_columns).expect(
+                "Expected to be the sole owner of virtual_columns since this function accepts mut self",
+            );
+            virtual_columns.extend(virtual_cols);
+        }
+        self.recompute_table_schema();
+        self
+    }
+
+    /// Recompute the table schema from file schema, partition columns, and virtual columns.
+    fn recompute_table_schema(&mut self) {
+        let mut builder = SchemaBuilder::from(self.file_schema.as_ref());
+        builder.extend(self.virtual_columns.iter().cloned());
+        builder.extend(self.table_partition_cols.iter().cloned());
+        self.table_schema = Arc::new(builder.finish());
+    }
+
+    /// Get the file schema (without virtual columns or partition columns).
     ///
     /// This is the schema of the actual data files on disk.
     pub fn file_schema(&self) -> &SchemaRef {
         &self.file_schema
+    }
+
+    /// Get the virtual columns.
+    ///
+    /// These are columns computed during read (e.g., row index) that
+    /// will be appended to each row during query execution.
+    pub fn virtual_columns(&self) -> &Arc<Vec<FieldRef>> {
+        &self.virtual_columns
     }
 
     /// Get the table partition columns.
@@ -170,10 +265,10 @@ impl TableSchema {
         &self.table_partition_cols
     }
 
-    /// Get the full table schema (file schema + partition columns).
+    /// Get the full table schema (file schema + virtual columns + partition columns).
     ///
     /// This is the complete schema that will be seen by queries, combining
-    /// both the columns from the files and the partition columns.
+    /// all columns from files, virtual, and partition columns.
     pub fn table_schema(&self) -> &SchemaRef {
         &self.table_schema
     }
@@ -275,5 +370,46 @@ mod tests {
             updated_table_schema.table_schema().as_ref(),
             &expected_schema
         );
+    }
+
+    #[test]
+    fn test_virtual_columns() {
+        let file_schema = Arc::new(Schema::new(vec![
+            Field::new("user_id", DataType::Int64, false),
+            Field::new("amount", DataType::Float64, false),
+        ]));
+
+        let virtual_cols =
+            vec![Arc::new(Field::new("row_index", DataType::Int64, false))];
+
+        let partition_cols = vec![Arc::new(Field::new("date", DataType::Utf8, false))];
+
+        let table_schema = TableSchema::new_with_virtual_columns(
+            file_schema.clone(),
+            virtual_cols.clone(),
+            partition_cols.clone(),
+        );
+
+        // Verify file schema
+        assert_eq!(table_schema.file_schema().as_ref(), file_schema.as_ref());
+
+        // Verify virtual columns
+        assert_eq!(table_schema.virtual_columns().len(), 1);
+        assert_eq!(table_schema.virtual_columns()[0].name(), "row_index");
+
+        // Verify partition columns
+        assert_eq!(table_schema.table_partition_cols().len(), 1);
+        assert_eq!(table_schema.table_partition_cols()[0].name(), "date");
+
+        // Verify full table schema has all columns in correct order:
+        // file_schema + virtual_columns + partition_columns
+        let expected_fields = vec![
+            Field::new("user_id", DataType::Int64, false),
+            Field::new("amount", DataType::Float64, false),
+            Field::new("row_index", DataType::Int64, false),
+            Field::new("date", DataType::Utf8, false),
+        ];
+        let expected_schema = Schema::new(expected_fields);
+        assert_eq!(table_schema.table_schema().as_ref(), &expected_schema);
     }
 }
