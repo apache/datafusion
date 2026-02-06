@@ -35,7 +35,7 @@ sys.path.insert(0, os.path.abspath(".."))
 # -- Project information -----------------------------------------------------
 
 project = "Apache DataFusion"
-copyright = "2019-2025, Apache Software Foundation"
+copyright = "2019-2026, Apache Software Foundation"
 author = "Apache Software Foundation"
 
 
