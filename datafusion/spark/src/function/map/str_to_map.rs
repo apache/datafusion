@@ -19,8 +19,9 @@ use std::any::Any;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, AsArray, MapBuilder, MapFieldNames, StringBuilder};
+use arrow::array::{ArrayRef, MapBuilder, MapFieldNames, StringBuilder, StringArrayType};
 use arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
 use datafusion_common::{Result, exec_err, internal_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -103,24 +104,81 @@ impl ScalarUDFImpl for SparkStrToMap {
 }
 
 fn str_to_map_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    assert!(
-        !args.is_empty() && args.len() <= 3,
-        "str_to_map expects 1-3 arguments, got {}",
-        args.len()
-    );
+    match args.len() {
+        1 => match args[0].data_type() {
+            DataType::Utf8 => {
+                str_to_map_impl(as_string_array(&args[0])?, None, None)
+            }
+            DataType::LargeUtf8 => {
+                str_to_map_impl(as_large_string_array(&args[0])?, None, None)
+            }
+            DataType::Utf8View => {
+                str_to_map_impl(as_string_view_array(&args[0])?, None, None)
+            }
+            other => exec_err!(
+                "Unsupported data type {other:?} for str_to_map, \
+                expected Utf8, LargeUtf8, or Utf8View"
+            ),
+        },
+        2 => match (args[0].data_type(), args[1].data_type()) {
+            (DataType::Utf8, DataType::Utf8) => str_to_map_impl(
+                as_string_array(&args[0])?,
+                Some(as_string_array(&args[1])?),
+                None,
+            ),
+            (DataType::LargeUtf8, DataType::LargeUtf8) => str_to_map_impl(
+                as_large_string_array(&args[0])?,
+                Some(as_large_string_array(&args[1])?),
+                None,
+            ),
+            (DataType::Utf8View, DataType::Utf8View) => str_to_map_impl(
+                as_string_view_array(&args[0])?,
+                Some(as_string_view_array(&args[1])?),
+                None,
+            ),
+            (t1, t2) => exec_err!(
+                "Unsupported data types ({t1:?}, {t2:?}) for str_to_map, \
+                expected matching Utf8, LargeUtf8, or Utf8View"
+            ),
+        },
+        3 => match (
+            args[0].data_type(),
+            args[1].data_type(),
+            args[2].data_type(),
+        ) {
+            (DataType::Utf8, DataType::Utf8, DataType::Utf8) => str_to_map_impl(
+                as_string_array(&args[0])?,
+                Some(as_string_array(&args[1])?),
+                Some(as_string_array(&args[2])?),
+            ),
+            (DataType::LargeUtf8, DataType::LargeUtf8, DataType::LargeUtf8) => {
+                str_to_map_impl(
+                    as_large_string_array(&args[0])?,
+                    Some(as_large_string_array(&args[1])?),
+                    Some(as_large_string_array(&args[2])?),
+                )
+            }
+            (DataType::Utf8View, DataType::Utf8View, DataType::Utf8View) => {
+                str_to_map_impl(
+                    as_string_view_array(&args[0])?,
+                    Some(as_string_view_array(&args[1])?),
+                    Some(as_string_view_array(&args[2])?),
+                )
+            }
+            (t1, t2, t3) => exec_err!(
+                "Unsupported data types ({t1:?}, {t2:?}, {t3:?}) for str_to_map, \
+                expected matching Utf8, LargeUtf8, or Utf8View"
+            ),
+        },
+        n => exec_err!("str_to_map expects 1-3 arguments, got {n}"),
+    }
+}
 
-    let text_array = args[0].as_string::<i32>();
-    let pair_delim_array = if args.len() > 1 {
-        Some(args[1].as_string::<i32>())
-    } else {
-        None
-    };
-    let kv_delim_array = if args.len() > 2 {
-        Some(args[2].as_string::<i32>())
-    } else {
-        None
-    };
-
+fn str_to_map_impl<'a, V: StringArrayType<'a> + Copy>(
+    text_array: V,
+    pair_delim_array: Option<V>,
+    kv_delim_array: Option<V>,
+) -> Result<ArrayRef> {
     let num_rows = text_array.len();
     // Use field names matching map_type_from_key_value_types: "key" and "value"
     let field_names = MapFieldNames {
@@ -190,7 +248,7 @@ fn str_to_map_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{MapArray, StringArray};
+    use arrow::array::{Array, MapArray, StringArray};
 
     // Table-driven tests for str_to_map
     // Test cases derived from Spark ComplexTypeSuite:
