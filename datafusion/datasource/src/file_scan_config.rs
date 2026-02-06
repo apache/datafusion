@@ -157,7 +157,13 @@ pub struct FileScanConfig {
     /// correct results (e.g., for `ORDER BY ... LIMIT` queries). When `false`,
     /// DataFusion may reorder file processing for optimization without affecting correctness.
     pub preserve_order: bool,
-    /// All equivalent lexicographical orderings that describe the schema.
+    /// All equivalent lexicographical output orderings of this file scan, in terms of
+    /// [`Self::table_schema`]. See [`FileScanConfigBuilder::with_output_ordering`] for more
+    /// details.
+    ///
+    /// [`Self::eq_properties`] uses this information along with projection
+    /// and filtering information to compute the effective
+    /// [`EquivalenceProperties`]
     pub output_ordering: Vec<LexOrdering>,
     /// File compression type
     pub file_compression_type: FileCompressionType,
@@ -408,6 +414,13 @@ impl FileScanConfigBuilder {
     }
 
     /// Set the output ordering of the files
+    ///
+    /// The expressions are in terms of the entire table schema (file schema +
+    /// partition columns), before any projection or filtering from the file
+    /// scan is applied.
+    ///
+    /// This is used for optimization purposes, e.g. to determine if a file scan
+    /// can satisfy an `ORDER BY` without an additional sort.
     pub fn with_output_ordering(mut self, output_ordering: Vec<LexOrdering>) -> Self {
         self.output_ordering = output_ordering;
         self
@@ -683,6 +696,9 @@ impl DataSource for FileScanConfig {
         Partitioning::UnknownPartitioning(self.file_groups.len())
     }
 
+    /// Computes the effective equivalence properties of this file scan, taking
+    /// into account the file schema, any projections or filters applied by the
+    /// file source, and the output ordering.
     fn eq_properties(&self) -> EquivalenceProperties {
         let schema = self.file_source.table_schema().table_schema();
         let mut eq_properties = EquivalenceProperties::new_with_orderings(
