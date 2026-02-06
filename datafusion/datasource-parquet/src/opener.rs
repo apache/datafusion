@@ -25,13 +25,12 @@ use crate::{
 };
 use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::DataType;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
-use datafusion_physical_expr::ScalarFunctionExpr;
-use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::utils::reassign_expr_columns;
-use datafusion_physical_expr_adapter::replace_columns_with_literals;
+use datafusion_physical_expr_adapter::{
+    replace_columns_with_literals, replace_nullary_udf_with_literal_in_projection,
+};
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -68,29 +67,6 @@ use parquet::arrow::arrow_reader::{
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
 use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader, RowGroupMetaData};
-
-fn replace_input_file_name_in_projection(
-    projection: ProjectionExprs,
-    file_name: &str,
-) -> Result<ProjectionExprs> {
-    let file_name_literal: Arc<dyn PhysicalExpr> =
-        Arc::new(Literal::new(ScalarValue::Utf8(Some(file_name.to_owned()))));
-
-    projection.try_map_exprs(|expr| {
-        Ok(expr
-            .transform(|expr| {
-                if let Some(func) = expr.as_any().downcast_ref::<ScalarFunctionExpr>()
-                    && func.fun().name() == "input_file_name"
-                    && func.args().is_empty()
-                {
-                    return Ok(Transformed::yes(Arc::clone(&file_name_literal)));
-                }
-                Ok(Transformed::no(expr))
-            })
-            .data()
-            .expect("infallible transform"))
-    })
-}
 
 /// Implements [`FileOpener`] for a parquet file
 pub(super) struct ParquetOpener {
@@ -286,7 +262,11 @@ impl FileOpener for ParquetOpener {
                 .transpose()?;
         }
         // Replace any `input_file_name()` UDFs in the projection with a literal for this file.
-        projection = replace_input_file_name_in_projection(projection, &file_name)?;
+        projection = replace_nullary_udf_with_literal_in_projection(
+            projection,
+            "input_file_name",
+            ScalarValue::Utf8(Some(file_name.clone())),
+        )?;
 
         let reorder_predicates = self.reorder_filters;
         let pushdown_filters = self.pushdown_filters;
@@ -1045,10 +1025,7 @@ mod test {
     use std::any::Any;
     use std::sync::Arc;
 
-    use super::{
-        ConstantColumns, constant_columns_from_stats,
-        replace_input_file_name_in_projection,
-    };
+    use super::{ConstantColumns, constant_columns_from_stats};
     use crate::{DefaultParquetFileReaderFactory, RowGroupAccess, opener::ParquetOpener};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use bytes::{BufMut, BytesMut};
@@ -1072,6 +1049,7 @@ mod test {
     };
     use datafusion_physical_expr_adapter::{
         DefaultPhysicalExprAdapterFactory, replace_columns_with_literals,
+        replace_nullary_udf_with_literal_in_projection,
     };
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
     use futures::{Stream, StreamExt};
@@ -1132,7 +1110,11 @@ mod test {
         ]);
 
         let file_name = "s3://bucket/data/file.parquet";
-        let rewritten = replace_input_file_name_in_projection(projection, file_name)?;
+        let rewritten = replace_nullary_udf_with_literal_in_projection(
+            projection,
+            "input_file_name",
+            ScalarValue::Utf8(Some(file_name.to_owned())),
+        )?;
 
         assert_eq!(rewritten.as_ref().len(), 2);
         assert_eq!(rewritten.as_ref()[1].alias, "input_file_name");

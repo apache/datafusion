@@ -23,10 +23,11 @@ use datafusion_common::{
     tree_node::{Transformed, TransformedResult, TreeNode},
 };
 use datafusion_physical_expr::{
-    PhysicalExpr, ScalarFunctionExpr,
+    PhysicalExpr,
     expressions::{Column, Literal},
     projection::{ProjectionExpr, ProjectionExprs},
 };
+use datafusion_physical_expr_adapter::replace_nullary_udf_with_literal_in_projection;
 use futures::{FutureExt, StreamExt};
 use itertools::Itertools;
 
@@ -83,7 +84,11 @@ impl FileOpener for ProjectionOpener {
             )
         };
         // Replace `input_file_name()` with a per-file literal if present.
-        let projection = inject_input_file_name_into_projection(&projection, file_name);
+        let projection = replace_nullary_udf_with_literal_in_projection(
+            projection,
+            "input_file_name",
+            ScalarValue::Utf8(Some(file_name)),
+        )?;
         let projector = projection.make_projector(&self.input_schema)?;
 
         let inner = self.inner.open(partitioned_file)?;
@@ -144,35 +149,6 @@ fn inject_partition_columns_into_projection(
             ProjectionExpr::new(expr, projection.alias.clone())
         })
         .collect_vec();
-    ProjectionExprs::new(projections)
-}
-
-fn inject_input_file_name_into_projection(
-    projection: &ProjectionExprs,
-    file_name: String,
-) -> ProjectionExprs {
-    let file_name_literal: Arc<dyn PhysicalExpr> =
-        Arc::new(Literal::new(ScalarValue::Utf8(Some(file_name))));
-
-    let projections = projection
-        .iter()
-        .map(|projection| {
-            let expr = Arc::clone(&projection.expr)
-                .transform(|expr| {
-                    if let Some(func) = expr.as_any().downcast_ref::<ScalarFunctionExpr>()
-                        && func.fun().name() == "input_file_name"
-                        && func.args().is_empty()
-                    {
-                        return Ok(Transformed::yes(Arc::clone(&file_name_literal)));
-                    }
-                    Ok(Transformed::no(expr))
-                })
-                .data()
-                .expect("infallible transform");
-            ProjectionExpr::new(expr, projection.alias.clone())
-        })
-        .collect_vec();
-
     ProjectionExprs::new(projections)
 }
 
