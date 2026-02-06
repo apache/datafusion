@@ -481,8 +481,19 @@ fn hash_map_array(
     let offsets = array.offsets();
 
     // Create hashes for each entry in each row
-    let mut values_hashes = vec![0u64; array.entries().len()];
-    create_hashes(array.entries().columns(), random_state, &mut values_hashes)?;
+    let first_offset = offsets.first().copied().unwrap_or_default() as usize;
+    let last_offset = offsets.last().copied().unwrap_or_default() as usize;
+    let entries_len = last_offset - first_offset;
+
+    // Only hash the entries that are actually referenced
+    let mut values_hashes = vec![0u64; entries_len];
+    let entries = array.entries();
+    let sliced_columns: Vec<ArrayRef> = entries
+        .columns()
+        .iter()
+        .map(|col| col.slice(first_offset, entries_len))
+        .collect();
+    create_hashes(&sliced_columns, random_state, &mut values_hashes)?;
 
     // Combine the hashes for entries on each row with each other and previous hash for that row
     if let Some(nulls) = nulls {
