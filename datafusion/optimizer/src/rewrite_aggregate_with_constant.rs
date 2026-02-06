@@ -28,7 +28,7 @@ use datafusion_expr::{
     col, lit,
 };
 use datafusion_functions_aggregate::expr_fn::{count, sum};
-use std::collections::HashMap;
+use indexmap::IndexMap;
 
 /// Optimizer rule that rewrites `SUM(column ± constant)` expressions
 /// into `SUM(column) ± constant * COUNT(column)` when multiple such expressions
@@ -110,12 +110,14 @@ struct SumWithConstant {
     order_by: Vec<Sort>,
 }
 
-/// Maps a base expression's schema name to all its SUM(base ± const) variants
-type RewriteGroups = HashMap<String, Vec<SumWithConstant>>;
+/// Maps a base expression's schema name to all its SUM(base ± const) variants.
+/// We use IndexMap to preserve insertion order, ensuring deterministic output
+/// in the rewritten plan (important for stable EXPLAIN output in tests).
+type RewriteGroups = IndexMap<String, Vec<SumWithConstant>>;
 
 /// Scans the aggregate expressions to find candidates for the rewrite.
 fn analyze_aggregate(aggregate: &Aggregate) -> Result<RewriteGroups> {
-    let mut groups: RewriteGroups = HashMap::new();
+    let mut groups: RewriteGroups = IndexMap::new();
 
     for (idx, expr) in aggregate.aggr_expr.iter().enumerate() {
         // Try to match the pattern SUM(col ± lit)
@@ -227,7 +229,7 @@ fn is_numeric_constant(value: &ScalarValue) -> bool {
 /// Check if an expression is a plain SUM(base_expr) that matches one of our rewrite groups
 fn check_plain_sum_in_group(
     expr: &Expr,
-    base_expr_indices: &HashMap<String, (usize, usize)>,
+    base_expr_indices: &IndexMap<String, (usize, usize)>,
 ) -> Option<(usize, usize)> {
     if let Expr::AggregateFunction(agg_fn) = expr
         && agg_fn.func.name().to_lowercase() == "sum"
@@ -258,11 +260,11 @@ fn transform_aggregate(
     all_sums.sort_by_key(|s| s.original_index);
 
     // Maps base column names to the indices of their new SUM/COUNT in the new Aggregate node
-    let mut base_expr_indices: HashMap<String, (usize, usize)> = HashMap::new();
+    let mut base_expr_indices: IndexMap<String, (usize, usize)> = IndexMap::new();
 
     // Process each group to determine what to add to the aggregate
-    let mut sum_names: HashMap<String, String> = HashMap::new();
-    let mut count_names: HashMap<String, String> = HashMap::new();
+    let mut sum_names: IndexMap<String, String> = IndexMap::new();
+    let mut count_names: IndexMap<String, String> = IndexMap::new();
 
     // For every group (e.g., all SUMs involving column 'a'), add one SUM(a) and one COUNT(a)
     for (base_key, sums) in rewrite_groups {

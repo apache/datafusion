@@ -337,8 +337,29 @@ FROM test_table;
 ----
 15 65 150 125
 
-# Now test with 2+ SUMs with constants on same columns
-# Note: The query verifies results are correct - EXPLAIN order may vary due to HashMap iteration
+# Test with 2+ SUMs with constants on same columns (triggers rewrite)
+# With IndexMap, the order is deterministic based on insertion order:
+#   - Group "a" first (from SUM(a + 5))
+#   - Group "b" second (from SUM(b - 3))
+query TT
+EXPLAIN SELECT 
+    SUM(a + 5) AS sum_a_plus_5,
+    SUM(a + 10) AS sum_a_plus_10,
+    SUM(b - 3) AS sum_b_minus_3,
+    SUM(b - 5) AS sum_b_minus_5
+FROM test_table;
+----
+logical_plan
+01)Projection: sum(test_table.a) + Int64(5) * count(test_table.a) AS sum_a_plus_5, sum(test_table.a) + Int64(10) * count(test_table.a) AS sum_a_plus_10, sum(test_table.b) - Int64(3) * count(test_table.b) AS sum_b_minus_3, sum(test_table.b) - Int64(5) * count(test_table.b) AS sum_b_minus_5
+02)--Aggregate: groupBy=[[]], aggr=[[sum(__common_expr_1 AS test_table.a), count(__common_expr_1 AS test_table.a), sum(__common_expr_2 AS test_table.b), count(__common_expr_2 AS test_table.b)]]
+03)----Projection: CAST(test_table.a AS Int64) AS __common_expr_1, CAST(test_table.b AS Int64) AS __common_expr_2
+04)------TableScan: test_table projection=[a, b]
+physical_plan
+01)ProjectionExec: expr=[sum(test_table.a)@0 + 5 * count(test_table.a)@1 as sum_a_plus_5, sum(test_table.a)@0 + 10 * count(test_table.a)@1 as sum_a_plus_10, sum(test_table.b)@2 - 3 * count(test_table.b)@3 as sum_b_minus_3, sum(test_table.b)@2 - 5 * count(test_table.b)@3 as sum_b_minus_5]
+02)--AggregateExec: mode=Single, gby=[], aggr=[sum(test_table.a), count(test_table.a), sum(test_table.b), count(test_table.b)]
+03)----ProjectionExec: expr=[CAST(a@0 AS Int64) as __common_expr_1, CAST(b@1 AS Int64) as __common_expr_2]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
 query IIII
 SELECT 
     SUM(a + 5) AS sum_a_plus_5,
@@ -492,6 +513,34 @@ FROM complex_test;
 #   - sum(a+1+1), sum(a+1+2): use SUM(a+1) + k*COUNT(a+1)
 #   - sum(a+5+1), sum(a+5+2), sum(a+5+3): use SUM(a+5) + k*COUNT(a+5)
 #
+# With IndexMap, the groups are processed in insertion order:
+#   - Group "a + Int64(1)" first (from SUM(a+1+1))
+#   - Group "a + Int64(5)" second (from SUM(a+5+1))
+# Non-matching expressions (SUM(a), SUM(a+1)) are passed through.
+query TT
+EXPLAIN SELECT
+    SUM(a),
+    SUM(a + 1),
+    SUM(a + 1 + 1),
+    SUM(a + 1 + 2),
+    SUM(a + 5 + 1),
+    SUM(a + 5 + 2),
+    SUM(a + 5 + 3)
+FROM complex_test;
+----
+logical_plan
+01)Projection: sum(complex_test.a), sum(complex_test.a + Int64(1)), sum(complex_test.a + Int64(1)) + count(complex_test.a + Int64(1)) AS sum(complex_test.a + Int64(1) + Int64(1)), sum(complex_test.a + Int64(1)) + Int64(2) * count(complex_test.a + Int64(1)) AS sum(complex_test.a + Int64(1) + Int64(2)), sum(complex_test.a + Int64(5)) + count(complex_test.a + Int64(5)) AS sum(complex_test.a + Int64(5) + Int64(1)), sum(complex_test.a + Int64(5)) + Int64(2) * count(complex_test.a + Int64(5)) AS sum(complex_test.a + Int64(5) + Int64(2)), sum(complex_test.a + Int64(5)) + Int64(3) * count(complex_test.a + Int64(5)) AS sum(complex_test.a + Int64(5) + Int64(3))
+02)--Aggregate: groupBy=[[]], aggr=[[sum(__common_expr_1 AS complex_test.a + Int64(1)), count(__common_expr_1 AS complex_test.a + Int64(1)), sum(__common_expr_2 AS complex_test.a + Int64(5)), count(__common_expr_2 AS complex_test.a + Int64(5)), sum(__common_expr_3 AS complex_test.a)]]
+03)----Projection: __common_expr_4 + Int64(1) AS __common_expr_1, __common_expr_4 + Int64(5) AS __common_expr_2, __common_expr_4 AS __common_expr_3
+04)------Projection: CAST(complex_test.a AS Int64) AS __common_expr_4
+05)--------TableScan: complex_test projection=[a]
+physical_plan
+01)ProjectionExec: expr=[sum(complex_test.a)@4 as sum(complex_test.a), sum(complex_test.a + Int64(1))@0 as sum(complex_test.a + Int64(1)), sum(complex_test.a + Int64(1))@0 + count(complex_test.a + Int64(1))@1 as sum(complex_test.a + Int64(1) + Int64(1)), sum(complex_test.a + Int64(1))@0 + 2 * count(complex_test.a + Int64(1))@1 as sum(complex_test.a + Int64(1) + Int64(2)), sum(complex_test.a + Int64(5))@2 + count(complex_test.a + Int64(5))@3 as sum(complex_test.a + Int64(5) + Int64(1)), sum(complex_test.a + Int64(5))@2 + 2 * count(complex_test.a + Int64(5))@3 as sum(complex_test.a + Int64(5) + Int64(2)), sum(complex_test.a + Int64(5))@2 + 3 * count(complex_test.a + Int64(5))@3 as sum(complex_test.a + Int64(5) + Int64(3))]
+02)--AggregateExec: mode=Single, gby=[], aggr=[sum(complex_test.a + Int64(1)), count(complex_test.a + Int64(1)), sum(complex_test.a + Int64(5)), count(complex_test.a + Int64(5)), sum(complex_test.a)]
+03)----ProjectionExec: expr=[__common_expr_4@0 + 1 as __common_expr_1, __common_expr_4@0 + 5 as __common_expr_2, __common_expr_4@0 as __common_expr_3]
+04)------ProjectionExec: expr=[CAST(a@0 AS Int64) as __common_expr_4]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
 # Verify correctness (using complex_test: a = 1, 2, 3):
 #   - sum(a)     = 1+2+3 = 6
 #   - sum(a+1)   = 2+3+4 = 9
