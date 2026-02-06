@@ -1,0 +1,3 @@
+{"int_col":1,"string_col":"foo","bigint_col":1,"date_col":"2023-01-01"}
+{"int_col":2,"string_col":"bar","bigint_col":2,"date_col":"2023-01-02"}
+{"int_col":3,"string_col":"baz","bigint_col":3,"date_col":"2023-01-03"}

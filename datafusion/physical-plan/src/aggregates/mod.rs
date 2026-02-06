@@ -16,7 +16,6 @@
 // under the License.
 
 //! Aggregates functionalities
-
 use std::any::Any;
 use std::sync::Arc;
 
@@ -1204,15 +1203,32 @@ impl DisplayAs for AggregateExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                let format_expr_with_alias =
-                    |(e, alias): &(Arc<dyn PhysicalExpr>, String)| -> String {
-                        let e = e.to_string();
-                        if &e != alias {
-                            format!("{e} as {alias}")
-                        } else {
-                            e
-                        }
-                    };
+	fn normalize_literal_display(s: &str) -> String {
+                    // already quoted → keep
+                    if s.starts_with('"') || s.starts_with('\'') {
+                        return s.to_string();
+                    }
+
+                    // numeric literal → keep unquoted
+                    if s.chars().all(|c| c.is_ascii_digit()) {
+                        return s.to_string();
+                    }
+
+                    // everything else → quote
+                    format!("\"{s}\"")
+                }
+let format_expr_with_alias =
+    |(expr, alias): &(Arc<dyn PhysicalExpr>, String)| -> String {
+        let display = expr.human_display().to_string();
+
+        if display.is_empty() {
+            alias.clone()
+        } else if display == *alias {
+            display
+        } else {
+            format!("{display} as {alias}")
+        }
+    };
 
                 write!(f, "AggregateExec: mode={:?}", self.mode)?;
                 let g: Vec<String> = if self.group_by.is_single() {
@@ -1250,8 +1266,14 @@ impl DisplayAs for AggregateExec {
                 let a: Vec<String> = self
                     .aggr_expr
                     .iter()
-                    .map(|agg| agg.name().to_string())
+                    .map(|agg| {
+                        let expr = agg.human_display().to_string();
+                        let alias = agg.name().to_string();
+
+                        if expr.is_empty() { alias.clone() } else { expr }
+                    })
                     .collect();
+
                 write!(f, ", aggr=[{}]", a.join(", "))?;
                 if let Some(config) = self.limit_options {
                     write!(f, ", lim=[{}]", config.limit)?;
