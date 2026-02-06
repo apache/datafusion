@@ -157,7 +157,16 @@ pub trait FileSource: Send + Sync {
     /// Try to push down filters into this FileSource.
     ///
     /// `filters` must be in terms of the unprojected table schema (file schema
-    /// plus partition columns).
+    /// plus partition columns), before any projection is applied.
+    ///
+    /// Any filters that this FileSource chooses to evaluate itself should be
+    /// returned as `PushedDown::Yes` in the result, along with a FileSource
+    /// instance that incorporates those filters. Such filters are logically
+    /// applied "during" the file scan, meaning they may refer to columns not
+    /// included in the final output projection.
+    ///
+    /// Filters that cannot be pushed down should be marked as `PushedDown::No`,
+    /// and will be evaluated by an execution plan after the file source.
     ///
     /// See [`ExecutionPlan::handle_child_pushdown_result`] for more details.
     ///
@@ -244,7 +253,7 @@ pub trait FileSource: Send + Sync {
         Ok(SortOrderPushdownResult::Unsupported)
     }
 
-    /// Try to push down a projection into a this FileSource.
+    /// Try to push down a projection into this FileSource.
     ///
     /// `FileSource` implementations that support projection pushdown should
     /// override this method and return a new `FileSource` instance with the
