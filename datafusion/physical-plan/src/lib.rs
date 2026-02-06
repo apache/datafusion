@@ -74,6 +74,11 @@ pub mod display;
 pub mod empty;
 pub mod execution_plan;
 pub mod explain;
+
+// Re-export expression_analyzer from physical-expr for backwards compatibility
+pub mod expression_analyzer {
+    pub use datafusion_physical_expr::expression_analyzer::*;
+}
 pub mod filter;
 pub mod filter_pushdown;
 pub mod joins;

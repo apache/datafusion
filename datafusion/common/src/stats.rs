@@ -637,7 +637,14 @@ impl Statistics {
             col_stats.max_value = col_stats.max_value.max(&item_col_stats.max_value);
             col_stats.min_value = col_stats.min_value.min(&item_col_stats.min_value);
             col_stats.sum_value = col_stats.sum_value.add(&item_col_stats.sum_value);
-            col_stats.distinct_count = Precision::Absent;
+            // Use max as a conservative lower bound for distinct count
+            // (can't accurately merge NDV since duplicates may exist across partitions)
+            col_stats.distinct_count = col_stats
+                .distinct_count
+                .get_value()
+                .max(item_col_stats.distinct_count.get_value())
+                .map(|&v| Precision::Inexact(v))
+                .unwrap_or(Precision::Absent);
             col_stats.byte_size = col_stats.byte_size.add(&item_col_stats.byte_size);
         }
 
@@ -1357,8 +1364,8 @@ mod tests {
             col_stats.max_value,
             Precision::Exact(ScalarValue::Int32(Some(20)))
         );
-        // Distinct count should be Absent after merge
-        assert_eq!(col_stats.distinct_count, Precision::Absent);
+        // Distinct count should be Inexact(max) after merge as a conservative lower bound
+        assert_eq!(col_stats.distinct_count, Precision::Inexact(7));
     }
 
     #[test]

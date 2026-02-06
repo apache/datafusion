@@ -150,13 +150,15 @@ mod test {
             // - null_count = 0 (partition values from paths are never null)
             // - min/max are the merged partition values across files in the group
             // - byte_size = num_rows * 4 (Date32 is 4 bytes per row)
+            // - distinct_count = Inexact(1) per partition file (single partition value per file),
+            //   preserved via max() when merging stats across partitions
             let date32_byte_size = num_rows * 4;
             column_stats.push(ColumnStatistics {
                 null_count: Precision::Exact(0),
                 max_value: Precision::Exact(ScalarValue::Date32(Some(max_date))),
                 min_value: Precision::Exact(ScalarValue::Date32(Some(min_date))),
                 sum_value: Precision::Absent,
-                distinct_count: Precision::Absent,
+                distinct_count: Precision::Inexact(1),
                 byte_size: Precision::Exact(date32_byte_size),
             });
         }
@@ -577,7 +579,7 @@ mod test {
                     max_value: Precision::Exact(ScalarValue::Date32(Some(20151))),
                     min_value: Precision::Exact(ScalarValue::Date32(Some(20148))),
                     sum_value: Precision::Absent,
-                    distinct_count: Precision::Absent,
+                    distinct_count: Precision::Inexact(1),
                     byte_size: Precision::Absent,
                 },
                 // column 2: right.id (Int32, file column from t2) - right partition 0: ids [3,4]
@@ -611,7 +613,7 @@ mod test {
                     max_value: Precision::Exact(ScalarValue::Date32(Some(20151))),
                     min_value: Precision::Exact(ScalarValue::Date32(Some(20148))),
                     sum_value: Precision::Absent,
-                    distinct_count: Precision::Absent,
+                    distinct_count: Precision::Inexact(1),
                     byte_size: Precision::Absent,
                 },
                 // column 2: right.id (Int32, file column from t2) - right partition 1: ids [1,2]
@@ -1247,7 +1249,7 @@ mod test {
                         DATE_2025_03_01,
                     ))),
                     sum_value: Precision::Absent,
-                    distinct_count: Precision::Absent,
+                    distinct_count: Precision::Inexact(1),
                     byte_size: Precision::Exact(8),
                 },
                 ColumnStatistics::new_unknown(), // window column
@@ -1275,7 +1277,7 @@ mod test {
                         DATE_2025_03_03,
                     ))),
                     sum_value: Precision::Absent,
-                    distinct_count: Precision::Absent,
+                    distinct_count: Precision::Inexact(1),
                     byte_size: Precision::Exact(8),
                 },
                 ColumnStatistics::new_unknown(), // window column
