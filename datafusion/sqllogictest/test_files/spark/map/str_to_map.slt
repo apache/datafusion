@@ -105,3 +105,11 @@ SELECT str_to_map(col, ',', '=') FROM (VALUES ('a=1,b=2'), ('x=9'), (NULL)) AS t
 {a: 1, b: 2}
 {x: 9}
 NULL
+
+# Per-row delimiters: each row can have different delimiters
+query ?
+SELECT str_to_map(col1, col2, col3) FROM (VALUES ('a=1,b=2', ',', '='), ('x#9', ',', '#'), (NULL, ',', '=')) AS t(col1, col2, col3);
+----
+{a: 1, b: 2}
+{x: 9}
+NULL
