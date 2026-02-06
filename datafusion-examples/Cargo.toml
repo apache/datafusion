@@ -40,6 +40,7 @@ arrow = { workspace = true }
 arrow-schema = { workspace = true }
 datafusion = { workspace = true, default-features = true, features = ["parquet_encryption"] }
 datafusion-common = { workspace = true }
+nom = "8.0.0"
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot", "fs"] }
 
