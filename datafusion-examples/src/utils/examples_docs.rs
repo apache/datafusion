@@ -59,7 +59,7 @@ use std::path::{Path, PathBuf};
 use datafusion::error::{DataFusionError, Result};
 use nom::{
     IResult, Parser,
-    bytes::complete::{tag, take_until},
+    bytes::complete::{tag, take_until, take_while},
     character::complete::multispace0,
     combinator::all_consuming,
     sequence::{delimited, preceded},
@@ -476,14 +476,31 @@ fn parse_subcommand_line(input: &str) -> IResult<&str, &str> {
 /// ```text
 /// //! (file: <file>.rs, desc: <description>)
 /// ```
-fn parse_metadata_line(input: &str) -> IResult<&str, (&str, &str)> {
-    let file = preceded(tag("file:"), preceded(multispace0, take_until(", desc:")));
-    let desc = preceded(tag(", desc:"), preceded(multispace0, take_until(")")));
+pub fn parse_metadata_line(input: &str) -> IResult<&str, (&str, &str)> {
     let parser = preceded(
-        tag("//!"),
-        preceded(multispace0, delimited(tag("("), (file, desc), tag(")"))),
+        multispace0,
+        preceded(tag("//!"), preceded(multispace0, take_while(|_| true))),
     );
-    all_consuming(parser).parse(input)
+    let (rest, line) = all_consuming(parser).parse(input)?;
+
+    let content = line
+        .strip_prefix("(")
+        .and_then(|s| s.strip_suffix(")"))
+        .ok_or_else(|| {
+            nom::Err::Error(nom::error::Error::new(line, nom::error::ErrorKind::Tag))
+        })?;
+
+    let (file, desc) = content
+        .strip_prefix("file:")
+        .ok_or_else(|| {
+            nom::Err::Error(nom::error::Error::new(line, nom::error::ErrorKind::Tag))
+        })?
+        .split_once(", desc:")
+        .ok_or_else(|| {
+            nom::Err::Error(nom::error::Error::new(line, nom::error::ErrorKind::Tag))
+        })?;
+
+    Ok((rest, (file.trim(), desc.trim())))
 }
 
 /// Discovers all example group directories under the given root.
@@ -619,13 +636,14 @@ mod tests {
                 ("date_time.rs", "Examples of date-time related functions")
             ))
         );
-    }
 
-    #[test]
-    fn parse_metadata_line_with_commas() {
         let line = "//! (file: foo.rs, desc: Foo, bar, baz)";
         let res = parse_metadata_line(line);
         assert_eq!(res, Ok(("", ("foo.rs", "Foo, bar, baz"))));
+
+        let line = "//! (file: foo.rs, desc: Foo(FOO))";
+        let res = parse_metadata_line(line);
+        assert_eq!(res, Ok(("", ("foo.rs", "Foo(FOO)"))));
     }
 
     #[test]
@@ -637,7 +655,6 @@ mod tests {
             "//! file: foo.rs,desc: test",
             "//! (file: foo.rs desc: test)",
             "//! (file: foo.rs,desc: test)",
-            "//! (file: foo.rs, desc: test(FOO))",
             "//! (desc: test, file: foo.rs)",
             "//! ()",
             "//! (file: foo.rs, desc: test) extra",
