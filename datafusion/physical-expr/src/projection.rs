@@ -372,16 +372,8 @@ impl ProjectionExprs {
     pub fn try_merge(&self, other: &ProjectionExprs) -> Result<ProjectionExprs> {
         let mut new_exprs = Vec::with_capacity(other.exprs.len());
         for proj_expr in other.exprs.iter() {
-            let new_expr = update_expr(&proj_expr.expr, &self.exprs, true)?
-                .ok_or_else(|| {
-                    internal_datafusion_err!(
-                        "Failed to combine projections: expression {} could not be applied on top of existing projections {}",
-                        proj_expr.expr,
-                        self.exprs.iter().map(|e| format!("{e}")).join(", ")
-                    )
-                })?;
             new_exprs.push(ProjectionExpr {
-                expr: new_expr,
+                expr: self.unproject_expr(&proj_expr.expr)?,
                 alias: proj_expr.alias.clone(),
             });
         }
@@ -450,9 +442,16 @@ impl ProjectionExprs {
     }
 
     /// Project a schema according to this projection.
-    /// For example, for a projection `SELECT a AS x, b + 1 AS y`, where `a` is at index 0 and `b` is at index 1,
-    /// if the input schema is `[a: Int32, b: Int32, c: Int32]`, the output schema would be `[x: Int32, y: Int32]`.
-    /// Fields' metadata are preserved from the input schema.
+    ///
+    /// For example, given a projection:
+    /// * `SELECT a AS x, b + 1 AS y`
+    /// * where `a` is at index 0
+    /// * `b` is at index 1
+    ///
+    /// If the input schema is `[a: Int32, b: Int32, c: Int32]`, the output
+    /// schema would be `[x: Int32, y: Int32]`.
+    ///
+    /// Note that [`Field`] metadata are preserved from the input schema.
     pub fn project_schema(&self, input_schema: &Schema) -> Result<Schema> {
         let fields: Result<Vec<Field>> = self
             .exprs
@@ -479,6 +478,48 @@ impl ProjectionExprs {
             fields?,
             input_schema.metadata().clone(),
         ))
+    }
+
+    /// "unproject" an expression by applying this projection in reverse,
+    /// returning a new set of expressions that reference the original input
+    /// columns.
+    ///
+    /// For example, consider
+    /// * an expression `c1_c2 > 5`, and a schema `[c1, c2]`
+    /// * a projection `c1 + c2 as c1_c2`
+    ///
+    /// This method would rewrite the expression to `c1 + c2 > 5`
+    pub fn unproject_expr(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        update_expr(expr, &self.exprs, true)?.ok_or_else(|| {
+            internal_datafusion_err!(
+                "Failed to unproject an expression {} with ProjectionExprs {}",
+                expr,
+                self.exprs.iter().map(|e| format!("{e}")).join(", ")
+            )
+        })
+    }
+
+    /// "project" an expression using these projection's expressions
+    ///
+    /// For example, consider
+    /// * an expression `c1 + c2 > 5`, and a schema `[c1, c2]`
+    /// * a projection `c1 + c2 as c1_c2`
+    ///
+    /// * This method would rewrite the expression to `c1_c2 > 5`
+    pub fn project_expr(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        update_expr(expr, &self.exprs, false)?.ok_or_else(|| {
+            internal_datafusion_err!(
+                "Failed to project an expression {} with ProjectionExprs {}",
+                expr,
+                self.exprs.iter().map(|e| format!("{e}")).join(", ")
+            )
+        })
     }
 
     /// Create a new [`Projector`] from this projection and an input schema.
@@ -812,26 +853,44 @@ pub fn combine_projections(
     ))
 }
 
-/// The function operates in two modes:
+/// The function projects / unprojects an expression with respect to set of
+/// projection expressions.
 ///
-/// 1) When `sync_with_child` is `true`:
+/// See also [`ProjectionExprs::unproject_expr`] and [`ProjectionExprs::project_expr`]
 ///
-///    The function updates the indices of `expr` if the expression resides
-///    in the input plan. For instance, given the expressions `a@1 + b@2`
-///    and `c@0` with the input schema `c@2, a@0, b@1`, the expressions are
-///    updated to `a@0 + b@1` and `c@2`.
+/// 1) When `unproject` is `true`:
 ///
-/// 2) When `sync_with_child` is `false`:
+///    Rewrites an expression with respect to the projection expressions,
+///    effectively "unprojecting" it to reference the original input columns.
 ///
-///    The function determines how the expression would be updated if a projection
-///    was placed before the plan associated with the expression. If the expression
-///    cannot be rewritten after the projection, it returns `None`. For example,
-///    given the expressions `c@0`, `a@1` and `b@2`, and the projection with
-///    an output schema of `a, c_new`, then `c@0` becomes `c_new@1`, `a@1` becomes
-///    `a@0`, but `b@2` results in `None` since the projection does not include `b`.
+///    For example, given
+///    * the expressions `a@1 + b@2` and `c@0`
+///    * and projection expressions `c@2, a@0, b@1`
+///
+///    Then
+///    * `a@1 + b@2` becomes `a@0 + b@1`
+///    * `c@0` becomes `c@2`
+///
+/// 2) When `unproject` is `false`:
+///
+///    Rewrites the expression to reference the projected expressions,
+///    effectively "projecting" it. The resulting expression will reference the
+///    indices as they appear in the projection.
+///
+///    If the expression cannot be rewritten after the projection, it returns
+///    `None`.
+///
+///    For example, given
+///    * the expressions `c@0`, `a@1` and `b@2`
+///    * the projection `a@1 as a, c@0 as c_new`,
+///
+///    Then
+///    * `c@0` becomes `c_new@1`
+///    * `a@1` becomes `a@0`
+///    * `b@2` results in `None` since the projection does not include `b`.
 ///
 /// # Errors
-/// This function returns an error if `sync_with_child` is `true` and if any expression references
+/// This function returns an error if `unproject` is `true` and if any expression references
 /// an index that is out of bounds for `projected_exprs`.
 /// For example:
 ///
@@ -842,7 +901,7 @@ pub fn combine_projections(
 pub fn update_expr(
     expr: &Arc<dyn PhysicalExpr>,
     projected_exprs: &[ProjectionExpr],
-    sync_with_child: bool,
+    unproject: bool,
 ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
     #[derive(Debug, PartialEq)]
     enum RewriteState {
@@ -866,7 +925,7 @@ pub fn update_expr(
             let Some(column) = expr.as_any().downcast_ref::<Column>() else {
                 return Ok(Transformed::no(expr));
             };
-            if sync_with_child {
+            if unproject {
                 state = RewriteState::RewrittenValid;
                 // Update the index of `column`:
                 let projected_expr = projected_exprs.get(column.index()).ok_or_else(|| {
