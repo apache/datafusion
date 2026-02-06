@@ -152,7 +152,14 @@ mod tests {
         let plan = df.explain(false, false)?.collect().await?;
         // Filters all the way to Parquet
         let formatted = pretty::pretty_format_batches(&plan)?.to_string();
-        assert!(formatted.contains("FilterExec: id@0 = 1"), "{formatted}");
+        let data_source_exec_row = formatted
+            .lines()
+            .find(|line| line.contains("DataSourceExec:"))
+            .unwrap();
+        assert!(
+            data_source_exec_row.contains("predicate=id@0 = 1"),
+            "{formatted}"
+        );
 
         Ok(())
     }

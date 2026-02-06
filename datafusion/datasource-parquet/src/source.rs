@@ -293,6 +293,11 @@ pub struct ParquetSource {
     /// so we still need to sort them after reading, so the reverse scan is inexact.
     /// Used to optimize ORDER BY ... DESC on sorted data.
     reverse_row_groups: bool,
+    /// Tracks filter selectivity across files for adaptive filter reordering.
+    /// Shared across all openers - each opener reads stats and makes its own
+    /// decision about which filters to push down vs. apply post-scan.
+    pub(crate) selectivity_tracker:
+        Arc<parking_lot::RwLock<crate::selectivity::SelectivityTracker>>,
 }
 
 impl ParquetSource {
@@ -318,7 +323,18 @@ impl ParquetSource {
             #[cfg(feature = "parquet_encryption")]
             encryption_factory: None,
             reverse_row_groups: false,
+            selectivity_tracker: Arc::new(parking_lot::RwLock::new(
+                crate::selectivity::SelectivityTracker::default(),
+            )),
         }
+    }
+
+    /// Set the selectivity for converting filters to pre-materialization row filters.
+    pub fn with_filter_pushdown_selectivity(mut self, selectivity: f64) -> Self {
+        self.selectivity_tracker = Arc::new(parking_lot::RwLock::new(
+            crate::selectivity::SelectivityTracker::new(selectivity),
+        ));
+        self
     }
 
     /// Set the `TableParquetOptions` for this ParquetSource.
@@ -326,6 +342,11 @@ impl ParquetSource {
         mut self,
         table_parquet_options: TableParquetOptions,
     ) -> Self {
+        // Update the selectivity tracker threshold from the config
+        let threshold = table_parquet_options.global.filter_effectiveness_threshold;
+        self.selectivity_tracker = Arc::new(parking_lot::RwLock::new(
+            crate::selectivity::SelectivityTracker::new(threshold),
+        ));
         self.table_parquet_options = table_parquet_options;
         self
     }
@@ -460,6 +481,30 @@ impl ParquetSource {
         self.table_parquet_options.global.max_predicate_cache_size
     }
 
+    /// Set the minimum filter effectiveness threshold for adaptive filter pushdown.
+    ///
+    /// When `pushdown_filters` is enabled, filters that don't filter out at least
+    /// this fraction of rows will be demoted from row-level filters to post-scan filters.
+    /// This helps avoid the I/O cost of late materialization for filters that aren't
+    /// selective enough. Valid values are 0.0 to 1.0, where 0.8 means filters must
+    /// filter out at least 80% of rows to remain as row filters. Defaults to 0.8.
+    pub fn with_filter_effectiveness_threshold(mut self, threshold: f64) -> Self {
+        self.table_parquet_options
+            .global
+            .filter_effectiveness_threshold = threshold;
+        self.selectivity_tracker = Arc::new(parking_lot::RwLock::new(
+            crate::selectivity::SelectivityTracker::new(threshold),
+        ));
+        self
+    }
+
+    /// Return the filter effectiveness threshold.
+    pub fn filter_effectiveness_threshold(&self) -> f64 {
+        self.table_parquet_options
+            .global
+            .filter_effectiveness_threshold
+    }
+
     #[cfg(feature = "parquet_encryption")]
     fn get_encryption_factory_with_config(
         &self,
@@ -568,6 +613,7 @@ impl FileSource for ParquetSource {
             encryption_factory: self.get_encryption_factory_with_config(),
             max_predicate_cache_size: self.max_predicate_cache_size(),
             reverse_row_groups: self.reverse_row_groups,
+            selectivity_tracker: Arc::clone(&self.selectivity_tracker),
         });
         Ok(opener)
     }

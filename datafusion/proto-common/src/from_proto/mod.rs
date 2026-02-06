@@ -1090,6 +1090,9 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             max_predicate_cache_size: value.max_predicate_cache_size_opt.map(|opt| match opt {
                 protobuf::parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(v) => Some(v as usize),
             }).unwrap_or(None),
+            filter_effectiveness_threshold: value.filter_effectiveness_threshold_opt.map(|opt| match opt {
+                protobuf::parquet_options::FilterEffectivenessThresholdOpt::FilterEffectivenessThreshold(v) => v,
+            }).unwrap_or(0.8f64),
         })
     }
 }
