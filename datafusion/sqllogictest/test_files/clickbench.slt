@@ -31,6 +31,7 @@ STORED AS PARQUET
 LOCATION '../core/tests/data/clickbench_hits_10.parquet';
 
 # ClickBench encodes EventDate as UInt16 days since epoch.
+# For full setup details, see benchmarks/README.md#clickbench
 statement ok
 CREATE VIEW hits AS
 SELECT * EXCEPT ("EventDate"),
