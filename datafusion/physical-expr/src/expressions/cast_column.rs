@@ -17,14 +17,19 @@
 
 //! Physical expression for struct-aware casting of columns.
 
-use crate::physical_expr::PhysicalExpr;
+use crate::{expressions::Column, physical_expr::PhysicalExpr};
 use arrow::{
-    compute::CastOptions,
+    compute::can_cast_types,
     datatypes::{DataType, FieldRef, Schema},
     record_batch::RecordBatch,
 };
 use datafusion_common::{
-    Result, ScalarValue, format::DEFAULT_CAST_OPTIONS, nested_struct::cast_column,
+    Result, ScalarValue,
+    format::OwnedCastOptions,
+    nested_struct::{
+        cast_column, validate_field_compatibility, validate_struct_compatibility,
+    },
+    plan_err,
 };
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use std::{
@@ -54,8 +59,10 @@ pub struct CastColumnExpr {
     input_field: FieldRef,
     /// The field metadata describing the desired output column.
     target_field: FieldRef,
-    /// Options forwarded to [`cast_column`].
-    cast_options: CastOptions<'static>,
+    /// Options forwarded to [`cast_column`] (owned, allowing dynamic format strings).
+    cast_options: OwnedCastOptions,
+    /// Schema used to resolve expression data types during construction.
+    input_schema: Arc<Schema>,
 }
 
 // Manually derive `PartialEq`/`Hash` as `Arc<dyn PhysicalExpr>` does not
@@ -78,20 +85,132 @@ impl Hash for CastColumnExpr {
     }
 }
 
+fn normalize_cast_options(cast_options: Option<OwnedCastOptions>) -> OwnedCastOptions {
+    cast_options.unwrap_or_default()
+}
+
+/// Validates that a cast is compatible between input and target fields.
+///
+/// This function checks:
+/// - If the expression is a Column, its index is within the schema bounds
+/// - If the expression is a Column, its data type is castable to the input field type
+/// - The input field can be cast to the target field (using validate_field_compatibility)
+/// - For struct types, field compatibility is validated recursively via validate_struct_compatibility
+fn validate_cast_compatibility(
+    expr: &Arc<dyn PhysicalExpr>,
+    input_field: &FieldRef,
+    target_field: &FieldRef,
+    input_schema: &Schema,
+) -> Result<()> {
+    // Validate that if the expression is a Column, it's within the schema bounds
+    if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+        let fields = input_schema.fields();
+        if column.index() >= fields.len() {
+            return plan_err!(
+                "CastColumnExpr column index {} is out of bounds for input schema with {} fields",
+                column.index(),
+                fields.len()
+            );
+        }
+
+        // Validate that the column's field data type is compatible with the input_field for casting.
+        // We use can_cast_types for this check since schema fields may have different names/metadata.
+        let schema_field = &fields[column.index()];
+        if schema_field.data_type() != input_field.data_type() {
+            let is_compatible =
+                can_cast_types(schema_field.data_type(), input_field.data_type());
+            if !is_compatible {
+                return plan_err!(
+                    "CastColumnExpr column '{}' at index {} has data type '{}' which is not compatible with input field data type '{}' - they cannot be cast",
+                    column.name(),
+                    column.index(),
+                    schema_field.data_type(),
+                    input_field.data_type()
+                );
+            }
+        }
+    }
+
+    // Validate the cast from input_field to target_field using the same logic as nested_struct.
+    // This ensures consistent nullability and data type checking across all field contexts.
+    match (input_field.data_type(), target_field.data_type()) {
+        (DataType::Struct(source_fields), DataType::Struct(target_fields)) => {
+            validate_struct_compatibility(source_fields, target_fields)?;
+        }
+        (_, DataType::Struct(_)) => {
+            return plan_err!(
+                "CastColumnExpr cannot cast non-struct input '{}' to struct target '{}'",
+                input_field.data_type(),
+                target_field.data_type()
+            );
+        }
+        _ => {
+            // For non-struct types, use the same field validation as struct fields.
+            // This ensures consistent nullability checking across all contexts.
+            validate_field_compatibility(input_field, target_field)?;
+        }
+    }
+
+    Ok(())
+}
+
 impl CastColumnExpr {
+    fn build(
+        expr: Arc<dyn PhysicalExpr>,
+        input_field: FieldRef,
+        target_field: FieldRef,
+        cast_options: Option<OwnedCastOptions>,
+        input_schema: Arc<Schema>,
+    ) -> Result<Self> {
+        let cast_options = normalize_cast_options(cast_options);
+
+        // Validate cast compatibility before constructing the expression
+        validate_cast_compatibility(&expr, &input_field, &target_field, &input_schema)?;
+
+        Ok(Self {
+            expr,
+            input_field,
+            target_field,
+            cast_options,
+            input_schema,
+        })
+    }
+
     /// Create a new [`CastColumnExpr`].
+    ///
+    /// This constructor ensures that format options are populated with defaults,
+    /// normalizing the CastOptions for consistent behavior during serialization
+    /// and evaluation. It constructs a single-field schema from `input_field`,
+    /// so it should only be used for expressions that resolve their type from
+    /// that field alone.
     pub fn new(
         expr: Arc<dyn PhysicalExpr>,
         input_field: FieldRef,
         target_field: FieldRef,
-        cast_options: Option<CastOptions<'static>>,
-    ) -> Self {
-        Self {
+        cast_options: Option<OwnedCastOptions>,
+    ) -> Result<Self> {
+        let input_schema = Schema::new(vec![input_field.as_ref().clone()]);
+        Self::build(
             expr,
             input_field,
             target_field,
-            cast_options: cast_options.unwrap_or(DEFAULT_CAST_OPTIONS),
-        }
+            cast_options,
+            Arc::new(input_schema),
+        )
+    }
+
+    /// Create a new [`CastColumnExpr`] with a specific input schema.
+    ///
+    /// Use this constructor when the expression depends on a broader schema,
+    /// such as multi-column expressions or columns with non-zero indexes.
+    pub fn new_with_schema(
+        expr: Arc<dyn PhysicalExpr>,
+        input_field: FieldRef,
+        target_field: FieldRef,
+        cast_options: Option<OwnedCastOptions>,
+        input_schema: Arc<Schema>,
+    ) -> Result<Self> {
+        Self::build(expr, input_field, target_field, cast_options, input_schema)
     }
 
     /// The expression that produces the value to be cast.
@@ -107,6 +226,11 @@ impl CastColumnExpr {
     /// Field metadata describing the output column after casting.
     pub fn target_field(&self) -> &FieldRef {
         &self.target_field
+    }
+
+    /// Options forwarded to [`cast_column`].
+    pub fn cast_options(&self) -> &OwnedCastOptions {
+        &self.cast_options
     }
 }
 
@@ -136,19 +260,18 @@ impl PhysicalExpr for CastColumnExpr {
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let value = self.expr.evaluate(batch)?;
+        // Convert OwnedCastOptions to arrow's CastOptions for the computation
+        let arrow_options = self.cast_options.as_arrow_options();
         match value {
             ColumnarValue::Array(array) => {
                 let casted =
-                    cast_column(&array, self.target_field.as_ref(), &self.cast_options)?;
+                    cast_column(&array, self.target_field.as_ref(), &arrow_options)?;
                 Ok(ColumnarValue::Array(casted))
             }
             ColumnarValue::Scalar(scalar) => {
                 let as_array = scalar.to_array_of_size(1)?;
-                let casted = cast_column(
-                    &as_array,
-                    self.target_field.as_ref(),
-                    &self.cast_options,
-                )?;
+                let casted =
+                    cast_column(&as_array, self.target_field.as_ref(), &arrow_options)?;
                 let result = ScalarValue::try_from_array(casted.as_ref(), 0)?;
                 Ok(ColumnarValue::Scalar(result))
             }
@@ -169,12 +292,13 @@ impl PhysicalExpr for CastColumnExpr {
     ) -> Result<Arc<dyn PhysicalExpr>> {
         assert_eq!(children.len(), 1);
         let child = children.pop().expect("CastColumnExpr child");
-        Ok(Arc::new(Self::new(
+        Ok(Arc::new(Self::new_with_schema(
             child,
             Arc::clone(&self.input_field),
             Arc::clone(&self.target_field),
             Some(self.cast_options.clone()),
-        )))
+            Arc::clone(&self.input_schema),
+        )?))
     }
 
     fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -192,7 +316,7 @@ mod tests {
         datatypes::{DataType, Field, Fields, SchemaRef},
     };
     use datafusion_common::{
-        Result as DFResult, ScalarValue,
+        Result as DFResult, ScalarValue, assert_contains,
         cast::{as_int64_array, as_string_array, as_struct_array, as_uint8_array},
     };
 
@@ -214,12 +338,13 @@ mod tests {
         let batch = RecordBatch::try_new(Arc::clone(&schema), vec![values])?;
 
         let column = Arc::new(Column::new_with_schema("a", schema.as_ref())?);
-        let expr = CastColumnExpr::new(
+        let expr = CastColumnExpr::new_with_schema(
             column,
             Arc::new(input_field.clone()),
             Arc::new(target_field.clone()),
             None,
-        );
+            Arc::clone(&schema),
+        )?;
 
         let result = expr.evaluate(&batch)?;
         let ColumnarValue::Array(array) = result else {
@@ -268,12 +393,13 @@ mod tests {
         )?;
 
         let column = Arc::new(Column::new_with_schema("s", schema.as_ref())?);
-        let expr = CastColumnExpr::new(
+        let expr = CastColumnExpr::new_with_schema(
             column,
             Arc::new(input_field.clone()),
             Arc::new(target_field.clone()),
             None,
-        );
+            Arc::clone(&schema),
+        )?;
 
         let result = expr.evaluate(&batch)?;
         let ColumnarValue::Array(array) = result else {
@@ -338,12 +464,13 @@ mod tests {
         )?;
 
         let column = Arc::new(Column::new_with_schema("root", schema.as_ref())?);
-        let expr = CastColumnExpr::new(
+        let expr = CastColumnExpr::new_with_schema(
             column,
             Arc::new(outer_field.clone()),
             Arc::new(target_field.clone()),
             None,
-        );
+            Arc::clone(&schema),
+        )?;
 
         let result = expr.evaluate(&batch)?;
         let ColumnarValue::Array(array) = result else {
@@ -389,12 +516,13 @@ mod tests {
         );
         let literal =
             Arc::new(Literal::new(ScalarValue::Struct(Arc::new(scalar_struct))));
-        let expr = CastColumnExpr::new(
+        let expr = CastColumnExpr::new_with_schema(
             literal,
             Arc::new(input_field.clone()),
             Arc::new(target_field.clone()),
             None,
-        );
+            Arc::clone(&schema),
+        )?;
 
         let batch = RecordBatch::new_empty(Arc::clone(&schema));
         let result = expr.evaluate(&batch)?;
@@ -405,5 +533,62 @@ mod tests {
         let casted = as_uint8_array(casted.as_ref())?;
         assert_eq!(casted.value(0), 9);
         Ok(())
+    }
+
+    #[test]
+    fn cast_column_schema_mismatch() {
+        // Test that an error is raised when data types are not compatible for casting
+        let input_field = Field::new("a", DataType::Int32, true);
+        let target_field = Field::new("a", DataType::Int32, true);
+        let schema = Arc::new(Schema::new(vec![
+            input_field.clone(),
+            Field::new(
+                "b",
+                DataType::Struct(
+                    vec![Field::new("nested", DataType::Int32, true)].into(),
+                ),
+                true,
+            ),
+        ]));
+
+        let column = Arc::new(Column::new("b", 1));
+        let err = CastColumnExpr::new_with_schema(
+            column,
+            Arc::new(input_field),
+            Arc::new(target_field),
+            None,
+            schema,
+        )
+        .expect_err("expected incompatible data type error");
+
+        assert_contains!(
+            err.to_string(),
+            r#"CastColumnExpr column 'b' at index 1 has data type 'Struct("nested": Int32)' which is not compatible with input field data type 'Int32' - they cannot be cast"#
+        );
+    }
+
+    #[test]
+    fn cast_column_schema_mismatch_nullability_metadata() {
+        // CastColumnExpr reuses validate_field_compatibility from nested_struct,
+        // it properly rejects nullable -> non-nullable casts to prevent data loss.
+        let input_field = Field::new("a", DataType::Int32, true); // nullable
+        let target_field = Field::new("a", DataType::Int32, false); // non-nullable
+        let schema = Arc::new(Schema::new(vec![input_field.clone()]));
+
+        let column = Arc::new(Column::new("a", 0));
+
+        let err = CastColumnExpr::new_with_schema(
+            column,
+            Arc::new(input_field),
+            Arc::new(target_field),
+            None,
+            schema,
+        )
+        .expect_err("should reject nullable -> non-nullable cast");
+
+        assert_contains!(
+            err.to_string(),
+            "Cannot cast nullable struct field 'a' to non-nullable field"
+        );
     }
 }
