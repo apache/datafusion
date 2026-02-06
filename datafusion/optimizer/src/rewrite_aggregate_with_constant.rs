@@ -135,9 +135,20 @@ fn analyze_aggregate(aggregate: &Aggregate) -> Result<RewriteGroups> {
     Ok(groups)
 }
 
-/// Extract SUM(base_expr ± constant) pattern from an expression
+/// Extract SUM(base_expr ± constant) pattern from an expression.
+/// Handles both `Expr::AggregateFunction(...)` and `Expr::Alias(Expr::AggregateFunction(...))`
+/// so the rule works regardless of whether aggregate expressions carry aliases
+/// (e.g., when plans are built via the LogicalPlanBuilder API).
 fn extract_sum_with_constant(expr: &Expr, idx: usize) -> Result<Option<SumWithConstant>> {
-    match expr {
+    // Unwrap Expr::Alias if present — the SQL planner puts aliases in a
+    // Projection above the Aggregate, but the builder API allows aliases
+    // directly inside aggr_expr.
+    let inner = match expr {
+        Expr::Alias(alias) => alias.expr.as_ref(),
+        other => other,
+    };
+
+    match inner {
         Expr::AggregateFunction(agg_fn) => {
             // Rule only applies to SUM
             if agg_fn.func.name().to_lowercase() != "sum" {
@@ -208,6 +219,7 @@ fn extract_sum_with_constant(expr: &Expr, idx: usize) -> Result<Option<SumWithCo
 }
 
 /// Check if a scalar value is a numeric constant
+/// (guards against non-arithmetic types like strings, booleans, dates, etc.)
 fn is_numeric_constant(value: &ScalarValue) -> bool {
     matches!(
         value,
@@ -226,12 +238,21 @@ fn is_numeric_constant(value: &ScalarValue) -> bool {
     )
 }
 
-/// Check if an expression is a plain SUM(base_expr) that matches one of our rewrite groups
+/// Check if an expression is a plain SUM(base_expr) that matches one of our rewrite groups.
+/// Handles both `Expr::AggregateFunction(...)` and `Expr::Alias(Expr::AggregateFunction(...))`
+/// so that aliased plain SUMs (e.g., `SUM(a) AS total`) are correctly detected and reused
+/// instead of being duplicated in the new Aggregate node.
 fn check_plain_sum_in_group(
     expr: &Expr,
     base_expr_indices: &IndexMap<String, (usize, usize)>,
 ) -> Option<(usize, usize)> {
-    if let Expr::AggregateFunction(agg_fn) = expr
+    // Unwrap alias if present
+    let inner = match expr {
+        Expr::Alias(alias) => alias.expr.as_ref(),
+        other => other,
+    };
+
+    if let Expr::AggregateFunction(agg_fn) = inner
         && agg_fn.func.name().to_lowercase() == "sum"
         && agg_fn.params.args.len() == 1
         && !agg_fn.params.distinct
@@ -327,8 +348,13 @@ fn transform_aggregate(
                 check_plain_sum_in_group(orig_expr, &base_expr_indices);
 
             if is_plain_sum_in_group.is_some() {
-                // Use the already-computed SUM
-                let base_key = if let Expr::AggregateFunction(agg_fn) = orig_expr {
+                // Use the already-computed SUM.
+                // Unwrap alias to get to the AggregateFunction and extract the base key.
+                let inner_expr = match orig_expr {
+                    Expr::Alias(alias) => alias.expr.as_ref(),
+                    other => other,
+                };
+                let base_key = if let Expr::AggregateFunction(agg_fn) = inner_expr {
                     agg_fn.params.args[0].schema_name().to_string()
                 } else {
                     String::new()
@@ -445,6 +471,98 @@ mod tests {
 
         // Should NOT be transformed (no constants)
         assert!(!result.transformed);
+        Ok(())
+    }
+
+    /// Test that aliased SUM(col ± constant) expressions are correctly detected
+    /// and rewritten. This exercises the Expr::Alias unwrapping in
+    /// `extract_sum_with_constant`.
+    ///
+    /// Note: The SQL planner puts aliases in a Projection above the Aggregate,
+    /// so this case only arises when building plans via the LogicalPlanBuilder API.
+    #[test]
+    fn test_aliased_sum_with_constant() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                Vec::<Expr>::new(),
+                vec![
+                    sum(col("a") + lit(1)).alias("sum_a_plus_1"),
+                    sum(col("a") + lit(2)).alias("sum_a_plus_2"),
+                ],
+            )?
+            .build()?;
+
+        let rule = RewriteAggregateWithConstant::new();
+        let config = OptimizerContext::new();
+        let result = rule.rewrite(plan, &config)?;
+
+        // Should be transformed: both aliased SUMs share base column "a"
+        assert!(result.transformed);
+
+        // The rewritten plan should be a Projection on top of an Aggregate
+        let plan_str = format!("{}", result.data.display_indent());
+        assert!(
+            plan_str.contains("Projection:"),
+            "Expected Projection node in rewritten plan, got:\n{plan_str}"
+        );
+        // The new aggregate should have SUM(a) and COUNT(a), not two separate SUMs
+        assert!(
+            plan_str.contains("sum(test.a)") && plan_str.contains("count(test.a)"),
+            "Expected SUM(a) and COUNT(a) in rewritten plan, got:\n{plan_str}"
+        );
+        Ok(())
+    }
+
+    /// Test that an aliased plain SUM(a) alongside SUM(a+1) and SUM(a+2) is
+    /// correctly detected as a "plain SUM in group" and reused, rather than
+    /// being duplicated in the new Aggregate node.
+    ///
+    /// This exercises the Expr::Alias unwrapping in `check_plain_sum_in_group`.
+    #[test]
+    fn test_aliased_plain_sum_in_group() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                Vec::<Expr>::new(),
+                vec![
+                    // This plain SUM(a) is aliased — it should be detected
+                    // as matching the rewrite group for "a" and reused.
+                    sum(col("a")).alias("total_a"),
+                    sum(col("a") + lit(1)),
+                    sum(col("a") + lit(2)),
+                ],
+            )?
+            .build()?;
+
+        let rule = RewriteAggregateWithConstant::new();
+        let config = OptimizerContext::new();
+        let result = rule.rewrite(plan, &config)?;
+
+        // Should be transformed
+        assert!(result.transformed);
+
+        let plan_str = format!("{}", result.data.display_indent());
+
+        // The rewritten plan should contain "total_a" alias in the Projection
+        assert!(
+            plan_str.contains("total_a"),
+            "Expected alias 'total_a' in rewritten plan, got:\n{plan_str}"
+        );
+
+        // The Aggregate node should contain exactly one SUM(a) and one COUNT(a),
+        // NOT a duplicate SUM(a). Count occurrences of "sum(test.a)" in the
+        // Aggregate line (not the Projection line).
+        let aggr_line = plan_str
+            .lines()
+            .find(|l| l.contains("Aggregate:"))
+            .expect("should have Aggregate node");
+        let sum_count = aggr_line.matches("sum(test.a)").count();
+        assert_eq!(
+            sum_count, 1,
+            "Expected exactly 1 SUM(test.a) in Aggregate (no duplicate), got {sum_count} in:\n{aggr_line}"
+        );
+
         Ok(())
     }
 }

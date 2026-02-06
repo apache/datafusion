@@ -621,6 +621,61 @@ physical_plan
 07)------------FilterExec: a@0 > 3
 08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
 
+# ==== Test 13: Constant on the left side (Commutative property) ====
+
+# Test: SUM(constant + a) should be rewritten to SUM(a) + constant * COUNT(a)
+query TT
+EXPLAIN SELECT
+    SUM(5 + a) as sum_5_plus_a,
+    SUM(10 + a) as sum_10_plus_a
+FROM test_table;
+----
+logical_plan
+01)Projection: sum(test_table.a) + Int64(5) * count(test_table.a) AS sum_5_plus_a, sum(test_table.a) + Int64(10) * count(test_table.a) AS sum_10_plus_a
+02)--Aggregate: groupBy=[[]], aggr=[[sum(__common_expr_1 AS test_table.a), count(__common_expr_1 AS test_table.a)]]
+03)----Projection: CAST(test_table.a AS Int64) AS __common_expr_1
+04)------TableScan: test_table projection=[a]
+physical_plan
+01)ProjectionExec: expr=[sum(test_table.a)@0 + 5 * count(test_table.a)@1 as sum_5_plus_a, sum(test_table.a)@0 + 10 * count(test_table.a)@1 as sum_10_plus_a]
+02)--AggregateExec: mode=Single, gby=[], aggr=[sum(test_table.a), count(test_table.a)]
+03)----ProjectionExec: expr=[CAST(a@0 AS Int64) as __common_expr_1]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query II
+SELECT
+    SUM(5 + a) as sum_5_plus_a,
+    SUM(10 + a) as sum_10_plus_a
+FROM test_table;
+----
+40 65
+
+# ==== Test 14: Constant on the left side with subtraction (SHOULD NOT rewrite) ====
+
+# Test: SUM(constant - a) should NOT be rewritten because 5 - a is NOT a - 5.
+# The rule intentionally only handles constant + col and col - constant.
+query TT
+EXPLAIN SELECT
+    SUM(5 - a),
+    SUM(10 - a)
+FROM test_table;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[sum(Int64(5) - __common_expr_1 AS test_table.a), sum(Int64(10) - __common_expr_1 AS test_table.a)]]
+02)--Projection: CAST(test_table.a AS Int64) AS __common_expr_1
+03)----TableScan: test_table projection=[a]
+physical_plan
+01)AggregateExec: mode=Single, gby=[], aggr=[sum(Int64(5) - test_table.a), sum(Int64(10) - test_table.a)]
+02)--ProjectionExec: expr=[CAST(a@0 AS Int64) as __common_expr_1]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+query II
+SELECT
+    SUM(5 - a),
+    SUM(10 - a)
+FROM test_table;
+----
+10 35
+
 # ==== Cleanup ====
 
 
