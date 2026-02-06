@@ -44,7 +44,6 @@ use datafusion_common::{
 };
 use datafusion_physical_expr::{expressions::Column, utils::reassign_expr_columns};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use itertools::Itertools;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FilterPushdownPhase {
@@ -317,7 +316,8 @@ pub struct ChildFilterDescription {
 /// exist in the target schema. If any column in the filter is not present
 /// in the schema, the filter cannot be pushed down to that child.
 pub(crate) struct FilterColumnChecker<'a> {
-    column_names: HashSet<&'a str>,
+    /// The set of `(column_name, column_index)` pairs that are allowed.
+    allowed_columns: HashSet<(&'a str, usize)>,
 }
 
 impl<'a> FilterColumnChecker<'a> {
@@ -325,13 +325,24 @@ impl<'a> FilterColumnChecker<'a> {
     ///
     /// Extracts all column names from the schema's fields to build
     /// a lookup set for efficient column existence checks.
-    pub(crate) fn new(input_schema: &'a Schema) -> Self {
-        let column_names: HashSet<&str> = input_schema
+    pub(crate) fn new_schema(input_schema: &'a Schema) -> Self {
+        let allowed_columns: HashSet<(&str, usize)> = input_schema
             .fields()
             .iter()
-            .map(|f| f.name().as_str())
+            .enumerate()
+            .map(|(i, f)| (f.name().as_str(), i))
             .collect();
-        Self { column_names }
+        Self { allowed_columns }
+    }
+
+    /// Creates a new [`FilterColumnChecker`] from an explicit set of
+    /// allowed `(name, index)` pairs.
+    ///
+    /// This is used by join nodes that need to restrict pushdown to columns
+    /// belonging to a specific side of the join, even when different sides
+    /// have columns with the same name (e.g. nested mark joins).
+    pub(crate) fn new_columns(allowed_columns: HashSet<(&'a str, usize)>) -> Self {
+        Self { allowed_columns }
     }
 
     /// Checks whether a filter expression can be pushed down to the child
@@ -347,7 +358,9 @@ impl<'a> FilterColumnChecker<'a> {
         filter
             .apply(|expr| {
                 if let Some(column) = expr.as_any().downcast_ref::<Column>()
-                    && !self.column_names.contains(column.name())
+                    && !self
+                        .allowed_columns
+                        .contains(&(column.name(), column.index()))
                 {
                     can_apply = false;
                     return Ok(TreeNodeRecursion::Stop);
@@ -375,7 +388,7 @@ impl ChildFilterDescription {
         let child_schema = child.schema();
 
         // Build a set of column names in the child schema for quick lookup
-        let checker = FilterColumnChecker::new(&child_schema);
+        let checker = FilterColumnChecker::new_schema(&child_schema);
 
         // Analyze each parent filter
         let mut child_parent_filters = Vec::with_capacity(parent_filters.len());
@@ -399,6 +412,52 @@ impl ChildFilterDescription {
             parent_filters: child_parent_filters,
             self_filters: vec![],
         })
+    }
+
+    /// Like [`Self::from_child`], but restricts which parent-level columns are
+    /// considered reachable through this child.
+    ///
+    /// `allowed_columns` is a set of `(column_name, column_index)` pairs
+    /// (in the *parent* schema) that map to this child's side of a join.
+    /// A filter is only eligible for pushdown when **every** column it
+    /// references appears in `allowed_columns`. This prevents incorrect
+    /// pushdown when different join sides have columns with the same name
+    pub fn from_child_with_allowed_columns(
+        parent_filters: &[Arc<dyn PhysicalExpr>],
+        allowed_columns: HashSet<(&str, usize)>,
+        child: &Arc<dyn crate::ExecutionPlan>,
+    ) -> Result<Self> {
+        let child_schema = child.schema();
+        let checker = FilterColumnChecker::new_columns(allowed_columns);
+
+        let mut child_parent_filters = Vec::with_capacity(parent_filters.len());
+        for filter in parent_filters {
+            if checker.can_pushdown(filter) {
+                let reassigned_filter =
+                    reassign_expr_columns(Arc::clone(filter), &child_schema)?;
+                child_parent_filters
+                    .push(PushedDownPredicate::supported(reassigned_filter));
+            } else {
+                child_parent_filters
+                    .push(PushedDownPredicate::unsupported(Arc::clone(filter)));
+            }
+        }
+
+        Ok(Self {
+            parent_filters: child_parent_filters,
+            self_filters: vec![],
+        })
+    }
+
+    /// Mark all parent filters as unsupported for this child.
+    pub fn all_unsupported(parent_filters: &[Arc<dyn PhysicalExpr>]) -> Self {
+        Self {
+            parent_filters: parent_filters
+                .iter()
+                .map(|f| PushedDownPredicate::unsupported(Arc::clone(f)))
+                .collect(),
+            self_filters: vec![],
+        }
     }
 
     /// Add a self filter (from the current node) to be pushed down to this child.
@@ -476,15 +535,9 @@ impl FilterDescription {
         children: &[&Arc<dyn crate::ExecutionPlan>],
     ) -> Self {
         let mut desc = Self::new();
-        let child_filters = parent_filters
-            .iter()
-            .map(|f| PushedDownPredicate::unsupported(Arc::clone(f)))
-            .collect_vec();
         for _ in 0..children.len() {
-            desc = desc.with_child(ChildFilterDescription {
-                parent_filters: child_filters.clone(),
-                self_filters: vec![],
-            });
+            desc =
+                desc.with_child(ChildFilterDescription::all_unsupported(parent_filters));
         }
         desc
     }
