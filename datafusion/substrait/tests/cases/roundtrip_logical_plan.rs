@@ -271,11 +271,11 @@ async fn select_with_reused_functions() -> Result<()> {
     let mut functions = proto
         .extensions
         .iter()
-        .map(|e| match e.mapping_type.as_ref().unwrap() {
+        .filter_map(|e| match e.mapping_type.as_ref().unwrap() {
             MappingType::ExtensionFunction(ext_f) => {
-                (ext_f.function_anchor, ext_f.name.to_owned())
+                Some((ext_f.function_anchor, ext_f.name.to_owned()))
             }
-            _ => unreachable!("Non-function extensions not expected"),
+            _ => None, // Skip type extensions (e.g., for unsigned integers)
         })
         .collect::<Vec<_>>();
     functions.sort_by_key(|(anchor, _)| *anchor);
