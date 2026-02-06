@@ -235,8 +235,8 @@ async fn test_physical_expr_adapter_with_non_null_defaults() {
     // Table schema has additional columns c2 (Utf8) and c3 (Int64) that don't exist in file
     let table_schema = Arc::new(Schema::new(vec![
         Field::new("c1", DataType::Int64, true), // type differs from file (Int32 vs Int64)
-        Field::new("c2", DataType::Utf8, true),   // missing from file
-        Field::new("c3", DataType::Int64, true),  // missing from file
+        Field::new("c2", DataType::Utf8, true),  // missing from file
+        Field::new("c3", DataType::Int64, true), // missing from file
     ]));
 
     let mut cfg = SessionConfig::new()
