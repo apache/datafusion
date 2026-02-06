@@ -81,6 +81,11 @@ jobs:
           rustup toolchain install
       - name: Install Protobuf Compiler
         run: sudo apt-get install -y protobuf-compiler
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5  # v2.8.2
+        with:
+          shared-key: "extended-build"
+          save-if: ${{ github.ref_name == 'main' }}
       - name: Prepare cargo build
         run: |
           cargo check --profile ci --all-targets
@@ -107,6 +112,11 @@ jobs:
           rustup toolchain install
       - name: Install Protobuf Compiler
         run: sudo apt-get install -y protobuf-compiler
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5  # v2.8.2
+        with:
+          shared-key: "extended-test"
+          save-if: ${{ github.ref_name == 'main' }}
       # For debugging, test binaries can be large.
       - name: Show available disk space
         run: |
@@ -146,6 +156,11 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5  # v2.8.2
+        with:
+          shared-key: "extended-hash-collisions"
+          save-if: ${{ github.ref_name == 'main' }}
       - name: Run tests
         run: |
           cd datafusion
@@ -167,6 +182,11 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5  # v2.8.2
+        with:
+          shared-key: "extended-sqllogictest"
+          save-if: ${{ github.ref_name == 'main' }}
       - name: Run sqllogictest
         run: |
           cargo test --features backtrace,parquet_encryption --profile release-nonlto --test sqllogictests -- --include-sqlite

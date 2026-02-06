@@ -33,6 +33,11 @@ jobs:
     name: Check License Header
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5  # v2.8.2
+        with:
+          shared-key: "dev-license-header"
+          cache-targets: false
       - name: Install HawkEye
       # This CI job is bound by installation time, use `--profile dev` to speed it up
         run: cargo install hawkeye --version 6.2.0 --locked --profile dev
@@ -58,6 +63,11 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           persist-credentials: false
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5  # v2.8.2
+        with:
+          shared-key: "dev-typos"
+          cache-targets: false
       # Version fixed on purpose. It uses heuristics to detect typos, so upgrading 
       # it may cause checks to fail more often.
       # We can upgrade it manually once a while.
