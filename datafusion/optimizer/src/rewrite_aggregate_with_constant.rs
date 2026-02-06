@@ -20,9 +20,11 @@
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 
+use std::collections::HashMap;
+
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::expr::{AggregateFunctionParams, Sort};
+use datafusion_expr::expr::AggregateFunctionParams;
 use datafusion_expr::{
     Aggregate, BinaryExpr, Expr, LogicalPlan, LogicalPlanBuilder, Operator, binary_expr,
     col, lit,
@@ -95,19 +97,21 @@ impl OptimizerRule for RewriteAggregateWithConstant {
     }
 }
 
-/// Internal structure to track metadata for a SUM expression that qualifies for rewrite
+/// Internal structure to track metadata for a SUM expression that qualifies for rewrite.
 #[derive(Debug, Clone)]
 struct SumWithConstant {
-    /// The inner expression being manipulated (e.g., the 'a' in SUM(a + 1))
+    /// The inner expression being summed (e.g., the `a` in `SUM(a + 1)`)
     base_expr: Expr,
-    /// The constant value being added/subtracted
+    /// The constant value being added/subtracted (e.g., `1` in `SUM(a + 1)`)
     constant: ScalarValue,
-    /// The operator (+ or -)
+    /// The operator (`+` or `-`)
     operator: Operator,
-    /// The index in the original Aggregate's aggr_expr list, used to maintain output order
+    /// The index in the original Aggregate's `aggr_expr` list, used to maintain output order
     original_index: usize,
-    /// Any ORDER BY clause inside the aggregate (e.g., SUM(a+1 ORDER BY b))
-    order_by: Vec<Sort>,
+    // Note: ORDER BY inside SUM is irrelevant because SUM is commutative —
+    // the order of addition doesn't change the result. If this rule is ever
+    // extended to non-commutative aggregates, ORDER BY handling would need
+    // to be added back.
 }
 
 /// Maps a base expression's schema name to all its SUM(base ± const) variants.
@@ -159,7 +163,7 @@ fn extract_sum_with_constant(expr: &Expr, idx: usize) -> Result<Option<SumWithCo
                 args,
                 distinct,
                 filter,
-                order_by,
+                order_by: _,
                 null_treatment: _,
             } = &agg_fn.params;
 
@@ -185,6 +189,7 @@ fn extract_sum_with_constant(expr: &Expr, idx: usize) -> Result<Option<SumWithCo
                 && matches!(op, Operator::Plus | Operator::Minus)
             {
                 // Check if right side is a literal constant
+                // Check if right side is a literal constant (e.g., SUM(a + 1))
                 if let Expr::Literal(constant, _) = right.as_ref()
                     && is_numeric_constant(constant)
                 {
@@ -193,11 +198,11 @@ fn extract_sum_with_constant(expr: &Expr, idx: usize) -> Result<Option<SumWithCo
                         constant: constant.clone(),
                         operator: *op,
                         original_index: idx,
-                        order_by: order_by.clone(),
                     }));
                 }
 
-                // Also check left side (for patterns like: constant + base_expr)
+                // Also check left side for commutative addition (e.g., SUM(1 + a))
+                // Does NOT apply to subtraction: SUM(5 - a) ≠ SUM(a - 5)
                 if let Expr::Literal(constant, _) = left.as_ref()
                     && is_numeric_constant(constant)
                     && *op == Operator::Plus
@@ -207,7 +212,6 @@ fn extract_sum_with_constant(expr: &Expr, idx: usize) -> Result<Option<SumWithCo
                         constant: constant.clone(),
                         operator: Operator::Plus,
                         original_index: idx,
-                        order_by: order_by.clone(),
                     }));
                 }
             }
@@ -238,14 +242,19 @@ fn is_numeric_constant(value: &ScalarValue) -> bool {
     )
 }
 
-/// Check if an expression is a plain SUM(base_expr) that matches one of our rewrite groups.
+/// Check if an expression is a plain `SUM(base_expr)` whose base expression matches
+/// one of our rewrite groups. Returns `Some(base_key)` if matched, `None` otherwise.
+///
 /// Handles both `Expr::AggregateFunction(...)` and `Expr::Alias(Expr::AggregateFunction(...))`
 /// so that aliased plain SUMs (e.g., `SUM(a) AS total`) are correctly detected and reused
 /// instead of being duplicated in the new Aggregate node.
+///
+/// Returning the `base_key` directly eliminates the need for the caller to re-extract it
+/// from the expression (avoiding a potential panic on impossible-to-reach fallback paths).
 fn check_plain_sum_in_group(
     expr: &Expr,
-    base_expr_indices: &IndexMap<String, (usize, usize)>,
-) -> Option<(usize, usize)> {
+    known_base_keys: &IndexMap<String, (usize, usize)>,
+) -> Option<String> {
     // Unwrap alias if present
     let inner = match expr {
         Expr::Alias(alias) => alias.expr.as_ref(),
@@ -260,127 +269,117 @@ fn check_plain_sum_in_group(
     {
         let arg = &agg_fn.params.args[0];
         let base_key = arg.schema_name().to_string();
-        return base_expr_indices.get(&base_key).copied();
+        if known_base_keys.contains_key(&base_key) {
+            return Some(base_key);
+        }
     }
     None
 }
 
-/// Transform the aggregate plan by rewriting SUM(col ± constant) expressions
+/// Alias `expr` to match the output column name of `orig_expr`.
+///
+/// If `orig_expr` is `Expr::Alias(name)`, the result is aliased to that name.
+/// Otherwise, the result is aliased to `orig_expr.schema_name()` to preserve
+/// the auto-generated column name (e.g., `"sum(t.a + Int64(1))"`).
+fn alias_like(expr: Expr, orig_expr: &Expr) -> Expr {
+    match orig_expr {
+        Expr::Alias(alias) => expr.alias(alias.name.clone()),
+        _ => expr.alias(orig_expr.schema_name().to_string()),
+    }
+}
+
+/// Transform the aggregate plan by rewriting SUM(col ± constant) expressions.
+///
+/// Replaces the original `Aggregate` node with:
+///   1. A new `Aggregate` containing one `SUM(base)` + one `COUNT(base)` per group,
+///      plus any unrelated expressions passed through.
+///   2. A `Projection` on top that derives each original output column using
+///      the formula: `SUM(base) ± constant * COUNT(base)`.
 fn transform_aggregate(
     aggregate: Aggregate,
     rewrite_groups: &RewriteGroups,
 ) -> Result<Transformed<LogicalPlan>> {
-    let mut new_aggr_exprs = Vec::new();
-    let mut projection_exprs = Vec::new();
+    let mut new_aggr_exprs: Vec<Expr> = Vec::new();
+    let mut projection_exprs: Vec<Expr> = Vec::new();
 
-    // Build a flat list of all SUMs to rewrite, sorted by original index
-    let mut all_sums: Vec<SumWithConstant> = rewrite_groups
+    // (Fix 1) Build a HashMap for O(1) lookup of rewritable expressions by their
+    // original index, replacing the previous O(n*m) linear scan with `.find()`.
+    let rewrite_lookup: HashMap<usize, &SumWithConstant> = rewrite_groups
         .values()
-        .flat_map(|v| v.iter().cloned())
+        .flatten()
+        .map(|s| (s.original_index, s))
         .collect();
-    all_sums.sort_by_key(|s| s.original_index);
 
-    // Maps base column names to the indices of their new SUM/COUNT in the new Aggregate node
+    // (Fix 2+6) Single map from base expression key to (sum_index, count_index)
+    // in `new_aggr_exprs`. We derive SUM/COUNT names directly from
+    // `new_aggr_exprs[index].schema_name()` instead of maintaining parallel
+    // `sum_names` / `count_names` maps that could go out of sync.
     let mut base_expr_indices: IndexMap<String, (usize, usize)> = IndexMap::new();
 
-    // Process each group to determine what to add to the aggregate
-    let mut sum_names: IndexMap<String, String> = IndexMap::new();
-    let mut count_names: IndexMap<String, String> = IndexMap::new();
-
-    // For every group (e.g., all SUMs involving column 'a'), add one SUM(a) and one COUNT(a)
+    // For every rewrite group (e.g., all SUMs involving column 'a'),
+    // add one SUM(base) and one COUNT(base) to the new Aggregate.
     for (base_key, sums) in rewrite_groups {
-        // If any original SUM had an ORDER BY, we try to preserve it in our new base SUM.
-        let representative = sums
-            .iter()
-            .find(|s| !s.order_by.is_empty())
-            .unwrap_or(&sums[0]);
+        let base_expr = &sums[0].base_expr;
 
-        // Add SUM(base_expr) with ORDER BY preserved
-        let sum_expr = sum(representative.base_expr.clone());
-        // Note: ORDER BY is not needed for SUM as it's commutative
-        let sum_name = sum_expr.schema_name().to_string();
+        // Add SUM(base_expr)
         let sum_index = new_aggr_exprs.len();
-        new_aggr_exprs.push(sum_expr);
-        sum_names.insert(base_key.clone(), sum_name);
+        new_aggr_exprs.push(sum(base_expr.clone()));
 
-        // Add the base COUNT(a)
-        // We use COUNT(col) rather than COUNT(*) because if 'col' is NULL, 
+        // Add COUNT(base_expr)
+        // We use COUNT(col) rather than COUNT(*) because if 'col' is NULL,
         // SUM(col + 1) should be NULL, and COUNT(col) correctly returns 0 for NULLs,
         // whereas COUNT(*) would count the row.
-        let count_expr = count(representative.base_expr.clone());
-        let count_name = count_expr.schema_name().to_string();
         let count_index = new_aggr_exprs.len();
-        new_aggr_exprs.push(count_expr);
-        count_names.insert(base_key.clone(), count_name);
+        new_aggr_exprs.push(count(base_expr.clone()));
 
         base_expr_indices.insert(base_key.clone(), (sum_index, count_index));
     }
 
-    // Now iterate through the ORIGINAL aggregate expressions to build the PROJECTION
+    // Iterate through the ORIGINAL aggregate expressions to build the PROJECTION.
+    // Each original expression falls into one of three cases.
     for (idx, orig_expr) in aggregate.aggr_expr.iter().enumerate() {
-        // Check if this expression should be rewritten
-        let rewritten = all_sums.iter().find(|s| s.original_index == idx);
-
-        let projection_expr = if let Some(sum_info) = rewritten {
+        let projection_expr = if let Some(sum_info) = rewrite_lookup.get(&idx) {
+            // ── Case 1: Rewritable SUM(col ± constant) ──
+            // Derive: SUM(col) ± (constant * COUNT(col))
             let base_key = sum_info.base_expr.schema_name().to_string();
+            let (sum_idx, count_idx) = base_expr_indices[&base_key];
 
-            // Construct the math: SUM(col) [±] (constant * COUNT(col))
-            let sum_ref = col(&sum_names[&base_key]);
-            let count_ref = col(&count_names[&base_key]);
+            let sum_ref = col(new_aggr_exprs[sum_idx].schema_name().to_string());
+            let count_ref = col(new_aggr_exprs[count_idx].schema_name().to_string());
 
             let multiplied = binary_expr(
                 lit(sum_info.constant.clone()),
                 Operator::Multiply,
                 count_ref,
             );
-
             let result = binary_expr(sum_ref, sum_info.operator, multiplied);
-
-            // Ensure the output column name matches the original (aliased or generated)
-            match orig_expr {
-                Expr::Alias(alias) => result.alias(alias.name.clone()),
-                _ => result.alias(orig_expr.schema_name().to_string()),
-            }
+            alias_like(result, orig_expr)
+        } else if let Some(base_key) =
+            check_plain_sum_in_group(orig_expr, &base_expr_indices)
+        {
+            // ── Case 2: Plain SUM(a) that matches a rewrite group ──
+            // Reuse the SUM(a) we already added instead of creating a duplicate.
+            // `base_key` is returned directly by check_plain_sum_in_group,
+            // so there is no need to re-extract it (and no risk of a panic).
+            let (sum_idx, _) = base_expr_indices[&base_key];
+            let sum_ref = col(new_aggr_exprs[sum_idx].schema_name().to_string());
+            alias_like(sum_ref, orig_expr)
         } else {
-            // Special case: If the user had a plain SUM(a) alongside SUM(a+1),
-            // we should reuse the SUM(a) we just added instead of adding another one.
-            let is_plain_sum_in_group =
-                check_plain_sum_in_group(orig_expr, &base_expr_indices);
+            // ── Case 3: Unrelated expression (e.g., AVG(b), MAX(c)) ──
+            // Pass it through to the new Aggregate node unchanged.
+            new_aggr_exprs.push(orig_expr.clone());
 
-            if is_plain_sum_in_group.is_some() {
-                // Use the already-computed SUM.
-                // Unwrap alias to get to the AggregateFunction and extract the base key.
-                let inner_expr = match orig_expr {
-                    Expr::Alias(alias) => alias.expr.as_ref(),
-                    other => other,
-                };
-                let base_key = if let Expr::AggregateFunction(agg_fn) = inner_expr {
-                    agg_fn.params.args[0].schema_name().to_string()
-                } else {
-                    String::new()
-                };
-                let sum_ref = col(&sum_names[&base_key]);
-                match orig_expr {
-                    Expr::Alias(alias) => sum_ref.alias(alias.name.clone()),
-                    _ => sum_ref.alias(orig_expr.schema_name().to_string()),
-                }
-            } else {
-                // This expression is unrelated to our rewrites (e.g., AVG(b) or MAX(c)).
-                // We just pass it through to the new Aggregate node.
-                new_aggr_exprs.push(orig_expr.clone());
-
-                // And reference it in the projection by name.
-                match orig_expr {
-                    Expr::Alias(alias) => col(alias.name.clone()),
-                    _ => col(orig_expr.schema_name().to_string()),
-                }
+            // Reference it in the projection by name.
+            match orig_expr {
+                Expr::Alias(alias) => col(alias.name.clone()),
+                _ => col(orig_expr.schema_name().to_string()),
             }
         };
 
         projection_exprs.push(projection_expr);
     }
 
-    // Handle GROUP BY columns: they must be passed through the Aggregate and Projection
+    // Handle GROUP BY columns: they must be passed through the Aggregate and Projection.
     let group_exprs: Vec<Expr> = aggregate
         .group_expr
         .iter()
@@ -391,18 +390,17 @@ fn transform_aggregate(
         })
         .collect();
 
-    // Final projection includes [Group Columns] + [Aggregated/Rewritten Columns]
+    // Final projection: [GROUP BY columns] ++ [aggregate/rewritten columns]
     let mut final_projection = group_exprs;
     final_projection.extend(projection_exprs);
 
-    // Create the new Aggregate plan node
+    // Build the two-node plan: Projection → Aggregate → (original input)
     let new_aggregate = LogicalPlan::Aggregate(Aggregate::try_new(
         aggregate.input,
         aggregate.group_expr,
         new_aggr_exprs,
     )?);
 
-    // Wrap the Aggregate with the Projection
     let projection = LogicalPlanBuilder::from(new_aggregate)
         .project(final_projection)?
         .build()?;
