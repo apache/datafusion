@@ -1801,7 +1801,7 @@ mod tests {
             &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
         ));
 
-        // Dictionary is logically equal to logically equivalent value type
+        // Dictionary is logically equal to the logically equivalent value type
         assert!(DFSchema::datatype_is_logically_equal(
             &DataType::Utf8View,
             &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
