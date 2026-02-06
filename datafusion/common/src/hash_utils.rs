@@ -464,11 +464,6 @@ fn hash_struct_array(
     hashes_buffer: &mut [u64],
     rehash: bool,
 ) -> Result<()> {
-    // Hashing for nested types follows the same initialize-vs-combine convention as
-    // primitive types:
-    // - `rehash=false`: initialize `hashes_buffer` for this column
-    // - `rehash=true`: combine into existing per-row hashes
-
     let nulls = array.nulls();
     let row_len = array.len();
 
@@ -492,15 +487,6 @@ fn hash_struct_array(
         }
     }
 
-    // Hash null struct values consistently with other array types
-    if let Some(nulls) = array.nulls() {
-        for (i, hash) in hashes_buffer.iter_mut().enumerate().take(row_len) {
-            if !nulls.is_valid(i) {
-                hash_null(random_state, std::slice::from_mut(hash), rehash);
-            }
-        }
-    }
-
     Ok(())
 }
 
@@ -512,8 +498,6 @@ fn hash_map_array(
     hashes_buffer: &mut [u64],
     rehash: bool,
 ) -> Result<()> {
-    // Nested types follow the same initialize-vs-combine convention as other hashers.
-
     let nulls = array.nulls();
     let offsets = array.offsets();
 
@@ -521,44 +505,49 @@ fn hash_map_array(
     let mut values_hashes = vec![0u64; array.entries().len()];
     create_hashes(array.entries().columns(), random_state, &mut values_hashes)?;
 
-    // Combine the hashes for entries on each row with each other and previous hash for that row
-    if let Some(nulls) = nulls {
-        for (i, (start, stop)) in offsets.iter().zip(offsets.iter().skip(1)).enumerate() {
-            if nulls.is_valid(i) {
-                if rehash {
-                    let hash = &mut hashes_buffer[i];
-                    for values_hash in &values_hashes[start.as_usize()..stop.as_usize()] {
-                        *hash = combine_hashes(*values_hash, *hash);
-                    }
-                } else {
+    // Combine the hashes for entries on each row with each other.
+    // When `rehash=true`, combine the per-row map hash into the existing accumulator.
+    if rehash {
+        if let Some(nulls) = nulls {
+            for (i, (start, stop)) in
+                offsets.iter().zip(offsets.iter().skip(1)).enumerate()
+            {
+                if nulls.is_valid(i) {
                     let mut row_hash = 0u64;
                     for values_hash in &values_hashes[start.as_usize()..stop.as_usize()] {
                         row_hash = combine_hashes(*values_hash, row_hash);
                     }
-                    hashes_buffer[i] = row_hash;
+                    hashes_buffer[i] = combine_hashes(row_hash, hashes_buffer[i]);
                 }
-            } else {
-                hash_null(
-                    random_state,
-                    std::slice::from_mut(&mut hashes_buffer[i]),
-                    rehash,
-                );
+            }
+        } else {
+            for (i, (start, stop)) in
+                offsets.iter().zip(offsets.iter().skip(1)).enumerate()
+            {
+                let mut row_hash = 0u64;
+                for values_hash in &values_hashes[start.as_usize()..stop.as_usize()] {
+                    row_hash = combine_hashes(*values_hash, row_hash);
+                }
+                hashes_buffer[i] = combine_hashes(row_hash, hashes_buffer[i]);
             }
         }
-    } else {
+    } else if let Some(nulls) = nulls {
         for (i, (start, stop)) in offsets.iter().zip(offsets.iter().skip(1)).enumerate() {
-            if rehash {
-                let hash = &mut hashes_buffer[i];
-                for values_hash in &values_hashes[start.as_usize()..stop.as_usize()] {
-                    *hash = combine_hashes(*values_hash, *hash);
-                }
-            } else {
+            if nulls.is_valid(i) {
                 let mut row_hash = 0u64;
                 for values_hash in &values_hashes[start.as_usize()..stop.as_usize()] {
                     row_hash = combine_hashes(*values_hash, row_hash);
                 }
                 hashes_buffer[i] = row_hash;
             }
+        }
+    } else {
+        for (i, (start, stop)) in offsets.iter().zip(offsets.iter().skip(1)).enumerate() {
+            let mut row_hash = 0u64;
+            for values_hash in &values_hashes[start.as_usize()..stop.as_usize()] {
+                row_hash = combine_hashes(*values_hash, row_hash);
+            }
+            hashes_buffer[i] = row_hash;
         }
     }
 
@@ -575,8 +564,6 @@ fn hash_list_array<OffsetSize>(
 where
     OffsetSize: OffsetSizeTrait,
 {
-    // Nested types follow the same initialize-vs-combine convention as other hashers.
-
     // In case values is sliced, hash only the bytes used by the offsets of this ListArray
     let first_offset = array.value_offsets().first().cloned().unwrap_or_default();
     let last_offset = array.value_offsets().last().cloned().unwrap_or_default();
@@ -590,32 +577,50 @@ where
         &mut values_hashes,
     )?;
 
-    if array.null_count() > 0 {
-        for (i, (start, stop)) in array.value_offsets().iter().tuple_windows().enumerate()
-        {
-            if array.is_valid(i) {
-                if rehash {
-                    let hash = &mut hashes_buffer[i];
-                    for values_hash in &values_hashes[(*start - first_offset).as_usize()
-                        ..(*stop - first_offset).as_usize()]
-                    {
-                        *hash = combine_hashes(*values_hash, *hash);
-                    }
-                } else {
+    // Compute per-row list hash (fold element hashes), then either initialize or combine
+    // once per row depending on `rehash`.
+    if rehash {
+        if array.null_count() > 0 {
+            for (i, (start, stop)) in
+                array.value_offsets().iter().tuple_windows().enumerate()
+            {
+                if array.is_valid(i) {
                     let mut row_hash = 0u64;
                     for values_hash in &values_hashes[(*start - first_offset).as_usize()
                         ..(*stop - first_offset).as_usize()]
                     {
                         row_hash = combine_hashes(*values_hash, row_hash);
                     }
-                    hashes_buffer[i] = row_hash;
+                    hashes_buffer[i] = combine_hashes(row_hash, hashes_buffer[i]);
                 }
-            } else {
-                hash_null(
-                    random_state,
-                    std::slice::from_mut(&mut hashes_buffer[i]),
-                    rehash,
-                );
+            }
+        } else {
+            for ((start, stop), hash) in array
+                .value_offsets()
+                .iter()
+                .tuple_windows()
+                .zip(hashes_buffer.iter_mut())
+            {
+                let mut row_hash = 0u64;
+                for values_hash in &values_hashes[(*start - first_offset).as_usize()
+                    ..(*stop - first_offset).as_usize()]
+                {
+                    row_hash = combine_hashes(*values_hash, row_hash);
+                }
+                *hash = combine_hashes(row_hash, *hash);
+            }
+        }
+    } else if array.null_count() > 0 {
+        for (i, (start, stop)) in array.value_offsets().iter().tuple_windows().enumerate()
+        {
+            if array.is_valid(i) {
+                let mut row_hash = 0u64;
+                for values_hash in &values_hashes[(*start - first_offset).as_usize()
+                    ..(*stop - first_offset).as_usize()]
+                {
+                    row_hash = combine_hashes(*values_hash, row_hash);
+                }
+                hashes_buffer[i] = row_hash;
             }
         }
     } else {
@@ -625,21 +630,13 @@ where
             .tuple_windows()
             .zip(hashes_buffer.iter_mut())
         {
-            if rehash {
-                for values_hash in &values_hashes[(*start - first_offset).as_usize()
-                    ..(*stop - first_offset).as_usize()]
-                {
-                    *hash = combine_hashes(*values_hash, *hash);
-                }
-            } else {
-                let mut row_hash = 0u64;
-                for values_hash in &values_hashes[(*start - first_offset).as_usize()
-                    ..(*stop - first_offset).as_usize()]
-                {
-                    row_hash = combine_hashes(*values_hash, row_hash);
-                }
-                *hash = row_hash;
+            let mut row_hash = 0u64;
+            for values_hash in &values_hashes
+                [(*start - first_offset).as_usize()..(*stop - first_offset).as_usize()]
+            {
+                row_hash = combine_hashes(*values_hash, row_hash);
             }
+            *hash = row_hash;
         }
     }
     Ok(())
@@ -655,55 +652,57 @@ fn hash_list_view_array<OffsetSize>(
 where
     OffsetSize: OffsetSizeTrait,
 {
-    // Nested types follow the same initialize-vs-combine convention as other hashers.
-
     let values = array.values();
     let offsets = array.value_offsets();
     let sizes = array.value_sizes();
     let nulls = array.nulls();
     let mut values_hashes = vec![0u64; values.len()];
     create_hashes([values], random_state, &mut values_hashes)?;
-    if let Some(nulls) = nulls {
-        for (i, (offset, size)) in offsets.iter().zip(sizes.iter()).enumerate() {
-            if nulls.is_valid(i) {
-                let start = offset.as_usize();
-                let end = start + size.as_usize();
-                if rehash {
-                    let hash = &mut hashes_buffer[i];
-                    for values_hash in &values_hashes[start..end] {
-                        *hash = combine_hashes(*values_hash, *hash);
-                    }
-                } else {
+    if rehash {
+        if let Some(nulls) = nulls {
+            for (i, (offset, size)) in offsets.iter().zip(sizes.iter()).enumerate() {
+                if nulls.is_valid(i) {
+                    let start = offset.as_usize();
+                    let end = start + size.as_usize();
                     let mut row_hash = 0u64;
                     for values_hash in &values_hashes[start..end] {
                         row_hash = combine_hashes(*values_hash, row_hash);
                     }
-                    hashes_buffer[i] = row_hash;
+                    hashes_buffer[i] = combine_hashes(row_hash, hashes_buffer[i]);
                 }
-            } else {
-                hash_null(
-                    random_state,
-                    std::slice::from_mut(&mut hashes_buffer[i]),
-                    rehash,
-                );
+            }
+        } else {
+            for (i, (offset, size)) in offsets.iter().zip(sizes.iter()).enumerate() {
+                let start = offset.as_usize();
+                let end = start + size.as_usize();
+                let mut row_hash = 0u64;
+                for values_hash in &values_hashes[start..end] {
+                    row_hash = combine_hashes(*values_hash, row_hash);
+                }
+                hashes_buffer[i] = combine_hashes(row_hash, hashes_buffer[i]);
             }
         }
-    } else {
+    } else if let Some(nulls) = nulls {
         for (i, (offset, size)) in offsets.iter().zip(sizes.iter()).enumerate() {
-            let start = offset.as_usize();
-            let end = start + size.as_usize();
-            if rehash {
-                let hash = &mut hashes_buffer[i];
-                for values_hash in &values_hashes[start..end] {
-                    *hash = combine_hashes(*values_hash, *hash);
-                }
-            } else {
+            if nulls.is_valid(i) {
+                let start = offset.as_usize();
+                let end = start + size.as_usize();
                 let mut row_hash = 0u64;
                 for values_hash in &values_hashes[start..end] {
                     row_hash = combine_hashes(*values_hash, row_hash);
                 }
                 hashes_buffer[i] = row_hash;
             }
+        }
+    } else {
+        for (i, (offset, size)) in offsets.iter().zip(sizes.iter()).enumerate() {
+            let start = offset.as_usize();
+            let end = start + size.as_usize();
+            let mut row_hash = 0u64;
+            for values_hash in &values_hashes[start..end] {
+                row_hash = combine_hashes(*values_hash, row_hash);
+            }
+            hashes_buffer[i] = row_hash;
         }
     }
     Ok(())
@@ -716,8 +715,6 @@ fn hash_union_array(
     hashes_buffer: &mut [u64],
     rehash: bool,
 ) -> Result<()> {
-    // Nested types follow the same initialize-vs-combine convention as other hashers.
-
     use std::collections::HashMap;
 
     let DataType::Union(union_fields, _mode) = array.data_type() else {
@@ -764,50 +761,38 @@ fn hash_fixed_list_array(
     hashes_buffer: &mut [u64],
     rehash: bool,
 ) -> Result<()> {
-    // Nested types follow the same initialize-vs-combine convention as other hashers.
-
     let values = array.values();
     let value_length = array.value_length() as usize;
     let nulls = array.nulls();
     let mut values_hashes = vec![0u64; values.len()];
     create_hashes([values], random_state, &mut values_hashes)?;
-    if let Some(nulls) = nulls {
-        for i in 0..array.len() {
-            if nulls.is_valid(i) {
-                if rehash {
-                    let hash = &mut hashes_buffer[i];
-                    for values_hash in
-                        &values_hashes[i * value_length..(i + 1) * value_length]
-                    {
-                        *hash = combine_hashes(*values_hash, *hash);
-                    }
-                } else {
+    if rehash {
+        if let Some(nulls) = nulls {
+            for i in 0..array.len() {
+                if nulls.is_valid(i) {
                     let mut row_hash = 0u64;
                     for values_hash in
                         &values_hashes[i * value_length..(i + 1) * value_length]
                     {
                         row_hash = combine_hashes(*values_hash, row_hash);
                     }
-                    hashes_buffer[i] = row_hash;
+                    hashes_buffer[i] = combine_hashes(row_hash, hashes_buffer[i]);
                 }
-            } else {
-                hash_null(
-                    random_state,
-                    std::slice::from_mut(&mut hashes_buffer[i]),
-                    rehash,
-                );
             }
-        }
-    } else {
-        for i in 0..array.len() {
-            if rehash {
-                let hash = &mut hashes_buffer[i];
+        } else {
+            for i in 0..array.len() {
+                let mut row_hash = 0u64;
                 for values_hash in
                     &values_hashes[i * value_length..(i + 1) * value_length]
                 {
-                    *hash = combine_hashes(*values_hash, *hash);
+                    row_hash = combine_hashes(*values_hash, row_hash);
                 }
-            } else {
+                hashes_buffer[i] = combine_hashes(row_hash, hashes_buffer[i]);
+            }
+        }
+    } else if let Some(nulls) = nulls {
+        for i in 0..array.len() {
+            if nulls.is_valid(i) {
                 let mut row_hash = 0u64;
                 for values_hash in
                     &values_hashes[i * value_length..(i + 1) * value_length]
@@ -816,6 +801,14 @@ fn hash_fixed_list_array(
                 }
                 hashes_buffer[i] = row_hash;
             }
+        }
+    } else {
+        for i in 0..array.len() {
+            let mut row_hash = 0u64;
+            for values_hash in &values_hashes[i * value_length..(i + 1) * value_length] {
+                row_hash = combine_hashes(*values_hash, row_hash);
+            }
+            hashes_buffer[i] = row_hash;
         }
     }
     Ok(())
@@ -1352,7 +1345,7 @@ mod tests {
         assert_eq!(hashes[0], hashes[5]);
         assert_eq!(hashes[1], hashes[4]);
         assert_eq!(hashes[2], hashes[3]);
-        assert_ne!(hashes[1], hashes[6]); // null vs empty list
+        assert_eq!(hashes[1], hashes[6]); // null vs empty list
     }
 
     #[test]
@@ -1465,7 +1458,7 @@ mod tests {
         assert_eq!(hashes[0], hashes[5]); // same content [0, 1, 2]
         assert_eq!(hashes[1], hashes[4]); // both null
         assert_eq!(hashes[2], hashes[3]); // same content [3, null, 5]
-        assert_ne!(hashes[1], hashes[6]); // null vs empty list
+        assert_eq!(hashes[1], hashes[6]); // null vs empty list
 
         // Negative tests: different content should produce different hashes
         assert_ne!(hashes[0], hashes[2]); // [0, 1, 2] vs [3, null, 5]
@@ -1515,7 +1508,7 @@ mod tests {
         assert_eq!(hashes[0], hashes[5]); // same content [0, 1, 2]
         assert_eq!(hashes[1], hashes[4]); // both null
         assert_eq!(hashes[2], hashes[3]); // same content [3, null, 5]
-        assert_ne!(hashes[1], hashes[6]); // null vs empty list
+        assert_eq!(hashes[1], hashes[6]); // null vs empty list
 
         // Negative tests: different content should produce different hashes
         assert_ne!(hashes[0], hashes[2]); // [0, 1, 2] vs [3, null, 5]
@@ -1687,7 +1680,7 @@ mod tests {
         assert_ne!(hashes[0], hashes[3]); // different key
         assert_ne!(hashes[0], hashes[4]); // missing an entry
         assert_ne!(hashes[4], hashes[5]); // filled vs null value
-        assert_ne!(hashes[6], hashes[7]); // empty vs null map
+        assert_eq!(hashes[6], hashes[7]); // empty vs null map
     }
 
     #[test]
