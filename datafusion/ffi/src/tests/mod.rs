@@ -35,6 +35,7 @@ use crate::execution_plan::FFI_ExecutionPlan;
 use crate::execution_plan::tests::EmptyExec;
 use crate::physical_optimizer::FFI_PhysicalOptimizerRule;
 use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
+use crate::session::planner::FFI_QueryPlanner;
 use crate::table_provider::FFI_TableProvider;
 use crate::table_provider_factory::FFI_TableProviderFactory;
 use crate::tests::catalog::create_catalog_provider_list;
@@ -47,6 +48,7 @@ mod async_provider;
 pub mod catalog;
 pub mod config;
 mod physical_optimizer;
+mod planner;
 mod sync_provider;
 mod table_provider_factory;
 mod udf_udaf_udwf;
@@ -99,6 +101,9 @@ pub struct ForeignLibraryModule {
     pub create_empty_exec: extern "C" fn() -> FFI_ExecutionPlan,
 
     pub create_physical_optimizer_rule: extern "C" fn() -> FFI_PhysicalOptimizerRule,
+
+    pub create_query_planner:
+        extern "C" fn(FFI_LogicalExtensionCodec) -> FFI_QueryPlanner,
 
     pub version: extern "C" fn() -> u64,
 }
@@ -164,6 +169,7 @@ pub extern "C" fn datafusion_ffi_get_module() -> ForeignLibraryModule {
         create_empty_exec,
         create_physical_optimizer_rule:
             physical_optimizer::create_physical_optimizer_rule,
+        create_query_planner: planner::create_query_planner,
         version: super::version,
     }
 }
