@@ -60,6 +60,7 @@ use crate::util::FFIResult;
 use crate::{df_result, rresult, rresult_return};
 
 pub mod config;
+pub mod planner;
 
 /// A stable struct for sharing [`Session`] across FFI boundaries.
 ///

@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 /// A planner used to add extensions to DataFusion logical and physical plans.
 #[async_trait]
-pub trait QueryPlanner: Debug {
+pub trait QueryPlanner: Debug + Send + Sync {
     /// Given a [`LogicalPlan`], create an [`ExecutionPlan`] suitable for execution
     async fn create_physical_plan(
         &self,
