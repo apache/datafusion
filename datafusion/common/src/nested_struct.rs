@@ -331,7 +331,7 @@ pub fn validate_field_compatibility(
     Ok(())
 }
 
-fn has_one_of_more_common_fields(
+pub fn has_one_of_more_common_fields(
     source_fields: &[FieldRef],
     target_fields: &[FieldRef],
 ) -> bool {
