@@ -50,6 +50,15 @@ use datafusion_expr::{
 };
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
 
+// Imports to figure out
+use datafusion::{
+    arrow::datatypes::{DataType, Field, TimeUnit},
+    config::ConfigOptions,
+    functions::datetime::date_trunc,
+    logical_expr::{binary_expr, cast, lit, ScalarFunctionArgs},
+    prelude::interval_datetime_lit,
+};
+
 use super::inlist_simplifier::ShortenInListSimplifier;
 use super::utils::*;
 use crate::simplify_expressions::SimplifyContext;
@@ -620,6 +629,255 @@ impl ConstEvaluator {
         }
     }
 
+    /// can_simplify returns true if the left expression is a `date_trunc` function and the right
+    /// expression is a literal.
+    fn can_simplify(lexpr: &Expr, rexpr: &Expr) -> bool {
+        matches!((lexpr, rexpr),
+            (
+                Expr::ScalarFunction(scalar_fn),
+                Expr::Literal(_, _)
+            ) if scalar_fn.name().to_lowercase() == "date_trunc"
+        )
+    }
+
+    /// Evaluate if a date literal is at an interval boundary (it is already truncated)
+    fn is_truncated_date(
+        date_part: &ScalarValue,
+        rexpr_date: &ScalarValue,
+        ts_type: &DataType,
+    ) -> Option<bool> {
+        let Ok(rexpr_cast) = rexpr_date.cast_to(&ts_type) else {
+            return None;
+        };
+
+        let fn_rtype = Field::new(
+            "result",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            true,
+        );
+        let fn_args = ScalarFunctionArgs {
+            args: vec![date_part.clone().into(), rexpr_cast.clone().into()],
+            arg_fields: vec![],
+            number_rows: 1,
+            return_field: fn_rtype.into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+
+        let fn_datetrunc = date_trunc();
+        match fn_datetrunc.invoke_with_args(fn_args) {
+            Ok(ColumnarValue::Scalar(trunc_result)) => Some(trunc_result == rexpr_cast),
+            _ => Some(false),
+        }
+    }
+
+    /// simplifies an expr of the form `date_trunc(part, col) <op> <contant>`
+    fn simplify_date_trunc_expr(
+        trunc_expr: Expr,
+        op: Operator,
+        rexpr: Expr,
+    ) -> Result<Transformed<Expr>> {
+        let fn_datetrunc = date_trunc();
+
+        // Decompose pieces of the left hand side
+        let Expr::ScalarFunction(scalar_fn) = &trunc_expr else {
+            return Ok(Transformed::no(binary_expr(trunc_expr, op, rexpr)));
+        };
+
+        if scalar_fn.args.len() < 2 {
+            return Err(DataFusionError::Plan(
+                "Error processing DATE_TRUNC when optimizing".to_owned(),
+            ));
+        }
+
+        let trunc_part = &scalar_fn.args[0];
+        let col_expr = &scalar_fn.args[1];
+
+        let Expr::Literal(date_part, _) = trunc_part.clone() else {
+            return Ok(Transformed::no(binary_expr(trunc_expr, op, rexpr)));
+        };
+        let interval_incr = match &date_part {
+            ScalarValue::Utf8(Some(s)) | ScalarValue::Utf8View(Some(s)) => {
+                format!("1 {s}")
+            }
+            _ => {
+                return Ok(Transformed::no(binary_expr(trunc_expr, op, rexpr)));
+            }
+        };
+
+        // Destructure the right hand side
+        let Expr::Literal(rexpr_date, _) = rexpr.clone() else {
+            return Ok(Transformed::no(binary_expr(trunc_expr, op, rexpr)));
+        };
+
+        let timestamp_type = DataType::Timestamp(TimeUnit::Nanosecond, None);
+
+        // Context for comments below:
+        // - The "left-hand side" (lhs) is always `date_trunc(part, column)`.
+        //     - `part` is a "part" of the date or timestamp structure, which is a multi-part
+        //       hierarchical interval. For example, `part` could be 'month' or 'day' and 'month' is an
+        //       interval that contains many 'day' intervals.
+        //     - `date_trunc` "truncates" the date or timestamp structure by setting less significant
+        //       parts to 0. For example, 'month' is more significant than 'day' (it contains 'day'
+        //       intervals), so `date_trunc('month', column)` sets the 'day' part to 1 (its smallest
+        //       value). Its easier to think that truncation sets "lower" or "less significant"
+        //       intervals to their minimal or left-most values.
+        // - The comparison operator, <op>, determines which special conditions apply to the
+        //   transformation.
+        //     - In the case of `=` and `!=`, the source expression is transformed into 2 expressions.
+        // - `date_add(const_rhs, INTERVAL 1 part)` increments the date or timestamp value of
+        //   `const_rhs` (the constant value on the right-hand side) to its next interval value.
+        //     - For example, `date_add('month', '2025-12-03')` would be '2026-01-03'.
+        //     - Datafusion does not have a `date_add` function, the syntax is:
+        //       `('2025-12-03'::TIMESTAMP + INTERVAL '1 MONTHS')`
+        // - The combination of `date_trunc` and `date_add` "rounds up" to the next interval, which we
+        //   call `next_interval`.
+        //     - For example, `date_trunc('month', date_add('month', '2025-12-03'))` evaluates to:
+        //       '2026-01-01'. This increments the month from dec to jan, then "truncates" intervals
+        //       smaller than 'month' (days, hours, minutes, etc.); in this case, day '03' becomes day
+        //       '01'.
+        //
+        // Shorthand for comments below:
+        // - `next_interval(part, const_rhs)` === `date_trunc(part, date_add(const_rhs, INTERVAL 1 part))`
+        // - `lhs(op)` === `date_trunc(part, column) <op>`
+        // With these shorthand representation, we try to concisely describe each transformation below.
+        match op {
+            // No special conditions for these operators.
+            // lhs(>)  --> column >= next_interval(part, const_rhs)
+            // lhs(<=) --> column <  next_interval(part, const_rhs)
+            // Note that we group these operators because we transform the operator
+            Operator::Gt | Operator::LtEq => {
+                // Gt --> GtEq | LtEq --> Lt
+                let simplified_op = if op == Operator::Gt {
+                    Operator::GtEq
+                } else {
+                    Operator::Lt
+                };
+
+                Ok(Transformed::yes(binary_expr(
+                    col_expr.clone(),
+                    simplified_op,
+                    fn_datetrunc.call(vec![
+                        trunc_part.clone(),
+                        binary_expr(
+                            cast(rexpr, timestamp_type),
+                            Operator::Plus,
+                            interval_datetime_lit(&interval_incr),
+                        ),
+                    ]),
+                )))
+            }
+
+            // Special condition for these operators:
+            // if date_trunc(part, const_rhs) == const_rhs,
+            // then we use `const_rhs` instead of `next_interval(part, const_rhs)`,
+            // lhs(<)  --> column <  next_interval(part, const_rhs)
+            // lhs(>=) --> column >= next_interval(part, const_rhs)
+            // Note that we group these operators because we do not transform the operator
+            Operator::Lt | Operator::GtEq => {
+                match Self::is_truncated_date(&date_part, &rexpr_date, &timestamp_type) {
+                    Some(true) => Ok(Transformed::yes(binary_expr(
+                        col_expr.clone(),
+                        op,
+                        fn_datetrunc.call(vec![trunc_part.clone(), rexpr]),
+                    ))),
+                    Some(false) => Ok(Transformed::yes(binary_expr(
+                        col_expr.clone(),
+                        op,
+                        fn_datetrunc.call(vec![
+                            trunc_part.clone(),
+                            binary_expr(
+                                cast(rexpr, timestamp_type),
+                                Operator::Plus,
+                                interval_datetime_lit(&interval_incr),
+                            ),
+                        ]),
+                    ))),
+                    None => Ok(Transformed::no(binary_expr(trunc_expr, op, rexpr))),
+                }
+            }
+
+            // Special condition:
+            // if date_trunc(part, const_rhs) != const_rhs, this is always false
+            // For this operator, truncation means that we check if the column is INSIDE of a range.
+            // lhs(=) --> column >= date_trunc(part, const_rhs) AND column < next_interval(part, const_rhs)
+            Operator::Eq => {
+                match Self::is_truncated_date(&date_part, &rexpr_date, &timestamp_type) {
+                    Some(false) => Ok(Transformed::yes(lit(false))),
+                    None => Ok(Transformed::no(binary_expr(trunc_expr, op, rexpr))),
+                    Some(true) => {
+                        let check_lower_bound = binary_expr(
+                            col_expr.clone(),
+                            Operator::GtEq,
+                            fn_datetrunc.call(vec![trunc_part.clone(), rexpr.clone()]),
+                        );
+
+                        let check_upper_bound = binary_expr(
+                            col_expr.clone(),
+                            Operator::Lt,
+                            fn_datetrunc.call(vec![
+                                trunc_part.clone(),
+                                binary_expr(
+                                    cast(rexpr, timestamp_type),
+                                    Operator::Plus,
+                                    interval_datetime_lit(&interval_incr),
+                                ),
+                            ]),
+                        );
+
+                        Ok(Transformed::yes(binary_expr(
+                            check_lower_bound,
+                            Operator::And,
+                            check_upper_bound,
+                        )))
+                    }
+                }
+            }
+
+            // Special condition:
+            // if date_trunc(part, const_rhs) != const_rhs, this is always true
+            // For this operator, truncation means that we check if the column is OUTSIDE of a range
+            // For this operator, truncation means that we check if the column is INSIDE of a range.
+            // lhs(!=) --> column < date_trunc(part, const_rhs) OR column >= next_interval(part, const_rhs)
+            Operator::NotEq => {
+                match Self::is_truncated_date(&date_part, &rexpr_date, &timestamp_type) {
+                    Some(false) => Ok(Transformed::yes(lit(true))),
+                    None => {
+                        Ok(Transformed::no(binary_expr(trunc_part.clone(), op, rexpr)))
+                    }
+                    Some(true) => {
+                        let check_lower_bound = binary_expr(
+                            col_expr.clone(),
+                            Operator::Lt,
+                            fn_datetrunc.call(vec![trunc_part.clone(), rexpr.clone()]),
+                        );
+
+                        let check_upper_bound = binary_expr(
+                            col_expr.clone(),
+                            Operator::GtEq,
+                            fn_datetrunc.call(vec![
+                                trunc_part.clone(),
+                                binary_expr(
+                                    cast(rexpr, timestamp_type),
+                                    Operator::Plus,
+                                    interval_datetime_lit(&interval_incr),
+                                ),
+                            ]),
+                        );
+
+                        Ok(Transformed::yes(binary_expr(
+                            check_lower_bound,
+                            Operator::Or,
+                            check_upper_bound,
+                        )))
+                    }
+                }
+            }
+
+            // We can't transform any other operator
+            _ => Ok(Transformed::no(binary_expr(trunc_part.clone(), op, rexpr))),
+        }
+    }
+
     /// Can the expression be evaluated at plan time, (assuming all of
     /// its children can also be evaluated)?
     fn can_evaluate(expr: &Expr) -> bool {
@@ -812,6 +1070,32 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 op: And | Or,
                 right,
             }) if is_null(&left) && is_null(&right) => Transformed::yes(lit_bool_null()),
+
+            //
+            // Rules for wholistic expression
+            //
+
+            // If left side is `DATE_TRUNC` and right side is literal, apply
+            Expr::BinaryExpr(BinaryExpr { left, op, right })
+                if Self::can_simplify(left.as_ref(), right.as_ref()) =>
+            {
+                Self::simplify_date_trunc_expr(*left, op, *right)
+            }
+
+            // If right side is `DATE_TRUNC` and left side is literal, invert
+            Expr::BinaryExpr(BinaryExpr { left, op, right })
+                if Self::can_simplify(right.as_ref(), left.as_ref()) =>
+            {
+                let inverted_op = match op {
+                    Operator::Lt => Operator::Gt,
+                    Operator::LtEq => Operator::GtEq,
+                    Operator::Gt => Operator::Lt,
+                    Operator::GtEq => Operator::LtEq,
+                    _ => op,
+                };
+
+                Self::simplify_date_trunc_expr(*right, inverted_op, *left)
+            }
 
             //
             // Rules for Eq
