@@ -562,8 +562,64 @@ FROM complex_test;
 ----
 6 9 12 15 24 27 30
 
-statement ok
-DROP TABLE complex_test;
+
+# ==== Test 12: Expressions with DISTINCT or FILTER (SHOULD NOT rewrite) ====
+
+# SUM(DISTINCT a + 1) should NOT be rewritten because the math SUM(a) + COUNT(a)
+# doesn't hold when counting distinct values of the modified expression.
+query TT
+EXPLAIN SELECT
+    SUM(DISTINCT a + 1),
+    SUM(DISTINCT a + 2)
+FROM test_table;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[sum(DISTINCT __common_expr_1 AS test_table.a + Int64(1)), sum(DISTINCT __common_expr_1 AS test_table.a + Int64(2))]]
+02)--Projection: CAST(test_table.a AS Int64) AS __common_expr_1
+03)----TableScan: test_table projection=[a]
+physical_plan
+01)AggregateExec: mode=Single, gby=[], aggr=[sum(DISTINCT test_table.a + Int64(1)), sum(DISTINCT test_table.a + Int64(2))]
+02)--ProjectionExec: expr=[CAST(a@0 AS Int64) as __common_expr_1]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+# SUM(a + 1) FILTER (WHERE a > 1) should NOT be rewritten because the filter
+# applies to the entire expression, and the rule doesn't handle filters.
+query TT
+EXPLAIN SELECT
+    SUM(a + 1) FILTER (WHERE a > 1),
+    SUM(a + 2) FILTER (WHERE a > 1)
+FROM test_table;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[sum(__common_expr_1 + Int64(1)) FILTER (WHERE __common_expr_2) AS sum(test_table.a + Int64(1)) FILTER (WHERE test_table.a > Int64(1)), sum(__common_expr_1 + Int64(2)) FILTER (WHERE __common_expr_2) AS sum(test_table.a + Int64(2)) FILTER (WHERE test_table.a > Int64(1))]]
+02)--Projection: CAST(test_table.a AS Int64) AS __common_expr_1, test_table.a > Int32(1) AS __common_expr_2
+03)----TableScan: test_table projection=[a]
+physical_plan
+01)AggregateExec: mode=Single, gby=[], aggr=[sum(test_table.a + Int64(1)) FILTER (WHERE test_table.a > Int64(1)), sum(test_table.a + Int64(2)) FILTER (WHERE test_table.a > Int64(1))]
+02)--ProjectionExec: expr=[CAST(a@0 AS Int64) as __common_expr_1, a@0 > 1 as __common_expr_2]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+EXPLAIN SELECT
+    SUM(a + 1),
+    SUM(a + 2)
+FROM test_table WHERE a > 3;
+----
+logical_plan
+01)Projection: sum(test_table.a) + count(test_table.a) AS sum(test_table.a + Int64(1)), sum(test_table.a) + Int64(2) * count(test_table.a) AS sum(test_table.a + Int64(2))
+02)--Aggregate: groupBy=[[]], aggr=[[sum(__common_expr_1 AS test_table.a), count(__common_expr_1 AS test_table.a)]]
+03)----Projection: CAST(test_table.a AS Int64) AS __common_expr_1
+04)------Filter: test_table.a > Int32(3)
+05)--------TableScan: test_table projection=[a]
+physical_plan
+01)ProjectionExec: expr=[sum(test_table.a)@0 + count(test_table.a)@1 as sum(test_table.a + Int64(1)), sum(test_table.a)@0 + 2 * count(test_table.a)@1 as sum(test_table.a + Int64(2))]
+02)--AggregateExec: mode=Final, gby=[], aggr=[sum(test_table.a), count(test_table.a)]
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=Partial, gby=[], aggr=[sum(test_table.a), count(test_table.a)]
+05)--------ProjectionExec: expr=[CAST(a@0 AS Int64) as __common_expr_1]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------FilterExec: a@0 > 3
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # ==== Cleanup ====
 
@@ -576,3 +632,6 @@ DROP TABLE group_test;
 
 statement ok
 DROP TABLE nullable_test;
+
+statement ok
+DROP TABLE complex_test;
