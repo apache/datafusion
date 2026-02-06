@@ -17,7 +17,7 @@
 
 pub mod map_from_arrays;
 pub mod map_from_entries;
-pub mod string_to_map;
+pub mod str_to_map;
 mod utils;
 
 use datafusion_expr::ScalarUDF;
@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 make_udf_function!(map_from_arrays::MapFromArrays, map_from_arrays);
 make_udf_function!(map_from_entries::MapFromEntries, map_from_entries);
-make_udf_function!(string_to_map::SparkStringToMap, string_to_map);
+make_udf_function!(str_to_map::SparkStrToMap, str_to_map);
 
 pub mod expr_fn {
     use datafusion_functions::export_functions;
@@ -44,12 +44,12 @@ pub mod expr_fn {
     ));
 
     export_functions!((
-        string_to_map,
+        str_to_map,
         "Creates a map after splitting the text into key/value pairs using delimiters.",
         text pair_delim key_value_delim
     ));
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
-    vec![map_from_arrays(), map_from_entries(), string_to_map()]
+    vec![map_from_arrays(), map_from_entries(), str_to_map()]
 }

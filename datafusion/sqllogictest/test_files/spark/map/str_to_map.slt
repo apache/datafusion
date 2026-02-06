@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# Tests for Spark-compatible string_to_map function
+# Tests for Spark-compatible str_to_map function
 # https://spark.apache.org/docs/latest/api/sql/index.html#str_to_map
 #
 # Test cases derived from Spark test("StringToMap"):
@@ -25,49 +25,49 @@
 
 # s0: Basic test with default delimiters
 query ?
-SELECT string_to_map('a:1,b:2,c:3');
+SELECT str_to_map('a:1,b:2,c:3');
 ----
 {a: 1, b: 2, c: 3}
 
 # s1: Preserve spaces in values
 query ?
-SELECT string_to_map('a: ,b:2');
+SELECT str_to_map('a: ,b:2');
 ----
 {a:  , b: 2}
 
 # s2: Custom key-value delimiter '='
 query ?
-SELECT string_to_map('a=1,b=2,c=3', ',', '=');
+SELECT str_to_map('a=1,b=2,c=3', ',', '=');
 ----
 {a: 1, b: 2, c: 3}
 
 # s3: Empty string returns map with empty key and NULL value
 query ?
-SELECT string_to_map('', ',', '=');
+SELECT str_to_map('', ',', '=');
 ----
 {: NULL}
 
 # s4: Custom pair delimiter '_'
 query ?
-SELECT string_to_map('a:1_b:2_c:3', '_', ':');
+SELECT str_to_map('a:1_b:2_c:3', '_', ':');
 ----
 {a: 1, b: 2, c: 3}
 
 # s5: Single key without value returns NULL value
 query ?
-SELECT string_to_map('a');
+SELECT str_to_map('a');
 ----
 {a: NULL}
 
 # s6: Custom delimiters '&' and '='
 query ?
-SELECT string_to_map('a=1&b=2&c=3', '&', '=');
+SELECT str_to_map('a=1&b=2&c=3', '&', '=');
 ----
 {a: 1, b: 2, c: 3}
 
 # Duplicate keys: last wins (LAST_WIN policy)
 query ?
-SELECT string_to_map('a:1,b:2,a:3');
+SELECT str_to_map('a:1,b:2,a:3');
 ----
 {b: 2, a: 3}
 
@@ -81,25 +81,25 @@ SELECT str_to_map('a:1,b:2');
 
 # NULL input returns NULL
 query ?
-SELECT string_to_map(NULL, ',', ':');
+SELECT str_to_map(NULL, ',', ':');
 ----
 NULL
 
 # Explicit 3-arg form
 query ?
-SELECT string_to_map('a:1,b:2,c:3', ',', ':');
+SELECT str_to_map('a:1,b:2,c:3', ',', ':');
 ----
 {a: 1, b: 2, c: 3}
 
 # Missing key-value delimiter results in NULL value
 query ?
-SELECT string_to_map('a,b:2', ',', ':');
+SELECT str_to_map('a,b:2', ',', ':');
 ----
 {a: NULL, b: 2}
 
 # Multi-row test
 query ?
-SELECT string_to_map(col) FROM (VALUES ('a:1,b:2'), ('x:9'), (NULL)) AS t(col);
+SELECT str_to_map(col) FROM (VALUES ('a:1,b:2'), ('x:9'), (NULL)) AS t(col);
 ----
 {a: 1, b: 2}
 {x: 9}
@@ -107,7 +107,7 @@ NULL
 
 # Multi-row with custom delimiter
 query ?
-SELECT string_to_map(col, ',', '=') FROM (VALUES ('a=1,b=2'), ('x=9'), (NULL)) AS t(col);
+SELECT str_to_map(col, ',', '=') FROM (VALUES ('a=1,b=2'), ('x=9'), (NULL)) AS t(col);
 ----
 {a: 1, b: 2}
 {x: 9}

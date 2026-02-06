@@ -32,7 +32,7 @@ use crate::function::map::utils::{
     map_from_keys_values_offsets_nulls, map_type_from_key_value_types,
 };
 
-/// Spark-compatible `string_to_map` expression
+/// Spark-compatible `str_to_map` expression
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#str_to_map>
 ///
 /// Creates a map from a string by splitting on delimiters.
@@ -49,51 +49,45 @@ use crate::function::map::utils::{
 /// Spark 3.0+ defaults to EXCEPTION. See:
 /// <https://github.com/apache/spark/blob/v4.0.0/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4502-L4511>
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct SparkStringToMap {
+pub struct SparkStrToMap {
     signature: Signature,
-    aliases: Vec<String>,
 }
 
-impl Default for SparkStringToMap {
+impl Default for SparkStrToMap {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl SparkStringToMap {
+impl SparkStrToMap {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
                 vec![
-                    // string_to_map(text)
+                    // str_to_map(text)
                     TypeSignature::String(1),
-                    // string_to_map(text, pairDelim)
+                    // str_to_map(text, pairDelim)
                     TypeSignature::String(2),
-                    // string_to_map(text, pairDelim, keyValueDelim)
+                    // str_to_map(text, pairDelim, keyValueDelim)
                     TypeSignature::String(3),
                 ],
                 Volatility::Immutable,
             ),
-            aliases: vec![String::from("str_to_map")],
         }
     }
 }
 
-impl ScalarUDFImpl for SparkStringToMap {
+impl ScalarUDFImpl for SparkStrToMap {
     fn as_any(&self) -> &dyn Any {
         self
     }
 
     fn name(&self) -> &str {
-        "string_to_map"
+        "str_to_map"
     }
 
     fn signature(&self) -> &Signature {
         &self.signature
-    }
-
-    fn aliases(&self) -> &[String] {
-        &self.aliases
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
@@ -107,14 +101,14 @@ impl ScalarUDFImpl for SparkStringToMap {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(string_to_map_inner, vec![])(&args.args)
+        make_scalar_function(str_to_map_inner, vec![])(&args.args)
     }
 }
 
-fn string_to_map_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn str_to_map_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     assert!(
         !args.is_empty() && args.len() <= 3,
-        "string_to_map expects 1-3 arguments, got {}",
+        "str_to_map expects 1-3 arguments, got {}",
         args.len()
     );
 
@@ -266,11 +260,11 @@ mod tests {
         assert_eq!(result, "=");
     }
 
-    // Table-driven tests for string_to_map
+    // Table-driven tests for str_to_map
     // Test cases derived from Spark ComplexTypeSuite:
     // https://github.com/apache/spark/blob/v4.0.0/sql/catalyst/src/test/scala/org/apache/spark/sql/catalyst/expressions/ComplexTypeSuite.scala#L525-L618
     #[test]
-    fn test_string_to_map_cases() {
+    fn test_str_to_map_cases() {
         struct TestCase {
             name: &'static str,
             inputs: Vec<Option<&'static str>>,
@@ -386,7 +380,7 @@ mod tests {
                 _ => vec![text],
             };
 
-            let result = string_to_map_inner(&args).unwrap();
+            let result = str_to_map_inner(&args).unwrap();
             let map_array = result.as_any().downcast_ref::<MapArray>().unwrap();
 
             assert_eq!(map_array.len(), case.expected.len(), "case: {}", case.name);
