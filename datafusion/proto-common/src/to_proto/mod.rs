@@ -874,6 +874,7 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
         Ok(protobuf::ParquetOptions {
             enable_page_index: value.enable_page_index,
             pruning: value.pruning,
+            pruning_max_inlist_limit_opt: Some(protobuf::parquet_options::PruningMaxInlistLimitOpt::PruningMaxInlistLimit(value.pruning as u64)),
             skip_metadata: value.skip_metadata,
             metadata_size_hint_opt: value.metadata_size_hint.map(|v| protobuf::parquet_options::MetadataSizeHintOpt::MetadataSizeHint(v as u64)),
             pushdown_filters: value.pushdown_filters,

@@ -42,7 +42,7 @@ use datafusion::parquet::arrow::{
     ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder,
 };
 use datafusion::physical_expr::PhysicalExpr;
-use datafusion::physical_optimizer::pruning::PruningPredicate;
+use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningPredicateConfig};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
 use std::any::Any;
@@ -367,8 +367,11 @@ impl ParquetMetadataIndex {
     ) -> Result<Vec<(&str, u64)>> {
         // Use the PruningPredicate API to determine which files can not
         // possibly have any relevant data.
-        let pruning_predicate =
-            PruningPredicate::try_new(predicate, self.schema().clone())?;
+        let pruning_predicate = PruningPredicate::try_new_with_config(
+            predicate,
+            self.schema().clone(),
+            &PruningPredicateConfig::default(),
+        )?;
 
         // Now evaluate the pruning predicate into a boolean mask, one element per
         // file in the index. If the mask is true, the file may have rows that
