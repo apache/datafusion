@@ -158,7 +158,7 @@ pub struct FileScanConfig {
     /// DataFusion may reorder file processing for optimization without affecting correctness.
     pub preserve_order: bool,
     /// All equivalent lexicographical output orderings of this file scan, in terms of
-    /// [`Self::table_schema`]. See [`FileScanConfigBuilder::with_output_ordering`] for more
+    /// [`FileSource::table_schema`]. See [`FileScanConfigBuilder::with_output_ordering`] for more
     /// details.
     ///
     /// [`Self::eq_properties`] uses this information along with projection
