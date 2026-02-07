@@ -220,8 +220,9 @@ impl CastColumnExpr {
         target_field: FieldRef,
         cast_options: Option<OwnedCastOptions>,
     ) -> Result<Self> {
-        let input_schema =
-            Arc::new(Schema::new(vec![Arc::unwrap_or_clone(input_field.clone())]));
+        let input_schema = Arc::new(Schema::new(vec![Arc::unwrap_or_clone(
+            Arc::clone(&input_field),
+        )]));
         Self::build(expr, input_field, target_field, cast_options, input_schema)
     }
 
