@@ -496,7 +496,7 @@ impl DefaultPhysicalExprAdapterRewriter {
             }
             _ => {
                 validate_field_compatibility(
-                    actual_physical_field.as_ref(),
+                    actual_physical_field,
                     logical_field,
                 )
                 .map_err(|err| {
