@@ -503,7 +503,7 @@ impl DefaultPhysicalExprAdapterRewriter {
             Arc::new(actual_physical_field.clone()),
             Arc::new(logical_field.clone()),
             None,
-        ));
+        )?);
 
         Ok(Transformed::yes(cast_expr))
     }

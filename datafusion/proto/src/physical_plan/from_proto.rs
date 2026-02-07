@@ -24,6 +24,7 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{Field, Schema};
 use arrow::ipc::reader::StreamReader;
 use chrono::{TimeZone, Utc};
+use datafusion_common::format::OwnedCastOptions;
 use datafusion_common::{DataFusionError, Result, internal_datafusion_err, not_impl_err};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_groups::FileGroup;
@@ -41,8 +42,8 @@ use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion_physical_plan::expressions::{
-    BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, LikeExpr, Literal,
-    NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn, in_list,
+    BinaryExpr, CaseExpr, CastColumnExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr,
+    LikeExpr, Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn, in_list,
 };
 use datafusion_physical_plan::joins::{HashExpr, SeededRandomState};
 use datafusion_physical_plan::windows::{create_window_expr, schema_add_window_field};
@@ -505,9 +506,100 @@ pub fn parse_physical_expr_with_converter(
                 .collect::<Result<_>>()?;
             codec.try_decode_expr(extension.expr.as_slice(), &inputs)? as _
         }
+        ExprType::CastColumn(e) => {
+            let input_field = e
+                .input_field
+                .as_ref()
+                .ok_or_else(|| proto_error("Missing cast_column input_field"))?;
+            let target_field = e
+                .target_field
+                .as_ref()
+                .ok_or_else(|| proto_error("Missing cast_column target_field"))?;
+            let cast_options = cast_options_from_proto(
+                e.cast_options.as_ref(),
+                e.safe,
+                e.format_options.as_ref(),
+            )?;
+            Arc::new(CastColumnExpr::new_with_schema(
+                parse_required_physical_expr(
+                    e.expr.as_deref(),
+                    ctx,
+                    "expr",
+                    input_schema,
+                    codec,
+                    proto_converter,
+                )?,
+                Arc::new(Field::try_from(input_field)?),
+                Arc::new(Field::try_from(target_field)?),
+                cast_options,
+                Arc::new(input_schema.clone()),
+            )?)
+        }
     };
 
     Ok(pexpr)
+}
+
+/// Parse a duration format string from protobuf to Arrow's DurationFormat.
+fn parse_duration_format(
+    format_str: Option<&str>,
+) -> arrow::util::display::DurationFormat {
+    match format_str {
+        Some("iso8601") => arrow::util::display::DurationFormat::ISO8601,
+        _ => arrow::util::display::DurationFormat::Pretty, // Default to Pretty
+    }
+}
+
+fn cast_options_from_proto(
+    cast_options: Option<&protobuf::PhysicalCastOptions>,
+    safe: bool,
+    format_options: Option<&protobuf::FormatOptions>,
+) -> Result<Option<OwnedCastOptions>> {
+    match cast_options {
+        Some(opts) => {
+            let format_opts = opts.format_options.as_ref().or(format_options);
+            let format_options =
+                format_opts.map(|fo| datafusion_common::format::OwnedFormatOptions {
+                    null: fo.null.clone(),
+                    date_format: fo.date_format.clone(),
+                    datetime_format: fo.datetime_format.clone(),
+                    timestamp_format: fo.timestamp_format.clone(),
+                    timestamp_tz_format: fo.timestamp_tz_format.clone(),
+                    time_format: fo.time_format.clone(),
+                    duration_format: parse_duration_format(fo.duration_format.as_deref()),
+                    types_info: fo.types_info,
+                });
+            Ok(Some(OwnedCastOptions {
+                safe: opts.safe,
+                format_options: format_options.unwrap_or_default(),
+            }))
+        }
+        None => {
+            // Fallback to deprecated fields for backward compatibility
+            if format_options.is_some() || safe {
+                let format_options = format_options.map(|fo| {
+                    datafusion_common::format::OwnedFormatOptions {
+                        null: fo.null.clone(),
+                        date_format: fo.date_format.clone(),
+                        datetime_format: fo.datetime_format.clone(),
+                        timestamp_format: fo.timestamp_format.clone(),
+                        timestamp_tz_format: fo.timestamp_tz_format.clone(),
+                        time_format: fo.time_format.clone(),
+                        duration_format: parse_duration_format(
+                            fo.duration_format.as_deref(),
+                        ),
+                        types_info: fo.types_info,
+                    }
+                });
+                Ok(Some(OwnedCastOptions {
+                    safe,
+                    format_options: format_options.unwrap_or_default(),
+                }))
+            } else {
+                Ok(None)
+            }
+        }
+    }
 }
 
 fn parse_required_physical_expr(
