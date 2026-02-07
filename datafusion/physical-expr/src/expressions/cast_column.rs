@@ -597,7 +597,7 @@ mod tests {
 
         assert_contains!(
             err.to_string(),
-            r#"CastColumnExpr column 'b' at index 1 has data type 'Struct(\"nested": Int32)' which is not compatible with input field data type 'Int32' - they cannot be cast"#
+            r#"Error during planning: CastColumnExpr column 'b' at index 1 has data type 'Struct("nested": Int32)' which is not compatible with input field data type 'Int32' - they cannot be cast"#
         );
     }
 
@@ -622,7 +622,7 @@ mod tests {
 
         assert_contains!(
             err.to_string(),
-            "Cannot cast nullable struct field 'a' to non-nullable field"
+            "Error during planning: Cannot cast nullable field 'a' to non-nullable field 'a'"
         );
     }
 }
