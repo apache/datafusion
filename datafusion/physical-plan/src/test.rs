@@ -29,7 +29,6 @@ use crate::ExecutionPlan;
 use crate::common;
 use crate::execution_plan::{Boundedness, EmissionType};
 use crate::memory::MemoryStream;
-use crate::metrics::MetricsSet;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::streaming::PartitionStream;
 use crate::{DisplayAs, DisplayFormatType, PlanProperties};
@@ -163,10 +162,6 @@ impl ExecutionPlan for TestMemoryExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         self.open(partition, context)
-    }
-
-    fn metrics(&self) -> Option<MetricsSet> {
-        unimplemented!()
     }
 
     fn statistics(&self) -> Result<Statistics> {

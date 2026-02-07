@@ -80,6 +80,7 @@ insta = { workspace = true }
 rand = { workspace = true }
 rstest = { workspace = true }
 rstest_reuse = "0.7.0"
+tempfile = { workspace = true }
 tokio = { workspace = true, features = [
     "rt-multi-thread",
     "fs",
