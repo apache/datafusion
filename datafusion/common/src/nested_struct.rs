@@ -311,6 +311,10 @@ pub fn validate_field_compatibility(
     Ok(())
 }
 
+/// Check if two field lists have at least one common field by name.
+///
+/// This is useful for validating struct compatibility when casting between structs,
+/// ensuring that source and target fields have overlapping names.
 pub fn has_one_of_more_common_fields(
     source_fields: &[FieldRef],
     target_fields: &[FieldRef],
@@ -328,7 +332,7 @@ pub fn has_one_of_more_common_fields(
 mod tests {
 
     use super::*;
-    use crate::{assert_contains, format::DEFAULT_CAST_OPTIONS};
+    use crate::format::DEFAULT_CAST_OPTIONS;
     use arrow::{
         array::{
             BinaryArray, Int32Array, Int32Builder, Int64Array, ListArray, MapArray,
@@ -646,10 +650,9 @@ mod tests {
         let result = validate_struct_compatibility(&source_fields, &target_fields);
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
-        assert_contains!(
-            error_msg,
+        assert!(error_msg.contains(
             "Cannot cast struct field 'field1' from type Binary to type Int32"
-        );
+        ));
     }
 
     #[test]
@@ -687,10 +690,10 @@ mod tests {
         let result = validate_struct_compatibility(&source_fields, &target_fields);
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
-        assert_contains!(
-            error_msg,
+        assert!(
+            error_msg.contains(
             "Cannot cast struct: target field 'field2' is non-nullable but missing from source. Cannot fill with NULL."
-        );
+        ));
     }
 
     #[test]
