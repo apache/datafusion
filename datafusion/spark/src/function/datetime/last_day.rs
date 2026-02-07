@@ -114,7 +114,11 @@ impl ScalarUDFImpl for SparkLastDay {
 }
 
 fn spark_last_day(days: i32) -> Result<i32> {
-    let date = Date32Type::to_naive_date(days);
+    let date = Date32Type::to_naive_date_opt(days).ok_or_else(|| {
+        exec_datafusion_err!(
+            "Spark `last_day`: Unable to convert days value {days} to date"
+        )
+    })?;
 
     let (year, month) = (date.year(), date.month());
     let (next_year, next_month) = if month == 12 {

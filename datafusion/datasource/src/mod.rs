@@ -573,7 +573,7 @@ mod tests {
     use datafusion_execution::object_store::{
         DefaultObjectStoreRegistry, ObjectStoreRegistry,
     };
-    use object_store::{local::LocalFileSystem, path::Path};
+    use object_store::{ObjectStoreExt, local::LocalFileSystem, path::Path};
     use std::{collections::HashMap, ops::Not, sync::Arc};
     use url::Url;
 

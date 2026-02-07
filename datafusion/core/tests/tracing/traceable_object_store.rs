@@ -18,10 +18,11 @@
 //! Object store implementation used for testing
 
 use crate::tracing::asserting_tracer::assert_traceability;
+use futures::StreamExt;
 use futures::stream::BoxStream;
 use object_store::{
-    GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
-    PutMultipartOptions, PutOptions, PutPayload, PutResult, path::Path,
+    CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
+    ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, path::Path,
 };
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
@@ -83,14 +84,17 @@ impl ObjectStore for TraceableObjectStore {
         self.inner.get_opts(location, options).await
     }
 
-    async fn head(&self, location: &Path) -> object_store::Result<ObjectMeta> {
-        assert_traceability().await;
-        self.inner.head(location).await
-    }
-
-    async fn delete(&self, location: &Path) -> object_store::Result<()> {
-        assert_traceability().await;
-        self.inner.delete(location).await
+    fn delete_stream(
+        &self,
+        locations: BoxStream<'static, object_store::Result<Path>>,
+    ) -> BoxStream<'static, object_store::Result<Path>> {
+        self.inner
+            .delete_stream(locations)
+            .then(|res| async {
+                futures::executor::block_on(assert_traceability());
+                res
+            })
+            .boxed()
     }
 
     fn list(
@@ -109,17 +113,13 @@ impl ObjectStore for TraceableObjectStore {
         self.inner.list_with_delimiter(prefix).await
     }
 
-    async fn copy(&self, from: &Path, to: &Path) -> object_store::Result<()> {
-        assert_traceability().await;
-        self.inner.copy(from, to).await
-    }
-
-    async fn copy_if_not_exists(
+    async fn copy_opts(
         &self,
         from: &Path,
         to: &Path,
+        options: CopyOptions,
     ) -> object_store::Result<()> {
         assert_traceability().await;
-        self.inner.copy_if_not_exists(from, to).await
+        self.inner.copy_opts(from, to, options).await
     }
 }

@@ -60,7 +60,7 @@ use datafusion_session::Session;
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 use datafusion_datasource::source::DataSourceExec;
-use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
+use object_store::{GetResultPayload, ObjectMeta, ObjectStore, ObjectStoreExt};
 
 #[derive(Default)]
 /// Factory struct used to create [JsonFormat]

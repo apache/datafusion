@@ -348,7 +348,8 @@ impl FileOpener for ParquetOpener {
             // unnecessary I/O. We decide later if it is needed to evaluate the
             // pruning predicates. Thus default to not requesting it from the
             // underlying reader.
-            let mut options = ArrowReaderOptions::new().with_page_index(false);
+            let mut options =
+                ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Skip);
             #[cfg(feature = "parquet_encryption")]
             if let Some(fd_val) = file_decryption_properties {
                 options = options.with_file_decryption_properties(Arc::clone(&fd_val));
@@ -1037,7 +1038,7 @@ mod test {
     };
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
     use futures::{Stream, StreamExt};
-    use object_store::{ObjectStore, memory::InMemory, path::Path};
+    use object_store::{ObjectStore, ObjectStoreExt, memory::InMemory, path::Path};
     use parquet::arrow::ArrowWriter;
     use parquet::file::properties::WriterProperties;
 

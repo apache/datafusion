@@ -662,6 +662,7 @@ mod tests {
     use datafusion_expr::{Expr, cast, col, lit};
     use datafusion_physical_expr::planner::logical2physical;
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
+    use object_store::ObjectStoreExt;
     use parquet::arrow::ArrowSchemaConverter;
     use parquet::arrow::async_reader::ParquetObjectReader;
     use parquet::basic::LogicalType;
@@ -1752,7 +1753,7 @@ mod tests {
         pruning_predicate: &PruningPredicate,
     ) -> Result<RowGroupAccessPlanFilter> {
         use datafusion_datasource::PartitionedFile;
-        use object_store::{ObjectMeta, ObjectStore};
+        use object_store::ObjectMeta;
 
         let object_meta = ObjectMeta {
             location: object_store::path::Path::parse(file_name).expect("creating path"),
