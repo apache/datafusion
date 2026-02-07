@@ -1247,6 +1247,19 @@ NULL
 1990-01-01
 2030-01-01
 
+# IN list optimization
+query D
+select c from t1 where extract(year from c) in (1990, 2024);
+----
+1990-01-01
+2024-01-01
+
+# NOT IN list optimization (NULL does not satisfy NOT IN)
+query D
+select c from t1 where extract(year from c) not in (1990, 2024);
+----
+2030-01-01
+
 # Check that date_part is not in the explain statements
 
 query TT
@@ -1327,6 +1340,16 @@ logical_plan
 02)--TableScan: t1 projection=[c]
 physical_plan
 01)FilterExec: c@0 < 2024-01-01 OR c@0 >= 2025-01-01 OR c@0 IS NULL
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+explain select c from t1 where extract (year from c) in (1990, 2024)
+----
+logical_plan
+01)Filter: t1.c >= Date32("1990-01-01") AND t1.c < Date32("1991-01-01") OR t1.c >= Date32("2024-01-01") AND t1.c < Date32("2025-01-01")
+02)--TableScan: t1 projection=[c]
+physical_plan
+01)FilterExec: c@0 >= 1990-01-01 AND c@0 < 1991-01-01 OR c@0 >= 2024-01-01 AND c@0 < 2025-01-01
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Simple optimizations, column on RHS
