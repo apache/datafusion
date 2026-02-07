@@ -173,9 +173,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         not_impl_err!("compound identifier: {ids:?}")
                     } else {
                         // Check the outer_query_schema and try to find a match
-                        let outer_schemas = planner_context.outer_queries_schemas();
-                        let mut maybe_result = None;
-                        if !outer_schemas.is_empty() {
                             for outer in planner_context.outer_queries_schemas() {
                                 let search_result = search_dfschema(&ids, &outer);
                                 let result = match search_result {
@@ -186,8 +183,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                         // TODO: remove when can support nested identifiers for OuterReferenceColumn
                                         not_impl_err!(
                                             "Nested identifiers are not yet supported for OuterReferenceColumn {}",
-                                            Column::from((qualifier, field))
-                                                .quoted_flat_name()
+                                            Column::from((qualifier, field)).quoted_flat_name()
                                         )
                                     }
                                     // Found matching field with no spare identifier(s)
@@ -201,18 +197,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                     // Found no matching field, will return a default
                                     None => continue,
                                 };
-                                maybe_result = Some(result);
-                                break;
+                                return result;
                             }
-                            if let Some(result) = maybe_result {
-                                result
-                            } else {
-                                let s = &ids[0..ids.len()];
-                                // safe unwrap as s can never be empty or exceed the bounds
-                                let (relation, column_name) = form_identifier(s).unwrap();
-                                Ok(Expr::Column(Column::new(relation, column_name)))
-                            }
-                        } else {
                             let s = &ids[0..ids.len()];
                             // Safe unwrap as s can never be empty or exceed the bounds
                             let (relation, column_name) = form_identifier(s).unwrap();
@@ -223,7 +209,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                 column.spans_mut().add_span(span);
                             }
                             Ok(Expr::Column(column))
-                        }
                     }
                 }
             }
