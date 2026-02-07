@@ -563,6 +563,15 @@ pub fn try_embed_projection<Exec: EmbeddedProjection + 'static>(
     projection: &ProjectionExec,
     execution_plan: &Exec,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    // If the projection has no expressions at all (e.g., ProjectionExec: expr=[]),
+    // embed an empty projection into the execution plan so it outputs zero columns.
+    // This avoids allocating throwaway null arrays for build-side columns
+    // when no output columns are actually needed (e.g., count(1) over a right join).
+    if projection.expr().is_empty() {
+        let new_execution_plan = Arc::new(execution_plan.with_projection(Some(vec![]))?);
+        return Ok(Some(new_execution_plan));
+    }
+
     // Collect all column indices from the given projection expressions.
     let projection_index = collect_column_indices(projection.expr());
 
