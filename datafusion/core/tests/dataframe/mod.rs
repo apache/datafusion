@@ -57,9 +57,7 @@ use datafusion::error::Result;
 use datafusion::execution::context::SessionContext;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::logical_expr::{ColumnarValue, Volatility};
-use datafusion::prelude::{
-    CsvReadOptions, JoinType, NdJsonReadOptions, ParquetReadOptions,
-};
+use datafusion::prelude::{CsvReadOptions, JoinType, ParquetReadOptions};
 use datafusion::test_util::{
     parquet_test_data, populate_csv_partitions, register_aggregate_csv, test_table,
     test_table_with_cache_factory, test_table_with_name,
@@ -94,6 +92,7 @@ use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties, displayable};
 
 use datafusion::error::Result as DataFusionResult;
+use datafusion::execution::options::JsonReadOptions;
 use datafusion_functions_window::expr_fn::lag;
 
 // Get string representation of the plan
@@ -2896,7 +2895,7 @@ async fn write_json_with_order() -> Result<()> {
     ctx.register_json(
         "data",
         test_path.to_str().unwrap(),
-        NdJsonReadOptions::default().schema(&schema),
+        JsonReadOptions::default().schema(&schema),
     )
     .await?;
 
@@ -6322,7 +6321,7 @@ async fn register_non_json_file() {
         .register_json(
             "data",
             "tests/data/test_binary.parquet",
-            NdJsonReadOptions::default(),
+            JsonReadOptions::default(),
         )
         .await;
     assert_contains!(

@@ -43,8 +43,11 @@ datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-plan = { workspace = true }
 datafusion-session = { workspace = true }
 futures = { workspace = true }
+log = "0.4.29"
 object_store = { workspace = true }
+serde_json = "1.0.149"
 tokio = { workspace = true }
+tokio-stream = { workspace = true, features = ["sync"] }
 
 # Note: add additional linter rules in lib.rs.
 # Rust does not support workspace + new linter rules in subcrates yet

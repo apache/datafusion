@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use super::super::options::ReadOptions;
+use super::{DataFilePaths, DataFrame, ExecutionPlan, Result, SessionContext};
+use crate::execution::options::JsonReadOptions;
 use datafusion_common::TableReference;
 use datafusion_datasource_json::source::plan_to_json;
 use std::sync::Arc;
-
-use super::super::options::{NdJsonReadOptions, ReadOptions};
-use super::{DataFilePaths, DataFrame, ExecutionPlan, Result, SessionContext};
 
 impl SessionContext {
     /// Creates a [`DataFrame`] for reading an JSON data source.
@@ -32,7 +32,7 @@ impl SessionContext {
     pub async fn read_json<P: DataFilePaths>(
         &self,
         table_paths: P,
-        options: NdJsonReadOptions<'_>,
+        options: JsonReadOptions<'_>,
     ) -> Result<DataFrame> {
         self._read_type(table_paths, options).await
     }
@@ -43,7 +43,7 @@ impl SessionContext {
         &self,
         table_ref: impl Into<TableReference>,
         table_path: impl AsRef<str>,
-        options: NdJsonReadOptions<'_>,
+        options: JsonReadOptions<'_>,
     ) -> Result<()> {
         let listing_options = options
             .to_listing_options(&self.copied_config(), self.copied_table_options());

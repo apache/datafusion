@@ -685,6 +685,9 @@ pub struct JsonOptions {
     /// Optional compression level
     #[prost(uint32, optional, tag = "3")]
     pub compression_level: ::core::option::Option<u32>,
+    /// Whether to read as newline-delimited JSON (default true). When false, expects JSON array format \[{},...\]
+    #[prost(bool, optional, tag = "4")]
+    pub newline_delimited: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TableParquetOptions {

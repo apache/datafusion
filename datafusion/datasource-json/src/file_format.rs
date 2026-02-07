@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`JsonFormat`]: Line delimited JSON [`FileFormat`] abstractions
+//! [`JsonFormat`]: Line delimited and array JSON [`FileFormat`] abstractions
 
 use std::any::Any;
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Debug;
-use std::io::BufReader;
+use std::io::{BufReader, Read};
 use std::sync::Arc;
 
 use crate::source::JsonSource;
@@ -31,6 +31,7 @@ use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::ArrowError;
 use arrow::json;
 use arrow::json::reader::{ValueIter, infer_json_schema_from_iterator};
+use bytes::{Buf, Bytes};
 use datafusion_common::config::{ConfigField, ConfigFileType, JsonOptions};
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::{
@@ -48,6 +49,7 @@ use datafusion_datasource::file_format::{
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
 use datafusion_datasource::sink::{DataSink, DataSinkExec};
+use datafusion_datasource::source::DataSourceExec;
 use datafusion_datasource::write::BatchSerializer;
 use datafusion_datasource::write::demux::DemuxedStreamReceiver;
 use datafusion_datasource::write::orchestration::spawn_writer_tasks_and_join;
@@ -57,9 +59,8 @@ use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 use datafusion_session::Session;
 
+use crate::utils::JsonArrayToNdjsonReader;
 use async_trait::async_trait;
-use bytes::{Buf, Bytes};
-use datafusion_datasource::source::DataSourceExec;
 use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
 
 #[derive(Default)]
@@ -132,7 +133,26 @@ impl Debug for JsonFormatFactory {
     }
 }
 
-/// New line delimited JSON `FileFormat` implementation.
+/// JSON `FileFormat` implementation supporting both line-delimited and array formats.
+///
+/// # Supported Formats
+///
+/// ## Line-Delimited JSON (default, `newline_delimited = true`)
+/// ```text
+/// {"key1": 1, "key2": "val"}
+/// {"key1": 2, "key2": "vals"}
+/// ```
+///
+/// ## JSON Array Format (`newline_delimited = false`)
+/// ```text
+/// [
+///     {"key1": 1, "key2": "val"},
+///     {"key1": 2, "key2": "vals"}
+/// ]
+/// ```
+///
+/// Note: JSON array format is processed using streaming conversion,
+/// which is memory-efficient even for large files.
 #[derive(Debug, Default)]
 pub struct JsonFormat {
     options: JsonOptions,
@@ -166,6 +186,57 @@ impl JsonFormat {
         self.options.compression = file_compression_type.into();
         self
     }
+
+    /// Set whether to read as newline-delimited JSON (NDJSON).
+    ///
+    /// When `true` (default), expects newline-delimited format:
+    /// ```text
+    /// {"a": 1}
+    /// {"a": 2}
+    /// ```
+    ///
+    /// When `false`, expects JSON array format:
+    /// ```text
+    /// [{"a": 1}, {"a": 2}]
+    /// ```
+    pub fn with_newline_delimited(mut self, newline_delimited: bool) -> Self {
+        self.options.newline_delimited = newline_delimited;
+        self
+    }
+
+    /// Returns whether this format expects newline-delimited JSON.
+    pub fn is_newline_delimited(&self) -> bool {
+        self.options.newline_delimited
+    }
+}
+
+/// Infer schema from JSON array format using streaming conversion.
+///
+/// This function converts JSON array format to NDJSON on-the-fly and uses
+/// arrow-json's schema inference. It properly tracks the number of records
+/// processed for correct `records_to_read` management.
+///
+/// # Returns
+/// A tuple of (Schema, records_consumed) where records_consumed is the
+/// number of records that were processed for schema inference.
+fn infer_schema_from_json_array<R: Read>(
+    reader: R,
+    max_records: usize,
+) -> Result<(Schema, usize)> {
+    let ndjson_reader = JsonArrayToNdjsonReader::new(reader);
+
+    let iter = ValueIter::new(ndjson_reader, None);
+    let mut count = 0;
+
+    let schema = infer_json_schema_from_iterator(iter.take_while(|_| {
+        let should_take = count < max_records;
+        if should_take {
+            count += 1;
+        }
+        should_take
+    }))?;
+
+    Ok((schema, count))
 }
 
 #[async_trait]
@@ -202,37 +273,67 @@ impl FileFormat for JsonFormat {
             .schema_infer_max_rec
             .unwrap_or(DEFAULT_SCHEMA_INFER_MAX_RECORD);
         let file_compression_type = FileCompressionType::from(self.options.compression);
+        let newline_delimited = self.options.newline_delimited;
+
         for object in objects {
-            let mut take_while = || {
-                let should_take = records_to_read > 0;
-                if should_take {
-                    records_to_read -= 1;
-                }
-                should_take
-            };
+            // Early exit if we've read enough records
+            if records_to_read == 0 {
+                break;
+            }
 
             let r = store.as_ref().get(&object.location).await?;
-            let schema = match r.payload {
+
+            let (schema, records_consumed) = match r.payload {
                 #[cfg(not(target_arch = "wasm32"))]
                 GetResultPayload::File(file, _) => {
                     let decoder = file_compression_type.convert_read(file)?;
-                    let mut reader = BufReader::new(decoder);
-                    let iter = ValueIter::new(&mut reader, None);
-                    infer_json_schema_from_iterator(iter.take_while(|_| take_while()))?
+                    let reader = BufReader::new(decoder);
+
+                    if newline_delimited {
+                        // NDJSON: use ValueIter directly
+                        let iter = ValueIter::new(reader, None);
+                        let mut count = 0;
+                        let schema =
+                            infer_json_schema_from_iterator(iter.take_while(|_| {
+                                let should_take = count < records_to_read;
+                                if should_take {
+                                    count += 1;
+                                }
+                                should_take
+                            }))?;
+                        (schema, count)
+                    } else {
+                        // JSON array format: use streaming converter
+                        infer_schema_from_json_array(reader, records_to_read)?
+                    }
                 }
                 GetResultPayload::Stream(_) => {
                     let data = r.bytes().await?;
                     let decoder = file_compression_type.convert_read(data.reader())?;
-                    let mut reader = BufReader::new(decoder);
-                    let iter = ValueIter::new(&mut reader, None);
-                    infer_json_schema_from_iterator(iter.take_while(|_| take_while()))?
+                    let reader = BufReader::new(decoder);
+
+                    if newline_delimited {
+                        let iter = ValueIter::new(reader, None);
+                        let mut count = 0;
+                        let schema =
+                            infer_json_schema_from_iterator(iter.take_while(|_| {
+                                let should_take = count < records_to_read;
+                                if should_take {
+                                    count += 1;
+                                }
+                                should_take
+                            }))?;
+                        (schema, count)
+                    } else {
+                        // JSON array format: use streaming converter
+                        infer_schema_from_json_array(reader, records_to_read)?
+                    }
                 }
             };
 
             schemas.push(schema);
-            if records_to_read == 0 {
-                break;
-            }
+            // Correctly decrement records_to_read
+            records_to_read = records_to_read.saturating_sub(records_consumed);
         }
 
         let schema = Schema::try_merge(schemas)?;
@@ -281,7 +382,10 @@ impl FileFormat for JsonFormat {
     }
 
     fn file_source(&self, table_schema: TableSchema) -> Arc<dyn FileSource> {
-        Arc::new(JsonSource::new(table_schema))
+        Arc::new(
+            JsonSource::new(table_schema)
+                .with_newline_delimited(self.options.newline_delimited),
+        )
     }
 }
 
