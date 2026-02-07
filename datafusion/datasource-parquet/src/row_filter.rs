@@ -725,10 +725,12 @@ mod test {
 
         // This is the schema we would like to coerce to,
         // which is different from the physical schema of the file.
+        // Keep nullability aligned with the file schema to avoid
+        // narrowing nullable data to non-nullable.
         let table_schema = Schema::new(vec![Field::new(
             "timestamp_col",
             DataType::Timestamp(Nanosecond, Some(Arc::from("UTC"))),
-            false,
+            true,
         )]);
 
         // Test all should fail
