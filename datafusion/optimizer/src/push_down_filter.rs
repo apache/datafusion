@@ -43,7 +43,9 @@ use datafusion_expr::{
 
 use crate::optimizer::ApplyOrder;
 use crate::simplify_expressions::simplify_predicates;
-use crate::utils::{has_all_column_refs, is_restrict_null_predicate};
+use crate::utils::{
+    has_all_column_refs, is_extracted_expr_projection, is_restrict_null_predicate,
+};
 use crate::{OptimizerConfig, OptimizerRule};
 
 /// Optimizer rule for pushing (moving) filter expressions down in a plan so
@@ -1295,6 +1297,18 @@ fn rewrite_projection(
     predicates: Vec<Expr>,
     mut projection: Projection,
 ) -> Result<(Transformed<LogicalPlan>, Option<Expr>)> {
+    // Note: This check coordinates with ExtractLeafExpressions optimizer rule.
+    // See extract_leaf_expressions.rs for details on why these projections exist.
+    // Don't push filters through extracted expression projections.
+    // Pushing filters through would rewrite expressions like `__datafusion_extracted_1 > 150`
+    // back to `get_field(s,'value') > 150`, undoing the extraction.
+    if is_extracted_expr_projection(&projection) {
+        return Ok((
+            Transformed::no(LogicalPlan::Projection(projection)),
+            conjunction(predicates),
+        ));
+    }
+
     // A projection is filter-commutable if it do not contain volatile predicates or contain volatile
     // predicates that are not used in the filter. However, we should re-writes all predicate expressions.
     // collect projection.
@@ -4218,6 +4232,63 @@ mod tests {
             @r"
         Filter: Boolean(false)
           TestUserNode
+        "
+        )
+    }
+
+    /// Test that filters are NOT pushed through extracted expression projections.
+    /// These projections are created by ExtractLeafExpressions and pushing filters
+    /// through would rewrite expressions back to their original form.
+    #[test]
+    fn filter_not_pushed_through_leaf_extraction_projection() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        // Create a projection with extracted expressions, simulating ExtractLeafExpressions output
+        let extraction_proj = LogicalPlanBuilder::from(table_scan)
+            .project(vec![
+                col("a").alias("__datafusion_extracted_1"),
+                col("b").alias("__datafusion_extracted_2"),
+                col("c"),
+            ])?
+            .build()?;
+
+        // Put a filter above the extraction projection
+        let plan = LogicalPlanBuilder::from(extraction_proj)
+            .filter(col("__datafusion_extracted_1").eq(lit(1i64)))?
+            .build()?;
+
+        // Filter should NOT be pushed through the extracted expression projection
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: __datafusion_extracted_1 = Int64(1)
+          Projection: test.a AS __datafusion_extracted_1, test.b AS __datafusion_extracted_2, test.c
+            TableScan: test
+        "
+        )
+    }
+
+    /// Test that filters ARE pushed through regular projections (not extracted expression ones).
+    #[test]
+    fn filter_pushed_through_regular_projection() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        // Create a regular projection without extracted expressions
+        let proj = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a").alias("x"), col("b").alias("y"), col("c")])?
+            .build()?;
+
+        // Put a filter above the projection
+        let plan = LogicalPlanBuilder::from(proj)
+            .filter(col("x").eq(lit(1i64)))?
+            .build()?;
+
+        // Filter SHOULD be pushed through the regular projection
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a AS x, test.b AS y, test.c
+          TableScan: test, full_filters=[test.a = Int64(1)]
         "
         )
     }

@@ -36,6 +36,81 @@ use std::sync::Arc;
 /// as it was initially placed here and then moved elsewhere.
 pub use datafusion_expr::expr_rewriter::NamePreserver;
 
+use datafusion_expr::Projection;
+
+/// Prefix used by [`ExtractLeafExpressions`] for extracted expression aliases.
+///
+/// Uses a unique prefix (`__datafusion_extracted`) to avoid collision with user-defined
+/// column names. The full alias format is `__datafusion_extracted_N` where N is a
+/// unique incrementing number.
+///
+/// # Usage
+///
+/// This constant is used by:
+/// - [`ExtractLeafExpressions`]: To generate aliases for extracted expressions
+/// - [`is_extracted_expr_projection`]: To detect extraction projections
+/// - [`PushDownFilter`]: To avoid pushing filters through extraction projections
+///
+/// # Example Aliases
+///
+/// ```text
+/// __datafusion_extracted_1
+/// __datafusion_extracted_2
+/// __datafusion_extracted_3
+/// ```
+///
+/// [`ExtractLeafExpressions`]: crate::extract_leaf_expressions::ExtractLeafExpressions
+/// [`PushDownFilter`]: crate::push_down_filter::PushDownFilter
+pub(crate) const EXTRACTED_EXPR_PREFIX: &str = "__datafusion_extracted";
+
+/// Checks if a projection contains extracted leaf expressions.
+///
+/// Projections created by [`ExtractLeafExpressions`] contain expressions aliased with
+/// the [`EXTRACTED_EXPR_PREFIX`]. This function detects such projections so that other
+/// optimizer rules can handle them specially.
+///
+/// # Returns
+///
+/// `true` if ANY expression in the projection has an alias starting with
+/// `__datafusion_extracted`. This indicates the projection was created by or
+/// modified by the extraction pass.
+///
+/// # Examples
+///
+/// ```text
+/// // Returns true (has extracted expression):
+/// Projection: get_field(s, 'x') AS __datafusion_extracted_1, s, a
+///   TableScan: t
+///
+/// // Returns false (no extracted expressions):
+/// Projection: a, b, c
+///   TableScan: t
+///
+/// // Returns false (alias doesn't match prefix):
+/// Projection: a AS my_alias, b
+///   TableScan: t
+/// ```
+///
+/// # Usage
+///
+/// This function is used by:
+/// - [`ExtractLeafExpressions`]: To skip already-processed projections and find
+///   existing extraction projections to merge into.
+/// - [`PushDownFilter`]: To avoid pushing filters through extraction projections,
+///   which would undo the extraction work.
+///
+/// [`ExtractLeafExpressions`]: crate::extract_leaf_expressions::ExtractLeafExpressions
+/// [`PushDownFilter`]: crate::push_down_filter::PushDownFilter
+pub(crate) fn is_extracted_expr_projection(proj: &Projection) -> bool {
+    proj.expr.iter().any(|e| {
+        if let Expr::Alias(alias) = e {
+            alias.name.starts_with(EXTRACTED_EXPR_PREFIX)
+        } else {
+            false
+        }
+    })
+}
+
 /// Returns true if `expr` contains all columns in `schema_cols`
 pub(crate) fn has_all_column_refs(expr: &Expr, schema_cols: &HashSet<Column>) -> bool {
     let column_refs = expr.column_refs();
