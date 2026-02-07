@@ -720,12 +720,15 @@ mod tests {
         println!("Rewritten expression: {result}");
 
         let expected = expressions::BinaryExpr::new(
-            Arc::new(CastColumnExpr::new(
-                Arc::new(Column::new("a", 0)),
-                Arc::new(Field::new("a", DataType::Int32, false)),
-                Arc::new(Field::new("a", DataType::Int64, false)),
-                None,
-            )),
+            Arc::new(
+                CastColumnExpr::new(
+                    Arc::new(Column::new("a", 0)),
+                    Arc::new(Field::new("a", DataType::Int32, false)),
+                    Arc::new(Field::new("a", DataType::Int64, false)),
+                    None,
+                )
+                .unwrap(),
+            ),
             Operator::Plus,
             Arc::new(expressions::Literal::new(ScalarValue::Int64(Some(5)))),
         );
@@ -830,12 +833,15 @@ mod tests {
             false,
         ));
 
-        let expected = Arc::new(CastColumnExpr::new(
-            Arc::new(Column::new("data", 0)),
-            physical_field,
-            logical_field,
-            None,
-        )) as Arc<dyn PhysicalExpr>;
+        let expected = Arc::new(
+            CastColumnExpr::new(
+                Arc::new(Column::new("data", 0)),
+                physical_field,
+                logical_field,
+                None,
+            )
+            .unwrap(),
+        ) as Arc<dyn PhysicalExpr>;
 
         assert_eq!(result.to_string(), expected.to_string());
     }
