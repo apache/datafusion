@@ -50,7 +50,7 @@ use tokio::sync::Barrier;
 pub(crate) struct ColumnBounds {
     /// The minimum value observed for this column
     pub(crate) min: ScalarValue,
-    /// The maximum value observed for this column  
+    /// The maximum value observed for this column
     pub(crate) max: ScalarValue,
 }
 
@@ -183,6 +183,44 @@ fn create_bounds_predicate(
     }
 }
 
+/// Build a filter expression for a single partition's data.
+///
+/// Returns a combined (bounds AND membership) expression, or `None` if neither bounds nor
+/// membership data is available.
+fn build_partition_filter_expr(
+    on_right: &[PhysicalExprRef],
+    partition: &PartitionData,
+    probe_schema: &Schema,
+) -> Result<Option<Arc<dyn PhysicalExpr>>> {
+    let membership_expr = create_membership_predicate(
+        on_right,
+        partition.pushdown.clone(),
+        &HASH_JOIN_SEED,
+        probe_schema,
+    )?;
+    let bounds_expr = create_bounds_predicate(on_right, &partition.bounds);
+
+    Ok(match (membership_expr, bounds_expr) {
+        (Some(membership), Some(bounds)) => {
+            Some(Arc::new(BinaryExpr::new(bounds, Operator::And, membership))
+                as Arc<dyn PhysicalExpr>)
+        }
+        (Some(membership), None) => Some(membership),
+        (None, Some(bounds)) => Some(bounds),
+        (None, None) => None,
+    })
+}
+
+/// Combine multiple filter expressions into a single OR expression.
+/// Returns `None` if the input is empty.
+fn combine_or_filters(
+    filters: Vec<Arc<dyn PhysicalExpr>>,
+) -> Option<Arc<dyn PhysicalExpr>> {
+    filters.into_iter().reduce(|acc, filter| {
+        Arc::new(BinaryExpr::new(acc, Operator::Or, filter)) as Arc<dyn PhysicalExpr>
+    })
+}
+
 /// Coordinates build-side information collection across multiple partitions
 ///
 /// This structure collects information from the build side (hash tables and/or bounds) and
@@ -226,6 +264,12 @@ pub(crate) struct SharedBuildAccumulator {
     repartition_random_state: SeededRandomState,
     /// Schema of the probe (right) side for evaluating filter expressions
     probe_schema: Arc<Schema>,
+    /// When true, Partitioned mode uses Global OR instead of CASE hash routing. This is needed
+    /// when the data is not truly hash-distributed (i.e. using file-group partitioning from
+    /// `preserve_file_partitions`). In this case, using `CASE hash(key) % N` routing would apply
+    /// the wrong partition's filter to data. Global OR combines all partition's filters which is
+    /// safe for any partitioning scheme and still allows for effective pruning.
+    use_global_or: bool,
 }
 
 /// Strategy for filter pushdown (decided at collection time)
@@ -302,6 +346,7 @@ impl SharedBuildAccumulator {
         dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
         on_right: Vec<PhysicalExprRef>,
         repartition_random_state: SeededRandomState,
+        use_global_or: bool,
     ) -> Self {
         // Troubleshooting: If partition counts are incorrect, verify this logic matches
         // the actual execution pattern in collect_build_side()
@@ -342,6 +387,7 @@ impl SharedBuildAccumulator {
             on_right,
             repartition_random_state,
             probe_schema: right_child.schema(),
+            use_global_or,
         }
     }
 
@@ -457,126 +503,132 @@ impl SharedBuildAccumulator {
                         }
                     }
                 }
-                // Partitioned: CASE expression routing to per-partition filters
+                // Partitioned: build filter from all partitions
                 AccumulatedBuildData::Partitioned { partitions } => {
                     // Collect all partition data (should all be Some at this point)
                     let partition_data: Vec<_> =
                         partitions.iter().filter_map(|p| p.as_ref()).collect();
 
                     if !partition_data.is_empty() {
-                        // Build a CASE expression that combines range checks AND membership checks
-                        // CASE (hash_repartition(join_keys) % num_partitions)
-                        //   WHEN 0 THEN (col >= min_0 AND col <= max_0 AND ...) AND membership_check_0
-                        //   WHEN 1 THEN (col >= min_1 AND col <= max_1 AND ...) AND membership_check_1
-                        //   ...
-                        //   ELSE false
-                        // END
+                        if self.use_global_or {
+                            // Global OR: combine all partition filters with OR
+                            //
+                            // Used when data is not truly hash-distributed (file-group
+                            // partitioning from `preserve_file_partitions`). In this case,
+                            // the CASE hash(key) % N routing would apply the wrong
+                            // partition's filter. Global OR is safe for any partitioning
+                            // scheme: PruningPredicate decomposes OR branches independently
+                            // for row-group pruning, achieving equivalent selectivity.
+                            //
+                            // WHERE (
+                            //  (col >= min_0 AND col <= max_0) OR
+                            //  (col >= min_1 AND col <= max_1) OR
+                            //   ...
+                            // )
+                            let partition_filters: Vec<Arc<dyn PhysicalExpr>> =
+                                partitions
+                                    .iter()
+                                    .filter_map(|partition_opt| {
+                                        partition_opt.as_ref().and_then(|partition| {
+                                            match &partition.pushdown {
+                                                PushdownStrategy::Empty => None,
+                                                _ => Some(partition),
+                                            }
+                                        })
+                                    })
+                                    .map(|partition| {
+                                        build_partition_filter_expr(
+                                            &self.on_right,
+                                            partition,
+                                            self.probe_schema.as_ref(),
+                                        )
+                                    })
+                                    .collect::<Result<Vec<_>>>()?
+                                    .into_iter()
+                                    .flatten()
+                                    .collect();
 
-                        let num_partitions = partition_data.len();
-
-                        // Create base expression: hash_repartition(join_keys) % num_partitions
-                        let routing_hash_expr = Arc::new(HashExpr::new(
-                            self.on_right.clone(),
-                            self.repartition_random_state.clone(),
-                            "hash_repartition".to_string(),
-                        ))
-                            as Arc<dyn PhysicalExpr>;
-
-                        let modulo_expr = Arc::new(BinaryExpr::new(
-                            routing_hash_expr,
-                            Operator::Modulo,
-                            lit(ScalarValue::UInt64(Some(num_partitions as u64))),
-                        ))
-                            as Arc<dyn PhysicalExpr>;
-
-                        // Create WHEN branches for each partition
-                        let when_then_branches: Vec<(
-                            Arc<dyn PhysicalExpr>,
-                            Arc<dyn PhysicalExpr>,
-                        )> = partitions
-                            .iter()
-                            .enumerate()
-                            .filter_map(|(partition_id, partition_opt)| {
-                                partition_opt.as_ref().and_then(|partition| {
-                                    // Skip empty partitions - they would always return false anyway
-                                    match &partition.pushdown {
-                                        PushdownStrategy::Empty => None,
-                                        _ => Some((partition_id, partition)),
-                                    }
-                                })
-                            })
-                            .map(|(partition_id, partition)| -> Result<_> {
-                                // WHEN partition_id
-                                let when_expr =
-                                    lit(ScalarValue::UInt64(Some(partition_id as u64)));
-
-                                // THEN: Combine bounds check AND membership predicate
-
-                                // 1. Create membership predicate (InList for small build sides, hash lookup otherwise)
-                                let membership_expr = create_membership_predicate(
-                                    &self.on_right,
-                                    partition.pushdown.clone(),
-                                    &HASH_JOIN_SEED,
-                                    self.probe_schema.as_ref(),
-                                )?;
-
-                                // 2. Create bounds check expression for this partition (if bounds available)
-                                let bounds_expr = create_bounds_predicate(
-                                    &self.on_right,
-                                    &partition.bounds,
-                                );
-
-                                // 3. Combine membership and bounds expressions
-                                let then_expr = match (membership_expr, bounds_expr) {
-                                    (Some(membership), Some(bounds)) => {
-                                        // Both available: combine with AND
-                                        Arc::new(BinaryExpr::new(
-                                            bounds,
-                                            Operator::And,
-                                            membership,
-                                        ))
-                                            as Arc<dyn PhysicalExpr>
-                                    }
-                                    (Some(membership), None) => {
-                                        // Membership available but no bounds (e.g., unsupported data types)
-                                        membership
-                                    }
-                                    (None, Some(bounds)) => {
-                                        // Bounds available but no membership.
-                                        // This should be unreachable in practice: we can always push down a reference
-                                        // to the hash table.
-                                        // But it seems safer to handle it defensively.
-                                        bounds
-                                    }
-                                    (None, None) => {
-                                        // No filter for this partition - should not happen due to filter_map above
-                                        // but handle defensively by returning a "true" literal
-                                        lit(true)
-                                    }
-                                };
-
-                                Ok((when_expr, then_expr))
-                            })
-                            .collect::<Result<Vec<_>>>()?;
-
-                        // Optimize for single partition: skip CASE expression entirely
-                        let filter_expr = if when_then_branches.is_empty() {
-                            // All partitions are empty: no rows can match
-                            lit(false)
-                        } else if when_then_branches.len() == 1 {
-                            // Single partition: just use the condition directly
-                            // since hash % 1 == 0 always, the WHEN 0 branch will always match
-                            Arc::clone(&when_then_branches[0].1)
+                            if let Some(filter_expr) =
+                                combine_or_filters(partition_filters)
+                            {
+                                self.dynamic_filter.update(filter_expr)?;
+                            }
                         } else {
-                            // Multiple partitions: create CASE expression
-                            Arc::new(CaseExpr::try_new(
-                                Some(modulo_expr),
-                                when_then_branches,
-                                Some(lit(false)), // ELSE false
-                            )?) as Arc<dyn PhysicalExpr>
-                        };
+                            // CASE hash routing: route each row to the correct partition's filter
+                            // CASE (hash_repartition(join_keys) % num_partitions)
+                            //   WHEN 0 THEN (col >= min_0 AND col <= max_0 AND ...) AND membership_check_0
+                            //   WHEN 1 THEN (col >= min_1 AND col <= max_1 AND ...) AND membership_check_1
+                            //   ...
+                            //   ELSE false
+                            // END
+                            let num_partitions = partition_data.len();
 
-                        self.dynamic_filter.update(filter_expr)?;
+                            // Create base expression: hash_repartition(join_keys) % num_partitions
+                            let routing_hash_expr = Arc::new(HashExpr::new(
+                                self.on_right.clone(),
+                                self.repartition_random_state.clone(),
+                                "hash_repartition".to_string(),
+                            ))
+                                as Arc<dyn PhysicalExpr>;
+
+                            let modulo_expr = Arc::new(BinaryExpr::new(
+                                routing_hash_expr,
+                                Operator::Modulo,
+                                lit(ScalarValue::UInt64(Some(num_partitions as u64))),
+                            ))
+                                as Arc<dyn PhysicalExpr>;
+
+                            // Create WHEN branches for each partition
+                            let when_then_branches: Vec<(
+                                Arc<dyn PhysicalExpr>,
+                                Arc<dyn PhysicalExpr>,
+                            )> = partitions
+                                .iter()
+                                .enumerate()
+                                .filter_map(|(partition_id, partition_opt)| {
+                                    partition_opt.as_ref().and_then(|partition| {
+                                        match &partition.pushdown {
+                                            PushdownStrategy::Empty => None,
+                                            _ => Some((partition_id, partition)),
+                                        }
+                                    })
+                                })
+                                .map(|(partition_id, partition)| -> Result<_> {
+                                    let when_expr = lit(ScalarValue::UInt64(Some(
+                                        partition_id as u64,
+                                    )));
+
+                                    let then_expr = build_partition_filter_expr(
+                                        &self.on_right,
+                                        partition,
+                                        self.probe_schema.as_ref(),
+                                    )?
+                                    .unwrap_or_else(|| lit(true));
+
+                                    Ok((when_expr, then_expr))
+                                })
+                                .collect::<Result<Vec<_>>>()?;
+
+                            // Optimize for single partition: skip CASE expression entirely
+                            let filter_expr = if when_then_branches.is_empty() {
+                                // All partitions are empty: no rows can match
+                                lit(false)
+                            } else if when_then_branches.len() == 1 {
+                                // Single partition: just use the condition directly
+                                // since hash % 1 == 0 always, the WHEN 0 branch will always match
+                                Arc::clone(&when_then_branches[0].1)
+                            } else {
+                                // Multiple partitions: create CASE expression
+                                Arc::new(CaseExpr::try_new(
+                                    Some(modulo_expr),
+                                    when_then_branches,
+                                    Some(lit(false)), // ELSE false
+                                )?)
+                                    as Arc<dyn PhysicalExpr>
+                            };
+
+                            self.dynamic_filter.update(filter_expr)?;
+                        }
                     }
                 }
             }
@@ -590,5 +642,247 @@ impl SharedBuildAccumulator {
 impl fmt::Debug for SharedBuildAccumulator {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "SharedBuildAccumulator")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::Int32Array;
+    use arrow::datatypes::Field;
+    use datafusion_physical_expr::expressions::Column;
+
+    /// Creates a Column expression
+    fn test_col(name: &str, index: usize) -> PhysicalExprRef {
+        Arc::new(Column::new(name, index))
+    }
+
+    #[test]
+    fn test_global_or_combines_multiple_partition_bounds() {
+        // 3 partitions with different ranges:
+        //   Partition 0: a in [1, 100]
+        //   Partition 1: a in [200, 300]
+        //   Partition 2: a in [400, 500]
+        // Global OR should produce:
+        //   (a >= 1 AND a <= 100) OR (a >= 200 AND a <= 300) OR (a >= 400 AND a <= 500)
+        let col_a = test_col("a", 0);
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+
+        let partitions: Vec<PartitionData> = vec![
+            PartitionData {
+                bounds: PartitionBounds::new(vec![ColumnBounds::new(
+                    ScalarValue::Int32(Some(1)),
+                    ScalarValue::Int32(Some(100)),
+                )]),
+                pushdown: PushdownStrategy::Empty,
+            },
+            PartitionData {
+                bounds: PartitionBounds::new(vec![ColumnBounds::new(
+                    ScalarValue::Int32(Some(200)),
+                    ScalarValue::Int32(Some(300)),
+                )]),
+                pushdown: PushdownStrategy::Empty,
+            },
+            PartitionData {
+                bounds: PartitionBounds::new(vec![ColumnBounds::new(
+                    ScalarValue::Int32(Some(400)),
+                    ScalarValue::Int32(Some(500)),
+                )]),
+                pushdown: PushdownStrategy::Empty,
+            },
+        ];
+
+        // Build per-partition filters (same logic as Global OR path)
+        let partition_filters: Vec<Arc<dyn PhysicalExpr>> = partitions
+            .iter()
+            .filter_map(|p| {
+                build_partition_filter_expr(std::slice::from_ref(&col_a), p, &schema)
+                    .ok()
+                    .flatten()
+            })
+            .collect();
+
+        assert_eq!(
+            partition_filters.len(),
+            3,
+            "should have 3 partition filters"
+        );
+
+        let combined = combine_or_filters(partition_filters).unwrap();
+        let display = format!("{combined}");
+        assert_eq!(
+            display,
+            "a@0 >= 1 AND a@0 <= 100 OR a@0 >= 200 AND a@0 <= 300 OR a@0 >= 400 AND a@0 <= 500"
+        );
+    }
+
+    #[test]
+    fn test_global_or_skips_empty_partitions() {
+        // 3 partitions with different ranges:
+        //   Partition 0: a in [1, 100]
+        //   Partition 1: empty
+        //   Partition 2: a in [400, 500]
+        // Should produce: (a >= 1 AND a <= 100) OR (a >= 400 AND a <= 500)
+        let col_a = test_col("a", 0);
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+
+        let partitions: Vec<Option<PartitionData>> = vec![
+            Some(PartitionData {
+                bounds: PartitionBounds::new(vec![ColumnBounds::new(
+                    ScalarValue::Int32(Some(1)),
+                    ScalarValue::Int32(Some(100)),
+                )]),
+                pushdown: PushdownStrategy::Empty,
+            }),
+            None, // empty partition
+            Some(PartitionData {
+                bounds: PartitionBounds::new(vec![ColumnBounds::new(
+                    ScalarValue::Int32(Some(400)),
+                    ScalarValue::Int32(Some(500)),
+                )]),
+                pushdown: PushdownStrategy::Empty,
+            }),
+        ];
+
+        // Build per-partition filters (same logic as Global OR path)
+        let partition_filters: Vec<Arc<dyn PhysicalExpr>> = partitions
+            .iter()
+            .filter_map(|opt| opt.as_ref())
+            .filter_map(|p| {
+                build_partition_filter_expr(std::slice::from_ref(&col_a), p, &schema)
+                    .ok()
+                    .flatten()
+            })
+            .collect();
+
+        assert_eq!(
+            partition_filters.len(),
+            2,
+            "should skip the empty partition"
+        );
+
+        let combined = combine_or_filters(partition_filters).unwrap();
+        let display = format!("{combined}");
+        assert_eq!(
+            display,
+            "a@0 >= 1 AND a@0 <= 100 OR a@0 >= 400 AND a@0 <= 500"
+        );
+    }
+
+    #[test]
+    fn test_global_or_single_partition() {
+        // Single partition should produce just the bounds
+        let col_a = test_col("a", 0);
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+
+        let partition = PartitionData {
+            bounds: PartitionBounds::new(vec![ColumnBounds::new(
+                ScalarValue::Int32(Some(10)),
+                ScalarValue::Int32(Some(50)),
+            )]),
+            pushdown: PushdownStrategy::Empty,
+        };
+
+        let filter = build_partition_filter_expr(&[col_a], &partition, &schema)
+            .unwrap()
+            .unwrap();
+        let combined = combine_or_filters(vec![filter]).unwrap();
+        let display = format!("{combined}");
+        // No OR, just the single partition's filter
+        assert_eq!(display, "a@0 >= 10 AND a@0 <= 50");
+    }
+
+    #[test]
+    fn test_global_or_all_empty_partitions() {
+        // All partitions empty → no filter
+        let col_a = test_col("a", 0);
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+
+        let partitions: Vec<Option<PartitionData>> = vec![None, None, None];
+
+        let partition_filters: Vec<Arc<dyn PhysicalExpr>> = partitions
+            .iter()
+            .filter_map(|opt| opt.as_ref())
+            .filter_map(|p| {
+                build_partition_filter_expr(std::slice::from_ref(&col_a), p, &schema)
+                    .ok()
+                    .flatten()
+            })
+            .collect();
+
+        assert!(partition_filters.is_empty());
+        let combined = combine_or_filters(partition_filters);
+        assert!(
+            combined.is_none(),
+            "all-empty partitions should produce no filter"
+        );
+    }
+
+    #[test]
+    fn test_global_or_row_level_evaluation() {
+        // 2 partitions with different ranges:
+        //   Partition 0: key in [1, 100]
+        //   Partition 1: key in [200, 300]
+        //
+        // A batch with keys [50, 250, 150] should produce:
+        //   row 0 (key=50):  (50>=1 AND 50<=100)=true  OR (50>=200 AND 50<=300)=false -> true
+        //   row 1 (key=250): (250>=1 AND 250<=100)=false OR (250>=200 AND 250<=300)=true -> true
+        //   row 2 (key=150): (150>=1 AND 150<=100)=false OR (150>=200 AND 150<=300)=false -> false
+        use arrow::record_batch::RecordBatch;
+
+        let col_key = test_col("key", 0);
+        let schema = Schema::new(vec![Field::new("key", DataType::Int32, false)]);
+
+        let partitions = [
+            PartitionData {
+                bounds: PartitionBounds::new(vec![ColumnBounds::new(
+                    ScalarValue::Int32(Some(1)),
+                    ScalarValue::Int32(Some(100)),
+                )]),
+                pushdown: PushdownStrategy::Empty,
+            },
+            PartitionData {
+                bounds: PartitionBounds::new(vec![ColumnBounds::new(
+                    ScalarValue::Int32(Some(200)),
+                    ScalarValue::Int32(Some(300)),
+                )]),
+                pushdown: PushdownStrategy::Empty,
+            },
+        ];
+
+        let filters: Vec<Arc<dyn PhysicalExpr>> = partitions
+            .iter()
+            .filter_map(|p| {
+                build_partition_filter_expr(std::slice::from_ref(&col_key), p, &schema)
+                    .ok()
+                    .flatten()
+            })
+            .collect();
+
+        let or_filter = combine_or_filters(filters).unwrap();
+
+        // Evaluate against a batch
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(Int32Array::from(vec![50, 250, 150]))],
+        )
+        .unwrap();
+
+        let result = or_filter
+            .evaluate(&batch)
+            .unwrap()
+            .into_array(batch.num_rows())
+            .unwrap();
+        let bools = result
+            .as_any()
+            .downcast_ref::<arrow::array::BooleanArray>()
+            .unwrap();
+
+        assert!(bools.value(0), "key=50 should match partition 0's range");
+        assert!(bools.value(1), "key=250 should match partition 1's range");
+        assert!(
+            !bools.value(2),
+            "key=150 should not match any partition's range"
+        );
     }
 }
