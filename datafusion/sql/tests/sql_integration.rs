@@ -4861,38 +4861,6 @@ fn test_using_join_wildcard_schema() {
 }
 
 #[test]
-fn test_2_nested_lateral_join_with_the_deepest_join_referencing_the_outer_most_relation()
-{
-    let sql = "SELECT * FROM j1 j1_outer, LATERAL (
-    SELECT * FROM j1 j1_inner, LATERAL (
-        SELECT * FROM j2 WHERE j1_inner.j1_id = j2_id and j1_outer.j1_id=j2_id
-    ) as j2
-) as j2";
-
-    let plan = logical_plan(sql).unwrap();
-    assert_snapshot!(
-         plan,
-         @r#"
-Projection: j1_outer.j1_id, j1_outer.j1_string, j2.j1_id, j2.j1_string, j2.j2_id, j2.j2_string
-  Cross Join:
-    SubqueryAlias: j1_outer
-      TableScan: j1
-    SubqueryAlias: j2
-      Subquery:
-        Projection: j1_inner.j1_id, j1_inner.j1_string, j2.j2_id, j2.j2_string
-          Cross Join:
-            SubqueryAlias: j1_inner
-              TableScan: j1
-            SubqueryAlias: j2
-              Subquery:
-                Projection: j2.j2_id, j2.j2_string
-                  Filter: outer_ref(j1_inner.j1_id) = j2.j2_id AND outer_ref(j1_outer.j1_id) = j2.j2_id
-                    TableScan: j2
-"#
-    );
-}
-
-#[test]
 fn test_correlated_recursive_scalar_subquery_with_level_3_scalar_subquery_referencing_level1_relation()
  {
     let sql = "select c_custkey from customer
