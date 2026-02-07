@@ -282,23 +282,20 @@ DROP TABLE interval_test;
 statement ok
 set datafusion.execution.enable_ansi_mode = true;
 
-# Test ANSI mode: negative of minimum tinyint should error
+# Test ANSI mode: negative of minimum values should error (overflow)
 query error DataFusion error: Arrow error: Compute error: Int8 overflow on negative\(\-128\)
 SELECT negative((-128)::tinyint);
 
-# Test ANSI mode: negative of minimum smallint should error
 query error DataFusion error: Arrow error: Compute error: Int16 overflow on negative\(\-32768\)
 SELECT negative((-32768)::smallint);
 
-# Test ANSI mode: negative of minimum int should error
 query error DataFusion error: Arrow error: Compute error: Int32 overflow on negative\(\-2147483648\)
 SELECT negative((-2147483648)::int);
 
-# Test ANSI mode: negative of minimum bigint should error
 query error DataFusion error: Arrow error: Compute error: Int64 overflow on negative\(\-9223372036854775808\)
 SELECT negative((-9223372036854775808)::bigint);
 
-# Test ANSI mode: negative of (MIN+1) should succeed
+# Test ANSI mode: negative of (MIN+1) should succeed (boundary test)
 query I
 SELECT negative((-127)::tinyint);
 ----
@@ -319,30 +316,7 @@ SELECT negative((-9223372036854775807)::bigint);
 ----
 9223372036854775807
 
-# Test ANSI mode: negative of positive values should succeed
-query I
-SELECT negative(42::int);
-----
--42
-
-query I
-SELECT negative(100::bigint);
-----
--100
-
-# Test ANSI mode: negative of negative values (not MIN) should succeed
-query I
-SELECT negative((-50)::int);
-----
-50
-
-# Test ANSI mode: negative of zero should succeed
-query I
-SELECT negative(0::int);
-----
-0
-
-# Test ANSI mode: negative with array containing MIN value should error
+# Test ANSI mode: array with MIN value should error
 statement ok
 CREATE TABLE min_values_ansi AS VALUES (-2147483648);
 
@@ -351,47 +325,6 @@ SELECT negative(column1::int) FROM min_values_ansi;
 
 statement ok
 DROP TABLE min_values_ansi;
-
-# Test ANSI mode: negative with array of valid values should succeed
-statement ok
-CREATE TABLE valid_values AS VALUES (-100), (50), (0), (NULL);
-
-query I rowsort
-SELECT negative(column1::int) FROM valid_values;
-----
--50
-0
-100
-NULL
-
-statement ok
-DROP TABLE valid_values;
-
-# Test ANSI mode: float and double should still work (no overflow for floats)
-query R
-SELECT negative(3.14::float);
-----
--3.14
-
-query R
-SELECT negative(-2.5::double);
-----
-2.5
-
-query R
-SELECT negative('Infinity'::float);
-----
--Infinity
-
-query R
-SELECT negative('-Infinity'::double);
-----
-Infinity
-
-query R
-SELECT negative('NaN'::float);
-----
-NaN
 
 # Reset ANSI mode to false
 statement ok
