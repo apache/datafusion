@@ -136,6 +136,8 @@ fn create_membership_predicate(
         )) as Arc<dyn PhysicalExpr>)),
         // Empty partition - should not create a filter for this
         PushdownStrategy::Empty => Ok(None),
+        // User disabled map pushdown - only bounds (if enabled) will be used
+        PushdownStrategy::Disabled => Ok(None),
     }
 }
 
@@ -226,6 +228,8 @@ pub(crate) struct SharedBuildAccumulator {
     repartition_random_state: SeededRandomState,
     /// Schema of the probe (right) side for evaluating filter expressions
     probe_schema: Arc<Schema>,
+    /// Whether to include bounds in the dynamic filter
+    bounds_pushdown_enabled: bool,
 }
 
 /// Strategy for filter pushdown (decided at collection time)
@@ -237,6 +241,8 @@ pub(crate) enum PushdownStrategy {
     Map(Arc<Map>),
     /// There was no data in this partition, do not build a dynamic filter for it
     Empty,
+    /// User disabled map pushdown via config, only use bounds (if enabled)
+    Disabled,
 }
 
 /// Build-side data reported by a single partition
@@ -302,6 +308,7 @@ impl SharedBuildAccumulator {
         dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
         on_right: Vec<PhysicalExprRef>,
         repartition_random_state: SeededRandomState,
+        bounds_pushdown_enabled: bool,
     ) -> Self {
         // Troubleshooting: If partition counts are incorrect, verify this logic matches
         // the actual execution pattern in collect_build_side()
@@ -342,6 +349,7 @@ impl SharedBuildAccumulator {
             on_right,
             repartition_random_state,
             probe_schema: right_child.schema(),
+            bounds_pushdown_enabled,
         }
     }
 
@@ -410,11 +418,15 @@ impl SharedBuildAccumulator {
                             self.probe_schema.as_ref(),
                         )?;
 
-                        // Create bounds check expression (if bounds available)
-                        let bounds_expr = create_bounds_predicate(
-                            &self.on_right,
-                            &partition_data.bounds,
-                        );
+                        // Create bounds check expression (if bounds available and enabled)
+                        let bounds_expr = if self.bounds_pushdown_enabled {
+                            create_bounds_predicate(
+                                &self.on_right,
+                                &partition_data.bounds,
+                            )
+                        } else {
+                            None
+                        };
 
                         // Combine membership and bounds expressions for multi-layer optimization:
                         // - Bounds (min/max): Enable statistics-based pruning (Parquet row group/file skipping)
@@ -490,6 +502,7 @@ impl SharedBuildAccumulator {
                             as Arc<dyn PhysicalExpr>;
 
                         // Create WHEN branches for each partition
+                        let bounds_enabled = self.bounds_pushdown_enabled;
                         let when_then_branches: Vec<(
                             Arc<dyn PhysicalExpr>,
                             Arc<dyn PhysicalExpr>,
@@ -501,6 +514,9 @@ impl SharedBuildAccumulator {
                                     // Skip empty partitions - they would always return false anyway
                                     match &partition.pushdown {
                                         PushdownStrategy::Empty => None,
+                                        // Note: We intentionally keep Disabled partitions even when bounds
+                                        // are disabled. This allows measuring the CASE routing overhead
+                                        // independently. The (None, None) case returns lit(true).
                                         _ => Some((partition_id, partition)),
                                     }
                                 })
@@ -520,11 +536,15 @@ impl SharedBuildAccumulator {
                                     self.probe_schema.as_ref(),
                                 )?;
 
-                                // 2. Create bounds check expression for this partition (if bounds available)
-                                let bounds_expr = create_bounds_predicate(
-                                    &self.on_right,
-                                    &partition.bounds,
-                                );
+                                // 2. Create bounds check expression for this partition (if bounds available and enabled)
+                                let bounds_expr = if self.bounds_pushdown_enabled {
+                                    create_bounds_predicate(
+                                        &self.on_right,
+                                        &partition.bounds,
+                                    )
+                                } else {
+                                    None
+                                };
 
                                 // 3. Combine membership and bounds expressions
                                 let then_expr = match (membership_expr, bounds_expr) {

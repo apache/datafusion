@@ -1115,6 +1115,18 @@ config_namespace! {
         /// See: <https://trino.io/docs/current/admin/dynamic-filtering.html#dynamic-filter-collection-thresholds>
         pub hash_join_inlist_pushdown_max_distinct_values: usize, default = 150
 
+        /// When true, pushes down hash table references for membership checks in hash joins
+        /// when the build side is too large for InList pushdown.
+        /// When false, no membership filter is created when InList thresholds are exceeded.
+        /// Default: true
+        pub hash_join_map_pushdown: bool, default = true
+
+        /// When true, pushes down min/max bounds for join key columns.
+        /// This enables statistics-based pruning (e.g., Parquet row group skipping).
+        /// When false, only membership filters (InList or Map) are pushed down.
+        /// Default: true
+        pub hash_join_bounds_pushdown: bool, default = true
+
         /// The default filter selectivity used by Filter Statistics
         /// when an exact selectivity cannot be determined. Valid values are
         /// between 0 (no selectivity) and 100 (all rows are selected).
