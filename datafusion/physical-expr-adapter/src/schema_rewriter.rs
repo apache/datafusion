@@ -29,7 +29,7 @@ use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, SchemaRef};
 use datafusion_common::{
     Result, ScalarValue, exec_err,
-    nested_struct::validate_struct_compatibility,
+    nested_struct::{validate_field_compatibility, validate_struct_compatibility},
     tree_node::{Transformed, TransformedResult, TreeNode},
 };
 use datafusion_functions::core::getfield::GetFieldFunc;
@@ -496,18 +496,18 @@ impl DefaultPhysicalExprAdapterRewriter {
                 )?;
             }
             _ => {
-                let is_compatible = can_cast_types(
-                    actual_physical_field.data_type(),
-                    logical_field.data_type(),
-                );
-                if !is_compatible {
-                    return exec_err!(
-                        "Cannot cast column '{}' from '{}' (physical data type) to '{}' (logical data type)",
+                validate_field_compatibility(
+                    actual_physical_field.as_ref(),
+                    logical_field,
+                )
+                .map_err(|err| {
+                    exec_err!(
+                        "Cannot cast column '{}' from '{}' (physical data type) to '{}' (logical data type): {err}",
                         column.name(),
                         actual_physical_field.data_type(),
                         logical_field.data_type()
-                    );
-                }
+                    )
+                })?;
             }
         }
 
