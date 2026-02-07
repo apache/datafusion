@@ -567,7 +567,7 @@ fn cast_options_from_proto(
                     timestamp_tz_format: fo.timestamp_tz_format.clone(),
                     time_format: fo.time_format.clone(),
                     duration_format: parse_duration_format(fo.duration_format.as_deref()),
-                    types_info: fo.types_info,
+                    types_info: false,
                 });
             Ok(Some(OwnedCastOptions {
                 safe: opts.safe,
@@ -588,7 +588,7 @@ fn cast_options_from_proto(
                         duration_format: parse_duration_format(
                             fo.duration_format.as_deref(),
                         ),
-                        types_info: fo.types_info,
+                        types_info: false,
                     }
                 });
                 Ok(Some(OwnedCastOptions {

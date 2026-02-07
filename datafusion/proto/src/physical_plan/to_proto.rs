@@ -251,6 +251,7 @@ fn format_duration_for_proto(duration_format: DurationFormat) -> Option<String> 
     match duration_format {
         DurationFormat::ISO8601 => Some("iso8601".to_string()),
         DurationFormat::Pretty => Some("pretty".to_string()),
+        _ => None,
     }
 }
 
@@ -439,6 +440,34 @@ pub fn serialize_physical_expr_with_converter(
             )),
         })
     } else if let Some(cast) = expr.downcast_ref::<CastExpr>() {
+        let cast_options = cast.cast_options();
+        let format_opts = protobuf::FormatOptions {
+            safe: false,
+            null: cast_options.format_options.null().to_string(),
+            date_format: cast_options
+                .format_options
+                .date_format()
+                .map(|s| s.to_string()),
+            datetime_format: cast_options
+                .format_options
+                .datetime_format()
+                .map(|s| s.to_string()),
+            timestamp_format: cast_options
+                .format_options
+                .timestamp_format()
+                .map(|s| s.to_string()),
+            timestamp_tz_format: cast_options
+                .format_options
+                .timestamp_tz_format()
+                .map(|s| s.to_string()),
+            time_format: cast_options
+                .format_options
+                .time_format()
+                .map(|s| s.to_string()),
+            duration_format: format_duration_for_proto(
+                cast_options.format_options.duration_format(),
+            ),
+        };
         Ok(protobuf::PhysicalExprNode {
             expr_id: None,
             expr_type: Some(protobuf::physical_expr_node::ExprType::Cast(Box::new(
@@ -447,6 +476,10 @@ pub fn serialize_physical_expr_with_converter(
                         proto_converter.physical_expr_to_proto(cast.expr(), codec)?,
                     )),
                     arrow_type: Some(cast.cast_type().try_into()?),
+                    cast_options: Some(protobuf::PhysicalCastOptions {
+                        safe: cast_options.safe,
+                        format_options: Some(format_opts),
+                    }),
                 },
             ))),
         })
