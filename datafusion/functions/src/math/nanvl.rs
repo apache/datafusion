@@ -23,7 +23,10 @@ use crate::utils::make_scalar_function;
 use arrow::array::{ArrayRef, AsArray, Float16Array, Float32Array, Float64Array};
 use arrow::datatypes::DataType::{Float16, Float32, Float64};
 use arrow::datatypes::{DataType, Float16Type, Float32Type, Float64Type};
-use datafusion_common::{DataFusionError, Result, exec_err};
+use datafusion_common::{
+    DataFusionError, Result, ScalarValue, exec_err, internal_err,
+    utils::take_function_args,
+};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -101,7 +104,53 @@ impl ScalarUDFImpl for NanvlFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(nanvl, vec![])(&args.args)
+        let [x, y] = take_function_args(self.name(), args.args)?;
+
+        match (&x, &y) {
+            (ColumnarValue::Scalar(x), ColumnarValue::Scalar(y)) => {
+                // NULL propagation
+                if x.is_null() || y.is_null() {
+                    return match (x.data_type(), y.data_type()) {
+                        (Float16, Float16) => {
+                            Ok(ColumnarValue::Scalar(ScalarValue::Float16(None)))
+                        }
+                        (Float32, Float32) => {
+                            Ok(ColumnarValue::Scalar(ScalarValue::Float32(None)))
+                        }
+                        (Float64, Float64) => {
+                            Ok(ColumnarValue::Scalar(ScalarValue::Float64(None)))
+                        }
+                        _ => internal_err!(
+                            "Unexpected datatypes for nanvl: {}, {}",
+                            x.data_type(),
+                            y.data_type()
+                        ),
+                    };
+                }
+
+                let out = match (x, y) {
+                    (ScalarValue::Float64(Some(xv)), ScalarValue::Float64(Some(yv))) => {
+                        ScalarValue::Float64(Some(if xv.is_nan() { *yv } else { *xv }))
+                    }
+                    (ScalarValue::Float32(Some(xv)), ScalarValue::Float32(Some(yv))) => {
+                        ScalarValue::Float32(Some(if xv.is_nan() { *yv } else { *xv }))
+                    }
+                    (ScalarValue::Float16(Some(xv)), ScalarValue::Float16(Some(yv))) => {
+                        ScalarValue::Float16(Some(if xv.is_nan() { *yv } else { *xv }))
+                    }
+                    _ => {
+                        return internal_err!(
+                            "Unexpected scalar types for nanvl: {}, {}",
+                            x.data_type(),
+                            y.data_type()
+                        );
+                    }
+                };
+
+                Ok(ColumnarValue::Scalar(out))
+            }
+            _ => make_scalar_function(nanvl, vec![])(&[x, y]),
+        }
     }
 
     fn documentation(&self) -> Option<&Documentation> {
