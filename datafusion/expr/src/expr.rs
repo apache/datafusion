@@ -2847,7 +2847,16 @@ impl Display for SchemaDisplay<'_> {
                 }
             }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                write!(f, "{} {op} {}", SchemaDisplay(left), SchemaDisplay(right),)
+                // Add parentheses around nested binary expressions to preserve precedence
+                fn write_child(f: &mut Formatter<'_>, expr: &Expr) -> fmt::Result {
+                    match expr {
+                        Expr::BinaryExpr(_) => write!(f, "({})", SchemaDisplay(expr)),
+                        _ => write!(f, "{}", SchemaDisplay(expr)),
+                    }
+                }
+                write_child(f, left)?;
+                write!(f, " {op} ")?;
+                write_child(f, right)
             }
             Expr::Case(Case {
                 expr,
@@ -3109,7 +3118,18 @@ impl Display for SqlDisplay<'_> {
                 }
             }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                write!(f, "{} {op} {}", SqlDisplay(left), SqlDisplay(right),)
+                // Add parentheses around nested binary expressions to preserve precedence
+                fn write_child(f: &mut Formatter<'_>, expr: &Expr) -> fmt::Result {
+                    match expr {
+                        Expr::BinaryExpr(_) => {
+                            write!(f, "({})", SqlDisplay(expr))
+                        }
+                        _ => write!(f, "{}", SqlDisplay(expr)),
+                    }
+                }
+                write_child(f, left)?;
+                write!(f, " {op} ")?;
+                write_child(f, right)
             }
             Expr::Case(Case {
                 expr,
