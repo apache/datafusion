@@ -17,7 +17,8 @@
 
 //! Physical expression schema rewriting utilities: [`PhysicalExprAdapter`],
 //! [`PhysicalExprAdapterFactory`], default implementations,
-//! and [`replace_columns_with_literals`].
+//! [`replace_columns_with_literals`], and
+//! [`replace_nullary_udf_with_literal_in_projection`].
 
 use std::borrow::Borrow;
 use std::collections::HashMap;
@@ -80,6 +81,30 @@ where
         Ok(Transformed::no(expr))
     })
     .data()
+}
+
+/// Replace occurrences of a nullary scalar UDF in projection expressions with a literal value.
+///
+/// This is useful at file-scan time where certain functions (such as `input_file_name()`)
+/// can be replaced with per-file constant values once the current file is known.
+pub fn replace_nullary_udf_with_literal_in_projection(
+    projection: ProjectionExprs,
+    udf_name: &str,
+    value: ScalarValue,
+) -> Result<ProjectionExprs> {
+    let literal_expr = expressions::lit(value);
+    projection.try_map_exprs(|expr| {
+        expr.transform_down(|expr| {
+            if let Some(func) = expr.as_any().downcast_ref::<ScalarFunctionExpr>()
+                && func.fun().name() == udf_name
+                && func.args().is_empty()
+            {
+                return Ok(Transformed::yes(Arc::clone(&literal_expr)));
+            }
+            Ok(Transformed::no(expr))
+        })
+        .data()
+    })
 }
 
 /// Trait for adapting [`PhysicalExpr`] expressions to match a target schema.
@@ -674,6 +699,128 @@ mod tests {
         (physical_schema, logical_schema)
     }
 
+    fn make_nullary_input_file_name_udf_expr(
+        schema: &Schema,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        use std::any::Any;
+
+        use datafusion_common::config::ConfigOptions;
+        use datafusion_expr::{
+            ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+            Volatility,
+        };
+        use datafusion_physical_expr::ScalarFunctionExpr;
+
+        #[derive(Debug, PartialEq, Eq, Hash)]
+        struct TestUdf {
+            signature: Signature,
+        }
+
+        impl TestUdf {
+            fn new() -> Self {
+                Self {
+                    signature: Signature::nullary(Volatility::Volatile),
+                }
+            }
+        }
+
+        impl ScalarUDFImpl for TestUdf {
+            fn as_any(&self) -> &dyn Any {
+                self
+            }
+
+            fn name(&self) -> &str {
+                "input_file_name"
+            }
+
+            fn signature(&self) -> &Signature {
+                &self.signature
+            }
+
+            fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+                Ok(DataType::Utf8)
+            }
+
+            fn invoke_with_args(
+                &self,
+                _args: ScalarFunctionArgs,
+            ) -> Result<ColumnarValue> {
+                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))
+            }
+        }
+
+        let udf = Arc::new(ScalarUDF::new_from_impl(TestUdf::new()));
+        Ok(Arc::new(ScalarFunctionExpr::try_new(
+            udf,
+            vec![],
+            schema,
+            Arc::new(ConfigOptions::default()),
+        )?))
+    }
+
+    fn make_unary_input_file_name_udf_expr(
+        schema: &Schema,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        use std::any::Any;
+
+        use datafusion_common::config::ConfigOptions;
+        use datafusion_expr::{
+            ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+            Volatility,
+        };
+        use datafusion_physical_expr::ScalarFunctionExpr;
+
+        #[derive(Debug, PartialEq, Eq, Hash)]
+        struct TestUdf {
+            signature: Signature,
+        }
+
+        impl TestUdf {
+            fn new() -> Self {
+                Self {
+                    signature: Signature::uniform(
+                        1,
+                        vec![DataType::Int32],
+                        Volatility::Volatile,
+                    ),
+                }
+            }
+        }
+
+        impl ScalarUDFImpl for TestUdf {
+            fn as_any(&self) -> &dyn Any {
+                self
+            }
+
+            fn name(&self) -> &str {
+                "input_file_name"
+            }
+
+            fn signature(&self) -> &Signature {
+                &self.signature
+            }
+
+            fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+                Ok(DataType::Utf8)
+            }
+
+            fn invoke_with_args(
+                &self,
+                _args: ScalarFunctionArgs,
+            ) -> Result<ColumnarValue> {
+                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))
+            }
+        }
+
+        let udf = Arc::new(ScalarUDF::new_from_impl(TestUdf::new()));
+        Ok(Arc::new(ScalarFunctionExpr::try_new(
+            udf,
+            vec![Arc::new(Column::new("a", 0))],
+            schema,
+            Arc::new(ConfigOptions::default()),
+        )?))
+    }
+
     #[test]
     fn test_rewrite_column_with_type_cast() {
         let (physical_schema, logical_schema) = create_test_schema();
@@ -948,6 +1095,137 @@ mod tests {
 
         let result = replace_columns_with_literals(expr, &replacements)?;
         assert_eq!(result.to_string(), "10 + 20");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_replace_nullary_udf_with_literal_in_projection() -> Result<()> {
+        use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let udf_expr = make_nullary_input_file_name_udf_expr(schema.as_ref())?;
+
+        let projection = ProjectionExprs::new(vec![
+            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a"),
+            ProjectionExpr::new(udf_expr, "input_file_name"),
+        ]);
+
+        let file_name = "s3://bucket/data/file.parquet";
+        let rewritten = replace_nullary_udf_with_literal_in_projection(
+            projection,
+            "input_file_name",
+            ScalarValue::Utf8(Some(file_name.to_owned())),
+        )?;
+
+        assert_eq!(rewritten.as_ref().len(), 2);
+        assert_eq!(rewritten.as_ref()[1].alias, "input_file_name");
+
+        let expr = &rewritten.as_ref()[1].expr;
+        let literal = expr
+            .as_any()
+            .downcast_ref::<Literal>()
+            .expect("expected input_file_name() to be rewritten to a literal");
+        assert_eq!(
+            literal.value(),
+            &ScalarValue::Utf8(Some(file_name.to_owned()))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_replace_nullary_udf_with_literal_in_projection_name_mismatch() -> Result<()> {
+        use datafusion_physical_expr::ScalarFunctionExpr;
+        use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let udf_expr = make_nullary_input_file_name_udf_expr(schema.as_ref())?;
+
+        let projection = ProjectionExprs::new(vec![
+            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a"),
+            ProjectionExpr::new(udf_expr, "input_file_name"),
+        ]);
+
+        let rewritten = replace_nullary_udf_with_literal_in_projection(
+            projection,
+            "some_other_udf",
+            ScalarValue::Utf8(Some("unused".to_string())),
+        )?;
+
+        let expr = &rewritten.as_ref()[1].expr;
+        assert!(expr.as_any().downcast_ref::<Literal>().is_none());
+        assert!(expr.as_any().downcast_ref::<ScalarFunctionExpr>().is_some());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_replace_nullary_udf_with_literal_in_projection_non_nullary_udf() -> Result<()>
+    {
+        use datafusion_physical_expr::ScalarFunctionExpr;
+        use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let udf_expr = make_unary_input_file_name_udf_expr(schema.as_ref())?;
+
+        let projection = ProjectionExprs::new(vec![
+            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a"),
+            ProjectionExpr::new(udf_expr, "input_file_name"),
+        ]);
+
+        let rewritten = replace_nullary_udf_with_literal_in_projection(
+            projection,
+            "input_file_name",
+            ScalarValue::Utf8(Some("unused".to_string())),
+        )?;
+
+        let expr = &rewritten.as_ref()[1].expr;
+        assert!(expr.as_any().downcast_ref::<Literal>().is_none());
+        assert!(expr.as_any().downcast_ref::<ScalarFunctionExpr>().is_some());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_replace_nullary_udf_with_literal_in_projection_nested_expr() -> Result<()> {
+        use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let udf_expr = make_nullary_input_file_name_udf_expr(schema.as_ref())?;
+
+        let expected_file_name = "s3://bucket/data/file.parquet";
+        let nested_expr = Arc::new(expressions::BinaryExpr::new(
+            udf_expr,
+            Operator::Eq,
+            expressions::lit(ScalarValue::Utf8(Some("ignored".to_string()))),
+        )) as Arc<dyn PhysicalExpr>;
+
+        let projection = ProjectionExprs::new(vec![
+            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a"),
+            ProjectionExpr::new(nested_expr, "file_pred"),
+        ]);
+
+        let rewritten = replace_nullary_udf_with_literal_in_projection(
+            projection,
+            "input_file_name",
+            ScalarValue::Utf8(Some(expected_file_name.to_owned())),
+        )?;
+
+        let expr = &rewritten.as_ref()[1].expr;
+        let binary = expr
+            .as_any()
+            .downcast_ref::<expressions::BinaryExpr>()
+            .expect("expected a binary expression");
+        let left_literal = binary
+            .left()
+            .as_any()
+            .downcast_ref::<Literal>()
+            .expect("expected left side to be rewritten to a literal");
+        assert_eq!(
+            left_literal.value(),
+            &ScalarValue::Utf8(Some(expected_file_name.to_owned()))
+        );
 
         Ok(())
     }
