@@ -1331,7 +1331,7 @@ select
   arrow_typeof(percentile_cont(0.5) within group (order by arrow_cast(col_f32, 'Float16')))
 from median_table;
 ----
-NaN Float16
+2.75 Float16
 
 query RT
 select
@@ -3926,7 +3926,7 @@ SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY c3 DESC) FROM aggregate_test
 query R
 SELECT percentile_cont(0.05) WITHIN GROUP (ORDER BY c3 DESC) FROM aggregate_test_100
 ----
-118.099998
+118.1
 
 # Test with GROUP BY
 query TR
@@ -3944,7 +3944,7 @@ SELECT c1, percentile_cont(0.95) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_
 a 65
 b 68
 c 118
-d 123.299998
+d 123.3
 e 112
 
 # Test with NULLs
@@ -4166,7 +4166,7 @@ SELECT percentile_cont(0.6) WITHIN GROUP (ORDER BY v DESC) FROM (VALUES (1), (2)
 query R
 SELECT percentile_cont(0.3) WITHIN GROUP (ORDER BY v) FROM (VALUES (10), (20), (30), (40), (50)) as t (v)
 ----
-21.99999
+22
 
 # Show 0.7 descending (should be same as 0.3 ascending)
 query R
