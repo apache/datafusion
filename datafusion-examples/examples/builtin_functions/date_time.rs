@@ -179,12 +179,8 @@ async fn query_make_date() -> Result<()> {
 
     assert_batches_eq!(expected, &df.collect().await?);
 
-    // invalid column values will result in an error
-    let result = ctx
-        .sql("select make_date(2024, '', 23)")
-        .await?
-        .collect()
-        .await;
+    // invalid column values will result in an error during planning phase
+    let result = ctx.sql("select make_date(2024, '', 23)").await;
 
     let expected =
         "Arrow error: Cast error: Cannot cast string '' to value of Int32 type";
