@@ -364,7 +364,7 @@ pub fn propagate_comparison(
         match op {
             Operator::Eq => {
                 // TODO: Propagation is not possible until we support interval sets.
-                Ok(None)
+                Ok(Some((left_child.clone(), right_child.clone())))
             }
             Operator::Gt => satisfy_greater(right_child, left_child, false),
             Operator::GtEq => satisfy_greater(right_child, left_child, true),

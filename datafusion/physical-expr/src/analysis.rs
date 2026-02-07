@@ -297,12 +297,14 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::{DFSchema, assert_contains};
+    use datafusion_common::stats::Precision;
+    use datafusion_common::{DFSchema, Result, ScalarValue, assert_contains};
     use datafusion_expr::{
         Expr, col, execution_props::ExecutionProps, interval_arithmetic::Interval, lit,
     };
 
     use crate::{AnalysisContext, create_physical_expr};
+    use crate::expressions::Column;
 
     use super::{ExprBoundaries, analyze};
 
@@ -434,5 +436,40 @@ mod tests {
         )
         .unwrap_err();
         assert_contains!(analysis_error.to_string(), expected_error);
+    }
+
+    #[test]
+    fn analyze_not_eq_around() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![make_field("a", DataType::Float32)]));
+        let boundaries = vec![ExprBoundaries {
+            column: Column::new("a", 0),
+            interval: Some(Interval::try_new(
+                ScalarValue::Float32(Some(-1.0)),
+                ScalarValue::Float32(Some(1.0)),
+            )?),
+            distinct_count: Precision::Absent,
+        }];
+
+        // NOT (a = 0.0)
+        let pred_not_eq = datafusion_expr::not(col("a").eq(lit(0.0f32)));
+
+        let df_schema = DFSchema::try_from(Arc::clone(&schema))?;
+        let physical_expr =
+            create_physical_expr(&pred_not_eq, &df_schema, &ExecutionProps::new())?;
+
+        let out_not_eq = analyze(
+            &physical_expr,
+            AnalysisContext::new(boundaries),
+            df_schema.as_ref(),
+        )?;
+
+        let actual = out_not_eq.boundaries[0].interval.clone();
+        let expected = Some(Interval::try_new(
+            ScalarValue::Float32(Some(-1.0)),
+            ScalarValue::Float32(Some(1.0)),
+        )?);
+
+        assert_eq!(expected, actual);
+        Ok(())
     }
 }
