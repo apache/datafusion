@@ -19,6 +19,7 @@ use std::any::Any;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use arrow::array::timezone::Tz;
 use arrow::array::{Array, ArrayRef, Float64Array, Int32Array};
 use arrow::compute::kernels::cast_utils::IntervalUnit;
 use arrow::compute::{DatePart, binary, date_part};
@@ -27,8 +28,10 @@ use arrow::datatypes::DataType::{
 };
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{
-    DataType, Field, FieldRef, IntervalUnit as ArrowIntervalUnit, TimeUnit,
+    DataType, Date32Type, Date64Type, Field, FieldRef, IntervalUnit as ArrowIntervalUnit,
+    TimeUnit,
 };
+use chrono::{Datelike, NaiveDate, TimeZone, Utc};
 use datafusion_common::types::{NativeType, logical_date};
 
 use datafusion_common::{
@@ -44,9 +47,11 @@ use datafusion_common::{
     types::logical_string,
     utils::take_function_args,
 };
+use datafusion_expr::preimage::PreimageResult;
+use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature,
-    TypeSignature, Volatility,
+    ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarUDFImpl, Signature,
+    TypeSignature, Volatility, interval_arithmetic,
 };
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
@@ -237,6 +242,71 @@ impl ScalarUDFImpl for DatePartFunc {
         })
     }
 
+    // Only casting the year is supported since pruning other IntervalUnit is not possible
+    // date_part(col, YEAR) = 2024 => col >= '2024-01-01' and col < '2025-01-01'
+    // But for anything less than YEAR simplifying is not possible without specifying the bigger interval
+    // date_part(col, MONTH) = 1 => col = '2023-01-01' or col = '2024-01-01' or ... or col = '3000-01-01'
+    fn preimage(
+        &self,
+        args: &[Expr],
+        lit_expr: &Expr,
+        info: &SimplifyContext,
+    ) -> Result<PreimageResult> {
+        let [part, col_expr] = take_function_args(self.name(), args)?;
+
+        // Get the interval unit from the part argument
+        let interval_unit = part
+            .as_literal()
+            .and_then(|sv| sv.try_as_str().flatten())
+            .map(part_normalization)
+            .and_then(|s| IntervalUnit::from_str(s).ok());
+
+        // only support extracting year
+        match interval_unit {
+            Some(IntervalUnit::Year) => (),
+            _ => return Ok(PreimageResult::None),
+        }
+
+        // Check if the argument is a literal (e.g. date_part(YEAR, col) = 2024)
+        let Some(argument_literal) = lit_expr.as_literal() else {
+            return Ok(PreimageResult::None);
+        };
+
+        // Extract i32 year from Scalar value
+        let year = match argument_literal {
+            ScalarValue::Int32(Some(y)) => *y,
+            _ => return Ok(PreimageResult::None),
+        };
+
+        // Can only extract year from Date32/64 and Timestamp column
+        let target_type = match info.get_data_type(col_expr)? {
+            Date32 | Date64 | Timestamp(_, _) => &info.get_data_type(col_expr)?,
+            _ => return Ok(PreimageResult::None),
+        };
+
+        // Compute the Interval bounds
+        let Some(start_time) = NaiveDate::from_ymd_opt(year, 1, 1) else {
+            return Ok(PreimageResult::None);
+        };
+        let Some(end_time) = start_time.with_year(year + 1) else {
+            return Ok(PreimageResult::None);
+        };
+
+        // Convert to ScalarValues
+        let (Some(lower), Some(upper)) = (
+            date_to_scalar(start_time, target_type),
+            date_to_scalar(end_time, target_type),
+        ) else {
+            return Ok(PreimageResult::None);
+        };
+        let interval = Box::new(interval_arithmetic::Interval::try_new(lower, upper)?);
+
+        Ok(PreimageResult::Range {
+            expr: col_expr.clone(),
+            interval,
+        })
+    }
+
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
@@ -249,6 +319,52 @@ impl ScalarUDFImpl for DatePartFunc {
 fn is_epoch(part: &str) -> bool {
     let part = part_normalization(part);
     matches!(part.to_lowercase().as_str(), "epoch")
+}
+
+fn date_to_scalar(date: NaiveDate, target_type: &DataType) -> Option<ScalarValue> {
+    Some(match target_type {
+        Date32 => ScalarValue::Date32(Some(Date32Type::from_naive_date(date))),
+        Date64 => ScalarValue::Date64(Some(Date64Type::from_naive_date(date))),
+
+        Timestamp(unit, tz_opt) => {
+            let naive_midnight = date.and_hms_opt(0, 0, 0)?;
+
+            let utc_dt = if let Some(tz_str) = tz_opt {
+                let tz: Tz = tz_str.parse().ok()?;
+
+                let local = tz.from_local_datetime(&naive_midnight);
+
+                let local_dt = match local {
+                    chrono::offset::LocalResult::Single(dt) => dt,
+                    chrono::offset::LocalResult::Ambiguous(dt1, _dt2) => dt1,
+                    chrono::offset::LocalResult::None => local.earliest()?,
+                };
+
+                local_dt.with_timezone(&Utc)
+            } else {
+                Utc.from_utc_datetime(&naive_midnight)
+            };
+
+            match unit {
+                Second => {
+                    ScalarValue::TimestampSecond(Some(utc_dt.timestamp()), tz_opt.clone())
+                }
+                Millisecond => ScalarValue::TimestampMillisecond(
+                    Some(utc_dt.timestamp_millis()),
+                    tz_opt.clone(),
+                ),
+                Microsecond => ScalarValue::TimestampMicrosecond(
+                    Some(utc_dt.timestamp_micros()),
+                    tz_opt.clone(),
+                ),
+                Nanosecond => ScalarValue::TimestampNanosecond(
+                    Some(utc_dt.timestamp_nanos_opt()?),
+                    tz_opt.clone(),
+                ),
+            }
+        }
+        _ => return None,
+    })
 }
 
 // Try to remove quote if exist, if the quote is invalid, return original string and let the downstream function handle the error
