@@ -1,0 +1,785 @@
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="../../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Upgrade Guides &#8212; Apache DataFusion  documentation</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  <!--
+    this give us a css class that will be invisible only if js is disabled
+  -->
+  <noscript>
+    <style>
+      .pst-js-only { display: none !important; }
+
+    </style>
+  </noscript>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../../_static/styles/theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+<link href="../../_static/styles/pydata-sphinx-theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../../_static/theme_overrides.css?v=d08b24aa" />
+  
+  <!-- So that users can add custom icons -->
+  <script src="../../_static/scripts/fontawesome.js?digest=8878045cc6db502f8baf"></script>
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf" />
+<link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf" />
+
+    <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'library-user-guide/upgrading/50.0.0';</script>
+    <link rel="icon" href="../../_static/favicon.svg"/>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="Upgrade Guides" href="49.0.0.html" />
+    <link rel="prev" title="Upgrade Guides" href="51.0.0.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+  <meta name="docsearch:version" content="" />
+  </head>
+  
+  
+  <body data-bs-spy="scroll" data-bs-target=".bd-toc-nav" data-offset="180" data-bs-root-margin="0px 0px -60%" data-default-mode="">
+
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+
+  
+  <dialog id="pst-search-dialog">
+    
+<form class="bd-search d-flex align-items-center"
+      action="../../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search the docs ..."
+         aria-label="Search the docs ..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form>
+  </dialog>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+<div class="bd-header__inner bd-page-width">
+  <button class="pst-navbar-icon sidebar-toggle primary-toggle" aria-label="Site navigation">
+    <span class="fa-solid fa-bars"></span>
+  </button>
+  
+  
+  <div class="col-lg-3 navbar-header-items__start">
+    
+      <div class="navbar-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../../_static/original.svg" class="logo__image only-light" alt="Apache DataFusion  documentation - Home"/>
+    <img src="../../_static/original_dark.svg" class="logo__image only-dark pst-js-only" alt="Apache DataFusion  documentation - Home"/>
+  
+  
+</a></div>
+    
+  </div>
+  
+  <div class="col-lg-9 navbar-header-items">
+    
+    
+    <div class="navbar-header-items__end">
+      
+        <div class="navbar-item navbar-persistent--container">
+          
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+        </div>
+      
+      
+        <div class="navbar-item">
+
+<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="Light"></i>
+  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="Dark"></i>
+  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
+</button></div>
+      
+    </div>
+    
+  </div>
+  
+  
+    <div class="navbar-persistent--mobile">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+    </div>
+  
+
+  
+    <button class="pst-navbar-icon sidebar-toggle secondary-toggle" aria-label="On this page">
+      <span class="fa-solid fa-outdent"></span>
+    </button>
+  
+</div>
+
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <dialog id="pst-primary-sidebar-modal"></dialog>
+      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+    
+    
+      <div class="sidebar-header-items__end">
+        
+          <div class="navbar-item">
+
+<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="Light"></i>
+  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="Dark"></i>
+  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
+</button></div>
+        
+      </div>
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item"><nav class="bd-links" id="bd-docs-nav" aria-label="Main navigation">
+
+  <div class="bd-toc-item active">
+    
+    <p aria-level="2" class="caption" role="heading"><span class="caption-text">ASF Links</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference external" href="https://apache.org">Apache Software Foundation</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/licenses/">License</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/foundation/sponsorship.html">Donate</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/foundation/thanks.html">Thanks</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/security/">Security</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Links</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference external" href="https://github.com/apache/datafusion">GitHub and Issue Tracker</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://crates.io/crates/datafusion">crates.io</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/">API Docs</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/blog/">Blog</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://github.com/apache/datafusion/blob/main/CODE_OF_CONDUCT.md">Code of conduct</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../download.html">Download</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">User Guide</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/introduction.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/example-usage.html">Example Usage</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/features.html">Features</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/concepts-readings-events.html">Concepts, Readings, Events</a></li>
+
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/crate-configuration.html">Crate Configuration</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../user-guide/cli/index.html">DataFusion CLI</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/cli/overview.html">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/cli/installation.html">Installation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/cli/usage.html">Usage</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/cli/datasources.html">Local Files / Directories</a></li>
+
+
+
+
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/cli/functions.html">CLI Specific Functions</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/dataframe.html">DataFrame API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/arrow-introduction.html">Gentle Arrow Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/expressions.html">Expression API</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../user-guide/sql/index.html">SQL Reference</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/data_types.html">Data Types</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/struct_coercion.html">Struct Type Coercion and Field Mapping</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/select.html">SELECT syntax</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/subqueries.html">Subqueries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/ddl.html">DDL</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/dml.html">DML</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/explain.html">EXPLAIN</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/information_schema.html">Information Schema</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/operators.html">Operators and Literals</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/aggregate_functions.html">Aggregate Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/window_functions.html">Window Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/scalar_functions.html">Scalar Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/special_functions.html">Special Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/format_options.html">Format Options</a></li>
+
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/prepared_statements.html">Prepared Statements</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/configs.html">Configuration Settings</a></li>
+
+
+
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/explain-usage.html">Reading Explain Plans</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/metrics.html">Metrics</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/faq.html">Frequently Asked Questions</a></li>
+
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Library User Guide</span></p>
+<ul class="current nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../index.html">Introduction</a></li>
+<li class="toctree-l1 current active has-children"><a class="reference internal" href="index.html">Upgrade Guides</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="53.0.0.html">DataFusion 53.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="52.0.0.html">DataFusion 52.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="51.0.0.html">DataFusion 51.0.0</a></li>
+<li class="toctree-l2 current active"><a class="current reference internal" href="#">DataFusion 50.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="49.0.0.html">DataFusion 49.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="48.0.1.html">DataFusion 48.0.1</a></li>
+<li class="toctree-l2"><a class="reference internal" href="48.0.0.html">DataFusion 48.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="47.0.0.html">DataFusion 47.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="46.0.0.html">DataFusion 46.0.0</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../extensions.html">Extensions List</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../using-the-sql-api.html">Using the SQL API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../extending-sql.html">Extending SQL Syntax</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../working-with-exprs.html">Working with <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../using-the-dataframe-api.html">Using the DataFrame API</a></li>
+
+<li class="toctree-l1"><a class="reference internal" href="../building-logical-plans.html">Building Logical Plans</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../catalogs.html">Catalogs, Schemas, and Tables</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../functions/index.html">Functions</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../functions/adding-udfs.html">Adding User Defined Functions: Scalar/Window/Aggregate/Table Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../functions/spark.html">Spark Compatible Functions</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../custom-table-providers.html">Custom Table Provider</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../table-constraints.html">Table Constraint Enforcement</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../extending-operators.html">Extending Operators</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../profiling.html">Profiling Cookbook</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../query-optimizer.html">Query Optimizer</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Contributor Guide</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/index.html">Introduction</a></li>
+
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/communication.html">Community Communication</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/development_environment.html">Development Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/architecture.html">Architecture</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/architecture/dependency-graph.html">Workspace Dependency Graph</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/testing.html">Testing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/api-health.html">API health policy</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/howtos.html">HOWTOs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/roadmap.html">Roadmap and Improvement Proposals</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/governance.html">Governance</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/inviting.html">Inviting New Committers and PMC Members</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../contributor-guide/specification/index.html">Specifications</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../contributor-guide/specification/invariants.html">Invariants</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../contributor-guide/specification/output-field-name-semantic.html">Output field name semantics</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../contributor-guide/gsoc/index.html">Google Summer of Code (GSOC)</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../contributor-guide/gsoc/gsoc_application_guidelines_2025.html">GSoC Application Guidelines (2025)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../contributor-guide/gsoc/gsoc_project_ideas_2025.html">GSoC Project Ideas (2025)</a></li>
+</ul>
+</details></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">DataFusion Subprojects</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/ballista/">DataFusion Ballista</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/comet/">DataFusion Comet</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/python/">DataFusion Python</a></li>
+</ul>
+
+    
+  </div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+      <div class="sidebar-primary-item">
+<div id="ethical-ad-placement"
+      class="flat"
+      data-ea-publisher="readthedocs"
+      data-ea-type="readthedocs-sidebar"
+      data-ea-manual="true">
+</div></div>
+  </div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item">
+
+<nav aria-label="Breadcrumb" class="d-print-none">
+  <ul class="bd-breadcrumbs">
+    
+    <li class="breadcrumb-item breadcrumb-home">
+      <a href="../../index.html" class="nav-link" aria-label="Home">
+        <i class="fa-solid fa-home"></i>
+      </a>
+    </li>
+    
+    <li class="breadcrumb-item"><a href="index.html" class="nav-link">Upgrade Guides</a></li>
+    
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">Upgrade Guides</span></li>
+  </ul>
+</nav>
+</div>
+      
+    </div>
+  
+  
+</div>
+</div>
+              
+              
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <!---
+  Licensed to the Apache Software Foundation (ASF) under one
+  or more contributor license agreements.  See the NOTICE file
+  distributed with this work for additional information
+  regarding copyright ownership.  The ASF licenses this file
+  to you under the Apache License, Version 2.0 (the
+  "License"); you may not use this file except in compliance
+  with the License.  You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing,
+  software distributed under the License is distributed on an
+  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+  KIND, either express or implied.  See the License for the
+  specific language governing permissions and limitations
+  under the License.
+-->
+<section id="upgrade-guides">
+<h1>Upgrade Guides<a class="headerlink" href="#upgrade-guides" title="Link to this heading">#</a></h1>
+<section id="datafusion-50-0-0">
+<h2>DataFusion 50.0.0<a class="headerlink" href="#datafusion-50-0-0" title="Link to this heading">#</a></h2>
+<section id="listingtable-automatically-detects-hive-partitioned-tables">
+<h3>ListingTable automatically detects Hive Partitioned tables<a class="headerlink" href="#listingtable-automatically-detects-hive-partitioned-tables" title="Link to this heading">#</a></h3>
+<p>DataFusion 50.0.0 automatically infers Hive partitions when using the <code class="docutils literal notranslate"><span class="pre">ListingTableFactory</span></code> and <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code>. Previously,
+when creating a <code class="docutils literal notranslate"><span class="pre">ListingTable</span></code>, datasets that use Hive partitioning (e.g.
+<code class="docutils literal notranslate"><span class="pre">/table_root/column1=value1/column2=value2/data.parquet</span></code>) would not have the Hive columns reflected in
+the table’s schema or data. The previous behavior can be
+restored by setting the <code class="docutils literal notranslate"><span class="pre">datafusion.execution.listing_table_factory_infer_partitions</span></code> configuration option to <code class="docutils literal notranslate"><span class="pre">false</span></code>.
+See <a class="reference external" href="https://github.com/apache/datafusion/issues/17049">issue #17049</a> for more details.</p>
+</section>
+<section id="msrv-updated-to-1-86-0">
+<h3><code class="docutils literal notranslate"><span class="pre">MSRV</span></code> updated to 1.86.0<a class="headerlink" href="#msrv-updated-to-1-86-0" title="Link to this heading">#</a></h3>
+<p>The Minimum Supported Rust Version (MSRV) has been updated to <a class="reference external" href="https://releases.rs/docs/1.86.0/"><code class="docutils literal notranslate"><span class="pre">1.86.0</span></code></a>.
+See <a class="reference external" href="https://github.com/apache/datafusion/pull/17230">#17230</a> for details.</p>
+</section>
+<section id="scalarudfimpl-aggregateudfimpl-and-windowudfimpl-traits-now-require-partialeq-eq-and-hash-traits">
+<h3><code class="docutils literal notranslate"><span class="pre">ScalarUDFImpl</span></code>, <code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl</span></code> and <code class="docutils literal notranslate"><span class="pre">WindowUDFImpl</span></code> traits now require <code class="docutils literal notranslate"><span class="pre">PartialEq</span></code>, <code class="docutils literal notranslate"><span class="pre">Eq</span></code>, and <code class="docutils literal notranslate"><span class="pre">Hash</span></code> traits<a class="headerlink" href="#scalarudfimpl-aggregateudfimpl-and-windowudfimpl-traits-now-require-partialeq-eq-and-hash-traits" title="Link to this heading">#</a></h3>
+<p>To address error-proneness of <code class="docutils literal notranslate"><span class="pre">ScalarUDFImpl::equals</span></code>, <code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl::equals</span></code>and
+<code class="docutils literal notranslate"><span class="pre">WindowUDFImpl::equals</span></code> methods and to make it easy to implement function equality correctly,
+the <code class="docutils literal notranslate"><span class="pre">equals</span></code> and <code class="docutils literal notranslate"><span class="pre">hash_value</span></code> methods have been removed from <code class="docutils literal notranslate"><span class="pre">ScalarUDFImpl</span></code>, <code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl</span></code>
+and <code class="docutils literal notranslate"><span class="pre">WindowUDFImpl</span></code> traits. They are replaced the requirement to implement the <code class="docutils literal notranslate"><span class="pre">PartialEq</span></code>, <code class="docutils literal notranslate"><span class="pre">Eq</span></code>,
+and <code class="docutils literal notranslate"><span class="pre">Hash</span></code> traits on any type implementing <code class="docutils literal notranslate"><span class="pre">ScalarUDFImpl</span></code>, <code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl</span></code> or <code class="docutils literal notranslate"><span class="pre">WindowUDFImpl</span></code>.
+Please see <a class="reference external" href="https://github.com/apache/datafusion/issues/16677">issue #16677</a> for more details.</p>
+<p>Most of the scalar functions are stateless and have a <code class="docutils literal notranslate"><span class="pre">signature</span></code> field. These can be migrated
+using regular expressions</p>
+<ul class="simple">
+<li><p>search for <code class="docutils literal notranslate"><span class="pre">\#\[derive\(Debug\)\](\n</span> <span class="pre">*(pub</span> <span class="pre">)?struct</span> <span class="pre">\w+</span> <span class="pre">\{\n</span> <span class="pre">*signature\:</span> <span class="pre">Signature\,\n</span> <span class="pre">*\})</span></code>,</p></li>
+<li><p>replace with <code class="docutils literal notranslate"><span class="pre">#[derive(Debug,</span> <span class="pre">PartialEq,</span> <span class="pre">Eq,</span> <span class="pre">Hash)]$1</span></code>,</p></li>
+<li><p>review all the changes and make sure only function structs were changed.</p></li>
+</ul>
+</section>
+<section id="asyncscalarudfimpl-invoke-async-with-args-returns-columnarvalue">
+<h3><code class="docutils literal notranslate"><span class="pre">AsyncScalarUDFImpl::invoke_async_with_args</span></code> returns <code class="docutils literal notranslate"><span class="pre">ColumnarValue</span></code><a class="headerlink" href="#asyncscalarudfimpl-invoke-async-with-args-returns-columnarvalue" title="Link to this heading">#</a></h3>
+<p>In order to enable single value optimizations and be consistent with other
+user defined function APIs, the <code class="docutils literal notranslate"><span class="pre">AsyncScalarUDFImpl::invoke_async_with_args</span></code> method now
+returns a <code class="docutils literal notranslate"><span class="pre">ColumnarValue</span></code> instead of a <code class="docutils literal notranslate"><span class="pre">ArrayRef</span></code>.</p>
+<p>To upgrade, change the return type of your implementation</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">impl</span><span class="w"> </span><span class="n">AsyncScalarUDFImpl</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">AskLLM</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">invoke_async_with_args</span><span class="p">(</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">        </span><span class="n">args</span><span class="p">:</span><span class="w"> </span><span class="nc">ScalarFunctionArgs</span><span class="p">,</span>
+<span class="w">        </span><span class="n">_option</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">ConfigOptions</span><span class="p">,</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">ColumnarValue</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="o">..</span>
+<span class="w">      </span><span class="k">return</span><span class="w"> </span><span class="n">array_ref</span><span class="p">;</span><span class="w"> </span><span class="c1">// old code</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>To return a <code class="docutils literal notranslate"><span class="pre">ColumnarValue</span></code></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">impl</span><span class="w"> </span><span class="n">AsyncScalarUDFImpl</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">AskLLM</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">invoke_async_with_args</span><span class="p">(</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">        </span><span class="n">args</span><span class="p">:</span><span class="w"> </span><span class="nc">ScalarFunctionArgs</span><span class="p">,</span>
+<span class="w">        </span><span class="n">_option</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">ConfigOptions</span><span class="p">,</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">ColumnarValue</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="o">..</span>
+<span class="w">      </span><span class="k">return</span><span class="w"> </span><span class="n">ColumnarValue</span><span class="p">::</span><span class="n">from</span><span class="p">(</span><span class="n">array_ref</span><span class="p">);</span><span class="w"> </span><span class="c1">// new code</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/16896">#16896</a> for more details.</p>
+</section>
+<section id="projectionexpr-changed-from-type-alias-to-struct">
+<h3><code class="docutils literal notranslate"><span class="pre">ProjectionExpr</span></code> changed from type alias to struct<a class="headerlink" href="#projectionexpr-changed-from-type-alias-to-struct" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">ProjectionExpr</span></code> has been changed from a type alias to a struct with named fields to improve code clarity and maintainability.</p>
+<p><strong>Before:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">pub</span><span class="w"> </span><span class="k">type</span><span class="w"> </span><span class="nc">ProjectionExpr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="n">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">PhysicalExpr</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="nb">String</span><span class="p">);</span>
+</pre></div>
+</div>
+<p><strong>After:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="cp">#[derive(Debug, Clone)]</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">ProjectionExpr</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">expr</span><span class="p">:</span><span class="w"> </span><span class="nc">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">PhysicalExpr</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">alias</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>To upgrade your code:</p>
+<ul class="simple">
+<li><p>Replace tuple construction <code class="docutils literal notranslate"><span class="pre">(expr,</span> <span class="pre">alias)</span></code> with <code class="docutils literal notranslate"><span class="pre">ProjectionExpr::new(expr,</span> <span class="pre">alias)</span></code> or <code class="docutils literal notranslate"><span class="pre">ProjectionExpr</span> <span class="pre">{</span> <span class="pre">expr,</span> <span class="pre">alias</span> <span class="pre">}</span></code></p></li>
+<li><p>Replace tuple field access <code class="docutils literal notranslate"><span class="pre">.0</span></code> and <code class="docutils literal notranslate"><span class="pre">.1</span></code> with <code class="docutils literal notranslate"><span class="pre">.expr</span></code> and <code class="docutils literal notranslate"><span class="pre">.alias</span></code></p></li>
+<li><p>Update pattern matching from <code class="docutils literal notranslate"><span class="pre">(expr,</span> <span class="pre">alias)</span></code> to <code class="docutils literal notranslate"><span class="pre">ProjectionExpr</span> <span class="pre">{</span> <span class="pre">expr,</span> <span class="pre">alias</span> <span class="pre">}</span></code></p></li>
+</ul>
+<p>This mainly impacts use of <code class="docutils literal notranslate"><span class="pre">ProjectionExec</span></code>.</p>
+<p>This change was done in <a class="reference external" href="https://github.com/apache/datafusion/pull/17398">#17398</a></p>
+</section>
+<section id="sessionstate-sessionconfig-and-optimizerconfig-returns-arc-configoptions-instead-of-configoptions">
+<h3><code class="docutils literal notranslate"><span class="pre">SessionState</span></code>, <code class="docutils literal notranslate"><span class="pre">SessionConfig</span></code>, and <code class="docutils literal notranslate"><span class="pre">OptimizerConfig</span></code> returns <code class="docutils literal notranslate"><span class="pre">&amp;Arc&lt;ConfigOptions&gt;</span></code> instead of <code class="docutils literal notranslate"><span class="pre">&amp;ConfigOptions</span></code><a class="headerlink" href="#sessionstate-sessionconfig-and-optimizerconfig-returns-arc-configoptions-instead-of-configoptions" title="Link to this heading">#</a></h3>
+<p>To provide broader access to <code class="docutils literal notranslate"><span class="pre">ConfigOptions</span></code> and reduce required clones, some
+APIs have been changed to return a <code class="docutils literal notranslate"><span class="pre">&amp;Arc&lt;ConfigOptions&gt;</span></code> instead of a
+<code class="docutils literal notranslate"><span class="pre">&amp;ConfigOptions</span></code>. This allows sharing the same <code class="docutils literal notranslate"><span class="pre">ConfigOptions</span></code> across multiple
+threads without needing to clone the entire <code class="docutils literal notranslate"><span class="pre">ConfigOptions</span></code> structure unless it
+is modified.</p>
+<p>Most users will not be impacted by this change since the Rust compiler typically
+automatically dereference the <code class="docutils literal notranslate"><span class="pre">Arc</span></code> when needed. However, in some cases you may
+have to change your code to explicitly call <code class="docutils literal notranslate"><span class="pre">as_ref()</span></code> for example, from</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">optimizer_config</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">ConfigOptions</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">state</span><span class="p">.</span><span class="n">options</span><span class="p">();</span>
+</pre></div>
+</div>
+<p>To</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">optimizer_config</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">ConfigOptions</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">state</span><span class="p">.</span><span class="n">options</span><span class="p">().</span><span class="n">as_ref</span><span class="p">();</span>
+</pre></div>
+</div>
+<p>See PR <a class="reference external" href="https://github.com/apache/datafusion/pull/16970">#16970</a></p>
+</section>
+<section id="api-change-to-asyncscalarudfimpl-invoke-async-with-args">
+<h3>API Change to <code class="docutils literal notranslate"><span class="pre">AsyncScalarUDFImpl::invoke_async_with_args</span></code><a class="headerlink" href="#api-change-to-asyncscalarudfimpl-invoke-async-with-args" title="Link to this heading">#</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">invoke_async_with_args</span></code> method of the <code class="docutils literal notranslate"><span class="pre">AsyncScalarUDFImpl</span></code> trait has been
+updated to remove the <code class="docutils literal notranslate"><span class="pre">_option:</span> <span class="pre">&amp;ConfigOptions</span></code> parameter to simplify the API
+now that the <code class="docutils literal notranslate"><span class="pre">ConfigOptions</span></code> can be accessed through the <code class="docutils literal notranslate"><span class="pre">ScalarFunctionArgs</span></code>
+parameter.</p>
+<p>You can change your code like this</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">impl</span><span class="w"> </span><span class="n">AsyncScalarUDFImpl</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">AskLLM</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">invoke_async_with_args</span><span class="p">(</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">        </span><span class="n">args</span><span class="p">:</span><span class="w"> </span><span class="nc">ScalarFunctionArgs</span><span class="p">,</span>
+<span class="w">        </span><span class="n">_option</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">ConfigOptions</span><span class="p">,</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">ArrayRef</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="o">..</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="o">..</span><span class="p">.</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>To this:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">impl</span><span class="w"> </span><span class="n">AsyncScalarUDFImpl</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">AskLLM</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">invoke_async_with_args</span><span class="p">(</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">        </span><span class="n">args</span><span class="p">:</span><span class="w"> </span><span class="nc">ScalarFunctionArgs</span><span class="p">,</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">ArrayRef</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">options</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">&amp;</span><span class="n">args</span><span class="p">.</span><span class="n">config_options</span><span class="p">;</span>
+<span class="w">        </span><span class="o">..</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="o">..</span><span class="p">.</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
+<section id="schema-rewriter-module-moved-to-new-crate">
+<h3>Schema Rewriter Module Moved to New Crate<a class="headerlink" href="#schema-rewriter-module-moved-to-new-crate" title="Link to this heading">#</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">schema_rewriter</span></code> module and its associated symbols have been moved from <code class="docutils literal notranslate"><span class="pre">datafusion_physical_expr</span></code> to a new crate <code class="docutils literal notranslate"><span class="pre">datafusion_physical_expr_adapter</span></code>. This affects the following symbols:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">DefaultPhysicalExprAdapter</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">DefaultPhysicalExprAdapterFactory</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">PhysicalExprAdapter</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">PhysicalExprAdapterFactory</span></code></p></li>
+</ul>
+<p>To upgrade, change your imports to:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion_physical_expr_adapter</span><span class="p">::{</span>
+<span class="w">    </span><span class="n">DefaultPhysicalExprAdapter</span><span class="p">,</span><span class="w"> </span><span class="n">DefaultPhysicalExprAdapterFactory</span><span class="p">,</span>
+<span class="w">    </span><span class="n">PhysicalExprAdapter</span><span class="p">,</span><span class="w"> </span><span class="n">PhysicalExprAdapterFactory</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+</section>
+<section id="upgrade-to-arrow-56-0-0-and-parquet-56-0-0">
+<h3>Upgrade to arrow <code class="docutils literal notranslate"><span class="pre">56.0.0</span></code> and parquet <code class="docutils literal notranslate"><span class="pre">56.0.0</span></code><a class="headerlink" href="#upgrade-to-arrow-56-0-0-and-parquet-56-0-0" title="Link to this heading">#</a></h3>
+<p>This version of DataFusion upgrades the underlying Apache Arrow implementation
+to version <code class="docutils literal notranslate"><span class="pre">56.0.0</span></code>. See the <a class="reference external" href="https://github.com/apache/arrow-rs/releases/tag/56.0.0">release notes</a>
+for more details.</p>
+</section>
+<section id="added-executionplan-reset-state">
+<h3>Added <code class="docutils literal notranslate"><span class="pre">ExecutionPlan::reset_state</span></code><a class="headerlink" href="#added-executionplan-reset-state" title="Link to this heading">#</a></h3>
+<p>In order to fix a bug in DataFusion <code class="docutils literal notranslate"><span class="pre">49.0.0</span></code> where dynamic filters (currently only generated in the presence of a query such as <code class="docutils literal notranslate"><span class="pre">ORDER</span> <span class="pre">BY</span> <span class="pre">...</span> <span class="pre">LIMIT</span> <span class="pre">...</span></code>)
+produced incorrect results in recursive queries, a new method <code class="docutils literal notranslate"><span class="pre">reset_state</span></code> has been added to the <code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code> trait.</p>
+<p>Any <code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code> that needs to maintain internal state or references to other nodes in the execution plan tree should implement this method to reset that state.
+See <a class="reference external" href="https://github.com/apache/datafusion/pull/17028">#17028</a> for more details and an example implementation for <code class="docutils literal notranslate"><span class="pre">SortExec</span></code>.</p>
+</section>
+<section id="nested-loop-join-input-sort-order-cannot-be-preserved">
+<h3>Nested Loop Join input sort order cannot be preserved<a class="headerlink" href="#nested-loop-join-input-sort-order-cannot-be-preserved" title="Link to this heading">#</a></h3>
+<p>The Nested Loop Join operator has been rewritten from scratch to improve performance and memory efficiency. From the micro-benchmarks: this change introduces up to 5X speed-up and uses only 1% memory in extreme cases compared to the previous implementation.</p>
+<p>However, the new implementation cannot preserve input sort order like the old version could. This is a fundamental design trade-off that prioritizes performance and memory efficiency over sort order preservation.</p>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/16996">#16996</a> for details.</p>
+</section>
+<section id="add-as-any-method-to-lazybatchgenerator">
+<h3>Add <code class="docutils literal notranslate"><span class="pre">as_any()</span></code> method to <code class="docutils literal notranslate"><span class="pre">LazyBatchGenerator</span></code><a class="headerlink" href="#add-as-any-method-to-lazybatchgenerator" title="Link to this heading">#</a></h3>
+<p>To help with protobuf serialization, the <code class="docutils literal notranslate"><span class="pre">as_any()</span></code> method has been added to the <code class="docutils literal notranslate"><span class="pre">LazyBatchGenerator</span></code> trait. This means you will need to add <code class="docutils literal notranslate"><span class="pre">as_any()</span></code> to your implementation of <code class="docutils literal notranslate"><span class="pre">LazyBatchGenerator</span></code>:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">impl</span><span class="w"> </span><span class="n">LazyBatchGenerator</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">MyBatchGenerator</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">as_any</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">dyn</span><span class="w"> </span><span class="n">Any</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="bp">self</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="o">..</span><span class="p">.</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/17200">#17200</a> for details.</p>
+</section>
+<section id="refactored-datasource-try-swapping-with-projection">
+<h3>Refactored <code class="docutils literal notranslate"><span class="pre">DataSource::try_swapping_with_projection</span></code><a class="headerlink" href="#refactored-datasource-try-swapping-with-projection" title="Link to this heading">#</a></h3>
+<p>We refactored <code class="docutils literal notranslate"><span class="pre">DataSource::try_swapping_with_projection</span></code> to simplify the method and minimize leakage across the ExecutionPlan &lt;-&gt; DataSource abstraction layer.
+Reimplementation for any custom <code class="docutils literal notranslate"><span class="pre">DataSource</span></code> should be relatively straightforward, see <a class="reference external" href="https://github.com/apache/datafusion/pull/17395/">#17395</a> for more details.</p>
+</section>
+<section id="fileopenfuture-now-uses-datafusionerror-instead-of-arrowerror">
+<h3><code class="docutils literal notranslate"><span class="pre">FileOpenFuture</span></code> now uses <code class="docutils literal notranslate"><span class="pre">DataFusionError</span></code> instead of <code class="docutils literal notranslate"><span class="pre">ArrowError</span></code><a class="headerlink" href="#fileopenfuture-now-uses-datafusionerror-instead-of-arrowerror" title="Link to this heading">#</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">FileOpenFuture</span></code> type alias has been updated to use <code class="docutils literal notranslate"><span class="pre">DataFusionError</span></code> instead of <code class="docutils literal notranslate"><span class="pre">ArrowError</span></code> for its error type. This change affects the <code class="docutils literal notranslate"><span class="pre">FileOpener</span></code> trait and any implementations that work with file streaming operations.</p>
+<p><strong>Before:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">pub</span><span class="w"> </span><span class="k">type</span><span class="w"> </span><span class="nc">FileOpenFuture</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">BoxFuture</span><span class="o">&lt;&#39;</span><span class="nb">static</span><span class="p">,</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">BoxStream</span><span class="o">&lt;&#39;</span><span class="nb">static</span><span class="p">,</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">RecordBatch</span><span class="p">,</span><span class="w"> </span><span class="n">ArrowError</span><span class="o">&gt;&gt;&gt;&gt;</span><span class="p">;</span>
+</pre></div>
+</div>
+<p><strong>After:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">pub</span><span class="w"> </span><span class="k">type</span><span class="w"> </span><span class="nc">FileOpenFuture</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">BoxFuture</span><span class="o">&lt;&#39;</span><span class="nb">static</span><span class="p">,</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">BoxStream</span><span class="o">&lt;&#39;</span><span class="nb">static</span><span class="p">,</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">RecordBatch</span><span class="o">&gt;&gt;&gt;&gt;</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>If you have custom implementations of <code class="docutils literal notranslate"><span class="pre">FileOpener</span></code> or work directly with <code class="docutils literal notranslate"><span class="pre">FileOpenFuture</span></code>, you’ll need to update your error handling to use <code class="docutils literal notranslate"><span class="pre">DataFusionError</span></code> instead of <code class="docutils literal notranslate"><span class="pre">ArrowError</span></code>. The <code class="docutils literal notranslate"><span class="pre">FileStreamState</span></code> enum’s <code class="docutils literal notranslate"><span class="pre">Open</span></code> variant has also been updated accordingly. See <a class="reference external" href="https://github.com/apache/datafusion/pull/17397">#17397</a> for more details.</p>
+</section>
+<section id="ffi-user-defined-aggregate-function-signature-change">
+<h3>FFI user defined aggregate function signature change<a class="headerlink" href="#ffi-user-defined-aggregate-function-signature-change" title="Link to this heading">#</a></h3>
+<p>The Foreign Function Interface (FFI) signature for user defined aggregate functions
+has been updated to call <code class="docutils literal notranslate"><span class="pre">return_field</span></code> instead of <code class="docutils literal notranslate"><span class="pre">return_type</span></code> on the underlying
+aggregate function. This is to support metadata handling with these aggregate functions.
+This change should be transparent to most users. If you have written unit tests to call
+<code class="docutils literal notranslate"><span class="pre">return_type</span></code> directly, you may need to change them to calling <code class="docutils literal notranslate"><span class="pre">return_field</span></code> instead.</p>
+<p>This update is a breaking change to the FFI API. The current best practice when using the
+FFI crate is to ensure that all libraries that are interacting are using the same
+underlying Rust version. Issue <a class="reference external" href="https://github.com/apache/datafusion/issues/17374">#17374</a> has been opened to discuss stabilization of
+this interface so that these libraries can be used across different DataFusion versions.</p>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/17407">#17407</a> for details.</p>
+</section>
+<section id="added-physicalexpr-is-volatile-node">
+<h3>Added <code class="docutils literal notranslate"><span class="pre">PhysicalExpr::is_volatile_node</span></code><a class="headerlink" href="#added-physicalexpr-is-volatile-node" title="Link to this heading">#</a></h3>
+<p>We added a method to <code class="docutils literal notranslate"><span class="pre">PhysicalExpr</span></code> to mark a <code class="docutils literal notranslate"><span class="pre">PhysicalExpr</span></code> as volatile:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">impl</span><span class="w"> </span><span class="n">PhysicalExpr</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">MyRandomExpr</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">fn</span><span class="w"> </span><span class="nf">is_volatile_node</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kc">true</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>We’ve shipped this with a default value of <code class="docutils literal notranslate"><span class="pre">false</span></code> to minimize breakage but we highly recommend that implementers of <code class="docutils literal notranslate"><span class="pre">PhysicalExpr</span></code> opt into a behavior, even if it is returning <code class="docutils literal notranslate"><span class="pre">false</span></code>.</p>
+<p>You can see more discussion and example implementations in <a class="reference external" href="https://github.com/apache/datafusion/pull/17351">#17351</a>.</p>
+</section>
+</section>
+</section>
+
+
+                </article>
+              
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="51.0.0.html"
+       title="previous page">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">previous</p>
+        <p class="prev-next-title">Upgrade Guides</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="49.0.0.html"
+       title="next page">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">Upgrade Guides</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <dialog id="pst-secondary-sidebar-modal"></dialog>
+                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item">
+<div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> On this page
+  </div>
+  <nav class="bd-toc-nav page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-50-0-0">DataFusion 50.0.0</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#listingtable-automatically-detects-hive-partitioned-tables">ListingTable automatically detects Hive Partitioned tables</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#msrv-updated-to-1-86-0"><code class="docutils literal notranslate"><span class="pre">MSRV</span></code> updated to 1.86.0</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#scalarudfimpl-aggregateudfimpl-and-windowudfimpl-traits-now-require-partialeq-eq-and-hash-traits"><code class="docutils literal notranslate"><span class="pre">ScalarUDFImpl</span></code>, <code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl</span></code> and <code class="docutils literal notranslate"><span class="pre">WindowUDFImpl</span></code> traits now require <code class="docutils literal notranslate"><span class="pre">PartialEq</span></code>, <code class="docutils literal notranslate"><span class="pre">Eq</span></code>, and <code class="docutils literal notranslate"><span class="pre">Hash</span></code> traits</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#asyncscalarudfimpl-invoke-async-with-args-returns-columnarvalue"><code class="docutils literal notranslate"><span class="pre">AsyncScalarUDFImpl::invoke_async_with_args</span></code> returns <code class="docutils literal notranslate"><span class="pre">ColumnarValue</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#projectionexpr-changed-from-type-alias-to-struct"><code class="docutils literal notranslate"><span class="pre">ProjectionExpr</span></code> changed from type alias to struct</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#sessionstate-sessionconfig-and-optimizerconfig-returns-arc-configoptions-instead-of-configoptions"><code class="docutils literal notranslate"><span class="pre">SessionState</span></code>, <code class="docutils literal notranslate"><span class="pre">SessionConfig</span></code>, and <code class="docutils literal notranslate"><span class="pre">OptimizerConfig</span></code> returns <code class="docutils literal notranslate"><span class="pre">&amp;Arc&lt;ConfigOptions&gt;</span></code> instead of <code class="docutils literal notranslate"><span class="pre">&amp;ConfigOptions</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#api-change-to-asyncscalarudfimpl-invoke-async-with-args">API Change to <code class="docutils literal notranslate"><span class="pre">AsyncScalarUDFImpl::invoke_async_with_args</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#schema-rewriter-module-moved-to-new-crate">Schema Rewriter Module Moved to New Crate</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#upgrade-to-arrow-56-0-0-and-parquet-56-0-0">Upgrade to arrow <code class="docutils literal notranslate"><span class="pre">56.0.0</span></code> and parquet <code class="docutils literal notranslate"><span class="pre">56.0.0</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#added-executionplan-reset-state">Added <code class="docutils literal notranslate"><span class="pre">ExecutionPlan::reset_state</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#nested-loop-join-input-sort-order-cannot-be-preserved">Nested Loop Join input sort order cannot be preserved</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#add-as-any-method-to-lazybatchgenerator">Add <code class="docutils literal notranslate"><span class="pre">as_any()</span></code> method to <code class="docutils literal notranslate"><span class="pre">LazyBatchGenerator</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#refactored-datasource-try-swapping-with-projection">Refactored <code class="docutils literal notranslate"><span class="pre">DataSource::try_swapping_with_projection</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#fileopenfuture-now-uses-datafusionerror-instead-of-arrowerror"><code class="docutils literal notranslate"><span class="pre">FileOpenFuture</span></code> now uses <code class="docutils literal notranslate"><span class="pre">DataFusionError</span></code> instead of <code class="docutils literal notranslate"><span class="pre">ArrowError</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#ffi-user-defined-aggregate-function-signature-change">FFI user defined aggregate function signature change</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#added-physicalexpr-is-volatile-node">Added <code class="docutils literal notranslate"><span class="pre">PhysicalExpr::is_volatile_node</span></code></a></li>
+</ul>
+</li>
+</ul>
+  </nav></div>
+
+  <div class="sidebar-secondary-item">
+
+  
+  <div class="tocsection editthispage">
+    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/library-user-guide/upgrading/50.0.0.md">
+      <i class="fa-solid fa-pencil"></i>
+      
+      
+        
+          Edit on GitHub
+        
+      
+    </a>
+  </div>
+</div>
+
+  <div class="sidebar-secondary-item">
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../../_sources/library-user-guide/upgrading/50.0.0.md.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div></div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+          </footer>
+        
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script defer src="../../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf"></script>
+<script defer src="../../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf"></script>
+
+<!-- Based on pydata_sphinx_theme/footer.html -->
+<footer class="footer mt-5 mt-md-0">
+  <div class="container">
+    
+    <div class="footer-item">
+      <p>Apache DataFusion, Apache, the Apache feather logo, and the Apache DataFusion project logo</p>
+      <p>are either registered trademarks or trademarks of The Apache Software Foundation in the United States and other countries.</p>
+    </div>
+  </div>
+</footer>
+
+
+  </body>
+</html>

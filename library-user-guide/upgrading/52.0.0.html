@@ -1,0 +1,1099 @@
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="../../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Upgrade Guides &#8212; Apache DataFusion  documentation</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  <!--
+    this give us a css class that will be invisible only if js is disabled
+  -->
+  <noscript>
+    <style>
+      .pst-js-only { display: none !important; }
+
+    </style>
+  </noscript>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../../_static/styles/theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+<link href="../../_static/styles/pydata-sphinx-theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../../_static/theme_overrides.css?v=d08b24aa" />
+  
+  <!-- So that users can add custom icons -->
+  <script src="../../_static/scripts/fontawesome.js?digest=8878045cc6db502f8baf"></script>
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf" />
+<link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf" />
+
+    <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'library-user-guide/upgrading/52.0.0';</script>
+    <link rel="icon" href="../../_static/favicon.svg"/>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="Upgrade Guides" href="51.0.0.html" />
+    <link rel="prev" title="Upgrade Guides" href="53.0.0.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+  <meta name="docsearch:version" content="" />
+  </head>
+  
+  
+  <body data-bs-spy="scroll" data-bs-target=".bd-toc-nav" data-offset="180" data-bs-root-margin="0px 0px -60%" data-default-mode="">
+
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+
+  
+  <dialog id="pst-search-dialog">
+    
+<form class="bd-search d-flex align-items-center"
+      action="../../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search the docs ..."
+         aria-label="Search the docs ..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form>
+  </dialog>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+<div class="bd-header__inner bd-page-width">
+  <button class="pst-navbar-icon sidebar-toggle primary-toggle" aria-label="Site navigation">
+    <span class="fa-solid fa-bars"></span>
+  </button>
+  
+  
+  <div class="col-lg-3 navbar-header-items__start">
+    
+      <div class="navbar-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../../_static/original.svg" class="logo__image only-light" alt="Apache DataFusion  documentation - Home"/>
+    <img src="../../_static/original_dark.svg" class="logo__image only-dark pst-js-only" alt="Apache DataFusion  documentation - Home"/>
+  
+  
+</a></div>
+    
+  </div>
+  
+  <div class="col-lg-9 navbar-header-items">
+    
+    
+    <div class="navbar-header-items__end">
+      
+        <div class="navbar-item navbar-persistent--container">
+          
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+        </div>
+      
+      
+        <div class="navbar-item">
+
+<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="Light"></i>
+  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="Dark"></i>
+  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
+</button></div>
+      
+    </div>
+    
+  </div>
+  
+  
+    <div class="navbar-persistent--mobile">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+    </div>
+  
+
+  
+    <button class="pst-navbar-icon sidebar-toggle secondary-toggle" aria-label="On this page">
+      <span class="fa-solid fa-outdent"></span>
+    </button>
+  
+</div>
+
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <dialog id="pst-primary-sidebar-modal"></dialog>
+      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+    
+    
+      <div class="sidebar-header-items__end">
+        
+          <div class="navbar-item">
+
+<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="Light"></i>
+  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="Dark"></i>
+  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
+</button></div>
+        
+      </div>
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item"><nav class="bd-links" id="bd-docs-nav" aria-label="Main navigation">
+
+  <div class="bd-toc-item active">
+    
+    <p aria-level="2" class="caption" role="heading"><span class="caption-text">ASF Links</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference external" href="https://apache.org">Apache Software Foundation</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/licenses/">License</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/foundation/sponsorship.html">Donate</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/foundation/thanks.html">Thanks</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/security/">Security</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Links</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference external" href="https://github.com/apache/datafusion">GitHub and Issue Tracker</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://crates.io/crates/datafusion">crates.io</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/">API Docs</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/blog/">Blog</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://github.com/apache/datafusion/blob/main/CODE_OF_CONDUCT.md">Code of conduct</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../download.html">Download</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">User Guide</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/introduction.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/example-usage.html">Example Usage</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/features.html">Features</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/concepts-readings-events.html">Concepts, Readings, Events</a></li>
+
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/crate-configuration.html">Crate Configuration</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../user-guide/cli/index.html">DataFusion CLI</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/cli/overview.html">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/cli/installation.html">Installation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/cli/usage.html">Usage</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/cli/datasources.html">Local Files / Directories</a></li>
+
+
+
+
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/cli/functions.html">CLI Specific Functions</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/dataframe.html">DataFrame API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/arrow-introduction.html">Gentle Arrow Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/expressions.html">Expression API</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../user-guide/sql/index.html">SQL Reference</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/data_types.html">Data Types</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/struct_coercion.html">Struct Type Coercion and Field Mapping</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/select.html">SELECT syntax</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/subqueries.html">Subqueries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/ddl.html">DDL</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/dml.html">DML</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/explain.html">EXPLAIN</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/information_schema.html">Information Schema</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/operators.html">Operators and Literals</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/aggregate_functions.html">Aggregate Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/window_functions.html">Window Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/scalar_functions.html">Scalar Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/special_functions.html">Special Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/format_options.html">Format Options</a></li>
+
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/prepared_statements.html">Prepared Statements</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/configs.html">Configuration Settings</a></li>
+
+
+
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/explain-usage.html">Reading Explain Plans</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/metrics.html">Metrics</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/faq.html">Frequently Asked Questions</a></li>
+
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Library User Guide</span></p>
+<ul class="current nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../index.html">Introduction</a></li>
+<li class="toctree-l1 current active has-children"><a class="reference internal" href="index.html">Upgrade Guides</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="53.0.0.html">DataFusion 53.0.0</a></li>
+<li class="toctree-l2 current active"><a class="current reference internal" href="#">DataFusion 52.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="51.0.0.html">DataFusion 51.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="50.0.0.html">DataFusion 50.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="49.0.0.html">DataFusion 49.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="48.0.1.html">DataFusion 48.0.1</a></li>
+<li class="toctree-l2"><a class="reference internal" href="48.0.0.html">DataFusion 48.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="47.0.0.html">DataFusion 47.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="46.0.0.html">DataFusion 46.0.0</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../extensions.html">Extensions List</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../using-the-sql-api.html">Using the SQL API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../extending-sql.html">Extending SQL Syntax</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../working-with-exprs.html">Working with <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../using-the-dataframe-api.html">Using the DataFrame API</a></li>
+
+<li class="toctree-l1"><a class="reference internal" href="../building-logical-plans.html">Building Logical Plans</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../catalogs.html">Catalogs, Schemas, and Tables</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../functions/index.html">Functions</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../functions/adding-udfs.html">Adding User Defined Functions: Scalar/Window/Aggregate/Table Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../functions/spark.html">Spark Compatible Functions</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../custom-table-providers.html">Custom Table Provider</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../table-constraints.html">Table Constraint Enforcement</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../extending-operators.html">Extending Operators</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../profiling.html">Profiling Cookbook</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../query-optimizer.html">Query Optimizer</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Contributor Guide</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/index.html">Introduction</a></li>
+
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/communication.html">Community Communication</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/development_environment.html">Development Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/architecture.html">Architecture</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/architecture/dependency-graph.html">Workspace Dependency Graph</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/testing.html">Testing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/api-health.html">API health policy</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/howtos.html">HOWTOs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/roadmap.html">Roadmap and Improvement Proposals</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/governance.html">Governance</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/inviting.html">Inviting New Committers and PMC Members</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../contributor-guide/specification/index.html">Specifications</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../contributor-guide/specification/invariants.html">Invariants</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../contributor-guide/specification/output-field-name-semantic.html">Output field name semantics</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../contributor-guide/gsoc/index.html">Google Summer of Code (GSOC)</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../contributor-guide/gsoc/gsoc_application_guidelines_2025.html">GSoC Application Guidelines (2025)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../contributor-guide/gsoc/gsoc_project_ideas_2025.html">GSoC Project Ideas (2025)</a></li>
+</ul>
+</details></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">DataFusion Subprojects</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/ballista/">DataFusion Ballista</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/comet/">DataFusion Comet</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/python/">DataFusion Python</a></li>
+</ul>
+
+    
+  </div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+      <div class="sidebar-primary-item">
+<div id="ethical-ad-placement"
+      class="flat"
+      data-ea-publisher="readthedocs"
+      data-ea-type="readthedocs-sidebar"
+      data-ea-manual="true">
+</div></div>
+  </div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item">
+
+<nav aria-label="Breadcrumb" class="d-print-none">
+  <ul class="bd-breadcrumbs">
+    
+    <li class="breadcrumb-item breadcrumb-home">
+      <a href="../../index.html" class="nav-link" aria-label="Home">
+        <i class="fa-solid fa-home"></i>
+      </a>
+    </li>
+    
+    <li class="breadcrumb-item"><a href="index.html" class="nav-link">Upgrade Guides</a></li>
+    
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">Upgrade Guides</span></li>
+  </ul>
+</nav>
+</div>
+      
+    </div>
+  
+  
+</div>
+</div>
+              
+              
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <!---
+  Licensed to the Apache Software Foundation (ASF) under one
+  or more contributor license agreements.  See the NOTICE file
+  distributed with this work for additional information
+  regarding copyright ownership.  The ASF licenses this file
+  to you under the Apache License, Version 2.0 (the
+  "License"); you may not use this file except in compliance
+  with the License.  You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing,
+  software distributed under the License is distributed on an
+  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+  KIND, either express or implied.  See the License for the
+  specific language governing permissions and limitations
+  under the License.
+-->
+<section id="upgrade-guides">
+<h1>Upgrade Guides<a class="headerlink" href="#upgrade-guides" title="Link to this heading">#</a></h1>
+<section id="datafusion-52-0-0">
+<h2>DataFusion 52.0.0<a class="headerlink" href="#datafusion-52-0-0" title="Link to this heading">#</a></h2>
+<section id="changes-to-dfschema-api">
+<h3>Changes to DFSchema API<a class="headerlink" href="#changes-to-dfschema-api" title="Link to this heading">#</a></h3>
+<p>To permit more efficient planning, several methods on <code class="docutils literal notranslate"><span class="pre">DFSchema</span></code> have been
+changed to return references to the underlying [<code class="docutils literal notranslate"><span class="pre">&amp;FieldRef</span></code>] rather than
+[<code class="docutils literal notranslate"><span class="pre">&amp;Field</span></code>]. This allows planners to more cheaply copy the references via
+<code class="docutils literal notranslate"><span class="pre">Arc::clone</span></code> rather than cloning the entire <code class="docutils literal notranslate"><span class="pre">Field</span></code> structure.</p>
+<p>You may need to change code to use <code class="docutils literal notranslate"><span class="pre">Arc::clone</span></code> instead of <code class="docutils literal notranslate"><span class="pre">.as_ref().clone()</span></code>
+directly on the <code class="docutils literal notranslate"><span class="pre">Field</span></code>. For example:</p>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span><span class="gd">- let field = df_schema.field(&quot;my_column&quot;).as_ref().clone();</span>
+<span class="gi">+ let field = Arc::clone(df_schema.field(&quot;my_column&quot;));</span>
+</pre></div>
+</div>
+</section>
+<section id="listingtableprovider-now-caches-list-commands">
+<h3>ListingTableProvider now caches <code class="docutils literal notranslate"><span class="pre">LIST</span></code> commands<a class="headerlink" href="#listingtableprovider-now-caches-list-commands" title="Link to this heading">#</a></h3>
+<p>In prior versions, <code class="docutils literal notranslate"><span class="pre">ListingTableProvider</span></code> would issue <code class="docutils literal notranslate"><span class="pre">LIST</span></code> commands to
+the underlying object store each time it needed to list files for a query.
+To improve performance, <code class="docutils literal notranslate"><span class="pre">ListingTableProvider</span></code> now caches the results of
+<code class="docutils literal notranslate"><span class="pre">LIST</span></code> commands for the lifetime of the <code class="docutils literal notranslate"><span class="pre">ListingTableProvider</span></code> instance or
+until a cache entry expires.</p>
+<p>Note that by default the cache has no expiration time, so if files are added or removed
+from the underlying object store, the <code class="docutils literal notranslate"><span class="pre">ListingTableProvider</span></code> will not see
+those changes until the <code class="docutils literal notranslate"><span class="pre">ListingTableProvider</span></code> instance is dropped and recreated.</p>
+<p>You can configure the maximum cache size and cache entry expiration time via configuration options:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">datafusion.runtime.list_files_cache_limit</span></code> - Limits the size of the cache in bytes</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">datafusion.runtime.list_files_cache_ttl</span></code> - Limits the TTL (time-to-live) of an entry in seconds</p></li>
+</ul>
+<p>Detailed configuration information can be found in the <a class="reference external" href="https://datafusion.apache.org/user-guide/configs.html#runtime-configuration-settings">DataFusion Runtime
+Configuration</a> user’s guide.</p>
+<p>Caching can be disabled by setting the limit to 0:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SET</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">runtime</span><span class="p">.</span><span class="n">list_files_cache_limit</span><span class="w"> </span><span class="k">TO</span><span class="w"> </span><span class="ss">&quot;0K&quot;</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>Note that the internal API has changed to use a trait <code class="docutils literal notranslate"><span class="pre">ListFilesCache</span></code> instead of a type alias.</p>
+</section>
+<section id="newlines-in-values-moved-from-filescanconfig-to-csvoptions">
+<h3><code class="docutils literal notranslate"><span class="pre">newlines_in_values</span></code> moved from <code class="docutils literal notranslate"><span class="pre">FileScanConfig</span></code> to <code class="docutils literal notranslate"><span class="pre">CsvOptions</span></code><a class="headerlink" href="#newlines-in-values-moved-from-filescanconfig-to-csvoptions" title="Link to this heading">#</a></h3>
+<p>The CSV-specific <code class="docutils literal notranslate"><span class="pre">newlines_in_values</span></code> configuration option has been moved from <code class="docutils literal notranslate"><span class="pre">FileScanConfig</span></code> to <code class="docutils literal notranslate"><span class="pre">CsvOptions</span></code>, as it only applies to CSV file parsing.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Users who set <code class="docutils literal notranslate"><span class="pre">newlines_in_values</span></code> via <code class="docutils literal notranslate"><span class="pre">FileScanConfigBuilder::with_newlines_in_values()</span></code></p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<p>Set <code class="docutils literal notranslate"><span class="pre">newlines_in_values</span></code> in <code class="docutils literal notranslate"><span class="pre">CsvOptions</span></code> instead of on <code class="docutils literal notranslate"><span class="pre">FileScanConfigBuilder</span></code>:</p>
+<p><strong>Before:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">source</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">CsvSource</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">file_schema</span><span class="p">.</span><span class="n">clone</span><span class="p">()));</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">config</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">FileScanConfigBuilder</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">object_store_url</span><span class="p">,</span><span class="w"> </span><span class="n">source</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_newlines_in_values</span><span class="p">(</span><span class="kc">true</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">build</span><span class="p">();</span>
+</pre></div>
+</div>
+<p><strong>After:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">options</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CsvOptions</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">newlines_in_values</span><span class="p">:</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+<span class="w">    </span><span class="o">..</span><span class="nb">Default</span><span class="p">::</span><span class="n">default</span><span class="p">()</span>
+<span class="p">};</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">source</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">CsvSource</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">file_schema</span><span class="p">.</span><span class="n">clone</span><span class="p">())</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_csv_options</span><span class="p">(</span><span class="n">options</span><span class="p">));</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">config</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">FileScanConfigBuilder</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">object_store_url</span><span class="p">,</span><span class="w"> </span><span class="n">source</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">build</span><span class="p">();</span>
+</pre></div>
+</div>
+</section>
+<section id="removal-of-pyarrow-feature">
+<h3>Removal of <code class="docutils literal notranslate"><span class="pre">pyarrow</span></code> feature<a class="headerlink" href="#removal-of-pyarrow-feature" title="Link to this heading">#</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">pyarrow</span></code> feature flag has been removed. This feature has been migrated to
+the <code class="docutils literal notranslate"><span class="pre">datafusion-python</span></code> repository since version <code class="docutils literal notranslate"><span class="pre">44.0.0</span></code>.</p>
+</section>
+<section id="refactoring-of-filesource-constructors-and-filescanconfigbuilder-to-accept-schemas-upfront">
+<h3>Refactoring of <code class="docutils literal notranslate"><span class="pre">FileSource</span></code> constructors and <code class="docutils literal notranslate"><span class="pre">FileScanConfigBuilder</span></code> to accept schemas upfront<a class="headerlink" href="#refactoring-of-filesource-constructors-and-filescanconfigbuilder-to-accept-schemas-upfront" title="Link to this heading">#</a></h3>
+<p>The way schemas are passed to file sources and scan configurations has been significantly refactored. File sources now require the schema (including partition columns) to be provided at construction time, and <code class="docutils literal notranslate"><span class="pre">FileScanConfigBuilder</span></code> no longer takes a separate schema parameter.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Users who create <code class="docutils literal notranslate"><span class="pre">FileScanConfig</span></code> or file sources (<code class="docutils literal notranslate"><span class="pre">ParquetSource</span></code>, <code class="docutils literal notranslate"><span class="pre">CsvSource</span></code>, <code class="docutils literal notranslate"><span class="pre">JsonSource</span></code>, <code class="docutils literal notranslate"><span class="pre">AvroSource</span></code>) directly</p></li>
+<li><p>Users who implement custom <code class="docutils literal notranslate"><span class="pre">FileFormat</span></code> implementations</p></li>
+</ul>
+<p><strong>Key changes:</strong></p>
+<ol class="arabic">
+<li><p><strong>FileSource constructors now require TableSchema</strong>: All built-in file sources now take the schema in their constructor:</p>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span><span class="gd">- let source = ParquetSource::default();</span>
+<span class="gi">+ let source = ParquetSource::new(table_schema);</span>
+</pre></div>
+</div>
+</li>
+<li><p><strong>FileScanConfigBuilder no longer takes schema as a parameter</strong>: The schema is now passed via the FileSource:</p>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span><span class="gd">- FileScanConfigBuilder::new(url, schema, source)</span>
+<span class="gi">+ FileScanConfigBuilder::new(url, source)</span>
+</pre></div>
+</div>
+</li>
+<li><p><strong>Partition columns are now part of TableSchema</strong>: The <code class="docutils literal notranslate"><span class="pre">with_table_partition_cols()</span></code> method has been removed from <code class="docutils literal notranslate"><span class="pre">FileScanConfigBuilder</span></code>. Partition columns are now passed as part of the <code class="docutils literal notranslate"><span class="pre">TableSchema</span></code> to the FileSource constructor:</p>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span><span class="gi">+ let table_schema = TableSchema::new(</span>
+<span class="gi">+     file_schema,</span>
+<span class="gi">+     vec![Arc::new(Field::new(&quot;date&quot;, DataType::Utf8, false))],</span>
+<span class="gi">+ );</span>
+<span class="gi">+ let source = ParquetSource::new(table_schema);</span>
+<span class="w"> </span> let config = FileScanConfigBuilder::new(url, source)
+<span class="gd">-     .with_table_partition_cols(vec![Field::new(&quot;date&quot;, DataType::Utf8, false)])</span>
+<span class="w"> </span>     .with_file(partitioned_file)
+<span class="w"> </span>     .build();
+</pre></div>
+</div>
+</li>
+<li><p><strong>FileFormat::file_source() now takes TableSchema parameter</strong>: Custom <code class="docutils literal notranslate"><span class="pre">FileFormat</span></code> implementations must be updated:</p>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span>impl FileFormat for MyFileFormat {
+<span class="gd">-   fn file_source(&amp;self) -&gt; Arc&lt;dyn FileSource&gt; {</span>
+<span class="gi">+   fn file_source(&amp;self, table_schema: TableSchema) -&gt; Arc&lt;dyn FileSource&gt; {</span>
+<span class="gd">-       Arc::new(MyFileSource::default())</span>
+<span class="gi">+       Arc::new(MyFileSource::new(table_schema))</span>
+<span class="w"> </span>   }
+}
+</pre></div>
+</div>
+</li>
+</ol>
+<p><strong>Migration examples:</strong></p>
+<p>For Parquet files:</p>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span><span class="gd">- let source = Arc::new(ParquetSource::default());</span>
+<span class="gd">- let config = FileScanConfigBuilder::new(url, schema, source)</span>
+<span class="gi">+ let table_schema = TableSchema::new(schema, vec![]);</span>
+<span class="gi">+ let source = Arc::new(ParquetSource::new(table_schema));</span>
+<span class="gi">+ let config = FileScanConfigBuilder::new(url, source)</span>
+<span class="w"> </span>     .with_file(partitioned_file)
+<span class="w"> </span>     .build();
+</pre></div>
+</div>
+<p>For CSV files with partition columns:</p>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span><span class="gd">- let source = Arc::new(CsvSource::new(true, b&#39;,&#39;, b&#39;&quot;&#39;));</span>
+<span class="gd">- let config = FileScanConfigBuilder::new(url, file_schema, source)</span>
+<span class="gd">-     .with_table_partition_cols(vec![Field::new(&quot;year&quot;, DataType::Int32, false)])</span>
+<span class="gi">+ let options = CsvOptions {</span>
+<span class="gi">+     has_header: Some(true),</span>
+<span class="gi">+     delimiter: b&#39;,&#39;,</span>
+<span class="gi">+     quote: b&#39;&quot;&#39;,</span>
+<span class="gi">+     ..Default::default()</span>
+<span class="gi">+ };</span>
+<span class="gi">+ let table_schema = TableSchema::new(</span>
+<span class="gi">+     file_schema,</span>
+<span class="gi">+     vec![Arc::new(Field::new(&quot;year&quot;, DataType::Int32, false))],</span>
+<span class="gi">+ );</span>
+<span class="gi">+ let source = Arc::new(CsvSource::new(table_schema).with_csv_options(options));</span>
+<span class="gi">+ let config = FileScanConfigBuilder::new(url, source)</span>
+<span class="w"> </span>     .build();
+</pre></div>
+</div>
+</section>
+<section id="adaptive-filter-representation-in-parquet-filter-pushdown">
+<h3>Adaptive filter representation in Parquet filter pushdown<a class="headerlink" href="#adaptive-filter-representation-in-parquet-filter-pushdown" title="Link to this heading">#</a></h3>
+<p>As of Arrow 57.1.0, DataFusion uses a new adaptive filter strategy when
+evaluating pushed down filters for Parquet files. This new strategy improves
+performance for certain types of queries where the results of filtering are
+more efficiently represented with a bitmask rather than a selection.
+See <a class="reference external" href="https://github.com/apache/arrow-rs/issues/5523">arrow-rs #5523</a> for more details.</p>
+<p>This change only applies to the built-in Parquet data source with filter-pushdown enabled (
+which is <a class="reference external" href="https://github.com/apache/datafusion/issues/3463">not yet the default behavior</a>).</p>
+<p>You can disable the new behavior by setting the
+<code class="docutils literal notranslate"><span class="pre">datafusion.execution.parquet.force_filter_selections</span></code> <a class="reference external" href="https://datafusion.apache.org/user-guide/configs.html">configuration setting</a> to true.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">set</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">parquet</span><span class="p">.</span><span class="n">force_filter_selections</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">true</span><span class="p">;</span>
+</pre></div>
+</div>
+</section>
+<section id="statistics-handling-moved-from-filesource-to-filescanconfig">
+<h3>Statistics handling moved from <code class="docutils literal notranslate"><span class="pre">FileSource</span></code> to <code class="docutils literal notranslate"><span class="pre">FileScanConfig</span></code><a class="headerlink" href="#statistics-handling-moved-from-filesource-to-filescanconfig" title="Link to this heading">#</a></h3>
+<p>Statistics are now managed directly by <code class="docutils literal notranslate"><span class="pre">FileScanConfig</span></code> instead of being delegated to <code class="docutils literal notranslate"><span class="pre">FileSource</span></code> implementations. This simplifies the <code class="docutils literal notranslate"><span class="pre">FileSource</span></code> trait and provides more consistent statistics handling across all file formats.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Users who have implemented custom <code class="docutils literal notranslate"><span class="pre">FileSource</span></code> implementations</p></li>
+</ul>
+<p><strong>Breaking changes:</strong></p>
+<p>Two methods have been removed from the <code class="docutils literal notranslate"><span class="pre">FileSource</span></code> trait:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">with_statistics(&amp;self,</span> <span class="pre">statistics:</span> <span class="pre">Statistics)</span> <span class="pre">-&gt;</span> <span class="pre">Arc&lt;dyn</span> <span class="pre">FileSource&gt;</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">statistics(&amp;self)</span> <span class="pre">-&gt;</span> <span class="pre">Result&lt;Statistics&gt;</span></code></p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<p>If you have a custom <code class="docutils literal notranslate"><span class="pre">FileSource</span></code> implementation, you need to:</p>
+<ol class="arabic simple">
+<li><p>Remove the <code class="docutils literal notranslate"><span class="pre">with_statistics</span></code> method implementation</p></li>
+<li><p>Remove the <code class="docutils literal notranslate"><span class="pre">statistics</span></code> method implementation</p></li>
+<li><p>Remove any internal state that was storing statistics</p></li>
+</ol>
+<p><strong>Before:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="cp">#[derive(Clone)]</span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">MyCustomSource</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">table_schema</span><span class="p">:</span><span class="w"> </span><span class="nc">TableSchema</span><span class="p">,</span>
+<span class="w">    </span><span class="n">projected_statistics</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="n">Statistics</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="c1">// other fields...</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">FileSource</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">MyCustomSource</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">with_statistics</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">statistics</span><span class="p">:</span><span class="w"> </span><span class="nc">Statistics</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">FileSource</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="bp">Self</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">table_schema</span><span class="p">:</span><span class="w"> </span><span class="nc">self</span><span class="p">.</span><span class="n">table_schema</span><span class="p">.</span><span class="n">clone</span><span class="p">(),</span>
+<span class="w">            </span><span class="n">projected_statistics</span><span class="p">:</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="n">statistics</span><span class="p">),</span>
+<span class="w">            </span><span class="c1">// other fields...</span>
+<span class="w">        </span><span class="p">})</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">statistics</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">Statistics</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="bp">self</span><span class="p">.</span><span class="n">projected_statistics</span><span class="p">.</span><span class="n">clone</span><span class="p">().</span><span class="n">unwrap_or_else</span><span class="p">(</span><span class="o">||</span>
+<span class="w">            </span><span class="n">Statistics</span><span class="p">::</span><span class="n">new_unknown</span><span class="p">(</span><span class="bp">self</span><span class="p">.</span><span class="n">table_schema</span><span class="p">.</span><span class="n">file_schema</span><span class="p">())</span>
+<span class="w">        </span><span class="p">))</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="c1">// other methods...</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p><strong>After:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="cp">#[derive(Clone)]</span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">MyCustomSource</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">table_schema</span><span class="p">:</span><span class="w"> </span><span class="nc">TableSchema</span><span class="p">,</span>
+<span class="w">    </span><span class="c1">// projected_statistics field removed</span>
+<span class="w">    </span><span class="c1">// other fields...</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">FileSource</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">MyCustomSource</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// with_statistics method removed</span>
+<span class="w">    </span><span class="c1">// statistics method removed</span>
+
+<span class="w">    </span><span class="c1">// other methods...</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p><strong>Accessing statistics:</strong></p>
+<p>Statistics are now accessed through <code class="docutils literal notranslate"><span class="pre">FileScanConfig</span></code> instead of <code class="docutils literal notranslate"><span class="pre">FileSource</span></code>:</p>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span><span class="gd">- let stats = config.file_source.statistics()?;</span>
+<span class="gi">+ let stats = config.statistics();</span>
+</pre></div>
+</div>
+<p>Note that <code class="docutils literal notranslate"><span class="pre">FileScanConfig::statistics()</span></code> automatically marks statistics as inexact when filters are present, ensuring correctness when filters are pushed down.</p>
+</section>
+<section id="partition-column-handling-moved-out-of-physicalexpradapter">
+<h3>Partition column handling moved out of <code class="docutils literal notranslate"><span class="pre">PhysicalExprAdapter</span></code><a class="headerlink" href="#partition-column-handling-moved-out-of-physicalexpradapter" title="Link to this heading">#</a></h3>
+<p>Partition column replacement is now a separate preprocessing step performed before expression rewriting via <code class="docutils literal notranslate"><span class="pre">PhysicalExprAdapter</span></code>. This change provides better separation of concerns and makes the adapter more focused on schema differences rather than partition value substitution.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Users who have custom implementations of <code class="docutils literal notranslate"><span class="pre">PhysicalExprAdapterFactory</span></code> that handle partition columns</p></li>
+<li><p>Users who directly use the <code class="docutils literal notranslate"><span class="pre">FilePruner</span></code> API</p></li>
+</ul>
+<p><strong>Breaking changes:</strong></p>
+<ol class="arabic simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">FilePruner::try_new()</span></code> signature changed: the <code class="docutils literal notranslate"><span class="pre">partition_fields</span></code> parameter has been removed since partition column handling is now done separately</p></li>
+<li><p>Partition column replacement must now be done via <code class="docutils literal notranslate"><span class="pre">replace_columns_with_literals()</span></code> before expressions are passed to the adapter</p></li>
+</ol>
+<p><strong>Migration guide:</strong></p>
+<p>If you have code that creates a <code class="docutils literal notranslate"><span class="pre">FilePruner</span></code> with partition fields:</p>
+<p><strong>Before:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion_pruning</span><span class="p">::</span><span class="n">FilePruner</span><span class="p">;</span>
+
+<span class="kd">let</span><span class="w"> </span><span class="n">pruner</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">FilePruner</span><span class="p">::</span><span class="n">try_new</span><span class="p">(</span>
+<span class="w">    </span><span class="n">predicate</span><span class="p">,</span>
+<span class="w">    </span><span class="n">file_schema</span><span class="p">,</span>
+<span class="w">    </span><span class="n">partition_fields</span><span class="p">,</span><span class="w">  </span><span class="c1">// This parameter is removed</span>
+<span class="w">    </span><span class="n">file_stats</span><span class="p">,</span>
+<span class="p">)</span><span class="o">?</span><span class="p">;</span>
+</pre></div>
+</div>
+<p><strong>After:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion_pruning</span><span class="p">::</span><span class="n">FilePruner</span><span class="p">;</span>
+
+<span class="c1">// Partition fields are no longer needed</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">pruner</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">FilePruner</span><span class="p">::</span><span class="n">try_new</span><span class="p">(</span>
+<span class="w">    </span><span class="n">predicate</span><span class="p">,</span>
+<span class="w">    </span><span class="n">file_schema</span><span class="p">,</span>
+<span class="w">    </span><span class="n">file_stats</span><span class="p">,</span>
+<span class="p">)</span><span class="o">?</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>If you have custom code that relies on <code class="docutils literal notranslate"><span class="pre">PhysicalExprAdapter</span></code> to handle partition columns, you must now call <code class="docutils literal notranslate"><span class="pre">replace_columns_with_literals()</span></code> separately:</p>
+<p><strong>Before:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Adapter handled partition column replacement internally</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">adapted_expr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">adapter</span><span class="p">.</span><span class="n">rewrite</span><span class="p">(</span><span class="n">expr</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+</pre></div>
+</div>
+<p><strong>After:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion_physical_expr_adapter</span><span class="p">::</span><span class="n">replace_columns_with_literals</span><span class="p">;</span>
+
+<span class="c1">// Replace partition columns first</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">expr_with_literals</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">replace_columns_with_literals</span><span class="p">(</span><span class="n">expr</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">partition_values</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="c1">// Then apply the adapter</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">adapted_expr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">adapter</span><span class="p">.</span><span class="n">rewrite</span><span class="p">(</span><span class="n">expr_with_literals</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+</pre></div>
+</div>
+</section>
+<section id="build-row-filter-signature-simplified">
+<h3><code class="docutils literal notranslate"><span class="pre">build_row_filter</span></code> signature simplified<a class="headerlink" href="#build-row-filter-signature-simplified" title="Link to this heading">#</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">build_row_filter</span></code> function in <code class="docutils literal notranslate"><span class="pre">datafusion-datasource-parquet</span></code> has been simplified to take a single schema parameter instead of two.
+The expectation is now that the filter has been adapted to the physical file schema (the arrow representation of the parquet file’s schema) before being passed to this function
+using a <code class="docutils literal notranslate"><span class="pre">PhysicalExprAdapter</span></code> for example.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Users who call <code class="docutils literal notranslate"><span class="pre">build_row_filter</span></code> directly</p></li>
+</ul>
+<p><strong>Breaking changes:</strong></p>
+<p>The function signature changed from:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">build_row_filter</span><span class="p">(</span>
+<span class="w">    </span><span class="n">expr</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">PhysicalExpr</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="n">physical_file_schema</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">SchemaRef</span><span class="p">,</span>
+<span class="w">    </span><span class="n">predicate_file_schema</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">SchemaRef</span><span class="p">,</span><span class="w">  </span><span class="c1">// removed</span>
+<span class="w">    </span><span class="n">metadata</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">ParquetMetaData</span><span class="p">,</span>
+<span class="w">    </span><span class="n">reorder_predicates</span><span class="p">:</span><span class="w"> </span><span class="kt">bool</span><span class="p">,</span>
+<span class="w">    </span><span class="n">file_metrics</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">ParquetFileMetrics</span><span class="p">,</span>
+<span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="nb">Option</span><span class="o">&lt;</span><span class="n">RowFilter</span><span class="o">&gt;&gt;</span>
+</pre></div>
+</div>
+<p>To:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">build_row_filter</span><span class="p">(</span>
+<span class="w">    </span><span class="n">expr</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">PhysicalExpr</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="n">file_schema</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">SchemaRef</span><span class="p">,</span>
+<span class="w">    </span><span class="n">metadata</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">ParquetMetaData</span><span class="p">,</span>
+<span class="w">    </span><span class="n">reorder_predicates</span><span class="p">:</span><span class="w"> </span><span class="kt">bool</span><span class="p">,</span>
+<span class="w">    </span><span class="n">file_metrics</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">ParquetFileMetrics</span><span class="p">,</span>
+<span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="nb">Option</span><span class="o">&lt;</span><span class="n">RowFilter</span><span class="o">&gt;&gt;</span>
+</pre></div>
+</div>
+<p><strong>Migration guide:</strong></p>
+<p>Remove the duplicate schema parameter from your call:</p>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span><span class="gd">- build_row_filter(&amp;predicate, &amp;file_schema, &amp;file_schema, metadata, reorder, metrics)</span>
+<span class="gi">+ build_row_filter(&amp;predicate, &amp;file_schema, metadata, reorder, metrics)</span>
+</pre></div>
+</div>
+</section>
+<section id="planner-now-requires-explicit-opt-in-for-within-group-syntax">
+<h3>Planner now requires explicit opt-in for WITHIN GROUP syntax<a class="headerlink" href="#planner-now-requires-explicit-opt-in-for-within-group-syntax" title="Link to this heading">#</a></h3>
+<p>The SQL planner now enforces the aggregate UDF contract more strictly: the
+<code class="docutils literal notranslate"><span class="pre">WITHIN</span> <span class="pre">GROUP</span> <span class="pre">(ORDER</span> <span class="pre">BY</span> <span class="pre">...)</span></code> syntax is accepted only if the aggregate UDAF
+explicitly advertises support by returning <code class="docutils literal notranslate"><span class="pre">true</span></code> from
+<code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl::supports_within_group_clause()</span></code>.</p>
+<p>Previously the planner forwarded a <code class="docutils literal notranslate"><span class="pre">WITHIN</span> <span class="pre">GROUP</span></code> clause to order-sensitive
+aggregates even when they did not implement ordered-set semantics, which could
+cause queries such as <code class="docutils literal notranslate"><span class="pre">SUM(x)</span> <span class="pre">WITHIN</span> <span class="pre">GROUP</span> <span class="pre">(ORDER</span> <span class="pre">BY</span> <span class="pre">x)</span></code> to plan successfully.
+This behavior was too permissive and has been changed to match PostgreSQL and
+the documented semantics.</p>
+<p>Migration: If your UDAF intentionally implements ordered-set semantics and
+wants to accept the <code class="docutils literal notranslate"><span class="pre">WITHIN</span> <span class="pre">GROUP</span></code> SQL syntax, update your implementation to
+return <code class="docutils literal notranslate"><span class="pre">true</span></code> from <code class="docutils literal notranslate"><span class="pre">supports_within_group_clause()</span></code> and handle the ordering
+semantics in your accumulator implementation. If your UDAF is merely
+order-sensitive (but not an ordered-set aggregate), do not advertise
+<code class="docutils literal notranslate"><span class="pre">supports_within_group_clause()</span></code> and clients should use alternative function
+signatures (for example, explicit ordering as a function argument) instead.</p>
+</section>
+<section id="aggregateudfimpl-supports-null-handling-clause-now-defaults-to-false">
+<h3><code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl::supports_null_handling_clause</span></code> now defaults to <code class="docutils literal notranslate"><span class="pre">false</span></code><a class="headerlink" href="#aggregateudfimpl-supports-null-handling-clause-now-defaults-to-false" title="Link to this heading">#</a></h3>
+<p>This method specifies whether an aggregate function allows <code class="docutils literal notranslate"><span class="pre">IGNORE</span> <span class="pre">NULLS</span></code>/<code class="docutils literal notranslate"><span class="pre">RESPECT</span> <span class="pre">NULLS</span></code>
+during SQL parsing, with the implication it respects these configs during computation.</p>
+<p>Most DataFusion aggregate functions silently ignored this syntax in prior versions
+as they did not make use of it and it was permitted by default. We change this so
+only the few functions which do respect this clause (e.g. <code class="docutils literal notranslate"><span class="pre">array_agg</span></code>, <code class="docutils literal notranslate"><span class="pre">first_value</span></code>,
+<code class="docutils literal notranslate"><span class="pre">last_value</span></code>) need to implement it.</p>
+<p>Custom user defined aggregate functions will also error if this syntax is used,
+unless they explicitly declare support by overriding the method.</p>
+<p>For example, SQL parsing will now fail for queries such as this:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">median</span><span class="p">(</span><span class="n">c1</span><span class="p">)</span><span class="w"> </span><span class="k">IGNORE</span><span class="w"> </span><span class="n">NULLS</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table</span>
+</pre></div>
+</div>
+<p>Instead of silently succeeding.</p>
+</section>
+<section id="api-change-for-cacheaccessor-trait">
+<h3>API change for <code class="docutils literal notranslate"><span class="pre">CacheAccessor</span></code> trait<a class="headerlink" href="#api-change-for-cacheaccessor-trait" title="Link to this heading">#</a></h3>
+<p>The remove API no longer requires a mutable instance</p>
+</section>
+<section id="ffi-crate-updates">
+<h3>FFI crate updates<a class="headerlink" href="#ffi-crate-updates" title="Link to this heading">#</a></h3>
+<p>Many of the structs in the <code class="docutils literal notranslate"><span class="pre">datafusion-ffi</span></code> crate have been updated to allow easier
+conversion to the underlying trait types they represent. This simplifies some code
+paths, but also provides an additional improvement in cases where library code goes
+through a round trip via the foreign function interface.</p>
+<p>To update your code, suppose you have a <code class="docutils literal notranslate"><span class="pre">FFI_SchemaProvider</span></code> called <code class="docutils literal notranslate"><span class="pre">ffi_provider</span></code>
+and you wish to use this as a <code class="docutils literal notranslate"><span class="pre">SchemaProvider</span></code>. In the old approach you would do
+something like:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">foreign_provider</span><span class="p">:</span><span class="w"> </span><span class="nc">ForeignSchemaProvider</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ffi_provider</span><span class="p">.</span><span class="n">into</span><span class="p">();</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">foreign_provider</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">foreign_provider</span><span class="p">)</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">SchemaProvider</span><span class="o">&gt;</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>This code should now be written as:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">foreign_provider</span><span class="p">:</span><span class="w"> </span><span class="nc">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">SchemaProvider</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nb">Send</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ffi_provider</span><span class="p">.</span><span class="n">into</span><span class="p">();</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">foreign_provider</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">foreign_provider</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">SchemaProvider</span><span class="o">&gt;</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>For the case of user defined functions, the updates are similar but you
+may need to change the way you call the creation of the <code class="docutils literal notranslate"><span class="pre">ScalarUDF</span></code>.
+Aggregate and window functions follow the same pattern.</p>
+<p>Previously you may write:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">foreign_udf</span><span class="p">:</span><span class="w"> </span><span class="nc">ForeignScalarUDF</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ffi_udf</span><span class="p">.</span><span class="n">try_into</span><span class="p">()</span><span class="o">?</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">foreign_udf</span><span class="p">:</span><span class="w"> </span><span class="nc">ScalarUDF</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">foreign_udf</span><span class="p">.</span><span class="n">into</span><span class="p">();</span>
+</pre></div>
+</div>
+<p>Instead this should now be:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">foreign_udf</span><span class="p">:</span><span class="w"> </span><span class="nc">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">ScalarUDFImpl</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ffi_udf</span><span class="p">.</span><span class="n">into</span><span class="p">();</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">foreign_udf</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ScalarUDF</span><span class="p">::</span><span class="n">new_from_shared_impl</span><span class="p">(</span><span class="n">foreign_udf</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>When creating any of the following structs, we now require the user to
+provide a <code class="docutils literal notranslate"><span class="pre">TaskContextProvider</span></code> and optionally a <code class="docutils literal notranslate"><span class="pre">LogicalExtensionCodec</span></code>:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">FFI_CatalogListProvider</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">FFI_CatalogProvider</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">FFI_SchemaProvider</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">FFI_TableProvider</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">FFI_TableFunction</span></code></p></li>
+</ul>
+<p>Each of these structs has a <code class="docutils literal notranslate"><span class="pre">new()</span></code> and a <code class="docutils literal notranslate"><span class="pre">new_with_ffi_codec()</span></code> method for
+instantiation. For example, when you previously would write</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">table</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">MyTableProvider</span><span class="p">::</span><span class="n">new</span><span class="p">());</span>
+<span class="w">   </span><span class="kd">let</span><span class="w"> </span><span class="n">ffi_table</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">FFI_TableProvider</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">table</span><span class="p">,</span><span class="w"> </span><span class="nb">None</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>Now you will need to provide a <code class="docutils literal notranslate"><span class="pre">TaskContextProvider</span></code>. The most common
+implementation of this trait is <code class="docutils literal notranslate"><span class="pre">SessionContext</span></code>.</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">ctx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">SessionContext</span><span class="p">::</span><span class="n">default</span><span class="p">());</span>
+<span class="w">   </span><span class="kd">let</span><span class="w"> </span><span class="n">table</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">MyTableProvider</span><span class="p">::</span><span class="n">new</span><span class="p">());</span>
+<span class="w">   </span><span class="kd">let</span><span class="w"> </span><span class="n">ffi_table</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">FFI_TableProvider</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">table</span><span class="p">,</span><span class="w"> </span><span class="nb">None</span><span class="p">,</span><span class="w"> </span><span class="n">ctx</span><span class="p">,</span><span class="w"> </span><span class="nb">None</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>The alternative function to create these structures may be more convenient
+if you are doing many of these operations. A <code class="docutils literal notranslate"><span class="pre">FFI_LogicalExtensionCodec</span></code> will
+store the <code class="docutils literal notranslate"><span class="pre">TaskContextProvider</span></code> as well.</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">codec</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">DefaultLogicalExtensionCodec</span><span class="w"> </span><span class="p">{});</span>
+<span class="w">   </span><span class="kd">let</span><span class="w"> </span><span class="n">ctx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">SessionContext</span><span class="p">::</span><span class="n">default</span><span class="p">());</span>
+<span class="w">   </span><span class="kd">let</span><span class="w"> </span><span class="n">ffi_codec</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">FFI_LogicalExtensionCodec</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">codec</span><span class="p">,</span><span class="w"> </span><span class="nb">None</span><span class="p">,</span><span class="w"> </span><span class="n">ctx</span><span class="p">);</span>
+<span class="w">   </span><span class="kd">let</span><span class="w"> </span><span class="n">table</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">MyTableProvider</span><span class="p">::</span><span class="n">new</span><span class="p">());</span>
+<span class="w">   </span><span class="kd">let</span><span class="w"> </span><span class="n">ffi_table</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">FFI_TableProvider</span><span class="p">::</span><span class="n">new_with_ffi_codec</span><span class="p">(</span><span class="n">table</span><span class="p">,</span><span class="w"> </span><span class="nb">None</span><span class="p">,</span><span class="w"> </span><span class="n">ffi_codec</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>Additional information about the usage of the <code class="docutils literal notranslate"><span class="pre">TaskContextProvider</span></code> can be
+found in the crate README.</p>
+<p>Additionally, the FFI structure for Scalar UDF’s no longer contains a
+<code class="docutils literal notranslate"><span class="pre">return_type</span></code> call. This code was not used since the <code class="docutils literal notranslate"><span class="pre">ForeignScalarUDF</span></code>
+struct implements the <code class="docutils literal notranslate"><span class="pre">return_field_from_args</span></code> instead.</p>
+</section>
+<section id="projection-handling-moved-from-filescanconfig-to-filesource">
+<h3>Projection handling moved from FileScanConfig to FileSource<a class="headerlink" href="#projection-handling-moved-from-filescanconfig-to-filesource" title="Link to this heading">#</a></h3>
+<p>Projection handling has been moved from <code class="docutils literal notranslate"><span class="pre">FileScanConfig</span></code> into <code class="docutils literal notranslate"><span class="pre">FileSource</span></code> implementations. This enables format-specific projection pushdown (e.g., Parquet can push down struct field access, Vortex can push down computed expressions into un-decoded data).</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Users who have implemented custom <code class="docutils literal notranslate"><span class="pre">FileSource</span></code> implementations</p></li>
+<li><p>Users who use <code class="docutils literal notranslate"><span class="pre">FileScanConfigBuilder::with_projection_indices</span></code> directly</p></li>
+</ul>
+<p><strong>Breaking changes:</strong></p>
+<ol class="arabic">
+<li><p><strong><code class="docutils literal notranslate"><span class="pre">FileSource::with_projection</span></code> replaced with <code class="docutils literal notranslate"><span class="pre">try_pushdown_projection</span></code>:</strong></p>
+<p>The <code class="docutils literal notranslate"><span class="pre">with_projection(&amp;self,</span> <span class="pre">config:</span> <span class="pre">&amp;FileScanConfig)</span> <span class="pre">-&gt;</span> <span class="pre">Arc&lt;dyn</span> <span class="pre">FileSource&gt;</span></code> method has been removed and replaced with <code class="docutils literal notranslate"><span class="pre">try_pushdown_projection(&amp;self,</span> <span class="pre">projection:</span> <span class="pre">&amp;ProjectionExprs)</span> <span class="pre">-&gt;</span> <span class="pre">Result&lt;Option&lt;Arc&lt;dyn</span> <span class="pre">FileSource&gt;&gt;&gt;</span></code>.</p>
+</li>
+<li><p><strong><code class="docutils literal notranslate"><span class="pre">FileScanConfig.projection_exprs</span></code> field removed:</strong></p>
+<p>Projections are now stored in the <code class="docutils literal notranslate"><span class="pre">FileSource</span></code> directly, not in <code class="docutils literal notranslate"><span class="pre">FileScanConfig</span></code>.
+Various public helper methods that access projection information have been removed from <code class="docutils literal notranslate"><span class="pre">FileScanConfig</span></code>.</p>
+</li>
+<li><p><strong><code class="docutils literal notranslate"><span class="pre">FileScanConfigBuilder::with_projection_indices</span></code> now returns <code class="docutils literal notranslate"><span class="pre">Result&lt;Self&gt;</span></code>:</strong></p>
+<p>This method can now fail if the projection pushdown fails.</p>
+</li>
+<li><p><strong><code class="docutils literal notranslate"><span class="pre">FileSource::create_file_opener</span></code> now returns <code class="docutils literal notranslate"><span class="pre">Result&lt;Arc&lt;dyn</span> <span class="pre">FileOpener&gt;&gt;</span></code>:</strong></p>
+<p>Previously returned <code class="docutils literal notranslate"><span class="pre">Arc&lt;dyn</span> <span class="pre">FileOpener&gt;</span></code> directly.
+Any <code class="docutils literal notranslate"><span class="pre">FileSource</span></code> implementation that may fail to create a <code class="docutils literal notranslate"><span class="pre">FileOpener</span></code> should now return an appropriate error.</p>
+</li>
+<li><p><strong><code class="docutils literal notranslate"><span class="pre">DataSource::try_swapping_with_projection</span></code> signature changed:</strong></p>
+<p>Parameter changed from <code class="docutils literal notranslate"><span class="pre">&amp;[ProjectionExpr]</span></code> to <code class="docutils literal notranslate"><span class="pre">&amp;ProjectionExprs</span></code>.</p>
+</li>
+</ol>
+<p><strong>Migration guide:</strong></p>
+<p>If you have a custom <code class="docutils literal notranslate"><span class="pre">FileSource</span></code> implementation:</p>
+<p><strong>Before:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">impl</span><span class="w"> </span><span class="n">FileSource</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">MyCustomSource</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">with_projection</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">config</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">FileScanConfig</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">FileSource</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// Apply projection from config</span>
+<span class="w">        </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="bp">Self</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="cm">/* ... */</span><span class="w"> </span><span class="p">})</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">create_file_opener</span><span class="p">(</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">        </span><span class="n">object_store</span><span class="p">:</span><span class="w"> </span><span class="nc">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">ObjectStore</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">        </span><span class="n">base_config</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">FileScanConfig</span><span class="p">,</span>
+<span class="w">        </span><span class="n">partition</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="p">,</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">FileOpener</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">MyOpener</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="cm">/* ... */</span><span class="w"> </span><span class="p">})</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p><strong>After:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">impl</span><span class="w"> </span><span class="n">FileSource</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">MyCustomSource</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">try_pushdown_projection</span><span class="p">(</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">        </span><span class="n">projection</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">ProjectionExprs</span><span class="p">,</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="nb">Option</span><span class="o">&lt;</span><span class="n">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">FileSource</span><span class="o">&gt;&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// Return None if projection cannot be pushed down</span>
+<span class="w">        </span><span class="c1">// Return Some(new_source) with projection applied if it can</span>
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="nb">Some</span><span class="p">(</span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="bp">Self</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">projection</span><span class="p">:</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="n">projection</span><span class="p">.</span><span class="n">clone</span><span class="p">()),</span>
+<span class="w">            </span><span class="cm">/* ... */</span>
+<span class="w">        </span><span class="p">})))</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">projection</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;&amp;</span><span class="n">ProjectionExprs</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="bp">self</span><span class="p">.</span><span class="n">projection</span><span class="p">.</span><span class="n">as_ref</span><span class="p">()</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">create_file_opener</span><span class="p">(</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">        </span><span class="n">object_store</span><span class="p">:</span><span class="w"> </span><span class="nc">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">ObjectStore</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">        </span><span class="n">base_config</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">FileScanConfig</span><span class="p">,</span>
+<span class="w">        </span><span class="n">partition</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="p">,</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">FileOpener</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">MyOpener</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="cm">/* ... */</span><span class="w"> </span><span class="p">}))</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>We recommend you look at <a class="reference external" href="https://github.com/apache/datafusion/pull/18627">#18627</a>
+that introduced these changes for more examples for how this was handled for the various built in file sources.</p>
+<p>We have added <a class="reference external" href="https://docs.rs/datafusion-datasource/latest/datafusion_datasource/projection/struct.SplitProjection.html"><code class="docutils literal notranslate"><span class="pre">SplitProjection</span></code></a> and <a class="reference external" href="https://docs.rs/datafusion-datasource/latest/datafusion_datasource/projection/struct.ProjectionOpener.html"><code class="docutils literal notranslate"><span class="pre">ProjectionOpener</span></code></a> helpers to make it easier to handle projections in your <code class="docutils literal notranslate"><span class="pre">FileSource</span></code> implementations.</p>
+<p>For file sources that can only handle simple column selections (not computed expressions), use the <code class="docutils literal notranslate"><span class="pre">SplitProjection</span></code> and <code class="docutils literal notranslate"><span class="pre">ProjectionOpener</span></code> helpers to split the projection into pushdownable and non-pushdownable parts:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion_datasource</span><span class="p">::</span><span class="n">projection</span><span class="p">::{</span><span class="n">SplitProjection</span><span class="p">,</span><span class="w"> </span><span class="n">ProjectionOpener</span><span class="p">};</span>
+
+<span class="c1">// In try_pushdown_projection:</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">split</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SplitProjection</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">projection</span><span class="p">,</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">table_schema</span><span class="p">())</span><span class="o">?</span><span class="p">;</span>
+<span class="c1">// Use split.file_projection() for what to push down to the file format</span>
+<span class="c1">// The ProjectionOpener wrapper will handle the rest</span>
+</pre></div>
+</div>
+<p><strong>For <code class="docutils literal notranslate"><span class="pre">FileScanConfigBuilder</span></code> users:</strong></p>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span>let config = FileScanConfigBuilder::new(url, source)
+<span class="gd">-   .with_projection_indices(Some(vec![0, 2, 3]))</span>
+<span class="gi">+   .with_projection_indices(Some(vec![0, 2, 3]))?</span>
+<span class="w"> </span>   .build();
+</pre></div>
+</div>
+</section>
+<section id="schemaadapter-and-schemaadapterfactory-completely-removed">
+<h3><code class="docutils literal notranslate"><span class="pre">SchemaAdapter</span></code> and <code class="docutils literal notranslate"><span class="pre">SchemaAdapterFactory</span></code> completely removed<a class="headerlink" href="#schemaadapter-and-schemaadapterfactory-completely-removed" title="Link to this heading">#</a></h3>
+<p>Following the deprecation announced in <a class="reference internal" href="49.0.0.html#deprecating-schemaadapterfactory-and-schemaadapter"><span class="std std-ref">DataFusion 49.0.0</span></a>, <code class="docutils literal notranslate"><span class="pre">SchemaAdapterFactory</span></code> has been fully removed from Parquet scanning. This applies to both:</p>
+<p>The following symbols have been deprecated and will be removed in the next release:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">SchemaAdapter</span></code> trait</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">SchemaAdapterFactory</span></code> trait</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">SchemaMapper</span></code> trait</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">SchemaMapping</span></code> struct</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">DefaultSchemaAdapterFactory</span></code> struct</p></li>
+</ul>
+<p>These types were previously used to adapt record batch schemas during file reading.
+This functionality has been replaced by <code class="docutils literal notranslate"><span class="pre">PhysicalExprAdapterFactory</span></code>, which rewrites expressions at planning time rather than transforming batches at runtime.
+If you were using a custom <code class="docutils literal notranslate"><span class="pre">SchemaAdapterFactory</span></code> for schema adaptation (e.g., default column values, type coercion), you should now implement <code class="docutils literal notranslate"><span class="pre">PhysicalExprAdapterFactory</span></code> instead.
+See the <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/custom_data_source/default_column_values.rs">default column values example</a> for how to implement a custom <code class="docutils literal notranslate"><span class="pre">PhysicalExprAdapterFactory</span></code>.</p>
+<p><strong>Migration guide:</strong></p>
+<p>If you implemented a custom <code class="docutils literal notranslate"><span class="pre">SchemaAdapterFactory</span></code>, migrate to <code class="docutils literal notranslate"><span class="pre">PhysicalExprAdapterFactory</span></code>.
+See the <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/custom_data_source/default_column_values.rs">default column values example</a> for a complete implementation.</p>
+</section>
+</section>
+</section>
+
+
+                </article>
+              
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="53.0.0.html"
+       title="previous page">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">previous</p>
+        <p class="prev-next-title">Upgrade Guides</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="51.0.0.html"
+       title="next page">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">Upgrade Guides</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <dialog id="pst-secondary-sidebar-modal"></dialog>
+                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item">
+<div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> On this page
+  </div>
+  <nav class="bd-toc-nav page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-52-0-0">DataFusion 52.0.0</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#changes-to-dfschema-api">Changes to DFSchema API</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#listingtableprovider-now-caches-list-commands">ListingTableProvider now caches <code class="docutils literal notranslate"><span class="pre">LIST</span></code> commands</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#newlines-in-values-moved-from-filescanconfig-to-csvoptions"><code class="docutils literal notranslate"><span class="pre">newlines_in_values</span></code> moved from <code class="docutils literal notranslate"><span class="pre">FileScanConfig</span></code> to <code class="docutils literal notranslate"><span class="pre">CsvOptions</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#removal-of-pyarrow-feature">Removal of <code class="docutils literal notranslate"><span class="pre">pyarrow</span></code> feature</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#refactoring-of-filesource-constructors-and-filescanconfigbuilder-to-accept-schemas-upfront">Refactoring of <code class="docutils literal notranslate"><span class="pre">FileSource</span></code> constructors and <code class="docutils literal notranslate"><span class="pre">FileScanConfigBuilder</span></code> to accept schemas upfront</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#adaptive-filter-representation-in-parquet-filter-pushdown">Adaptive filter representation in Parquet filter pushdown</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#statistics-handling-moved-from-filesource-to-filescanconfig">Statistics handling moved from <code class="docutils literal notranslate"><span class="pre">FileSource</span></code> to <code class="docutils literal notranslate"><span class="pre">FileScanConfig</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#partition-column-handling-moved-out-of-physicalexpradapter">Partition column handling moved out of <code class="docutils literal notranslate"><span class="pre">PhysicalExprAdapter</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#build-row-filter-signature-simplified"><code class="docutils literal notranslate"><span class="pre">build_row_filter</span></code> signature simplified</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#planner-now-requires-explicit-opt-in-for-within-group-syntax">Planner now requires explicit opt-in for WITHIN GROUP syntax</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#aggregateudfimpl-supports-null-handling-clause-now-defaults-to-false"><code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl::supports_null_handling_clause</span></code> now defaults to <code class="docutils literal notranslate"><span class="pre">false</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#api-change-for-cacheaccessor-trait">API change for <code class="docutils literal notranslate"><span class="pre">CacheAccessor</span></code> trait</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#ffi-crate-updates">FFI crate updates</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#projection-handling-moved-from-filescanconfig-to-filesource">Projection handling moved from FileScanConfig to FileSource</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#schemaadapter-and-schemaadapterfactory-completely-removed"><code class="docutils literal notranslate"><span class="pre">SchemaAdapter</span></code> and <code class="docutils literal notranslate"><span class="pre">SchemaAdapterFactory</span></code> completely removed</a></li>
+</ul>
+</li>
+</ul>
+  </nav></div>
+
+  <div class="sidebar-secondary-item">
+
+  
+  <div class="tocsection editthispage">
+    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/library-user-guide/upgrading/52.0.0.md">
+      <i class="fa-solid fa-pencil"></i>
+      
+      
+        
+          Edit on GitHub
+        
+      
+    </a>
+  </div>
+</div>
+
+  <div class="sidebar-secondary-item">
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../../_sources/library-user-guide/upgrading/52.0.0.md.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div></div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+          </footer>
+        
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script defer src="../../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf"></script>
+<script defer src="../../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf"></script>
+
+<!-- Based on pydata_sphinx_theme/footer.html -->
+<footer class="footer mt-5 mt-md-0">
+  <div class="container">
+    
+    <div class="footer-item">
+      <p>Apache DataFusion, Apache, the Apache feather logo, and the Apache DataFusion project logo</p>
+      <p>are either registered trademarks or trademarks of The Apache Software Foundation in the United States and other countries.</p>
+    </div>
+  </div>
+</footer>
+
+
+  </body>
+</html>

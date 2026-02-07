@@ -1,0 +1,829 @@
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="../../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Upgrade Guides &#8212; Apache DataFusion  documentation</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  <!--
+    this give us a css class that will be invisible only if js is disabled
+  -->
+  <noscript>
+    <style>
+      .pst-js-only { display: none !important; }
+
+    </style>
+  </noscript>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../../_static/styles/theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+<link href="../../_static/styles/pydata-sphinx-theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../../_static/theme_overrides.css?v=d08b24aa" />
+  
+  <!-- So that users can add custom icons -->
+  <script src="../../_static/scripts/fontawesome.js?digest=8878045cc6db502f8baf"></script>
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf" />
+<link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf" />
+
+    <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'library-user-guide/upgrading/53.0.0';</script>
+    <link rel="icon" href="../../_static/favicon.svg"/>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="Upgrade Guides" href="52.0.0.html" />
+    <link rel="prev" title="Upgrade Guides" href="index.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+  <meta name="docsearch:version" content="" />
+  </head>
+  
+  
+  <body data-bs-spy="scroll" data-bs-target=".bd-toc-nav" data-offset="180" data-bs-root-margin="0px 0px -60%" data-default-mode="">
+
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+
+  
+  <dialog id="pst-search-dialog">
+    
+<form class="bd-search d-flex align-items-center"
+      action="../../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search the docs ..."
+         aria-label="Search the docs ..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form>
+  </dialog>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+<div class="bd-header__inner bd-page-width">
+  <button class="pst-navbar-icon sidebar-toggle primary-toggle" aria-label="Site navigation">
+    <span class="fa-solid fa-bars"></span>
+  </button>
+  
+  
+  <div class="col-lg-3 navbar-header-items__start">
+    
+      <div class="navbar-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../../_static/original.svg" class="logo__image only-light" alt="Apache DataFusion  documentation - Home"/>
+    <img src="../../_static/original_dark.svg" class="logo__image only-dark pst-js-only" alt="Apache DataFusion  documentation - Home"/>
+  
+  
+</a></div>
+    
+  </div>
+  
+  <div class="col-lg-9 navbar-header-items">
+    
+    
+    <div class="navbar-header-items__end">
+      
+        <div class="navbar-item navbar-persistent--container">
+          
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+        </div>
+      
+      
+        <div class="navbar-item">
+
+<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="Light"></i>
+  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="Dark"></i>
+  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
+</button></div>
+      
+    </div>
+    
+  </div>
+  
+  
+    <div class="navbar-persistent--mobile">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+    </div>
+  
+
+  
+    <button class="pst-navbar-icon sidebar-toggle secondary-toggle" aria-label="On this page">
+      <span class="fa-solid fa-outdent"></span>
+    </button>
+  
+</div>
+
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <dialog id="pst-primary-sidebar-modal"></dialog>
+      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+    
+    
+      <div class="sidebar-header-items__end">
+        
+          <div class="navbar-item">
+
+<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="Light"></i>
+  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="Dark"></i>
+  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
+</button></div>
+        
+      </div>
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item"><nav class="bd-links" id="bd-docs-nav" aria-label="Main navigation">
+
+  <div class="bd-toc-item active">
+    
+    <p aria-level="2" class="caption" role="heading"><span class="caption-text">ASF Links</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference external" href="https://apache.org">Apache Software Foundation</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/licenses/">License</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/foundation/sponsorship.html">Donate</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/foundation/thanks.html">Thanks</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/security/">Security</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Links</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference external" href="https://github.com/apache/datafusion">GitHub and Issue Tracker</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://crates.io/crates/datafusion">crates.io</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/">API Docs</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/blog/">Blog</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://github.com/apache/datafusion/blob/main/CODE_OF_CONDUCT.md">Code of conduct</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../download.html">Download</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">User Guide</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/introduction.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/example-usage.html">Example Usage</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/features.html">Features</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/concepts-readings-events.html">Concepts, Readings, Events</a></li>
+
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/crate-configuration.html">Crate Configuration</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../user-guide/cli/index.html">DataFusion CLI</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/cli/overview.html">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/cli/installation.html">Installation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/cli/usage.html">Usage</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/cli/datasources.html">Local Files / Directories</a></li>
+
+
+
+
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/cli/functions.html">CLI Specific Functions</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/dataframe.html">DataFrame API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/arrow-introduction.html">Gentle Arrow Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/expressions.html">Expression API</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../user-guide/sql/index.html">SQL Reference</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/data_types.html">Data Types</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/struct_coercion.html">Struct Type Coercion and Field Mapping</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/select.html">SELECT syntax</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/subqueries.html">Subqueries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/ddl.html">DDL</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/dml.html">DML</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/explain.html">EXPLAIN</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/information_schema.html">Information Schema</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/operators.html">Operators and Literals</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/aggregate_functions.html">Aggregate Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/window_functions.html">Window Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/scalar_functions.html">Scalar Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/special_functions.html">Special Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/format_options.html">Format Options</a></li>
+
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/prepared_statements.html">Prepared Statements</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/configs.html">Configuration Settings</a></li>
+
+
+
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/explain-usage.html">Reading Explain Plans</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/metrics.html">Metrics</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/faq.html">Frequently Asked Questions</a></li>
+
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Library User Guide</span></p>
+<ul class="current nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../index.html">Introduction</a></li>
+<li class="toctree-l1 current active has-children"><a class="reference internal" href="index.html">Upgrade Guides</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l2 current active"><a class="current reference internal" href="#">DataFusion 53.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="52.0.0.html">DataFusion 52.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="51.0.0.html">DataFusion 51.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="50.0.0.html">DataFusion 50.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="49.0.0.html">DataFusion 49.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="48.0.1.html">DataFusion 48.0.1</a></li>
+<li class="toctree-l2"><a class="reference internal" href="48.0.0.html">DataFusion 48.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="47.0.0.html">DataFusion 47.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="46.0.0.html">DataFusion 46.0.0</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../extensions.html">Extensions List</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../using-the-sql-api.html">Using the SQL API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../extending-sql.html">Extending SQL Syntax</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../working-with-exprs.html">Working with <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../using-the-dataframe-api.html">Using the DataFrame API</a></li>
+
+<li class="toctree-l1"><a class="reference internal" href="../building-logical-plans.html">Building Logical Plans</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../catalogs.html">Catalogs, Schemas, and Tables</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../functions/index.html">Functions</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../functions/adding-udfs.html">Adding User Defined Functions: Scalar/Window/Aggregate/Table Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../functions/spark.html">Spark Compatible Functions</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../custom-table-providers.html">Custom Table Provider</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../table-constraints.html">Table Constraint Enforcement</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../extending-operators.html">Extending Operators</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../profiling.html">Profiling Cookbook</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../query-optimizer.html">Query Optimizer</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Contributor Guide</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/index.html">Introduction</a></li>
+
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/communication.html">Community Communication</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/development_environment.html">Development Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/architecture.html">Architecture</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/architecture/dependency-graph.html">Workspace Dependency Graph</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/testing.html">Testing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/api-health.html">API health policy</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/howtos.html">HOWTOs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/roadmap.html">Roadmap and Improvement Proposals</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/governance.html">Governance</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/inviting.html">Inviting New Committers and PMC Members</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../contributor-guide/specification/index.html">Specifications</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../contributor-guide/specification/invariants.html">Invariants</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../contributor-guide/specification/output-field-name-semantic.html">Output field name semantics</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../contributor-guide/gsoc/index.html">Google Summer of Code (GSOC)</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../contributor-guide/gsoc/gsoc_application_guidelines_2025.html">GSoC Application Guidelines (2025)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../contributor-guide/gsoc/gsoc_project_ideas_2025.html">GSoC Project Ideas (2025)</a></li>
+</ul>
+</details></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">DataFusion Subprojects</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/ballista/">DataFusion Ballista</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/comet/">DataFusion Comet</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/python/">DataFusion Python</a></li>
+</ul>
+
+    
+  </div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+      <div class="sidebar-primary-item">
+<div id="ethical-ad-placement"
+      class="flat"
+      data-ea-publisher="readthedocs"
+      data-ea-type="readthedocs-sidebar"
+      data-ea-manual="true">
+</div></div>
+  </div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item">
+
+<nav aria-label="Breadcrumb" class="d-print-none">
+  <ul class="bd-breadcrumbs">
+    
+    <li class="breadcrumb-item breadcrumb-home">
+      <a href="../../index.html" class="nav-link" aria-label="Home">
+        <i class="fa-solid fa-home"></i>
+      </a>
+    </li>
+    
+    <li class="breadcrumb-item"><a href="index.html" class="nav-link">Upgrade Guides</a></li>
+    
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">Upgrade Guides</span></li>
+  </ul>
+</nav>
+</div>
+      
+    </div>
+  
+  
+</div>
+</div>
+              
+              
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <!---
+  Licensed to the Apache Software Foundation (ASF) under one
+  or more contributor license agreements.  See the NOTICE file
+  distributed with this work for additional information
+  regarding copyright ownership.  The ASF licenses this file
+  to you under the Apache License, Version 2.0 (the
+  "License"); you may not use this file except in compliance
+  with the License.  You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing,
+  software distributed under the License is distributed on an
+  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+  KIND, either express or implied.  See the License for the
+  specific language governing permissions and limitations
+  under the License.
+-->
+<section id="upgrade-guides">
+<h1>Upgrade Guides<a class="headerlink" href="#upgrade-guides" title="Link to this heading">#</a></h1>
+<section id="datafusion-53-0-0">
+<h2>DataFusion 53.0.0<a class="headerlink" href="#datafusion-53-0-0" title="Link to this heading">#</a></h2>
+<p><strong>Note:</strong> DataFusion <code class="docutils literal notranslate"><span class="pre">53.0.0</span></code> has not been released yet. The information provided
+*in this section pertains to features and changes that have already been merged
+*to the main branch and are awaiting release in this version. See <a class="reference external" href="https://github.com/apache/datafusion/issues/19692">#19692</a> for
+*more details.</p>
+<section id="filesinkconfig-adds-file-output-mode">
+<h3><code class="docutils literal notranslate"><span class="pre">FileSinkConfig</span></code> adds <code class="docutils literal notranslate"><span class="pre">file_output_mode</span></code><a class="headerlink" href="#filesinkconfig-adds-file-output-mode" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">FileSinkConfig</span></code> now includes a <code class="docutils literal notranslate"><span class="pre">file_output_mode:</span> <span class="pre">FileOutputMode</span></code> field to control
+single-file vs directory output behavior. Any code constructing <code class="docutils literal notranslate"><span class="pre">FileSinkConfig</span></code> via struct
+literals must initialize this field.</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">FileOutputMode</span></code> enum has three variants:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">Automatic</span></code> (default): Infer output mode from the URL (extension/trailing <code class="docutils literal notranslate"><span class="pre">/</span></code> heuristic)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">SingleFile</span></code>: Write to a single file at the exact output path</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Directory</span></code>: Write to a directory with generated filenames</p></li>
+</ul>
+<p><strong>Before:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="n">FileSinkConfig</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// ...</span>
+<span class="w">    </span><span class="n">file_extension</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;parquet&quot;</span><span class="p">.</span><span class="n">into</span><span class="p">(),</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p><strong>After:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion_datasource</span><span class="p">::</span><span class="n">file_sink_config</span><span class="p">::</span><span class="n">FileOutputMode</span><span class="p">;</span>
+
+<span class="n">FileSinkConfig</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// ...</span>
+<span class="w">    </span><span class="n">file_extension</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;parquet&quot;</span><span class="p">.</span><span class="n">into</span><span class="p">(),</span>
+<span class="w">    </span><span class="n">file_output_mode</span><span class="p">:</span><span class="w"> </span><span class="nc">FileOutputMode</span><span class="p">::</span><span class="n">Automatic</span><span class="p">,</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
+<section id="simplifyinfo-trait-removed-simplifycontext-now-uses-builder-style-api">
+<h3><code class="docutils literal notranslate"><span class="pre">SimplifyInfo</span></code> trait removed, <code class="docutils literal notranslate"><span class="pre">SimplifyContext</span></code> now uses builder-style API<a class="headerlink" href="#simplifyinfo-trait-removed-simplifycontext-now-uses-builder-style-api" title="Link to this heading">#</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">SimplifyInfo</span></code> trait has been removed and replaced with the concrete <code class="docutils literal notranslate"><span class="pre">SimplifyContext</span></code> struct. This simplifies the expression simplification API and removes the need for trait objects.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Users who implemented custom <code class="docutils literal notranslate"><span class="pre">SimplifyInfo</span></code> implementations</p></li>
+<li><p>Users who implemented <code class="docutils literal notranslate"><span class="pre">ScalarUDFImpl::simplify()</span></code> for custom scalar functions</p></li>
+<li><p>Users who directly use <code class="docutils literal notranslate"><span class="pre">SimplifyContext</span></code> or <code class="docutils literal notranslate"><span class="pre">ExprSimplifier</span></code></p></li>
+</ul>
+<p><strong>Breaking changes:</strong></p>
+<ol class="arabic simple">
+<li><p>The <code class="docutils literal notranslate"><span class="pre">SimplifyInfo</span></code> trait has been removed entirely</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">SimplifyContext</span></code> no longer takes <code class="docutils literal notranslate"><span class="pre">&amp;ExecutionProps</span></code> - it now uses a builder-style API with direct fields</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">ScalarUDFImpl::simplify()</span></code> now takes <code class="docutils literal notranslate"><span class="pre">&amp;SimplifyContext</span></code> instead of <code class="docutils literal notranslate"><span class="pre">&amp;dyn</span> <span class="pre">SimplifyInfo</span></code></p></li>
+<li><p>Time-dependent function simplification (e.g., <code class="docutils literal notranslate"><span class="pre">now()</span></code>) is now optional - if <code class="docutils literal notranslate"><span class="pre">query_execution_start_time</span></code> is <code class="docutils literal notranslate"><span class="pre">None</span></code>, these functions won’t be simplified</p></li>
+</ol>
+<p><strong>Migration guide:</strong></p>
+<p>If you implemented a custom <code class="docutils literal notranslate"><span class="pre">SimplifyInfo</span></code>:</p>
+<p><strong>Before:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">impl</span><span class="w"> </span><span class="n">SimplifyInfo</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">MySimplifyInfo</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">is_boolean_type</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">expr</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Expr</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="kt">bool</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">..</span><span class="p">.</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">nullable</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">expr</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Expr</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="kt">bool</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">..</span><span class="p">.</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">execution_props</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">ExecutionProps</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">..</span><span class="p">.</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">get_data_type</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">expr</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Expr</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">DataType</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">..</span><span class="p">.</span><span class="w"> </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p><strong>After:</strong></p>
+<p>Use <code class="docutils literal notranslate"><span class="pre">SimplifyContext</span></code> directly with the builder-style API:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">context</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SimplifyContext</span><span class="p">::</span><span class="n">default</span><span class="p">()</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_schema</span><span class="p">(</span><span class="n">schema</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_config_options</span><span class="p">(</span><span class="n">config_options</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_query_execution_start_time</span><span class="p">(</span><span class="nb">Some</span><span class="p">(</span><span class="n">Utc</span><span class="p">::</span><span class="n">now</span><span class="p">()));</span><span class="w"> </span><span class="c1">// or use .with_current_time()</span>
+</pre></div>
+</div>
+<p>If you implemented <code class="docutils literal notranslate"><span class="pre">ScalarUDFImpl::simplify()</span></code>:</p>
+<p><strong>Before:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">fn</span><span class="w"> </span><span class="nf">simplify</span><span class="p">(</span>
+<span class="w">    </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">    </span><span class="n">args</span><span class="p">:</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="n">Expr</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="n">info</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">dyn</span><span class="w"> </span><span class="n">SimplifyInfo</span><span class="p">,</span>
+<span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">ExprSimplifyResult</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">now_ts</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">info</span><span class="p">.</span><span class="n">execution_props</span><span class="p">().</span><span class="n">query_execution_start_time</span><span class="p">;</span>
+<span class="w">    </span><span class="c1">// ...</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p><strong>After:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">fn</span><span class="w"> </span><span class="nf">simplify</span><span class="p">(</span>
+<span class="w">    </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">    </span><span class="n">args</span><span class="p">:</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="n">Expr</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="n">info</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">SimplifyContext</span><span class="p">,</span>
+<span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">ExprSimplifyResult</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// query_execution_start_time is now Option&lt;DateTime&lt;Utc&gt;&gt;</span>
+<span class="w">    </span><span class="c1">// Return Original if time is not set (simplification skipped)</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="n">now_ts</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">info</span><span class="p">.</span><span class="n">query_execution_start_time</span><span class="p">()</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nb">Ok</span><span class="p">(</span><span class="n">ExprSimplifyResult</span><span class="p">::</span><span class="n">Original</span><span class="p">(</span><span class="n">args</span><span class="p">));</span>
+<span class="w">    </span><span class="p">};</span>
+<span class="w">    </span><span class="c1">// ...</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>If you created <code class="docutils literal notranslate"><span class="pre">SimplifyContext</span></code> from <code class="docutils literal notranslate"><span class="pre">ExecutionProps</span></code>:</p>
+<p><strong>Before:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">props</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ExecutionProps</span><span class="p">::</span><span class="n">new</span><span class="p">();</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">context</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SimplifyContext</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="o">&amp;</span><span class="n">props</span><span class="p">).</span><span class="n">with_schema</span><span class="p">(</span><span class="n">schema</span><span class="p">);</span>
+</pre></div>
+</div>
+<p><strong>After:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">context</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SimplifyContext</span><span class="p">::</span><span class="n">default</span><span class="p">()</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_schema</span><span class="p">(</span><span class="n">schema</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_config_options</span><span class="p">(</span><span class="n">config_options</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_current_time</span><span class="p">();</span><span class="w"> </span><span class="c1">// Sets query_execution_start_time to Utc::now()</span>
+</pre></div>
+</div>
+<p>See <a class="reference external" href="https://docs.rs/datafusion-expr/latest/datafusion_expr/simplify/struct.SimplifyContext.html"><code class="docutils literal notranslate"><span class="pre">SimplifyContext</span></code> documentation</a> for more details.</p>
+</section>
+<section id="struct-casting-now-requires-field-name-overlap">
+<h3>Struct Casting Now Requires Field Name Overlap<a class="headerlink" href="#struct-casting-now-requires-field-name-overlap" title="Link to this heading">#</a></h3>
+<p>DataFusion’s struct casting mechanism previously allowed casting between structs with differing field names if the field counts matched. This “positional fallback” behavior could silently misalign fields and cause data corruption.</p>
+<p><strong>Breaking Change:</strong></p>
+<p>Starting with DataFusion 53.0.0, struct casts now require <strong>at least one overlapping field name</strong> between the source and target structs. Casts without field name overlap are rejected at plan time with a clear error message.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Applications that cast between structs with no overlapping field names</p></li>
+<li><p>Queries that rely on positional struct field mapping (e.g., casting <code class="docutils literal notranslate"><span class="pre">struct(x,</span> <span class="pre">y)</span></code> to <code class="docutils literal notranslate"><span class="pre">struct(a,</span> <span class="pre">b)</span></code> based solely on position)</p></li>
+<li><p>Code that constructs or transforms struct columns programmatically</p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<p>If you encounter an error like:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>Cannot cast struct with 2 fields to 2 fields because there is no field name overlap
+</pre></div>
+</div>
+<p>You must explicitly rename or map fields to ensure at least one field name matches. Here are common patterns:</p>
+<p><strong>Example 1: Source and target field names already match (Name-based casting)</strong></p>
+<p><strong>Success case (field names align):</strong></p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- source_col has schema: STRUCT&lt;x INT, y INT&gt;</span>
+<span class="c1">-- Casting to the same field names succeeds (no-op or type validation only)</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="k">CAST</span><span class="p">(</span><span class="n">source_col</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">STRUCT</span><span class="o">&lt;</span><span class="n">x</span><span class="w"> </span><span class="nb">INT</span><span class="p">,</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="nb">INT</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">table1</span><span class="p">;</span>
+</pre></div>
+</div>
+<p><strong>Example 2: Source and target field names differ (Migration scenario)</strong></p>
+<p><strong>What fails now (no field name overlap):</strong></p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- source_col has schema: STRUCT&lt;a INT, b INT&gt;</span>
+<span class="c1">-- This FAILS because there is no field name overlap:</span>
+<span class="c1">-- ❌ SELECT CAST(source_col AS STRUCT&lt;x INT, y INT&gt;) FROM table1;</span>
+<span class="c1">-- Error: Cannot cast struct with 2 fields to 2 fields because there is no field name overlap</span>
+</pre></div>
+</div>
+<p><strong>Migration options (must align names):</strong></p>
+<p><strong>Option A: Use struct constructor for explicit field mapping</strong></p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- source_col has schema: STRUCT&lt;a INT, b INT&gt;</span>
+<span class="c1">-- Use STRUCT_CONSTRUCT with explicit field names</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="n">STRUCT_CONSTRUCT</span><span class="p">(</span>
+<span class="w">    </span><span class="s1">&#39;x&#39;</span><span class="p">,</span><span class="w"> </span><span class="n">source_col</span><span class="p">.</span><span class="n">a</span><span class="p">,</span>
+<span class="w">    </span><span class="s1">&#39;y&#39;</span><span class="p">,</span><span class="w"> </span><span class="n">source_col</span><span class="p">.</span><span class="n">b</span>
+<span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">renamed_struct</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">table1</span><span class="p">;</span>
+</pre></div>
+</div>
+<p><strong>Option B: Rename in the cast target to match source names</strong></p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- source_col has schema: STRUCT&lt;a INT, b INT&gt;</span>
+<span class="c1">-- Cast to target with matching field names</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="k">CAST</span><span class="p">(</span><span class="n">source_col</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">STRUCT</span><span class="o">&lt;</span><span class="n">a</span><span class="w"> </span><span class="nb">INT</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="nb">INT</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">table1</span><span class="p">;</span>
+</pre></div>
+</div>
+<p><strong>Example 3: Using struct constructors in Rust API</strong></p>
+<p>If you need to map fields programmatically, build the target struct explicitly:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Build the target struct with explicit field names</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">target_struct_type</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DataType</span><span class="p">::</span><span class="n">Struct</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span>
+<span class="w">    </span><span class="n">FieldRef</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="s">&quot;x&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">DataType</span><span class="p">::</span><span class="n">Int32</span><span class="p">),</span>
+<span class="w">    </span><span class="n">FieldRef</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="s">&quot;y&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">DataType</span><span class="p">::</span><span class="n">Utf8</span><span class="p">),</span>
+<span class="p">]);</span>
+
+<span class="c1">// Use struct constructors rather than casting for field mapping</span>
+<span class="c1">// This makes the field mapping explicit and unambiguous</span>
+<span class="c1">// Use struct builders or row constructors that preserve your mapping logic</span>
+</pre></div>
+</div>
+<p><strong>Why this change:</strong></p>
+<ol class="arabic simple">
+<li><p><strong>Safety:</strong> Field names are now the primary contract for struct compatibility</p></li>
+<li><p><strong>Explicitness:</strong> Prevents silent data misalignment caused by positional assumptions</p></li>
+<li><p><strong>Consistency:</strong> Matches DuckDB’s behavior and aligns with other SQL engines that enforce name-based matching</p></li>
+<li><p><strong>Debuggability:</strong> Errors now appear at plan time rather than as silent data corruption</p></li>
+</ol>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/19841">Issue #19841</a> and <a class="reference external" href="https://github.com/apache/datafusion/pull/19955">PR #19955</a> for more details.</p>
+</section>
+<section id="filterexec-builder-methods-deprecated">
+<h3><code class="docutils literal notranslate"><span class="pre">FilterExec</span></code> builder methods deprecated<a class="headerlink" href="#filterexec-builder-methods-deprecated" title="Link to this heading">#</a></h3>
+<p>The following methods on <code class="docutils literal notranslate"><span class="pre">FilterExec</span></code> have been deprecated in favor of using <code class="docutils literal notranslate"><span class="pre">FilterExecBuilder</span></code>:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">with_projection()</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">with_batch_size()</span></code></p></li>
+</ul>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Users who create <code class="docutils literal notranslate"><span class="pre">FilterExec</span></code> instances and use these methods to configure them</p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<p>Use <code class="docutils literal notranslate"><span class="pre">FilterExecBuilder</span></code> instead of chaining method calls on <code class="docutils literal notranslate"><span class="pre">FilterExec</span></code>:</p>
+<p><strong>Before:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">filter</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">FilterExec</span><span class="p">::</span><span class="n">try_new</span><span class="p">(</span><span class="n">predicate</span><span class="p">,</span><span class="w"> </span><span class="n">input</span><span class="p">)</span><span class="o">?</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_projection</span><span class="p">(</span><span class="nb">Some</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">]))</span><span class="o">?</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_batch_size</span><span class="p">(</span><span class="mi">8192</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+</pre></div>
+</div>
+<p><strong>After:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">filter</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">FilterExecBuilder</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">predicate</span><span class="p">,</span><span class="w"> </span><span class="n">input</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_projection</span><span class="p">(</span><span class="nb">Some</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">]))</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_batch_size</span><span class="p">(</span><span class="mi">8192</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">build</span><span class="p">()</span><span class="o">?</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>The builder pattern is more efficient as it computes properties once during <code class="docutils literal notranslate"><span class="pre">build()</span></code> rather than recomputing them for each method call.</p>
+<p>Note: <code class="docutils literal notranslate"><span class="pre">with_default_selectivity()</span></code> is not deprecated as it simply updates a field value and does not require the overhead of the builder pattern.</p>
+</section>
+<section id="protobuf-conversion-trait-added">
+<h3>Protobuf conversion trait added<a class="headerlink" href="#protobuf-conversion-trait-added" title="Link to this heading">#</a></h3>
+<p>A new trait, <code class="docutils literal notranslate"><span class="pre">PhysicalProtoConverterExtension</span></code>, has been added to the <code class="docutils literal notranslate"><span class="pre">datafusion-proto</span></code>
+crate. This is used for controlling the process of conversion of physical plans and
+expressions to and from their protobuf equivalents. The methods for conversion now
+require an additional parameter.</p>
+<p>The primary APIs for interacting with this crate have not been modified, so most users
+should not need to make any changes. If you do require this trait, you can use the
+<code class="docutils literal notranslate"><span class="pre">DefaultPhysicalProtoConverter</span></code> implementation.</p>
+<p>For example, to convert a sort expression protobuf node you can make the following
+updates:</p>
+<p><strong>Before:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">sort_expr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">parse_physical_sort_expr</span><span class="p">(</span>
+<span class="w">    </span><span class="n">sort_proto</span><span class="p">,</span>
+<span class="w">    </span><span class="n">ctx</span><span class="p">,</span>
+<span class="w">    </span><span class="n">input_schema</span><span class="p">,</span>
+<span class="w">    </span><span class="n">codec</span><span class="p">,</span>
+<span class="p">);</span>
+</pre></div>
+</div>
+<p><strong>After:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">converter</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DefaultPhysicalProtoConverter</span><span class="w"> </span><span class="p">{};</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">sort_expr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">parse_physical_sort_expr</span><span class="p">(</span>
+<span class="w">    </span><span class="n">sort_proto</span><span class="p">,</span>
+<span class="w">    </span><span class="n">ctx</span><span class="p">,</span>
+<span class="w">    </span><span class="n">input_schema</span><span class="p">,</span>
+<span class="w">    </span><span class="n">codec</span><span class="p">,</span>
+<span class="w">    </span><span class="o">&amp;</span><span class="n">converter</span>
+<span class="p">);</span>
+</pre></div>
+</div>
+<p>Similarly to convert from a physical sort expression into a protobuf node:</p>
+<p><strong>Before:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">sort_proto</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">serialize_physical_sort_expr</span><span class="p">(</span>
+<span class="w">    </span><span class="n">sort_expr</span><span class="p">,</span>
+<span class="w">    </span><span class="n">codec</span><span class="p">,</span>
+<span class="p">);</span>
+</pre></div>
+</div>
+<p><strong>After:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">converter</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DefaultPhysicalProtoConverter</span><span class="w"> </span><span class="p">{};</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">sort_proto</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">serialize_physical_sort_expr</span><span class="p">(</span>
+<span class="w">    </span><span class="n">sort_expr</span><span class="p">,</span>
+<span class="w">    </span><span class="n">codec</span><span class="p">,</span>
+<span class="w">    </span><span class="o">&amp;</span><span class="n">converter</span><span class="p">,</span>
+<span class="p">);</span>
+</pre></div>
+</div>
+</section>
+<section id="generate-series-and-range-table-functions-changed">
+<h3><code class="docutils literal notranslate"><span class="pre">generate_series</span></code> and <code class="docutils literal notranslate"><span class="pre">range</span></code> table functions changed<a class="headerlink" href="#generate-series-and-range-table-functions-changed" title="Link to this heading">#</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">generate_series</span></code> and <code class="docutils literal notranslate"><span class="pre">range</span></code> table functions now return an empty set when the interval is invalid, instead of an error.
+This behavior is consistent with systems like PostgreSQL.</p>
+<p>Before:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">generate_series</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="o">-</span><span class="mi">1</span><span class="p">);</span>
+<span class="n">Error</span><span class="w"> </span><span class="n">during</span><span class="w"> </span><span class="n">planning</span><span class="p">:</span><span class="w"> </span><span class="k">Start</span><span class="w"> </span><span class="k">is</span><span class="w"> </span><span class="n">bigger</span><span class="w"> </span><span class="k">than</span><span class="w"> </span><span class="k">end</span><span class="p">,</span><span class="w"> </span><span class="n">but</span><span class="w"> </span><span class="k">increment</span><span class="w"> </span><span class="k">is</span><span class="w"> </span><span class="n">positive</span><span class="p">:</span><span class="w"> </span><span class="n">Cannot</span><span class="w"> </span><span class="n">generate</span><span class="w"> </span><span class="n">infinite</span><span class="w"> </span><span class="n">series</span>
+
+<span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="o">-</span><span class="mi">1</span><span class="p">);</span>
+<span class="n">Error</span><span class="w"> </span><span class="n">during</span><span class="w"> </span><span class="n">planning</span><span class="p">:</span><span class="w"> </span><span class="k">Start</span><span class="w"> </span><span class="k">is</span><span class="w"> </span><span class="n">bigger</span><span class="w"> </span><span class="k">than</span><span class="w"> </span><span class="k">end</span><span class="p">,</span><span class="w"> </span><span class="n">but</span><span class="w"> </span><span class="k">increment</span><span class="w"> </span><span class="k">is</span><span class="w"> </span><span class="n">positive</span><span class="p">:</span><span class="w"> </span><span class="n">Cannot</span><span class="w"> </span><span class="n">generate</span><span class="w"> </span><span class="n">infinite</span><span class="w"> </span><span class="n">series</span>
+</pre></div>
+</div>
+<p>Now:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">generate_series</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="o">-</span><span class="mi">1</span><span class="p">);</span>
+<span class="o">+</span><span class="c1">-------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">value</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------+</span>
+<span class="o">+</span><span class="c1">-------+</span>
+<span class="mi">0</span><span class="w"> </span><span class="k">row</span><span class="p">(</span><span class="n">s</span><span class="p">)</span><span class="w"> </span><span class="n">fetched</span><span class="p">.</span>
+
+<span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="o">-</span><span class="mi">1</span><span class="p">);</span>
+<span class="o">+</span><span class="c1">-------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">value</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------+</span>
+<span class="o">+</span><span class="c1">-------+</span>
+<span class="mi">0</span><span class="w"> </span><span class="k">row</span><span class="p">(</span><span class="n">s</span><span class="p">)</span><span class="w"> </span><span class="n">fetched</span><span class="p">.</span>
+</pre></div>
+</div>
+</section>
+</section>
+</section>
+
+
+                </article>
+              
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="index.html"
+       title="previous page">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">previous</p>
+        <p class="prev-next-title">Upgrade Guides</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="52.0.0.html"
+       title="next page">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">Upgrade Guides</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <dialog id="pst-secondary-sidebar-modal"></dialog>
+                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item">
+<div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> On this page
+  </div>
+  <nav class="bd-toc-nav page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-53-0-0">DataFusion 53.0.0</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#filesinkconfig-adds-file-output-mode"><code class="docutils literal notranslate"><span class="pre">FileSinkConfig</span></code> adds <code class="docutils literal notranslate"><span class="pre">file_output_mode</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#simplifyinfo-trait-removed-simplifycontext-now-uses-builder-style-api"><code class="docutils literal notranslate"><span class="pre">SimplifyInfo</span></code> trait removed, <code class="docutils literal notranslate"><span class="pre">SimplifyContext</span></code> now uses builder-style API</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#struct-casting-now-requires-field-name-overlap">Struct Casting Now Requires Field Name Overlap</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#filterexec-builder-methods-deprecated"><code class="docutils literal notranslate"><span class="pre">FilterExec</span></code> builder methods deprecated</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#protobuf-conversion-trait-added">Protobuf conversion trait added</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#generate-series-and-range-table-functions-changed"><code class="docutils literal notranslate"><span class="pre">generate_series</span></code> and <code class="docutils literal notranslate"><span class="pre">range</span></code> table functions changed</a></li>
+</ul>
+</li>
+</ul>
+  </nav></div>
+
+  <div class="sidebar-secondary-item">
+
+  
+  <div class="tocsection editthispage">
+    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/library-user-guide/upgrading/53.0.0.md">
+      <i class="fa-solid fa-pencil"></i>
+      
+      
+        
+          Edit on GitHub
+        
+      
+    </a>
+  </div>
+</div>
+
+  <div class="sidebar-secondary-item">
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../../_sources/library-user-guide/upgrading/53.0.0.md.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div></div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+          </footer>
+        
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script defer src="../../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf"></script>
+<script defer src="../../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf"></script>
+
+<!-- Based on pydata_sphinx_theme/footer.html -->
+<footer class="footer mt-5 mt-md-0">
+  <div class="container">
+    
+    <div class="footer-item">
+      <p>Apache DataFusion, Apache, the Apache feather logo, and the Apache DataFusion project logo</p>
+      <p>are either registered trademarks or trademarks of The Apache Software Foundation in the United States and other countries.</p>
+    </div>
+  </div>
+</footer>
+
+
+  </body>
+</html>
