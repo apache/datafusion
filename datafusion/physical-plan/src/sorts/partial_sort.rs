@@ -57,11 +57,13 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use crate::execution_plan::has_same_children_properties;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::sorts::sort::sort_batch;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     Partitioning, PlanProperties, SendableRecordBatchStream, Statistics,
+    check_if_same_properties,
 };
 
 use arrow::compute::concat_batches;
@@ -93,7 +95,7 @@ pub struct PartialSortExec {
     /// Fetch highest/lowest n results
     fetch: Option<usize>,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl PartialSortExec {
@@ -114,7 +116,7 @@ impl PartialSortExec {
             metrics_set: ExecutionPlanMetricsSet::new(),
             preserve_partitioning,
             fetch: None,
-            cache,
+            cache: Arc::new(cache),
         }
     }
 
@@ -132,12 +134,8 @@ impl PartialSortExec {
     /// input partitions producing a single, sorted partition.
     pub fn with_preserve_partitioning(mut self, preserve_partitioning: bool) -> Self {
         self.preserve_partitioning = preserve_partitioning;
-        self.cache = self
-            .cache
-            .with_partitioning(Self::output_partitioning_helper(
-                &self.input,
-                self.preserve_partitioning,
-            ));
+        Arc::make_mut(&mut self.cache).partitioning =
+            Self::output_partitioning_helper(&self.input, self.preserve_partitioning);
         self
     }
 
@@ -207,6 +205,16 @@ impl PartialSortExec {
             input.boundedness(),
         ))
     }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        Self {
+            input: children.swap_remove(0),
+            ..Self::clone(self)
+        }
+    }
 }
 
 impl DisplayAs for PartialSortExec {
@@ -255,7 +263,7 @@ impl ExecutionPlan for PartialSortExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -283,6 +291,7 @@ impl ExecutionPlan for PartialSortExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        check_if_same_properties!(self, children);
         let new_partial_sort = PartialSortExec::new(
             self.expr.clone(),
             Arc::clone(&children[0]),
