@@ -194,6 +194,7 @@ impl ExecutionPlan for EmptyExec {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::common;
     use crate::test;
     use crate::with_new_children_if_necessary;
 
