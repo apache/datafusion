@@ -373,6 +373,26 @@ mod tests {
     }
 
     #[test]
+    fn cast_primitive_nullable_to_non_nullable_rejected() {
+        let input_field = Field::new("a", DataType::Int32, true);
+        let target_field = Field::new("a", DataType::Int64, false);
+        let schema = make_schema(&input_field);
+
+        let column = Arc::new(Column::new_with_schema("a", schema.as_ref()).unwrap());
+        let error = CastColumnExpr::new_with_schema(
+            column,
+            Arc::new(input_field),
+            Arc::new(target_field),
+            None,
+            schema,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert_contains!(error, "Cannot cast nullable struct field 'a' to non-nullable field");
+    }
+
+    #[test]
     fn cast_struct_array_missing_child() -> DFResult<()> {
         let source_a = Field::new("a", DataType::Int32, true);
         let source_b = Field::new("b", DataType::Utf8, true);
