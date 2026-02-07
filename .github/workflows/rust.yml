@@ -557,6 +557,11 @@ jobs:
           fetch-depth: 1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-macos-aarch64-builder
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5  # v2.8.2
+        with:
+          shared-key: "macos-aarch64-ci"
+          save-if: ${{ github.ref_name == 'main' }}
       - name: Run tests (excluding doctests)
         shell: bash
         run: cargo test --profile ci --exclude datafusion-cli --workspace --lib --tests --bins --features avro,json,backtrace,integration-tests
