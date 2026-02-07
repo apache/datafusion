@@ -184,8 +184,8 @@ impl TableProvider for CustomProvider {
         filters: &[Expr],
         _: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let empty = Vec::new();
-        let projection = projection.unwrap_or(&empty);
+        // None means "all columns", Some(empty) means "no columns"
+        let select_all_columns = projection.is_none() || !projection.unwrap().is_empty();
         match &filters[0] {
             Expr::BinaryExpr(BinaryExpr { right, .. }) => {
                 let int_value = match &**right {
@@ -215,9 +215,10 @@ impl TableProvider for CustomProvider {
                 };
 
                 Ok(Arc::new(CustomPlan::new(
-                    match projection.is_empty() {
-                        true => Arc::new(Schema::empty()),
-                        false => self.zero_batch.schema(),
+                    if select_all_columns {
+                        self.zero_batch.schema()
+                    } else {
+                        Arc::new(Schema::empty())
                     },
                     match int_value {
                         0 => vec![self.zero_batch.clone()],
@@ -227,9 +228,10 @@ impl TableProvider for CustomProvider {
                 )))
             }
             _ => Ok(Arc::new(CustomPlan::new(
-                match projection.is_empty() {
-                    true => Arc::new(Schema::empty()),
-                    false => self.zero_batch.schema(),
+                if select_all_columns {
+                    self.zero_batch.schema()
+                } else {
+                    Arc::new(Schema::empty())
                 },
                 vec![],
             ))),

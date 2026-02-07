@@ -4760,6 +4760,9 @@ impl serde::Serialize for CustomTableScanNode {
         if !self.custom_table_data.is_empty() {
             len += 1;
         }
+        if !self.projection_exprs.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.CustomTableScanNode", len)?;
         if let Some(v) = self.table_name.as_ref() {
             struct_ser.serialize_field("tableName", v)?;
@@ -4778,6 +4781,9 @@ impl serde::Serialize for CustomTableScanNode {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("customTableData", pbjson::private::base64::encode(&self.custom_table_data).as_str())?;
         }
+        if !self.projection_exprs.is_empty() {
+            struct_ser.serialize_field("projectionExprs", &self.projection_exprs)?;
+        }
         struct_ser.end()
     }
 }
@@ -4795,6 +4801,8 @@ impl<'de> serde::Deserialize<'de> for CustomTableScanNode {
             "filters",
             "custom_table_data",
             "customTableData",
+            "projection_exprs",
+            "projectionExprs",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -4804,6 +4812,7 @@ impl<'de> serde::Deserialize<'de> for CustomTableScanNode {
             Schema,
             Filters,
             CustomTableData,
+            ProjectionExprs,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -4830,6 +4839,7 @@ impl<'de> serde::Deserialize<'de> for CustomTableScanNode {
                             "schema" => Ok(GeneratedField::Schema),
                             "filters" => Ok(GeneratedField::Filters),
                             "customTableData" | "custom_table_data" => Ok(GeneratedField::CustomTableData),
+                            "projectionExprs" | "projection_exprs" => Ok(GeneratedField::ProjectionExprs),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -4854,6 +4864,7 @@ impl<'de> serde::Deserialize<'de> for CustomTableScanNode {
                 let mut schema__ = None;
                 let mut filters__ = None;
                 let mut custom_table_data__ = None;
+                let mut projection_exprs__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::TableName => {
@@ -4888,6 +4899,12 @@ impl<'de> serde::Deserialize<'de> for CustomTableScanNode {
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::ProjectionExprs => {
+                            if projection_exprs__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("projectionExprs"));
+                            }
+                            projection_exprs__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(CustomTableScanNode {
@@ -4896,6 +4913,7 @@ impl<'de> serde::Deserialize<'de> for CustomTableScanNode {
                     schema: schema__,
                     filters: filters__.unwrap_or_default(),
                     custom_table_data: custom_table_data__.unwrap_or_default(),
+                    projection_exprs: projection_exprs__.unwrap_or_default(),
                 })
             }
         }
@@ -11216,6 +11234,9 @@ impl serde::Serialize for ListingTableScanNode {
         if !self.file_sort_order.is_empty() {
             len += 1;
         }
+        if !self.projection_exprs.is_empty() {
+            len += 1;
+        }
         if self.file_format_type.is_some() {
             len += 1;
         }
@@ -11249,6 +11270,9 @@ impl serde::Serialize for ListingTableScanNode {
         }
         if !self.file_sort_order.is_empty() {
             struct_ser.serialize_field("fileSortOrder", &self.file_sort_order)?;
+        }
+        if !self.projection_exprs.is_empty() {
+            struct_ser.serialize_field("projectionExprs", &self.projection_exprs)?;
         }
         if let Some(v) = self.file_format_type.as_ref() {
             match v {
@@ -11295,6 +11319,8 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
             "targetPartitions",
             "file_sort_order",
             "fileSortOrder",
+            "projection_exprs",
+            "projectionExprs",
             "csv",
             "parquet",
             "avro",
@@ -11314,6 +11340,7 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
             CollectStat,
             TargetPartitions,
             FileSortOrder,
+            ProjectionExprs,
             Csv,
             Parquet,
             Avro,
@@ -11350,6 +11377,7 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
                             "collectStat" | "collect_stat" => Ok(GeneratedField::CollectStat),
                             "targetPartitions" | "target_partitions" => Ok(GeneratedField::TargetPartitions),
                             "fileSortOrder" | "file_sort_order" => Ok(GeneratedField::FileSortOrder),
+                            "projectionExprs" | "projection_exprs" => Ok(GeneratedField::ProjectionExprs),
                             "csv" => Ok(GeneratedField::Csv),
                             "parquet" => Ok(GeneratedField::Parquet),
                             "avro" => Ok(GeneratedField::Avro),
@@ -11384,6 +11412,7 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
                 let mut collect_stat__ = None;
                 let mut target_partitions__ = None;
                 let mut file_sort_order__ = None;
+                let mut projection_exprs__ = None;
                 let mut file_format_type__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
@@ -11449,6 +11478,12 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
                             }
                             file_sort_order__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::ProjectionExprs => {
+                            if projection_exprs__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("projectionExprs"));
+                            }
+                            projection_exprs__ = Some(map_.next_value()?);
+                        }
                         GeneratedField::Csv => {
                             if file_format_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("csv"));
@@ -11497,6 +11532,7 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
                     collect_stat: collect_stat__.unwrap_or_default(),
                     target_partitions: target_partitions__.unwrap_or_default(),
                     file_sort_order: file_sort_order__.unwrap_or_default(),
+                    projection_exprs: projection_exprs__.unwrap_or_default(),
                     file_format_type: file_format_type__,
                 })
             }
@@ -24006,6 +24042,9 @@ impl serde::Serialize for ViewTableScanNode {
         if !self.definition.is_empty() {
             len += 1;
         }
+        if !self.projection_exprs.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.ViewTableScanNode", len)?;
         if let Some(v) = self.table_name.as_ref() {
             struct_ser.serialize_field("tableName", v)?;
@@ -24021,6 +24060,9 @@ impl serde::Serialize for ViewTableScanNode {
         }
         if !self.definition.is_empty() {
             struct_ser.serialize_field("definition", &self.definition)?;
+        }
+        if !self.projection_exprs.is_empty() {
+            struct_ser.serialize_field("projectionExprs", &self.projection_exprs)?;
         }
         struct_ser.end()
     }
@@ -24038,6 +24080,8 @@ impl<'de> serde::Deserialize<'de> for ViewTableScanNode {
             "schema",
             "projection",
             "definition",
+            "projection_exprs",
+            "projectionExprs",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -24047,6 +24091,7 @@ impl<'de> serde::Deserialize<'de> for ViewTableScanNode {
             Schema,
             Projection,
             Definition,
+            ProjectionExprs,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -24073,6 +24118,7 @@ impl<'de> serde::Deserialize<'de> for ViewTableScanNode {
                             "schema" => Ok(GeneratedField::Schema),
                             "projection" => Ok(GeneratedField::Projection),
                             "definition" => Ok(GeneratedField::Definition),
+                            "projectionExprs" | "projection_exprs" => Ok(GeneratedField::ProjectionExprs),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -24097,6 +24143,7 @@ impl<'de> serde::Deserialize<'de> for ViewTableScanNode {
                 let mut schema__ = None;
                 let mut projection__ = None;
                 let mut definition__ = None;
+                let mut projection_exprs__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::TableName => {
@@ -24129,6 +24176,12 @@ impl<'de> serde::Deserialize<'de> for ViewTableScanNode {
                             }
                             definition__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::ProjectionExprs => {
+                            if projection_exprs__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("projectionExprs"));
+                            }
+                            projection_exprs__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(ViewTableScanNode {
@@ -24137,6 +24190,7 @@ impl<'de> serde::Deserialize<'de> for ViewTableScanNode {
                     schema: schema__,
                     projection: projection__,
                     definition: definition__.unwrap_or_default(),
+                    projection_exprs: projection_exprs__.unwrap_or_default(),
                 })
             }
         }

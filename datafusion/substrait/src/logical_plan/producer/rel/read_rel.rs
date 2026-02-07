@@ -15,11 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::logical_plan::producer::rel::project_rel::create_project_remapping;
 use crate::logical_plan::producer::{
     SubstraitProducer, to_substrait_literal, to_substrait_named_struct,
 };
 use datafusion::common::{DFSchema, ToDFSchema, substrait_datafusion_err};
-use datafusion::logical_expr::utils::conjunction;
+use datafusion::logical_expr::utils::{conjunction, split_projection};
 use datafusion::logical_expr::{EmptyRelation, Expr, TableScan, Values};
 use datafusion::scalar::ScalarValue;
 use std::sync::Arc;
@@ -29,7 +30,7 @@ use substrait::proto::expression::mask_expression::{StructItem, StructSelect};
 use substrait::proto::expression::nested::Struct as NestedStruct;
 use substrait::proto::read_rel::{NamedTable, ReadType, VirtualTable};
 use substrait::proto::rel::RelType;
-use substrait::proto::{ReadRel, Rel};
+use substrait::proto::{ProjectRel, ReadRel, Rel, RelCommon};
 
 /// Converts rows of literal expressions into Substrait literal structs.
 ///
@@ -97,18 +98,24 @@ pub fn from_table_scan(
     producer: &mut impl SubstraitProducer,
     scan: &TableScan,
 ) -> datafusion::common::Result<Box<Rel>> {
-    let projection = scan.projection.as_ref().map(|p| {
-        p.iter()
-            .map(|i| StructItem {
-                field: *i as i32,
+    let source_schema = scan.source.schema();
+
+    // Compute required column indices and remainder projection expressions.
+    let split = split_projection(&scan.projection, source_schema.as_ref())?;
+
+    // Build the projection mask from computed scan indices
+    let projection = split.column_indices.as_ref().map(|indices| {
+        let struct_items = indices
+            .iter()
+            .map(|&i| StructItem {
+                field: i as i32,
                 child: None,
             })
-            .collect()
-    });
-
-    let projection = projection.map(|struct_items| MaskExpression {
-        select: Some(StructSelect { struct_items }),
-        maintain_singular_struct: false,
+            .collect();
+        MaskExpression {
+            select: Some(StructSelect { struct_items }),
+            maintain_singular_struct: false,
+        }
     });
 
     let table_schema = scan.source.schema().to_dfschema_ref()?;
@@ -131,7 +138,7 @@ pub fn from_table_scan(
         Some(Box::new(filter_expr))
     };
 
-    Ok(Box::new(Rel {
+    let read_rel = Box::new(Rel {
         rel_type: Some(RelType::Read(Box::new(ReadRel {
             common: None,
             base_schema: Some(base_schema),
@@ -144,7 +151,53 @@ pub fn from_table_scan(
                 advanced_extension: None,
             })),
         }))),
-    }))
+    });
+
+    // If we have complex expressions, wrap the ReadRel with a ProjectRel
+    if let Some(ref proj_exprs) = split.remainder {
+        // Build a schema for the scanned columns (the output of the ReadRel).
+        // The projection expressions reference columns by name, and the schema
+        // tells us the position of each column in the scan output.
+        // We need to construct this from the source schema and scan indices since
+        // `projected_schema` is the final output schema after complex projections.
+        let scan_output_schema = {
+            let indices = split
+                .column_indices
+                .as_ref()
+                .expect("column_indices should be Some when remainder is Some");
+            let projected_arrow_schema = source_schema.project(indices)?;
+            Arc::new(DFSchema::try_from_qualified_schema(
+                scan.table_name.clone(),
+                &projected_arrow_schema,
+            )?)
+        };
+
+        let expressions = proj_exprs
+            .iter()
+            .map(|e| producer.handle_expr(e, &scan_output_schema))
+            .collect::<datafusion::common::Result<Vec<_>>>()?;
+
+        let emit_kind = create_project_remapping(
+            expressions.len(),
+            scan_output_schema.fields().len(),
+        );
+        let common = RelCommon {
+            emit_kind: Some(emit_kind),
+            hint: None,
+            advanced_extension: None,
+        };
+
+        Ok(Box::new(Rel {
+            rel_type: Some(RelType::Project(Box::new(ProjectRel {
+                common: Some(common),
+                input: Some(read_rel),
+                expressions,
+                advanced_extension: None,
+            }))),
+        }))
+    } else {
+        Ok(read_rel)
+    }
 }
 
 /// Encodes an EmptyRelation as a Substrait VirtualTable.

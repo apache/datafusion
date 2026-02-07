@@ -865,6 +865,19 @@ async fn roundtrip_arithmetic_ops() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_table_scan_complex_projection() -> Result<()> {
+    // Test TableScan with complex (non-column) projection expressions
+    // This verifies that the producer wraps the ReadRel with a ProjectRel
+    // when the projection contains expressions like a + e
+    roundtrip("SELECT a + e FROM data").await?;
+    // Mix of simple columns and complex expressions
+    roundtrip("SELECT a, a + e, f FROM data").await?;
+    // Complex expression with CAST
+    roundtrip("SELECT CAST(a AS double) + CAST(e AS double) FROM data").await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn roundtrip_like() -> Result<()> {
     roundtrip("SELECT f FROM data WHERE f LIKE 'a%b'").await
 }

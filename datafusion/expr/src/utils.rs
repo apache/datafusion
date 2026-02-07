@@ -34,8 +34,8 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::utils::get_at_indices;
 use datafusion_common::{
-    Column, DFSchema, DFSchemaRef, HashMap, Result, TableReference, internal_err,
-    plan_err,
+    Column, DFSchema, DFSchemaRef, DataFusionError, HashMap, Result, TableReference,
+    internal_err, plan_err,
 };
 
 #[cfg(not(feature = "sql"))]
@@ -1286,6 +1286,43 @@ pub fn format_state_name(name: &str, state_name: &str) -> String {
     format!("{name}[{state_name}]")
 }
 
+/// Convert projection expressions (assumed to be column references) to column indices.
+///
+/// This function takes a list of expressions (which should be `Expr::Column` variants)
+/// and returns the indices of those columns in the given schema.
+///
+/// # Arguments
+/// * `exprs` - A slice of expressions, expected to be `Expr::Column` variants
+/// * `schema` - The schema to look up column indices in
+///
+/// # Returns
+/// * `Ok(Some(Vec<usize>))` - If all expressions are column references found in the schema
+/// * `Ok(None)` - If any expression is not a simple column reference
+/// * `Err(...)` - If a column reference is not found in the schema (indicates a bug)
+pub fn projection_indices_from_exprs(
+    exprs: &[Expr],
+    schema: &Schema,
+) -> Result<Option<Vec<usize>>> {
+    let mut indices = Vec::with_capacity(exprs.len());
+    for expr in exprs {
+        match expr {
+            Expr::Column(col) => {
+                let idx = schema.index_of(&col.name).map_err(|_| {
+                    DataFusionError::Internal(format!(
+                        "Column '{}' not found in schema during projection index conversion. \
+                         Available columns: {:?}",
+                        col.name,
+                        schema.fields().iter().map(|f| f.name()).collect::<Vec<_>>()
+                    ))
+                })?;
+                indices.push(idx);
+            }
+            _ => return Ok(None), // Non-column expression, cannot convert to indices
+        }
+    }
+    Ok(Some(indices))
+}
+
 /// Determine the set of [`Column`]s produced by the subquery.
 pub fn collect_subquery_cols(
     exprs: &[Expr],
@@ -1301,6 +1338,112 @@ pub fn collect_subquery_cols(
 
         cols.extend(using_cols);
         Result::<_>::Ok(cols)
+    })
+}
+
+/// Result of splitting a projection into column indices and remainder expressions.
+///
+/// See [`split_projection`] for details on how projections are split.
+#[derive(Debug, Clone, Default)]
+pub struct SplitProjection {
+    /// If the projection contains complex expressions (not just column references),
+    /// this contains the full projection to apply on top of the column selection.
+    /// `None` means no remainder projection is needed (all expressions were simple columns).
+    pub remainder: Option<Vec<Expr>>,
+    /// Column indices to scan from the source. `None` means scan all columns.
+    pub column_indices: Option<Vec<usize>>,
+}
+
+/// Split a projection into a column mask and an optional remainder projection.
+///
+/// Given a list of projection expressions and a schema, this function separates
+/// simple column references from complex expressions. This is useful when an
+/// operator can push down simple column selections but needs a follow-up
+/// projection for computed expressions.
+///
+/// # Arguments
+/// * `projection` - Optional list of projection expressions. `None` means select all columns.
+/// * `schema` - The schema to resolve column indices against
+///
+/// # Returns
+/// A [`SplitProjection`] containing:
+/// * `remainder: None, column_indices: None` - If projection is `None` (select all columns)
+/// * `remainder: None, column_indices: Some(indices)` - If all expressions are simple column references
+/// * `remainder: Some(exprs), column_indices: Some(indices)` - If any expression is complex
+///
+/// # Example
+/// Given projection `[col("a"), col("a") + col("c"), col("d")]` and schema `[a, b, c, d]`:
+/// - `column_indices = Some([0, 2, 3])` (indices of a, c, d)
+/// - `remainder = Some([col("a"), col("a") + col("c"), col("d")])`
+pub fn split_projection(
+    projection: &Option<Vec<Expr>>,
+    schema: &Schema,
+) -> Result<SplitProjection> {
+    let Some(exprs) = projection else {
+        // None means scan all columns, no remainder needed
+        return Ok(SplitProjection::default());
+    };
+
+    if exprs.is_empty() {
+        return Ok(SplitProjection {
+            remainder: None,
+            column_indices: Some(vec![]),
+        });
+    }
+
+    let mut has_complex_expr = false;
+    let mut all_required_columns = BTreeSet::new();
+    let mut remainder_exprs = vec![];
+
+    for expr in exprs {
+        // Collect all column references from this expression
+        let mut is_complex_expr = false;
+        expr.apply(|e| {
+            if let Expr::Column(col) = e {
+                if let Ok(index) = schema.index_of(col.name()) {
+                    // If we made it this far this must be the first level and the whole
+                    // expression is a simple column reference.
+                    // But we don't know if subsequent expressions might have more complex
+                    // expressions necessitating `remainder_exprs` to be populated, so we
+                    // push to `remainder_exprs` just in case they are needed later.
+                    // It is simpler to do this now than to try to backtrack later since
+                    // we already matched into Expr::Column and thus can simply clone
+                    // `expr` here.
+                    // If `is_complex_expr` is true then we will append the complex
+                    // expression itself to `remainder_exprs` instead later once we've
+                    // fully traversed this expression.
+                    if !is_complex_expr {
+                        remainder_exprs.push(expr.clone());
+                    }
+                    all_required_columns.insert(index);
+                }
+            } else {
+                // Nothing to do here except note that we will have to append the full
+                // expression later
+                is_complex_expr = true;
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        if is_complex_expr {
+            // If any expression in the projection is not a simple column reference we
+            // will need to apply a remainder projection
+            has_complex_expr = true;
+            // Append the full expression itself to the remainder expressions
+            // So given a projection like `[a, a + c, d]` we would have:
+            // all_required_columns = {0, 2, 3}
+            // original schema: [a: Int, b: Int, c: Int, d: Int]
+            // projected schema: [a: Int, c: Int, d: Int]
+            // remainder_exprs = [col(a), col(a) + col(c), col(d)]
+            remainder_exprs.push(expr.clone());
+        }
+    }
+
+    // Always return explicit indices to ensure compatibility with all providers.
+    // Some providers (e.g., FFI) cannot distinguish between None (scan all) and
+    // empty vec (scan nothing), so we always provide explicit column indices.
+    Ok(SplitProjection {
+        remainder: has_complex_expr.then_some(remainder_exprs),
+        column_indices: Some(all_required_columns.into_iter().collect()),
     })
 }
 

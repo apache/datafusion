@@ -20,7 +20,7 @@ use crate::logical_plan::consumer::from_substrait_literal;
 use crate::logical_plan::consumer::from_substrait_named_struct;
 use crate::logical_plan::consumer::utils::ensure_schema_compatibility;
 use datafusion::common::{
-    DFSchema, DFSchemaRef, TableReference, not_impl_err, plan_err,
+    Column, DFSchema, DFSchemaRef, TableReference, not_impl_err, plan_err,
     substrait_datafusion_err, substrait_err,
 };
 use datafusion::datasource::provider_as_source;
@@ -325,11 +325,21 @@ fn apply_projection(
                 .map(|(qualifier, field)| (qualifier.cloned(), Arc::clone(field)))
                 .collect();
 
+            // Convert indices to column expressions for the new projection format
+            let source_schema = scan.source.schema();
+            let projection_exprs: Vec<Expr> = column_indices
+                .iter()
+                .map(|&i| {
+                    let field = source_schema.field(i);
+                    Expr::Column(Column::new_unqualified(field.name()))
+                })
+                .collect();
+
             scan.projected_schema = DFSchemaRef::new(DFSchema::new_with_metadata(
                 fields,
                 df_schema.metadata().clone(),
             )?);
-            scan.projection = Some(column_indices);
+            scan.projection = Some(projection_exprs);
 
             Ok(LogicalPlan::TableScan(scan))
         }

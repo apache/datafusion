@@ -109,6 +109,7 @@ pub struct ListingTableScanNode {
     pub paths: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(string, tag = "3")]
     pub file_extension: ::prost::alloc::string::String,
+    /// Deprecated: use projection_exprs instead
     #[prost(message, optional, tag = "4")]
     pub projection: ::core::option::Option<ProjectionColumns>,
     #[prost(message, optional, tag = "5")]
@@ -123,6 +124,9 @@ pub struct ListingTableScanNode {
     pub target_partitions: u32,
     #[prost(message, repeated, tag = "13")]
     pub file_sort_order: ::prost::alloc::vec::Vec<SortExprNodeCollection>,
+    /// Expression-based projections
+    #[prost(message, repeated, tag = "17")]
+    pub projection_exprs: ::prost::alloc::vec::Vec<LogicalExprNode>,
     #[prost(
         oneof = "listing_table_scan_node::FileFormatType",
         tags = "10, 11, 12, 15, 16"
@@ -155,16 +159,21 @@ pub struct ViewTableScanNode {
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
     #[prost(message, optional, tag = "3")]
     pub schema: ::core::option::Option<super::datafusion_common::Schema>,
+    /// Deprecated: use projection_exprs instead
     #[prost(message, optional, tag = "4")]
     pub projection: ::core::option::Option<ProjectionColumns>,
     #[prost(string, tag = "5")]
     pub definition: ::prost::alloc::string::String,
+    /// Expression-based projections
+    #[prost(message, repeated, tag = "7")]
+    pub projection_exprs: ::prost::alloc::vec::Vec<LogicalExprNode>,
 }
 /// Logical Plan to Scan a CustomTableProvider registered at runtime
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CustomTableScanNode {
     #[prost(message, optional, tag = "6")]
     pub table_name: ::core::option::Option<TableReference>,
+    /// Deprecated: use projection_exprs instead
     #[prost(message, optional, tag = "2")]
     pub projection: ::core::option::Option<ProjectionColumns>,
     #[prost(message, optional, tag = "3")]
@@ -173,6 +182,9 @@ pub struct CustomTableScanNode {
     pub filters: ::prost::alloc::vec::Vec<LogicalExprNode>,
     #[prost(bytes = "vec", tag = "5")]
     pub custom_table_data: ::prost::alloc::vec::Vec<u8>,
+    /// Expression-based projections
+    #[prost(message, repeated, tag = "7")]
+    pub projection_exprs: ::prost::alloc::vec::Vec<LogicalExprNode>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ProjectionNode {
