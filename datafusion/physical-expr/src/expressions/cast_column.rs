@@ -389,7 +389,10 @@ mod tests {
         .unwrap_err()
         .to_string();
 
-        assert_contains!(error, "Cannot cast nullable struct field 'a' to non-nullable field");
+        assert_contains!(
+            error,
+            "Cannot cast nullable struct field 'a' to non-nullable field"
+        );
     }
 
     #[test]
