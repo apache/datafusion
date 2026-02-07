@@ -25,11 +25,10 @@ use std::hash::Hash;
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
-use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, SchemaRef};
 use datafusion_common::{
-    Result, ScalarValue, exec_err,
-    nested_struct::validate_struct_compatibility,
+    Result, ScalarValue, exec_datafusion_err, exec_err,
+    nested_struct::{validate_field_compatibility, validate_struct_compatibility},
     tree_node::{Transformed, TransformedResult, TreeNode},
 };
 use datafusion_functions::core::getfield::GetFieldFunc;
@@ -421,13 +420,19 @@ impl DefaultPhysicalExprAdapterRewriter {
         };
         let physical_field = self.physical_file_schema.field(physical_column_index);
 
+        // Check if index and types match - if so, we can return early
         if column.index() == physical_column_index
             && logical_field.data_type() == physical_field.data_type()
         {
             return Ok(Transformed::no(expr));
         }
 
-        let column = self.resolve_column(column, physical_column_index)?;
+        let column = self.resolve_column(
+            column,
+            physical_column_index,
+            logical_field.data_type(),
+            physical_field.data_type(),
+        )?;
 
         if logical_field.data_type() == physical_field.data_type() {
             // If the data types match, we can use the column as is
@@ -450,10 +455,14 @@ impl DefaultPhysicalExprAdapterRewriter {
         &self,
         column: &Column,
         physical_column_index: usize,
+        _logical_type: &DataType,
+        _physical_type: &DataType,
     ) -> Result<Column> {
         if column.index() == physical_column_index {
+            // Index matches but type differs - reuse the column as-is
             Ok(column.clone())
         } else {
+            // Index doesn't match - create a new column with the correct index
             Column::new_with_schema(column.name(), self.physical_file_schema.as_ref())
         }
     }
@@ -468,8 +477,11 @@ impl DefaultPhysicalExprAdapterRewriter {
         column: Column,
         logical_field: &Field,
     ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
+        // Get the actual field at the column's index (not pre-calculated)
+        // This is important when the column was recreated with a different index
         let actual_physical_field = self.physical_file_schema.field(column.index());
 
+        // Validate type compatibility for struct and scalar types
         // For struct types, use validate_struct_compatibility which handles:
         // - Missing fields in source (filled with nulls)
         // - Extra fields in source (ignored)
@@ -483,27 +495,28 @@ impl DefaultPhysicalExprAdapterRewriter {
                 )?;
             }
             _ => {
-                let is_compatible = can_cast_types(
-                    actual_physical_field.data_type(),
-                    logical_field.data_type(),
-                );
-                if !is_compatible {
-                    return exec_err!(
-                        "Cannot cast column '{}' from '{}' (physical data type) to '{}' (logical data type)",
+                validate_field_compatibility(
+                    actual_physical_field,
+                    logical_field,
+                )
+                .map_err(|err| {
+                    exec_datafusion_err!(
+                        "Cannot cast column '{}' from '{}' (physical data type) to '{}' (logical data type): {err}",
                         column.name(),
                         actual_physical_field.data_type(),
                         logical_field.data_type()
-                    );
-                }
+                    )
+                })?;
             }
         }
 
-        let cast_expr = Arc::new(CastColumnExpr::new(
+        let cast_expr = Arc::new(CastColumnExpr::new_with_schema(
             Arc::new(column),
-            Arc::new(actual_physical_field.clone()),
+            Arc::new(actual_physical_field.as_ref().clone()),
             Arc::new(logical_field.clone()),
             None,
-        ));
+            Arc::clone(&self.physical_file_schema),
+        )?);
 
         Ok(Transformed::yes(cast_expr))
     }
@@ -693,9 +706,11 @@ mod tests {
     #[test]
     fn test_rewrite_multi_column_expr_with_type_cast() {
         let (physical_schema, logical_schema) = create_test_schema();
+        let physical_schema = Arc::new(physical_schema);
+        let logical_schema = Arc::new(logical_schema);
         let factory = DefaultPhysicalExprAdapterFactory;
         let adapter = factory
-            .create(Arc::new(logical_schema), Arc::new(physical_schema))
+            .create(Arc::clone(&logical_schema), Arc::clone(&physical_schema))
             .unwrap();
 
         // Create a complex expression: (a + 5) OR (c > 0.0) that tests the recursive case of the rewriter
@@ -720,12 +735,16 @@ mod tests {
         println!("Rewritten expression: {result}");
 
         let expected = expressions::BinaryExpr::new(
-            Arc::new(CastColumnExpr::new(
-                Arc::new(Column::new("a", 0)),
-                Arc::new(Field::new("a", DataType::Int32, false)),
-                Arc::new(Field::new("a", DataType::Int64, false)),
-                None,
-            )),
+            Arc::new(
+                CastColumnExpr::new_with_schema(
+                    Arc::new(Column::new("a", 0)),
+                    Arc::new(Field::new("a", DataType::Int32, false)),
+                    Arc::new(Field::new("a", DataType::Int64, false)),
+                    None,
+                    Arc::clone(&physical_schema),
+                )
+                .expect("cast column expr"),
+            ),
             Operator::Plus,
             Arc::new(expressions::Literal::new(ScalarValue::Int64(Some(5)))),
         );
@@ -800,14 +819,17 @@ mod tests {
             false,
         )]);
 
+        let physical_schema = Arc::new(physical_schema);
+        let logical_schema = Arc::new(logical_schema);
         let factory = DefaultPhysicalExprAdapterFactory;
         let adapter = factory
-            .create(Arc::new(logical_schema), Arc::new(physical_schema))
+            .create(Arc::clone(&logical_schema), Arc::clone(&physical_schema))
             .unwrap();
         let column_expr = Arc::new(Column::new("data", 0));
 
         let result = adapter.rewrite(column_expr).unwrap();
 
+        // Build expected physical (source) field: Struct(id: Int32, name: Utf8)
         let physical_struct_fields: Fields = vec![
             Field::new("id", DataType::Int32, false),
             Field::new("name", DataType::Utf8, true),
@@ -819,6 +841,7 @@ mod tests {
             false,
         ));
 
+        // Build expected logical (target) field: Struct(id: Int64, name: Utf8View)
         let logical_struct_fields: Fields = vec![
             Field::new("id", DataType::Int64, false),
             Field::new("name", DataType::Utf8View, true),
@@ -830,12 +853,17 @@ mod tests {
             false,
         ));
 
-        let expected = Arc::new(CastColumnExpr::new(
-            Arc::new(Column::new("data", 0)),
-            physical_field,
-            logical_field,
-            None,
-        )) as Arc<dyn PhysicalExpr>;
+        // Create the expected cast expression
+        let expected = Arc::new(
+            CastColumnExpr::new_with_schema(
+                Arc::new(Column::new("data", 0)),
+                physical_field,
+                logical_field,
+                None,
+                Arc::clone(&physical_schema),
+            )
+            .expect("cast column expr"),
+        ) as Arc<dyn PhysicalExpr>;
 
         assert_eq!(result.to_string(), expected.to_string());
     }
@@ -1447,49 +1475,5 @@ mod tests {
         // Both should work correctly
         assert!(format!("{:?}", adapter1).contains("BatchAdapter"));
         assert!(format!("{:?}", adapter2).contains("BatchAdapter"));
-    }
-
-    #[test]
-    fn test_rewrite_column_index_and_type_mismatch() {
-        let physical_schema = Schema::new(vec![
-            Field::new("b", DataType::Utf8, true),
-            Field::new("a", DataType::Int32, false), // Index 1
-        ]);
-
-        let logical_schema = Schema::new(vec![
-            Field::new("a", DataType::Int64, false), // Index 0, Different Type
-            Field::new("b", DataType::Utf8, true),
-        ]);
-
-        let factory = DefaultPhysicalExprAdapterFactory;
-        let adapter = factory
-            .create(Arc::new(logical_schema), Arc::new(physical_schema))
-            .unwrap();
-
-        // Logical column "a" is at index 0
-        let column_expr = Arc::new(Column::new("a", 0));
-
-        let result = adapter.rewrite(column_expr).unwrap();
-
-        // Should be a CastColumnExpr
-        let cast_expr = result
-            .as_any()
-            .downcast_ref::<CastColumnExpr>()
-            .expect("Expected CastColumnExpr");
-
-        // Verify the inner column points to the correct physical index (1)
-        let inner_col = cast_expr
-            .expr()
-            .as_any()
-            .downcast_ref::<Column>()
-            .expect("Expected inner Column");
-        assert_eq!(inner_col.name(), "a");
-        assert_eq!(inner_col.index(), 1); // Physical index is 1
-
-        // Verify cast types
-        assert_eq!(
-            cast_expr.data_type(&Schema::empty()).unwrap(),
-            DataType::Int64
-        );
     }
 }

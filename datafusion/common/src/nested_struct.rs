@@ -31,7 +31,6 @@ use std::{collections::HashSet, sync::Arc};
 ///
 /// ## Field Matching Strategy
 /// - **By Name**: Source struct fields are matched to target fields by name (case-sensitive)
-/// - **No Positional Mapping**: Structs with no overlapping field names are rejected
 /// - **Type Adaptation**: When a matching field is found, it is recursively cast to the target field's type
 /// - **Missing Fields**: Target fields not present in the source are filled with null values
 /// - **Extra Fields**: Source fields not present in the target are ignored
@@ -67,18 +66,16 @@ fn cast_struct_column(
     if let Some(source_struct) = source_col.as_any().downcast_ref::<StructArray>() {
         let source_fields = source_struct.fields();
         validate_struct_compatibility(source_fields, target_fields)?;
+
         let mut fields: Vec<Arc<Field>> = Vec::with_capacity(target_fields.len());
         let mut arrays: Vec<ArrayRef> = Vec::with_capacity(target_fields.len());
         let num_rows = source_col.len();
 
-        // Iterate target fields and pick source child by name when present.
-        for target_child_field in target_fields.iter() {
+        // Iterate target fields and pick source child by name.
+        for target_child_field in target_fields {
             fields.push(Arc::clone(target_child_field));
 
-            let source_child_opt =
-                source_struct.column_by_name(target_child_field.name());
-
-            match source_child_opt {
+            match source_struct.column_by_name(target_child_field.name()) {
                 Some(source_child_col) => {
                     let adapted_child =
                         cast_column(source_child_col, target_child_field, cast_options)
@@ -254,7 +251,15 @@ pub fn validate_struct_compatibility(
     Ok(())
 }
 
-fn validate_field_compatibility(
+/// Validate that a field can be cast from source to target type.
+///
+/// This function checks:
+/// - Nullability compatibility: cannot cast nullable → non-nullable
+/// - Data type castability using Arrow's can_cast_types
+/// - Recursive validation for nested struct types
+///
+/// This validation is used for both top-level fields and nested struct fields.
+pub fn validate_field_compatibility(
     source_field: &Field,
     target_field: &Field,
 ) -> Result<()> {
@@ -327,7 +332,7 @@ pub fn has_one_of_more_common_fields(
 mod tests {
 
     use super::*;
-    use crate::{assert_contains, format::DEFAULT_CAST_OPTIONS};
+    use crate::format::DEFAULT_CAST_OPTIONS;
     use arrow::{
         array::{
             BinaryArray, Int32Array, Int32Builder, Int64Array, ListArray, MapArray,
@@ -533,7 +538,7 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_struct_compatibility_no_overlap_mismatch_len() {
+    fn test_validate_struct_compatibility_no_overlap_rejected() {
         let source_fields = vec![
             arc_field("left", DataType::Int32),
             arc_field("right", DataType::Int32),
@@ -543,7 +548,7 @@ mod tests {
         let result = validate_struct_compatibility(&source_fields, &target_fields);
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
-        assert_contains!(error_msg, "no field name overlap");
+        assert!(error_msg.contains("no field name overlap"));
     }
 
     #[test]
@@ -645,28 +650,9 @@ mod tests {
         let result = validate_struct_compatibility(&source_fields, &target_fields);
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
-        assert_contains!(
-            error_msg,
+        assert!(error_msg.contains(
             "Cannot cast struct field 'field1' from type Binary to type Int32"
-        );
-    }
-
-    #[test]
-    fn test_validate_struct_compatibility_no_overlap_equal_len() {
-        let source_fields = vec![
-            arc_field("left", DataType::Int32),
-            arc_field("right", DataType::Utf8),
-        ];
-
-        let target_fields = vec![
-            arc_field("alpha", DataType::Int32),
-            arc_field("beta", DataType::Utf8),
-        ];
-
-        let result = validate_struct_compatibility(&source_fields, &target_fields);
-        assert!(result.is_err());
-        let error_msg = result.unwrap_err().to_string();
-        assert_contains!(error_msg, "no field name overlap");
+        ));
     }
 
     #[test]
@@ -704,10 +690,10 @@ mod tests {
         let result = validate_struct_compatibility(&source_fields, &target_fields);
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
-        assert_contains!(
-            error_msg,
+        assert!(
+            error_msg.contains(
             "Cannot cast struct: target field 'field2' is non-nullable but missing from source. Cannot fill with NULL."
-        );
+        ));
     }
 
     #[test]
@@ -954,7 +940,7 @@ mod tests {
         let result = cast_column(&source_col, &target_field, &DEFAULT_CAST_OPTIONS);
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
-        assert_contains!(error_msg, "no field name overlap");
+        assert!(error_msg.contains("no field name overlap"));
     }
 
     #[test]

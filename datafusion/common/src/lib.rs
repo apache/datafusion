@@ -79,6 +79,7 @@ pub use file_options::file_type::{
     DEFAULT_ARROW_EXTENSION, DEFAULT_AVRO_EXTENSION, DEFAULT_CSV_EXTENSION,
     DEFAULT_JSON_EXTENSION, DEFAULT_PARQUET_EXTENSION, GetExt,
 };
+pub use format::{OwnedCastOptions, OwnedFormatOptions};
 pub use functional_dependencies::{
     Constraint, Constraints, Dependency, FunctionalDependence, FunctionalDependencies,
     aggregate_functional_dependencies, get_required_group_by_exprs_indices,

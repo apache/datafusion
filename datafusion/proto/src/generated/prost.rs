@@ -1079,7 +1079,7 @@ pub mod table_reference {
 pub struct PhysicalPlanNode {
     #[prost(
         oneof = "physical_plan_node::PhysicalPlanType",
-        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37"
+        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36"
     )]
     pub physical_plan_type: ::core::option::Option<physical_plan_node::PhysicalPlanType>,
 }
@@ -1159,8 +1159,6 @@ pub mod physical_plan_node {
         MemoryScan(super::MemoryScanExecNode),
         #[prost(message, tag = "36")]
         AsyncFunc(::prost::alloc::boxed::Box<super::AsyncFuncExecNode>),
-        #[prost(message, tag = "37")]
-        Buffer(::prost::alloc::boxed::Box<super::BufferExecNode>),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1188,9 +1186,6 @@ pub struct FileSinkConfig {
     pub insert_op: i32,
     #[prost(string, tag = "11")]
     pub file_extension: ::prost::alloc::string::String,
-    /// Determines how the output path is interpreted.
-    #[prost(enumeration = "FileOutputMode", tag = "12")]
-    pub file_output_mode: i32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct JsonSink {
@@ -1282,17 +1277,9 @@ pub struct PhysicalExtensionNode {
 /// physical expressions
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalExprNode {
-    /// Unique identifier for this expression to do deduplication during deserialization.
-    /// When serializing, this is set to a unique identifier for each combination of
-    /// expression, process and serialization run.
-    /// When deserializing, if this ID has been seen before, the cached Arc is returned
-    /// instead of creating a new one, enabling reconstruction of referential integrity
-    /// across serde roundtrips.
-    #[prost(uint64, optional, tag = "30")]
-    pub expr_id: ::core::option::Option<u64>,
     #[prost(
         oneof = "physical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21, 22"
     )]
     pub expr_type: ::core::option::Option<physical_expr_node::ExprType>,
 }
@@ -1345,6 +1332,8 @@ pub mod physical_expr_node {
         UnknownColumn(super::UnknownColumn),
         #[prost(message, tag = "21")]
         HashExpr(super::PhysicalHashExprNode),
+        #[prost(message, tag = "22")]
+        CastColumn(::prost::alloc::boxed::Box<super::PhysicalCastColumnNode>),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1521,6 +1510,54 @@ pub struct PhysicalCastNode {
     pub expr: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
     #[prost(message, optional, tag = "2")]
     pub arrow_type: ::core::option::Option<super::datafusion_common::ArrowType>,
+    #[prost(message, optional, tag = "3")]
+    pub cast_options: ::core::option::Option<PhysicalCastOptions>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalCastColumnNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub expr: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
+    #[prost(message, optional, tag = "2")]
+    pub input_field: ::core::option::Option<super::datafusion_common::Field>,
+    #[prost(message, optional, tag = "3")]
+    pub target_field: ::core::option::Option<super::datafusion_common::Field>,
+    /// DEPRECATED: Use cast_options instead of safe/format_options.
+    /// These fields retained for backward compatibility with DataFusion < 43.0.
+    /// When deserializing, safe and format_options are only used if cast_options is not set.
+    #[prost(bool, tag = "4")]
+    pub safe: bool,
+    #[prost(message, optional, tag = "5")]
+    pub format_options: ::core::option::Option<FormatOptions>,
+    #[prost(message, optional, tag = "6")]
+    pub cast_options: ::core::option::Option<PhysicalCastOptions>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PhysicalCastOptions {
+    #[prost(bool, tag = "1")]
+    pub safe: bool,
+    #[prost(message, optional, tag = "2")]
+    pub format_options: ::core::option::Option<FormatOptions>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct FormatOptions {
+    #[prost(bool, tag = "1")]
+    pub safe: bool,
+    #[prost(string, tag = "2")]
+    pub null: ::prost::alloc::string::String,
+    #[prost(string, optional, tag = "3")]
+    pub date_format: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "4")]
+    pub datetime_format: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "5")]
+    pub timestamp_format: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "6")]
+    pub timestamp_tz_format: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "7")]
+    pub time_format: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(enumeration = "DurationFormat", tag = "8")]
+    pub duration_format: i32,
+    #[prost(bool, tag = "9")]
+    pub types_info: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalNegativeNode {
@@ -2157,13 +2194,6 @@ pub struct AsyncFuncExecNode {
     #[prost(string, repeated, tag = "3")]
     pub async_expr_names: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct BufferExecNode {
-    #[prost(message, optional, boxed, tag = "1")]
-    pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
-    #[prost(uint64, tag = "2")]
-    pub capacity: u64,
-}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum WindowFrameUnits {
@@ -2274,39 +2304,6 @@ impl DateUnit {
         }
     }
 }
-/// Determines how file sink output paths are interpreted.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-#[repr(i32)]
-pub enum FileOutputMode {
-    /// Infer output mode from the URL (extension/trailing `/` heuristic).
-    Automatic = 0,
-    /// Write to a single file at the exact output path.
-    SingleFile = 1,
-    /// Write to a directory with generated filenames.
-    Directory = 2,
-}
-impl FileOutputMode {
-    /// String value of the enum field names used in the ProtoBuf definition.
-    ///
-    /// The values are not transformed in any way and thus are considered stable
-    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-    pub fn as_str_name(&self) -> &'static str {
-        match self {
-            Self::Automatic => "FILE_OUTPUT_MODE_AUTOMATIC",
-            Self::SingleFile => "FILE_OUTPUT_MODE_SINGLE_FILE",
-            Self::Directory => "FILE_OUTPUT_MODE_DIRECTORY",
-        }
-    }
-    /// Creates an enum from field names used in the ProtoBuf definition.
-    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-        match value {
-            "FILE_OUTPUT_MODE_AUTOMATIC" => Some(Self::Automatic),
-            "FILE_OUTPUT_MODE_SINGLE_FILE" => Some(Self::SingleFile),
-            "FILE_OUTPUT_MODE_DIRECTORY" => Some(Self::Directory),
-            _ => None,
-        }
-    }
-}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum InsertOp {
@@ -2332,6 +2329,35 @@ impl InsertOp {
             "Append" => Some(Self::Append),
             "Overwrite" => Some(Self::Overwrite),
             "Replace" => Some(Self::Replace),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum DurationFormat {
+    Unspecified = 0,
+    Iso8601 = 1,
+    Pretty = 2,
+}
+impl DurationFormat {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "DURATION_FORMAT_UNSPECIFIED",
+            Self::Iso8601 => "DURATION_FORMAT_ISO8601",
+            Self::Pretty => "DURATION_FORMAT_PRETTY",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "DURATION_FORMAT_UNSPECIFIED" => Some(Self::Unspecified),
+            "DURATION_FORMAT_ISO8601" => Some(Self::Iso8601),
+            "DURATION_FORMAT_PRETTY" => Some(Self::Pretty),
             _ => None,
         }
     }

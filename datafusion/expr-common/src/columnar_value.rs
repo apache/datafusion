@@ -288,17 +288,29 @@ impl ColumnarValue {
     pub fn cast_to(
         &self,
         cast_type: &DataType,
-        cast_options: Option<&CastOptions<'static>>,
+        cast_options: Option<&CastOptions<'_>>,
     ) -> Result<ColumnarValue> {
-        let cast_options = cast_options.cloned().unwrap_or(DEFAULT_CAST_OPTIONS);
-        match self {
-            ColumnarValue::Array(array) => {
-                let casted = cast_array_by_name(array, cast_type, &cast_options)?;
-                Ok(ColumnarValue::Array(casted))
-            }
-            ColumnarValue::Scalar(scalar) => Ok(ColumnarValue::Scalar(
-                scalar.cast_to_with_options(cast_type, &cast_options)?,
-            )),
+        // Use provided options when available; otherwise fallback to global default
+        match cast_options {
+            Some(cast_options) => match self {
+                ColumnarValue::Array(array) => {
+                    let casted = cast_array_by_name(array, cast_type, cast_options)?;
+                    Ok(ColumnarValue::Array(casted))
+                }
+                ColumnarValue::Scalar(scalar) => Ok(ColumnarValue::Scalar(
+                    scalar.cast_to_with_options(cast_type, cast_options)?,
+                )),
+            },
+            None => match self {
+                ColumnarValue::Array(array) => {
+                    let casted =
+                        cast_array_by_name(array, cast_type, &DEFAULT_CAST_OPTIONS)?;
+                    Ok(ColumnarValue::Array(casted))
+                }
+                ColumnarValue::Scalar(scalar) => Ok(ColumnarValue::Scalar(
+                    scalar.cast_to_with_options(cast_type, &DEFAULT_CAST_OPTIONS)?,
+                )),
+            },
         }
     }
 }
@@ -306,7 +318,7 @@ impl ColumnarValue {
 fn cast_array_by_name(
     array: &ArrayRef,
     cast_type: &DataType,
-    cast_options: &CastOptions<'static>,
+    cast_options: &CastOptions<'_>,
 ) -> Result<ArrayRef> {
     // If types are already equal, no cast needed
     if array.data_type() == cast_type {
