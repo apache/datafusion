@@ -1294,4 +1294,64 @@ mod test {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_statistics_by_partition_of_empty_exec() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, true),
+        ]));
+
+        // Try to test with single partition
+        let empty_single = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+
+        let stats = empty_single.partition_statistics(Some(0))?;
+        assert_eq!(stats.num_rows, Precision::Exact(0));
+        assert_eq!(stats.total_byte_size, Precision::Exact(0));
+        assert_eq!(stats.column_statistics.len(), 2);
+
+        for col_stat in &stats.column_statistics {
+            assert_eq!(col_stat.null_count, Precision::Exact(0));
+            assert_eq!(col_stat.distinct_count, Precision::Exact(0));
+            assert_eq!(col_stat.byte_size, Precision::Exact(0));
+            assert_eq!(col_stat.min_value, Precision::<ScalarValue>::Absent);
+            assert_eq!(col_stat.max_value, Precision::<ScalarValue>::Absent);
+            assert_eq!(col_stat.sum_value, Precision::<ScalarValue>::Absent);
+            assert_eq!(col_stat.byte_size, Precision::Exact(0));
+        }
+
+        let overall_stats = empty_single.partition_statistics(None)?;
+        assert_eq!(stats, overall_stats);
+
+        validate_statistics_with_data(empty_single, vec![ExpectedStatistics::Empty], 0)
+            .await?;
+
+        // Test with multiple partitions
+        let empty_multi: Arc<dyn ExecutionPlan> =
+            Arc::new(EmptyExec::new(Arc::clone(&schema)).with_partitions(3));
+
+        let statistics = (0..empty_multi.output_partitioning().partition_count())
+            .map(|idx| empty_multi.partition_statistics(Some(idx)))
+            .collect::<Result<Vec<_>>>()?;
+
+        assert_eq!(statistics.len(), 3);
+
+        for stat in &statistics {
+            assert_eq!(stat.num_rows, Precision::Exact(0));
+            assert_eq!(stat.total_byte_size, Precision::Exact(0));
+        }
+
+        validate_statistics_with_data(
+            empty_multi,
+            vec![
+                ExpectedStatistics::Empty,
+                ExpectedStatistics::Empty,
+                ExpectedStatistics::Empty,
+            ],
+            0,
+        )
+        .await?;
+
+        Ok(())
+    }
 }
