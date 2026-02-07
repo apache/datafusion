@@ -339,6 +339,27 @@ For this query, let's again read the plan from the bottom to the top:
 [topk]: https://docs.rs/datafusion/latest/datafusion/physical_plan/struct.TopK.html
 [documentation on multi phase grouping]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.Accumulator.html#tymethod.state
 
+### NestedLoopJoinExec
+
+`NestedLoopJoinExec` is DataFusion’s build-probe join used for non-equijoins and other cases where hash/sort-merge joins cannot be applied. When running `EXPLAIN ANALYZE`, this operator now exposes the same runtime metrics as other joins, plus a **selectivity** metric that reports the ratio of output rows to input probe rows.
+
+Example `EXPLAIN ANALYZE` output fragment:
+
+
+Meaning of the key metrics:
+
+* `output_rows` — number of rows produced by the join.
+* `input_rows` — number of rows scanned on the probe side.
+* `build_input_rows` — number of rows consumed on the build (materialized) side.
+* `output_batches` — number of Arrow record batches emitted.
+* `elapsed_compute` — CPU time spent performing the join.
+* `selectivity` — **output_rows / input_rows**, useful for understanding how many probe rows match the join condition.
+
+Notes:
+* `selectivity` is especially helpful for diagnosing cases where many probe rows generate very few outputs.
+* No extra config is needed — metrics appear automatically under `EXPLAIN ANALYZE`.
+
+
 ### Data in this Example
 
 The examples in this section use data from [ClickBench], a benchmark for data
