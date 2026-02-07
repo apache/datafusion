@@ -129,6 +129,21 @@ fn validate_cast_compatibility(
                 );
             }
         }
+    } else {
+        let expr_field = expr.return_field(input_schema)?;
+        if expr_field.data_type() != input_field.data_type() {
+            return plan_err!(
+                "CastColumnExpr input field type '{}' does not match expression field type '{}'",
+                input_field.data_type(),
+                expr_field.data_type()
+            );
+        }
+        if expr_field.is_nullable() && !input_field.is_nullable() {
+            return plan_err!(
+                "CastColumnExpr input field '{}' is non-nullable but expression field is nullable",
+                input_field.name()
+            );
+        }
     }
 
     // Validate the cast from input_field to target_field using the same logic as nested_struct.
