@@ -177,7 +177,7 @@ impl Default for OwnedFormatOptions {
 /// let arrow_options = owned_options.as_arrow_options(); // borrows owned strings
 /// arrow::compute::cast(&array, &data_type, Some(&arrow_options))?;
 /// ```
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Default, Eq, PartialEq, Hash)]
 pub struct OwnedCastOptions {
     /// Whether to use safe casting (return errors instead of overflowing)
     pub safe: bool,
@@ -229,15 +229,6 @@ impl OwnedCastOptions {
         CastOptions {
             safe: self.safe,
             format_options: self.format_options.as_arrow_options(),
-        }
-    }
-}
-
-impl Default for OwnedCastOptions {
-    fn default() -> Self {
-        Self {
-            safe: false,
-            format_options: OwnedFormatOptions::default(),
         }
     }
 }
