@@ -1013,7 +1013,7 @@ message PhysicalCastColumnNode {
   datafusion_common.Field input_field = 2;
   datafusion_common.Field target_field = 3;
   // DEPRECATED: Use cast_options instead of safe/format_options.
-  // These fields retained for backward compatibility with DataFusion < 43.0.
+  // These fields retained for backward compatibility with DataFusion < 52.0
   // When deserializing, safe and format_options are only used if cast_options is not set.
   bool safe = 4;
   FormatOptions format_options = 5;
