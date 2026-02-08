@@ -20,8 +20,8 @@
 use ahash::RandomState;
 use arrow::array::{
     Array, ArrayRef, ArrowPrimitiveType, DictionaryArray, GenericStringArray,
-    NullBufferBuilder, OffsetSizeTrait, PrimitiveArray, RunArray, StringArray,
-    StringViewArray, StructArray, make_array,
+    NullBufferBuilder, OffsetSizeTrait, PrimitiveArray, RunArray, StringViewArray,
+    StructArray, make_array,
 };
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::{
@@ -80,7 +80,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         },
         BenchData {
             name: "struct_array",
-            array: create_struct_array(BATCH_SIZE),
+            array: create_struct_array(&pool, BATCH_SIZE),
             supports_nulls: true,
         },
         BenchData {
@@ -104,7 +104,6 @@ fn criterion_benchmark(c: &mut Criterion) {
             do_hash_test(b, &arrays);
         });
 
-        // Union arrays can't have null bitmasks
         if supports_nulls {
             let nullable_array = add_nulls(&array);
 
@@ -278,25 +277,12 @@ fn boolean_array(array_len: usize) -> ArrayRef {
     )
 }
 
-fn string_array(array_len: usize) -> ArrayRef {
-    let mut rng = make_rng();
-    let strings: Vec<String> = (0..array_len)
-        .map(|_| {
-            let len = rng.random_range(5..20);
-            let value: Vec<u8> =
-                rng.clone().sample_iter(&Alphanumeric).take(len).collect();
-            String::from_utf8(value).unwrap()
-        })
-        .collect();
-    Arc::new(StringArray::from(strings))
-}
-
 /// Create a StructArray with multiple columns
-fn create_struct_array(array_len: usize) -> ArrayRef {
+fn create_struct_array(pool: &StringPool, array_len: usize) -> ArrayRef {
     let bool_array = boolean_array(array_len);
     let int32_array = primitive_array::<Int32Type>(array_len);
     let int64_array = primitive_array::<Int64Type>(array_len);
-    let str_array = string_array(array_len);
+    let str_array = pool.string_array::<i32>(array_len);
 
     let fields = Fields::from(vec![
         Field::new("bool_col", DataType::Boolean, false),
