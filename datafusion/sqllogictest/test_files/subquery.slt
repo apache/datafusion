@@ -1651,12 +1651,13 @@ logical_plan
 02)--SubqueryAlias: e1
 03)----TableScan: employees projection=[employee_id]
 04)--SubqueryAlias: __correlated_sq_2
-05)----LeftSemi Join:  Filter: __correlated_sq_1.project_id = e1.dept_id
-06)------SubqueryAlias: e2
-07)--------TableScan: employees projection=[]
-08)------SubqueryAlias: __correlated_sq_1
-09)--------SubqueryAlias: p
-10)----------TableScan: project_assignments projection=[project_id]
+05)----Projection:
+06)------LeftSemi Join: e2.dept_id = __correlated_sq_1.project_id
+07)--------SubqueryAlias: e2
+08)----------TableScan: employees projection=[dept_id]
+09)--------SubqueryAlias: __correlated_sq_1
+10)----------SubqueryAlias: p
+11)------------TableScan: project_assignments projection=[project_id]
 
 statement count 0
 drop table employees;
