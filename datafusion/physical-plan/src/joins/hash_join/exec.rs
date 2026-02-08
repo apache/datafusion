@@ -47,7 +47,7 @@ use crate::projection::{
     EmbeddedProjection, JoinData, ProjectionExec, try_embed_projection,
     try_pushdown_through_join,
 };
-use crate::repartition::REPARTITION_RANDOM_STATE;
+use crate::repartition::{REPARTITION_RANDOM_STATE, RepartitionExec};
 use crate::spill::get_record_batch_memory_size;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
@@ -945,6 +945,47 @@ impl HashJoinExec {
             reorder_output_after_swap(Arc::new(new_join), &left.schema(), &right.schema())
         }
     }
+
+    /// Determines whether the dynamic filter should use Global OR instead of CASE hash routing for
+    /// Partitioned mode.
+    ///
+    /// The CASE `hash(key) % N` routing in the dynamic filter is only correct when both sides of
+    /// the join are truly hash-distributed by a `RepartitionExec`. If the optimizer skips inserting
+    /// `RepartitionExec` because it sees matching Hash partitioning, the CASE routing applies the
+    /// wrong partition's filter.
+    ///
+    /// In this case, we fall back to a Global OR: all partition filters are combined with OR into
+    /// a single expression. This is safe for any partitioning scheme and still allows for
+    /// effective pruning because `PruningPredicate` decomposes OR branches independently.
+    fn should_use_global_or(&self) -> bool {
+        // Only relevant for Partitioned mode
+        if self.mode != PartitionMode::Partitioned {
+            return false;
+        }
+        // If both sides have a RepartitionExec(Hash), then data is truly
+        // hash-distributed and CASE routing is correct.
+        if Self::has_hash_repartition(&self.left)
+            && Self::has_hash_repartition(&self.right)
+        {
+            return false;
+        }
+
+        true
+    }
+
+    /// Recursively checks whether a plan tree contains a `RepartitionExec` with
+    /// `Hash` partitioning.
+    fn has_hash_repartition(plan: &Arc<dyn ExecutionPlan>) -> bool {
+        if plan.as_any().downcast_ref::<RepartitionExec>().is_some() {
+            return matches!(plan.output_partitioning(), Partitioning::Hash(_, _));
+        }
+        let children = plan.children();
+        if children.len() == 1 {
+            Self::has_hash_repartition(children[0])
+        } else {
+            false
+        }
+    }
 }
 
 impl DisplayAs for HashJoinExec {
@@ -1250,6 +1291,7 @@ impl ExecutionPlan for HashJoinExec {
         // Initialize build_accumulator lazily with runtime partition counts (only if enabled)
         // Use RepartitionExec's random state (seeds: 0,0,0,0) for partition routing
         let repartition_random_state = REPARTITION_RANDOM_STATE;
+        let use_global_or = self.should_use_global_or();
         let build_accumulator = enable_dynamic_filter_pushdown
             .then(|| {
                 self.dynamic_filter.as_ref().map(|df| {
@@ -1267,6 +1309,7 @@ impl ExecutionPlan for HashJoinExec {
                             filter,
                             on_right,
                             repartition_random_state,
+                            use_global_or,
                         ))
                     })))
                 })
@@ -5697,5 +5740,281 @@ mod tests {
                 .to_string()
                 .contains("null_aware anti join only supports single column join key")
         );
+    }
+
+    #[test]
+    fn test_has_hash_repartition() {
+        let left = build_table(
+            ("a1", &vec![1, 2]),
+            ("b1", &vec![4, 5]),
+            ("c1", &vec![7, 8]),
+        );
+
+        // DataSource -> RepartitionExec(Hash) should return true
+        let schema = left.schema();
+        let hash_exprs =
+            vec![Arc::new(Column::new_with_schema("b1", &schema).unwrap()) as _];
+        let hash_repartition = Arc::new(
+            RepartitionExec::try_new(
+                Arc::clone(&left),
+                Partitioning::Hash(hash_exprs.clone(), 4),
+            )
+            .unwrap(),
+        );
+        assert!(
+            HashJoinExec::has_hash_repartition(
+                &(hash_repartition as Arc<dyn ExecutionPlan>)
+            ),
+            "should detect Hash RepartitionExec"
+        );
+
+        // DataSource -> RepartitionExec(RoundRobin) should return false
+        let round_robin_repartition = Arc::new(
+            RepartitionExec::try_new(Arc::clone(&left), Partitioning::RoundRobinBatch(4))
+                .unwrap(),
+        );
+        assert!(
+            !HashJoinExec::has_hash_repartition(
+                &(round_robin_repartition as Arc<dyn ExecutionPlan>)
+            ),
+            "RoundRobin should not be detected as hash repartition"
+        );
+
+        // DataSource -> RepartitionExec(UnknownPartitioning) should return false
+        let unknown_repartition = Arc::new(
+            RepartitionExec::try_new(
+                Arc::clone(&left),
+                Partitioning::UnknownPartitioning(4),
+            )
+            .unwrap(),
+        );
+        assert!(
+            !HashJoinExec::has_hash_repartition(
+                &(unknown_repartition as Arc<dyn ExecutionPlan>)
+            ),
+            "UnknownPartitioning should not be detected as hash repartition"
+        );
+
+        // Plain DataSource (no RepartitionExec) should return false
+        assert!(
+            !HashJoinExec::has_hash_repartition(&left),
+            "plan without RepartitionExec should return false"
+        );
+
+        // CoalescePartitionsExec -> RepartitionExec(Hash) should return true
+        // (traverses single-child operator to find RepartitionExec)
+        let coalesce = Arc::new(CoalescePartitionsExec::new(Arc::new(
+            RepartitionExec::try_new(
+                Arc::clone(&left),
+                Partitioning::Hash(hash_exprs.clone(), 4),
+            )
+            .unwrap(),
+        ))) as Arc<dyn ExecutionPlan>;
+        assert!(
+            HashJoinExec::has_hash_repartition(&coalesce),
+            "should traverse through CoalescePartitionsExec to find Hash RepartitionExec"
+        );
+
+        // CoalescePartitionsExec -> DataSource (no RepartitionExec) should return false
+        let coalesce_no_repart = Arc::new(CoalescePartitionsExec::new(Arc::clone(&left)))
+            as Arc<dyn ExecutionPlan>;
+        assert!(
+            !HashJoinExec::has_hash_repartition(&coalesce_no_repart),
+            "should return false when traversing through CoalescePartitionsExec with no RepartitionExec"
+        );
+
+        // Multiple single-child operators -> RepartitionExec(Hash) should return true
+        // (tests deep traversal)
+        let deep_chain = Arc::new(CoalescePartitionsExec::new(Arc::new(
+            CoalescePartitionsExec::new(Arc::new(
+                RepartitionExec::try_new(
+                    Arc::clone(&left),
+                    Partitioning::Hash(hash_exprs, 4),
+                )
+                .unwrap(),
+            )),
+        ))) as Arc<dyn ExecutionPlan>;
+        assert!(
+            HashJoinExec::has_hash_repartition(&deep_chain),
+            "should traverse through multiple single-child operators to find Hash RepartitionExec"
+        );
+    }
+
+    #[test]
+    fn test_should_use_global_or_collect_left_mode() -> Result<()> {
+        // CollectLeft mode should never use global OR
+        let left = build_table(
+            ("a1", &vec![1, 2]),
+            ("b1", &vec![4, 5]),
+            ("c1", &vec![7, 8]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 20]),
+            ("b1", &vec![4, 5]),
+            ("c2", &vec![70, 80]),
+        );
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        )];
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?;
+
+        assert!(
+            !join.should_use_global_or(),
+            "CollectLeft should never use global OR"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_should_use_global_or_partitioned_with_repartition() -> Result<()> {
+        // Partitioned mode with RepartitionExec(Hash) on both sides should not use global OR since
+        // hash routing is correct
+        let left = build_table(
+            ("a1", &vec![1, 2]),
+            ("b1", &vec![4, 5]),
+            ("c1", &vec![7, 8]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 20]),
+            ("b1", &vec![4, 5]),
+            ("c2", &vec![70, 80]),
+        );
+
+        let left_schema = left.schema();
+        let right_schema = right.schema();
+
+        let left_repart = Arc::new(RepartitionExec::try_new(
+            left,
+            Partitioning::Hash(
+                vec![Arc::new(Column::new_with_schema("b1", &left_schema)?) as _],
+                4,
+            ),
+        )?) as Arc<dyn ExecutionPlan>;
+
+        let right_repart = Arc::new(RepartitionExec::try_new(
+            right,
+            Partitioning::Hash(
+                vec![Arc::new(Column::new_with_schema("b1", &right_schema)?) as _],
+                4,
+            ),
+        )?) as Arc<dyn ExecutionPlan>;
+
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left_schema)?) as _,
+            Arc::new(Column::new_with_schema("b1", &right_schema)?) as _,
+        )];
+        let join = HashJoinExec::try_new(
+            left_repart,
+            right_repart,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?;
+
+        assert!(
+            !join.should_use_global_or(),
+            "both sides have Hash RepartitionExec, should use CASE routing"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_should_use_global_or_partitioned_without_repartition() -> Result<()> {
+        // Partitioned mode without RepartitionExec should use global OR
+        let left = build_table(
+            ("a1", &vec![1, 2]),
+            ("b1", &vec![4, 5]),
+            ("c1", &vec![7, 8]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 20]),
+            ("b1", &vec![4, 5]),
+            ("c2", &vec![70, 80]),
+        );
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        )];
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?;
+
+        assert!(
+            join.should_use_global_or(),
+            "no RepartitionExec on either side, should use global OR"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_should_use_global_or_one_side_missing_repartition() -> Result<()> {
+        // Partitioned mode but left side has RepartitionExec and right side does not
+        // Should use global OR since probe side has no RepartitionExec
+        let left = build_table(
+            ("a1", &vec![1, 2]),
+            ("b1", &vec![4, 5]),
+            ("c1", &vec![7, 8]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 20]),
+            ("b1", &vec![4, 5]),
+            ("c2", &vec![70, 80]),
+        );
+
+        let left_schema = left.schema();
+        let right_schema = right.schema();
+
+        let left_repart = Arc::new(RepartitionExec::try_new(
+            left,
+            Partitioning::Hash(
+                vec![Arc::new(Column::new_with_schema("b1", &left_schema)?) as _],
+                4,
+            ),
+        )?) as Arc<dyn ExecutionPlan>;
+
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left_schema)?) as _,
+            Arc::new(Column::new_with_schema("b1", &right_schema)?) as _,
+        )];
+        let join = HashJoinExec::try_new(
+            left_repart,
+            right,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?;
+
+        assert!(
+            join.should_use_global_or(),
+            "right side has no RepartitionExec, should use global OR"
+        );
+        Ok(())
     }
 }

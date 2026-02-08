@@ -23,6 +23,10 @@ use arrow::{
     util::pretty::pretty_format_batches,
 };
 use arrow_schema::SortOptions;
+use futures::StreamExt;
+use object_store::{ObjectStore, memory::InMemory};
+use regex::Regex;
+
 use datafusion::{
     assert_batches_eq,
     logical_expr::Operator,
@@ -34,7 +38,7 @@ use datafusion::{
     scalar::ScalarValue,
 };
 use datafusion_catalog::memory::DataSourceExec;
-use datafusion_common::config::ConfigOptions;
+use datafusion_common::{JoinType, config::ConfigOptions};
 use datafusion_datasource::{
     PartitionedFile, file_groups::FileGroup, file_scan_config::FileScanConfigBuilder,
 };
@@ -45,10 +49,10 @@ use datafusion_functions_aggregate::{
     count::count_udaf,
     min_max::{max_udaf, min_udaf},
 };
-use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr, expressions::col};
 use datafusion_physical_expr::{
-    Partitioning, ScalarFunctionExpr,
+    LexOrdering, Partitioning, PhysicalSortExpr, ScalarFunctionExpr,
     aggregate::{AggregateExprBuilder, AggregateFunctionExpr},
+    expressions::col,
 };
 use datafusion_physical_optimizer::{
     PhysicalOptimizerRule, filter_pushdown::FilterPushdown,
@@ -59,18 +63,16 @@ use datafusion_physical_plan::{
     coalesce_partitions::CoalescePartitionsExec,
     collect,
     filter::{FilterExec, FilterExecBuilder},
+    joins::{HashJoinExec, PartitionMode},
     projection::ProjectionExec,
     repartition::RepartitionExec,
     sorts::sort::SortExec,
+    union::UnionExec,
 };
 
 use super::pushdown_utils::{
     OptimizationTest, TestNode, TestScanBuilder, TestSource, format_plan_for_test,
 };
-use datafusion_physical_plan::union::UnionExec;
-use futures::StreamExt;
-use object_store::{ObjectStore, memory::InMemory};
-use regex::Regex;
 
 #[test]
 fn test_pushdown_into_scan() {
@@ -921,6 +923,38 @@ async fn test_topk_filter_passes_through_coalesce_partitions() {
     );
 }
 
+/// Returns a `SessionConfig` with `pushdown_filters`, `enable_dynamic_filter_pushdown`, and `batch_size=10`.
+fn dynamic_filter_session_config() -> SessionConfig {
+    let mut config = SessionConfig::new().with_batch_size(10);
+    config.options_mut().execution.parquet.pushdown_filters = true;
+    config
+        .options_mut()
+        .optimizer
+        .enable_dynamic_filter_pushdown = true;
+    config
+}
+
+/// Optimizes the plan with `FilterPushdown`, creates a session context, and collects results.
+async fn optimize_and_collect(
+    plan: Arc<dyn ExecutionPlan>,
+    session_config: SessionConfig,
+) -> (Arc<dyn ExecutionPlan>, Vec<RecordBatch>) {
+    let plan = FilterPushdown::new_post_optimization()
+        .optimize(plan, session_config.options())
+        .unwrap();
+    let session_ctx = SessionContext::new_with_config(session_config);
+    session_ctx.register_object_store(
+        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
+        Arc::new(InMemory::new()),
+    );
+    let state = session_ctx.state();
+    let task_ctx = state.task_ctx();
+    let batches = collect(Arc::clone(&plan), Arc::clone(&task_ctx))
+        .await
+        .unwrap();
+    (plan, batches)
+}
+
 #[tokio::test]
 async fn test_hashjoin_dynamic_filter_pushdown() {
     use datafusion_common::JoinType;
@@ -1008,19 +1042,16 @@ async fn test_hashjoin_dynamic_filter_pushdown() {
     );
 
     // Actually apply the optimization to the plan and execute to see the filter in action
-    let mut config = ConfigOptions::default();
-    config.execution.parquet.pushdown_filters = true;
-    config.optimizer.enable_dynamic_filter_pushdown = true;
+    let session_config = dynamic_filter_session_config();
     let plan = FilterPushdown::new_post_optimization()
-        .optimize(plan, &config)
+        .optimize(plan, session_config.options())
         .unwrap();
 
     // Test for https://github.com/apache/datafusion/pull/17371: dynamic filter linking survives `with_new_children`
     let children = plan.children().into_iter().map(Arc::clone).collect();
     let plan = plan.with_new_children(children).unwrap();
 
-    let config = SessionConfig::new().with_batch_size(10);
-    let session_ctx = SessionContext::new_with_config(config);
+    let session_ctx = SessionContext::new_with_config(session_config);
     session_ctx.register_object_store(
         ObjectStoreUrl::parse("test://").unwrap().as_ref(),
         Arc::new(InMemory::new()),
@@ -1218,23 +1249,8 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
     );
 
     // Actually apply the optimization to the plan and execute to see the filter in action
-    let mut config = ConfigOptions::default();
-    config.execution.parquet.pushdown_filters = true;
-    config.optimizer.enable_dynamic_filter_pushdown = true;
-    let plan = FilterPushdown::new_post_optimization()
-        .optimize(plan, &config)
-        .unwrap();
-    let config = SessionConfig::new().with_batch_size(10);
-    let session_ctx = SessionContext::new_with_config(config);
-    session_ctx.register_object_store(
-        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
-        Arc::new(InMemory::new()),
-    );
-    let state = session_ctx.state();
-    let task_ctx = state.task_ctx();
-    let batches = collect(Arc::clone(&plan), Arc::clone(&task_ctx))
-        .await
-        .unwrap();
+    let session_config = dynamic_filter_session_config();
+    let (plan, batches) = optimize_and_collect(plan, session_config).await;
 
     // Now check what our filter looks like
     #[cfg(not(feature = "force_hash_collisions"))]
@@ -1288,6 +1304,184 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
     | aa | ba | 1.0 | aa | ba | 1.0 |
     +----+----+-----+----+----+-----+
     ",
+    );
+}
+
+#[tokio::test]
+async fn test_partitioned_hashjoin_no_repartition_dynamic_filter_pushdown() {
+    let build_batches = vec![
+        record_batch!(
+            ("a", Utf8, ["aa", "ab"]),
+            ("b", Utf8, ["ba", "bb"]),
+            ("c", Float64, [1.0, 2.0])
+        )
+        .unwrap(),
+    ];
+    let build_side_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Utf8, false),
+        Field::new("c", DataType::Float64, false),
+    ]));
+
+    let probe_batches = vec![
+        record_batch!(
+            ("a", Utf8, ["aa", "ab", "ac", "ad"]),
+            ("b", Utf8, ["ba", "bb", "bc", "bd"]),
+            ("e", Float64, [1.0, 2.0, 3.0, 4.0])
+        )
+        .unwrap(),
+    ];
+    let probe_side_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Utf8, false),
+        Field::new("e", DataType::Float64, false),
+    ]));
+
+    // Ensure there is no RepartitionExec and 2 file groups per side of the joins (2 partitions).
+    // This should show global OR dynamic filtering and simulates what happens when
+    // `preserve_file_partitions` is enabled and declares Hash partitioning on the DataSourceExec.
+    let build_source = Arc::new(TestSource::new(
+        Arc::clone(&build_side_schema),
+        true,
+        build_batches,
+    ));
+    let build_config = FileScanConfigBuilder::new(
+        ObjectStoreUrl::parse("test://").unwrap(),
+        build_source,
+    )
+    .with_file_group(FileGroup::new(vec![PartitionedFile::new(
+        "build_0.parquet",
+        123,
+    )]))
+    .with_file_group(FileGroup::new(vec![PartitionedFile::new(
+        "build_1.parquet",
+        123,
+    )]))
+    .build();
+    let build_scan =
+        DataSourceExec::from_data_source(build_config) as Arc<dyn ExecutionPlan>;
+
+    let probe_source = Arc::new(TestSource::new(
+        Arc::clone(&probe_side_schema),
+        true,
+        probe_batches,
+    ));
+    let probe_config = FileScanConfigBuilder::new(
+        ObjectStoreUrl::parse("test://").unwrap(),
+        probe_source,
+    )
+    .with_file_group(FileGroup::new(vec![PartitionedFile::new(
+        "probe_0.parquet",
+        123,
+    )]))
+    .with_file_group(FileGroup::new(vec![PartitionedFile::new(
+        "probe_1.parquet",
+        123,
+    )]))
+    .build();
+    let probe_scan =
+        DataSourceExec::from_data_source(probe_config) as Arc<dyn ExecutionPlan>;
+
+    let on = vec![
+        (
+            col("a", &build_side_schema).unwrap(),
+            col("a", &probe_side_schema).unwrap(),
+        ),
+        (
+            col("b", &build_side_schema).unwrap(),
+            col("b", &probe_side_schema).unwrap(),
+        ),
+    ];
+    let hash_join = Arc::new(
+        HashJoinExec::try_new(
+            build_scan,
+            Arc::clone(&probe_scan),
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            datafusion_common::NullEquality::NullEqualsNothing,
+            false,
+        )
+        .unwrap(),
+    );
+
+    // Top-level CoalescePartitionsExec
+    let cp = Arc::new(CoalescePartitionsExec::new(hash_join)) as Arc<dyn ExecutionPlan>;
+    // Add a sort for deterministic output
+    let plan = Arc::new(SortExec::new(
+        LexOrdering::new(vec![PhysicalSortExpr::new(
+            col("a", &probe_side_schema).unwrap(),
+            SortOptions::new(true, false), // descending, nulls_first
+        )])
+        .unwrap(),
+        cp,
+    )) as Arc<dyn ExecutionPlan>;
+
+    // expect the predicate to be pushed down into the probe side DataSource
+    insta::assert_snapshot!(
+        OptimizationTest::new(Arc::clone(&plan), FilterPushdown::new_post_optimization(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
+        -   CoalescePartitionsExec
+        -     HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
+        -       DataSourceExec: file_groups={2 groups: [[build_0.parquet], [build_1.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+        -       DataSourceExec: file_groups={2 groups: [[probe_0.parquet], [probe_1.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
+          -   CoalescePartitionsExec
+          -     HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
+          -       DataSourceExec: file_groups={2 groups: [[build_0.parquet], [build_1.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+          -       DataSourceExec: file_groups={2 groups: [[probe_0.parquet], [probe_1.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ empty ]
+    "
+    );
+
+    // Actually apply the optimization to the plan and execute to see the filter in action
+    let mut session_config = dynamic_filter_session_config();
+    // Enable preserve_file_partitions to trigger Global OR
+    session_config
+        .options_mut()
+        .optimizer
+        .preserve_file_partitions = 1;
+    let (plan, batches) = optimize_and_collect(plan, session_config).await;
+
+    // Now check what our filter looks like with no RepartitionExec and 2 partitions.
+    // The dynamic filter should show OR between partition filters (not CASE hash routing).
+    insta::assert_snapshot!(
+        format!("{}", format_plan_for_test(&plan)),
+        @r"
+    - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
+    -   CoalescePartitionsExec
+    -     HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
+    -       DataSourceExec: file_groups={2 groups: [[build_0.parquet], [build_1.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+    -       DataSourceExec: file_groups={2 groups: [[probe_0.parquet], [probe_1.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 >= aa AND a@0 <= ab AND b@1 >= ba AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}, {c0:ab,c1:bb}]) OR a@0 >= aa AND a@0 <= ab AND b@1 >= ba AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}, {c0:ab,c1:bb}]) ]
+    "
+    );
+
+    let result = format!("{}", pretty_format_batches(&batches).unwrap());
+
+    let probe_scan_metrics = probe_scan.metrics().unwrap();
+
+    // The probe side had 4 rows per partition * 2 partitions = 8 total rows.
+    // After applying the dynamic filter, only 2 rows per partition remain = 4 total.
+    assert_eq!(probe_scan_metrics.output_rows().unwrap(), 4);
+
+    insta::assert_snapshot!(
+        result,
+        @r"
+    +----+----+-----+----+----+-----+
+    | a  | b  | c   | a  | b  | e   |
+    +----+----+-----+----+----+-----+
+    | ab | bb | 2.0 | ab | bb | 2.0 |
+    | ab | bb | 2.0 | ab | bb | 2.0 |
+    | aa | ba | 1.0 | aa | ba | 1.0 |
+    | aa | ba | 1.0 | aa | ba | 1.0 |
+    +----+----+-----+----+----+-----+
+    "
     );
 }
 
@@ -1410,23 +1604,8 @@ async fn test_hashjoin_dynamic_filter_pushdown_collect_left() {
     );
 
     // Actually apply the optimization to the plan and execute to see the filter in action
-    let mut config = ConfigOptions::default();
-    config.execution.parquet.pushdown_filters = true;
-    config.optimizer.enable_dynamic_filter_pushdown = true;
-    let plan = FilterPushdown::new_post_optimization()
-        .optimize(plan, &config)
-        .unwrap();
-    let config = SessionConfig::new().with_batch_size(10);
-    let session_ctx = SessionContext::new_with_config(config);
-    session_ctx.register_object_store(
-        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
-        Arc::new(InMemory::new()),
-    );
-    let state = session_ctx.state();
-    let task_ctx = state.task_ctx();
-    let batches = collect(Arc::clone(&plan), Arc::clone(&task_ctx))
-        .await
-        .unwrap();
+    let session_config = dynamic_filter_session_config();
+    let (plan, batches) = optimize_and_collect(plan, session_config).await;
 
     // Now check what our filter looks like
     insta::assert_snapshot!(
@@ -1585,14 +1764,11 @@ async fn test_nested_hashjoin_dynamic_filter_pushdown() {
     );
 
     // Execute the plan to verify the dynamic filters are properly updated
-    let mut config = ConfigOptions::default();
-    config.execution.parquet.pushdown_filters = true;
-    config.optimizer.enable_dynamic_filter_pushdown = true;
+    let session_config = dynamic_filter_session_config();
     let plan = FilterPushdown::new_post_optimization()
-        .optimize(outer_join, &config)
+        .optimize(outer_join, session_config.options())
         .unwrap();
-    let config = SessionConfig::new().with_batch_size(10);
-    let session_ctx = SessionContext::new_with_config(config);
+    let session_ctx = SessionContext::new_with_config(session_config);
     session_ctx.register_object_store(
         ObjectStoreUrl::parse("test://").unwrap().as_ref(),
         Arc::new(InMemory::new()),
@@ -3309,24 +3485,12 @@ async fn test_hashjoin_hash_table_pushdown_partitioned() {
     )) as Arc<dyn ExecutionPlan>;
 
     // Apply the optimization with config setting that forces HashTable strategy
-    let session_config = SessionConfig::default()
-        .with_batch_size(10)
-        .set_usize("datafusion.optimizer.hash_join_inlist_pushdown_max_size", 1)
-        .set_bool("datafusion.execution.parquet.pushdown_filters", true)
-        .set_bool("datafusion.optimizer.enable_dynamic_filter_pushdown", true);
-    let plan = FilterPushdown::new_post_optimization()
-        .optimize(plan, session_config.options())
-        .unwrap();
-    let session_ctx = SessionContext::new_with_config(session_config);
-    session_ctx.register_object_store(
-        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
-        Arc::new(InMemory::new()),
-    );
-    let state = session_ctx.state();
-    let task_ctx = state.task_ctx();
-    let batches = collect(Arc::clone(&plan), Arc::clone(&task_ctx))
-        .await
-        .unwrap();
+    let mut session_config = dynamic_filter_session_config();
+    session_config
+        .options_mut()
+        .optimizer
+        .hash_join_inlist_pushdown_max_size = 1;
+    let (plan, batches) = optimize_and_collect(plan, session_config).await;
 
     // Verify that hash_lookup is used instead of IN (SET)
     let plan_str = format_plan_for_test(&plan).to_string();
@@ -3460,24 +3624,12 @@ async fn test_hashjoin_hash_table_pushdown_collect_left() {
     )) as Arc<dyn ExecutionPlan>;
 
     // Apply the optimization with config setting that forces HashTable strategy
-    let session_config = SessionConfig::default()
-        .with_batch_size(10)
-        .set_usize("datafusion.optimizer.hash_join_inlist_pushdown_max_size", 1)
-        .set_bool("datafusion.execution.parquet.pushdown_filters", true)
-        .set_bool("datafusion.optimizer.enable_dynamic_filter_pushdown", true);
-    let plan = FilterPushdown::new_post_optimization()
-        .optimize(plan, session_config.options())
-        .unwrap();
-    let session_ctx = SessionContext::new_with_config(session_config);
-    session_ctx.register_object_store(
-        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
-        Arc::new(InMemory::new()),
-    );
-    let state = session_ctx.state();
-    let task_ctx = state.task_ctx();
-    let batches = collect(Arc::clone(&plan), Arc::clone(&task_ctx))
-        .await
-        .unwrap();
+    let mut session_config = dynamic_filter_session_config();
+    session_config
+        .options_mut()
+        .optimizer
+        .hash_join_inlist_pushdown_max_size = 1;
+    let (plan, batches) = optimize_and_collect(plan, session_config).await;
 
     // Verify that hash_lookup is used instead of IN (SET)
     let plan_str = format_plan_for_test(&plan).to_string();
@@ -3692,11 +3844,9 @@ async fn test_hashjoin_dynamic_filter_pushdown_is_used() {
         ) as Arc<dyn ExecutionPlan>;
 
         // Apply filter pushdown optimization
-        let mut config = ConfigOptions::default();
-        config.execution.parquet.pushdown_filters = true;
-        config.optimizer.enable_dynamic_filter_pushdown = true;
+        let session_config = dynamic_filter_session_config();
         let plan = FilterPushdown::new_post_optimization()
-            .optimize(plan, &config)
+            .optimize(plan, session_config.options())
             .unwrap();
 
         // Get the HashJoinExec to check the dynamic filter
