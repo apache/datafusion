@@ -1926,3 +1926,12 @@ select "current_time" is not null from t_with_current_time;
 true
 false
 true
+
+# https://github.com/apache/datafusion/issues/20215
+statement count 0
+CREATE TABLE t0;
+
+query I
+SELECT COUNT(*) FROM t0 AS tt0 WHERE (4==(3/0));
+----
+0
