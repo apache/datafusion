@@ -262,9 +262,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             } => {
                 let tbl_func_ref = self.object_name_to_table_reference(name)?;
                 let schema = planner_context
-                    .outer_query_schema()
+                    .outer_queries_schemas()
+                    .last()
                     .cloned()
-                    .unwrap_or_else(DFSchema::empty);
+                    .unwrap_or_else(|| Arc::new(DFSchema::empty()));
                 let func_args = args
                     .into_iter()
                     .map(|arg| match arg {
@@ -310,20 +311,24 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let old_from_schema = planner_context
             .set_outer_from_schema(None)
             .unwrap_or_else(|| Arc::new(DFSchema::empty()));
-        let new_query_schema = match planner_context.outer_query_schema() {
-            Some(old_query_schema) => {
+        let outer_query_schema = planner_context.pop_outer_query_schema();
+        let new_query_schema = match outer_query_schema {
+            Some(ref old_query_schema) => {
                 let mut new_query_schema = old_from_schema.as_ref().clone();
-                new_query_schema.merge(old_query_schema);
-                Some(Arc::new(new_query_schema))
+                new_query_schema.merge(old_query_schema.as_ref());
+                Arc::new(new_query_schema)
             }
-            None => Some(Arc::clone(&old_from_schema)),
+            None => Arc::clone(&old_from_schema),
         };
-        let old_query_schema = planner_context.set_outer_query_schema(new_query_schema);
+        planner_context.append_outer_query_schema(new_query_schema);
 
         let plan = self.create_relation(subquery, planner_context)?;
         let outer_ref_columns = plan.all_out_ref_exprs();
 
-        planner_context.set_outer_query_schema(old_query_schema);
+        planner_context.pop_outer_query_schema();
+        if let Some(schema) = outer_query_schema {
+            planner_context.append_outer_query_schema(schema);
+        }
         planner_context.set_outer_from_schema(Some(old_from_schema));
 
         // We can omit the subquery wrapper if there are no columns
