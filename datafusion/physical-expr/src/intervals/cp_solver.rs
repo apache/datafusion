@@ -363,8 +363,17 @@ pub fn propagate_comparison(
     } else if parent == &Interval::FALSE {
         match op {
             Operator::Eq => {
-                // TODO: Propagation is not possible until we support interval sets.
-                Ok(Some((left_child.clone(), right_child.clone())))
+                // If the intervals are the same and single points, then equality
+                // is certain. Thus, inequality is impossible.
+                if !left_child.is_unbounded()
+                    && left_child == right_child
+                    && left_child.lower() == left_child.upper()
+                {
+                    Ok(None)
+                } else {
+                    // TODO: Propagation is not possible until we support interval sets.
+                    Ok(Some((left_child.clone(), right_child.clone())))
+                }
             }
             Operator::Gt => satisfy_greater(right_child, left_child, false),
             Operator::GtEq => satisfy_greater(right_child, left_child, true),
@@ -1711,4 +1720,5 @@ mod tests {
 
         Ok(())
     }
+
 }
