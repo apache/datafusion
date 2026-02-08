@@ -57,6 +57,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use crate::execution_plan::ReplacePhysicalExpr;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::sorts::sort::sort_batch;
 use crate::{
@@ -67,10 +68,10 @@ use crate::{
 use arrow::compute::concat_batches;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::Result;
 use datafusion_common::utils::evaluate_partition_ranges;
+use datafusion_common::{Result, assert_eq_or_internal_err};
 use datafusion_execution::{RecordBatchStream, TaskContext};
-use datafusion_physical_expr::LexOrdering;
+use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
 
 use futures::{Stream, StreamExt, ready};
 use log::trace;
@@ -335,6 +336,35 @@ impl ExecutionPlan for PartialSortExec {
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         self.input.partition_statistics(partition)
+    }
+
+    fn physical_expressions<'a>(
+        &'a self,
+    ) -> Option<Box<dyn Iterator<Item = Arc<dyn PhysicalExpr>> + 'a>> {
+        Some(Box::new(
+            self.expr.iter().map(|sort| Arc::clone(&sort.expr)),
+        ))
+    }
+
+    fn with_physical_expressions(
+        &self,
+        params: ReplacePhysicalExpr,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let expected_count = self.expr.len();
+        let exprs_count = params.exprs.len();
+        assert_eq_or_internal_err!(
+            expected_count,
+            exprs_count,
+            "Inconsistent number of physical expressions for {}",
+            self.name()
+        );
+
+        let expr = self.expr.try_with_new_expressions(params.exprs)?;
+        Ok(Some(Arc::new(Self {
+            expr,
+            metrics_set: ExecutionPlanMetricsSet::new(),
+            ..self.clone()
+        })))
     }
 }
 

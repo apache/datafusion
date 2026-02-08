@@ -25,7 +25,7 @@ use crate::aggregates::{
     no_grouping::AggregateStream, row_hash::GroupedHashAggregateStream,
     topk_stream::GroupedTopKAggregateStream,
 };
-use crate::execution_plan::{CardinalityEffect, EmissionType};
+use crate::execution_plan::{CardinalityEffect, EmissionType, ReplacePhysicalExpr};
 use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation, PushedDownPredicate,
@@ -1555,6 +1555,110 @@ impl ExecutionPlan for AggregateExec {
         }
 
         Ok(result)
+    }
+
+    fn physical_expressions<'a>(
+        &'a self,
+    ) -> Option<Box<dyn Iterator<Item = Arc<dyn PhysicalExpr>> + 'a>> {
+        let group_by_expr = self.group_by.expr.iter().map(|pair| Arc::clone(&pair.0));
+        let group_by_null_expr = self
+            .group_by
+            .null_expr
+            .iter()
+            .map(|pair| Arc::clone(&pair.0));
+        let aggr_expr = self.aggr_expr.iter().flat_map(|expr| {
+            expr.expressions()
+                .into_iter()
+                .chain(expr.order_bys().iter().map(|sort| Arc::clone(&sort.expr)))
+        });
+        let filter_exprs = self.filter_expr.iter().flatten().cloned();
+
+        Some(Box::new(
+            group_by_expr
+                .chain(group_by_null_expr)
+                .chain(aggr_expr)
+                .chain(filter_exprs),
+        ))
+    }
+
+    fn with_physical_expressions(
+        &self,
+        params: ReplacePhysicalExpr,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let group_by_expr_count = self.group_by.expr.len();
+        let group_by_null_expr_count = self.group_by.null_expr.len();
+        let aggr_expr_count = self
+            .aggr_expr
+            .iter()
+            .map(|aggr| aggr.order_bys().len() + aggr.expressions().len())
+            .sum::<usize>();
+        let filter_expr_count = self.filter_expr.iter().filter(|f| f.is_some()).count();
+
+        let expected_count = group_by_expr_count
+            + group_by_null_expr_count
+            + aggr_expr_count
+            + filter_expr_count;
+
+        let exprs_count = params.exprs.len();
+        assert_eq_or_internal_err!(
+            expected_count,
+            exprs_count,
+            "Inconsistent number of physical expressions for {}",
+            self.name()
+        );
+
+        let mut exprs_iter = params.exprs.into_iter();
+        let group_by_expr = self
+            .group_by
+            .expr
+            .iter()
+            .zip(&mut exprs_iter)
+            .map(|(group_by, expr)| (expr, group_by.1.clone()))
+            .collect();
+
+        let group_by_null_expr = self
+            .group_by
+            .null_expr
+            .iter()
+            .zip(&mut exprs_iter)
+            .map(|(group_by, expr)| (expr, group_by.1.clone()))
+            .collect();
+
+        let group_by = PhysicalGroupBy::new(
+            group_by_expr,
+            group_by_null_expr,
+            self.group_by.groups.clone(),
+            self.group_by.has_grouping_set,
+        );
+
+        let mut aggr_expr = Vec::with_capacity(self.aggr_expr.len());
+        for expr in self.aggr_expr.iter() {
+            let args_count = expr.expressions().len();
+            let order_by_count = expr.order_bys().len();
+            let args = exprs_iter.by_ref().take(args_count).collect();
+            let order_by = exprs_iter.by_ref().take(order_by_count).collect();
+
+            let new_expr = expr
+                .with_new_expressions(args, order_by)
+                .expect("should rewrite");
+
+            aggr_expr.push(Arc::new(new_expr));
+        }
+
+        let mut filter_expr = Vec::with_capacity(self.filter_expr.len());
+        for expr in self.filter_expr.iter() {
+            let new_filter_expr = expr.as_ref().and_then(|_| exprs_iter.next());
+            filter_expr.push(new_filter_expr);
+        }
+
+        Ok(Some(Arc::new(Self {
+            group_by: Arc::new(group_by),
+            aggr_expr: aggr_expr.into(),
+            filter_expr: filter_expr.into(),
+            dynamic_filter: None,
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..self.clone()
+        })))
     }
 }
 

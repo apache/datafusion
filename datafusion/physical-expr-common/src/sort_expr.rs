@@ -29,7 +29,7 @@ use crate::physical_expr::{PhysicalExpr, fmt_sql};
 use arrow::compute::kernels::sort::{SortColumn, SortOptions};
 use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{HashSet, Result};
+use datafusion_common::{HashSet, Result, assert_eq_or_internal_err};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use indexmap::IndexSet;
 /// Represents Sort operation for a column in a RecordBatch
@@ -395,6 +395,33 @@ impl LexOrdering {
         for sort_expr in sort_exprs {
             self.push(sort_expr);
         }
+    }
+
+    /// Replaces the expressions in a [`LexOrdering`] with new expressions, while preserving the
+    /// original sort options.
+    ///
+    /// This method returns an error if:
+    /// - The number of provided expressions is different from the number of expressions in the
+    ///   original [`LexOrdering`].
+    pub fn try_with_new_expressions(
+        &self,
+        exprs: impl IntoIterator<Item = Arc<dyn PhysicalExpr>>,
+    ) -> Result<LexOrdering> {
+        let mut exprs_count = 0;
+        let new_lex_ordering = LexOrdering::new(
+            self.iter()
+                .zip(exprs)
+                .inspect(|_| exprs_count += 1)
+                .map(|(sort, expr)| PhysicalSortExpr::new(expr, sort.options)),
+        );
+
+        assert_eq_or_internal_err!(
+            exprs_count,
+            self.len(),
+            "Inconsistent number of expressions in LexOrdering",
+        );
+
+        Ok(new_lex_ordering.expect("at this point LexOrdering should be defined"))
     }
 
     /// Returns the leading `PhysicalSortExpr` of the `LexOrdering`. Note that
