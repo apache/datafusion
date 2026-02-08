@@ -26,7 +26,9 @@ use arrow::{
 use datafusion_common::{
     Result, ScalarValue,
     format::OwnedCastOptions,
-    nested_struct::{cast_column, validate_field_compatibility, validate_struct_compatibility},
+    nested_struct::{
+        cast_column, validate_field_compatibility, validate_struct_compatibility,
+    },
     plan_err,
 };
 use datafusion_expr_common::columnar_value::ColumnarValue;
@@ -79,8 +81,7 @@ impl Hash for CastColumnExpr {
         self.input_field.hash(state);
         self.target_field.hash(state);
         self.cast_options.hash(state);
-        // Note: We don't hash the input_schema as it's derived from the column expression
-        // and should be consistent across equivalent CastColumnExpr instances
+        self.input_schema.hash(state);
     }
 }
 
