@@ -51,6 +51,11 @@ jobs:
           python3 -m venv venv
           source venv/bin/activate
           pip install -r docs/requirements.txt
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5  # v2.8.2
+        with:
+          shared-key: "docs-depgraph"
+          cache-targets: false
       - name: Install dependency graph tooling
         run: |
           set -x
