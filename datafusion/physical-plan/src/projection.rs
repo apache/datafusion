@@ -138,13 +138,19 @@ impl ProjectionExec {
         E: Into<ProjectionExpr>,
     {
         let input_schema = input.schema();
-        // convert argument to Vec<ProjectionExpr>
-        let expr_vec = expr.into_iter().map(Into::into).collect::<Vec<_>>();
-        let projection = ProjectionExprs::new(expr_vec);
+        let expr_arc = expr.into_iter().map(Into::into).collect::<Arc<_>>();
+        let projection = ProjectionExprs::from_expressions(expr_arc);
         let projector = projection.make_projector(&input_schema)?;
+        Self::try_from_projector(projector, input)
+    }
 
+    fn try_from_projector(
+        projector: Projector,
+        input: Arc<dyn ExecutionPlan>,
+    ) -> Result<Self> {
         // Construct a map from the input expressions to the output expression of the Projection
-        let projection_mapping = projection.projection_mapping(&input_schema)?;
+        let projection_mapping =
+            projector.projection().projection_mapping(&input.schema())?;
         let cache = Self::compute_properties(
             &input,
             &projection_mapping,
@@ -305,8 +311,8 @@ impl ExecutionPlan for ProjectionExec {
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        ProjectionExec::try_new(
-            self.projector.projection().clone(),
+        ProjectionExec::try_from_projector(
+            self.projector.clone(),
             children.swap_remove(0),
         )
         .map(|p| Arc::new(p) as _)

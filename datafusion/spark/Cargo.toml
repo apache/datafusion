@@ -92,3 +92,7 @@ name = "substring"
 [[bench]]
 harness = false
 name = "unhex"
+
+[[bench]]
+harness = false
+name = "sha2"
