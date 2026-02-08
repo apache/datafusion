@@ -295,7 +295,7 @@ impl ScalarUDFImpl for DateBinFunc {
 const NANOS_PER_MICRO: i64 = 1_000;
 const NANOS_PER_MILLI: i64 = 1_000_000;
 const NANOS_PER_SEC: i64 = NANOSECONDS;
-
+type BinFunction = fn(i64, i64, i64) -> Result<i64>;
 enum Interval {
     Nanoseconds(i64),
     Months(i64),
@@ -310,7 +310,7 @@ impl Interval {
     /// `source` is the timestamp being binned
     ///
     /// `origin`  is the time, in nanoseconds, where windows are measured from
-    fn bin_fn(&self) -> (i64, fn(i64, i64, i64) -> Result<i64>) {
+    fn bin_fn(&self) -> (i64, BinFunction) {
         match self {
             Interval::Nanoseconds(nanos) => (*nanos, date_bin_nanos_interval),
             Interval::Months(months) => (*months, date_bin_months_interval),
@@ -1293,5 +1293,52 @@ mod tests {
             let result = date_bin_nanos_interval(stride1, source1, 0).unwrap();
             assert_eq!(result, expected1, "{source} = {expected}");
         })
+    }
+
+    #[test]
+    fn test_date_bin_out_of_range() {
+        let return_field = &Arc::new(Field::new(
+            "f",
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            true,
+        ));
+        let args = vec![
+            ColumnarValue::Scalar(ScalarValue::new_interval_mdn(1637426858, 0, 0)),
+            ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(
+                Some(1040292460),
+                None,
+            )),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
+                Some(string_to_timestamp_nanos("1984-01-07 00:00:00").unwrap()),
+                None,
+            )),
+        ];
+
+        let result = invoke_date_bin_with_args(args, 1, return_field);
+        assert!(result.is_ok());
+        if let ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(val, _)) =
+            result.unwrap()
+        {
+            assert!(val.is_none(), "Expected None for out of range operation");
+        }
+        let args = vec![
+            ColumnarValue::Scalar(ScalarValue::new_interval_mdn(1637426858, 0, 0)),
+            ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(
+                Some(-1040292460),
+                None,
+            )),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
+                Some(string_to_timestamp_nanos("1984-01-07 00:00:00").unwrap()),
+                None,
+            )),
+        ];
+
+        let result = invoke_date_bin_with_args(args, 1, return_field);
+        assert!(result.is_ok());
+        if let ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(val, _)) =
+            result.unwrap()
+        {
+            assert!(val.is_none(), "Expected None for out of range operation");
+        }
     }
 }
