@@ -101,85 +101,99 @@ fn validate_cast_compatibility(
     target_field: &FieldRef,
     input_schema: &Schema,
 ) -> Result<()> {
-    // Validate that if the expression is a Column, it's within the schema bounds
-    if let Some(column) = expr.as_any().downcast_ref::<Column>() {
-        let fields = input_schema.fields();
-        if column.index() >= fields.len() {
-            return plan_err!(
-                "CastColumnExpr column index {} is out of bounds for input schema with {} fields",
-                column.index(),
-                fields.len()
-            );
-        }
+    validate_column_bounds_and_type(expr, input_field, input_schema)?;
+    validate_field_cast_compatibility(input_field, target_field)
+}
 
-        // Validate that the column's field data type is compatible with the input_field for casting.
-        // We use can_cast_types for this check since schema fields may have different names/metadata.
-        let schema_field = &fields[column.index()];
-        if schema_field.data_type() != input_field.data_type() {
-            let is_compatible =
-                can_cast_types(schema_field.data_type(), input_field.data_type());
-            if !is_compatible {
-                return plan_err!(
-                    "CastColumnExpr column '{}' at index {} has data type '{}' which is not compatible with input field data type '{}' - they cannot be cast",
-                    column.name(),
-                    column.index(),
-                    schema_field.data_type(),
-                    input_field.data_type()
-                );
-            }
-        }
+/// Validates that a Column expression is within schema bounds and has a compatible data type.
+fn validate_column_bounds_and_type(
+    expr: &Arc<dyn PhysicalExpr>,
+    input_field: &FieldRef,
+    input_schema: &Schema,
+) -> Result<()> {
+    let Some(column) = expr.as_any().downcast_ref::<Column>() else {
+        return Ok(());
+    };
+
+    let fields = input_schema.fields();
+    if column.index() >= fields.len() {
+        return plan_err!(
+            "CastColumnExpr column index {} is out of bounds for input schema with {} fields",
+            column.index(),
+            fields.len()
+        );
     }
 
-    // Validate the cast from input_field to target_field.
-    // This is similar to validate_field_compatibility logic, but inlined here since it's private.
+    let schema_field = &fields[column.index()];
+    if schema_field.data_type() == input_field.data_type() {
+        return Ok(());
+    }
+
+    if !can_cast_types(schema_field.data_type(), input_field.data_type()) {
+        return plan_err!(
+            "CastColumnExpr column '{}' at index {} has data type '{}' which is not compatible with input field data type '{}' - they cannot be cast",
+            column.name(),
+            column.index(),
+            schema_field.data_type(),
+            input_field.data_type()
+        );
+    }
+
+    Ok(())
+}
+
+/// Validates that the input field can be cast to the target field.
+fn validate_field_cast_compatibility(
+    input_field: &FieldRef,
+    target_field: &FieldRef,
+) -> Result<()> {
     match (input_field.data_type(), target_field.data_type()) {
         (DataType::Struct(source_fields), DataType::Struct(target_fields)) => {
-            validate_struct_compatibility(source_fields, target_fields)?;
+            validate_struct_compatibility(source_fields, target_fields)
         }
-        (_, DataType::Struct(_)) => {
+        (_, DataType::Struct(_)) => plan_err!(
+            "CastColumnExpr cannot cast non-struct input '{}' to struct target '{}'",
+            input_field.data_type(),
+            target_field.data_type()
+        ),
+        _ => validate_non_struct_cast(input_field, target_field),
+    }
+}
+
+/// Validates casting between non-struct fields, checking nullability and type compatibility.
+fn validate_non_struct_cast(
+    input_field: &FieldRef,
+    target_field: &FieldRef,
+) -> Result<()> {
+    // NULL fields can only be cast to nullable targets
+    if input_field.data_type() == &DataType::Null {
+        if !target_field.is_nullable() {
             return plan_err!(
-                "CastColumnExpr cannot cast non-struct input '{}' to struct target '{}'",
-                input_field.data_type(),
-                target_field.data_type()
+                "Cannot cast NULL field '{}' to non-nullable field '{}'",
+                input_field.name(),
+                target_field.name()
             );
         }
-        _ => {
-            // For non-struct types, validate nullability and data type compatibility.
-            // This mirrors the logic from validate_field_compatibility.
+        return Ok(());
+    }
 
-            // If the source field is NULL, validate that target allows nulls before returning early.
-            if input_field.data_type() == &DataType::Null {
-                // It is invalid to cast a NULL source field to a non-nullable target field.
-                if !target_field.is_nullable() {
-                    return plan_err!(
-                        "Cannot cast NULL field '{}' to non-nullable field '{}'",
-                        input_field.name(),
-                        target_field.name()
-                    );
-                }
-                return Ok(());
-            }
+    // Nullable fields cannot be cast to non-nullable targets
+    if input_field.is_nullable() && !target_field.is_nullable() {
+        return plan_err!(
+            "Cannot cast nullable field '{}' to non-nullable field '{}'",
+            input_field.name(),
+            target_field.name()
+        );
+    }
 
-            // Ensure nullability is compatible. It is invalid to cast a nullable
-            // source field to a non-nullable target field as this may discard null values.
-            if input_field.is_nullable() && !target_field.is_nullable() {
-                return plan_err!(
-                    "Cannot cast nullable field '{}' to non-nullable field '{}'",
-                    input_field.name(),
-                    target_field.name()
-                );
-            }
-
-            // Check that source and target types are castable (for non-struct types)
-            if !can_cast_types(input_field.data_type(), target_field.data_type()) {
-                return plan_err!(
-                    "Cannot cast field '{}' from type '{}' to type '{}'",
-                    input_field.name(),
-                    input_field.data_type(),
-                    target_field.data_type()
-                );
-            }
-        }
+    // Validate type compatibility
+    if !can_cast_types(input_field.data_type(), target_field.data_type()) {
+        return plan_err!(
+            "Cannot cast field '{}' from type '{}' to type '{}'",
+            input_field.name(),
+            input_field.data_type(),
+            target_field.data_type()
+        );
     }
 
     Ok(())
