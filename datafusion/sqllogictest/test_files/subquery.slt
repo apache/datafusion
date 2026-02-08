@@ -1581,3 +1581,85 @@ logical_plan
 11)----------------SubqueryAlias: __correlated_sq_1
 12)------------------Projection: lineitem.l_extendedprice AS price, lineitem.l_extendedprice, lineitem.l_orderkey
 13)--------------------TableScan: lineitem projection=[l_orderkey, l_extendedprice]
+
+# Setup tables for recursive correlation tests
+statement ok
+CREATE TABLE employees (
+    employee_id INTEGER,
+    employee_name VARCHAR,
+    dept_id INTEGER,
+    salary DECIMAL
+);
+
+statement ok
+CREATE TABLE project_assignments (
+    project_id INTEGER,
+    employee_id INTEGER,
+    priority INTEGER
+);
+
+# Provided recursive scalar subquery explain case
+query TT
+EXPLAIN SELECT e1.employee_name, e1.salary
+FROM employees e1
+WHERE e1.salary > (
+    SELECT AVG(e2.salary)
+    FROM employees e2
+    WHERE e2.dept_id = e1.dept_id
+    AND e2.salary > (
+        SELECT AVG(e3.salary)
+        FROM employees e3
+        WHERE e3.dept_id = e1.dept_id
+    )
+);
+----
+logical_plan
+01)Projection: e1.employee_name, e1.salary
+02)--Inner Join: e1.dept_id = __scalar_sq_1.dept_id Filter: CAST(e1.salary AS Decimal128(38, 14)) > __scalar_sq_1.avg(e2.salary)
+03)----SubqueryAlias: e1
+04)------TableScan: employees projection=[employee_name, dept_id, salary]
+05)----SubqueryAlias: __scalar_sq_1
+06)------Projection: avg(e2.salary), e2.dept_id
+07)--------Aggregate: groupBy=[[e2.dept_id]], aggr=[[avg(e2.salary)]]
+08)----------Projection: e2.dept_id, e2.salary
+09)------------Inner Join:  Filter: CAST(e2.salary AS Decimal128(38, 14)) > __scalar_sq_2.avg(e3.salary) AND __scalar_sq_2.dept_id = e1.dept_id
+10)--------------SubqueryAlias: e2
+11)----------------TableScan: employees projection=[dept_id, salary]
+12)--------------SubqueryAlias: __scalar_sq_2
+13)----------------Projection: avg(e3.salary), e3.dept_id
+14)------------------Aggregate: groupBy=[[e3.dept_id]], aggr=[[avg(e3.salary)]]
+15)--------------------SubqueryAlias: e3
+16)----------------------TableScan: employees projection=[dept_id, salary]
+
+# Check shadowing: `dept_id` should resolve to the nearest outer relation (`e2`)
+# in the innermost subquery rather than the outermost
+query TT
+EXPLAIN SELECT e1.employee_id
+FROM employees e1
+WHERE EXISTS (
+    SELECT 1
+    FROM employees e2
+    WHERE EXISTS (
+        SELECT 1
+        FROM project_assignments p
+        WHERE p.project_id = dept_id
+    )
+);
+----
+logical_plan
+01)LeftSemi Join:
+02)--SubqueryAlias: e1
+03)----TableScan: employees projection=[employee_id]
+04)--SubqueryAlias: __correlated_sq_2
+05)----LeftSemi Join:  Filter: __correlated_sq_1.project_id = e1.dept_id
+06)------SubqueryAlias: e2
+07)--------TableScan: employees projection=[]
+08)------SubqueryAlias: __correlated_sq_1
+09)--------SubqueryAlias: p
+10)----------TableScan: project_assignments projection=[project_id]
+
+statement count 0
+drop table employees;
+
+statement count 0
+drop table project_assignments;
