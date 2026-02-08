@@ -384,20 +384,32 @@ impl Drop for SpillPoolWriter {
 /// // Create channel with 1MB file size limit
 /// let (writer, mut reader) = spill_pool::channel(1024 * 1024, spill_manager);
 ///
-/// // Write a few batches, then drop the writer to finalize the spill file.
-/// for i in 0..5 {
-///     let array: ArrayRef = Arc::new(Int32Array::from(vec![i; 100]));
-///     let batch = RecordBatch::try_new(schema.clone(), vec![array]).unwrap();
-///     writer.push_batch(&batch)?;
-/// }
-/// // Explicitly drop writer to finalize the spill file and wake the reader
-/// drop(writer);
+/// // Spawn writer and reader concurrently; writer wakes reader via wakers
+/// let writer_task = tokio::spawn(async move {
+///     for i in 0..5 {
+///         let array: ArrayRef = Arc::new(Int32Array::from(vec![i; 100]));
+///         let batch = RecordBatch::try_new(schema.clone(), vec![array]).unwrap();
+///         writer.push_batch(&batch)?;
+///     }
+///     // Explicitly drop writer to finalize the spill file and wake the reader
+///     drop(writer);
+///     datafusion_common::Result::<()>::Ok(())
+/// });
 ///
-/// let mut batches_read = 0;
-/// while let Some(result) = reader.next().await {
-///     let _batch = result?;
-///     batches_read += 1;
-/// }
+/// let reader_task = tokio::spawn(async move {
+///     let mut batches_read = 0;
+///     while let Some(result) = reader.next().await {
+///         let _batch = result?;
+///         batches_read += 1;
+///     }
+///     datafusion_common::Result::<usize>::Ok(batches_read)
+/// });
+///
+/// let (writer_res, reader_res) = tokio::join!(writer_task, reader_task);
+/// writer_res
+///     .map_err(|e| datafusion_common::DataFusionError::Execution(e.to_string()))??;
+/// let batches_read = reader_res
+///     .map_err(|e| datafusion_common::DataFusionError::Execution(e.to_string()))??;
 ///
 /// assert_eq!(batches_read, 5);
 /// # Ok(())
