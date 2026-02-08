@@ -98,9 +98,8 @@ impl ScalarUDFImpl for FindInSetFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let ScalarFunctionArgs { args, .. } = args;
-
-        let [string, str_list] = take_function_args(self.name(), args)?;
+        let return_field = args.return_field;
+        let [string, str_list] = take_function_args(self.name(), args.args)?;
 
         match (string, str_list) {
             // both inputs are scalars
@@ -141,7 +140,7 @@ impl ScalarUDFImpl for FindInSetFunc {
             ) => {
                 let result_array = match str_list_literal {
                     // find_in_set(column_a, null) = null
-                    None => new_null_array(str_array.data_type(), str_array.len()),
+                    None => new_null_array(return_field.data_type(), str_array.len()),
                     Some(str_list_literal) => {
                         let str_list = str_list_literal.split(',').collect::<Vec<&str>>();
                         let result = match str_array.data_type() {
@@ -190,7 +189,7 @@ impl ScalarUDFImpl for FindInSetFunc {
                 let res = match string_literal {
                     // find_in_set(null, column_b) = null
                     None => {
-                        new_null_array(str_list_array.data_type(), str_list_array.len())
+                        new_null_array(return_field.data_type(), str_list_array.len())
                     }
                     Some(string) => {
                         let result = match str_list_array.data_type() {
