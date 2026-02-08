@@ -356,7 +356,7 @@ fn handle_regexp_like(
                 .map_err(|e| arrow_datafusion_err!(e))?
         }
         (Utf8, LargeUtf8) => {
-            let value = values.as_string_view();
+            let value = values.as_string::<i32>();
             let pattern = patterns.as_string::<i64>();
 
             regexp::regexp_is_match(value, pattern, flags)
