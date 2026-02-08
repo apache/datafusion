@@ -118,6 +118,24 @@ SELECT id, s['value'] FROM simple_struct ORDER BY id;
 4 300
 5 250
 
+query TT
+EXPLAIN SELECT s['label'] FROM simple_struct;
+----
+logical_plan
+01)Projection: get_field(simple_struct.s, Utf8("label"))
+02)--TableScan: simple_struct projection=[s]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[get_field(s@1, label) as simple_struct.s[label]], file_type=parquet
+
+# Verify correctness
+query T
+SELECT s['label'] FROM simple_struct ORDER BY s['label'];
+----
+alpha
+beta
+delta
+epsilon
+gamma
+
 ###
 # Test 2.2: Multiple get_field expressions
 ###
@@ -1339,17 +1357,254 @@ SELECT id, s['value'] FROM simple_struct ORDER BY id, s['value'];
 5 250
 
 #####################
-# Section 12: Cleanup
+# Section 12: Join Tests - get_field Extraction from Join Nodes
 #####################
 
+# Create a second table for join tests
 statement ok
-DROP TABLE simple_struct;
+COPY (
+    SELECT
+        column1 as id,
+        column2 as s
+    FROM VALUES
+        (1, {role: 'admin', level: 10}),
+        (2, {role: 'user', level: 5}),
+        (3, {role: 'guest', level: 1}),
+        (4, {role: 'admin', level: 8}),
+        (5, {role: 'user', level: 3})
+) TO 'test_files/scratch/projection_pushdown/join_right.parquet'
+STORED AS PARQUET;
 
 statement ok
-DROP TABLE nested_struct;
+CREATE EXTERNAL TABLE join_right STORED AS PARQUET
+LOCATION 'test_files/scratch/projection_pushdown/join_right.parquet';
 
-statement ok
-DROP TABLE nullable_struct;
+###
+# Test 12.1: Join with get_field in equijoin condition
+# Tests extraction from join ON clause - get_field on each side routed appropriately
+###
 
+query TT
+EXPLAIN SELECT simple_struct.id, join_right.id
+FROM simple_struct
+INNER JOIN join_right ON simple_struct.s['value'] = join_right.s['level'] * 10;
+----
+logical_plan
+01)Projection: simple_struct.id, join_right.id
+02)--Inner Join: get_field(simple_struct.s, Utf8("value")) = get_field(join_right.s, Utf8("level")) * Int64(10)
+03)----TableScan: simple_struct projection=[id, s]
+04)----TableScan: join_right projection=[id, s]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(simple_struct.s[value]@2, join_right.s[level] * Int64(10)@2)], projection=[id@0, id@3]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[id, s, get_field(s@1, value) as simple_struct.s[value]], file_type=parquet
+03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/join_right.parquet]]}, projection=[id, s, get_field(s@1, level) * 10 as join_right.s[level] * Int64(10)], file_type=parquet
+
+# Verify correctness - value = level * 10
+# simple_struct: (1,100), (2,200), (3,150), (4,300), (5,250)
+# join_right: (1,10), (2,5), (3,1), (4,8), (5,3)
+# Matches: simple_struct.value=100 matches join_right.level*10=100 (level=10, id=1)
+query II
+SELECT simple_struct.id, join_right.id
+FROM simple_struct
+INNER JOIN join_right ON simple_struct.s['value'] = join_right.s['level'] * 10
+ORDER BY simple_struct.id;
+----
+1 1
+
+###
+# Test 12.2: Join with get_field in non-equi filter
+# Tests extraction from join filter expression - left side only
+###
+
+query TT
+EXPLAIN SELECT simple_struct.id, join_right.id
+FROM simple_struct
+INNER JOIN join_right ON simple_struct.id = join_right.id
+WHERE simple_struct.s['value'] > 150;
+----
+logical_plan
+01)Inner Join: simple_struct.id = join_right.id
+02)--Projection: simple_struct.id
+03)----Filter: get_field(simple_struct.s, Utf8("value")) > Int64(150)
+04)------TableScan: simple_struct projection=[id, s], partial_filters=[get_field(simple_struct.s, Utf8("value")) > Int64(150)]
+05)--TableScan: join_right projection=[id]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0)]
+02)--FilterExec: get_field(s@1, value) > 150, projection=[id@0]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[id, s], file_type=parquet
+04)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/join_right.parquet]]}, projection=[id], file_type=parquet, predicate=DynamicFilter [ empty ]
+
+# Verify correctness - id matches and value > 150
+query II
+SELECT simple_struct.id, join_right.id
+FROM simple_struct
+INNER JOIN join_right ON simple_struct.id = join_right.id
+WHERE simple_struct.s['value'] > 150
+ORDER BY simple_struct.id;
+----
+2 2
+4 4
+5 5
+
+###
+# Test 12.3: Join with get_field from both sides in filter
+# Tests extraction routing to both left and right inputs
+###
+
+query TT
+EXPLAIN SELECT simple_struct.id, join_right.id
+FROM simple_struct
+INNER JOIN join_right ON simple_struct.id = join_right.id
+WHERE simple_struct.s['value'] > 100 AND join_right.s['level'] > 3;
+----
+logical_plan
+01)Inner Join: simple_struct.id = join_right.id
+02)--Projection: simple_struct.id
+03)----Filter: get_field(simple_struct.s, Utf8("value")) > Int64(100)
+04)------TableScan: simple_struct projection=[id, s], partial_filters=[get_field(simple_struct.s, Utf8("value")) > Int64(100)]
+05)--Projection: join_right.id
+06)----Filter: get_field(join_right.s, Utf8("level")) > Int64(3)
+07)------TableScan: join_right projection=[id, s], partial_filters=[get_field(join_right.s, Utf8("level")) > Int64(3)]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0)]
+02)--FilterExec: get_field(s@1, value) > 100, projection=[id@0]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[id, s], file_type=parquet
+04)--FilterExec: get_field(s@1, level) > 3, projection=[id@0]
+05)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/join_right.parquet]]}, projection=[id, s], file_type=parquet, predicate=DynamicFilter [ empty ]
+
+# Verify correctness - id matches, value > 100, and level > 3
+# Matching ids where value > 100: 2(200), 3(150), 4(300), 5(250)
+# Of those, level > 3: 2(5), 4(8), 5(3) -> only 2 and 4
+query II
+SELECT simple_struct.id, join_right.id
+FROM simple_struct
+INNER JOIN join_right ON simple_struct.id = join_right.id
+WHERE simple_struct.s['value'] > 100 AND join_right.s['level'] > 3
+ORDER BY simple_struct.id;
+----
+2 2
+4 4
+
+###
+# Test 12.4: Join with get_field in SELECT projection
+# Tests that get_field in output columns pushes down through the join
+###
+
+query TT
+EXPLAIN SELECT simple_struct.id, simple_struct.s['label'], join_right.s['role']
+FROM simple_struct
+INNER JOIN join_right ON simple_struct.id = join_right.id;
+----
+logical_plan
+01)Projection: simple_struct.id, get_field(simple_struct.s, Utf8("label")), get_field(join_right.s, Utf8("role"))
+02)--Inner Join: simple_struct.id = join_right.id
+03)----TableScan: simple_struct projection=[id, s]
+04)----TableScan: join_right projection=[id, s]
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, get_field(s@1, label) as simple_struct.s[label], get_field(s@2, role) as join_right.s[role]]
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0)], projection=[id@0, s@1, s@3]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[id, s], file_type=parquet
+04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/join_right.parquet]]}, projection=[id, s], file_type=parquet, predicate=DynamicFilter [ empty ]
+
+# Verify correctness
+query ITT
+SELECT simple_struct.id, simple_struct.s['label'], join_right.s['role']
+FROM simple_struct
+INNER JOIN join_right ON simple_struct.id = join_right.id
+ORDER BY simple_struct.id;
+----
+1 alpha admin
+2 beta user
+3 gamma guest
+4 delta admin
+5 epsilon user
+
+###
+# Test 12.5: Join without get_field (baseline - no extraction needed)
+# Verifies no unnecessary projections are added when there's nothing to extract
+###
+
+query TT
+EXPLAIN SELECT simple_struct.id, join_right.id
+FROM simple_struct
+INNER JOIN join_right ON simple_struct.id = join_right.id;
+----
+logical_plan
+01)Inner Join: simple_struct.id = join_right.id
+02)--TableScan: simple_struct projection=[id]
+03)--TableScan: join_right projection=[id]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0)]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[id], file_type=parquet
+03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/join_right.parquet]]}, projection=[id], file_type=parquet, predicate=DynamicFilter [ empty ]
+
+# Verify correctness
+query II
+SELECT simple_struct.id, join_right.id
+FROM simple_struct
+INNER JOIN join_right ON simple_struct.id = join_right.id
+ORDER BY simple_struct.id;
+----
+1 1
+2 2
+3 3
+4 4
+5 5
+
+###
+# Test 12.6: Left Join with get_field extraction
+# Tests extraction works correctly with outer joins
+###
+
+query TT
+EXPLAIN SELECT simple_struct.id, simple_struct.s['value'], join_right.s['level']
+FROM simple_struct
+LEFT JOIN join_right ON simple_struct.id = join_right.id AND join_right.s['level'] > 5;
+----
+logical_plan
+01)Projection: simple_struct.id, get_field(simple_struct.s, Utf8("value")), get_field(join_right.s, Utf8("level"))
+02)--Left Join: simple_struct.id = join_right.id
+03)----TableScan: simple_struct projection=[id, s]
+04)----Filter: get_field(join_right.s, Utf8("level")) > Int64(5)
+05)------TableScan: join_right projection=[id, s], partial_filters=[get_field(join_right.s, Utf8("level")) > Int64(5)]
+physical_plan
+01)ProjectionExec: expr=[id@1 as id, get_field(s@2, value) as simple_struct.s[value], get_field(s@0, level) as join_right.s[level]]
+02)--HashJoinExec: mode=CollectLeft, join_type=Right, on=[(id@0, id@0)], projection=[s@1, id@2, s@3]
+03)----FilterExec: get_field(s@1, level) > 5
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/join_right.parquet]]}, projection=[id, s], file_type=parquet
+05)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[id, s], file_type=parquet
+
+# Verify correctness - left join with level > 5 condition
+# Only join_right rows with level > 5 are matched: id=1 (level=10), id=4 (level=8)
+query III
+SELECT simple_struct.id, simple_struct.s['value'], join_right.s['level']
+FROM simple_struct
+LEFT JOIN join_right ON simple_struct.id = join_right.id AND join_right.s['level'] > 5
+ORDER BY simple_struct.id;
+----
+1 100 10
+2 200 NULL
+3 150 NULL
+4 300 8
+5 250 NULL
+
+#####################
+# Section 13: RepartitionExec tests
+#####################
+
+# Set target partitions to 32 -> this forces a RepartitionExec
 statement ok
-DROP TABLE multi_struct;
+SET datafusion.execution.target_partitions = 32;
+
+query TT
+EXPLAIN SELECT s['value'] FROM simple_struct WHERE id > 2;
+----
+logical_plan
+01)Projection: get_field(simple_struct.s, Utf8("value"))
+02)--Filter: simple_struct.id > Int64(2)
+03)----TableScan: simple_struct projection=[id, s], partial_filters=[simple_struct.id > Int64(2)]
+physical_plan
+01)ProjectionExec: expr=[get_field(s@0, value) as simple_struct.s[value]]
+02)--FilterExec: id@0 > 2, projection=[s@1]
+03)----RepartitionExec: partitioning=RoundRobinBatch(32), input_partitions=1
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[id, s], file_type=parquet, predicate=id@0 > 2, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 2, required_guarantees=[]

@@ -626,11 +626,14 @@ pub struct AggregateExec {
     /// Aggregation mode (full, partial)
     mode: AggregateMode,
     /// Group by expressions
-    group_by: PhysicalGroupBy,
+    /// [`Arc`] used for a cheap clone, which improves physical plan optimization performance.
+    group_by: Arc<PhysicalGroupBy>,
     /// Aggregate expressions
-    aggr_expr: Vec<Arc<AggregateFunctionExpr>>,
+    /// The same reason to [`Arc`] it as for [`Self::group_by`].
+    aggr_expr: Arc<[Arc<AggregateFunctionExpr>]>,
     /// FILTER (WHERE clause) expression for each aggregate expression
-    filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
+    /// The same reason to [`Arc`] it as for [`Self::group_by`].
+    filter_expr: Arc<[Option<Arc<dyn PhysicalExpr>>]>,
     /// Configuration for limit-based optimizations
     limit_options: Option<LimitOptions>,
     /// Input plan, could be a partial aggregate or the input to the aggregate
@@ -664,18 +667,18 @@ impl AggregateExec {
     /// Rewrites aggregate exec with new aggregate expressions.
     pub fn with_new_aggr_exprs(
         &self,
-        aggr_expr: Vec<Arc<AggregateFunctionExpr>>,
+        aggr_expr: impl Into<Arc<[Arc<AggregateFunctionExpr>]>>,
     ) -> Self {
         Self {
-            aggr_expr,
+            aggr_expr: aggr_expr.into(),
             // clone the rest of the fields
             required_input_ordering: self.required_input_ordering.clone(),
             metrics: ExecutionPlanMetricsSet::new(),
             input_order_mode: self.input_order_mode.clone(),
             cache: self.cache.clone(),
             mode: self.mode,
-            group_by: self.group_by.clone(),
-            filter_expr: self.filter_expr.clone(),
+            group_by: Arc::clone(&self.group_by),
+            filter_expr: Arc::clone(&self.filter_expr),
             limit_options: self.limit_options,
             input: Arc::clone(&self.input),
             schema: Arc::clone(&self.schema),
@@ -694,9 +697,9 @@ impl AggregateExec {
             input_order_mode: self.input_order_mode.clone(),
             cache: self.cache.clone(),
             mode: self.mode,
-            group_by: self.group_by.clone(),
-            aggr_expr: self.aggr_expr.clone(),
-            filter_expr: self.filter_expr.clone(),
+            group_by: Arc::clone(&self.group_by),
+            aggr_expr: Arc::clone(&self.aggr_expr),
+            filter_expr: Arc::clone(&self.filter_expr),
             input: Arc::clone(&self.input),
             schema: Arc::clone(&self.schema),
             input_schema: Arc::clone(&self.input_schema),
@@ -711,12 +714,13 @@ impl AggregateExec {
     /// Create a new hash aggregate execution plan
     pub fn try_new(
         mode: AggregateMode,
-        group_by: PhysicalGroupBy,
+        group_by: impl Into<Arc<PhysicalGroupBy>>,
         aggr_expr: Vec<Arc<AggregateFunctionExpr>>,
         filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
     ) -> Result<Self> {
+        let group_by = group_by.into();
         let schema = create_schema(&input.schema(), &group_by, &aggr_expr, mode)?;
 
         let schema = Arc::new(schema);
@@ -741,13 +745,16 @@ impl AggregateExec {
     /// the schema in such cases.
     fn try_new_with_schema(
         mode: AggregateMode,
-        group_by: PhysicalGroupBy,
+        group_by: impl Into<Arc<PhysicalGroupBy>>,
         mut aggr_expr: Vec<Arc<AggregateFunctionExpr>>,
-        filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
+        filter_expr: impl Into<Arc<[Option<Arc<dyn PhysicalExpr>>]>>,
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
         schema: SchemaRef,
     ) -> Result<Self> {
+        let group_by = group_by.into();
+        let filter_expr = filter_expr.into();
+
         // Make sure arguments are consistent in size
         assert_eq_or_internal_err!(
             aggr_expr.len(),
@@ -814,13 +821,13 @@ impl AggregateExec {
             &group_expr_mapping,
             &mode,
             &input_order_mode,
-            aggr_expr.as_slice(),
+            aggr_expr.as_ref(),
         )?;
 
         let mut exec = AggregateExec {
             mode,
             group_by,
-            aggr_expr,
+            aggr_expr: aggr_expr.into(),
             filter_expr,
             input,
             schema,
@@ -1370,9 +1377,9 @@ impl ExecutionPlan for AggregateExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let mut me = AggregateExec::try_new_with_schema(
             self.mode,
-            self.group_by.clone(),
-            self.aggr_expr.clone(),
-            self.filter_expr.clone(),
+            Arc::clone(&self.group_by),
+            self.aggr_expr.to_vec(),
+            Arc::clone(&self.filter_expr),
             Arc::clone(&children[0]),
             Arc::clone(&self.input_schema),
             Arc::clone(&self.schema),

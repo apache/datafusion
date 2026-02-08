@@ -300,7 +300,7 @@ impl StatementExecutor {
                 let curr_num_rows = batch.num_rows();
                 // Stop collecting results if the number of rows exceeds the limit
                 // results batch should include the last batch that exceeds the limit
-                if row_count < max_rows + curr_num_rows {
+                if row_count < max_rows.saturating_add(curr_num_rows) {
                     // Try to grow the reservation to accommodate the batch in memory
                     reservation.try_grow(get_record_batch_memory_size(&batch))?;
                     results.push(batch);
