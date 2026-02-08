@@ -993,25 +993,27 @@ NULL NULL NULL NULL
 # Test FIND_IN_SET
 # --------------------------------------
 
-query IIII
+query IIIIII
 SELECT
   FIND_IN_SET(ascii_1, 'a,b,c,d'),
   FIND_IN_SET(ascii_1, 'Andrew,Xiangpeng,Raphael'),
   FIND_IN_SET(unicode_1, 'a,b,c,d'),
-  FIND_IN_SET(unicode_1, 'datafusion📊🔥,datafusion数据融合,datafusionДатаФусион')
+  FIND_IN_SET(unicode_1, 'datafusion📊🔥,datafusion数据融合,datafusionДатаФусион'),
+  FIND_IN_SET(NULL, unicode_1),
+  FIND_IN_SET(unicode_1, NULL)
 FROM test_basic_operator;
 ----
-0 1 0 1
-0 2 0 2
-0 3 0 3
-0 0 0 0
-0 0 0 0
-0 0 0 0
-0 0 0 0
-0 0 0 0
-0 0 0 0
-NULL NULL NULL NULL
-NULL NULL NULL NULL
+0 1 0 1 NULL NULL
+0 2 0 2 NULL NULL
+0 3 0 3 NULL NULL
+0 0 0 0 NULL NULL
+0 0 0 0 NULL NULL
+0 0 0 0 NULL NULL
+0 0 0 0 NULL NULL
+0 0 0 0 NULL NULL
+0 0 0 0 NULL NULL
+NULL NULL NULL NULL NULL NULL
+NULL NULL NULL NULL NULL NULL
 
 # --------------------------------------
 # Test || operator
