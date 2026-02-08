@@ -482,23 +482,43 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     Arc::unwrap_or_clone(subquery.subquery),
                 )?
                 .data;
-                let expr_type = expr.get_type(self.schema)?;
-                let subquery_type = new_plan.schema().field(0).data_type();
-                let common_type = comparison_coercion(&expr_type, subquery_type).ok_or(
-                    plan_datafusion_err!(
-                    "expr type {expr_type} can't cast to {subquery_type} in InSubquery"
-                ),
-                )?;
-                let new_subquery = Subquery {
-                    subquery: Arc::new(new_plan),
-                    outer_ref_columns: subquery.outer_ref_columns,
-                    spans: subquery.spans,
-                };
-                Ok(Transformed::yes(Expr::InSubquery(InSubquery::new(
-                    Box::new(expr.cast_to(&common_type, self.schema)?),
-                    cast_subquery(new_subquery, &common_type)?,
-                    negated,
-                ))))
+
+                // Check if this is a multi-column IN (struct expression)
+                let is_struct = matches!(*expr, Expr::ScalarFunction(ref func) if func.func.name() == "struct");
+
+                if is_struct {
+                    // For multi-column IN, we don't need type coercion at this level
+                    // The decorrelation phase will handle this by creating join conditions
+                    let new_subquery = Subquery {
+                        subquery: Arc::new(new_plan),
+                        outer_ref_columns: subquery.outer_ref_columns,
+                        spans: subquery.spans,
+                    };
+                    Ok(Transformed::yes(Expr::InSubquery(InSubquery::new(
+                        expr,
+                        new_subquery,
+                        negated,
+                    ))))
+                } else {
+                    // Single-column IN: apply type coercion as before
+                    let expr_type = expr.get_type(self.schema)?;
+                    let subquery_type = new_plan.schema().field(0).data_type();
+                    let common_type = comparison_coercion(&expr_type, subquery_type).ok_or(
+                        plan_datafusion_err!(
+                        "expr type {expr_type} can't cast to {subquery_type} in InSubquery"
+                    ),
+                    )?;
+                    let new_subquery = Subquery {
+                        subquery: Arc::new(new_plan),
+                        outer_ref_columns: subquery.outer_ref_columns,
+                        spans: subquery.spans,
+                    };
+                    Ok(Transformed::yes(Expr::InSubquery(InSubquery::new(
+                        Box::new(expr.cast_to(&common_type, self.schema)?),
+                        cast_subquery(new_subquery, &common_type)?,
+                        negated,
+                    ))))
+                }
             }
             Expr::SetComparison(SetComparison {
                 expr,

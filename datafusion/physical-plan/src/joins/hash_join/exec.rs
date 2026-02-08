@@ -339,18 +339,10 @@ impl HashJoinExecBuilder {
         check_join_is_valid(&left_schema, &right_schema, &on)?;
 
         // Validate null_aware flag
-        if null_aware {
-            if !matches!(join_type, JoinType::LeftAnti) {
-                return plan_err!(
-                    "null_aware can only be true for LeftAnti joins, got {join_type}"
-                );
-            }
-            if on.len() != 1 {
-                return plan_err!(
-                    "null_aware anti join only supports single column join key, got {} columns",
-                    on.len()
-                );
-            }
+        if null_aware && !matches!(join_type, JoinType::LeftAnti) {
+            return plan_err!(
+                "null_aware can only be true for LeftAnti joins, got {join_type}"
+            );
         }
 
         let (join_schema, column_indices) =
@@ -5659,26 +5651,41 @@ mod tests {
         );
     }
 
-    /// Test that null_aware validation rejects multi-column joins
+    /// Test null-aware anti join with multi-column (a, b) NOT IN (SELECT x, y FROM ...)
+    /// When probe side (right) has NULL in ANY column, result should be empty
+    #[apply(hash_join_exec_configs)]
     #[tokio::test]
-    async fn test_null_aware_validation_multi_column() {
-        let left = build_table(("a", &vec![1]), ("b", &vec![2]), ("c", &vec![3]));
-        let right = build_table(("x", &vec![1]), ("y", &vec![2]), ("z", &vec![3]));
+    async fn test_null_aware_anti_join_multi_column_probe_null(
+        batch_size: usize,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, false);
 
-        // Try multi-column join
+        // Build left table (rows to potentially output)
+        let left = build_table_three_cols(
+            ("a", &vec![Some(1), Some(3), Some(5)]),
+            ("b", &vec![Some(2), Some(4), Some(6)]),
+            ("dummy", &vec![Some(10), Some(30), Some(50)]),
+        );
+
+        // Build right table (has NULL in second column)
+        let right = build_table_two_cols(
+            ("x", &vec![Some(1), Some(7)]),
+            ("y", &vec![Some(2), None]), // NULL in y column
+        );
+
         let on = vec![
             (
-                Arc::new(Column::new_with_schema("a", &left.schema()).unwrap()) as _,
-                Arc::new(Column::new_with_schema("x", &right.schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("a", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("x", &right.schema())?) as _,
             ),
             (
-                Arc::new(Column::new_with_schema("b", &left.schema()).unwrap()) as _,
-                Arc::new(Column::new_with_schema("y", &right.schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("b", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("y", &right.schema())?) as _,
             ),
         ];
 
-        // Try to create null-aware anti join with 2 columns (should fail)
-        let result = HashJoinExec::try_new(
+        // Create null-aware anti join
+        let join = HashJoinExec::try_new(
             left,
             right,
             on,
@@ -5687,15 +5694,165 @@ mod tests {
             None,
             PartitionMode::CollectLeft,
             NullEquality::NullEqualsNothing,
-            true, // null_aware = true (invalid for multi-column)
+            true, // null_aware = true
+        )?;
+
+        let stream = join.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        // Expected: empty result (probe side has NULL in y column, so no rows should be output)
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
+            ++
+            ++
+            ");
+        }
+        Ok(())
+    }
+
+    /// Test null-aware anti join with multi-column when probe side has no NULLs
+    /// Expected: rows that don't match should be output, but rows with NULL keys should be filtered
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn test_null_aware_anti_join_multi_column_no_null(
+        batch_size: usize,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, false);
+
+        // Build left table with some NULL keys
+        let left = build_table_three_cols(
+            ("a", &vec![Some(1), Some(3), Some(5), None]),
+            ("b", &vec![Some(2), Some(4), Some(6), Some(8)]),
+            ("dummy", &vec![Some(10), Some(30), Some(50), Some(0)]),
         );
 
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("null_aware anti join only supports single column join key")
+        // Build right table (no NULLs)
+        let right = build_table_two_cols(("x", &vec![Some(1)]), ("y", &vec![Some(2)]));
+
+        let on = vec![
+            (
+                Arc::new(Column::new_with_schema("a", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("x", &right.schema())?) as _,
+            ),
+            (
+                Arc::new(Column::new_with_schema("b", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("y", &right.schema())?) as _,
+            ),
+        ];
+
+        // Create null-aware anti join
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::LeftAnti,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            true, // null_aware = true
+        )?;
+
+        let stream = join.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        // Expected: (3, 4, 30) and (5, 6, 50)
+        // Row (1, 2, 10) matches right side, so filtered out
+        // Row (NULL, 8, 0) has NULL in a column, so filtered out
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
+            +---+---+-------+
+            | a | b | dummy |
+            +---+---+-------+
+            | 3 | 4 | 30    |
+            | 5 | 6 | 50    |
+            +---+---+-------+
+            ");
+        }
+        Ok(())
+    }
+
+    /// Test null-aware anti join with three columns (a, b, c) NOT IN (SELECT x, y, z FROM ...)
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn test_null_aware_anti_join_three_columns(batch_size: usize) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, false);
+
+        // Build left table
+        let left = build_table_three_cols(
+            ("a", &vec![Some(1), Some(4), Some(7)]),
+            ("b", &vec![Some(2), Some(5), Some(8)]),
+            ("c", &vec![Some(3), Some(6), Some(9)]),
         );
+
+        // Build right table with NULL in third column
+        let right = build_table_three_cols(
+            ("x", &vec![Some(1)]),
+            ("y", &vec![Some(2)]),
+            ("z", &vec![None]), // NULL in z column
+        );
+
+        let on = vec![
+            (
+                Arc::new(Column::new_with_schema("a", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("x", &right.schema())?) as _,
+            ),
+            (
+                Arc::new(Column::new_with_schema("b", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("y", &right.schema())?) as _,
+            ),
+            (
+                Arc::new(Column::new_with_schema("c", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("z", &right.schema())?) as _,
+            ),
+        ];
+
+        // Create null-aware anti join
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::LeftAnti,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            true, // null_aware = true
+        )?;
+
+        let stream = join.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        // Expected: empty result (probe side has NULL in z column)
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
+            ++
+            ++
+            ");
+        }
+        Ok(())
+    }
+
+    /// Helper to build a table with three columns supporting nullable values
+    fn build_table_three_cols(
+        a: (&str, &Vec<Option<i32>>),
+        b: (&str, &Vec<Option<i32>>),
+        c: (&str, &Vec<Option<i32>>),
+    ) -> Arc<dyn ExecutionPlan> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new(a.0, DataType::Int32, true),
+            Field::new(b.0, DataType::Int32, true),
+            Field::new(c.0, DataType::Int32, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(a.1.clone())),
+                Arc::new(Int32Array::from(b.1.clone())),
+                Arc::new(Int32Array::from(c.1.clone())),
+            ],
+        )
+        .unwrap();
+        TestMemoryExec::try_new_exec(&[vec![batch]], schema, None).unwrap()
     }
 }
