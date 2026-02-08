@@ -265,7 +265,6 @@ pub struct PlannerContext {
     /// The queries schemas of outer query relations, used to resolve the outer referenced
     /// columns in subquery (recursive aware)
     outer_queries_schemas_stack: Vec<DFSchemaRef>,
-
     /// The joined schemas of all FROM clauses planned so far. When planning LATERAL
     /// FROM clauses, this should become a suffix of the `outer_query_schema`.
     outer_from_schema: Option<DFSchemaRef>,
@@ -306,6 +305,22 @@ impl PlannerContext {
         &self.outer_queries_schemas_stack
     }
 
+    /// Return an iterator of the subquery relations' schemas, innermost
+    /// relation is returned first.
+    ///
+    /// This order corresponds to the order of resolution when looking up column
+    /// references in subqueries, which start from the innermost relation and
+    /// then look up the outer relations one by one until a match is found or no
+    /// more outer relation exist.
+    ///
+    /// NOTE this is *REVERSED* order of [`Self::outer_queries_schemas_stack`]
+    ///
+    /// This is useful to resolve the column reference in the subquery by
+    /// looking up the outer query schemas one by one.
+    pub fn outer_schemas_iter(&self) -> impl Iterator<Item = &DFSchemaRef> {
+        self.outer_queries_schemas_stack.iter().rev()
+    }
+
     /// Sets the outer query schema, returning the existing one, if
     /// any
     pub fn append_outer_query_schema(&mut self, schema: DFSchemaRef) {
@@ -313,7 +328,7 @@ impl PlannerContext {
     }
 
     /// The schema of the adjacent outer relation
-    pub fn latest_outer_query_schema(&mut self) -> Option<&DFSchemaRef> {
+    pub fn latest_outer_query_schema(&self) -> Option<&DFSchemaRef> {
         self.outer_queries_schemas_stack.last()
     }
 

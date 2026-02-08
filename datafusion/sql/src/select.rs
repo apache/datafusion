@@ -638,8 +638,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             Some(predicate_expr) => {
                 let fallback_schemas = plan.fallback_normalize_schemas();
 
-                let outer_query_schema_vec =
-                    planner_context.outer_queries_schemas().to_vec();
                 let filter_expr =
                     self.sql_to_expr(predicate_expr, plan.schema(), planner_context)?;
 
@@ -656,7 +654,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 expr_to_columns(&filter_expr, &mut using_columns)?;
                 let mut schema_stack: Vec<Vec<&DFSchema>> =
                     vec![vec![plan.schema()], fallback_schemas];
-                for sc in outer_query_schema_vec.iter().rev() {
+                for sc in planner_context.outer_schemas_iter() {
                     schema_stack.push(vec![sc.as_ref()]);
                 }
 
