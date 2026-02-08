@@ -725,12 +725,17 @@ fn hash_fixed_list_array(
     Ok(())
 }
 
+/// Inner hash function for RunArray
+#[inline(never)]
 #[cfg(not(feature = "force_hash_collisions"))]
-fn hash_run_array<R: RunEndIndexType>(
+fn hash_run_array_inner<
+    R: RunEndIndexType,
+    const HAS_NULL_VALUES: bool,
+    const REHASH: bool,
+>(
     array: &RunArray<R>,
     random_state: &RandomState,
     hashes_buffer: &mut [u64],
-    rehash: bool,
 ) -> Result<()> {
     // We find the relevant runs that cover potentially sliced arrays, so we can only hash those
     // values. Then we find the runs that refer to the original runs and ensure that we apply
@@ -768,31 +773,54 @@ fn hash_run_array<R: RunEndIndexType>(
         .iter()
         .enumerate()
     {
-        let is_null_value = sliced_values.is_null(adjusted_physical_index);
         let absolute_run_end = absolute_run_end.as_usize();
-
         let end_in_slice = (absolute_run_end - array_offset).min(array_len);
 
-        if rehash {
-            if !is_null_value {
-                let value_hash = values_hashes[adjusted_physical_index];
-                for hash in hashes_buffer
-                    .iter_mut()
-                    .take(end_in_slice)
-                    .skip(start_in_slice)
-                {
-                    *hash = combine_hashes(value_hash, *hash);
-                }
+        if HAS_NULL_VALUES && sliced_values.is_null(adjusted_physical_index) {
+            start_in_slice = end_in_slice;
+            continue;
+        }
+
+        let value_hash = values_hashes[adjusted_physical_index];
+        let run_slice = &mut hashes_buffer[start_in_slice..end_in_slice];
+
+        if REHASH {
+            for hash in run_slice.iter_mut() {
+                *hash = combine_hashes(value_hash, *hash);
             }
         } else {
-            let value_hash = values_hashes[adjusted_physical_index];
-            hashes_buffer[start_in_slice..end_in_slice].fill(value_hash);
+            run_slice.fill(value_hash);
         }
 
         start_in_slice = end_in_slice;
     }
 
     Ok(())
+}
+
+#[cfg(not(feature = "force_hash_collisions"))]
+fn hash_run_array<R: RunEndIndexType>(
+    array: &RunArray<R>,
+    random_state: &RandomState,
+    hashes_buffer: &mut [u64],
+    rehash: bool,
+) -> Result<()> {
+    let has_null_values = array.values().null_count() != 0;
+
+    match (has_null_values, rehash) {
+        (false, false) => {
+            hash_run_array_inner::<R, false, false>(array, random_state, hashes_buffer)
+        }
+        (false, true) => {
+            hash_run_array_inner::<R, false, true>(array, random_state, hashes_buffer)
+        }
+        (true, false) => {
+            hash_run_array_inner::<R, true, false>(array, random_state, hashes_buffer)
+        }
+        (true, true) => {
+            hash_run_array_inner::<R, true, true>(array, random_state, hashes_buffer)
+        }
+    }
 }
 
 /// Internal helper function that hashes a single array and either initializes or combines
