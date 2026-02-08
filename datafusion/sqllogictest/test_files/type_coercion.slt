@@ -268,16 +268,16 @@ query error There isn't a common type to coerce .* in .* expression
 SELECT true FROM t0 WHERE ((REGEXP_MATCH(t0.v1, t0.v1)) NOT LIKE (REGEXP_MATCH(t0.v1, t0.v1, 'jH')));
 
 query error There isn't a common type to coerce .* in .* expression
-SELECT true FROM t0 WHERE ((REGEXP_MATCH(t0.v1, t0.v1)) NOT LIKE (REGEXP_MATCH(t0.v1, t0.v1, 'i')));
+SELECT true FROM t0 WHERE (REGEXP_MATCH(t0.v1, t0.v1)) NOT LIKE [];
 
 query error There isn't a common type to coerce .* in .* expression
-SELECT true FROM t0 WHERE ((REGEXP_MATCH(t0.v1, t0.v1)) LIKE (REGEXP_MATCH(t0.v1, t0.v1, 'i')));
+SELECT true FROM t0 WHERE (REGEXP_MATCH(t0.v1, t0.v1)) LIKE [];
 
 query error There isn't a common type to coerce .* in .* expression
-SELECT true FROM t0 WHERE ((REGEXP_MATCH(t0.v1, t0.v1)) ILIKE (REGEXP_MATCH(t0.v1, t0.v1, 'i')));
+SELECT true FROM t0 WHERE (REGEXP_MATCH(t0.v1, t0.v1)) ILIKE [];
 
 query error There isn't a common type to coerce .* in .* expression
-SELECT true FROM t0 WHERE ((REGEXP_MATCH(t0.v1, t0.v1)) NOT ILIKE (REGEXP_MATCH(t0.v1, t0.v1, 'i')));
+SELECT true FROM t0 WHERE (REGEXP_MATCH(t0.v1, t0.v1)) NOT ILIKE [];
 
 statement ok
 DROP TABLE t0;
