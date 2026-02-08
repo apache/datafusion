@@ -46,6 +46,12 @@ pub fn as_file_source<T: FileSource + 'static>(source: T) -> Arc<dyn FileSource>
 
 /// file format specific behaviors for elements in [`DataSource`]
 ///
+/// # Schema information
+/// There are two important schemas for a [`FileSource`]:
+/// 1. [`Self::table_schema`] -- the schema for the overall "table"
+/// 2. The logical output schema, comprised of [`Self::table_schema`] with
+///    [`Self::projection`] applied
+///
 /// See more details on specific implementations:
 /// * [`ArrowSource`](https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.ArrowSource.html)
 /// * [`AvroSource`](https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.AvroSource.html)
@@ -64,24 +70,38 @@ pub trait FileSource: Send + Sync {
     ) -> Result<Arc<dyn FileOpener>>;
     /// Any
     fn as_any(&self) -> &dyn Any;
+
     /// Returns the table schema for this file source.
     ///
-    /// This always returns the unprojected schema (the full schema of the data).
+    /// This always returns the unprojected schema (the full schema of the data)
+    /// without [`Self::projection`] applied.
+    ///
+    /// The output schema of this `FileSource` is this TableSchema
+    /// with [`Self::projection`] applied.
     fn table_schema(&self) -> &crate::table_schema::TableSchema;
+
     /// Initialize new type with batch size configuration
     fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource>;
-    /// Returns the filter expression that will be applied during the file scan.
+
+    /// Returns the filter expression that will be applied *during* the file scan.
+    ///
+    /// These expressions are in terms of the unprojected [`Self::table_schema`].
     fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
         None
     }
-    /// Return the projection that will be applied to the output stream on top of the table schema.
+
+    /// Return the projection that will be applied to the output stream on top
+    /// of [`Self::table_schema`].
     fn projection(&self) -> Option<&ProjectionExprs> {
         None
     }
+
     /// Return execution plan metrics
     fn metrics(&self) -> &ExecutionPlanMetricsSet;
+
     /// String representation of file source such as "csv", "json", "parquet"
     fn file_type(&self) -> &str;
+
     /// Format FileType specific information
     fn fmt_extra(&self, _t: DisplayFormatType, _f: &mut Formatter) -> fmt::Result {
         Ok(())
@@ -135,6 +155,19 @@ pub trait FileSource: Send + Sync {
     }
 
     /// Try to push down filters into this FileSource.
+    ///
+    /// `filters` must be in terms of the unprojected table schema (file schema
+    /// plus partition columns), before any projection is applied.
+    ///
+    /// Any filters that this FileSource chooses to evaluate itself should be
+    /// returned as `PushedDown::Yes` in the result, along with a FileSource
+    /// instance that incorporates those filters. Such filters are logically
+    /// applied "during" the file scan, meaning they may refer to columns not
+    /// included in the final output projection.
+    ///
+    /// Filters that cannot be pushed down should be marked as `PushedDown::No`,
+    /// and will be evaluated by an execution plan after the file source.
+    ///
     /// See [`ExecutionPlan::handle_child_pushdown_result`] for more details.
     ///
     /// [`ExecutionPlan::handle_child_pushdown_result`]: datafusion_physical_plan::ExecutionPlan::handle_child_pushdown_result
@@ -220,7 +253,7 @@ pub trait FileSource: Send + Sync {
         Ok(SortOrderPushdownResult::Unsupported)
     }
 
-    /// Try to push down a projection into a this FileSource.
+    /// Try to push down a projection into this FileSource.
     ///
     /// `FileSource` implementations that support projection pushdown should
     /// override this method and return a new `FileSource` instance with the
