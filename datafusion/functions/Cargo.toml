@@ -134,6 +134,11 @@ required-features = ["math_expressions"]
 
 [[bench]]
 harness = false
+name = "nanvl"
+required-features = ["math_expressions"]
+
+[[bench]]
+harness = false
 name = "uuid"
 required-features = ["string_expressions"]
 
