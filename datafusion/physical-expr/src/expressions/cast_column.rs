@@ -26,7 +26,7 @@ use arrow::{
 use datafusion_common::{
     Result, ScalarValue,
     format::OwnedCastOptions,
-    nested_struct::{cast_column, validate_struct_compatibility},
+    nested_struct::{cast_column, validate_field_compatibility, validate_struct_compatibility},
     plan_err,
 };
 use datafusion_expr_common::columnar_value::ColumnarValue;
