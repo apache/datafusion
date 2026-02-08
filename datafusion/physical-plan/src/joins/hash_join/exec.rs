@@ -950,22 +950,16 @@ impl HashJoinExec {
     /// Partitioned mode.
     ///
     /// The CASE `hash(key) % N` routing in the dynamic filter is only correct when both sides of
-    /// the join are truly hash-distributed by a `RepartitionExec`. When `preserve_file_partitions`
-    /// is enabled, the `DataSourceExec` declares `Partitioning::Hash` based on the file-group
-    /// partitioning, but the data is not hash-distributed in the same fashion. If the optimizer
-    /// skips inserting `RepartitionExec` because it sees matching Hash partitioning, the CASE
-    /// routing applies the wrong partition's filter.
+    /// the join are truly hash-distributed by a `RepartitionExec`. If the optimizer skips inserting
+    /// `RepartitionExec` because it sees matching Hash partitioning, the CASE routing applies the
+    /// wrong partition's filter.
     ///
     /// In this case, we fall back to a Global OR: all partition filters are combined with OR into
     /// a single expression. This is safe for any partitioning scheme and still allows for
     /// effective pruning because `PruningPredicate` decomposes OR branches independently.
-    fn should_use_global_or(&self, config: &ConfigOptions) -> bool {
+    fn should_use_global_or(&self) -> bool {
         // Only relevant for Partitioned mode
         if self.mode != PartitionMode::Partitioned {
-            return false;
-        }
-        // Only relevant when preserve_file_partitions is enabled
-        if config.optimizer.preserve_file_partitions == 0 {
             return false;
         }
         // If both sides have a RepartitionExec(Hash), then data is truly
@@ -1297,7 +1291,7 @@ impl ExecutionPlan for HashJoinExec {
         // Initialize build_accumulator lazily with runtime partition counts (only if enabled)
         // Use RepartitionExec's random state (seeds: 0,0,0,0) for partition routing
         let repartition_random_state = REPARTITION_RANDOM_STATE;
-        let use_global_or = self.should_use_global_or(context.session_config().options());
+        let use_global_or = self.should_use_global_or();
         let build_accumulator = enable_dynamic_filter_pushdown
             .then(|| {
                 self.dynamic_filter.as_ref().map(|df| {
@@ -5763,7 +5757,7 @@ mod tests {
         let hash_repartition = Arc::new(
             RepartitionExec::try_new(
                 Arc::clone(&left),
-                Partitioning::Hash(hash_exprs, 4),
+                Partitioning::Hash(hash_exprs.clone(), 4),
             )
             .unwrap(),
         );
@@ -5775,15 +5769,74 @@ mod tests {
         );
 
         // DataSource -> RepartitionExec(RoundRobin) should return false
-        let round_roubin_repartition = Arc::new(
+        let round_robin_repartition = Arc::new(
             RepartitionExec::try_new(Arc::clone(&left), Partitioning::RoundRobinBatch(4))
                 .unwrap(),
         );
         assert!(
             !HashJoinExec::has_hash_repartition(
-                &(round_roubin_repartition as Arc<dyn ExecutionPlan>)
+                &(round_robin_repartition as Arc<dyn ExecutionPlan>)
             ),
             "RoundRobin should not be detected as hash repartition"
+        );
+
+        // DataSource -> RepartitionExec(UnknownPartitioning) should return false
+        let unknown_repartition = Arc::new(
+            RepartitionExec::try_new(
+                Arc::clone(&left),
+                Partitioning::UnknownPartitioning(4),
+            )
+            .unwrap(),
+        );
+        assert!(
+            !HashJoinExec::has_hash_repartition(
+                &(unknown_repartition as Arc<dyn ExecutionPlan>)
+            ),
+            "UnknownPartitioning should not be detected as hash repartition"
+        );
+
+        // Plain DataSource (no RepartitionExec) should return false
+        assert!(
+            !HashJoinExec::has_hash_repartition(&left),
+            "plan without RepartitionExec should return false"
+        );
+
+        // CoalescePartitionsExec -> RepartitionExec(Hash) should return true
+        // (traverses single-child operator to find RepartitionExec)
+        let coalesce = Arc::new(CoalescePartitionsExec::new(Arc::new(
+            RepartitionExec::try_new(
+                Arc::clone(&left),
+                Partitioning::Hash(hash_exprs.clone(), 4),
+            )
+            .unwrap(),
+        ))) as Arc<dyn ExecutionPlan>;
+        assert!(
+            HashJoinExec::has_hash_repartition(&coalesce),
+            "should traverse through CoalescePartitionsExec to find Hash RepartitionExec"
+        );
+
+        // CoalescePartitionsExec -> DataSource (no RepartitionExec) should return false
+        let coalesce_no_repart = Arc::new(CoalescePartitionsExec::new(Arc::clone(&left)))
+            as Arc<dyn ExecutionPlan>;
+        assert!(
+            !HashJoinExec::has_hash_repartition(&coalesce_no_repart),
+            "should return false when traversing through CoalescePartitionsExec with no RepartitionExec"
+        );
+
+        // Multiple single-child operators -> RepartitionExec(Hash) should return true
+        // (tests deep traversal)
+        let deep_chain = Arc::new(CoalescePartitionsExec::new(Arc::new(
+            CoalescePartitionsExec::new(Arc::new(
+                RepartitionExec::try_new(
+                    Arc::clone(&left),
+                    Partitioning::Hash(hash_exprs, 4),
+                )
+                .unwrap(),
+            )),
+        ))) as Arc<dyn ExecutionPlan>;
+        assert!(
+            HashJoinExec::has_hash_repartition(&deep_chain),
+            "should traverse through multiple single-child operators to find Hash RepartitionExec"
         );
     }
 
@@ -5816,10 +5869,8 @@ mod tests {
             false,
         )?;
 
-        let mut config = ConfigOptions::default();
-        config.optimizer.preserve_file_partitions = 1;
         assert!(
-            !join.should_use_global_or(&config),
+            !join.should_use_global_or(),
             "CollectLeft should never use global OR"
         );
         Ok(())
@@ -5875,10 +5926,8 @@ mod tests {
             false,
         )?;
 
-        let mut config = ConfigOptions::default();
-        config.optimizer.preserve_file_partitions = 1;
         assert!(
-            !join.should_use_global_or(&config),
+            !join.should_use_global_or(),
             "both sides have Hash RepartitionExec, should use CASE routing"
         );
         Ok(())
@@ -5886,7 +5935,7 @@ mod tests {
 
     #[test]
     fn test_should_use_global_or_partitioned_without_repartition() -> Result<()> {
-        // Partitioned mode without RepartitionExec (file-group partitioning) should use global OR
+        // Partitioned mode without RepartitionExec should use global OR
         let left = build_table(
             ("a1", &vec![1, 2]),
             ("b1", &vec![4, 5]),
@@ -5913,49 +5962,9 @@ mod tests {
             false,
         )?;
 
-        let mut config = ConfigOptions::default();
-        config.optimizer.preserve_file_partitions = 1;
         assert!(
-            join.should_use_global_or(&config),
+            join.should_use_global_or(),
             "no RepartitionExec on either side, should use global OR"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn test_should_use_global_or_partitioned_preserve_disabled() -> Result<()> {
-        // Partitioned mode but preserve_file_partitions is disabled should not use global OR
-        let left = build_table(
-            ("a1", &vec![1, 2]),
-            ("b1", &vec![4, 5]),
-            ("c1", &vec![7, 8]),
-        );
-        let right = build_table(
-            ("a2", &vec![10, 20]),
-            ("b1", &vec![4, 5]),
-            ("c2", &vec![70, 80]),
-        );
-        let on = vec![(
-            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
-            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
-        )];
-        let join = HashJoinExec::try_new(
-            left,
-            right,
-            on,
-            None,
-            &JoinType::Inner,
-            None,
-            PartitionMode::Partitioned,
-            NullEquality::NullEqualsNothing,
-            false,
-        )?;
-
-        let mut config = ConfigOptions::default();
-        config.optimizer.preserve_file_partitions = 0;
-        assert!(
-            !join.should_use_global_or(&config),
-            "preserve_file_partitions disabled, should use CASE routing"
         );
         Ok(())
     }
@@ -6002,10 +6011,8 @@ mod tests {
             false,
         )?;
 
-        let mut config = ConfigOptions::default();
-        config.optimizer.preserve_file_partitions = 1;
         assert!(
-            join.should_use_global_or(&config),
+            join.should_use_global_or(),
             "right side has no RepartitionExec, should use global OR"
         );
         Ok(())

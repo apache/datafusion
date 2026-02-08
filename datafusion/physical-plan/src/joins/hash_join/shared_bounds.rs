@@ -265,10 +265,10 @@ pub(crate) struct SharedBuildAccumulator {
     /// Schema of the probe (right) side for evaluating filter expressions
     probe_schema: Arc<Schema>,
     /// When true, Partitioned mode uses Global OR instead of CASE hash routing. This is needed
-    /// when the data is not truly hash-distributed (i.e. using file-group partitioning from
-    /// `preserve_file_partitions`). In this case, using `CASE hash(key) % N` routing would apply
-    /// the wrong partition's filter to data. Global OR combines all partition's filters which is
-    /// safe for any partitioning scheme and still allows for effective pruning.
+    /// when the data is not truly hash-distributed (i.e., when there's no RepartitionExec with
+    /// Hash partitioning on both join sides). Using `CASE hash(key) % N` routing would apply
+    /// the wrong partition's filter to data in these cases. Global OR combines all partition
+    /// filters which is safe for any partitioning scheme and still allows for effective pruning.
     use_global_or: bool,
 }
 
@@ -513,12 +513,15 @@ impl SharedBuildAccumulator {
                         if self.use_global_or {
                             // Global OR: combine all partition filters with OR
                             //
-                            // Used when data is not truly hash-distributed (file-group
-                            // partitioning from `preserve_file_partitions`). In this case,
-                            // the CASE hash(key) % N routing would apply the wrong
-                            // partition's filter. Global OR is safe for any partitioning
-                            // scheme: PruningPredicate decomposes OR branches independently
-                            // for row-group pruning, achieving equivalent selectivity.
+                            // Used when data is not truly hash-distributed (i.e., when there's
+                            // no RepartitionExec with Hash partitioning on both join sides).
+                            // This happens with file-group partitioning, custom partitioning
+                            // schemes, or any scenario where partitioning matches but data isn't
+                            // actually hash-distributed. The CASE hash(key) % N routing would
+                            // apply the wrong partition's filter in these cases. Global OR is
+                            // safe for any partitioning scheme: PruningPredicate decomposes OR
+                            // branches independently for row-group pruning, achieving equivalent
+                            // selectivity.
                             //
                             // WHERE (
                             //  (col >= min_0 AND col <= max_0) OR
