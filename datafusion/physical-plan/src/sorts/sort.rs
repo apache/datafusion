@@ -819,7 +819,8 @@ impl ExternalSorter {
         match e {
             DataFusionError::ResourcesExhausted(_) => e.context(
                 "Not enough memory to continue external sort. \
-                    Consider increasing the memory limit, or decreasing sort_spill_reservation_bytes"
+                    Consider increasing the memory limit config: 'datafusion.runtime.memory_limit', \
+                    or decreasing the config: 'datafusion.execution.sort_spill_reservation_bytes'."
             ),
             // This is not an OOM error, so just return it as is.
             _ => e,
@@ -1735,6 +1736,48 @@ mod tests {
             matches!(err.find_root(), DataFusionError::ResourcesExhausted(_)),
             "Assertion failed: expected a ResourcesExhausted error, but got: {err:?}"
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_external_sorter_when_resource_exhausted() -> Result<()> {
+        let session_config = SessionConfig::new().with_batch_size(100);
+        // Memory allocation is being set lower than input data memory footprint
+        // to cause ResourcesExhausted error
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(1024, 1.0)
+            .build_arc()?;
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(session_config)
+                .with_runtime(runtime),
+        );
+
+        // The input has 200 partitions, each partition has a batch containing 100 rows.
+        // Each row has a single Utf8 column, the Utf8 string values are roughly 42 bytes.
+        // The total size of the input is roughly 8.4 KB.
+        let input = test::scan_partitioned_utf8(200);
+        let schema = input.schema();
+
+        let sort_exec = Arc::new(SortExec::new(
+            [PhysicalSortExpr {
+                expr: col("i", &schema)?,
+                options: SortOptions::default(),
+            }]
+            .into(),
+            Arc::new(CoalescePartitionsExec::new(input)),
+        ));
+
+        let result = collect(Arc::clone(&sort_exec) as _, Arc::clone(&task_ctx)).await;
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err.find_root(), DataFusionError::ResourcesExhausted(_)),
+            "Assertion failed: expected a ResourcesExhausted error, but got: {err:?}"
+        );
+        assert!(err.message().to_string().as_str().contains("Not enough memory to continue external sort. \
+                  Consider increasing the memory limit config: 'datafusion.runtime.memory_limit', \
+                  or decreasing the config: 'datafusion.execution.sort_spill_reservation_bytes'."));
 
         Ok(())
     }
