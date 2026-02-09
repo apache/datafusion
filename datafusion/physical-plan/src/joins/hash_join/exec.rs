@@ -1373,7 +1373,9 @@ impl ExecutionPlan for HashJoinExec {
             &self.join_schema,
         )?;
         // Project statistics if there is a projection
-        Ok(stats.project(self.projection.as_ref()))
+        let stats = stats.project(self.projection.as_ref());
+        // Apply fetch limit to statistics
+        stats.with_fetch(self.fetch, 0, 1)
     }
 
     /// Tries to push `projection` down through `hash_join`. If possible, performs the
@@ -1535,7 +1537,6 @@ impl ExecutionPlan for HashJoinExec {
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
-
         HashJoinExecBuilder::from(self)
             .with_fetch(limit)
             .build()
