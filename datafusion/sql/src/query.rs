@@ -253,7 +253,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             return Ok(input);
         };
 
-        let empty_schema = DFSchema::empty();
+        let empty_schema = Arc::new(DFSchema::empty());
 
         let (skip, fetch, limit_by_exprs) = match limit_clause {
             LimitClause::LimitOffset {

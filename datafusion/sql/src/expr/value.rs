@@ -25,7 +25,7 @@ use arrow::datatypes::{
 use bigdecimal::num_bigint::BigInt;
 use bigdecimal::{BigDecimal, Signed, ToPrimitive};
 use datafusion_common::{
-    DFSchema, DataFusionError, Result, ScalarValue, internal_datafusion_err,
+    DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, internal_datafusion_err,
     not_impl_err, plan_err,
 };
 use datafusion_expr::expr::{BinaryExpr, Placeholder};
@@ -152,7 +152,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(super) fn sql_array_literal(
         &self,
         elements: Vec<SQLExpr>,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
     ) -> Result<Expr> {
         let values = elements
             .into_iter()

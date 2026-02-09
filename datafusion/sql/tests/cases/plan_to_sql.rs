@@ -98,7 +98,7 @@ fn roundtrip_expr(table: TableReference, sql: &str) -> Result<String> {
     let state = MockSessionState::default().with_aggregate_function(sum_udaf());
     let context = MockContextProvider { state };
     let schema = context.get_table_source(table)?.schema();
-    let df_schema = DFSchema::try_from(schema)?;
+    let df_schema = Arc::new(DFSchema::try_from(schema)?);
     let sql_to_rel = SqlToRel::new(&context);
     let expr =
         sql_to_rel.sql_to_expr(sql_expr, &df_schema, &mut PlannerContext::new())?;
@@ -1330,7 +1330,7 @@ fn test_pretty_roundtrip() -> Result<()> {
         Field::new("age", DataType::Utf8, false),
     ]);
 
-    let df_schema = DFSchema::try_from(schema)?;
+    let df_schema = Arc::new(DFSchema::try_from(schema)?);
 
     let context = MockContextProvider {
         state: MockSessionState::default(),

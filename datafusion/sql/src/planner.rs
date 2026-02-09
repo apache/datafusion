@@ -454,7 +454,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<Vec<(String, Expr)>> {
         let mut column_defaults = vec![];
         // Default expressions are restricted, column references are not allowed
-        let empty_schema = DFSchema::empty();
+        let empty_schema = Arc::new(DFSchema::empty());
         let error_desc = |e: DataFusionError| match e {
             DataFusionError::SchemaError(ref err, _)
                 if matches!(**err, SchemaError::FieldNotFound { .. }) =>

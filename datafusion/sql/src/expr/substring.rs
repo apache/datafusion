@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{DFSchema, Result, ScalarValue};
+use datafusion_common::{DFSchemaRef, Result, ScalarValue};
 use datafusion_common::{not_impl_err, plan_err};
 use datafusion_expr::{Expr, planner::PlannerResult};
 
@@ -28,7 +28,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         expr: Box<SQLExpr>,
         substring_from: Option<Box<SQLExpr>>,
         substring_for: Option<Box<SQLExpr>>,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         let mut substring_args = match (substring_from, substring_for) {

@@ -16,8 +16,8 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::plan_err;
-use datafusion_common::{DFSchema, Result};
+use datafusion_common::Result;
+use datafusion_common::{DFSchemaRef, plan_err};
 use datafusion_expr::{Expr, GroupingSet};
 use sqlparser::ast::Expr as SQLExpr;
 
@@ -25,7 +25,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(super) fn sql_grouping_sets_to_expr(
         &self,
         exprs: Vec<Vec<SQLExpr>>,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         let args: Result<Vec<Vec<_>>> = exprs
@@ -42,7 +42,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(super) fn sql_rollup_to_expr(
         &self,
         exprs: Vec<Vec<SQLExpr>>,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         let args: Result<Vec<_>> = exprs
@@ -63,7 +63,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(super) fn sql_cube_to_expr(
         &self,
         exprs: Vec<Vec<SQLExpr>>,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         let args: Result<Vec<_>> = exprs

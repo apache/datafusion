@@ -585,7 +585,8 @@ impl SessionState {
         };
 
         let query = SqlToRel::new_with_options(&provider, self.get_parser_options());
-        query.sql_to_expr_with_alias(sql_expr, df_schema, &mut PlannerContext::new())
+        let df_schema = Arc::new(df_schema.clone());
+        query.sql_to_expr_with_alias(sql_expr, &df_schema, &mut PlannerContext::new())
     }
 
     /// Returns the [`Analyzer`] for this session
@@ -2187,7 +2188,7 @@ mod tests {
 
             let sql = "[1,2,3]";
             let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
-            let df_schema = DFSchema::try_from(schema)?;
+            let df_schema = Arc::new(DFSchema::try_from(schema)?);
             let dialect = state.config.options().sql_parser.dialect;
             let sql_expr = state.sql_to_expr(sql, &dialect)?;
 
@@ -2216,7 +2217,7 @@ mod tests {
         };
 
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
-        let df_schema = DFSchema::try_from(schema).unwrap();
+        let df_schema = Arc::new(DFSchema::try_from(schema).unwrap());
         let dialect = state.config.options().sql_parser.dialect;
         let query = SqlToRel::new_with_options(&provider, state.get_parser_options());
 
@@ -2229,7 +2230,10 @@ mod tests {
             let sql_expr_with_alias =
                 state.sql_to_expr_with_alias(sql, &dialect).unwrap();
             let from_expr = state
-                .create_logical_expr_from_sql_expr(sql_expr_with_alias, &df_schema)
+                .create_logical_expr_from_sql_expr(
+                    sql_expr_with_alias,
+                    df_schema.as_ref(),
+                )
                 .unwrap();
             assert_eq!(from_str, from_expr);
         }

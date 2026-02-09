@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{DFSchema, Diagnostic, Result, Span, Spans, plan_err};
+use datafusion_common::{DFSchemaRef, Diagnostic, Result, Span, Spans, plan_err};
 use datafusion_expr::expr::{Exists, InSubquery, SetComparison, SetQuantifier};
 use datafusion_expr::{Expr, LogicalPlan, Subquery};
 use sqlparser::ast::Expr as SQLExpr;
@@ -28,11 +28,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         &self,
         subquery: Query,
         negated: bool,
-        input_schema: &DFSchema,
+        input_schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         let old_outer_query_schema =
-            planner_context.set_outer_query_schema(Some(input_schema.clone().into()));
+            planner_context.set_outer_query_schema(Some(Arc::clone(input_schema)));
         let sub_plan = self.query_to_plan(subquery, planner_context)?;
         let outer_ref_columns = sub_plan.all_out_ref_exprs();
         planner_context.set_outer_query_schema(old_outer_query_schema);
@@ -51,11 +51,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         expr: SQLExpr,
         subquery: Query,
         negated: bool,
-        input_schema: &DFSchema,
+        input_schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         let old_outer_query_schema =
-            planner_context.set_outer_query_schema(Some(input_schema.clone().into()));
+            planner_context.set_outer_query_schema(Some(Arc::clone(input_schema)));
 
         let mut spans = Spans::new();
         if let SetExpr::Select(select) = &subquery.body.as_ref() {
@@ -95,11 +95,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(super) fn parse_scalar_subquery(
         &self,
         subquery: Query,
-        input_schema: &DFSchema,
+        input_schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         let old_outer_query_schema =
-            planner_context.set_outer_query_schema(Some(input_schema.clone().into()));
+            planner_context.set_outer_query_schema(Some(Arc::clone(input_schema)));
         let mut spans = Spans::new();
         if let SetExpr::Select(select) = subquery.body.as_ref() {
             for item in &select.projection {
@@ -169,11 +169,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         subquery: Query,
         compare_op: &BinaryOperator,
         quantifier: SetQuantifier,
-        input_schema: &DFSchema,
+        input_schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         let old_outer_query_schema =
-            planner_context.set_outer_query_schema(Some(input_schema.clone().into()));
+            planner_context.set_outer_query_schema(Some(Arc::clone(input_schema)));
 
         let mut spans = Spans::new();
         if let SetExpr::Select(select) = subquery.body.as_ref() {

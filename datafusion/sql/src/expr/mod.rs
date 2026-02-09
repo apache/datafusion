@@ -27,8 +27,8 @@ use sqlparser::ast::{
 };
 
 use datafusion_common::{
-    DFSchema, Result, ScalarValue, internal_datafusion_err, internal_err, not_impl_err,
-    plan_err,
+    DFSchema, DFSchemaRef, Result, ScalarValue, internal_datafusion_err, internal_err,
+    not_impl_err, plan_err,
 };
 
 use datafusion_expr::expr::ScalarFunction;
@@ -56,7 +56,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(crate) fn sql_expr_to_logical_expr_with_alias(
         &self,
         sql: SQLExprWithAlias,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         let mut expr =
@@ -69,7 +69,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(crate) fn sql_expr_to_logical_expr(
         &self,
         sql: SQLExpr,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         enum StackEntry {
@@ -150,7 +150,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     pub fn sql_to_expr_with_alias(
         &self,
         sql: SQLExprWithAlias,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         let mut expr =
@@ -165,7 +165,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     pub fn sql_to_expr(
         &self,
         sql: SQLExpr,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         // The location of the original SQL expression in the source code
@@ -177,7 +177,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     }
 
     /// Rewrite aliases which are not-complete (e.g. ones that only include only table qualifier in a schema.table qualified relation)
-    fn rewrite_partial_qualifier(&self, expr: Expr, schema: &DFSchema) -> Expr {
+    fn rewrite_partial_qualifier(&self, expr: Expr, schema: &DFSchemaRef) -> Expr {
         match expr {
             Expr::Column(col) => match &col.relation {
                 Some(q) => {
@@ -204,7 +204,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     fn sql_expr_to_logical_expr_internal(
         &self,
         sql: SQLExpr,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         // NOTE: This function is called recursively, so each match arm body should be as
@@ -652,7 +652,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     /// Parses a struct(..) expression and plans it creation
     fn parse_struct(
         &self,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
         values: Vec<SQLExpr>,
         fields: &[StructField],
@@ -681,7 +681,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     fn parse_tuple(
         &self,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
         values: Vec<SQLExpr>,
     ) -> Result<Expr> {
@@ -702,7 +702,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         &self,
         substr_expr: SQLExpr,
         str_expr: SQLExpr,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         let substr =
@@ -724,7 +724,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     fn try_plan_dictionary_literal(
         &self,
         fields: Vec<DictionaryField>,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         let mut keys = vec![];
@@ -753,7 +753,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     fn try_plan_map_literal(
         &self,
         entries: Vec<MapEntry>,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         let mut exprs: Vec<_> = entries
@@ -777,7 +777,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     fn create_named_struct_expr(
         &self,
         values: Vec<SQLExpr>,
-        input_schema: &DFSchema,
+        input_schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
     ) -> Result<Vec<Expr>> {
         Ok(values
@@ -818,7 +818,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     fn create_struct_expr(
         &self,
         values: Vec<SQLExpr>,
-        input_schema: &DFSchema,
+        input_schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
     ) -> Result<Vec<Expr>> {
         values
@@ -834,7 +834,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         expr: SQLExpr,
         list: Vec<SQLExpr>,
         negated: bool,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         let list_expr = list
@@ -856,7 +856,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         expr: SQLExpr,
         pattern: SQLExpr,
         escape_char: Option<Value>,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
         case_insensitive: bool,
         any: bool,
@@ -891,7 +891,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         expr: SQLExpr,
         pattern: SQLExpr,
         escape_char: Option<Value>,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         let pattern = self.sql_expr_to_logical_expr(pattern, schema, planner_context)?;
@@ -925,7 +925,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         trim_where: Option<TrimWhereField>,
         trim_what: Option<Box<SQLExpr>>,
         trim_characters: Option<Vec<SQLExpr>>,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         let arg = self.sql_expr_to_logical_expr(expr, schema, planner_context)?;
@@ -975,7 +975,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         overlay_what: SQLExpr,
         overlay_from: SQLExpr,
         overlay_for: Option<Box<SQLExpr>>,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         let arg = self.sql_expr_to_logical_expr(expr, schema, planner_context)?;
@@ -1005,7 +1005,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         expr: SQLExpr,
         data_type: &SQLDataType,
         format: Option<CastFormat>,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         if let Some(format) = format {
@@ -1058,7 +1058,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         &self,
         root: SQLExpr,
         mut access_chain: Vec<AccessExpr>,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
     ) -> Result<(Expr, Vec<AccessExpr>)> {
         let SQLExpr::Identifier(root_ident) = root else {
@@ -1099,7 +1099,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         &self,
         root: SQLExpr,
         access_chain: Vec<AccessExpr>,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         let (root, access_chain) = self.extract_root_and_access_chain(
@@ -1314,7 +1314,7 @@ mod tests {
             paste::item! {
                 #[test]
                 fn [<test_stack_overflow_ $num_expr>]() {
-                    let schema = DFSchema::empty();
+                    let schema = Arc::new(DFSchema::empty());
                     let mut planner_context = PlannerContext::default();
 
                     let expr_str = (0..$num_expr)
@@ -1352,7 +1352,7 @@ mod tests {
     test_stack_overflow!(8192);
     #[test]
     fn test_sql_to_expr_with_alias() {
-        let schema = DFSchema::empty();
+        let schema = Arc::new(DFSchema::empty());
         let mut planner_context = PlannerContext::default();
 
         let expr_str = "SUM(int_col) as sum_int_col";
