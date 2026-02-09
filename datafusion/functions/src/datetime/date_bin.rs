@@ -567,7 +567,7 @@ fn date_bin_impl(
     fn stride_map_fn<T: ArrowTimestampType>(
         origin: i64,
         stride: i64,
-        stride_fn: fn(i64, i64, i64) -> Result<i64>,
+        stride_fn: BinFunction,
     ) -> impl Fn(i64) -> Result<i64> {
         let scale = match T::UNIT {
             Nanosecond => 1,
@@ -672,7 +672,7 @@ fn date_bin_impl(
             fn transform_array_with_stride<T>(
                 origin: i64,
                 stride: i64,
-                stride_fn: fn(i64, i64, i64) -> Result<i64>,
+                stride_fn: BinFunction,
                 array: &ArrayRef,
                 tz_opt: &Option<Arc<str>>,
             ) -> Result<ColumnarValue>
