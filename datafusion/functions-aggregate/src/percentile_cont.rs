@@ -29,7 +29,7 @@ use arrow::{
     datatypes::{DataType, Field, FieldRef, Float16Type, Float32Type, Float64Type},
 };
 
-use half::f16;
+use num_traits::AsPrimitive;
 
 use arrow::array::ArrowNativeTypeOp;
 use datafusion_common::internal_err;
@@ -58,50 +58,11 @@ use datafusion_macros::user_doc;
 
 use crate::utils::validate_percentile_expr;
 
-/// Helper trait for safe interpolation on floating point native types
-/// (Float16 / Float32 / Float64).
-trait InterpolateNative: Copy {
-    fn to_f64(self) -> f64;
-    fn from_f64(v: f64) -> Self;
-}
-
-impl InterpolateNative for f64 {
-    #[inline]
-    fn to_f64(self) -> f64 {
-        self
-    }
-
-    #[inline]
-    fn from_f64(v: f64) -> Self {
-        v
-    }
-}
-
-impl InterpolateNative for f32 {
-    #[inline]
-    fn to_f64(self) -> f64 {
-        self as f64
-    }
-
-    #[inline]
-    fn from_f64(v: f64) -> Self {
-        v as f32
-    }
-}
-
-impl InterpolateNative for f16 {
-    #[inline]
-    fn to_f64(self) -> f64 {
-        // Use UFCS to ensure we call the inherent method on `half::f16` (and not
-        // recurse into this trait method).
-        f16::to_f64(self)
-    }
-
-    #[inline]
-    fn from_f64(v: f64) -> Self {
-        f16::from_f64(v)
-    }
-}
+// Keep historical behavior for percentile interpolation by quantizing the
+// fractional component before interpolation. This minimizes output changes for
+// Float32/Float64 while still allowing us to perform the arithmetic in f64
+// (preventing Float16 overflow).
+const INTERPOLATION_PRECISION: usize = 1_000_000;
 
 create_func!(PercentileCont, percentile_cont_udaf);
 
@@ -425,7 +386,8 @@ impl<T: ArrowNumericType + Debug> PercentileContAccumulator<T> {
 impl<T> Accumulator for PercentileContAccumulator<T>
 where
     T: ArrowNumericType + Debug,
-    T::Native: InterpolateNative,
+    T::Native: Copy + AsPrimitive<f64>,
+    f64: AsPrimitive<T::Native>,
 {
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
         // Convert `all_values` to `ListArray` and return a single List ScalarValue
@@ -533,7 +495,8 @@ impl<T: ArrowNumericType + Send> PercentileContGroupsAccumulator<T> {
 impl<T> GroupsAccumulator for PercentileContGroupsAccumulator<T>
 where
     T: ArrowNumericType + Send,
-    T::Native: InterpolateNative,
+    T::Native: Copy + AsPrimitive<f64>,
+    f64: AsPrimitive<T::Native>,
 {
     fn update_batch(
         &mut self,
@@ -715,7 +678,8 @@ impl<T: ArrowNumericType + Debug> DistinctPercentileContAccumulator<T> {
 impl<T> Accumulator for DistinctPercentileContAccumulator<T>
 where
     T: ArrowNumericType + Debug,
-    T::Native: InterpolateNative,
+    T::Native: Copy + AsPrimitive<f64>,
+    f64: AsPrimitive<T::Native>,
 {
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
         self.distinct_values.state()
@@ -773,7 +737,8 @@ fn calculate_percentile<T: ArrowNumericType>(
     percentile: f64,
 ) -> Option<T::Native>
 where
-    T::Native: InterpolateNative,
+    T::Native: Copy + AsPrimitive<f64>,
+    f64: AsPrimitive<T::Native>,
 {
     let cmp = |x: &T::Native, y: &T::Native| x.compare(*y);
 
@@ -818,18 +783,15 @@ where
             let (_, upper_value, _) = values.select_nth_unstable_by(upper_index, cmp);
             let upper_value = *upper_value;
 
-            // Linear interpolation.
-            //
-            // Do the interpolation in f64 and then cast back to the native type.
-            //
-            // This avoids overflowing Float16 intermediates. For example, a prior
-            // implementation that scaled `fraction` (e.g. by 1_000_000) and multiplied
-            // in the native type could overflow `f16` to `inf`, and then yield `NaN`.
+            // Linear interpolation (see `INTERPOLATION_PRECISION` comment for rationale).
             let fraction = index - (lower_index as f64);
-            let lower_f = lower_value.to_f64();
-            let upper_f = upper_value.to_f64();
-            let interpolated_f = lower_f + (upper_f - lower_f) * fraction;
-            Some(T::Native::from_f64(interpolated_f))
+            let scaled = (fraction * INTERPOLATION_PRECISION as f64) as usize;
+            let weight = scaled as f64 / INTERPOLATION_PRECISION as f64;
+
+            let lower_f: f64 = lower_value.as_();
+            let upper_f: f64 = upper_value.as_();
+            let interpolated_f = lower_f + (upper_f - lower_f) * weight;
+            Some(interpolated_f.as_())
         }
     }
 }
