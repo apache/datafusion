@@ -283,8 +283,19 @@ impl DynamicFilterPhysicalExpr {
     }
 
     /// Update the dynamic filter with per-partition filter expressions.
+    ///
+    /// This stores one filter per partition, indexed by partition number.
     pub fn update_partitioned(&self, partition_exprs: PartitionedFilters) -> Result<()> {
+        let mut current = self.inner.write();
+        let new_generation = current.generation + 1;
+        current.generation = new_generation;
         *self.partitioned_exprs.write() = partition_exprs;
+        drop(current);
+
+        // Broadcast the new state.
+        let _ = self.state_watch.send(FilterState::InProgress {
+            generation: new_generation,
+        });
         Ok(())
     }
 

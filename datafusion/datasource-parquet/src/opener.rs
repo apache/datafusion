@@ -424,13 +424,7 @@ impl FileOpener for ParquetOpener {
             // When both sides of a hash join preserve their file partitioning, each partition gets
             // its own filter.
             predicate = predicate
-                .map(|p| {
-                    if is_dynamic_physical_expr(&p) {
-                        snapshot_physical_expr_for_partition(p, partition_index)
-                    } else {
-                        Ok(p)
-                    }
-                })
+                .map(|p| snapshot_physical_expr_for_partition(p, partition_index))
                 .transpose()?;
 
             // Adapt projections to the physical file schema as well

@@ -783,22 +783,20 @@ impl HashJoinExec {
             && !Self::has_hash_repartition(&self.right)
     }
 
-    /// Walk the plan looking for a `RepartitionExec` with `Hash` partitioning.
+    /// Walk the plan tree looking for a `RepartitionExec` with `Hash` partitioning.
     fn has_hash_repartition(plan: &Arc<dyn ExecutionPlan>) -> bool {
-        let mut current = Arc::clone(plan);
-        loop {
+        let mut stack = vec![Arc::clone(plan)];
+        while let Some(current) = stack.pop() {
             if let Some(repart) = current.as_any().downcast_ref::<RepartitionExec>()
                 && matches!(repart.partitioning(), Partitioning::Hash(_, _))
             {
                 return true;
             }
-            let children = current.children();
-            if children.len() == 1 {
-                current = Arc::clone(children[0]);
-            } else {
-                return false;
+            for child in current.children() {
+                stack.push(Arc::clone(child));
             }
         }
+        false
     }
 
     /// Calculate order preservation flags for this hash join.
@@ -5818,7 +5816,7 @@ mod tests {
             CoalescePartitionsExec::new(Arc::new(
                 RepartitionExec::try_new(
                     Arc::clone(&left),
-                    Partitioning::Hash(hash_exprs, 4),
+                    Partitioning::Hash(hash_exprs.clone(), 4),
                 )
                 .unwrap(),
             )),
@@ -5826,6 +5824,50 @@ mod tests {
         assert!(
             HashJoinExec::has_hash_repartition(&deep_chain),
             "should traverse through multiple single-child operators to find Hash RepartitionExec"
+        );
+
+        // UnionExec with no RepartitionExec on either branch should return false
+        let union_no_repart =
+            crate::union::UnionExec::try_new(vec![Arc::clone(&left), Arc::clone(&left)])
+                .unwrap();
+        assert!(
+            !HashJoinExec::has_hash_repartition(&union_no_repart),
+            "UnionExec with no RepartitionExec on any branch should return false"
+        );
+
+        // UnionExec with RepartitionExec(Hash) on one branch should return true
+        let hash_branch = Arc::new(
+            RepartitionExec::try_new(
+                Arc::clone(&left),
+                Partitioning::Hash(hash_exprs.clone(), 4),
+            )
+            .unwrap(),
+        ) as Arc<dyn ExecutionPlan>;
+        let union_one_hash =
+            crate::union::UnionExec::try_new(vec![Arc::clone(&left), hash_branch])
+                .unwrap();
+        assert!(
+            HashJoinExec::has_hash_repartition(&union_one_hash),
+            "UnionExec with RepartitionExec(Hash) on one branch should return true"
+        );
+
+        // CoalescePartitionsExec -> UnionExec -> ... -> RepartitionExec(Hash) should return true
+        let deep_union = Arc::new(CoalescePartitionsExec::new(
+            crate::union::UnionExec::try_new(vec![
+                Arc::clone(&left),
+                Arc::new(CoalescePartitionsExec::new(Arc::new(
+                    RepartitionExec::try_new(
+                        Arc::clone(&left),
+                        Partitioning::Hash(hash_exprs, 4),
+                    )
+                    .unwrap(),
+                ))) as Arc<dyn ExecutionPlan>,
+            ])
+            .unwrap(),
+        )) as Arc<dyn ExecutionPlan>;
+        assert!(
+            HashJoinExec::has_hash_repartition(&deep_union),
+            "should find RepartitionExec(Hash) through UnionExec and multiple nesting levels"
         );
     }
 
