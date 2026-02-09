@@ -313,7 +313,7 @@ impl PlannerContext {
     /// then look up the outer relations one by one until a match is found or no
     /// more outer relation exist.
     ///
-    /// NOTE this is *REVERSED* order of [`Self::outer_queries_schemas_stack`]
+    /// NOTE this is *REVERSED* order of [`Self::outer_queries_schemas`]
     ///
     /// This is useful to resolve the column reference in the subquery by
     /// looking up the outer query schemas one by one.
