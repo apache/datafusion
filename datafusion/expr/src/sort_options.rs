@@ -12,7 +12,10 @@ pub struct SortOptions {
 impl SortOptions {
     /// Create a new `SortOptions` with default values (Ascending, Nulls Last).
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            descending: false,
+            nulls_first: false,
+        }
     }
 
     /// Set sort order to descending.
