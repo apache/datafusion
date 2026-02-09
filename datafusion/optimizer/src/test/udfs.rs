@@ -32,6 +32,12 @@ pub struct PlacementTestUDF {
     placement: ExpressionPlacement,
 }
 
+impl Default for PlacementTestUDF {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PlacementTestUDF {
     pub fn new() -> Self {
         Self {
@@ -68,7 +74,7 @@ impl ScalarUDFImpl for PlacementTestUDF {
         panic!("PlacementTestUDF: not intended for execution")
     }
     fn placement(&self, _args: &[ExpressionPlacement]) -> ExpressionPlacement {
-        self.placement.clone()
+        self.placement
     }
 }
 
