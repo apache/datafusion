@@ -51,7 +51,12 @@ impl ScalarUDFImpl for PlacementTestUDF {
         self
     }
     fn name(&self) -> &str {
-        "leaf_udf"
+        match self.placement {
+            ExpressionPlacement::MoveTowardsLeafNodes => "leaf_udf",
+            ExpressionPlacement::KeepInPlace => "keep_in_place_udf",
+            ExpressionPlacement::Column => "column_udf",
+            ExpressionPlacement::Literal => "literal_udf",
+        }
     }
     fn signature(&self) -> &Signature {
         &self.signature
@@ -69,6 +74,8 @@ impl ScalarUDFImpl for PlacementTestUDF {
 
 /// Create a `leaf_udf(arg)` expression with `MoveTowardsLeafNodes` placement.
 pub fn leaf_udf_expr(arg: Expr) -> Expr {
-    let udf = ScalarUDF::new_from_impl(PlacementTestUDF::new());
+    let udf = ScalarUDF::new_from_impl(
+        PlacementTestUDF::new().with_placement(ExpressionPlacement::MoveTowardsLeafNodes),
+    );
     udf.call(vec![arg])
 }
