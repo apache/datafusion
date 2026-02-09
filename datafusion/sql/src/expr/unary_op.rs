@@ -16,9 +16,7 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{
-    DFSchemaRef, Diagnostic, Result, not_impl_err, plan_err,
-};
+use datafusion_common::{DFSchemaRef, Diagnostic, Result, not_impl_err, plan_err};
 use datafusion_expr::{
     Expr, ExprSchemable,
     type_coercion::{is_interval, is_timestamp},

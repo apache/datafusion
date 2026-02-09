@@ -25,8 +25,8 @@ use arrow::datatypes::{
 use bigdecimal::num_bigint::BigInt;
 use bigdecimal::{BigDecimal, Signed, ToPrimitive};
 use datafusion_common::{
-    DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
-    internal_datafusion_err, not_impl_err, plan_err,
+    DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, internal_datafusion_err,
+    not_impl_err, plan_err,
 };
 use datafusion_expr::expr::{BinaryExpr, Placeholder};
 use datafusion_expr::planner::PlannerResult;

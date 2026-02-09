@@ -17,8 +17,7 @@
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{
-    Column, DFSchema, DFSchemaRef, Result, not_impl_err, plan_datafusion_err,
-    plan_err,
+    Column, DFSchema, DFSchemaRef, Result, not_impl_err, plan_datafusion_err, plan_err,
 };
 use datafusion_expr::expr::Sort;
 use datafusion_expr::{Expr, SortExpr};

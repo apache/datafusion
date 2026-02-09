@@ -18,7 +18,10 @@
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use arrow::datatypes::DataType;
-use datafusion_common::{DFSchema, Dependency, Diagnostic, Result, Span, internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err, DFSchemaRef};
+use datafusion_common::{
+    DFSchema, DFSchemaRef, Dependency, Diagnostic, Result, Span, internal_datafusion_err,
+    internal_err, not_impl_err, plan_datafusion_err, plan_err,
+};
 use datafusion_expr::{
     Expr, ExprSchemable, SortExpr, WindowFrame, WindowFunctionDefinition,
     arguments::ArgumentName,

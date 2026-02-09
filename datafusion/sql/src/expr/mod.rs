@@ -26,7 +26,10 @@ use sqlparser::ast::{
     TypedString, Value, ValueWithSpan,
 };
 
-use datafusion_common::{DFSchema, Result, ScalarValue, internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchemaRef};
+use datafusion_common::{
+    DFSchema, DFSchemaRef, Result, ScalarValue, internal_datafusion_err, internal_err,
+    not_impl_err, plan_err,
+};
 
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr::SetQuantifier;

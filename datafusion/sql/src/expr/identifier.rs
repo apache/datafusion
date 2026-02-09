@@ -17,7 +17,10 @@
 
 use arrow::datatypes::FieldRef;
 use datafusion_common::datatype::DataTypeExt;
-use datafusion_common::{Column, DFSchema, Result, Span, TableReference, assert_or_internal_err, exec_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err, DFSchemaRef};
+use datafusion_common::{
+    Column, DFSchema, DFSchemaRef, Result, Span, TableReference, assert_or_internal_err,
+    exec_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
+};
 use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::{Case, Expr};
 use sqlparser::ast::{CaseWhen, Expr as SQLExpr, Ident};

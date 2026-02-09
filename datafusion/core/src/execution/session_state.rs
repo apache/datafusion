@@ -2230,7 +2230,10 @@ mod tests {
             let sql_expr_with_alias =
                 state.sql_to_expr_with_alias(sql, &dialect).unwrap();
             let from_expr = state
-                .create_logical_expr_from_sql_expr(sql_expr_with_alias, df_schema.as_ref())
+                .create_logical_expr_from_sql_expr(
+                    sql_expr_with_alias,
+                    df_schema.as_ref(),
+                )
                 .unwrap();
             assert_eq!(from_str, from_expr);
         }
