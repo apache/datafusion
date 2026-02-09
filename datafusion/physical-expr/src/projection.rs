@@ -29,7 +29,8 @@ use arrow::datatypes::{Field, Schema, SchemaRef};
 use datafusion_common::stats::{ColumnStatistics, Precision};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
-    Result, ScalarValue, assert_or_internal_err, internal_datafusion_err, plan_err,
+    Result, ScalarValue, Statistics, assert_or_internal_err, internal_datafusion_err,
+    plan_err,
 };
 
 use datafusion_physical_expr_common::metrics::ExecutionPlanMetricsSet;
@@ -125,7 +126,8 @@ impl From<ProjectionExpr> for (Arc<dyn PhysicalExpr>, String) {
 /// indices.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectionExprs {
-    exprs: Vec<ProjectionExpr>,
+    /// [`Arc`] used for a cheap clone, which improves physical plan optimization performance.
+    exprs: Arc<[ProjectionExpr]>,
 }
 
 impl std::fmt::Display for ProjectionExprs {
@@ -137,14 +139,16 @@ impl std::fmt::Display for ProjectionExprs {
 
 impl From<Vec<ProjectionExpr>> for ProjectionExprs {
     fn from(value: Vec<ProjectionExpr>) -> Self {
-        Self { exprs: value }
+        Self {
+            exprs: value.into(),
+        }
     }
 }
 
 impl From<&[ProjectionExpr]> for ProjectionExprs {
     fn from(value: &[ProjectionExpr]) -> Self {
         Self {
-            exprs: value.to_vec(),
+            exprs: value.iter().cloned().collect(),
         }
     }
 }
@@ -152,7 +156,7 @@ impl From<&[ProjectionExpr]> for ProjectionExprs {
 impl FromIterator<ProjectionExpr> for ProjectionExprs {
     fn from_iter<T: IntoIterator<Item = ProjectionExpr>>(exprs: T) -> Self {
         Self {
-            exprs: exprs.into_iter().collect::<Vec<_>>(),
+            exprs: exprs.into_iter().collect(),
         }
     }
 }
@@ -164,12 +168,17 @@ impl AsRef<[ProjectionExpr]> for ProjectionExprs {
 }
 
 impl ProjectionExprs {
-    pub fn new<I>(exprs: I) -> Self
-    where
-        I: IntoIterator<Item = ProjectionExpr>,
-    {
+    /// Make a new [`ProjectionExprs`] from expressions iterator.
+    pub fn new(exprs: impl IntoIterator<Item = ProjectionExpr>) -> Self {
         Self {
-            exprs: exprs.into_iter().collect::<Vec<_>>(),
+            exprs: exprs.into_iter().collect(),
+        }
+    }
+
+    /// Make a new [`ProjectionExprs`] from expressions.
+    pub fn from_expressions(exprs: impl Into<Arc<[ProjectionExpr]>>) -> Self {
+        Self {
+            exprs: exprs.into(),
         }
     }
 
@@ -285,13 +294,14 @@ impl ProjectionExprs {
     {
         let exprs = self
             .exprs
-            .into_iter()
+            .iter()
+            .cloned()
             .map(|mut proj| {
                 proj.expr = f(proj.expr)?;
                 Ok(proj)
             })
-            .collect::<Result<Vec<_>>>()?;
-        Ok(Self::new(exprs))
+            .collect::<Result<Arc<_>>>()?;
+        Ok(Self::from_expressions(exprs))
     }
 
     /// Apply another projection on top of this projection, returning the combined projection.
@@ -361,7 +371,7 @@ impl ProjectionExprs {
     /// applied on top of this projection.
     pub fn try_merge(&self, other: &ProjectionExprs) -> Result<ProjectionExprs> {
         let mut new_exprs = Vec::with_capacity(other.exprs.len());
-        for proj_expr in &other.exprs {
+        for proj_expr in other.exprs.iter() {
             let new_expr = update_expr(&proj_expr.expr, &self.exprs, true)?
                 .ok_or_else(|| {
                     internal_datafusion_err!(
@@ -602,12 +612,12 @@ impl ProjectionExprs {
     /// ```
     pub fn project_statistics(
         &self,
-        mut stats: datafusion_common::Statistics,
+        mut stats: Statistics,
         output_schema: &Schema,
-    ) -> Result<datafusion_common::Statistics> {
+    ) -> Result<Statistics> {
         let mut column_statistics = vec![];
 
-        for proj_expr in &self.exprs {
+        for proj_expr in self.exprs.iter() {
             let expr = &proj_expr.expr;
             let col_stats = if let Some(col) = expr.as_any().downcast_ref::<Column>() {
                 std::mem::take(&mut stats.column_statistics[col.index()])
@@ -754,13 +764,52 @@ impl Projector {
     }
 }
 
-impl IntoIterator for ProjectionExprs {
-    type Item = ProjectionExpr;
-    type IntoIter = std::vec::IntoIter<ProjectionExpr>;
+/// Describes an immutable reference counted projection.
+///
+/// This structure represents projecting a set of columns by index.
+/// [`Arc`] is used to make it cheap to clone.
+pub type ProjectionRef = Arc<[usize]>;
 
-    fn into_iter(self) -> Self::IntoIter {
-        self.exprs.into_iter()
-    }
+/// Combine two projections.
+///
+/// If `p1` is [`None`] then there are no changes.
+/// Otherwise, if passed `p2` is not [`None`] then it is remapped
+/// according to the `p1`. Otherwise, there are no changes.
+///
+/// # Example
+///
+/// If stored projection is [0, 2] and we call `apply_projection([0, 2, 3])`,
+/// then the resulting projection will be [0, 3].
+///
+/// # Error
+///
+/// Returns an internal error if `p1` contains index that is greater than `p2` len.
+///
+pub fn combine_projections(
+    p1: Option<&ProjectionRef>,
+    p2: Option<&ProjectionRef>,
+) -> Result<Option<ProjectionRef>> {
+    let Some(p1) = p1 else {
+        return Ok(None);
+    };
+    let Some(p2) = p2 else {
+        return Ok(Some(Arc::clone(p1)));
+    };
+
+    Ok(Some(
+        p1.iter()
+            .map(|i| {
+                let idx = *i;
+                assert_or_internal_err!(
+                    idx < p2.len(),
+                    "unable to apply projection: index {} is greater than new projection len {}",
+                    idx,
+                    p2.len(),
+                );
+                Ok(p2[*i])
+            })
+            .collect::<Result<Arc<[usize]>>>()?,
+    ))
 }
 
 /// The function operates in two modes:

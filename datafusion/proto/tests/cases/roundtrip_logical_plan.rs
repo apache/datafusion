@@ -413,6 +413,7 @@ async fn roundtrip_logical_plan_dml() -> Result<()> {
         "DELETE FROM T1",
         "UPDATE T1 SET a = 1",
         "CREATE TABLE T2 AS SELECT * FROM T1",
+        "TRUNCATE TABLE T1",
     ];
     for query in queries {
         let plan = ctx.sql(query).await?.into_optimized_plan()?;
@@ -1531,6 +1532,16 @@ fn round_trip_scalar_values_and_data_types() {
         ),
         ScalarValue::Dictionary(
             Box::new(DataType::Int32),
+            Box::new(ScalarValue::Utf8(None)),
+        ),
+        ScalarValue::RunEndEncoded(
+            Field::new("run_ends", DataType::Int32, false).into(),
+            Field::new("values", DataType::Utf8, true).into(),
+            Box::new(ScalarValue::from("foo")),
+        ),
+        ScalarValue::RunEndEncoded(
+            Field::new("run_ends", DataType::Int32, false).into(),
+            Field::new("values", DataType::Utf8, true).into(),
             Box::new(ScalarValue::Utf8(None)),
         ),
         ScalarValue::Binary(Some(b"bar".to_vec())),

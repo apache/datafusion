@@ -25,7 +25,9 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Result, plan_datafusion_err};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortRequirement};
-use datafusion_physical_plan::aggregates::{AggregateExec, concat_slices};
+use datafusion_physical_plan::aggregates::{
+    AggregateExec, AggregateInputMode, concat_slices,
+};
 use datafusion_physical_plan::windows::get_ordered_partition_by_indices;
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
@@ -81,7 +83,7 @@ impl PhysicalOptimizerRule for OptimizeAggregateOrder {
                 // ordering fields may be pruned out by first stage aggregates.
                 // Hence, necessary information for proper merge is added during
                 // the first stage to the state field, which the final stage uses.
-                if !aggr_exec.mode().is_first_stage() {
+                if aggr_exec.mode().input_mode() == AggregateInputMode::Partial {
                     return Ok(Transformed::no(plan));
                 }
                 let input = aggr_exec.input();

@@ -31,7 +31,6 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::{DataType::Null, Field};
 use datafusion_common::utils::SingleRowListArrayBuilder;
 use datafusion_common::{Result, plan_err};
-use datafusion_expr::TypeSignature;
 use datafusion_expr::binary::{
     try_type_union_resolution_with_struct, type_union_resolution,
 };
@@ -80,10 +79,7 @@ impl Default for MakeArray {
 impl MakeArray {
     pub fn new() -> Self {
         Self {
-            signature: Signature::one_of(
-                vec![TypeSignature::Nullary, TypeSignature::UserDefined],
-                Volatility::Immutable,
-            ),
+            signature: Signature::user_defined(Volatility::Immutable),
             aliases: vec![String::from("make_list")],
         }
     }
@@ -125,7 +121,11 @@ impl ScalarUDFImpl for MakeArray {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        coerce_types_inner(arg_types, self.name())
+        if arg_types.is_empty() {
+            Ok(vec![])
+        } else {
+            coerce_types_inner(arg_types, self.name())
+        }
     }
 
     fn documentation(&self) -> Option<&Documentation> {
