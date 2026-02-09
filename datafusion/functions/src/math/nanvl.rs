@@ -108,36 +108,32 @@ impl ScalarUDFImpl for NanvlFunc {
 
         match (&x, &y) {
             (ColumnarValue::Scalar(x), ColumnarValue::Scalar(y)) => {
-                // NULL propagation
-                if x.is_null() || y.is_null() {
-                    return match (x.data_type(), y.data_type()) {
-                        (Float16, Float16) => {
-                            Ok(ColumnarValue::Scalar(ScalarValue::Float16(None)))
-                        }
-                        (Float32, Float32) => {
-                            Ok(ColumnarValue::Scalar(ScalarValue::Float32(None)))
-                        }
-                        (Float64, Float64) => {
-                            Ok(ColumnarValue::Scalar(ScalarValue::Float64(None)))
-                        }
-                        _ => internal_err!(
-                            "Unexpected datatypes for nanvl: {}, {}",
-                            x.data_type(),
-                            y.data_type()
-                        ),
-                    };
-                }
-
+                // Scalar fast path: return x unless x is NaN (then return y)
                 let out = match (x, y) {
-                    (ScalarValue::Float64(Some(xv)), ScalarValue::Float64(Some(yv))) => {
-                        ScalarValue::Float64(Some(if xv.is_nan() { *yv } else { *xv }))
+                    (ScalarValue::Float64(Some(xv)), _) => {
+                        if xv.is_nan() {
+                            y.clone()
+                        } else {
+                            ScalarValue::Float64(Some(*xv))
+                        }
                     }
-                    (ScalarValue::Float32(Some(xv)), ScalarValue::Float32(Some(yv))) => {
-                        ScalarValue::Float32(Some(if xv.is_nan() { *yv } else { *xv }))
+                    (ScalarValue::Float32(Some(xv)), _) => {
+                        if xv.is_nan() {
+                            y.clone()
+                        } else {
+                            ScalarValue::Float32(Some(*xv))
+                        }
                     }
-                    (ScalarValue::Float16(Some(xv)), ScalarValue::Float16(Some(yv))) => {
-                        ScalarValue::Float16(Some(if xv.is_nan() { *yv } else { *xv }))
+                    (ScalarValue::Float16(Some(xv)), _) => {
+                        if xv.is_nan() {
+                            y.clone()
+                        } else {
+                            ScalarValue::Float16(Some(*xv))
+                        }
                     }
+                    (ScalarValue::Float64(None), _) => ScalarValue::Float64(None),
+                    (ScalarValue::Float32(None), _) => ScalarValue::Float32(None),
+                    (ScalarValue::Float16(None), _) => ScalarValue::Float16(None),
                     _ => {
                         return internal_err!(
                             "Unexpected scalar types for nanvl: {}, {}",
@@ -212,8 +208,8 @@ mod test {
     #[test]
     fn test_nanvl_f64() {
         let args: Vec<ArrayRef> = vec![
-            Arc::new(Float64Array::from(vec![1.0, f64::NAN, 3.0, f64::NAN])), // y
-            Arc::new(Float64Array::from(vec![5.0, 6.0, f64::NAN, f64::NAN])), // x
+            Arc::new(Float64Array::from(vec![1.0, f64::NAN, 3.0, f64::NAN])), // x
+            Arc::new(Float64Array::from(vec![5.0, 6.0, f64::NAN, f64::NAN])), // y
         ];
 
         let result = nanvl(&args).expect("failed to initialize function nanvl");
@@ -230,8 +226,8 @@ mod test {
     #[test]
     fn test_nanvl_f32() {
         let args: Vec<ArrayRef> = vec![
-            Arc::new(Float32Array::from(vec![1.0, f32::NAN, 3.0, f32::NAN])), // y
-            Arc::new(Float32Array::from(vec![5.0, 6.0, f32::NAN, f32::NAN])), // x
+            Arc::new(Float32Array::from(vec![1.0, f32::NAN, 3.0, f32::NAN])), // x
+            Arc::new(Float32Array::from(vec![5.0, 6.0, f32::NAN, f32::NAN])), // y
         ];
 
         let result = nanvl(&args).expect("failed to initialize function nanvl");
