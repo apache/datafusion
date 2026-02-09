@@ -932,25 +932,27 @@ impl HashJoinExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let left = self.left();
         let right = self.right();
-        let new_join = HashJoinExec::try_new(
+        let new_join = HashJoinExecBuilder::new(
             Arc::clone(right),
             Arc::clone(left),
             self.on()
                 .iter()
                 .map(|(l, r)| (Arc::clone(r), Arc::clone(l)))
                 .collect(),
-            self.filter().map(JoinFilter::swap),
-            &self.join_type().swap(),
-            swap_join_projection(
-                left.schema().fields().len(),
-                right.schema().fields().len(),
-                self.projection.as_deref(),
-                self.join_type(),
-            ),
-            partition_mode,
-            self.null_equality(),
-            self.null_aware,
-        )?;
+            self.join_type().swap(),
+        )
+        .with_filter(self.filter().map(JoinFilter::swap))
+        .with_projection(swap_join_projection(
+            left.schema().fields().len(),
+            right.schema().fields().len(),
+            self.projection.as_deref(),
+            self.join_type(),
+        ))
+        .with_partition_mode(partition_mode)
+        .with_null_equality(self.null_equality())
+        .with_null_aware(self.null_aware)
+        .with_fetch(self.fetch)
+        .build()?;
         // In case of anti / semi joins or if there is embedded projection in HashJoinExec, output column order is preserved, no need to add projection again
         if matches!(
             self.join_type(),
@@ -1400,18 +1402,22 @@ impl ExecutionPlan for HashJoinExec {
             &schema,
             self.filter(),
         )? {
-            Ok(Some(Arc::new(HashJoinExec::try_new(
-                Arc::new(projected_left_child),
-                Arc::new(projected_right_child),
-                join_on,
-                join_filter,
-                self.join_type(),
+            Ok(Some(Arc::new(
+                HashJoinExecBuilder::new(
+                    Arc::new(projected_left_child),
+                    Arc::new(projected_right_child),
+                    join_on,
+                    *self.join_type(),
+                )
+                .with_filter(join_filter)
                 // Returned early if projection is not None
-                None,
-                *self.partition_mode(),
-                self.null_equality,
-                self.null_aware,
-            )?)))
+                .with_projection(None)
+                .with_partition_mode(*self.partition_mode())
+                .with_null_equality(self.null_equality)
+                .with_null_aware(self.null_aware)
+                .with_fetch(self.fetch)
+                .build()?,
+            )))
         } else {
             try_embed_projection(projection, self)
         }
@@ -1529,25 +1535,12 @@ impl ExecutionPlan for HashJoinExec {
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
-        Some(Arc::new(HashJoinExec {
-            left: Arc::clone(&self.left),
-            right: Arc::clone(&self.right),
-            on: self.on.clone(),
-            filter: self.filter.clone(),
-            join_type: self.join_type,
-            join_schema: Arc::clone(&self.join_schema),
-            left_fut: Arc::clone(&self.left_fut),
-            random_state: self.random_state.clone(),
-            mode: self.mode,
-            metrics: ExecutionPlanMetricsSet::new(),
-            projection: self.projection.clone(),
-            column_indices: self.column_indices.clone(),
-            null_equality: self.null_equality,
-            null_aware: self.null_aware,
-            cache: self.cache.clone(),
-            dynamic_filter: self.dynamic_filter.clone(),
-            fetch: limit,
-        }))
+
+        HashJoinExecBuilder::from(self)
+            .with_fetch(limit)
+            .build()
+            .ok()
+            .map(|exec| Arc::new(exec) as _)
     }
 }
 
