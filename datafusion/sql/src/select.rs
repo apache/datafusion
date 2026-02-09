@@ -640,7 +640,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let outer_query_schema = planner_context.outer_query_schema().cloned();
                 let outer_query_schema_vec = outer_query_schema
                     .as_ref()
-                    .map(|schema| vec![schema])
+                    .map(|schema| vec![schema.as_ref()])
                     .unwrap_or_else(Vec::new);
 
                 let filter_expr =

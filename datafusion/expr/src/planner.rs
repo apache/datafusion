@@ -30,7 +30,7 @@ use crate::{
 use arrow::datatypes::{DataType, Field, FieldRef, SchemaRef};
 use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::{
-    DFSchema, Result, TableReference, config::ConfigOptions,
+    DFSchema, DFSchemaRef, Result, TableReference, config::ConfigOptions,
     file_options::file_type::FileType, not_impl_err,
 };
 #[cfg(feature = "sql")]
@@ -408,14 +408,14 @@ pub trait RelationPlannerContext {
 
     /// Converts a SQL expression into a logical expression using the current
     /// planner context.
-    fn sql_to_expr(&mut self, expr: SQLExpr, schema: &DFSchema) -> Result<Expr>;
+    fn sql_to_expr(&mut self, expr: SQLExpr, schema: &DFSchemaRef) -> Result<Expr>;
 
     /// Converts a SQL expression into a logical expression without DataFusion
     /// rewrites.
     fn sql_expr_to_logical_expr(
         &mut self,
         expr: SQLExpr,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
     ) -> Result<Expr>;
 
     /// Normalizes an identifier according to session settings.

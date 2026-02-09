@@ -43,8 +43,8 @@ use datafusion_common::config::{ConfigExtension, ConfigOptions, TableOptions};
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{
-    DFSchema, DataFusionError, ResolvedTableReference, TableReference, config_err,
-    exec_err, plan_datafusion_err,
+    DFSchema, DFSchemaRef, DataFusionError, ResolvedTableReference, TableReference,
+    config_err, exec_err, plan_datafusion_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::config::SessionConfig;
@@ -568,8 +568,9 @@ impl SessionState {
         let dialect = self.config.options().sql_parser.dialect;
 
         let sql_expr = self.sql_to_expr_with_alias(sql, &dialect)?;
+        let df_schema = Arc::new(df_schema.clone());
 
-        self.create_logical_expr_from_sql_expr(sql_expr, df_schema)
+        self.create_logical_expr_from_sql_expr(sql_expr, &df_schema)
     }
 
     /// Creates a datafusion style AST [`Expr`] from a SQL expression.
@@ -577,7 +578,7 @@ impl SessionState {
     pub fn create_logical_expr_from_sql_expr(
         &self,
         sql_expr: SQLExprWithAlias,
-        df_schema: &DFSchema,
+        df_schema: &DFSchemaRef,
     ) -> datafusion_common::Result<Expr> {
         let provider = SessionContextProvider {
             state: self,
@@ -585,8 +586,7 @@ impl SessionState {
         };
 
         let query = SqlToRel::new_with_options(&provider, self.get_parser_options());
-        let df_schema = Arc::new(df_schema.clone());
-        query.sql_to_expr_with_alias(sql_expr, &df_schema, &mut PlannerContext::new())
+        query.sql_to_expr_with_alias(sql_expr, df_schema, &mut PlannerContext::new())
     }
 
     /// Returns the [`Analyzer`] for this session
@@ -2230,10 +2230,7 @@ mod tests {
             let sql_expr_with_alias =
                 state.sql_to_expr_with_alias(sql, &dialect).unwrap();
             let from_expr = state
-                .create_logical_expr_from_sql_expr(
-                    sql_expr_with_alias,
-                    df_schema.as_ref(),
-                )
+                .create_logical_expr_from_sql_expr(sql_expr_with_alias, &df_schema)
                 .unwrap();
             assert_eq!(from_str, from_expr);
         }

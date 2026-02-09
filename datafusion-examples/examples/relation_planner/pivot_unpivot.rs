@@ -364,7 +364,7 @@ fn plan_pivot(
     // Parse aggregate functions
     let aggregates: Vec<Expr> = aggregate_functions
         .iter()
-        .map(|agg| ctx.sql_to_expr(agg.expr.clone(), schema.as_ref()))
+        .map(|agg| ctx.sql_to_expr(agg.expr.clone(), schema))
         .collect::<Result<_>>()?;
 
     // Get the pivot column (only single-column pivot supported)
@@ -373,7 +373,7 @@ fn plan_pivot(
             "Only single-column PIVOT is supported"
         ));
     }
-    let pivot_col = ctx.sql_to_expr(value_column[0].clone(), schema.as_ref())?;
+    let pivot_col = ctx.sql_to_expr(value_column[0].clone(), schema)?;
     let pivot_col_name = extract_column_name(&pivot_col)?;
 
     // Parse pivot values
@@ -385,7 +385,7 @@ fn plan_pivot(
                     .alias
                     .as_ref()
                     .map(|id| ctx.normalize_ident(id.clone()));
-                let expr = ctx.sql_to_expr(item.expr.clone(), schema.as_ref())?;
+                let expr = ctx.sql_to_expr(item.expr.clone(), schema)?;
                 Ok((alias, expr))
             })
             .collect::<Result<Vec<_>>>()?,
@@ -495,7 +495,7 @@ fn plan_unpivot(
                 .as_ref()
                 .map(|id| ctx.normalize_ident(id.clone()))
                 .unwrap_or_else(|| c.expr.to_string());
-            let expr = ctx.sql_to_expr(c.expr.clone(), schema.as_ref())?;
+            let expr = ctx.sql_to_expr(c.expr.clone(), schema)?;
             let col_name = extract_column_name(&expr)?;
             Ok((col_name.to_string(), label))
         })

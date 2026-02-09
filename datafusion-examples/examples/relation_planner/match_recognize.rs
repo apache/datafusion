@@ -374,7 +374,7 @@ impl RelationPlanner for MatchRecognizePlanner {
             .iter()
             .map(|m| {
                 let alias = ctx.normalize_ident(m.alias.clone());
-                let expr = ctx.sql_to_expr(m.expr.clone(), schema.as_ref())?;
+                let expr = ctx.sql_to_expr(m.expr.clone(), &schema)?;
                 Ok((alias, expr))
             })
             .collect::<Result<_>>()?;
@@ -384,7 +384,7 @@ impl RelationPlanner for MatchRecognizePlanner {
             .iter()
             .map(|s| {
                 let name = ctx.normalize_ident(s.symbol.clone());
-                let expr = ctx.sql_to_expr(s.definition.clone(), schema.as_ref())?;
+                let expr = ctx.sql_to_expr(s.definition.clone(), &schema)?;
                 Ok((name, expr))
             })
             .collect::<Result<_>>()?;

@@ -298,8 +298,8 @@ impl PlannerContext {
     }
 
     // Return a reference to the outer query's schema
-    pub fn outer_query_schema(&self) -> Option<&DFSchema> {
-        self.outer_query_schema.as_ref().map(|s| s.as_ref())
+    pub fn outer_query_schema(&self) -> Option<&DFSchemaRef> {
+        self.outer_query_schema.as_ref()
     }
 
     /// Sets the outer query schema, returning the existing one, if
