@@ -45,6 +45,7 @@ use crate::optimizer::ApplyOrder;
 use crate::simplify_expressions::simplify_predicates;
 use crate::utils::{has_all_column_refs, is_restrict_null_predicate};
 use crate::{OptimizerConfig, OptimizerRule};
+use datafusion_expr::ExpressionPlacement;
 
 /// Optimizer rule for pushing (moving) filter expressions down in a plan so
 /// they are applied as early as possible.
@@ -1295,9 +1296,9 @@ fn rewrite_projection(
     predicates: Vec<Expr>,
     mut projection: Projection,
 ) -> Result<(Transformed<LogicalPlan>, Option<Expr>)> {
-    // A projection is filter-commutable if it do not contain volatile predicates or contain volatile
-    // predicates that are not used in the filter. However, we should re-writes all predicate expressions.
-    // collect projection.
+    // Partition projection expressions by volatility.
+    // A projection is filter-commutable if it does not contain volatile predicates or
+    // contains volatile predicates that are not used in the filter.
     let (volatile_map, non_volatile_map): (HashMap<_, _>, HashMap<_, _>) = projection
         .schema
         .iter()
@@ -1310,10 +1311,19 @@ fn rewrite_projection(
         })
         .partition(|(_, value)| value.is_volatile());
 
+    // Partition non-volatile expressions by MoveTowardsLeafNodes vs everything else.
+    // MoveTowardsLeafNodes expressions (like get_field) are cheap — no benefit to
+    // re-inlining them into filters, and it causes optimizer instability with
+    // ExtractLeafExpressions.
+    let (move_towards_leaves_map, pushable_map): (HashMap<_, _>, HashMap<_, _>) =
+        non_volatile_map.into_iter().partition(|(_, value)| {
+            value.placement() == ExpressionPlacement::MoveTowardsLeafNodes
+        });
+
     let mut push_predicates = vec![];
     let mut keep_predicates = vec![];
     for expr in predicates {
-        if contain(&expr, &volatile_map) {
+        if contain(&expr, &volatile_map) || contain(&expr, &move_towards_leaves_map) {
             keep_predicates.push(expr);
         } else {
             push_predicates.push(expr);
@@ -1325,7 +1335,7 @@ fn rewrite_projection(
             // re-write all filters based on this projection
             // E.g. in `Filter: b\n  Projection: a > 1 as b`, we can swap them, but the filter must be "a > 1"
             let new_filter = LogicalPlan::Filter(Filter::try_new(
-                replace_cols_by_name(expr, &non_volatile_map)?,
+                replace_cols_by_name(expr, &pushable_map)?,
                 std::mem::take(&mut projection.input),
             )?);
 
@@ -1336,7 +1346,10 @@ fn rewrite_projection(
                 conjunction(keep_predicates),
             ))
         }
-        None => Ok((Transformed::no(LogicalPlan::Projection(projection)), None)),
+        None => Ok((
+            Transformed::no(LogicalPlan::Projection(projection)),
+            conjunction(keep_predicates),
+        )),
     }
 }
 
@@ -4218,6 +4231,158 @@ mod tests {
             @r"
         Filter: Boolean(false)
           TestUserNode
+        "
+        )
+    }
+
+    /// A mock UDF that reports MoveTowardsLeafNodes placement (like get_field).
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct LeafUDF {
+        signature: Signature,
+    }
+
+    impl ScalarUDFImpl for LeafUDF {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn name(&self) -> &str {
+            "leaf_udf"
+        }
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::UInt32)
+        }
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            Ok(ColumnarValue::Scalar(ScalarValue::UInt32(Some(1))))
+        }
+        fn placement(&self, _args: &[ExpressionPlacement]) -> ExpressionPlacement {
+            ExpressionPlacement::MoveTowardsLeafNodes
+        }
+    }
+
+    /// Helper to create a leaf_udf(col) expression.
+    fn leaf_udf_expr(arg: Expr) -> Expr {
+        let udf = ScalarUDF::new_from_impl(LeafUDF {
+            signature: Signature::exact(vec![DataType::UInt32], Volatility::Immutable),
+        });
+        Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(udf), vec![arg]))
+    }
+
+    /// Test that filters are NOT pushed through MoveTowardsLeafNodes projections.
+    /// These are cheap expressions (like get_field) where re-inlining into a filter
+    /// has no benefit and causes optimizer instability with ExtractLeafExpressions.
+    #[test]
+    fn filter_not_pushed_through_move_towards_leaves_projection() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        // Create a projection with a MoveTowardsLeafNodes expression
+        let proj = LogicalPlanBuilder::from(table_scan)
+            .project(vec![
+                leaf_udf_expr(col("a")).alias("val"),
+                col("b"),
+                col("c"),
+            ])?
+            .build()?;
+
+        // Put a filter on the MoveTowardsLeafNodes column
+        let plan = LogicalPlanBuilder::from(proj)
+            .filter(col("val").gt(lit(150i64)))?
+            .build()?;
+
+        // Filter should NOT be pushed through — val maps to a MoveTowardsLeafNodes expr
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: val > Int64(150)
+          Projection: leaf_udf(test.a) AS val, test.b, test.c
+            TableScan: test
+        "
+        )
+    }
+
+    /// Test that filters ARE pushed through regular (Column/KeepInPlace) projections.
+    #[test]
+    fn filter_pushed_through_regular_projection() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        // Create a regular projection without MoveTowardsLeafNodes expressions
+        let proj = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a").alias("x"), col("b").alias("y"), col("c")])?
+            .build()?;
+
+        // Put a filter above the projection
+        let plan = LogicalPlanBuilder::from(proj)
+            .filter(col("x").eq(lit(1i64)))?
+            .build()?;
+
+        // Filter SHOULD be pushed through the regular projection
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a AS x, test.b AS y, test.c
+          TableScan: test, full_filters=[test.a = Int64(1)]
+        "
+        )
+    }
+
+    /// Test that filters ARE pushed through KeepInPlace (expensive) projections.
+    /// Filtering before expensive computation is beneficial.
+    #[test]
+    fn filter_pushed_through_keep_in_place_projection() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        // Create a projection with a KeepInPlace expression (BinaryExpr)
+        let proj = LogicalPlanBuilder::from(table_scan)
+            .project(vec![
+                (col("a") * lit(10u32)).alias("val"),
+                col("b"),
+                col("c"),
+            ])?
+            .build()?;
+
+        // Put a filter on the KeepInPlace column
+        let plan = LogicalPlanBuilder::from(proj)
+            .filter(col("val").gt(lit(50i64)))?
+            .build()?;
+
+        // Filter SHOULD be pushed through — filtering before expensive computation
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a * UInt32(10) AS val, test.b, test.c
+          TableScan: test, full_filters=[test.a * UInt32(10) > Int64(50)]
+        "
+        )
+    }
+
+    /// Test mixed predicates: Column predicate pushed, MoveTowardsLeafNodes kept.
+    #[test]
+    fn filter_mixed_predicates_partial_push() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        // Create a projection with both MoveTowardsLeafNodes and Column expressions
+        let proj = LogicalPlanBuilder::from(table_scan)
+            .project(vec![
+                leaf_udf_expr(col("a")).alias("val"),
+                col("b"),
+                col("c"),
+            ])?
+            .build()?;
+
+        // Filter with both: val > 150 (MoveTowardsLeafNodes) AND b > 5 (Column)
+        let plan = LogicalPlanBuilder::from(proj)
+            .filter(col("val").gt(lit(150i64)).and(col("b").gt(lit(5i64))))?
+            .build()?;
+
+        // val > 150 should be kept above, b > 5 should be pushed through
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: val > Int64(150)
+          Projection: leaf_udf(test.a) AS val, test.b, test.c
+            TableScan: test, full_filters=[test.b > Int64(5)]
         "
         )
     }
