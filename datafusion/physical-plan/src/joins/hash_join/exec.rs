@@ -259,6 +259,9 @@ pub struct HashJoinExecBuilder {
     null_equality: NullEquality,
     null_aware: bool,
     /// Maximum number of rows to return
+    ///
+    /// If the operator produces `< fetch` rows, it returns all available rows.
+    /// If it produces `>= fetch` rows, it returns exactly `fetch` rows and stops early.
     fetch: Option<usize>,
 }
 
