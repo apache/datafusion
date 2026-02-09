@@ -427,6 +427,25 @@
 *in this section pertains to features and changes that have already been merged
 *to the main branch and are awaiting release in this version. See <a class="reference external" href="https://github.com/apache/datafusion/issues/19692">#19692</a> for
 *more details.</p>
+<section id="plannercontext-outer-query-schema-api-now-uses-a-stack">
+<h3><code class="docutils literal notranslate"><span class="pre">PlannerContext</span></code> outer query schema API now uses a stack<a class="headerlink" href="#plannercontext-outer-query-schema-api-now-uses-a-stack" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">PlannerContext</span></code> no longer stores a single <code class="docutils literal notranslate"><span class="pre">outer_query_schema</span></code>. It now tracks a
+stack of outer relation schemas so nested subqueries can access non-adjacent
+outer relations.</p>
+<p><strong>Before:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">old_outer_query_schema</span><span class="w"> </span><span class="o">=</span>
+<span class="w">    </span><span class="n">planner_context</span><span class="p">.</span><span class="n">set_outer_query_schema</span><span class="p">(</span><span class="nb">Some</span><span class="p">(</span><span class="n">input_schema</span><span class="p">.</span><span class="n">clone</span><span class="p">().</span><span class="n">into</span><span class="p">()));</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">sub_plan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">query_to_plan</span><span class="p">(</span><span class="n">subquery</span><span class="p">,</span><span class="w"> </span><span class="n">planner_context</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="n">planner_context</span><span class="p">.</span><span class="n">set_outer_query_schema</span><span class="p">(</span><span class="n">old_outer_query_schema</span><span class="p">);</span>
+</pre></div>
+</div>
+<p><strong>After:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="n">planner_context</span><span class="p">.</span><span class="n">append_outer_query_schema</span><span class="p">(</span><span class="n">input_schema</span><span class="p">.</span><span class="n">clone</span><span class="p">().</span><span class="n">into</span><span class="p">());</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">sub_plan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">query_to_plan</span><span class="p">(</span><span class="n">subquery</span><span class="p">,</span><span class="w"> </span><span class="n">planner_context</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="n">planner_context</span><span class="p">.</span><span class="n">pop_outer_query_schema</span><span class="p">();</span>
+</pre></div>
+</div>
+</section>
 <section id="filesinkconfig-adds-file-output-mode">
 <h3><code class="docutils literal notranslate"><span class="pre">FileSinkConfig</span></code> adds <code class="docutils literal notranslate"><span class="pre">file_output_mode</span></code><a class="headerlink" href="#filesinkconfig-adds-file-output-mode" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">FileSinkConfig</span></code> now includes a <code class="docutils literal notranslate"><span class="pre">file_output_mode:</span> <span class="pre">FileOutputMode</span></code> field to control
@@ -761,6 +780,7 @@ This behavior is consistent with systems like PostgreSQL.</p>
   <nav class="bd-toc-nav page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-53-0-0">DataFusion 53.0.0</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#plannercontext-outer-query-schema-api-now-uses-a-stack"><code class="docutils literal notranslate"><span class="pre">PlannerContext</span></code> outer query schema API now uses a stack</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#filesinkconfig-adds-file-output-mode"><code class="docutils literal notranslate"><span class="pre">FileSinkConfig</span></code> adds <code class="docutils literal notranslate"><span class="pre">file_output_mode</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#simplifyinfo-trait-removed-simplifycontext-now-uses-builder-style-api"><code class="docutils literal notranslate"><span class="pre">SimplifyInfo</span></code> trait removed, <code class="docutils literal notranslate"><span class="pre">SimplifyContext</span></code> now uses builder-style API</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#struct-casting-now-requires-field-name-overlap">Struct Casting Now Requires Field Name Overlap</a></li>
