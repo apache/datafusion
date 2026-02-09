@@ -17,13 +17,15 @@
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{
-    Column, DFSchema, Result, not_impl_err, plan_datafusion_err, plan_err,
+    Column, DFSchema, DFSchemaRef, Result, not_impl_err, plan_datafusion_err,
+    plan_err,
 };
 use datafusion_expr::expr::Sort;
 use datafusion_expr::{Expr, SortExpr};
 use sqlparser::ast::{
     Expr as SQLExpr, OrderByExpr, OrderByOptions, Value, ValueWithSpan,
 };
+use std::sync::Arc;
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
     /// Convert sql [OrderByExpr] to `Vec<Expr>`.
@@ -42,7 +44,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(crate) fn order_by_to_sort_expr(
         &self,
         order_by_exprs: Vec<OrderByExpr>,
-        input_schema: &DFSchema,
+        input_schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
         literal_to_column: bool,
         additional_schema: Option<&DFSchema>,
@@ -54,8 +56,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let mut combined_schema;
         let order_by_schema = match additional_schema {
             Some(schema) => {
-                combined_schema = input_schema.clone();
-                combined_schema.merge(schema);
+                combined_schema = Arc::clone(input_schema);
+                Arc::make_mut(&mut combined_schema).merge(schema);
                 &combined_schema
             }
             None => input_schema,

@@ -21,7 +21,8 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
-    DFSchema, Diagnostic, Result, Span, Spans, TableReference, not_impl_err, plan_err,
+    DFSchema, Diagnostic, Result, Span, Spans, TableReference, not_impl_err,
+    plan_err,
 };
 use datafusion_expr::builder::subquery_alias;
 use datafusion_expr::planner::{
@@ -55,7 +56,9 @@ impl<'a, 'b, S: ContextProvider> RelationPlannerContext
         expr: sqlparser::ast::Expr,
         schema: &DFSchema,
     ) -> Result<Expr> {
-        self.planner.sql_to_expr(expr, schema, self.planner_context)
+        let schema = Arc::new(schema.clone());
+        self.planner
+            .sql_to_expr(expr, &schema, self.planner_context)
     }
 
     fn sql_expr_to_logical_expr(
@@ -63,8 +66,9 @@ impl<'a, 'b, S: ContextProvider> RelationPlannerContext
         expr: sqlparser::ast::Expr,
         schema: &DFSchema,
     ) -> Result<Expr> {
+        let schema = Arc::new(schema.clone());
         self.planner
-            .sql_expr_to_logical_expr(expr, schema, self.planner_context)
+            .sql_expr_to_logical_expr(expr, &schema, self.planner_context)
     }
 
     fn normalize_ident(&self, ident: sqlparser::ast::Ident) -> String {
@@ -148,6 +152,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 if let Some(func_args) = args {
                     let tbl_func_name =
                         name.0.first().unwrap().as_ident().unwrap().to_string();
+                    let empty_schema = Arc::new(DFSchema::empty());
                     let args = func_args
                         .args
                         .into_iter()
@@ -156,7 +161,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             {
                                 self.sql_expr_to_logical_expr(
                                     expr,
-                                    &DFSchema::empty(),
+                                    &empty_schema,
                                     planner_context,
                                 )
                             } else {
@@ -230,7 +235,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
 
                 // Unnest table factor has empty input
-                let schema = DFSchema::empty();
+                let schema = Arc::new(DFSchema::empty());
                 let input = LogicalPlanBuilder::empty(true).build()?;
                 // Unnest table factor can have multiple arguments.
                 // We treat each argument as a separate unnest expression.
@@ -242,7 +247,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             &schema,
                             planner_context,
                         )?;
-                        Self::check_unnest_arg(&expr, &schema)?;
+                        Self::check_unnest_arg(&expr, schema.as_ref())?;
                         Ok(Expr::Unnest(Unnest::new(expr)))
                     })
                     .collect::<Result<Vec<_>>>()?;
@@ -263,8 +268,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let tbl_func_ref = self.object_name_to_table_reference(name)?;
                 let schema = planner_context
                     .outer_query_schema()
-                    .cloned()
-                    .unwrap_or_else(DFSchema::empty);
+                    .map(|schema| Arc::new(schema.clone()))
+                    .unwrap_or_else(|| Arc::new(DFSchema::empty()));
                 let func_args = args
                     .into_iter()
                     .map(|arg| match arg {

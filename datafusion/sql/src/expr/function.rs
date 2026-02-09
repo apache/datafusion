@@ -18,10 +18,7 @@
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use arrow::datatypes::DataType;
-use datafusion_common::{
-    DFSchema, Dependency, Diagnostic, Result, Span, internal_datafusion_err,
-    internal_err, not_impl_err, plan_datafusion_err, plan_err,
-};
+use datafusion_common::{DFSchema, Dependency, Diagnostic, Result, Span, internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err, DFSchemaRef};
 use datafusion_expr::{
     Expr, ExprSchemable, SortExpr, WindowFrame, WindowFunctionDefinition,
     arguments::ArgumentName,
@@ -225,7 +222,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(super) fn sql_function_to_expr(
         &self,
         function: SQLFunction,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         let function_args = FunctionArgs::try_new(function)?;
@@ -695,7 +692,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         &self,
         expr: SQLExpr,
         fn_name: &str,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         let fun = self
@@ -734,7 +731,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     fn sql_fn_arg_to_logical_expr(
         &self,
         sql: FunctionArg,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         let (expr, _) =
@@ -745,7 +742,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     fn sql_fn_arg_to_logical_expr_with_name(
         &self,
         sql: FunctionArg,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
     ) -> Result<(Expr, Option<ArgumentName>)> {
         match sql {
@@ -840,7 +837,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(super) fn function_args_to_expr(
         &self,
         args: Vec<FunctionArg>,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
     ) -> Result<Vec<Expr>> {
         args.into_iter()
@@ -851,7 +848,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(super) fn function_args_to_expr_with_names(
         &self,
         args: Vec<FunctionArg>,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
     ) -> Result<(Vec<Expr>, Vec<Option<ArgumentName>>)> {
         let results: Result<Vec<(Expr, Option<ArgumentName>)>> = args
@@ -872,7 +869,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         within_group: Vec<OrderByExpr>,
         mut args: Vec<Expr>,
         mut arg_names: Vec<Option<ArgumentName>>,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
     ) -> Result<WithinGroupExtraction> {
         let within_group = self.order_by_to_sort_expr(

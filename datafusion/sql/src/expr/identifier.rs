@@ -17,10 +17,7 @@
 
 use arrow::datatypes::FieldRef;
 use datafusion_common::datatype::DataTypeExt;
-use datafusion_common::{
-    Column, DFSchema, Result, Span, TableReference, assert_or_internal_err,
-    exec_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
-};
+use datafusion_common::{Column, DFSchema, Result, Span, TableReference, assert_or_internal_err, exec_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err, DFSchemaRef};
 use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::{Case, Expr};
 use sqlparser::ast::{CaseWhen, Expr as SQLExpr, Ident};
@@ -33,7 +30,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(super) fn sql_identifier_to_expr(
         &self,
         id: Ident,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         let id_span = id.span;
@@ -101,7 +98,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(crate) fn sql_compound_identifier_to_expr(
         &self,
         ids: Vec<Ident>,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         assert_or_internal_err!(ids.len() >= 2, "Not a compound identifier: {ids:?}");
@@ -226,7 +223,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         operand: Option<Box<SQLExpr>>,
         conditions: Vec<CaseWhen>,
         else_result: Option<Box<SQLExpr>>,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         let expr = if let Some(e) = operand {

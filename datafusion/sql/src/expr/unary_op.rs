@@ -16,7 +16,9 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{DFSchema, Diagnostic, Result, not_impl_err, plan_err};
+use datafusion_common::{
+    DFSchemaRef, Diagnostic, Result, not_impl_err, plan_err,
+};
 use datafusion_expr::{
     Expr, ExprSchemable,
     type_coercion::{is_interval, is_timestamp},
@@ -28,7 +30,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         &self,
         op: UnaryOperator,
         expr: SQLExpr,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         match op {

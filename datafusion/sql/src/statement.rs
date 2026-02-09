@@ -847,7 +847,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         "Execute statement with DEFAULT is not supported"
                     );
                 }
-                let empty_schema = DFSchema::empty();
+                let empty_schema = Arc::new(DFSchema::empty());
                 let parameters = parameters
                     .into_iter()
                     .map(|expr| self.sql_to_expr(expr, &empty_schema, planner_context))
@@ -1232,7 +1232,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     None => None,
                 };
                 let mut planner_context = PlannerContext::new();
-                let empty_schema = &DFSchema::empty();
+                let empty_schema = Arc::new(DFSchema::empty());
 
                 let args = match args {
                     Some(function_args) => {
@@ -1245,7 +1245,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                 let default_expr = match arg.default_expr {
                                     Some(expr) => Some(self.sql_to_expr(
                                         expr,
-                                        empty_schema,
+                                        &empty_schema,
                                         &mut planner_context,
                                     )?),
                                     None => None,
@@ -1315,6 +1315,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let mut planner_context = PlannerContext::new()
                     .with_prepare_param_data_types(arg_types.unwrap_or_default());
 
+                let function_body_empty_schema = Arc::new(DFSchema::empty());
                 let function_body = match function_body {
                     Some(r) => Some(self.sql_to_expr(
                         match r {
@@ -1334,7 +1335,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                 )?
                             }
                         },
-                        &DFSchema::empty(),
+                        &function_body_empty_schema,
                         &mut planner_context,
                     )?),
                     None => None,
@@ -2073,10 +2074,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // Do a table lookup to verify the table exists
         let table_ref = self.object_name_to_table_reference(table_name.clone())?;
         let table_source = self.context_provider.get_table_source(table_ref.clone())?;
-        let schema = DFSchema::try_from_qualified_schema(
+        let schema = Arc::new(DFSchema::try_from_qualified_schema(
             table_ref.clone(),
             &table_source.schema(),
-        )?;
+        )?);
         let scan =
             LogicalPlanBuilder::scan(table_ref.clone(), Arc::clone(&table_source), None)?
                 .build()?;
@@ -2087,7 +2088,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             Some(predicate_expr) => {
                 let filter_expr =
                     self.sql_to_expr(predicate_expr, &schema, &mut planner_context)?;
-                let schema = Arc::new(schema);
                 let mut using_columns = HashSet::new();
                 expr_to_columns(&filter_expr, &mut using_columns)?;
                 let filter_expr = normalize_col_with_schemas_and_ambiguity_check(
@@ -2100,7 +2100,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         };
 
         if let Some(limit) = limit {
-            let empty_schema = DFSchema::empty();
+            let empty_schema = Arc::new(DFSchema::empty());
             let limit = self.sql_to_expr(limit, &empty_schema, &mut planner_context)?;
             source = LogicalPlanBuilder::from(source)
                 .limit_by_expr(None, Some(limit))?

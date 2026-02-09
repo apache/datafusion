@@ -119,14 +119,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // Place the fields of the base plan at the front so that when there are references
         // with the same name, the fields of the base plan will be searched first.
         // See https://github.com/apache/datafusion/issues/9162
-        let mut combined_schema = base_plan.schema().as_ref().clone();
-        combined_schema.merge(projected_plan.schema());
+        let mut combined_schema = Arc::clone(base_plan.schema());
+        Arc::make_mut(&mut combined_schema).merge(projected_plan.schema());
 
         // Order-by expressions prioritize referencing columns from the select list,
         // then from the FROM clause.
         let order_by_rex = self.order_by_to_sort_expr(
             order_by,
-            projected_plan.schema().as_ref(),
+            projected_plan.schema(),
             planner_context,
             true,
             Some(base_plan.schema().as_ref()),
