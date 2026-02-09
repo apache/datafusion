@@ -1861,6 +1861,17 @@ impl Expr {
         Sort::new(self, asc, nulls_first)
     }
 
+    /// Create a sort configuration from an existing expression using `SortOptions`.
+    ///
+    /// ```
+    /// # use datafusion_expr::{col, SortOptions};
+    /// let sort_expr = col("foo").sort_by(SortOptions::new().desc().nulls_first());
+    /// ```
+    pub fn sort_by(self, options: crate::sort_options::SortOptions) -> Sort {
+        Sort::new(self, !options.descending, options.nulls_first)
+    }
+
+
     /// Return `IsTrue(Box(self))`
     pub fn is_true(self) -> Expr {
         Expr::IsTrue(Box::new(self))
