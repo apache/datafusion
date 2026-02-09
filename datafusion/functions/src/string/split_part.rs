@@ -48,7 +48,10 @@ use std::sync::Arc;
 ```"#,
     standard_argument(name = "str", prefix = "String"),
     argument(name = "delimiter", description = "String or character to split on."),
-    argument(name = "pos", description = "Position of the part to return.")
+    argument(
+        name = "pos",
+        description = "Position of the part to return (counting from 1). Negative values count backward from the end of the string."
+    )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SplitPartFunc {
@@ -233,7 +236,7 @@ where
                         std::cmp::Ordering::Less => {
                             // Negative index: use rsplit().nth() to efficiently get from the end
                             // rsplit iterates in reverse, so -1 means first from rsplit (index 0)
-                            let idx: usize = (-n - 1).try_into().map_err(|_| {
+                            let idx: usize = (n.unsigned_abs() - 1).try_into().map_err(|_| {
                                 exec_datafusion_err!(
                                     "split_part index {n} exceeds minimum supported value"
                                 )
@@ -320,6 +323,20 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::Int64(Some(0))),
             ],
             exec_err!("field position must not be zero"),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            SplitPartFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from(
+                    "abc~@~def~@~ghi"
+                )))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("~@~")))),
+                ColumnarValue::Scalar(ScalarValue::Int64(Some(i64::MIN))),
+            ],
+            Ok(Some("")),
             &str,
             Utf8,
             StringArray
