@@ -856,9 +856,8 @@ EXPLAIN SELECT id, s['value'], s['value'] + 10, s['label'] FROM simple_struct OR
 ----
 logical_plan
 01)Sort: simple_struct.id ASC NULLS LAST, fetch=3
-02)--Projection: simple_struct.id, __common_expr_1 AS simple_struct.s[value], __common_expr_1 AS simple_struct.s[value] + Int64(10), get_field(simple_struct.s, Utf8("label"))
-03)----Projection: get_field(simple_struct.s, Utf8("value")) AS __common_expr_1, simple_struct.id, simple_struct.s
-04)------TableScan: simple_struct projection=[id, s]
+02)--Projection: simple_struct.id, get_field(simple_struct.s, Utf8("value")) AS simple_struct.s[value], get_field(simple_struct.s, Utf8("value")) + Int64(10), get_field(simple_struct.s, Utf8("label"))
+03)----TableScan: simple_struct projection=[id, s]
 physical_plan
 01)SortExec: TopK(fetch=3), expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
 02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[id, get_field(s@1, value) as simple_struct.s[value], get_field(s@1, value) + 10 as simple_struct.s[value] + Int64(10), get_field(s@1, label) as simple_struct.s[label]], file_type=parquet, predicate=DynamicFilter [ empty ]
@@ -969,10 +968,9 @@ query TT
 EXPLAIN SELECT s['value'] + s['value'] as doubled FROM simple_struct WHERE id > 2;
 ----
 logical_plan
-01)Projection: __common_expr_1 + __common_expr_1 AS doubled
-02)--Projection: get_field(simple_struct.s, Utf8("value")) AS __common_expr_1
-03)----Filter: simple_struct.id > Int64(2)
-04)------TableScan: simple_struct projection=[id, s], partial_filters=[simple_struct.id > Int64(2)]
+01)Projection: get_field(simple_struct.s, Utf8("value")) + get_field(simple_struct.s, Utf8("value")) AS doubled
+02)--Filter: simple_struct.id > Int64(2)
+03)----TableScan: simple_struct projection=[id, s], partial_filters=[simple_struct.id > Int64(2)]
 physical_plan
 01)ProjectionExec: expr=[get_field(s@0, value) + get_field(s@0, value) as doubled]
 02)--FilterExec: id@0 > 2, projection=[s@1]
