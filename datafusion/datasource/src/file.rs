@@ -80,7 +80,7 @@ pub trait FileSource: Send + Sync {
     /// The output schema of this `FileSource` is this TableSchema
     /// with [`Self::projection`] applied.
     ///
-    /// Use [`ProjectionExprs::project_schema`]` to get the projected schema
+    /// Use [`ProjectionExprs::project_schema`] to get the projected schema
     /// after applying the projection.
     fn table_schema(&self) -> &crate::table_schema::TableSchema;
 
@@ -97,7 +97,7 @@ pub trait FileSource: Send + Sync {
     /// Return the projection that will be applied to the output stream on top
     /// of [`Self::table_schema`].
     ///
-    /// Note you can use [`ProjectionExprs::project_schema`]` on the table
+    /// Note you can use [`ProjectionExprs::project_schema`] on the table
     /// schema to get the effective output schema of this source.
     fn projection(&self) -> Option<&ProjectionExprs> {
         None
