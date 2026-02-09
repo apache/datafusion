@@ -24,15 +24,15 @@ use std::sync::Arc;
 use crate::{
     PhysicalExpr,
     simplifier::{
-        const_evaluator::{create_dummy_batch, simplify_const_expr_with_dummy},
+        const_evaluator::{create_dummy_batch, simplify_const_expr},
         not::simplify_not_expr,
         unwrap_cast::unwrap_cast_in_comparison,
     },
 };
 
-pub mod const_evaluator;
-pub mod not;
-pub mod unwrap_cast;
+mod const_evaluator;
+mod not;
+mod unwrap_cast;
 
 const MAX_LOOP_COUNT: usize = 5;
 
@@ -69,9 +69,7 @@ impl<'a> PhysicalExprSimplifier<'a> {
                 // then constant expression evaluation
                 let rewritten = simplify_not_expr(node, schema)?
                     .transform_data(|node| unwrap_cast_in_comparison(node, schema))?
-                    .transform_data(|node| {
-                        simplify_const_expr_with_dummy(node, &batch)
-                    })?;
+                    .transform_data(|node| simplify_const_expr(node, &batch))?;
 
                 #[cfg(debug_assertions)]
                 assert_eq!(

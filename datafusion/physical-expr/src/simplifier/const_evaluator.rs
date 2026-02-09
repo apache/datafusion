@@ -22,35 +22,51 @@ use std::sync::Arc;
 use arrow::array::new_null_array;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
+use datafusion_common::tree_node::Transformed;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 
 use crate::PhysicalExpr;
 use crate::expressions::{Column, Literal};
 
-/// Simplify expressions that consist only of literals by evaluating them.
+/// Simplify expressions whose immediate children are all literals.
 ///
-/// This function checks if all children of the given expression are literals.
-/// If so, it evaluates the expression against a dummy RecordBatch and returns
-/// the result as a new Literal.
+/// This function only checks the direct children of the expression,
+/// not the entire subtree. It is designed to be used with bottom-up tree
+/// traversal, where children are simplified before parents.
 ///
 /// # Example transformations
 /// - `1 + 2` -> `3`
-/// - `(1 + 2) * 3` -> `9` (with bottom-up traversal)
+/// - `(1 + 2) * 3` -> `9` (with bottom-up traversal, inner expr simplified first)
 /// - `'hello' || ' world'` -> `'hello world'`
-pub fn simplify_const_expr(
-    expr: Arc<dyn PhysicalExpr>,
-) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
-    simplify_const_expr_with_dummy(expr, &create_dummy_batch()?)
-}
-
-pub(crate) fn simplify_const_expr_with_dummy(
+pub(crate) fn simplify_const_expr(
     expr: Arc<dyn PhysicalExpr>,
     batch: &RecordBatch,
 ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
-    // If expr is already a const literal or can't be evaluated into one.
-    if expr.as_any().is::<Literal>() || (!can_evaluate_as_constant(&expr)) {
+    // Already a literal - nothing to do
+    if expr.as_any().is::<Literal>() {
+        return Ok(Transformed::no(expr));
+    }
+
+    // Column references cannot be evaluated at plan time
+    if expr.as_any().is::<Column>() {
+        return Ok(Transformed::no(expr));
+    }
+
+    // Volatile nodes cannot be evaluated at plan time
+    if expr.is_volatile_node() {
+        return Ok(Transformed::no(expr));
+    }
+
+    // Since transform visits bottom-up, children have already been simplified.
+    // If all children are now Literals, this node can be const-evaluated.
+    // This is O(k) where k = number of children, instead of O(subtree).
+    let all_children_literal = expr
+        .children()
+        .iter()
+        .all(|child| child.as_any().is::<Literal>());
+
+    if !all_children_literal {
         return Ok(Transformed::no(expr));
     }
 
@@ -77,22 +93,6 @@ pub(crate) fn simplify_const_expr_with_dummy(
     }
 }
 
-fn can_evaluate_as_constant(expr: &Arc<dyn PhysicalExpr>) -> bool {
-    let mut can_evaluate = true;
-
-    expr.apply(|e| {
-        if e.as_any().is::<Column>() || e.is_volatile_node() {
-            can_evaluate = false;
-            Ok(TreeNodeRecursion::Stop)
-        } else {
-            Ok(TreeNodeRecursion::Continue)
-        }
-    })
-    .expect("apply should not fail");
-
-    can_evaluate
-}
-
 /// Create a 1-row dummy RecordBatch for evaluating constant expressions.
 ///
 /// The batch is never actually accessed for data - it's just needed because
@@ -105,19 +105,4 @@ pub(crate) fn create_dummy_batch() -> Result<RecordBatch> {
     let dummy_schema = Arc::new(Schema::new(vec![Field::new("_", DataType::Null, true)]));
     let col = new_null_array(&DataType::Null, 1);
     Ok(RecordBatch::try_new(dummy_schema, vec![col])?)
-}
-
-/// Check if this expression has any column references.
-pub fn has_column_references(expr: &Arc<dyn PhysicalExpr>) -> bool {
-    let mut has_columns = false;
-    expr.apply(|expr| {
-        if expr.as_any().downcast_ref::<Column>().is_some() {
-            has_columns = true;
-            Ok(TreeNodeRecursion::Stop)
-        } else {
-            Ok(TreeNodeRecursion::Continue)
-        }
-    })
-    .expect("apply should not fail");
-    has_columns
 }
