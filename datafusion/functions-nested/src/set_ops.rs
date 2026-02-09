@@ -189,6 +189,12 @@ pub struct ArrayIntersect {
     aliases: Vec<String>,
 }
 
+impl Default for ArrayIntersect {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ArrayIntersect {
     pub fn new() -> Self {
         Self {
