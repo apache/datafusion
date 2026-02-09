@@ -228,6 +228,37 @@ fn test_type_coercion_arithmetic() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn test_bitwise_coercion_float_types_error() -> Result<()> {
+    let err = BinaryTypeCoercer::new(
+        &DataType::Float32,
+        &Operator::BitwiseAnd,
+        &DataType::Float32,
+    )
+    .get_input_types()
+    .unwrap_err()
+    .to_string();
+    assert_contains!(
+        &err,
+        "Cannot infer common type for bitwise operation Float32 & Float32"
+    );
+
+    let err = BinaryTypeCoercer::new(
+        &DataType::Float32,
+        &Operator::BitwiseAnd,
+        &DataType::Float64,
+    )
+    .get_input_types()
+    .unwrap_err()
+    .to_string();
+    assert_contains!(
+        &err,
+        "Cannot infer common type for bitwise operation Float32 & Float64"
+    );
+
+    Ok(())
+}
+
 fn test_math_decimal_coercion_rule(
     lhs_type: DataType,
     rhs_type: DataType,

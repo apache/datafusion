@@ -470,7 +470,7 @@ fn bitwise_coercion(left_type: &DataType, right_type: &DataType) -> Option<DataT
         return None;
     }
 
-    if left_type == right_type {
+    if left_type == right_type && left_type.is_integer() {
         return Some(left_type.clone());
     }
 
