@@ -56,7 +56,7 @@ use datafusion_common::{
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
-use datafusion_physical_expr::expressions::{BinaryExpr, Column, lit};
+use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal, lit};
 use datafusion_physical_expr::intervals::utils::check_support;
 use datafusion_physical_expr::utils::{collect_columns, reassign_expr_columns};
 use datafusion_physical_expr::{
@@ -358,18 +358,37 @@ impl FilterExec {
             if let Some(binary) = conjunction.as_any().downcast_ref::<BinaryExpr>()
                 && binary.op() == &Operator::Eq
             {
-                // Filter evaluates to single value for all partitions
-                if input_eqs.is_expr_constant(binary.left()).is_some() {
-                    let across = input_eqs
-                        .is_expr_constant(binary.right())
-                        .unwrap_or_default();
+                // Check if either side is constant — either already known
+                // constant from the input equivalence properties, or a literal
+                // value (which is inherently constant across all partitions).
+                let left_const =
+                    input_eqs.is_expr_constant(binary.left()).or_else(|| {
+                        binary
+                            .left()
+                            .as_any()
+                            .downcast_ref::<Literal>()
+                            .map(|l| AcrossPartitions::Uniform(Some(l.value().clone())))
+                    });
+                let right_const =
+                    input_eqs.is_expr_constant(binary.right()).or_else(|| {
+                        binary
+                            .right()
+                            .as_any()
+                            .downcast_ref::<Literal>()
+                            .map(|l| AcrossPartitions::Uniform(Some(l.value().clone())))
+                    });
+
+                if let Some(left_across) = left_const {
+                    // LEFT is constant, so RIGHT must also be constant.
+                    // Use RIGHT's known across value if available, otherwise
+                    // propagate LEFT's (e.g. Uniform from a literal).
+                    let across = right_const.unwrap_or(left_across);
                     res_constants
                         .push(ConstExpr::new(Arc::clone(binary.right()), across));
-                } else if input_eqs.is_expr_constant(binary.right()).is_some() {
-                    let across = input_eqs
-                        .is_expr_constant(binary.left())
-                        .unwrap_or_default();
-                    res_constants.push(ConstExpr::new(Arc::clone(binary.left()), across));
+                } else if let Some(right_across) = right_const {
+                    // RIGHT is constant, so LEFT must also be constant.
+                    res_constants
+                        .push(ConstExpr::new(Arc::clone(binary.left()), right_across));
                 }
             }
         }
@@ -977,6 +996,18 @@ fn collect_columns_from_predicate_inner(
     let predicates = split_conjunction(predicate);
     predicates.into_iter().for_each(|p| {
         if let Some(binary) = p.as_any().downcast_ref::<BinaryExpr>() {
+            // Only extract pairs where at least one side is a Column reference.
+            // Pairs like `complex_expr = literal` should not create equivalence
+            // classes — the literal could appear in many unrelated expressions
+            // (e.g. sort keys), and normalize_expr's deep traversal would
+            // replace those occurrences with the complex expression, corrupting
+            // sort orderings. Constant propagation for such pairs is handled
+            // separately by `extend_constants`.
+            let has_column = binary.left().as_any().downcast_ref::<Column>().is_some()
+                || binary.right().as_any().downcast_ref::<Column>().is_some();
+            if !has_column {
+                return;
+            }
             match binary.op() {
                 Operator::Eq => {
                     eq_predicate_columns.push((binary.left(), binary.right()))
@@ -2008,6 +2039,48 @@ mod tests {
         // Schema should have all columns
         let output_schema = filter.schema();
         assert_eq!(output_schema.fields().len(), 2);
+
+        Ok(())
+    }
+
+    /// Regression test for https://github.com/apache/datafusion/issues/20194
+    ///
+    /// `collect_columns_from_predicate_inner` should only extract equality
+    /// pairs where at least one side is a Column. Pairs like
+    /// `complex_expr = literal` must not create equivalence classes because
+    /// `normalize_expr`'s deep traversal would replace the literal inside
+    /// unrelated expressions (e.g. sort keys) with the complex expression.
+    #[tokio::test]
+    async fn test_collect_columns_skips_non_column_pairs() -> Result<()> {
+        let schema = test::aggr_test_schema();
+
+        // Simulate: nvl(c2, 0) = 0  →  (c2 IS DISTINCT FROM 0) = 0
+        // Neither side is a Column, so this should NOT be extracted.
+        let complex_expr: Arc<dyn PhysicalExpr> = binary(
+            col("c2", &schema)?,
+            Operator::IsDistinctFrom,
+            lit(0u32),
+            &schema,
+        )?;
+        let predicate: Arc<dyn PhysicalExpr> =
+            binary(complex_expr, Operator::Eq, lit(0u32), &schema)?;
+
+        let (equal_pairs, _) = collect_columns_from_predicate_inner(&predicate);
+        assert_eq!(
+            0,
+            equal_pairs.len(),
+            "Should not extract equality pairs where neither side is a Column"
+        );
+
+        // But col = literal should still be extracted
+        let predicate: Arc<dyn PhysicalExpr> =
+            binary(col("c2", &schema)?, Operator::Eq, lit(0u32), &schema)?;
+        let (equal_pairs, _) = collect_columns_from_predicate_inner(&predicate);
+        assert_eq!(
+            1,
+            equal_pairs.len(),
+            "Should extract equality pairs where one side is a Column"
+        );
 
         Ok(())
     }
