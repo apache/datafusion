@@ -704,8 +704,10 @@ impl CSEController for ExprCSEController<'_> {
         // field accesses that the ExtractLeafExpressions / PushDownLeafProjections
         // rules deliberately duplicate when needed (one copy for a filter
         // predicate, another for an output column). CSE deduplicating them
-        // creates intermediate projections that fight with those rules and
-        // cause optimizer instability. Skip them.
+        // creates intermediate projections that fight with those rules,
+        // causing optimizer instability — ExtractLeafExpressions will undo
+        // the dedup, creating an infinite loop that runs until the iteration
+        // limit is hit. Skip them.
         if node.placement() == ExpressionPlacement::MoveTowardsLeafNodes {
             return true;
         }
@@ -842,6 +844,7 @@ mod test {
     use super::*;
     use crate::assert_optimized_plan_eq_snapshot;
     use crate::optimizer::OptimizerContext;
+    use crate::test::udfs::leaf_udf_expr;
     use crate::test::*;
     use datafusion_expr::test::function_stub::{avg, sum};
 
@@ -1844,45 +1847,12 @@ mod test {
         }
     }
 
-    /// A UDF that returns `MoveTowardsLeafNodes` placement, simulating cheap
-    /// expressions like `get_field` (struct field access).
-    #[derive(Debug, PartialEq, Eq, Hash)]
-    struct LeafUDF {
-        signature: Signature,
-    }
-
-    impl ScalarUDFImpl for LeafUDF {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-        fn name(&self) -> &str {
-            "leaf_udf"
-        }
-        fn signature(&self) -> &Signature {
-            &self.signature
-        }
-        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-            Ok(DataType::UInt32)
-        }
-        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-            panic!("dummy - not implemented")
-        }
-        fn placement(&self, _args: &[ExpressionPlacement]) -> ExpressionPlacement {
-            ExpressionPlacement::MoveTowardsLeafNodes
-        }
-    }
-
-    fn leaf_udf_expr(arg: Expr) -> Expr {
-        let udf = ScalarUDF::new_from_impl(LeafUDF {
-            signature: Signature::exact(vec![DataType::UInt32], Volatility::Immutable),
-        });
-        Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(udf), vec![arg]))
-    }
-
     /// Identical MoveTowardsLeafNodes expressions should NOT be deduplicated
     /// by CSE — they are cheap (e.g. struct field access) and the extraction
     /// rules deliberately duplicate them. Deduplicating causes optimizer
-    /// instability.
+    /// instability where one optimizer rule will undo the work of another,
+    /// resulting in an infinite optimization loop until the
+    /// we hit the max iteration limit and then give up.
     #[test]
     fn test_leaf_expression_not_extracted() -> Result<()> {
         let table_scan = test_table_scan()?;

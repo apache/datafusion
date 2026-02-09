@@ -24,6 +24,7 @@ use datafusion_common::{Result, assert_contains};
 use datafusion_expr::{LogicalPlan, LogicalPlanBuilder, logical_plan::table_scan};
 use std::sync::Arc;
 
+pub mod udfs;
 pub mod user_defined;
 
 pub fn test_table_scan_fields() -> Vec<Field> {
