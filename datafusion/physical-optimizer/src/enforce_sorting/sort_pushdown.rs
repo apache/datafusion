@@ -35,6 +35,7 @@ use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, LexRequirement, OrderingRequirements, PhysicalSortExpr,
     PhysicalSortRequirement,
 };
+use datafusion_physical_plan::aggregates::AggregateExec;
 use datafusion_physical_plan::execution_plan::CardinalityEffect;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::utils::{
@@ -355,6 +356,10 @@ fn pushdown_requirement_to_children(
         }
     } else if maintains_input_order.is_empty()
         || !maintains_input_order.iter().any(|o| *o)
+        // Aggregate output columns can be computed expressions that are not
+        // order-preserving wrt input columns. The generic index-based rewrite
+        // in handle_custom_pushdown is not safe for AggregateExec.
+        || plan.as_any().is::<AggregateExec>()
         || plan.as_any().is::<RepartitionExec>()
         || plan.as_any().is::<FilterExec>()
         // TODO: Add support for Projection push down
