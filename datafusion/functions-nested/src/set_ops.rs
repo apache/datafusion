@@ -184,7 +184,7 @@ impl ScalarUDFImpl for ArrayUnion {
     )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub(super) struct ArrayIntersect {
+pub struct ArrayIntersect {
     signature: Signature,
     aliases: Vec<String>,
 }
@@ -358,69 +358,84 @@ fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
         "{set_op:?} is not implemented for '{l:?}' and '{r:?}'"
     );
 
-    let mut offsets = vec![OffsetSize::usize_as(0)];
-    let mut new_arrays = vec![];
+    // Convert all values to rows in batch for performance.
     let converter = RowConverter::new(vec![SortField::new(l.value_type())])?;
-    for (l_arr, r_arr) in l.iter().zip(r.iter()) {
-        let last_offset = *offsets.last().unwrap();
+    let rows_l = converter.convert_columns(&[Arc::clone(l.values())])?;
+    let rows_r = converter.convert_columns(&[Arc::clone(r.values())])?;
+    let l_offsets = l.value_offsets();
+    let r_offsets = r.value_offsets();
 
-        let (l_values, r_values) = match (l_arr, r_arr) {
-            (Some(l_arr), Some(r_arr)) => (
-                converter.convert_columns(&[l_arr])?,
-                converter.convert_columns(&[r_arr])?,
-            ),
-            _ => {
-                offsets.push(last_offset);
-                continue;
-            }
-        };
+    let mut result_offsets = Vec::with_capacity(l.len() + 1);
+    result_offsets.push(OffsetSize::usize_as(0));
+    let mut final_rows = Vec::with_capacity(rows_l.num_rows());
 
-        let l_iter = l_values.iter().sorted().dedup();
-        let values_set: HashSet<_> = l_iter.clone().collect();
-        let mut rows = if set_op == SetOp::Union {
-            l_iter.collect()
-        } else {
-            vec![]
-        };
+    // Reuse hash sets across iterations
+    let mut seen = HashSet::new();
+    let mut r_set = HashSet::new();
+    for i in 0..l.len() {
+        let last_offset = *result_offsets.last().unwrap();
 
-        for r_val in r_values.iter().sorted().dedup() {
-            match set_op {
-                SetOp::Union => {
-                    if !values_set.contains(&r_val) {
-                        rows.push(r_val);
+        if l.is_null(i) || r.is_null(i) {
+            result_offsets.push(last_offset);
+            continue;
+        }
+
+        let l_start = l_offsets[i].as_usize();
+        let l_end = l_offsets[i + 1].as_usize();
+        let r_start = r_offsets[i].as_usize();
+        let r_end = r_offsets[i + 1].as_usize();
+
+        let mut count = 0usize;
+        // Clear sets for reuse
+        seen.clear();
+        r_set.clear();
+
+        match set_op {
+            SetOp::Union => {
+                for idx in l_start..l_end {
+                    let row = rows_l.row(idx);
+                    if seen.insert(row) {
+                        final_rows.push(row);
+                        count += 1;
                     }
                 }
-                SetOp::Intersect => {
-                    if values_set.contains(&r_val) {
-                        rows.push(r_val);
+                for idx in r_start..r_end {
+                    let row = rows_r.row(idx);
+                    if seen.insert(row) {
+                        final_rows.push(row);
+                        count += 1;
+                    }
+                }
+            }
+            SetOp::Intersect => {
+                // Build hash set from right array for lookup table
+                // then iterator left array to find common elements.
+                for idx in r_start..r_end {
+                    r_set.insert(rows_r.row(idx));
+                }
+                for idx in l_start..l_end {
+                    let row = rows_l.row(idx);
+                    if r_set.contains(&row) && seen.insert(row) {
+                        final_rows.push(row);
+                        count += 1;
                     }
                 }
             }
         }
-
-        offsets.push(last_offset + OffsetSize::usize_as(rows.len()));
-        let arrays = converter.convert_rows(rows)?;
-        let array = match arrays.first() {
-            Some(array) => Arc::clone(array),
-            None => {
-                return internal_err!("{set_op}: failed to get array from rows");
-            }
-        };
-
-        new_arrays.push(array);
+        result_offsets.push(last_offset + OffsetSize::usize_as(count));
     }
 
-    let offsets = OffsetBuffer::new(offsets.into());
-    let new_arrays_ref: Vec<_> = new_arrays.iter().map(|v| v.as_ref()).collect();
-    let values = if new_arrays_ref.is_empty() {
+    let final_values = if final_rows.is_empty() {
         new_empty_array(&l.value_type())
     } else {
-        compute::concat(&new_arrays_ref)?
+        let arrays = converter.convert_rows(final_rows)?;
+        Arc::clone(&arrays[0])
     };
+
     let arr = GenericListArray::<OffsetSize>::try_new(
         field,
-        offsets,
-        values,
+        OffsetBuffer::new(result_offsets.into()),
+        final_values,
         NullBuffer::union(l.nulls(), r.nulls()),
     )?;
     Ok(Arc::new(arr))
