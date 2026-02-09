@@ -1529,13 +1529,6 @@ impl ExecutionPlan for HashJoinExec {
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
-        // Null-aware anti join requires seeing ALL probe rows to check for NULLs.
-        // If any probe row has NULL, the output must be empty.
-        // We can't stop early or we might miss a NULL and return wrong results.
-        if self.null_aware {
-            return None;
-        }
-
         Some(Arc::new(HashJoinExec {
             left: Arc::clone(&self.left),
             right: Arc::clone(&self.right),
