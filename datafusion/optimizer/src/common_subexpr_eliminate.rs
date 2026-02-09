@@ -34,7 +34,9 @@ use datafusion_expr::expr::{Alias, ScalarFunction};
 use datafusion_expr::logical_plan::{
     Aggregate, Filter, LogicalPlan, Projection, Sort, Window,
 };
-use datafusion_expr::{BinaryExpr, Case, Expr, Operator, SortExpr, col};
+use datafusion_expr::{
+    BinaryExpr, Case, Expr, ExpressionPlacement, Operator, SortExpr, col,
+};
 
 const CSE_PREFIX: &str = "__common_expr";
 
@@ -698,6 +700,16 @@ impl CSEController for ExprCSEController<'_> {
     }
 
     fn is_ignored(&self, node: &Expr) -> bool {
+        // MoveTowardsLeafNodes expressions (e.g. get_field) are cheap struct
+        // field accesses that the ExtractLeafExpressions / PushDownLeafProjections
+        // rules deliberately duplicate when needed (one copy for a filter
+        // predicate, another for an output column). CSE deduplicating them
+        // creates intermediate projections that fight with those rules and
+        // cause optimizer instability. Skip them.
+        if node.placement() == ExpressionPlacement::MoveTowardsLeafNodes {
+            return true;
+        }
+
         // TODO: remove the next line after `Expr::Wildcard` is removed
         #[expect(deprecated)]
         let is_normal_minus_aggregates = matches!(
@@ -1830,5 +1842,90 @@ mod test {
         fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
             panic!("dummy - not implemented")
         }
+    }
+
+    /// A UDF that returns `MoveTowardsLeafNodes` placement, simulating cheap
+    /// expressions like `get_field` (struct field access).
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct LeafUDF {
+        signature: Signature,
+    }
+
+    impl ScalarUDFImpl for LeafUDF {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn name(&self) -> &str {
+            "leaf_udf"
+        }
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::UInt32)
+        }
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            panic!("dummy - not implemented")
+        }
+        fn placement(&self, _args: &[ExpressionPlacement]) -> ExpressionPlacement {
+            ExpressionPlacement::MoveTowardsLeafNodes
+        }
+    }
+
+    fn leaf_udf_expr(arg: Expr) -> Expr {
+        let udf = ScalarUDF::new_from_impl(LeafUDF {
+            signature: Signature::exact(vec![DataType::UInt32], Volatility::Immutable),
+        });
+        Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(udf), vec![arg]))
+    }
+
+    /// Identical MoveTowardsLeafNodes expressions should NOT be deduplicated
+    /// by CSE — they are cheap (e.g. struct field access) and the extraction
+    /// rules deliberately duplicate them. Deduplicating causes optimizer
+    /// instability.
+    #[test]
+    fn test_leaf_expression_not_extracted() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let leaf = leaf_udf_expr(col("a"));
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![leaf.clone().alias("c1"), leaf.alias("c2")])?
+            .build()?;
+
+        // Plan should be unchanged — no __common_expr introduced
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: leaf_udf(test.a) AS c1, leaf_udf(test.a) AS c2
+          TableScan: test
+        "
+        )
+    }
+
+    /// When a MoveTowardsLeafNodes expression appears as a sub-expression of
+    /// a larger expression that IS duplicated, only the outer expression gets
+    /// deduplicated; the leaf sub-expression stays inline.
+    #[test]
+    fn test_leaf_subexpression_not_extracted() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        // leaf_udf(a) + b appears twice — the outer `+` is a common
+        // sub-expression, but leaf_udf(a) by itself is MoveTowardsLeafNodes
+        // and should not be extracted separately.
+        let common = leaf_udf_expr(col("a")) + col("b");
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![common.clone().alias("c1"), common.alias("c2")])?
+            .build()?;
+
+        // The whole `leaf_udf(a) + b` gets deduplicated as __common_expr_1,
+        // but leaf_udf(a) alone is NOT pulled out.
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: __common_expr_1 AS c1, __common_expr_1 AS c2
+          Projection: leaf_udf(test.a) + test.b AS __common_expr_1, test.a, test.b, test.c
+            TableScan: test
+        "
+        )
     }
 }
