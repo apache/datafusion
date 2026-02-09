@@ -698,10 +698,12 @@ impl DFSchema {
         // check nested fields
         match (dt1, dt2) {
             (DataType::Dictionary(_, v1), DataType::Dictionary(_, v2)) => {
-                v1.as_ref() == v2.as_ref()
+                Self::datatype_is_logically_equal(v1.as_ref(), v2.as_ref())
             }
-            (DataType::Dictionary(_, v1), othertype) => v1.as_ref() == othertype,
-            (othertype, DataType::Dictionary(_, v1)) => v1.as_ref() == othertype,
+            (DataType::Dictionary(_, v1), othertype)
+            | (othertype, DataType::Dictionary(_, v1)) => {
+                Self::datatype_is_logically_equal(v1.as_ref(), othertype)
+            }
             (DataType::List(f1), DataType::List(f2))
             | (DataType::LargeList(f1), DataType::LargeList(f2))
             | (DataType::FixedSizeList(f1, _), DataType::FixedSizeList(f2, _)) => {
@@ -1797,6 +1799,27 @@ mod tests {
         assert!(DFSchema::datatype_is_logically_equal(
             &DataType::Utf8,
             &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
+        ));
+
+        // Dictionary is logically equal to the logically equivalent value type
+        assert!(DFSchema::datatype_is_logically_equal(
+            &DataType::Utf8View,
+            &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
+        ));
+
+        assert!(DFSchema::datatype_is_logically_equal(
+            &DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(DataType::List(
+                    Field::new("element", DataType::Utf8, false).into()
+                ))
+            ),
+            &DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(DataType::List(
+                    Field::new("element", DataType::Utf8View, false).into()
+                ))
+            )
         ));
     }
 

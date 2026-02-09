@@ -52,10 +52,18 @@
 //! cargo run --bin examples-docs  
 //! ```
 
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use datafusion::error::{DataFusionError, Result};
+use nom::{
+    IResult, Parser,
+    bytes::complete::{tag, take_until, take_while},
+    character::complete::multispace0,
+    combinator::all_consuming,
+    sequence::{delimited, preceded},
+};
 
 const STATIC_HEADER: &str = r#"<!---
   Licensed to the Apache Software Foundation (ASF) under one
@@ -113,6 +121,8 @@ cargo run --example dataframe -- dataframe
 ```
 "#;
 
+/// Well-known abbreviations used to preserve correct capitalization
+/// when generating human-readable documentation titles.
 const ABBREVIATIONS: &[(&str, &str)] = &[
     ("dataframe", "DataFrame"),
     ("io", "IO"),
@@ -365,38 +375,85 @@ pub fn generate_examples_readme(
     Ok(out)
 }
 
+/// Parsing state machine used while scanning `main.rs` docs.
+///
+/// This makes the "subcommand - metadata" relationship explicit:
+/// metadata is only valid immediately after a subcommand has been seen.
+enum ParserState<'a> {
+    /// Not currently expecting metadata.
+    Idle,
+    /// A subcommand was just parsed; the next valid metadata (if any)
+    /// must belong to this subcommand.
+    SeenSubcommand(&'a str),
+}
+
 /// Parses example entries from a group's `main.rs` file.
 pub fn parse_main_rs_docs(path: &Path) -> Result<Vec<ExampleEntry>> {
     let content = fs::read_to_string(path)?;
-    let mut entries = Vec::new();
-    let mut pending_subcommand: Option<String> = None;
+    let mut entries = vec![];
+    let mut state = ParserState::Idle;
+    let mut seen_subcommands = HashSet::new();
 
-    for raw_line in content.lines() {
+    for (line_no, raw_line) in content.lines().enumerate() {
         let line = raw_line.trim();
 
-        if let Some(sub) = parse_subcommand_line(line) {
-            if sub != "all" {
-                pending_subcommand = Some(sub);
-            }
+        // Try parsing subcommand, excluding `all` because it's not used in README
+        if let Ok((_, sub)) = parse_subcommand_line(line) {
+            state = if sub == "all" {
+                ParserState::Idle
+            } else {
+                ParserState::SeenSubcommand(sub)
+            };
             continue;
         }
 
-        if let Some((file, desc)) = parse_metadata_line(line) {
-            let subcommand = pending_subcommand.take().ok_or_else(|| {
-                DataFusionError::Execution(
-                    "Metadata without preceding subcommand".to_string(),
-                )
-            })?;
+        // Try parsing metadata
+        if let Ok((_, (file, desc))) = parse_metadata_line(line) {
+            let subcommand = match state {
+                ParserState::SeenSubcommand(s) => s,
+                ParserState::Idle => {
+                    return Err(DataFusionError::Execution(format!(
+                        "Metadata without preceding subcommand at {}:{}",
+                        path.display(),
+                        line_no + 1
+                    )));
+                }
+            };
+
+            if !seen_subcommands.insert(subcommand) {
+                return Err(DataFusionError::Execution(format!(
+                    "Duplicate metadata for subcommand `{subcommand}`"
+                )));
+            }
 
             entries.push(ExampleEntry {
-                subcommand,
-                file,
-                desc,
+                subcommand: subcommand.to_string(),
+                file: file.to_string(),
+                desc: desc.to_string(),
             });
+
+            state = ParserState::Idle;
+            continue;
+        }
+
+        // If a non-blank doc line interrupts a pending subcommand, reset the state
+        if let ParserState::SeenSubcommand(_) = state
+            && is_non_blank_doc_line(line)
+        {
+            state = ParserState::Idle;
         }
     }
 
     Ok(entries)
+}
+
+/// Returns `true` for non-blank Rust doc comment lines (`//!`).
+///
+/// Used to detect when a subcommand is interrupted by unrelated documentation,
+/// so metadata is only accepted immediately after a subcommand (blank doc lines
+/// are allowed in between).
+fn is_non_blank_doc_line(line: &str) -> bool {
+    line.starts_with("//!") && !line.trim_start_matches("//!").trim().is_empty()
 }
 
 /// Parses a subcommand declaration line from `main.rs` docs.
@@ -405,10 +462,12 @@ pub fn parse_main_rs_docs(path: &Path) -> Result<Vec<ExampleEntry>> {
 /// ```text
 /// //! - `<subcommand>`
 /// ```
-fn parse_subcommand_line(line: &str) -> Option<String> {
-    line.strip_prefix("//! - `")
-        .and_then(|rest| rest.strip_suffix('`'))
-        .map(|s| s.to_string())
+fn parse_subcommand_line(input: &str) -> IResult<&str, &str> {
+    let parser = preceded(
+        multispace0,
+        delimited(tag("//! - `"), take_until("`"), tag("`")),
+    );
+    all_consuming(parser).parse(input)
 }
 
 /// Parses example metadata (file name and description) from `main.rs` docs.
@@ -417,16 +476,31 @@ fn parse_subcommand_line(line: &str) -> Option<String> {
 /// ```text
 /// //! (file: <file>.rs, desc: <description>)
 /// ```
-fn parse_metadata_line(line: &str) -> Option<(String, String)> {
-    let line = line.strip_prefix("//!").map(str::trim)?;
-    if !line.starts_with("(file:") || !line.ends_with(')') {
-        return None;
-    }
-    let inner = line.strip_prefix('(')?.strip_suffix(')')?;
-    let (file_part, desc_part) = inner.split_once(", desc:")?;
-    let file = file_part.strip_prefix("file:")?.trim().to_string();
-    let desc = desc_part.trim().to_string();
-    Some((file, desc))
+pub fn parse_metadata_line(input: &str) -> IResult<&str, (&str, &str)> {
+    let parser = preceded(
+        multispace0,
+        preceded(tag("//!"), preceded(multispace0, take_while(|_| true))),
+    );
+    let (rest, line) = all_consuming(parser).parse(input)?;
+
+    let content = line
+        .strip_prefix("(")
+        .and_then(|s| s.strip_suffix(")"))
+        .ok_or_else(|| {
+            nom::Err::Error(nom::error::Error::new(line, nom::error::ErrorKind::Tag))
+        })?;
+
+    let (file, desc) = content
+        .strip_prefix("file:")
+        .ok_or_else(|| {
+            nom::Err::Error(nom::error::Error::new(line, nom::error::ErrorKind::Tag))
+        })?
+        .split_once(", desc:")
+        .ok_or_else(|| {
+            nom::Err::Error(nom::error::Error::new(line, nom::error::ErrorKind::Tag))
+        })?;
+
+    Ok((rest, (file.trim(), desc.trim())))
 }
 
 /// Discovers all example group directories under the given root.
@@ -471,71 +545,134 @@ mod tests {
 
     use tempfile::TempDir;
 
+    /// Helper for grammar-focused tests.
+    ///
+    /// Creates a minimal temporary example group with a single `main.rs`
+    /// containing the provided docs. Intended for testing parsing and
+    /// validation rules, not full integration behavior.
+    fn example_group_from_docs(docs: &str) -> Result<ExampleGroup> {
+        let tmp = TempDir::new().map_err(|e| {
+            DataFusionError::Execution(format!("Failed initializing temp dir: {e}"))
+        })?;
+        let dir = tmp.path().join("group");
+        fs::create_dir(&dir).map_err(|e| {
+            DataFusionError::Execution(format!("Failed creating temp dir: {e}"))
+        })?;
+        fs::write(dir.join("main.rs"), docs).map_err(|e| {
+            DataFusionError::Execution(format!("Failed writing to temp file: {e}"))
+        })?;
+        ExampleGroup::from_dir(&dir, Category::SingleProcess)
+    }
+
+    /// Asserts that an `Execution` error contains the expected message fragment.
+    ///
+    /// Keeps tests focused on semantic error causes without coupling them
+    /// to full error string formatting.
+    fn assert_exec_err_contains(err: DataFusionError, needle: &str) {
+        match err {
+            DataFusionError::Execution(msg) => {
+                assert!(
+                    msg.contains(needle),
+                    "expected '{needle}' in error message, got: {msg}"
+                );
+            }
+            other => panic!("expected Execution error, got: {other:?}"),
+        }
+    }
+
     #[test]
     fn all_subcommand_is_ignored() -> Result<()> {
-        let tmp = TempDir::new().unwrap();
-        let group_dir = tmp.path().join("foo");
-        fs::create_dir(&group_dir)?;
-
-        fs::write(
-            group_dir.join("main.rs"),
+        let group = example_group_from_docs(
             r#"
-//! - `all`
-//!
-//! - `foo`
-//!   (file: foo.rs, desc: foo example)
-"#,
+        //! - `all` — run all examples included in this module
+        //!
+        //! - `foo`
+        //!   (file: foo.rs, desc: foo example)
+        "#,
         )?;
-
-        let group = ExampleGroup::from_dir(&group_dir, Category::SingleProcess)?;
-
         assert_eq!(group.examples.len(), 1);
         assert_eq!(group.examples[0].subcommand, "foo");
-
         Ok(())
     }
 
     #[test]
-    fn parse_subcommand_line_works() {
+    fn parse_subcommand_line_accepts_valid_input() {
         let line = "//! - `date_time`";
-        let sub = parse_subcommand_line(line).unwrap();
-        assert_eq!(sub, "date_time");
+        let sub = parse_subcommand_line(line);
+        assert_eq!(sub, Ok(("", "date_time")));
     }
 
     #[test]
-    fn parse_metadata_line_works() {
-        let line =
-            "//!   (file: date_time.rs, desc: Examples of date-time related functions)";
-        let (file, desc) = parse_metadata_line(line).unwrap();
-        assert_eq!(file, "date_time.rs");
-        assert_eq!(desc, "Examples of date-time related functions");
+    fn parse_subcommand_line_invalid_inputs() {
+        let err_lines = [
+            "//! - ",
+            "//! - foo",
+            "//! - `foo` bar",
+            "//! --",
+            "//!-",
+            "//!--",
+            "//!",
+            "//",
+            "/",
+            "",
+        ];
+        for line in err_lines {
+            assert!(
+                parse_subcommand_line(line).is_err(),
+                "expected error for input: {line}"
+            );
+        }
+    }
 
-        let line = "//!   (file: foo.rs, desc: Foo, bar, baz)";
-        let (file, desc) = parse_metadata_line(line).unwrap();
-        assert_eq!(file, "foo.rs");
-        assert_eq!(desc, "Foo, bar, baz");
+    #[test]
+    fn parse_metadata_line_accepts_valid_input() {
+        let line =
+            "//! (file: date_time.rs, desc: Examples of date-time related functions)";
+        let res = parse_metadata_line(line);
+        assert_eq!(
+            res,
+            Ok((
+                "",
+                ("date_time.rs", "Examples of date-time related functions")
+            ))
+        );
+
+        let line = "//! (file: foo.rs, desc: Foo, bar, baz)";
+        let res = parse_metadata_line(line);
+        assert_eq!(res, Ok(("", ("foo.rs", "Foo, bar, baz"))));
+
+        let line = "//! (file: foo.rs, desc: Foo(FOO))";
+        let res = parse_metadata_line(line);
+        assert_eq!(res, Ok(("", ("foo.rs", "Foo(FOO)"))));
+    }
+
+    #[test]
+    fn parse_metadata_line_invalid_inputs() {
+        let bad_lines = [
+            "//! (file: foo.rs)",
+            "//! (desc: missing file)",
+            "//! file: foo.rs, desc: test",
+            "//! file: foo.rs,desc: test",
+            "//! (file: foo.rs desc: test)",
+            "//! (file: foo.rs,desc: test)",
+            "//! (desc: test, file: foo.rs)",
+            "//! ()",
+            "//! (file: foo.rs, desc: test) extra",
+            "",
+        ];
+        for line in bad_lines {
+            assert!(
+                parse_metadata_line(line).is_err(),
+                "expected error for input: {line}"
+            );
+        }
     }
 
     #[test]
     fn metadata_without_subcommand_fails() {
-        let tmp = TempDir::new().unwrap();
-        let group_dir = tmp.path().join("bad");
-        fs::create_dir(&group_dir).unwrap();
-
-        fs::write(
-            group_dir.join("main.rs"),
-            "//! (file: foo.rs, desc: missing subcommand)",
-        )
-        .unwrap();
-
-        let err =
-            ExampleGroup::from_dir(&group_dir, Category::SingleProcess).unwrap_err();
-
-        assert!(
-            err.to_string()
-                .contains("Metadata without preceding subcommand"),
-            "unexpected error: {err}"
-        );
+        let err = example_group_from_docs("//! (file: foo.rs, desc: missing subcommand)")
+            .unwrap_err();
+        assert_exec_err_contains(err, "Metadata without preceding subcommand");
     }
 
     #[test]
@@ -551,44 +688,44 @@ mod tests {
         fs::write(
             &main_rs,
             r#"
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
-// 
-//! # These are miscellaneous function-related examples
-//!
-//! These examples demonstrate miscellaneous function-related features.
-//!
-//! ## Usage
-//! ```bash
-//! cargo run --example builtin_functions -- [all|date_time|function_factory|regexp]
-//! ```
-//!
-//! Each subcommand runs a corresponding example:
-//! - `all` — run all examples included in this module
-//!
-//! - `date_time`
-//!   (file: date_time.rs, desc: Examples of date-time related functions and queries)
-//!
-//! - `function_factory`  
-//!   (file: function_factory.rs, desc: Register `CREATE FUNCTION` handler to implement SQL macros)
-//!
-//! - `regexp`
-//!   (file: regexp.rs, desc: Examples of using regular expression functions)
-"#,
+    // Licensed to the Apache Software Foundation (ASF) under one
+    // or more contributor license agreements.  See the NOTICE file
+    // distributed with this work for additional information
+    // regarding copyright ownership.  The ASF licenses this file
+    // to you under the Apache License, Version 2.0 (the
+    // "License"); you may not use this file except in compliance
+    // with the License.  You may obtain a copy of the License at
+    //
+    //   http://www.apache.org/licenses/LICENSE-2.0
+    //
+    // Unless required by applicable law or agreed to in writing,
+    // software distributed under the License is distributed on an
+    // "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+    // KIND, either express or implied.  See the License for the
+    // specific language governing permissions and limitations
+    // under the License.
+    //
+    //! # These are miscellaneous function-related examples
+    //!
+    //! These examples demonstrate miscellaneous function-related features.
+    //!
+    //! ## Usage
+    //! ```bash
+    //! cargo run --example builtin_functions -- [all|date_time|function_factory|regexp]
+    //! ```
+    //!
+    //! Each subcommand runs a corresponding example:
+    //! - `all` — run all examples included in this module
+    //!
+    //! - `date_time`
+    //!   (file: date_time.rs, desc: Examples of date-time related functions and queries)
+    //!
+    //! - `function_factory`
+    //!   (file: function_factory.rs, desc: Register `CREATE FUNCTION` handler to implement SQL macros)
+    //!
+    //! - `regexp`
+    //!   (file: regexp.rs, desc: Examples of using regular expression functions)
+    "#,
         )?;
 
         let group = ExampleGroup::from_dir(&group_dir, Category::SingleProcess)?;
@@ -641,7 +778,6 @@ mod tests {
         .unwrap();
 
         let out = generate_examples_readme(&layout, Some("builtin_functions")).unwrap();
-
         assert!(out.contains("Builtin Functions"));
     }
 
@@ -649,20 +785,8 @@ mod tests {
     fn single_group_generation_fails_if_group_missing() {
         let tmp = TempDir::new().unwrap();
         let layout = RepoLayout::from_root(tmp.path().to_path_buf());
-
         let err = generate_examples_readme(&layout, Some("missing_group")).unwrap_err();
-
-        assert!(
-            err.to_string()
-                .contains("Example group `missing_group` does not exist"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn group_name_title_is_human_readable() {
-        let name = GroupName::from_dir_name("very_long_group_name".to_string());
-        assert_eq!(name.title(), "Very Long Group Name");
+        assert_exec_err_contains(err, "Example group `missing_group` does not exist");
     }
 
     #[test]
@@ -680,5 +804,105 @@ mod tests {
             "SQL Ops"
         );
         assert_eq!(GroupName::from_dir_name("udf".to_string()).title(), "UDF");
+    }
+
+    #[test]
+    fn duplicate_metadata_without_repeating_subcommand_fails() {
+        let err = example_group_from_docs(
+            r#"
+        //! - `foo`
+        //! (file: a.rs, desc: first)
+        //! (file: b.rs, desc: second)
+        "#,
+        )
+        .unwrap_err();
+        assert_exec_err_contains(err, "Metadata without preceding subcommand");
+    }
+
+    #[test]
+    fn duplicate_metadata_for_same_subcommand_fails() {
+        let err = example_group_from_docs(
+            r#"
+        //! - `foo`
+        //! (file: a.rs, desc: first)
+        //!
+        //! - `foo`
+        //! (file: b.rs, desc: second)
+        "#,
+        )
+        .unwrap_err();
+        assert_exec_err_contains(err, "Duplicate metadata for subcommand `foo`");
+    }
+
+    #[test]
+    fn metadata_must_follow_subcommand() {
+        let err = example_group_from_docs(
+            r#"
+        //! - `foo`
+        //! some unrelated comment
+        //! (file: foo.rs, desc: test)
+        "#,
+        )
+        .unwrap_err();
+        assert_exec_err_contains(err, "Metadata without preceding subcommand");
+    }
+
+    #[test]
+    fn preserves_example_order_from_main_rs() -> Result<()> {
+        let group = example_group_from_docs(
+            r#"
+        //! - `second`
+        //! (file: second.rs, desc: second example)
+        //!
+        //! - `first`
+        //! (file: first.rs, desc: first example)
+        //!
+        //! - `third`
+        //! (file: third.rs, desc: third example)
+        "#,
+        )?;
+
+        let subcommands: Vec<&str> = group
+            .examples
+            .iter()
+            .map(|e| e.subcommand.as_str())
+            .collect();
+
+        assert_eq!(
+            subcommands,
+            vec!["second", "first", "third"],
+            "examples must preserve the order defined in main.rs"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn metadata_can_follow_blank_doc_line() -> Result<()> {
+        let group = example_group_from_docs(
+            r#"
+        //! - `foo`
+        //!
+        //! (file: foo.rs, desc: test)
+        "#,
+        )?;
+        assert_eq!(group.examples.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn group_name_title_cases() {
+        let cases = [
+            ("very_long_group_name", "Very Long Group Name"),
+            ("foo", "Foo"),
+            ("dataframe", "DataFrame"),
+            ("data_io", "Data IO"),
+            ("sql_ops", "SQL Ops"),
+            ("udf", "UDF"),
+        ];
+        for (input, expected) in cases {
+            let name = GroupName::from_dir_name(input.to_string());
+            assert_eq!(name.title(), expected);
+        }
     }
 }
