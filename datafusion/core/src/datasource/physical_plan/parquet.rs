@@ -26,6 +26,7 @@ mod tests {
     // See also `parquet_exec` integration test
     use std::fs::{self, File};
     use std::io::Write;
+    use std::str::FromStr;
     use std::sync::Arc;
     use std::sync::Mutex;
 
@@ -47,6 +48,7 @@ mod tests {
     use arrow_schema::{SchemaRef, TimeUnit};
     use bytes::{BufMut, BytesMut};
     use datafusion_common::config::TableParquetOptions;
+    use datafusion_common::parquet_config::DFTimeUnit;
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
     use datafusion_common::{Result, ScalarValue, assert_contains};
     use datafusion_datasource::file_format::FileFormat;
@@ -1342,18 +1344,7 @@ mod tests {
 
         let time_units_and_expected = vec![
             (
-                None, // Same as "ns" time_unit
-                Arc::new(Int64Array::from(vec![
-                    Some(1704141296123456000), // Reads as nanosecond fine (note 3 extra 0s)
-                    Some(1704070800000000000), // Reads as nanosecond fine (note 3 extra 0s)
-                    Some(-4852191831933722624), // Cannot be represented with nanos timestamp (year 9999)
-                    Some(1735599600000000000), // Reads as nanosecond fine (note 3 extra 0s)
-                    None,
-                    Some(-4864435138808946688), // Cannot be represented with nanos timestamp (year 290000)
-                ])),
-            ),
-            (
-                Some("ns".to_string()),
+                None, // default: None = "ns"
                 Arc::new(Int64Array::from(vec![
                     Some(1704141296123456000),
                     Some(1704070800000000000),
@@ -1364,7 +1355,18 @@ mod tests {
                 ])),
             ),
             (
-                Some("us".to_string()),
+                Some(DFTimeUnit::NS),
+                Arc::new(Int64Array::from(vec![
+                    Some(1704141296123456000),
+                    Some(1704070800000000000),
+                    Some(-4852191831933722624),
+                    Some(1735599600000000000),
+                    None,
+                    Some(-4864435138808946688),
+                ])),
+            ),
+            (
+                Some(DFTimeUnit::US),
                 Arc::new(Int64Array::from(vec![
                     Some(1704141296123456),
                     Some(1704070800000000),
@@ -1379,7 +1381,7 @@ mod tests {
         for (time_unit, expected) in time_units_and_expected {
             let parquet_exec = scan_format(
                 &state,
-                &ParquetFormat::default().with_coerce_int96(time_unit.clone()),
+                &ParquetFormat::default().with_coerce_int96(time_unit),
                 Some(schema.clone()),
                 &testdata,
                 filename,
@@ -1428,7 +1430,8 @@ mod tests {
 
         let parquet_exec = scan_format(
             &state,
-            &ParquetFormat::default().with_coerce_int96(Some("us".to_string())),
+            &ParquetFormat::default()
+                .with_coerce_int96(Some(DFTimeUnit::from_str("us").unwrap())),
             None,
             testdata,
             filename,
