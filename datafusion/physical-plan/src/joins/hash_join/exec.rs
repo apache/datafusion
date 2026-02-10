@@ -719,6 +719,26 @@ impl HashJoinExec {
         Arc::new(DynamicFilterPhysicalExpr::new(right_keys, lit(true)))
     }
 
+    fn allow_join_dynamic_filter_pushdown(&self, config: &ConfigOptions) -> bool {
+        if !config.optimizer.enable_join_dynamic_filter_pushdown {
+            return false;
+        }
+
+        // `preserve_file_partitions` can report Hash partitioning for Hive-style
+        // file groups, but those partitions are not actually hash-distributed.
+        // Partitioned dynamic filters rely on hash routing, so disable them in
+        // this mode to avoid incorrect results. Follow-up work: enable dynamic
+        // filtering for preserve_file_partitioned scans (issue #20195).
+        // https://github.com/apache/datafusion/issues/20195
+        if config.optimizer.preserve_file_partitions > 0
+            && self.mode == PartitionMode::Partitioned
+        {
+            return false;
+        }
+
+        true
+    }
+
     /// left (build) side which gets hashed
     pub fn left(&self) -> &Arc<dyn ExecutionPlan> {
         &self.left
@@ -1179,11 +1199,8 @@ impl ExecutionPlan for HashJoinExec {
         // - A dynamic filter exists
         // - At least one consumer is holding a reference to it, this avoids expensive filter
         //   computation when disabled or when no consumer will use it.
-        let enable_dynamic_filter_pushdown = context
-            .session_config()
-            .options()
-            .optimizer
-            .enable_join_dynamic_filter_pushdown
+        let enable_dynamic_filter_pushdown = self
+            .allow_join_dynamic_filter_pushdown(context.session_config().options())
             && self
                 .dynamic_filter
                 .as_ref()
@@ -1413,7 +1430,7 @@ impl ExecutionPlan for HashJoinExec {
 
         // Add dynamic filters in Post phase if enabled
         if matches!(phase, FilterPushdownPhase::Post)
-            && config.optimizer.enable_join_dynamic_filter_pushdown
+            && self.allow_join_dynamic_filter_pushdown(config)
         {
             // Add actual dynamic filter to right side (probe side)
             let dynamic_filter = Self::create_dynamic_filter(&self.on);
