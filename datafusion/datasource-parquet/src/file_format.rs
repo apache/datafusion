@@ -27,6 +27,7 @@ use std::{fmt, vec};
 
 use arrow::array::RecordBatch;
 use arrow::datatypes::{Fields, Schema, SchemaRef, TimeUnit};
+use datafusion_common::parquet_config::DFTimeUnit;
 use datafusion_datasource::TableSchema;
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
@@ -60,7 +61,7 @@ use datafusion_session::Session;
 
 use crate::metadata::{DFParquetMetadata, lex_ordering_to_sorting_columns};
 use crate::reader::CachedParquetFileReaderFactory;
-use crate::source::{ParquetSource, parse_coerce_int96_string};
+use crate::source::ParquetSource;
 use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion_datasource::source::DataSourceExec;
@@ -273,11 +274,11 @@ impl ParquetFormat {
         self
     }
 
-    pub fn coerce_int96(&self) -> Option<String> {
+    pub fn coerce_int96(&self) -> Option<DFTimeUnit> {
         self.options.global.coerce_int96.clone()
     }
 
-    pub fn with_coerce_int96(mut self, time_unit: Option<String>) -> Self {
+    pub fn with_coerce_int96(mut self, time_unit: Option<DFTimeUnit>) -> Self {
         self.options.global.coerce_int96 = time_unit;
         self
     }
@@ -365,7 +366,8 @@ impl FileFormat for ParquetFormat {
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
         let coerce_int96 = match self.coerce_int96() {
-            Some(time_unit) => Some(parse_coerce_int96_string(time_unit.as_str())?),
+            Some(time_unit) => Some(time_unit.into()),
+
             None => None,
         };
 

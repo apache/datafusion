@@ -29,15 +29,12 @@ use crate::row_filter::can_expr_be_pushed_down_with_schemas;
 use datafusion_common::config::ConfigOptions;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_common::config::EncryptionFactoryOptions;
-use datafusion_datasource::as_file_source;
-use datafusion_datasource::file_stream::FileOpener;
-
-use arrow::datatypes::TimeUnit;
-use datafusion_common::DataFusionError;
 use datafusion_common::config::TableParquetOptions;
 use datafusion_datasource::TableSchema;
+use datafusion_datasource::as_file_source;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::file_stream::FileOpener;
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::{EquivalenceProperties, conjunction};
 use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
@@ -483,24 +480,6 @@ impl ParquetSource {
     }
 }
 
-/// Parses datafusion.common.config.ParquetOptions.coerce_int96 String to a arrow_schema.datatype.TimeUnit
-pub(crate) fn parse_coerce_int96_string(
-    str_setting: &str,
-) -> datafusion_common::Result<TimeUnit> {
-    let str_setting_lower: &str = &str_setting.to_lowercase();
-
-    match str_setting_lower {
-        "ns" => Ok(TimeUnit::Nanosecond),
-        "us" => Ok(TimeUnit::Microsecond),
-        "ms" => Ok(TimeUnit::Millisecond),
-        "s" => Ok(TimeUnit::Second),
-        _ => Err(DataFusionError::Configuration(format!(
-            "Unknown or unsupported parquet coerce_int96: \
-        {str_setting}. Valid values are: ns, us, ms, and s."
-        ))),
-    }
-}
-
 /// Allows easy conversion from ParquetSource to Arc&lt;dyn FileSource&gt;
 impl From<ParquetSource> for Arc<dyn FileSource> {
     fn from(source: ParquetSource) -> Self {
@@ -539,7 +518,7 @@ impl FileSource for ParquetSource {
             .global
             .coerce_int96
             .as_ref()
-            .map(|time_unit| parse_coerce_int96_string(time_unit.as_str()).unwrap());
+            .map(|time_unit| (*time_unit).into());
 
         let opener = Arc::new(ParquetOpener {
             partition_index: partition,

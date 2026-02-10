@@ -23,7 +23,7 @@ use arrow_ipc::CompressionType;
 use crate::encryption::{FileDecryptionProperties, FileEncryptionProperties};
 use crate::error::_config_err;
 use crate::format::{ExplainAnalyzeLevel, ExplainFormat};
-use crate::parquet_config::DFParquetWriterVersion;
+use crate::parquet_config::{DFParquetWriterVersion, DFTimeUnit};
 use crate::parsers::CompressionTypeVariant;
 use crate::utils::get_available_parallelism;
 use crate::{DataFusionError, Result};
@@ -738,7 +738,7 @@ config_namespace! {
         /// which stores microsecond resolution timestamps in an int96 allowing it
         /// to write values with a larger date range than 64-bit timestamps with
         /// nanosecond resolution.
-        pub coerce_int96: Option<String>, transform = str::to_lowercase, default = None
+        pub coerce_int96: Option<DFTimeUnit>, default = Some(DFTimeUnit::default())
 
         /// (reading) Use any available bloom filters when reading parquet files
         pub bloom_filter_on_read: bool, default = true
@@ -3528,6 +3528,30 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "Invalid or Unsupported Configuration: Invalid parquet writer version: 3.0. Expected one of: 1.0, 2.0"
+        );
+    }
+    #[cfg(feature = "parquet")]
+    #[test]
+    fn test_parquet_coerce_int96_validation() {
+        use crate::{config::ConfigOptions, parquet_config::DFTimeUnit};
+
+        let mut config = ConfigOptions::default();
+
+        // Valid values should work
+        config
+            .set("datafusion.execution.parquet.coerce_int96", "ns")
+            .unwrap();
+        assert_eq!(config.execution.parquet.coerce_int96, Some(DFTimeUnit::NS));
+
+        // ... tests for "us", "ms", "s" ...
+
+        // Invalid value should error immediately at SET time
+        let err = config
+            .set("datafusion.execution.parquet.coerce_int96", "invalid")
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid or Unsupported Configuration: Invalid parquet coerce_int96: invalid. Expected one of: ns, us, ms, s"
         );
     }
 }
