@@ -2386,6 +2386,8 @@ fn trim_trailing_0s_hex(number: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::function::utils::test::test_scalar_function;
+    use arrow::array::StringArray;
     use arrow::datatypes::DataType::Utf8;
     use datafusion_common::Result;
 
@@ -2415,6 +2417,53 @@ mod tests {
             "format_string(fmt, ...) should NOT be nullable when fmt is NOT nullable"
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_insert_thousands_separator() {
+        assert_eq!(insert_thousands_separator("1234567.89"), "1,234,567.89");
+        assert_eq!(insert_thousands_separator("123.45"), "123.45");
+        assert_eq!(insert_thousands_separator("1234"), "1,234");
+        assert_eq!(insert_thousands_separator("12"), "12");
+        assert_eq!(insert_thousands_separator("0.5"), "0.5");
+        assert_eq!(
+            insert_thousands_separator("1234567890.1234"),
+            "1,234,567,890.1234"
+        );
+        assert_eq!(insert_thousands_separator("1000"), "1,000");
+        assert_eq!(insert_thousands_separator("100"), "100");
+    }
+
+    #[test]
+    fn test_grouping_separator_float() -> Result<()> {
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%,.2f".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(1234567.89))),
+            ],
+            Ok(Some("1,234,567.89")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_grouping_separator_decimal() -> Result<()> {
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%,.2f".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Decimal128(Some(123456789), 10, 2)),
+            ],
+            Ok(Some("1,234,567.89")),
+            &str,
+            Utf8,
+            StringArray
+        );
         Ok(())
     }
 }
