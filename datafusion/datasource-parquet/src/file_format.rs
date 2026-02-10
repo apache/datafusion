@@ -275,7 +275,7 @@ impl ParquetFormat {
     }
 
     pub fn coerce_int96(&self) -> Option<DFTimeUnit> {
-        self.options.global.coerce_int96.clone()
+        self.options.global.coerce_int96
     }
 
     pub fn with_coerce_int96(mut self, time_unit: Option<DFTimeUnit>) -> Self {
@@ -365,12 +365,7 @@ impl FileFormat for ParquetFormat {
         store: &Arc<dyn ObjectStore>,
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
-        let coerce_int96 = match self.coerce_int96() {
-            Some(time_unit) => Some(time_unit.into()),
-
-            None => None,
-        };
-
+        let coerce_int96 = self.coerce_int96().map(|time_unit| time_unit.into());
         let file_metadata_cache =
             state.runtime_env().cache_manager.get_file_metadata_cache();
 

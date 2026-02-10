@@ -738,7 +738,7 @@ config_namespace! {
         /// which stores microsecond resolution timestamps in an int96 allowing it
         /// to write values with a larger date range than 64-bit timestamps with
         /// nanosecond resolution.
-        pub coerce_int96: Option<DFTimeUnit>, default = Some(DFTimeUnit::default())
+        pub coerce_int96: Option<DFTimeUnit>, default = None
 
         /// (reading) Use any available bloom filters when reading parquet files
         pub bloom_filter_on_read: bool, default = true
