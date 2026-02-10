@@ -28,7 +28,12 @@ use arrow::datatypes::{
     DataType, Field, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, Schema,
     TimeUnit, UnionFields, UnionMode, i256,
 };
-use arrow::ipc::{reader::read_record_batch, root_as_message};
+use arrow::ipc::{
+    convert::fb_to_schema,
+    reader::{read_dictionary, read_record_batch},
+    root_as_message,
+    writer::{DictionaryTracker, IpcDataGenerator, IpcWriteOptions},
+};
 
 use datafusion_common::{
     Column, ColumnStatistics, Constraint, Constraints, DFSchema, DFSchemaRef,
@@ -326,6 +331,19 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
                 let keys_sorted = map.keys_sorted;
                 DataType::Map(Arc::new(field), keys_sorted)
             }
+            arrow_type::ArrowTypeEnum::RunEndEncoded(run_end_encoded) => {
+                let run_ends_field: Field = run_end_encoded
+                    .as_ref()
+                    .run_ends_field
+                    .as_deref()
+                    .required("run_ends_field")?;
+                let value_field: Field = run_end_encoded
+                    .as_ref()
+                    .values_field
+                    .as_deref()
+                    .required("values_field")?;
+                DataType::RunEndEncoded(run_ends_field.into(), value_field.into())
+            }
         })
     }
 }
@@ -384,7 +402,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
             Value::Float32Value(v) => Self::Float32(Some(*v)),
             Value::Float64Value(v) => Self::Float64(Some(*v)),
             Value::Date32Value(v) => Self::Date32(Some(*v)),
-            // ScalarValue::List is serialized using arrow IPC format
+            // Nested ScalarValue types are serialized using arrow IPC format
             Value::ListValue(v)
             | Value::FixedSizeListValue(v)
             | Value::LargeListValue(v)
@@ -401,55 +419,83 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                     schema_ref.try_into()?
                 } else {
                     return Err(Error::General(
-                        "Invalid schema while deserializing ScalarValue::List"
+                        "Invalid schema while deserializing nested ScalarValue"
                             .to_string(),
                     ));
                 };
 
+                // IPC dictionary batch IDs are assigned when encoding the schema, but our protobuf
+                // `Schema` doesn't preserve those IDs. Reconstruct them deterministically by
+                // round-tripping the schema through IPC.
+                let schema: Schema = {
+                    let ipc_gen = IpcDataGenerator {};
+                    let write_options = IpcWriteOptions::default();
+                    let mut dict_tracker = DictionaryTracker::new(false);
+                    let encoded_schema = ipc_gen.schema_to_bytes_with_dictionary_tracker(
+                        &schema,
+                        &mut dict_tracker,
+                        &write_options,
+                    );
+                    let message =
+                        root_as_message(encoded_schema.ipc_message.as_slice()).map_err(
+                            |e| {
+                                Error::General(format!(
+                                    "Error IPC schema message while deserializing nested ScalarValue: {e}"
+                                ))
+                            },
+                        )?;
+                    let ipc_schema = message.header_as_schema().ok_or_else(|| {
+                        Error::General(
+                            "Unexpected message type deserializing nested ScalarValue schema"
+                                .to_string(),
+                        )
+                    })?;
+                    fb_to_schema(ipc_schema)
+                };
+
                 let message = root_as_message(ipc_message.as_slice()).map_err(|e| {
                     Error::General(format!(
-                        "Error IPC message while deserializing ScalarValue::List: {e}"
+                        "Error IPC message while deserializing nested ScalarValue: {e}"
                     ))
                 })?;
                 let buffer = Buffer::from(arrow_data.as_slice());
 
                 let ipc_batch = message.header_as_record_batch().ok_or_else(|| {
                     Error::General(
-                        "Unexpected message type deserializing ScalarValue::List"
+                        "Unexpected message type deserializing nested ScalarValue"
                             .to_string(),
                     )
                 })?;
 
-                let dict_by_id: HashMap<i64,ArrayRef> = dictionaries.iter().map(|protobuf::scalar_nested_value::Dictionary { ipc_message, arrow_data }| {
+                let mut dict_by_id: HashMap<i64, ArrayRef> = HashMap::new();
+                for protobuf::scalar_nested_value::Dictionary {
+                    ipc_message,
+                    arrow_data,
+                } in dictionaries
+                {
                     let message = root_as_message(ipc_message.as_slice()).map_err(|e| {
                         Error::General(format!(
-                            "Error IPC message while deserializing ScalarValue::List dictionary message: {e}"
+                            "Error IPC message while deserializing nested ScalarValue dictionary message: {e}"
                         ))
                     })?;
                     let buffer = Buffer::from(arrow_data.as_slice());
 
                     let dict_batch = message.header_as_dictionary_batch().ok_or_else(|| {
                         Error::General(
-                            "Unexpected message type deserializing ScalarValue::List dictionary message"
+                            "Unexpected message type deserializing nested ScalarValue dictionary message"
                                 .to_string(),
                         )
                     })?;
-
-                    let id = dict_batch.id();
-
-                    let record_batch = read_record_batch(
+                    read_dictionary(
                         &buffer,
-                        dict_batch.data().unwrap(),
-                        Arc::new(schema.clone()),
-                        &Default::default(),
-                        None,
+                        dict_batch,
+                        &schema,
+                        &mut dict_by_id,
                         &message.version(),
-                    )?;
-
-                    let values: ArrayRef = Arc::clone(record_batch.column(0));
-
-                    Ok((id, values))
-                }).collect::<datafusion_common::Result<HashMap<_, _>>>()?;
+                    )
+                    .map_err(|e| arrow_datafusion_err!(e))
+                    .map_err(|e| e.context("Decoding nested ScalarValue dictionary"))?;
+                }
 
                 let record_batch = read_record_batch(
                     &buffer,
@@ -460,7 +506,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                     &message.version(),
                 )
                 .map_err(|e| arrow_datafusion_err!(e))
-                .map_err(|e| e.context("Decoding ScalarValue::List Value"))?;
+                .map_err(|e| e.context("Decoding nested ScalarValue value"))?;
                 let arr = record_batch.column(0);
                 match value {
                     Value::ListValue(_) => {
@@ -577,6 +623,32 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                     .try_into()?;
 
                 Self::Dictionary(Box::new(index_type), Box::new(value))
+            }
+            Value::RunEndEncodedValue(v) => {
+                let run_ends_field: Field = v
+                    .run_ends_field
+                    .as_ref()
+                    .ok_or_else(|| Error::required("run_ends_field"))?
+                    .try_into()?;
+
+                let values_field: Field = v
+                    .values_field
+                    .as_ref()
+                    .ok_or_else(|| Error::required("values_field"))?
+                    .try_into()?;
+
+                let value: Self = v
+                    .value
+                    .as_ref()
+                    .ok_or_else(|| Error::required("value"))?
+                    .as_ref()
+                    .try_into()?;
+
+                Self::RunEndEncoded(
+                    run_ends_field.into(),
+                    values_field.into(),
+                    Box::new(value),
+                )
             }
             Value::BinaryValue(v) => Self::Binary(Some(v.clone())),
             Value::BinaryViewValue(v) => Self::BinaryView(Some(v.clone())),

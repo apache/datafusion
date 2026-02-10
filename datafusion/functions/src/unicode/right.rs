@@ -16,20 +16,11 @@
 // under the License.
 
 use std::any::Any;
-use std::cmp::Ordering;
-use std::sync::Arc;
 
+use crate::unicode::common::{RightSlicer, general_left_right};
 use crate::utils::make_scalar_function;
-use arrow::array::{
-    Array, ArrayAccessor, ArrayIter, ArrayRef, ByteView, GenericStringArray, Int64Array,
-    OffsetSizeTrait, StringViewArray, make_view,
-};
 use arrow::datatypes::DataType;
-use arrow_buffer::{NullBuffer, ScalarBuffer};
 use datafusion_common::Result;
-use datafusion_common::cast::{
-    as_generic_string_array, as_int64_array, as_string_view_array,
-};
 use datafusion_common::exec_err;
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
@@ -97,6 +88,10 @@ impl ScalarUDFImpl for RightFunc {
         Ok(arg_types[0].clone())
     }
 
+    /// Returns right n characters in the string, or when n is negative, returns all but first |n| characters.
+    /// right('abcde', 2) = 'de'
+    /// right('abcde', -2) = 'cde'
+    /// The implementation uses UTF-8 code points as characters
     fn invoke_with_args(
         &self,
         args: datafusion_expr::ScalarFunctionArgs,
@@ -104,7 +99,7 @@ impl ScalarUDFImpl for RightFunc {
         let args = &args.args;
         match args[0].data_type() {
             DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => {
-                make_scalar_function(right, vec![])(args)
+                make_scalar_function(general_left_right::<RightSlicer>, vec![])(args)
             }
             other => exec_err!(
                 "Unsupported data type {other:?} for function {},\
@@ -116,129 +111,6 @@ impl ScalarUDFImpl for RightFunc {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
-    }
-}
-
-/// Returns right n characters in the string, or when n is negative, returns all but first |n| characters.
-/// right('abcde', 2) = 'de'
-/// right('abcde', -2) = 'cde'
-/// The implementation uses UTF-8 code points as characters
-fn right(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let n_array = as_int64_array(&args[1])?;
-
-    match args[0].data_type() {
-        DataType::Utf8 => {
-            let string_array = as_generic_string_array::<i32>(&args[0])?;
-            right_impl::<i32, _>(string_array, n_array)
-        }
-        DataType::LargeUtf8 => {
-            let string_array = as_generic_string_array::<i64>(&args[0])?;
-            right_impl::<i64, _>(string_array, n_array)
-        }
-        DataType::Utf8View => {
-            let string_view_array = as_string_view_array(&args[0])?;
-            right_impl_view(string_view_array, n_array)
-        }
-        _ => exec_err!("Not supported"),
-    }
-}
-
-/// `right` implementation for strings
-fn right_impl<'a, T: OffsetSizeTrait, V: ArrayAccessor<Item = &'a str>>(
-    string_array: V,
-    n_array: &Int64Array,
-) -> Result<ArrayRef> {
-    let iter = ArrayIter::new(string_array);
-    let result = iter
-        .zip(n_array.iter())
-        .map(|(string, n)| match (string, n) {
-            (Some(string), Some(n)) => {
-                let byte_length = right_byte_length(string, n);
-                // Extract starting from `byte_length` bytes from a byte-indexed slice
-                Some(&string[byte_length..])
-            }
-            _ => None,
-        })
-        .collect::<GenericStringArray<T>>();
-
-    Ok(Arc::new(result) as ArrayRef)
-}
-
-/// `right` implementation for StringViewArray
-fn right_impl_view(
-    string_view_array: &StringViewArray,
-    n_array: &Int64Array,
-) -> Result<ArrayRef> {
-    let len = n_array.len();
-
-    let views = string_view_array.views();
-    // Every string in StringViewArray has one corresponding view in `views`
-    debug_assert!(views.len() == string_view_array.len());
-
-    // Compose null buffer at once
-    let string_nulls = string_view_array.nulls();
-    let n_nulls = n_array.nulls();
-    let new_nulls = NullBuffer::union(string_nulls, n_nulls);
-
-    let new_views = (0..len)
-        .map(|idx| {
-            let view = views[idx];
-
-            let is_valid = match &new_nulls {
-                Some(nulls_buf) => nulls_buf.is_valid(idx),
-                None => true,
-            };
-
-            if is_valid {
-                let string: &str = string_view_array.value(idx);
-                let n = n_array.value(idx);
-
-                let new_offset = right_byte_length(string, n);
-                let result_bytes = &string.as_bytes()[new_offset..];
-
-                if result_bytes.len() > 12 {
-                    let byte_view = ByteView::from(view);
-                    // Reuse buffer, but adjust offset and length
-                    make_view(
-                        result_bytes,
-                        byte_view.buffer_index,
-                        byte_view.offset + new_offset as u32,
-                    )
-                } else {
-                    // inline value does not need block id or offset
-                    make_view(result_bytes, 0, 0)
-                }
-            } else {
-                // For nulls, keep the original view
-                view
-            }
-        })
-        .collect::<Vec<u128>>();
-
-    // Buffers are unchanged
-    let result = StringViewArray::try_new(
-        ScalarBuffer::from(new_views),
-        Vec::from(string_view_array.data_buffers()),
-        new_nulls,
-    )?;
-    Ok(Arc::new(result) as ArrayRef)
-}
-
-/// Calculate the byte length of the substring of last `n` chars from string `string`
-/// (or all but first `|n|` chars if n is negative)
-fn right_byte_length(string: &str, n: i64) -> usize {
-    match n.cmp(&0) {
-        Ordering::Less => string
-            .char_indices()
-            .nth(n.unsigned_abs().min(usize::MAX as u64) as usize)
-            .map(|(index, _)| index)
-            .unwrap_or(string.len()),
-        Ordering::Equal => string.len(),
-        Ordering::Greater => string
-            .char_indices()
-            .nth_back((n.unsigned_abs().min(usize::MAX as u64) - 1) as usize)
-            .map(|(index, _)| index)
-            .unwrap_or(0),
     }
 }
 
