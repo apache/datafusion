@@ -661,7 +661,7 @@ query TT
 explain select s['a']['b'] from explain_test;
 ----
 logical_plan
-01)Projection: get_field(explain_test.s, Utf8("a"), Utf8("b")) AS explain_test.s[a][b]
+01)Projection: get_field(explain_test.s, Utf8("a"), Utf8("b"))
 02)--TableScan: explain_test projection=[s]
 physical_plan
 01)ProjectionExec: expr=[get_field(s@0, a, b) as explain_test.s[a][b]]
