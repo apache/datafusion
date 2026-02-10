@@ -2436,9 +2436,10 @@ impl Filter {
         // Note that it is not always possible to resolve the predicate expression during plan
         // construction (such as with correlated subqueries) so we make a best effort here and
         // ignore errors resolving the expression against the schema.
-        if let Ok(predicate_type) = predicate.get_type(input.schema())
-            && !Filter::is_allowed_filter_type(&predicate_type)
+        if let Ok(field) = predicate.to_field(input.schema())
+            && !Filter::is_allowed_filter_type(field.1.data_type())
         {
+            let predicate_type = field.1.data_type();
             return plan_err!(
                 "Cannot create filter with non-boolean predicate '{predicate}' returning {predicate_type}"
             );

@@ -277,7 +277,7 @@ impl LogicalPlanBuilder {
             let field_nullable = schema.field(j).is_nullable();
             for row in values.iter() {
                 let value = &row[j];
-                let data_type = value.get_type(schema)?;
+                let data_type = value.to_field(schema)?.1.data_type().clone();
 
                 if !data_type.equals_datatype(field_type)
                     && !can_cast_types(&data_type, field_type)
@@ -305,7 +305,8 @@ impl LogicalPlanBuilder {
             let mut common_metadata: Option<FieldMetadata> = None;
             for (i, row) in values.iter().enumerate() {
                 let value = &row[j];
-                let metadata = value.metadata(&schema)?;
+                let field = value.to_field(&schema)?.1;
+                let metadata = FieldMetadata::from(field.metadata());
                 if let Some(ref cm) = common_metadata {
                     if &metadata != cm {
                         return plan_err!(
@@ -315,9 +316,9 @@ impl LogicalPlanBuilder {
                         );
                     }
                 } else {
-                    common_metadata = Some(metadata.clone());
+                    common_metadata = Some(metadata);
                 }
-                let data_type = value.get_type(&schema)?;
+                let data_type = field.data_type().clone();
                 if data_type == DataType::Null {
                     continue;
                 }

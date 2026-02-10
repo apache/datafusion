@@ -1181,7 +1181,7 @@ mod tests {
             fixed_size_list_type
         );
 
-        // Via ExprSchemable::get_type (e.g. SimplifyInfo)
+        // Via ExprSchemable::to_field (e.g. SimplifyInfo)
         let udf_expr = Expr::ScalarFunction(ScalarFunction {
             func: array_element_udf(),
             args: vec![
@@ -1190,7 +1190,7 @@ mod tests {
             ],
         });
         assert_eq!(
-            ExprSchemable::get_type(&udf_expr, &schema).unwrap(),
+            udf_expr.to_field(&schema).unwrap().1.data_type().clone(),
             fixed_size_list_type
         );
     }

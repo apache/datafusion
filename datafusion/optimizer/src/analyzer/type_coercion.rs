@@ -248,7 +248,7 @@ impl<'a> TypeCoercionRewriter<'a> {
             schema: &DFSchema,
             expr_name: &str,
         ) -> Result<Expr> {
-            let dt = expr.get_type(schema)?;
+            let dt = expr.to_field(schema)?.1.data_type().clone();
             if dt.is_integer() || dt.is_null() {
                 expr.cast_to(&DataType::Int64, schema)
             } else {
@@ -273,7 +273,7 @@ impl<'a> TypeCoercionRewriter<'a> {
     }
 
     fn coerce_join_filter(&self, expr: Expr) -> Result<Expr> {
-        let expr_type = expr.get_type(self.schema)?;
+        let expr_type = expr.to_field(self.schema)?.1.data_type().clone();
         match expr_type {
             DataType::Boolean => Ok(expr),
             DataType::Null => expr.cast_to(&DataType::Boolean, self.schema),
@@ -289,8 +289,8 @@ impl<'a> TypeCoercionRewriter<'a> {
         right: Expr,
         right_schema: &DFSchema,
     ) -> Result<(Expr, Expr)> {
-        let left_data_type = left.get_type(left_schema)?;
-        let right_data_type = right.get_type(right_schema)?;
+        let left_data_type = left.to_field(left_schema)?.1.data_type().clone();
+        let right_data_type = right.to_field(right_schema)?.1.data_type().clone();
         let (left_type, right_type) =
             BinaryTypeCoercer::new(&left_data_type, &op, &right_data_type)
                 .get_input_types()?;
@@ -482,7 +482,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     Arc::unwrap_or_clone(subquery.subquery),
                 )?
                 .data;
-                let expr_type = expr.get_type(self.schema)?;
+                let expr_type = expr.to_field(self.schema)?.1.data_type().clone();
                 let subquery_type = new_plan.schema().field(0).data_type();
                 let common_type = comparison_coercion(&expr_type, subquery_type).ok_or(
                     plan_datafusion_err!(
@@ -511,7 +511,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     Arc::unwrap_or_clone(subquery.subquery),
                 )?
                 .data;
-                let expr_type = expr.get_type(self.schema)?;
+                let expr_type = expr.to_field(self.schema)?.1.data_type().clone();
                 let subquery_type = new_plan.schema().field(0).data_type();
                 if (expr_type.is_numeric() && subquery_type.is_string())
                     || (subquery_type.is_numeric() && expr_type.is_string())
@@ -566,8 +566,8 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 escape_char,
                 case_insensitive,
             }) => {
-                let left_type = expr.get_type(self.schema)?;
-                let right_type = pattern.get_type(self.schema)?;
+                let left_type = expr.to_field(self.schema)?.1.data_type().clone();
+                let right_type = pattern.to_field(self.schema)?.1.data_type().clone();
                 let coerced_type = like_coercion(&left_type,  &right_type).ok_or_else(|| {
                     let op_name = if case_insensitive {
                         "ILIKE"
@@ -606,15 +606,15 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 low,
                 high,
             }) => {
-                let expr_type = expr.get_type(self.schema)?;
-                let low_type = low.get_type(self.schema)?;
+                let expr_type = expr.to_field(self.schema)?.1.data_type().clone();
+                let low_type = low.to_field(self.schema)?.1.data_type().clone();
                 let low_coerced_type = comparison_coercion(&expr_type, &low_type)
                     .ok_or_else(|| {
                         internal_datafusion_err!(
                             "Failed to coerce types {expr_type} and {low_type} in BETWEEN expression"
                         )
                     })?;
-                let high_type = high.get_type(self.schema)?;
+                let high_type = high.to_field(self.schema)?.1.data_type().clone();
                 let high_coerced_type = comparison_coercion(&expr_type, &high_type)
                     .ok_or_else(|| {
                         internal_datafusion_err!(
@@ -640,10 +640,14 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 list,
                 negated,
             }) => {
-                let expr_data_type = expr.get_type(self.schema)?;
+                let expr_data_type = expr.to_field(self.schema)?.1.data_type().clone();
                 let list_data_types = list
                     .iter()
-                    .map(|list_expr| list_expr.get_type(self.schema))
+                    .map(|list_expr| {
+                        list_expr
+                            .to_field(self.schema)
+                            .map(|f| f.1.data_type().clone())
+                    })
                     .collect::<Result<Vec<_>>>()?;
                 let result_type =
                     get_coerce_type_for_list(&expr_data_type, &list_data_types);
@@ -920,7 +924,7 @@ fn coerce_window_frame(
         WindowFrameUnits::Range => {
             let current_types = expressions
                 .first()
-                .map(|s| s.expr.get_type(schema))
+                .map(|s| s.expr.to_field(schema).map(|f| f.1.data_type().clone()))
                 .transpose()?;
             if let Some(col_type) = current_types {
                 extract_window_frame_target_type(&col_type)?
@@ -939,7 +943,7 @@ fn coerce_window_frame(
 // Support the `IsTrue` `IsNotTrue` `IsFalse` `IsNotFalse` type coercion.
 // The above op will be rewrite to the binary op when creating the physical op.
 fn get_casted_expr_for_bool_op(expr: Expr, schema: &DFSchema) -> Result<Expr> {
-    let left_type = expr.get_type(schema)?;
+    let left_type = expr.to_field(schema)?.1.data_type().clone();
     BinaryTypeCoercer::new(&left_type, &Operator::IsDistinctFrom, &DataType::Boolean)
         .get_input_types()?;
     expr.cast_to(&DataType::Boolean, schema)
@@ -1010,17 +1014,17 @@ fn coerce_case_expression(case: Case, schema: &DFSchema) -> Result<Case> {
     let case_type = case
         .expr
         .as_ref()
-        .map(|expr| expr.get_type(schema))
+        .map(|expr| expr.to_field(schema).map(|f| f.1.data_type().clone()))
         .transpose()?;
     let then_types = case
         .when_then_expr
         .iter()
-        .map(|(_when, then)| then.get_type(schema))
+        .map(|(_when, then)| then.to_field(schema).map(|f| f.1.data_type().clone()))
         .collect::<Result<Vec<_>>>()?;
     let else_type = case
         .else_expr
         .as_ref()
-        .map(|expr| expr.get_type(schema))
+        .map(|expr| expr.to_field(schema).map(|f| f.1.data_type().clone()))
         .transpose()?;
 
     // find common coercible types
@@ -1030,7 +1034,9 @@ fn coerce_case_expression(case: Case, schema: &DFSchema) -> Result<Case> {
             let when_types = case
                 .when_then_expr
                 .iter()
-                .map(|(when, _then)| when.get_type(schema))
+                .map(|(when, _then)| {
+                    when.to_field(schema).map(|f| f.1.data_type().clone())
+                })
                 .collect::<Result<Vec<_>>>()?;
             let coerced_type =
                 get_coerce_type_for_case_expression(&when_types, Some(case_type));
@@ -2266,7 +2272,7 @@ mod test {
         data_type: &DataType,
         schema: &DFSchemaRef,
     ) -> Box<Expr> {
-        if &expr.get_type(schema).unwrap() != data_type {
+        if &expr.to_field(schema).unwrap().1.data_type().clone() != data_type {
             Box::new(cast(*expr, data_type.clone()))
         } else {
             expr

@@ -651,8 +651,11 @@ impl ConstEvaluator {
                 if let (
                     Ok(DataType::Struct(source_fields)),
                     DataType::Struct(target_fields),
-                ) = (expr.get_type(&DFSchema::empty()), data_type)
-                {
+                ) = (
+                    expr.to_field(&DFSchema::empty())
+                        .map(|f| f.1.data_type().clone()),
+                    data_type,
+                ) {
                     // Don't const-fold struct casts with different field counts
                     if source_fields.len() != target_fields.len() {
                         return false;
@@ -3679,7 +3682,10 @@ mod tests {
     #[test]
     fn simplify_expr_eq() {
         let schema = expr_test_schema();
-        assert_eq!(col("c2").get_type(&schema).unwrap(), DataType::Boolean);
+        assert_eq!(
+            col("c2").to_field(&schema).unwrap().1.data_type(),
+            &DataType::Boolean
+        );
 
         // true = true -> true
         assert_eq!(simplify(lit(true).eq(lit(true))), lit(true));
@@ -3703,7 +3709,10 @@ mod tests {
         // expression to non-boolean.
         //
         // Make sure c1 column to be used in tests is not boolean type
-        assert_eq!(col("c1").get_type(&schema).unwrap(), DataType::Utf8);
+        assert_eq!(
+            col("c1").to_field(&schema).unwrap().1.data_type(),
+            &DataType::Utf8
+        );
 
         // don't fold c1 = foo
         assert_eq!(simplify(col("c1").eq(lit("foo"))), col("c1").eq(lit("foo")),);
@@ -3713,7 +3722,10 @@ mod tests {
     fn simplify_expr_not_eq() {
         let schema = expr_test_schema();
 
-        assert_eq!(col("c2").get_type(&schema).unwrap(), DataType::Boolean);
+        assert_eq!(
+            col("c2").to_field(&schema).unwrap().1.data_type(),
+            &DataType::Boolean
+        );
 
         // c2 != true -> !c2
         assert_eq!(simplify(col("c2").not_eq(lit(true))), col("c2").not(),);
@@ -3734,7 +3746,10 @@ mod tests {
         // when one of the operand is not of boolean type, folding the
         // other boolean constant will change return type of
         // expression to non-boolean.
-        assert_eq!(col("c1").get_type(&schema).unwrap(), DataType::Utf8);
+        assert_eq!(
+            col("c1").to_field(&schema).unwrap().1.data_type(),
+            &DataType::Utf8
+        );
 
         assert_eq!(
             simplify(col("c1").not_eq(lit("foo"))),

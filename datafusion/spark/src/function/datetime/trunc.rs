@@ -121,7 +121,7 @@ impl ScalarUDFImpl for SparkTrunc {
                 );
             }
         };
-        let return_type = dt_expr.get_type(info.schema())?;
+        let return_type = dt_expr.to_field(info.schema())?.1.data_type().clone();
 
         let fmt_expr = Expr::Literal(ScalarValue::new_utf8(fmt), None);
 
