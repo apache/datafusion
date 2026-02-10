@@ -241,11 +241,11 @@ async fn test_test_metadata_cache_limit() {
 
 #[tokio::test]
 async fn test_list_files_cache_limit() {
-    let file_statistics_cache = Arc::new(DefaultListFilesCache::default());
+    let list_files_cache = Arc::new(DefaultListFilesCache::default());
 
     let rt = RuntimeEnvBuilder::new()
         .with_cache_manager(
-            CacheManagerConfig::default().with_list_files_cache(Some(file_statistics_cache)),
+            CacheManagerConfig::default().with_list_files_cache(Some(list_files_cache)),
         )
         .build_arc()
         .unwrap();
@@ -328,12 +328,12 @@ async fn test_list_files_cache_ttl() {
 
 #[tokio::test]
 async fn test_file_statistics_cache_limit() {
-    let list_files_cache = Arc::new(DefaultFileStatisticsCache::default());
+    let file_statistics_cache = Arc::new(DefaultFileStatisticsCache::default());
 
     let rt = RuntimeEnvBuilder::new()
         .with_cache_manager(
             CacheManagerConfig::default()
-                .with_file_statistics_cache(Some(list_files_cache)),
+                .with_file_statistics_cache(Some(file_statistics_cache)),
         )
         .build_arc()
         .unwrap();
