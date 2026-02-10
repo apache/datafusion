@@ -58,10 +58,14 @@ use datafusion_macros::user_doc;
 
 use crate::utils::validate_percentile_expr;
 
-// Keep historical behavior for percentile interpolation by quantizing the
-// fractional component before interpolation. This minimizes output changes for
-// Float32/Float64 while still allowing us to perform the arithmetic in f64
-// (preventing Float16 overflow).
+/// Precision multiplier used to quantize the fractional component of the
+/// interpolation weight.
+///
+/// We keep this quantization to minimize output changes for Float32/Float64
+/// compared to the previous implementation.
+///
+/// Interpolation is performed in f64 and then cast back to the native type to
+/// avoid overflowing Float16 intermediates.
 const INTERPOLATION_PRECISION: usize = 1_000_000;
 
 create_func!(PercentileCont, percentile_cont_udaf);
@@ -783,7 +787,14 @@ where
             let (_, upper_value, _) = values.select_nth_unstable_by(upper_index, cmp);
             let upper_value = *upper_value;
 
-            // Linear interpolation (see `INTERPOLATION_PRECISION` comment for rationale).
+            // Linear interpolation.
+            //
+            // We quantize the fractional component (via `INTERPOLATION_PRECISION`) to
+            // minimize output changes for Float32/Float64 compared to the previous
+            // implementation.
+            //
+            // We perform the arithmetic in f64 and then cast back to the native type to
+            // avoid overflowing Float16 intermediates.
             let fraction = index - (lower_index as f64);
             let scaled = (fraction * INTERPOLATION_PRECISION as f64) as usize;
             let weight = scaled as f64 / INTERPOLATION_PRECISION as f64;
