@@ -22,12 +22,58 @@ use std::sync::Arc;
 use arrow::array::new_null_array;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::tree_node::Transformed;
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 
 use crate::PhysicalExpr;
 use crate::expressions::{Column, Literal};
+
+/// Simplify expressions that consist only of literals by evaluating them.
+///
+/// This function checks if all children of the given expression are literals.
+/// If so, it evaluates the expression against a dummy RecordBatch and returns
+/// the result as a new Literal.
+///
+/// # Example transformations
+/// - `1 + 2` -> `3`
+/// - `(1 + 2) * 3` -> `9` (with bottom-up traversal)
+/// - `'hello' || ' world'` -> `'hello world'`
+#[deprecated(
+    since = "53.0.0",
+    note = "This function will be removed in a future release in favor of a private implementation that depends on other implementation details. Please open an issue if you have a use case for keeping it."
+)]
+pub fn simplify_const_expr(
+    expr: Arc<dyn PhysicalExpr>,
+) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
+    let batch = create_dummy_batch()?;
+    // If expr is already a const literal or can't be evaluated into one.
+    if expr.as_any().is::<Literal>() || (!can_evaluate_as_constant(&expr)) {
+        return Ok(Transformed::no(expr));
+    }
+
+    // Evaluate the expression
+    match expr.evaluate(&batch) {
+        Ok(ColumnarValue::Scalar(scalar)) => {
+            Ok(Transformed::yes(Arc::new(Literal::new(scalar))))
+        }
+        Ok(ColumnarValue::Array(arr)) if arr.len() == 1 => {
+            // Some operations return an array even for scalar inputs
+            let scalar = ScalarValue::try_from_array(&arr, 0)?;
+            Ok(Transformed::yes(Arc::new(Literal::new(scalar))))
+        }
+        Ok(_) => {
+            // Unexpected result - keep original expression
+            Ok(Transformed::no(expr))
+        }
+        Err(_) => {
+            // On error, keep original expression
+            // The expression might succeed at runtime due to short-circuit evaluation
+            // or other runtime conditions
+            Ok(Transformed::no(expr))
+        }
+    }
+}
 
 /// Simplify expressions whose immediate children are all literals.
 ///
@@ -39,7 +85,7 @@ use crate::expressions::{Column, Literal};
 /// - `1 + 2` -> `3`
 /// - `(1 + 2) * 3` -> `9` (with bottom-up traversal, inner expr simplified first)
 /// - `'hello' || ' world'` -> `'hello world'`
-pub(crate) fn simplify_const_expr(
+pub(crate) fn simplify_const_expr_immediate(
     expr: Arc<dyn PhysicalExpr>,
     batch: &RecordBatch,
 ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
@@ -105,4 +151,39 @@ pub(crate) fn create_dummy_batch() -> Result<RecordBatch> {
     let dummy_schema = Arc::new(Schema::new(vec![Field::new("_", DataType::Null, true)]));
     let col = new_null_array(&DataType::Null, 1);
     Ok(RecordBatch::try_new(dummy_schema, vec![col])?)
+}
+
+fn can_evaluate_as_constant(expr: &Arc<dyn PhysicalExpr>) -> bool {
+    let mut can_evaluate = true;
+
+    expr.apply(|e| {
+        if e.as_any().is::<Column>() || e.is_volatile_node() {
+            can_evaluate = false;
+            Ok(TreeNodeRecursion::Stop)
+        } else {
+            Ok(TreeNodeRecursion::Continue)
+        }
+    })
+    .expect("apply should not fail");
+
+    can_evaluate
+}
+
+/// Check if this expression has any column references.
+#[deprecated(
+    since = "53.0.0",
+    note = "This function isn't used internally and is trivial to implement, therefore it will be removed in a future release."
+)]
+pub fn has_column_references(expr: &Arc<dyn PhysicalExpr>) -> bool {
+    let mut has_columns = false;
+    expr.apply(|expr| {
+        if expr.as_any().downcast_ref::<Column>().is_some() {
+            has_columns = true;
+            Ok(TreeNodeRecursion::Stop)
+        } else {
+            Ok(TreeNodeRecursion::Continue)
+        }
+    })
+    .expect("apply should not fail");
+    has_columns
 }
