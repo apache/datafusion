@@ -362,10 +362,9 @@ impl FileOpener for JsonOpener {
                         // Uses tokio::sync::mpsc so the async send never blocks a
                         // tokio worker thread; the consumer calls blocking_recv()
                         // inside spawn_blocking.
-                        let (byte_tx, byte_rx) =
-                            tokio::sync::mpsc::channel::<bytes::Bytes>(
-                                CHANNEL_BUFFER_SIZE,
-                            );
+                        let (byte_tx, byte_rx) = tokio::sync::mpsc::channel::<bytes::Bytes>(
+                            CHANNEL_BUFFER_SIZE,
+                        );
 
                         // Channel for results: sync producer -> async consumer
                         let (result_tx, result_rx) = tokio::sync::mpsc::channel(2);
@@ -384,9 +383,11 @@ impl FileOpener for JsonOpener {
                                     }
                                     Err(e) => {
                                         let _ = error_tx
-                                            .send(Err(arrow::error::ArrowError::ExternalError(
-                                                Box::new(e),
-                                            )))
+                                            .send(Err(
+                                                arrow::error::ArrowError::ExternalError(
+                                                    Box::new(e),
+                                                ),
+                                            ))
                                             .await;
                                         break;
                                     }
@@ -399,10 +400,11 @@ impl FileOpener for JsonOpener {
                         // Store the SpawnedTask to keep it alive until stream is dropped
                         let parse_task = SpawnedTask::spawn_blocking(move || {
                             let channel_reader = ChannelReader::new(byte_rx);
-                            let mut ndjson_reader = JsonArrayToNdjsonReader::with_capacity(
-                                channel_reader,
-                                JSON_CONVERTER_BUFFER_SIZE,
-                            );
+                            let mut ndjson_reader =
+                                JsonArrayToNdjsonReader::with_capacity(
+                                    channel_reader,
+                                    JSON_CONVERTER_BUFFER_SIZE,
+                                );
 
                             match ReaderBuilder::new(schema)
                                 .with_batch_size(batch_size)
