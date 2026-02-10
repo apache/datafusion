@@ -100,6 +100,8 @@ impl DefaultFileStatisticsCacheState {
         let entry_size = value.heap_size();
 
         if entry_size > self.memory_limit {
+            // Remove stale entry if exists
+            self.remove(key);
             return None;
         }
 
