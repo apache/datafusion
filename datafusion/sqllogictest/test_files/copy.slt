@@ -200,6 +200,14 @@ physical_plan
 01)DataSinkExec: sink=ParquetSink(file_groups=[])
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
+# Verify ParquetSink exposes rows_written, bytes_written, and elapsed_compute metrics
+query TT
+EXPLAIN ANALYZE COPY source_table TO 'test_files/scratch/copy/table_metrics/' STORED AS PARQUET;
+----
+Plan with Metrics
+01)DataSinkExec: sink=ParquetSink(file_groups=[]), metrics=[elapsed_compute=<slt:ignore>, bytes_written=<slt:ignore>, rows_written=2]
+02)--DataSourceExec: partitions=1, partition_sizes=[1], metrics=[]
+
 # Copy to directory as partitioned files with keep_partition_by_columns enabled
 query I
 COPY (values ('1', 'a'), ('2', 'b'), ('3', 'c')) TO 'test_files/scratch/copy/partitioned_table4/' STORED AS parquet PARTITIONED BY (column1)

@@ -55,6 +55,9 @@ use datafusion_execution::memory_pool::{MemoryConsumer, MemoryPool, MemoryReserv
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
+use datafusion_physical_plan::metrics::{
+    ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
+};
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 use datafusion_session::Session;
 
@@ -1156,6 +1159,8 @@ pub struct ParquetSink {
     written: Arc<parking_lot::Mutex<HashMap<Path, ParquetMetaData>>>,
     /// Optional sorting columns to write to Parquet metadata
     sorting_columns: Option<Vec<SortingColumn>>,
+    /// Metrics for tracking write operations
+    metrics: ExecutionPlanMetricsSet,
 }
 
 impl Debug for ParquetSink {
@@ -1188,6 +1193,7 @@ impl ParquetSink {
             parquet_options,
             written: Default::default(),
             sorting_columns: None,
+            metrics: ExecutionPlanMetricsSet::new(),
         }
     }
 
@@ -1333,6 +1339,15 @@ impl FileSink for ParquetSink {
         mut file_stream_rx: DemuxedStreamReceiver,
         object_store: Arc<dyn ObjectStore>,
     ) -> Result<u64> {
+        let rows_written_counter =
+            MetricBuilder::new(&self.metrics).global_counter("rows_written");
+        let bytes_written_counter =
+            MetricBuilder::new(&self.metrics).global_counter("bytes_written");
+        let elapsed_compute =
+            MetricBuilder::new(&self.metrics).elapsed_compute(0);
+
+        let write_start = std::time::Instant::now();
+
         let parquet_opts = &self.parquet_options;
 
         let mut file_write_tasks: JoinSet<
@@ -1415,7 +1430,16 @@ impl FileSink for ParquetSink {
             match result {
                 Ok(r) => {
                     let (path, parquet_meta_data) = r?;
+                    let file_rows =
+                        parquet_meta_data.file_metadata().num_rows() as usize;
+                    let file_bytes: usize = parquet_meta_data
+                        .row_groups()
+                        .iter()
+                        .map(|rg| rg.compressed_size() as usize)
+                        .sum();
                     row_count += parquet_meta_data.file_metadata().num_rows();
+                    rows_written_counter.add(file_rows);
+                    bytes_written_counter.add(file_bytes);
                     let mut written_files = self.written.lock();
                     written_files
                         .try_insert(path.clone(), parquet_meta_data)
@@ -1437,6 +1461,8 @@ impl FileSink for ParquetSink {
             .await
             .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??;
 
+        elapsed_compute.add_elapsed(write_start);
+
         Ok(row_count as u64)
     }
 }
@@ -1445,6 +1471,10 @@ impl FileSink for ParquetSink {
 impl DataSink for ParquetSink {
     fn as_any(&self) -> &dyn Any {
         self
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
     }
 
     fn schema(&self) -> &SchemaRef {
