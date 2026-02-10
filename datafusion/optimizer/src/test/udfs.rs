@@ -44,10 +44,10 @@ impl PlacementTestUDF {
     pub fn new() -> Self {
         Self {
             name: "leaf_udf".to_string(),
-            // Accept any two arguments and return UInt32 for testing purposes.
+            // Accept any one or two arguments and return UInt32 for testing purposes.
             // The actual types don't matter since this UDF is not intended for execution.
             signature: Signature::new(
-                TypeSignature::Any(2),
+                TypeSignature::OneOf(vec![TypeSignature::Any(1), TypeSignature::Any(2)]),
                 datafusion_expr::Volatility::Immutable,
             ),
             placement: ExpressionPlacement::MoveTowardsLeafNodes,
