@@ -413,7 +413,7 @@ SHOW datafusion.runtime.max_temp_directory_size
 ----
 datafusion.runtime.max_temp_directory_size 10G
 
-# Test SET and SHOW rruntime.file_statistics_cache_limit
+# Test SET and SHOW runtime.file_statistics_cache_limit
 statement ok
 SET datafusion.runtime.file_statistics_cache_limit = '42M'
 
