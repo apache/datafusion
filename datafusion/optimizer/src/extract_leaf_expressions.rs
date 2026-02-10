@@ -1223,7 +1223,7 @@ mod tests {
         Projection: test.id
           Projection: test.id, test.user
             Filter: __datafusion_extracted_1 = Utf8("active")
-              Projection: mock_leaf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.id, test.user
+              Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.id, test.user
                 TableScan: test projection=[id, user]
 
         ## After Pushdown
@@ -1232,7 +1232,7 @@ mod tests {
         ## Optimized
         Projection: test.id
           Filter: __datafusion_extracted_1 = Utf8("active")
-            Projection: mock_leaf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.id
+            Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.id
               TableScan: test projection=[id, user]
         "#)
     }
@@ -1276,12 +1276,12 @@ mod tests {
         (same as original)
 
         ## After Pushdown
-        Projection: __datafusion_extracted_1 AS mock_leaf(test.user,Utf8("name"))
-          Projection: mock_leaf(test.user, Utf8("name")) AS __datafusion_extracted_1, test.user
+        Projection: __datafusion_extracted_1 AS leaf_udf(test.user,Utf8("name"))
+          Projection: leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_1, test.user
             TableScan: test projection=[user]
 
         ## Optimized
-        Projection: mock_leaf(test.user, Utf8("name")) AS mock_leaf(test.user,Utf8("name"))
+        Projection: leaf_udf(test.user, Utf8("name")) AS leaf_udf(test.user,Utf8("name"))
           TableScan: test projection=[user]
         "#)
     }
@@ -1307,11 +1307,11 @@ mod tests {
 
         ## After Pushdown
         Projection: __datafusion_extracted_1 IS NOT NULL AS has_name
-          Projection: mock_leaf(test.user, Utf8("name")) AS __datafusion_extracted_1, test.user
+          Projection: leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_1, test.user
             TableScan: test projection=[user]
 
         ## Optimized
-        Projection: mock_leaf(test.user, Utf8("name")) IS NOT NULL AS has_name
+        Projection: leaf_udf(test.user, Utf8("name")) IS NOT NULL AS has_name
           TableScan: test projection=[user]
         "#)
     }
@@ -1360,7 +1360,7 @@ mod tests {
         ## After Extraction
         Projection: test.id, test.user
           Filter: __datafusion_extracted_1 IS NOT NULL AND __datafusion_extracted_1 IS NULL
-            Projection: mock_leaf(test.user, Utf8("name")) AS __datafusion_extracted_1, test.id, test.user
+            Projection: leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_1, test.id, test.user
               TableScan: test projection=[id, user]
 
         ## After Pushdown
@@ -1386,7 +1386,7 @@ mod tests {
         ## After Extraction
         Projection: test.id, test.user
           Filter: __datafusion_extracted_1 = Utf8("test")
-            Projection: mock_leaf(test.user, Utf8("name")) AS __datafusion_extracted_1, test.id, test.user
+            Projection: leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_1, test.id, test.user
               TableScan: test projection=[id, user]
 
         ## After Pushdown
@@ -1412,18 +1412,18 @@ mod tests {
           TableScan: test projection=[user]
 
         ## After Extraction
-        Projection: __datafusion_extracted_1 AS mock_leaf(test.user,Utf8("status")), COUNT(Int32(1))
+        Projection: __datafusion_extracted_1 AS leaf_udf(test.user,Utf8("status")), COUNT(Int32(1))
           Aggregate: groupBy=[[__datafusion_extracted_1]], aggr=[[COUNT(Int32(1))]]
-            Projection: mock_leaf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.user
+            Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.user
               TableScan: test projection=[user]
 
         ## After Pushdown
         (same as after extraction)
 
         ## Optimized
-        Projection: __datafusion_extracted_1 AS mock_leaf(test.user,Utf8("status")), COUNT(Int32(1))
+        Projection: __datafusion_extracted_1 AS leaf_udf(test.user,Utf8("status")), COUNT(Int32(1))
           Aggregate: groupBy=[[__datafusion_extracted_1]], aggr=[[COUNT(Int32(1))]]
-            Projection: mock_leaf(test.user, Utf8("status")) AS __datafusion_extracted_1
+            Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1
               TableScan: test projection=[user]
         "#)
     }
@@ -1446,9 +1446,9 @@ mod tests {
           TableScan: test projection=[user]
 
         ## After Extraction
-        Projection: test.user, COUNT(__datafusion_extracted_1) AS COUNT(mock_leaf(test.user,Utf8("value")))
+        Projection: test.user, COUNT(__datafusion_extracted_1) AS COUNT(leaf_udf(test.user,Utf8("value")))
           Aggregate: groupBy=[[test.user]], aggr=[[COUNT(__datafusion_extracted_1)]]
-            Projection: mock_leaf(test.user, Utf8("value")) AS __datafusion_extracted_1, test.user
+            Projection: leaf_udf(test.user, Utf8("value")) AS __datafusion_extracted_1, test.user
               TableScan: test projection=[user]
 
         ## After Pushdown
@@ -1474,22 +1474,22 @@ mod tests {
             TableScan: test projection=[user]
 
         ## After Extraction
-        Projection: mock_leaf(test.user, Utf8("name"))
+        Projection: leaf_udf(test.user, Utf8("name"))
           Projection: test.user
             Filter: __datafusion_extracted_1 = Utf8("active")
-              Projection: mock_leaf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.user
+              Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.user
                 TableScan: test projection=[user]
 
         ## After Pushdown
-        Projection: __datafusion_extracted_2 AS mock_leaf(test.user,Utf8("name"))
+        Projection: __datafusion_extracted_2 AS leaf_udf(test.user,Utf8("name"))
           Filter: __datafusion_extracted_1 = Utf8("active")
-            Projection: mock_leaf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.user, mock_leaf(test.user, Utf8("name")) AS __datafusion_extracted_2
+            Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.user, leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_2
               TableScan: test projection=[user]
 
         ## Optimized
-        Projection: __datafusion_extracted_2 AS mock_leaf(test.user,Utf8("name"))
+        Projection: __datafusion_extracted_2 AS leaf_udf(test.user,Utf8("name"))
           Filter: __datafusion_extracted_1 = Utf8("active")
-            Projection: mock_leaf(test.user, Utf8("status")) AS __datafusion_extracted_1, mock_leaf(test.user, Utf8("name")) AS __datafusion_extracted_2
+            Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1, leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_2
               TableScan: test projection=[user]
         "#)
     }
@@ -1511,11 +1511,11 @@ mod tests {
 
         ## After Pushdown
         Projection: __datafusion_extracted_1 AS username
-          Projection: mock_leaf(test.user, Utf8("name")) AS __datafusion_extracted_1, test.user
+          Projection: leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_1, test.user
             TableScan: test projection=[user]
 
         ## Optimized
-        Projection: mock_leaf(test.user, Utf8("name")) AS username
+        Projection: leaf_udf(test.user, Utf8("name")) AS username
           TableScan: test projection=[user]
         "#)
     }
@@ -1538,16 +1538,16 @@ mod tests {
             TableScan: test projection=[user]
 
         ## After Extraction
-        Projection: test.user, mock_leaf(test.user, Utf8("label"))
+        Projection: test.user, leaf_udf(test.user, Utf8("label"))
           Projection: test.user
             Filter: __datafusion_extracted_1 > Int32(150)
-              Projection: mock_leaf(test.user, Utf8("value")) AS __datafusion_extracted_1, test.user
+              Projection: leaf_udf(test.user, Utf8("value")) AS __datafusion_extracted_1, test.user
                 TableScan: test projection=[user]
 
         ## After Pushdown
-        Projection: test.user, __datafusion_extracted_2 AS mock_leaf(test.user,Utf8("label"))
+        Projection: test.user, __datafusion_extracted_2 AS leaf_udf(test.user,Utf8("label"))
           Filter: __datafusion_extracted_1 > Int32(150)
-            Projection: mock_leaf(test.user, Utf8("value")) AS __datafusion_extracted_1, test.user, mock_leaf(test.user, Utf8("label")) AS __datafusion_extracted_2
+            Projection: leaf_udf(test.user, Utf8("value")) AS __datafusion_extracted_1, test.user, leaf_udf(test.user, Utf8("label")) AS __datafusion_extracted_2
               TableScan: test projection=[user]
 
         ## Optimized
@@ -1572,12 +1572,12 @@ mod tests {
         (same as original)
 
         ## After Pushdown
-        Projection: __datafusion_extracted_1 AS mock_leaf(test.user,Utf8("name")), __datafusion_extracted_1 AS name2
-          Projection: mock_leaf(test.user, Utf8("name")) AS __datafusion_extracted_1, test.user
+        Projection: __datafusion_extracted_1 AS leaf_udf(test.user,Utf8("name")), __datafusion_extracted_1 AS name2
+          Projection: leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_1, test.user
             TableScan: test projection=[user]
 
         ## Optimized
-        Projection: mock_leaf(test.user, Utf8("name")) AS mock_leaf(test.user,Utf8("name")), mock_leaf(test.user, Utf8("name")) AS name2
+        Projection: leaf_udf(test.user, Utf8("name")) AS leaf_udf(test.user,Utf8("name")), leaf_udf(test.user, Utf8("name")) AS name2
           TableScan: test projection=[user]
         "#)
     }
@@ -1605,9 +1605,9 @@ mod tests {
         (same as original)
 
         ## After Pushdown
-        Projection: __datafusion_extracted_1 AS mock_leaf(test.user,Utf8("name"))
+        Projection: __datafusion_extracted_1 AS leaf_udf(test.user,Utf8("name"))
           Sort: test.user ASC NULLS FIRST
-            Projection: mock_leaf(test.user, Utf8("name")) AS __datafusion_extracted_1, test.user
+            Projection: leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_1, test.user
               TableScan: test projection=[user]
 
         ## Optimized
@@ -1634,15 +1634,15 @@ mod tests {
         (same as original)
 
         ## After Pushdown
-        Projection: __datafusion_extracted_1 AS mock_leaf(test.user,Utf8("name"))
+        Projection: __datafusion_extracted_1 AS leaf_udf(test.user,Utf8("name"))
           Limit: skip=0, fetch=10
-            Projection: mock_leaf(test.user, Utf8("name")) AS __datafusion_extracted_1, test.user
+            Projection: leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_1, test.user
               TableScan: test projection=[user]
 
         ## Optimized
-        Projection: __datafusion_extracted_1 AS mock_leaf(test.user,Utf8("name"))
+        Projection: __datafusion_extracted_1 AS leaf_udf(test.user,Utf8("name"))
           Limit: skip=0, fetch=10
-            Projection: mock_leaf(test.user, Utf8("name")) AS __datafusion_extracted_1
+            Projection: leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_1
               TableScan: test projection=[user]
         "#)
     }
@@ -1667,7 +1667,7 @@ mod tests {
 
         ## After Extraction
         Aggregate: groupBy=[[test.user]], aggr=[[COUNT(__datafusion_extracted_1) AS cnt]]
-          Projection: mock_leaf(test.user, Utf8("value")) AS __datafusion_extracted_1, test.user
+          Projection: leaf_udf(test.user, Utf8("value")) AS __datafusion_extracted_1, test.user
             TableScan: test projection=[user]
 
         ## After Pushdown
@@ -1749,17 +1749,17 @@ mod tests {
         ## After Extraction
         Projection: test.id, test.user
           Filter: __datafusion_extracted_1 IS NOT NULL
-            Projection: mock_leaf(test.user, Utf8("name")) AS __datafusion_extracted_1, test.id, test.user
+            Projection: leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_1, test.id, test.user
               Projection: test.id, test.user
                 Filter: __datafusion_extracted_2 = Utf8("active")
-                  Projection: mock_leaf(test.user, Utf8("status")) AS __datafusion_extracted_2, test.id, test.user
+                  Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_2, test.id, test.user
                     TableScan: test projection=[id, user]
 
         ## After Pushdown
         Projection: test.id, test.user
           Filter: __datafusion_extracted_1 IS NOT NULL
             Filter: __datafusion_extracted_2 = Utf8("active")
-              Projection: mock_leaf(test.user, Utf8("status")) AS __datafusion_extracted_2, test.id, test.user, mock_leaf(test.user, Utf8("name")) AS __datafusion_extracted_1
+              Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_2, test.id, test.user, leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_1
                 TableScan: test projection=[id, user]
 
         ## Optimized
@@ -1767,7 +1767,7 @@ mod tests {
           Filter: __datafusion_extracted_1 IS NOT NULL
             Projection: test.id, test.user, __datafusion_extracted_1
               Filter: __datafusion_extracted_2 = Utf8("active")
-                Projection: mock_leaf(test.user, Utf8("status")) AS __datafusion_extracted_2, test.id, test.user, mock_leaf(test.user, Utf8("name")) AS __datafusion_extracted_1
+                Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_2, test.id, test.user, leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_1
                   TableScan: test projection=[id, user]
         "#)
     }
@@ -1790,12 +1790,12 @@ mod tests {
         (same as original)
 
         ## After Pushdown
-        Projection: __datafusion_extracted_1 AS mock_leaf(test.user,Utf8("name"))
-          Projection: mock_leaf(test.user, Utf8("name")) AS __datafusion_extracted_1, test.user
+        Projection: __datafusion_extracted_1 AS leaf_udf(test.user,Utf8("name"))
+          Projection: leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_1, test.user
             TableScan: test projection=[user]
 
         ## Optimized
-        Projection: mock_leaf(test.user, Utf8("name")) AS mock_leaf(test.user,Utf8("name"))
+        Projection: leaf_udf(test.user, Utf8("name")) AS leaf_udf(test.user,Utf8("name"))
           TableScan: test projection=[user]
         "#)
     }
@@ -1866,27 +1866,27 @@ mod tests {
             TableScan: test projection=[user]
 
         ## After Extraction
-        Projection: __datafusion_extracted_1 AS mock_leaf(test.user,Utf8("name")), COUNT(Int32(1))
+        Projection: __datafusion_extracted_1 AS leaf_udf(test.user,Utf8("name")), COUNT(Int32(1))
           Aggregate: groupBy=[[__datafusion_extracted_1]], aggr=[[COUNT(Int32(1))]]
-            Projection: mock_leaf(test.user, Utf8("name")) AS __datafusion_extracted_1, test.user
+            Projection: leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_1, test.user
               Projection: test.user
                 Filter: __datafusion_extracted_2 = Utf8("active")
-                  Projection: mock_leaf(test.user, Utf8("status")) AS __datafusion_extracted_2, test.user
+                  Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_2, test.user
                     TableScan: test projection=[user]
 
         ## After Pushdown
-        Projection: __datafusion_extracted_1 AS mock_leaf(test.user,Utf8("name")), COUNT(Int32(1))
+        Projection: __datafusion_extracted_1 AS leaf_udf(test.user,Utf8("name")), COUNT(Int32(1))
           Aggregate: groupBy=[[__datafusion_extracted_1]], aggr=[[COUNT(Int32(1))]]
             Filter: __datafusion_extracted_2 = Utf8("active")
-              Projection: mock_leaf(test.user, Utf8("status")) AS __datafusion_extracted_2, test.user, mock_leaf(test.user, Utf8("name")) AS __datafusion_extracted_1
+              Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_2, test.user, leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_1
                 TableScan: test projection=[user]
 
         ## Optimized
-        Projection: __datafusion_extracted_1 AS mock_leaf(test.user,Utf8("name")), COUNT(Int32(1))
+        Projection: __datafusion_extracted_1 AS leaf_udf(test.user,Utf8("name")), COUNT(Int32(1))
           Aggregate: groupBy=[[__datafusion_extracted_1]], aggr=[[COUNT(Int32(1))]]
             Projection: __datafusion_extracted_1
               Filter: __datafusion_extracted_2 = Utf8("active")
-                Projection: mock_leaf(test.user, Utf8("status")) AS __datafusion_extracted_2, mock_leaf(test.user, Utf8("name")) AS __datafusion_extracted_1
+                Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_2, leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_1
                   TableScan: test projection=[user]
         "#)
     }
@@ -1909,17 +1909,17 @@ mod tests {
         ## After Extraction
         Projection: test.a, test.b, test.c
           Filter: __datafusion_extracted_1 = Int32(2)
-            Projection: mock_leaf(test.b, Utf8("y")) AS __datafusion_extracted_1, test.a, test.b, test.c
+            Projection: leaf_udf(test.b, Utf8("y")) AS __datafusion_extracted_1, test.a, test.b, test.c
               Projection: test.a, test.b, test.c
                 Filter: __datafusion_extracted_2 = Int32(1)
-                  Projection: mock_leaf(test.a, Utf8("x")) AS __datafusion_extracted_2, test.a, test.b, test.c
+                  Projection: leaf_udf(test.a, Utf8("x")) AS __datafusion_extracted_2, test.a, test.b, test.c
                     TableScan: test projection=[a, b, c]
 
         ## After Pushdown
         Projection: test.a, test.b, test.c
           Filter: __datafusion_extracted_1 = Int32(2)
             Filter: __datafusion_extracted_2 = Int32(1)
-              Projection: mock_leaf(test.a, Utf8("x")) AS __datafusion_extracted_2, test.a, test.b, test.c, mock_leaf(test.b, Utf8("y")) AS __datafusion_extracted_1
+              Projection: leaf_udf(test.a, Utf8("x")) AS __datafusion_extracted_2, test.a, test.b, test.c, leaf_udf(test.b, Utf8("y")) AS __datafusion_extracted_1
                 TableScan: test projection=[a, b, c]
 
         ## Optimized
@@ -1927,7 +1927,7 @@ mod tests {
           Filter: __datafusion_extracted_1 = Int32(2)
             Projection: test.a, test.b, test.c, __datafusion_extracted_1
               Filter: __datafusion_extracted_2 = Int32(1)
-                Projection: mock_leaf(test.a, Utf8("x")) AS __datafusion_extracted_2, test.a, test.b, test.c, mock_leaf(test.b, Utf8("y")) AS __datafusion_extracted_1
+                Projection: leaf_udf(test.a, Utf8("x")) AS __datafusion_extracted_2, test.a, test.b, test.c, leaf_udf(test.b, Utf8("y")) AS __datafusion_extracted_1
                   TableScan: test projection=[a, b, c]
         "#)
     }
@@ -1972,9 +1972,9 @@ mod tests {
         ## After Extraction
         Projection: test.id, test.user, right.id, right.user
           Inner Join: __datafusion_extracted_1 = __datafusion_extracted_2
-            Projection: mock_leaf(test.user, Utf8("id")) AS __datafusion_extracted_1, test.id, test.user
+            Projection: leaf_udf(test.user, Utf8("id")) AS __datafusion_extracted_1, test.id, test.user
               TableScan: test projection=[id, user]
-            Projection: mock_leaf(right.user, Utf8("id")) AS __datafusion_extracted_2, right.id, right.user
+            Projection: leaf_udf(right.user, Utf8("id")) AS __datafusion_extracted_2, right.id, right.user
               TableScan: right projection=[id, user]
 
         ## After Pushdown
@@ -2013,7 +2013,7 @@ mod tests {
         ## After Extraction
         Projection: test.id, test.user, right.id, right.user
           Inner Join:  Filter: test.user = right.user AND __datafusion_extracted_1 = Utf8("active")
-            Projection: mock_leaf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.id, test.user
+            Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.id, test.user
               TableScan: test projection=[id, user]
             TableScan: right projection=[id, user]
 
@@ -2054,9 +2054,9 @@ mod tests {
         ## After Extraction
         Projection: test.id, test.user, right.id, right.user
           Inner Join:  Filter: test.user = right.user AND __datafusion_extracted_1 = Utf8("active") AND __datafusion_extracted_2 = Utf8("admin")
-            Projection: mock_leaf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.id, test.user
+            Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.id, test.user
               TableScan: test projection=[id, user]
-            Projection: mock_leaf(right.user, Utf8("role")) AS __datafusion_extracted_2, right.id, right.user
+            Projection: leaf_udf(right.user, Utf8("role")) AS __datafusion_extracted_2, right.id, right.user
               TableScan: right projection=[id, user]
 
         ## After Pushdown
@@ -2127,21 +2127,21 @@ mod tests {
         ## After Extraction
         Projection: test.id, test.user, right.id, right.user
           Filter: __datafusion_extracted_1 = Utf8("active")
-            Projection: mock_leaf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.id, test.user, right.id, right.user
+            Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.id, test.user, right.id, right.user
               Projection: test.id, test.user, right.id, right.user
                 Inner Join: __datafusion_extracted_2 = __datafusion_extracted_3
-                  Projection: mock_leaf(test.user, Utf8("id")) AS __datafusion_extracted_2, test.id, test.user
+                  Projection: leaf_udf(test.user, Utf8("id")) AS __datafusion_extracted_2, test.id, test.user
                     TableScan: test projection=[id, user]
-                  Projection: mock_leaf(right.user, Utf8("id")) AS __datafusion_extracted_3, right.id, right.user
+                  Projection: leaf_udf(right.user, Utf8("id")) AS __datafusion_extracted_3, right.id, right.user
                     TableScan: right projection=[id, user]
 
         ## After Pushdown
         Projection: test.id, test.user, right.id, right.user
           Filter: __datafusion_extracted_1 = Utf8("active")
             Inner Join: __datafusion_extracted_2 = __datafusion_extracted_3
-              Projection: mock_leaf(test.user, Utf8("id")) AS __datafusion_extracted_2, test.id, test.user, mock_leaf(test.user, Utf8("status")) AS __datafusion_extracted_1
+              Projection: leaf_udf(test.user, Utf8("id")) AS __datafusion_extracted_2, test.id, test.user, leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1
                 TableScan: test projection=[id, user]
-              Projection: mock_leaf(right.user, Utf8("id")) AS __datafusion_extracted_3, right.id, right.user
+              Projection: leaf_udf(right.user, Utf8("id")) AS __datafusion_extracted_3, right.id, right.user
                 TableScan: right projection=[id, user]
 
         ## Optimized
@@ -2149,9 +2149,9 @@ mod tests {
           Filter: __datafusion_extracted_1 = Utf8("active")
             Projection: test.id, test.user, __datafusion_extracted_1, right.id, right.user
               Inner Join: __datafusion_extracted_2 = __datafusion_extracted_3
-                Projection: mock_leaf(test.user, Utf8("id")) AS __datafusion_extracted_2, test.id, test.user, mock_leaf(test.user, Utf8("status")) AS __datafusion_extracted_1
+                Projection: leaf_udf(test.user, Utf8("id")) AS __datafusion_extracted_2, test.id, test.user, leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1
                   TableScan: test projection=[id, user]
-                Projection: mock_leaf(right.user, Utf8("id")) AS __datafusion_extracted_3, right.id, right.user
+                Projection: leaf_udf(right.user, Utf8("id")) AS __datafusion_extracted_3, right.id, right.user
                   TableScan: right projection=[id, user]
         "#)
     }
@@ -2184,19 +2184,19 @@ mod tests {
         (same as original)
 
         ## After Pushdown
-        Projection: __datafusion_extracted_1 AS mock_leaf(test.user,Utf8("status")), __datafusion_extracted_2 AS mock_leaf(right.user,Utf8("role"))
+        Projection: __datafusion_extracted_1 AS leaf_udf(test.user,Utf8("status")), __datafusion_extracted_2 AS leaf_udf(right.user,Utf8("role"))
           Inner Join: test.id = right.id
-            Projection: mock_leaf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.id, test.user
+            Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.id, test.user
               TableScan: test projection=[id, user]
-            Projection: mock_leaf(right.user, Utf8("role")) AS __datafusion_extracted_2, right.id, right.user
+            Projection: leaf_udf(right.user, Utf8("role")) AS __datafusion_extracted_2, right.id, right.user
               TableScan: right projection=[id, user]
 
         ## Optimized
-        Projection: __datafusion_extracted_1 AS mock_leaf(test.user,Utf8("status")), __datafusion_extracted_2 AS mock_leaf(right.user,Utf8("role"))
+        Projection: __datafusion_extracted_1 AS leaf_udf(test.user,Utf8("status")), __datafusion_extracted_2 AS leaf_udf(right.user,Utf8("role"))
           Inner Join: test.id = right.id
-            Projection: mock_leaf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.id
+            Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.id
               TableScan: test projection=[id, user]
-            Projection: mock_leaf(right.user, Utf8("role")) AS __datafusion_extracted_2, right.id
+            Projection: leaf_udf(right.user, Utf8("role")) AS __datafusion_extracted_2, right.id
               TableScan: right projection=[id, user]
         "#)
     }
@@ -2226,15 +2226,15 @@ mod tests {
         (same as original)
 
         ## After Pushdown
-        Projection: __datafusion_extracted_1 AS mock_leaf(x,Utf8("a"))
+        Projection: __datafusion_extracted_1 AS leaf_udf(x,Utf8("a"))
           Filter: x IS NOT NULL
-            Projection: test.user AS x, mock_leaf(test.user, Utf8("a")) AS __datafusion_extracted_1, test.user
+            Projection: test.user AS x, leaf_udf(test.user, Utf8("a")) AS __datafusion_extracted_1, test.user
               TableScan: test projection=[user]
 
         ## Optimized
-        Projection: __datafusion_extracted_1 AS mock_leaf(x,Utf8("a"))
+        Projection: __datafusion_extracted_1 AS leaf_udf(x,Utf8("a"))
           Filter: x IS NOT NULL
-            Projection: test.user AS x, mock_leaf(test.user, Utf8("a")) AS __datafusion_extracted_1
+            Projection: test.user AS x, leaf_udf(test.user, Utf8("a")) AS __datafusion_extracted_1
               TableScan: test projection=[user]
         "#)
     }
@@ -2260,15 +2260,15 @@ mod tests {
         (same as original)
 
         ## After Pushdown
-        Projection: __datafusion_extracted_1 IS NOT NULL AS mock_leaf(x,Utf8("a")) IS NOT NULL
+        Projection: __datafusion_extracted_1 IS NOT NULL AS leaf_udf(x,Utf8("a")) IS NOT NULL
           Filter: x IS NOT NULL
-            Projection: test.user AS x, mock_leaf(test.user, Utf8("a")) AS __datafusion_extracted_1, test.user
+            Projection: test.user AS x, leaf_udf(test.user, Utf8("a")) AS __datafusion_extracted_1, test.user
               TableScan: test projection=[user]
 
         ## Optimized
-        Projection: __datafusion_extracted_1 IS NOT NULL AS mock_leaf(x,Utf8("a")) IS NOT NULL
+        Projection: __datafusion_extracted_1 IS NOT NULL AS leaf_udf(x,Utf8("a")) IS NOT NULL
           Filter: x IS NOT NULL
-            Projection: test.user AS x, mock_leaf(test.user, Utf8("a")) AS __datafusion_extracted_1
+            Projection: test.user AS x, leaf_udf(test.user, Utf8("a")) AS __datafusion_extracted_1
               TableScan: test projection=[user]
         "#)
     }
@@ -2291,20 +2291,20 @@ mod tests {
         ## After Extraction
         Projection: x
           Filter: __datafusion_extracted_1 = Utf8("active")
-            Projection: mock_leaf(x, Utf8("a")) AS __datafusion_extracted_1, x
+            Projection: leaf_udf(x, Utf8("a")) AS __datafusion_extracted_1, x
               Projection: test.user AS x
                 TableScan: test projection=[user]
 
         ## After Pushdown
         Projection: x
           Filter: __datafusion_extracted_1 = Utf8("active")
-            Projection: test.user AS x, mock_leaf(test.user, Utf8("a")) AS __datafusion_extracted_1, test.user
+            Projection: test.user AS x, leaf_udf(test.user, Utf8("a")) AS __datafusion_extracted_1, test.user
               TableScan: test projection=[user]
 
         ## Optimized
         Projection: x
           Filter: __datafusion_extracted_1 = Utf8("active")
-            Projection: test.user AS x, mock_leaf(test.user, Utf8("a")) AS __datafusion_extracted_1
+            Projection: test.user AS x, leaf_udf(test.user, Utf8("a")) AS __datafusion_extracted_1
               TableScan: test projection=[user]
         "#)
     }
@@ -2332,15 +2332,15 @@ mod tests {
         (same as original)
 
         ## After Pushdown
-        Projection: __datafusion_extracted_1 AS mock_leaf(sub.user,Utf8("name"))
+        Projection: __datafusion_extracted_1 AS leaf_udf(sub.user,Utf8("name"))
           SubqueryAlias: sub
-            Projection: mock_leaf(test.user, Utf8("name")) AS __datafusion_extracted_1, test.user
+            Projection: leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_1, test.user
               TableScan: test projection=[user]
 
         ## Optimized
-        Projection: __datafusion_extracted_1 AS mock_leaf(sub.user,Utf8("name"))
+        Projection: __datafusion_extracted_1 AS leaf_udf(sub.user,Utf8("name"))
           SubqueryAlias: sub
-            Projection: mock_leaf(test.user, Utf8("name")) AS __datafusion_extracted_1
+            Projection: leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_1
               TableScan: test projection=[user]
         "#)
     }
@@ -2363,25 +2363,25 @@ mod tests {
               TableScan: test projection=[user]
 
         ## After Extraction
-        Projection: mock_leaf(sub.user, Utf8("name"))
+        Projection: leaf_udf(sub.user, Utf8("name"))
           Projection: sub.user
             Filter: __datafusion_extracted_1 = Utf8("active")
-              Projection: mock_leaf(sub.user, Utf8("status")) AS __datafusion_extracted_1, sub.user
+              Projection: leaf_udf(sub.user, Utf8("status")) AS __datafusion_extracted_1, sub.user
                 SubqueryAlias: sub
                   TableScan: test projection=[user]
 
         ## After Pushdown
-        Projection: __datafusion_extracted_2 AS mock_leaf(sub.user,Utf8("name"))
+        Projection: __datafusion_extracted_2 AS leaf_udf(sub.user,Utf8("name"))
           Filter: __datafusion_extracted_1 = Utf8("active")
             SubqueryAlias: sub
-              Projection: mock_leaf(test.user, Utf8("status")) AS __datafusion_extracted_1, mock_leaf(test.user, Utf8("name")) AS __datafusion_extracted_2, test.user
+              Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1, leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_2, test.user
                 TableScan: test projection=[user]
 
         ## Optimized
-        Projection: __datafusion_extracted_2 AS mock_leaf(sub.user,Utf8("name"))
+        Projection: __datafusion_extracted_2 AS leaf_udf(sub.user,Utf8("name"))
           Filter: __datafusion_extracted_1 = Utf8("active")
             SubqueryAlias: sub
-              Projection: mock_leaf(test.user, Utf8("status")) AS __datafusion_extracted_1, mock_leaf(test.user, Utf8("name")) AS __datafusion_extracted_2
+              Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1, leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_2
                 TableScan: test projection=[user]
         "#)
     }
@@ -2407,17 +2407,17 @@ mod tests {
         (same as original)
 
         ## After Pushdown
-        Projection: __datafusion_extracted_1 AS mock_leaf(outer_sub.user,Utf8("name"))
+        Projection: __datafusion_extracted_1 AS leaf_udf(outer_sub.user,Utf8("name"))
           SubqueryAlias: outer_sub
             SubqueryAlias: inner_sub
-              Projection: mock_leaf(test.user, Utf8("name")) AS __datafusion_extracted_1, test.user
+              Projection: leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_1, test.user
                 TableScan: test projection=[user]
 
         ## Optimized
-        Projection: __datafusion_extracted_1 AS mock_leaf(outer_sub.user,Utf8("name"))
+        Projection: __datafusion_extracted_1 AS leaf_udf(outer_sub.user,Utf8("name"))
           SubqueryAlias: outer_sub
             SubqueryAlias: inner_sub
-              Projection: mock_leaf(test.user, Utf8("name")) AS __datafusion_extracted_1
+              Projection: leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_1
                 TableScan: test projection=[user]
         "#)
     }
@@ -2504,7 +2504,7 @@ mod tests {
         Projection: test.id
           Projection: test.id, test.user
             Filter: __datafusion_extracted_1 = Utf8("a") AND __datafusion_extracted_2 = Utf8("b")
-              Projection: mock_leaf(test.user, Utf8("field")) AS __datafusion_extracted_1, mock_leaf(test.user, Utf8("field")) AS __datafusion_extracted_2, test.id, test.user
+              Projection: leaf_udf(test.user, Utf8("field")) AS __datafusion_extracted_1, leaf_udf(test.user, Utf8("field")) AS __datafusion_extracted_2, test.id, test.user
                 TableScan: test projection=[id, user]
 
         ## After Pushdown
@@ -2513,7 +2513,7 @@ mod tests {
         ## Optimized
         Projection: test.id
           Filter: __datafusion_extracted_1 = Utf8("a") AND __datafusion_extracted_2 = Utf8("b")
-            Projection: mock_leaf(test.user, Utf8("field")) AS __datafusion_extracted_1, mock_leaf(test.user, Utf8("field")) AS __datafusion_extracted_2, test.id
+            Projection: leaf_udf(test.user, Utf8("field")) AS __datafusion_extracted_1, leaf_udf(test.user, Utf8("field")) AS __datafusion_extracted_2, test.id
               TableScan: test projection=[id, user]
         "#)
     }
@@ -2523,7 +2523,7 @@ mod tests {
     // =========================================================================
 
     /// Extraction pushdown through a filter that already had its own
-    /// `mock_leaf` extracted.
+    /// `leaf_udf` extracted.
     #[test]
     fn test_extraction_pushdown_through_filter_with_extracted_predicate() -> Result<()> {
         let table_scan = test_table_scan_with_struct()?;
@@ -2539,22 +2539,22 @@ mod tests {
             TableScan: test projection=[id, user]
 
         ## After Extraction
-        Projection: test.id, mock_leaf(test.user, Utf8("name"))
+        Projection: test.id, leaf_udf(test.user, Utf8("name"))
           Projection: test.id, test.user
             Filter: __datafusion_extracted_1 = Utf8("active")
-              Projection: mock_leaf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.id, test.user
+              Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.id, test.user
                 TableScan: test projection=[id, user]
 
         ## After Pushdown
-        Projection: test.id, __datafusion_extracted_2 AS mock_leaf(test.user,Utf8("name"))
+        Projection: test.id, __datafusion_extracted_2 AS leaf_udf(test.user,Utf8("name"))
           Filter: __datafusion_extracted_1 = Utf8("active")
-            Projection: mock_leaf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.id, test.user, mock_leaf(test.user, Utf8("name")) AS __datafusion_extracted_2
+            Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.id, test.user, leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_2
               TableScan: test projection=[id, user]
 
         ## Optimized
-        Projection: test.id, __datafusion_extracted_2 AS mock_leaf(test.user,Utf8("name"))
+        Projection: test.id, __datafusion_extracted_2 AS leaf_udf(test.user,Utf8("name"))
           Filter: __datafusion_extracted_1 = Utf8("active")
-            Projection: mock_leaf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.id, mock_leaf(test.user, Utf8("name")) AS __datafusion_extracted_2
+            Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.id, leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_2
               TableScan: test projection=[id, user]
         "#)
     }
@@ -2576,28 +2576,28 @@ mod tests {
             TableScan: test projection=[id, user]
 
         ## After Extraction
-        Projection: test.id, mock_leaf(test.user, Utf8("status"))
+        Projection: test.id, leaf_udf(test.user, Utf8("status"))
           Projection: test.id, test.user
             Filter: __datafusion_extracted_1 > Int32(5)
-              Projection: mock_leaf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.id, test.user
+              Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.id, test.user
                 TableScan: test projection=[id, user]
 
         ## After Pushdown
-        Projection: test.id, __datafusion_extracted_2 AS mock_leaf(test.user,Utf8("status"))
+        Projection: test.id, __datafusion_extracted_2 AS leaf_udf(test.user,Utf8("status"))
           Filter: __datafusion_extracted_1 > Int32(5)
-            Projection: mock_leaf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.id, test.user, mock_leaf(test.user, Utf8("status")) AS __datafusion_extracted_2
+            Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.id, test.user, leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_2
               TableScan: test projection=[id, user]
 
         ## Optimized
-        Projection: test.id, __datafusion_extracted_2 AS mock_leaf(test.user,Utf8("status"))
+        Projection: test.id, __datafusion_extracted_2 AS leaf_udf(test.user,Utf8("status"))
           Filter: __datafusion_extracted_1 > Int32(5)
-            Projection: mock_leaf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.id, mock_leaf(test.user, Utf8("status")) AS __datafusion_extracted_2
+            Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.id, leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_2
               TableScan: test projection=[id, user]
         "#)
     }
 
-    /// Left join with a `mock_leaf` filter on the right side AND
-    /// the projection also selects `mock_leaf` from the right side.
+    /// Left join with a `leaf_udf` filter on the right side AND
+    /// the projection also selects `leaf_udf` from the right side.
     #[test]
     fn test_left_join_with_filter_and_projection_extraction() -> Result<()> {
         use datafusion_expr::JoinType;
@@ -2629,27 +2629,27 @@ mod tests {
             TableScan: right projection=[id, user]
 
         ## After Extraction
-        Projection: test.id, mock_leaf(test.user, Utf8("name")), mock_leaf(right.user, Utf8("status"))
+        Projection: test.id, leaf_udf(test.user, Utf8("name")), leaf_udf(right.user, Utf8("status"))
           Projection: test.id, test.user, right.id, right.user
             Left Join:  Filter: test.id = right.id AND __datafusion_extracted_1 > Int32(5)
               TableScan: test projection=[id, user]
-              Projection: mock_leaf(right.user, Utf8("status")) AS __datafusion_extracted_1, right.id, right.user
+              Projection: leaf_udf(right.user, Utf8("status")) AS __datafusion_extracted_1, right.id, right.user
                 TableScan: right projection=[id, user]
 
         ## After Pushdown
-        Projection: test.id, __datafusion_extracted_2 AS mock_leaf(test.user,Utf8("name")), __datafusion_extracted_3 AS mock_leaf(right.user,Utf8("status"))
+        Projection: test.id, __datafusion_extracted_2 AS leaf_udf(test.user,Utf8("name")), __datafusion_extracted_3 AS leaf_udf(right.user,Utf8("status"))
           Left Join:  Filter: test.id = right.id AND __datafusion_extracted_1 > Int32(5)
-            Projection: mock_leaf(test.user, Utf8("name")) AS __datafusion_extracted_2, test.id, test.user
+            Projection: leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_2, test.id, test.user
               TableScan: test projection=[id, user]
-            Projection: mock_leaf(right.user, Utf8("status")) AS __datafusion_extracted_1, right.id, right.user, mock_leaf(right.user, Utf8("status")) AS __datafusion_extracted_3
+            Projection: leaf_udf(right.user, Utf8("status")) AS __datafusion_extracted_1, right.id, right.user, leaf_udf(right.user, Utf8("status")) AS __datafusion_extracted_3
               TableScan: right projection=[id, user]
 
         ## Optimized
-        Projection: test.id, __datafusion_extracted_2 AS mock_leaf(test.user,Utf8("name")), __datafusion_extracted_3 AS mock_leaf(right.user,Utf8("status"))
+        Projection: test.id, __datafusion_extracted_2 AS leaf_udf(test.user,Utf8("name")), __datafusion_extracted_3 AS leaf_udf(right.user,Utf8("status"))
           Left Join:  Filter: test.id = right.id AND __datafusion_extracted_1 > Int32(5)
-            Projection: mock_leaf(test.user, Utf8("name")) AS __datafusion_extracted_2, test.id
+            Projection: leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_2, test.id
               TableScan: test projection=[id, user]
-            Projection: mock_leaf(right.user, Utf8("status")) AS __datafusion_extracted_1, right.id, mock_leaf(right.user, Utf8("status")) AS __datafusion_extracted_3
+            Projection: leaf_udf(right.user, Utf8("status")) AS __datafusion_extracted_1, right.id, leaf_udf(right.user, Utf8("status")) AS __datafusion_extracted_3
               TableScan: right projection=[id, user]
         "#)
     }
@@ -2675,22 +2675,22 @@ mod tests {
             TableScan: test projection=[id, user]
 
         ## After Extraction
-        Projection: test.id, mock_leaf(test.user, Utf8("name")), mock_leaf(test.user, Utf8("status"))
+        Projection: test.id, leaf_udf(test.user, Utf8("name")), leaf_udf(test.user, Utf8("status"))
           Projection: test.id, test.user
             Filter: __datafusion_extracted_1 > Int32(5)
-              Projection: mock_leaf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.id, test.user
+              Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.id, test.user
                 TableScan: test projection=[id, user]
 
         ## After Pushdown
-        Projection: test.id, __datafusion_extracted_2 AS mock_leaf(test.user,Utf8("name")), __datafusion_extracted_3 AS mock_leaf(test.user,Utf8("status"))
+        Projection: test.id, __datafusion_extracted_2 AS leaf_udf(test.user,Utf8("name")), __datafusion_extracted_3 AS leaf_udf(test.user,Utf8("status"))
           Filter: __datafusion_extracted_1 > Int32(5)
-            Projection: mock_leaf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.id, test.user, mock_leaf(test.user, Utf8("name")) AS __datafusion_extracted_2, mock_leaf(test.user, Utf8("status")) AS __datafusion_extracted_3
+            Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.id, test.user, leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_2, leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_3
               TableScan: test projection=[id, user]
 
         ## Optimized
-        Projection: test.id, __datafusion_extracted_2 AS mock_leaf(test.user,Utf8("name")), __datafusion_extracted_3 AS mock_leaf(test.user,Utf8("status"))
+        Projection: test.id, __datafusion_extracted_2 AS leaf_udf(test.user,Utf8("name")), __datafusion_extracted_3 AS leaf_udf(test.user,Utf8("status"))
           Filter: __datafusion_extracted_1 > Int32(5)
-            Projection: mock_leaf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.id, mock_leaf(test.user, Utf8("name")) AS __datafusion_extracted_2, mock_leaf(test.user, Utf8("status")) AS __datafusion_extracted_3
+            Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.id, leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_2, leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_3
               TableScan: test projection=[id, user]
         "#)
     }
