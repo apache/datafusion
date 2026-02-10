@@ -16,7 +16,7 @@
 // under the License.
 
 //! NB: This module is a work in progress.
-//! We merged it early in https://github.com/apache/datafusion/pull/20238
+//! We merged it early in <https://github.com/apache/datafusion/pull/20238>
 //! with the skeleton and snapshots matching the current state,
 //! but the actual implementation is pending further development.
 //! There may be comments or code that are incomplete or inaccurate.
