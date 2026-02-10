@@ -1104,72 +1104,25 @@ mod tests {
 
     use super::*;
     use crate::optimize_projections::OptimizeProjections;
+    use crate::test::udfs::PlacementTestUDF;
     use crate::test::*;
     use crate::{Optimizer, OptimizerContext};
-    use arrow::datatypes::DataType;
     use datafusion_common::Result;
     use datafusion_expr::expr::ScalarFunction;
-    use datafusion_expr::{
-        ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
-        TypeSignature, col, lit, logical_plan::builder::LogicalPlanBuilder,
-    };
     use datafusion_expr::{Expr, ExpressionPlacement};
-
-    /// A mock UDF that simulates a leaf-pushable function like `get_field`.
-    /// It returns `MoveTowardsLeafNodes` when its first argument is Column or MoveTowardsLeafNodes.
-    #[derive(Debug, PartialEq, Eq, Hash)]
-    struct MockLeafFunc {
-        signature: Signature,
-    }
-
-    impl MockLeafFunc {
-        fn new() -> Self {
-            Self {
-                signature: Signature::new(
-                    TypeSignature::Any(2),
-                    datafusion_expr::Volatility::Immutable,
-                ),
-            }
-        }
-    }
-
-    impl ScalarUDFImpl for MockLeafFunc {
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
-        fn name(&self) -> &str {
-            "mock_leaf"
-        }
-
-        fn signature(&self) -> &Signature {
-            &self.signature
-        }
-
-        fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
-            Ok(DataType::Utf8)
-        }
-
-        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-            unimplemented!("This is only used for testing optimization")
-        }
-
-        fn placement(&self, args: &[ExpressionPlacement]) -> ExpressionPlacement {
-            // Return MoveTowardsLeafNodes if first arg is Column or MoveTowardsLeafNodes
-            // (like get_field does)
-            match args.first() {
-                Some(ExpressionPlacement::Column)
-                | Some(ExpressionPlacement::MoveTowardsLeafNodes) => {
-                    ExpressionPlacement::MoveTowardsLeafNodes
-                }
-                _ => ExpressionPlacement::KeepInPlace,
-            }
-        }
-    }
+    use datafusion_expr::{
+        ScalarUDF, col, lit, logical_plan::builder::LogicalPlanBuilder,
+    };
 
     fn mock_leaf(expr: Expr, name: &str) -> Expr {
         Expr::ScalarFunction(ScalarFunction::new_udf(
-            Arc::new(ScalarUDF::new_from_impl(MockLeafFunc::new())),
+            Arc::new(ScalarUDF::new_from_impl(
+                PlacementTestUDF::new()
+                    .with_placement(ExpressionPlacement::MoveTowardsLeafNodes)
+                    // Use mock_leaf to minimize snapshot churn vs. previous implementation that used a UDF with this name.
+                    // We can remove this name change and accept the snapshot diff in the future.
+                    .with_name("mock_leaf"),
+            )),
             vec![expr, lit(name)],
         ))
     }
@@ -2497,63 +2450,23 @@ mod tests {
         ")
     }
 
-    /// A variant of MockLeafFunc with the same `name()` but a different concrete type.
-    /// Used to verify that deduplication uses `Expr` equality, not `schema_name`.
-    #[derive(Debug, PartialEq, Eq, Hash)]
-    struct MockLeafFuncVariant {
-        signature: Signature,
-    }
-
-    impl MockLeafFuncVariant {
-        fn new() -> Self {
-            Self {
-                signature: Signature::new(
-                    TypeSignature::Any(2),
-                    datafusion_expr::Volatility::Immutable,
-                ),
-            }
-        }
-    }
-
-    impl ScalarUDFImpl for MockLeafFuncVariant {
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
-        fn name(&self) -> &str {
-            "mock_leaf"
-        }
-
-        fn signature(&self) -> &Signature {
-            &self.signature
-        }
-
-        fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
-            Ok(DataType::Utf8)
-        }
-
-        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-            unimplemented!("This is only used for testing optimization")
-        }
-
-        fn placement(&self, args: &[ExpressionPlacement]) -> ExpressionPlacement {
-            match args.first() {
-                Some(ExpressionPlacement::Column)
-                | Some(ExpressionPlacement::MoveTowardsLeafNodes) => {
-                    ExpressionPlacement::MoveTowardsLeafNodes
-                }
-                _ => ExpressionPlacement::KeepInPlace,
-            }
-        }
-    }
-
     /// Two UDFs with the same `name()` but different concrete types should NOT be
     /// deduplicated -- they are semantically different expressions that happen to
     /// collide on `schema_name()`.
     #[test]
     fn test_different_udfs_same_schema_name_not_deduplicated() -> Result<()> {
-        let udf_a = Arc::new(ScalarUDF::new_from_impl(MockLeafFunc::new()));
-        let udf_b = Arc::new(ScalarUDF::new_from_impl(MockLeafFuncVariant::new()));
+        let udf_a = Arc::new(ScalarUDF::new_from_impl(
+            PlacementTestUDF::new()
+                .with_placement(ExpressionPlacement::MoveTowardsLeafNodes)
+                .with_name("mock_leaf")
+                .with_id(1),
+        ));
+        let udf_b = Arc::new(ScalarUDF::new_from_impl(
+            PlacementTestUDF::new()
+                .with_placement(ExpressionPlacement::MoveTowardsLeafNodes)
+                .with_name("mock_leaf")
+                .with_id(2),
+        ));
 
         let expr_a = Expr::ScalarFunction(ScalarFunction::new_udf(
             udf_a,

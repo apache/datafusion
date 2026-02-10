@@ -21,7 +21,7 @@ use arrow::datatypes::DataType;
 use datafusion_common::Result;
 use datafusion_expr::{
     ColumnarValue, Expr, ExpressionPlacement, ScalarFunctionArgs, ScalarUDF,
-    ScalarUDFImpl, Signature, Volatility,
+    ScalarUDFImpl, Signature, TypeSignature,
 };
 
 /// A configurable test UDF for optimizer tests.
@@ -30,6 +30,8 @@ use datafusion_expr::{
 pub struct PlacementTestUDF {
     signature: Signature,
     placement: ExpressionPlacement,
+    name: String,
+    id: usize,
 }
 
 impl Default for PlacementTestUDF {
@@ -41,13 +43,42 @@ impl Default for PlacementTestUDF {
 impl PlacementTestUDF {
     pub fn new() -> Self {
         Self {
-            signature: Signature::exact(vec![DataType::UInt32], Volatility::Immutable),
+            name: "leaf_udf".to_string(),
+            // Accept any two arguments and return UInt32 for testing purposes.
+            // The actual types don't matter since this UDF is not intended for execution.
+            signature: Signature::new(
+                TypeSignature::Any(2),
+                datafusion_expr::Volatility::Immutable,
+            ),
             placement: ExpressionPlacement::MoveTowardsLeafNodes,
+            id: 0,
         }
     }
 
+    /// Set the expression placement for this UDF, which is used by optimizer rules to determine where in the plan the expression should be placed.
+    /// This also resets the name of the UDF to a default based on the placement.
     pub fn with_placement(mut self, placement: ExpressionPlacement) -> Self {
         self.placement = placement;
+        self.name = match self.placement {
+            ExpressionPlacement::MoveTowardsLeafNodes => "leaf_udf",
+            ExpressionPlacement::KeepInPlace => "keep_in_place_udf",
+            ExpressionPlacement::Column => "column_udf",
+            ExpressionPlacement::Literal => "literal_udf",
+        }
+        .to_string();
+        self
+    }
+
+    /// Set the name of the UDF, which is used in the expression and thus in optimizer rules.
+    pub fn with_name(mut self, name: &str) -> Self {
+        self.name = name.to_string();
+        self
+    }
+
+    /// Set the id of the UDF.
+    /// This is an arbitrary made up field to allow creating multiple distinct UDFs with the same placement.
+    pub fn with_id(mut self, id: usize) -> Self {
+        self.id = id;
         self
     }
 }
@@ -57,12 +88,7 @@ impl ScalarUDFImpl for PlacementTestUDF {
         self
     }
     fn name(&self) -> &str {
-        match self.placement {
-            ExpressionPlacement::MoveTowardsLeafNodes => "leaf_udf",
-            ExpressionPlacement::KeepInPlace => "keep_in_place_udf",
-            ExpressionPlacement::Column => "column_udf",
-            ExpressionPlacement::Literal => "literal_udf",
-        }
+        &self.name
     }
     fn signature(&self) -> &Signature {
         &self.signature
