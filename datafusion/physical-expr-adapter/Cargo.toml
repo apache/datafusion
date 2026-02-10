@@ -11,6 +11,9 @@ license = { workspace = true }
 authors = { workspace = true }
 rust-version = { workspace = true }
 
+[lints]
+workspace = true
+
 [lib]
 name = "datafusion_physical_expr_adapter"
 path = "src/lib.rs"

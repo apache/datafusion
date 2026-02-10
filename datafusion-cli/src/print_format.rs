@@ -585,7 +585,7 @@ mod tests {
             self.format
                 .print_batches(
                     &mut buffer,
-                    self.schema.clone(),
+                    Arc::clone(&self.schema),
                     &self.batches,
                     self.maxrows,
                     with_header,

@@ -73,8 +73,8 @@ impl CliSessionContext for MyUnionerContext {
         &self,
         plan: LogicalPlan,
     ) -> Result<DataFrame, DataFusionError> {
-        let new_plan = LogicalPlanBuilder::from(plan.clone())
-            .union(plan.clone())?
+        let new_plan = LogicalPlanBuilder::from(Arc::clone(&plan))
+            .union(Arc::clone(&plan))?
             .build()?;
 
         self.ctx.execute_logical_plan(new_plan).await

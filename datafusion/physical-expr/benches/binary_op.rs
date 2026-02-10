@@ -163,9 +163,9 @@ fn benchmark_binary_op_in_short_circuit(c: &mut Criterion) {
     let (b_values, c_values) = generate_test_strings(8192);
 
     let batches_and =
-        create_record_batch::<true>(schema.clone(), &b_values, &c_values).unwrap();
+        create_record_batch::<true>(Arc::clone(&schema), &b_values, &c_values).unwrap();
     let batches_or =
-        create_record_batch::<false>(schema.clone(), &b_values, &c_values).unwrap();
+        create_record_batch::<false>(Arc::clone(&schema), &b_values, &c_values).unwrap();
 
     // Build complex string matching conditions
     let right_condition_and = and(
@@ -301,7 +301,7 @@ fn create_record_batch<const TEST_ALL_FALSE: bool>(
         rbs.push((
             name,
             RecordBatch::try_new(
-                schema.clone(),
+                Arc::clone(&schema),
                 vec![Arc::new(a_array), Arc::new(b_array), Arc::new(c_array)],
             )?,
         ));

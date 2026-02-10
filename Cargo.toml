@@ -200,6 +200,7 @@ or_fun_call = "warn"
 unnecessary_lazy_evaluations = "warn"
 uninlined_format_args = "warn"
 inefficient_to_string = "warn"
+clone_on_ref_ptr = "deny"
 # https://github.com/apache/datafusion/issues/18503
 needless_pass_by_value = "warn"
 # https://github.com/apache/datafusion/issues/18881
