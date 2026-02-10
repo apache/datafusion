@@ -1123,9 +1123,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     plan_err!("Delete-order-by clause not yet supported")?;
                 }
 
-                if limit.is_some() {
-                    plan_err!("Delete-limit clause not yet supported")?;
-                }
                 if optimizer_hint.is_some() {
                     plan_err!("Optimizer hints not supported")?;
                 }
