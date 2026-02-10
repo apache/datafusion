@@ -177,14 +177,11 @@ mod tests {
         ScalarUDF, col, lit, logical_plan::builder::LogicalPlanBuilder,
     };
 
-    fn mock_leaf(expr: Expr, name: &str) -> Expr {
+    fn leaf_udf(expr: Expr, name: &str) -> Expr {
         Expr::ScalarFunction(ScalarFunction::new_udf(
             Arc::new(ScalarUDF::new_from_impl(
                 PlacementTestUDF::new()
-                    .with_placement(ExpressionPlacement::MoveTowardsLeafNodes)
-                    // Use mock_leaf to minimize snapshot churn vs. previous implementation that used a UDF with this name.
-                    // We can remove this name change and accept the snapshot diff in the future.
-                    .with_name("mock_leaf"),
+                    .with_placement(ExpressionPlacement::MoveTowardsLeafNodes),
             )),
             vec![expr, lit(name)],
         ))
@@ -270,7 +267,7 @@ mod tests {
     fn test_extract_from_filter() -> Result<()> {
         let table_scan = test_table_scan_with_struct()?;
         let plan = LogicalPlanBuilder::from(table_scan.clone())
-            .filter(mock_leaf(col("user"), "status").eq(lit("active")))?
+            .filter(leaf_udf(col("user"), "status").eq(lit("active")))?
             .select(vec![
                 table_scan
                     .schema()
@@ -323,7 +320,7 @@ mod tests {
     fn test_extract_from_projection() -> Result<()> {
         let table_scan = test_table_scan_with_struct()?;
         let plan = LogicalPlanBuilder::from(table_scan)
-            .project(vec![mock_leaf(col("user"), "name")])?
+            .project(vec![leaf_udf(col("user"), "name")])?
             .build()?;
 
         assert_stages!(plan, @r#"
@@ -347,7 +344,7 @@ mod tests {
         let table_scan = test_table_scan_with_struct()?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![
-                mock_leaf(col("user"), "name")
+                leaf_udf(col("user"), "name")
                     .is_not_null()
                     .alias("has_name"),
             ])?
@@ -394,7 +391,7 @@ mod tests {
     #[test]
     fn test_filter_with_deduplication() -> Result<()> {
         let table_scan = test_table_scan_with_struct()?;
-        let field_access = mock_leaf(col("user"), "name");
+        let field_access = leaf_udf(col("user"), "name");
         // Filter with the same expression used twice
         let plan = LogicalPlanBuilder::from(table_scan)
             .filter(
@@ -425,7 +422,7 @@ mod tests {
     fn test_already_leaf_expression_in_filter() -> Result<()> {
         let table_scan = test_table_scan_with_struct()?;
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(mock_leaf(col("user"), "name").eq(lit("test")))?
+            .filter(leaf_udf(col("user"), "name").eq(lit("test")))?
             .build()?;
 
         assert_stages!(plan, @r#"
@@ -450,7 +447,7 @@ mod tests {
 
         let table_scan = test_table_scan_with_struct()?;
         let plan = LogicalPlanBuilder::from(table_scan)
-            .aggregate(vec![mock_leaf(col("user"), "status")], vec![count(lit(1))])?
+            .aggregate(vec![leaf_udf(col("user"), "status")], vec![count(lit(1))])?
             .build()?;
 
         assert_stages!(plan, @r#"
@@ -477,7 +474,7 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(
                 vec![col("user")],
-                vec![count(mock_leaf(col("user"), "value"))],
+                vec![count(leaf_udf(col("user"), "value"))],
             )?
             .build()?;
 
@@ -501,8 +498,8 @@ mod tests {
     fn test_projection_with_filter_combined() -> Result<()> {
         let table_scan = test_table_scan_with_struct()?;
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(mock_leaf(col("user"), "status").eq(lit("active")))?
-            .project(vec![mock_leaf(col("user"), "name")])?
+            .filter(leaf_udf(col("user"), "status").eq(lit("active")))?
+            .project(vec![leaf_udf(col("user"), "name")])?
             .build()?;
 
         assert_stages!(plan, @r#"
@@ -526,7 +523,7 @@ mod tests {
     fn test_projection_preserves_alias() -> Result<()> {
         let table_scan = test_table_scan_with_struct()?;
         let plan = LogicalPlanBuilder::from(table_scan)
-            .project(vec![mock_leaf(col("user"), "name").alias("username")])?
+            .project(vec![leaf_udf(col("user"), "name").alias("username")])?
             .build()?;
 
         assert_stages!(plan, @r#"
@@ -552,8 +549,8 @@ mod tests {
     fn test_projection_different_field_from_filter() -> Result<()> {
         let table_scan = test_table_scan_with_struct()?;
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(mock_leaf(col("user"), "value").gt(lit(150)))?
-            .project(vec![col("user"), mock_leaf(col("user"), "label")])?
+            .filter(leaf_udf(col("user"), "value").gt(lit(150)))?
+            .project(vec![col("user"), leaf_udf(col("user"), "label")])?
             .build()?;
 
         assert_stages!(plan, @r#"
@@ -576,7 +573,7 @@ mod tests {
     #[test]
     fn test_projection_deduplication() -> Result<()> {
         let table_scan = test_table_scan_with_struct()?;
-        let field = mock_leaf(col("user"), "name");
+        let field = leaf_udf(col("user"), "name");
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![field.clone(), field.clone().alias("name2")])?
             .build()?;
@@ -607,7 +604,7 @@ mod tests {
         let table_scan = test_table_scan_with_struct()?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .sort(vec![col("user").sort(true, true)])?
-            .project(vec![mock_leaf(col("user"), "name")])?
+            .project(vec![leaf_udf(col("user"), "name")])?
             .build()?;
 
         assert_stages!(plan, @r#"
@@ -633,7 +630,7 @@ mod tests {
         let table_scan = test_table_scan_with_struct()?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .limit(0, Some(10))?
-            .project(vec![mock_leaf(col("user"), "name")])?
+            .project(vec![leaf_udf(col("user"), "name")])?
             .build()?;
 
         assert_stages!(plan, @r#"
@@ -662,7 +659,7 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(
                 vec![col("user")],
-                vec![count(mock_leaf(col("user"), "value")).alias("cnt")],
+                vec![count(leaf_udf(col("user"), "value")).alias("cnt")],
             )?
             .build()?;
 
@@ -714,7 +711,7 @@ mod tests {
         let table_scan = test_table_scan_with_struct()?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![
-                mock_leaf(col("user"), "name").alias("__datafusion_extracted_manual"),
+                leaf_udf(col("user"), "name").alias("__datafusion_extracted_manual"),
                 col("user"),
             ])?
             .build()?;
@@ -740,8 +737,8 @@ mod tests {
     fn test_merge_into_existing_extracted_projection() -> Result<()> {
         let table_scan = test_table_scan_with_struct()?;
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(mock_leaf(col("user"), "status").eq(lit("active")))?
-            .filter(mock_leaf(col("user"), "name").is_not_null())?
+            .filter(leaf_udf(col("user"), "status").eq(lit("active")))?
+            .filter(leaf_udf(col("user"), "name").is_not_null())?
             .build()?;
 
         assert_stages!(plan, @r#"
@@ -767,7 +764,7 @@ mod tests {
         let table_scan = test_table_scan_with_struct()?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![col("user")])?
-            .project(vec![mock_leaf(col("user"), "name")])?
+            .project(vec![leaf_udf(col("user"), "name")])?
             .build()?;
 
         assert_stages!(plan, @r#"
@@ -841,8 +838,8 @@ mod tests {
 
         let table_scan = test_table_scan_with_struct()?;
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(mock_leaf(col("user"), "status").eq(lit("active")))?
-            .aggregate(vec![mock_leaf(col("user"), "name")], vec![count(lit(1))])?
+            .filter(leaf_udf(col("user"), "status").eq(lit("active")))?
+            .aggregate(vec![leaf_udf(col("user"), "name")], vec![count(lit(1))])?
             .build()?;
 
         assert_stages!(plan, @r#"
@@ -867,8 +864,8 @@ mod tests {
     fn test_merge_with_new_columns() -> Result<()> {
         let table_scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(mock_leaf(col("a"), "x").eq(lit(1)))?
-            .filter(mock_leaf(col("b"), "y").eq(lit(2)))?
+            .filter(leaf_udf(col("a"), "x").eq(lit(1)))?
+            .filter(leaf_udf(col("b"), "y").eq(lit(2)))?
             .build()?;
 
         assert_stages!(plan, @r#"
@@ -912,8 +909,8 @@ mod tests {
                 right,
                 JoinType::Inner,
                 (
-                    vec![mock_leaf(col("user"), "id")],
-                    vec![mock_leaf(col("user"), "id")],
+                    vec![leaf_udf(col("user"), "id")],
+                    vec![leaf_udf(col("user"), "id")],
                 ),
                 None,
             )?
@@ -950,7 +947,7 @@ mod tests {
                 JoinType::Inner,
                 vec![
                     col("test.user").eq(col("right.user")),
-                    mock_leaf(col("test.user"), "status").eq(lit("active")),
+                    leaf_udf(col("test.user"), "status").eq(lit("active")),
                 ],
             )?
             .build()?;
@@ -986,8 +983,8 @@ mod tests {
                 JoinType::Inner,
                 vec![
                     col("test.user").eq(col("right.user")),
-                    mock_leaf(col("test.user"), "status").eq(lit("active")),
-                    mock_leaf(col("right.user"), "role").eq(lit("admin")),
+                    leaf_udf(col("test.user"), "status").eq(lit("active")),
+                    leaf_udf(col("right.user"), "role").eq(lit("admin")),
                 ],
             )?
             .build()?;
@@ -1051,12 +1048,12 @@ mod tests {
                 right,
                 JoinType::Inner,
                 (
-                    vec![mock_leaf(col("user"), "id")],
-                    vec![mock_leaf(col("user"), "id")],
+                    vec![leaf_udf(col("user"), "id")],
+                    vec![leaf_udf(col("user"), "id")],
                 ),
                 None,
             )?
-            .filter(mock_leaf(col("test.user"), "status").eq(lit("active")))?
+            .filter(leaf_udf(col("test.user"), "status").eq(lit("active")))?
             .build()?;
 
         assert_stages!(plan, @r#"
@@ -1089,8 +1086,8 @@ mod tests {
         let plan = LogicalPlanBuilder::from(left)
             .join(right, JoinType::Inner, (vec!["id"], vec!["id"]), None)?
             .project(vec![
-                mock_leaf(col("test.user"), "status"),
-                mock_leaf(col("right.user"), "role"),
+                leaf_udf(col("test.user"), "status"),
+                leaf_udf(col("right.user"), "role"),
             ])?
             .build()?;
 
@@ -1123,7 +1120,7 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![col("user").alias("x")])?
             .filter(col("x").is_not_null())?
-            .project(vec![mock_leaf(col("x"), "a")])?
+            .project(vec![leaf_udf(col("x"), "a")])?
             .build()?;
 
         assert_stages!(plan, @r#"
@@ -1151,7 +1148,7 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![col("user").alias("x")])?
             .filter(col("x").is_not_null())?
-            .project(vec![mock_leaf(col("x"), "a").is_not_null()])?
+            .project(vec![leaf_udf(col("x"), "a").is_not_null()])?
             .build()?;
 
         assert_stages!(plan, @r#"
@@ -1178,7 +1175,7 @@ mod tests {
         let table_scan = test_table_scan_with_struct()?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![col("user").alias("x")])?
-            .filter(mock_leaf(col("x"), "a").eq(lit("active")))?
+            .filter(leaf_udf(col("x"), "a").eq(lit("active")))?
             .build()?;
 
         assert_stages!(plan, @r#"
@@ -1208,7 +1205,7 @@ mod tests {
         let table_scan = test_table_scan_with_struct()?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .alias("sub")?
-            .project(vec![mock_leaf(col("sub.user"), "name")])?
+            .project(vec![leaf_udf(col("sub.user"), "name")])?
             .build()?;
 
         assert_stages!(plan, @r#"
@@ -1234,8 +1231,8 @@ mod tests {
         let table_scan = test_table_scan_with_struct()?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .alias("sub")?
-            .filter(mock_leaf(col("sub.user"), "status").eq(lit("active")))?
-            .project(vec![mock_leaf(col("sub.user"), "name")])?
+            .filter(leaf_udf(col("sub.user"), "status").eq(lit("active")))?
+            .project(vec![leaf_udf(col("sub.user"), "name")])?
             .build()?;
 
         assert_stages!(plan, @r#"
@@ -1263,7 +1260,7 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan)
             .alias("inner_sub")?
             .alias("outer_sub")?
-            .project(vec![mock_leaf(col("outer_sub.user"), "name")])?
+            .project(vec![leaf_udf(col("outer_sub.user"), "name")])?
             .build()?;
 
         assert_stages!(plan, @r#"
@@ -1317,13 +1314,11 @@ mod tests {
         let udf_a = Arc::new(ScalarUDF::new_from_impl(
             PlacementTestUDF::new()
                 .with_placement(ExpressionPlacement::MoveTowardsLeafNodes)
-                .with_name("mock_leaf")
                 .with_id(1),
         ));
         let udf_b = Arc::new(ScalarUDF::new_from_impl(
             PlacementTestUDF::new()
                 .with_placement(ExpressionPlacement::MoveTowardsLeafNodes)
-                .with_name("mock_leaf")
                 .with_id(2),
         ));
 
@@ -1385,8 +1380,8 @@ mod tests {
     fn test_extraction_pushdown_through_filter_with_extracted_predicate() -> Result<()> {
         let table_scan = test_table_scan_with_struct()?;
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(mock_leaf(col("user"), "status").eq(lit("active")))?
-            .project(vec![col("id"), mock_leaf(col("user"), "name")])?
+            .filter(leaf_udf(col("user"), "status").eq(lit("active")))?
+            .project(vec![col("id"), leaf_udf(col("user"), "name")])?
             .build()?;
 
         assert_stages!(plan, @r#"
@@ -1410,7 +1405,7 @@ mod tests {
     #[test]
     fn test_extraction_pushdown_same_expr_in_filter_and_projection() -> Result<()> {
         let table_scan = test_table_scan_with_struct()?;
-        let field_expr = mock_leaf(col("user"), "status");
+        let field_expr = leaf_udf(col("user"), "status");
         let plan = LogicalPlanBuilder::from(table_scan)
             .filter(field_expr.clone().gt(lit(5)))?
             .project(vec![col("id"), field_expr])?
@@ -1448,13 +1443,13 @@ mod tests {
                 JoinType::Left,
                 vec![
                     col("test.id").eq(col("right.id")),
-                    mock_leaf(col("right.user"), "status").gt(lit(5)),
+                    leaf_udf(col("right.user"), "status").gt(lit(5)),
                 ],
             )?
             .project(vec![
                 col("test.id"),
-                mock_leaf(col("test.user"), "name"),
-                mock_leaf(col("right.user"), "status"),
+                leaf_udf(col("test.user"), "name"),
+                leaf_udf(col("right.user"), "status"),
             ])?
             .build()?;
 
@@ -1482,11 +1477,11 @@ mod tests {
     fn test_pure_extraction_proj_push_through_filter() -> Result<()> {
         let table_scan = test_table_scan_with_struct()?;
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(mock_leaf(col("user"), "status").gt(lit(5)))?
+            .filter(leaf_udf(col("user"), "status").gt(lit(5)))?
             .project(vec![
                 col("id"),
-                mock_leaf(col("user"), "name"),
-                mock_leaf(col("user"), "status"),
+                leaf_udf(col("user"), "name"),
+                leaf_udf(col("user"), "status"),
             ])?
             .build()?;
 
