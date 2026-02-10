@@ -1311,6 +1311,14 @@ select a << b, c << d, e << f from signed_integers;
 33554432 123 10485760
 NULL NULL NULL
 
+## bitwise operations should reject non-integer types
+
+query error DataFusion error: Error during planning: Cannot infer common type for bitwise operation Float32 & Float32
+select arrow_cast(1, 'Float32') & arrow_cast(2, 'Float32');
+
+query error DataFusion error: Error during planning: Cannot infer common type for bitwise operation Date32 & Date32
+select arrow_cast(1, 'Date32') & arrow_cast(2, 'Date32');
+
 statement ok
 drop table unsigned_integers;
 
