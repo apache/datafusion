@@ -113,6 +113,7 @@ impl DFHeapSize for CachedFileMetadata {
             + self.meta.e_tag.heap_size()
             + self.meta.location.as_ref().heap_size()
             + self.statistics.heap_size()
+        //TODO add ordering once LexOrdering /PhysicalExpr implements DFHeapSize
     }
 }
 
