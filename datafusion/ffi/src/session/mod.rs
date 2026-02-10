@@ -38,7 +38,9 @@ use datafusion_expr::{
 };
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::ExecutionPlan;
-use datafusion_proto::bytes::{logical_plan_from_bytes, logical_plan_to_bytes};
+use datafusion_proto::bytes::{
+    logical_plan_from_bytes, logical_plan_to_bytes_with_extension_codec,
+};
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::logical_plan::from_proto::parse_expr;
 use datafusion_proto::logical_plan::to_proto::serialize_expr;
@@ -468,8 +470,10 @@ impl Session for ForeignSession {
         &self,
         logical_plan: &LogicalPlan,
     ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+        let codec: Arc<dyn LogicalExtensionCodec> = (&self.session.logical_codec).into();
         unsafe {
-            let logical_plan = logical_plan_to_bytes(logical_plan)?;
+            let logical_plan =
+                logical_plan_to_bytes_with_extension_codec(logical_plan, codec.as_ref())?;
             let physical_plan = df_result!(
                 (self.session.create_physical_plan)(
                     &self.session,

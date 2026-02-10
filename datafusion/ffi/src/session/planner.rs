@@ -14,32 +14,33 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-use std::{ffi::c_void, sync::Arc};
+use std::ffi::c_void;
+use std::sync::Arc;
 
-use abi_stable::{StableAbi, std_types::RVec};
+use abi_stable::StableAbi;
+use abi_stable::std_types::RVec;
 use async_ffi::{FfiFuture, FutureExt};
 use async_trait::async_trait;
-use datafusion_execution::{TaskContext, TaskContextProvider};
+use datafusion_common::DataFusionError;
+use datafusion_execution::TaskContext;
 use datafusion_expr::LogicalPlan;
 use datafusion_physical_plan::ExecutionPlan;
-use datafusion_proto::{
-    bytes::{
-        logical_plan_from_bytes_with_extension_codec,
-        logical_plan_to_bytes_with_extension_codec,
-    },
-    logical_plan::{DefaultLogicalExtensionCodec, LogicalExtensionCodec},
+use datafusion_proto::bytes::{
+    logical_plan_from_bytes_with_extension_codec,
+    logical_plan_to_bytes_with_extension_codec,
+};
+use datafusion_proto::logical_plan::{
+    DefaultLogicalExtensionCodec, LogicalExtensionCodec,
 };
 use datafusion_session::{QueryPlanner, Session};
+use tokio::runtime::Handle;
 
-use crate::{
-    df_result,
-    execution::FFI_TaskContextProvider,
-    execution_plan::FFI_ExecutionPlan,
-    proto::logical_extension_codec::FFI_LogicalExtensionCodec,
-    rresult, rresult_return,
-    session::{FFI_SessionRef, ForeignSession},
-    util::FFIResult,
-};
+use crate::execution::FFI_TaskContextProvider;
+use crate::execution_plan::FFI_ExecutionPlan;
+use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
+use crate::session::{FFI_SessionRef, ForeignSession};
+use crate::util::FFIResult;
+use crate::{df_result, rresult, rresult_return};
 
 #[repr(C)]
 #[derive(Debug, StableAbi)]
@@ -52,9 +53,12 @@ pub struct FFI_QueryPlanner {
     create_physical_plan: unsafe extern "C" fn(
         &Self,
         logical_plan_serialized: RVec<u8>,
-        session: &FFI_SessionRef,
+        session: FFI_SessionRef,
     )
         -> FfiFuture<FFIResult<FFI_ExecutionPlan>>,
+
+    /// Logical codec used to provide encoding and decoding of plans.
+    pub logical_codec: FFI_LogicalExtensionCodec,
 
     /// Release the memory of the private data when it is no longer being used.
     pub release: unsafe extern "C" fn(arg: &mut Self),
@@ -100,16 +104,25 @@ unsafe extern "C" fn release_fn_wrapper(ctx: &mut FFI_QueryPlanner) {
 unsafe extern "C" fn create_physical_plan_fn_wrapper(
     planner: &FFI_QueryPlanner,
     logical_plan_serialized: RVec<u8>,
-    session: &FFI_SessionRef,
+    session: FFI_SessionRef,
 ) -> FfiFuture<FFIResult<FFI_ExecutionPlan>> {
     unsafe {
         let planner = Arc::clone(planner.inner());
         let codec: Arc<dyn LogicalExtensionCodec> = (&session.logical_codec).into();
         let runtime = session.runtime().clone();
-        let session = ForeignSession::try_from(session);
 
         async move {
-            let session = rresult_return!(session);
+            let mut foreign_session = None;
+            let session = rresult_return!(
+                session
+                    .as_local()
+                    .map(Ok::<&(dyn Session + Send + Sync), DataFusionError>)
+                    .unwrap_or_else(|| {
+                        foreign_session = Some(ForeignSession::try_from(&session)?);
+                        Ok(foreign_session.as_ref().unwrap())
+                    })
+            );
+
             let task_ctx: Arc<TaskContext> = session.task_ctx();
 
             let logical_plan =
@@ -120,7 +133,7 @@ unsafe extern "C" fn create_physical_plan_fn_wrapper(
                 ));
 
             let physical_plan =
-                planner.create_physical_plan(&logical_plan, &session).await;
+                planner.create_physical_plan(&logical_plan, session).await;
 
             rresult!(physical_plan.map(|plan| FFI_ExecutionPlan::new(plan, runtime)))
         }
@@ -129,13 +142,49 @@ unsafe extern "C" fn create_physical_plan_fn_wrapper(
 }
 
 unsafe extern "C" fn clone_fn_wrapper(planner: &FFI_QueryPlanner) -> FFI_QueryPlanner {
+    let codec = planner.logical_codec.clone();
     let planner = Arc::clone(planner.inner());
-    planner.into()
+    FFI_QueryPlanner::new_with_ffi_codec(planner, codec)
 }
 
 impl Drop for FFI_QueryPlanner {
     fn drop(&mut self) {
         unsafe { (self.release)(self) }
+    }
+}
+
+impl FFI_QueryPlanner {
+    pub fn new(
+        planner: Arc<dyn QueryPlanner>,
+        runtime: Option<&Handle>,
+        task_ctx_provider: impl Into<FFI_TaskContextProvider>,
+        logical_codec: Option<Arc<dyn LogicalExtensionCodec>>,
+    ) -> Self {
+        let logical_codec =
+            logical_codec.unwrap_or_else(|| Arc::new(DefaultLogicalExtensionCodec {}));
+        let logical_codec = FFI_LogicalExtensionCodec::new(
+            logical_codec,
+            runtime.cloned(),
+            task_ctx_provider.into(),
+        );
+
+        Self::new_with_ffi_codec(planner, logical_codec)
+    }
+
+    pub fn new_with_ffi_codec(
+        planner: Arc<dyn QueryPlanner>,
+        codec: FFI_LogicalExtensionCodec,
+    ) -> Self {
+        let private_data = Box::new(QueryPlannerPrivateData { planner });
+
+        Self {
+            create_physical_plan: create_physical_plan_fn_wrapper,
+            logical_codec: codec,
+            clone: clone_fn_wrapper,
+            release: release_fn_wrapper,
+            private_data: Box::into_raw(private_data) as *mut c_void,
+            library_marker_id: crate::get_library_marker_id,
+        }
     }
 }
 
@@ -146,48 +195,15 @@ impl Clone for FFI_QueryPlanner {
 }
 
 #[derive(Debug)]
-pub struct ForeignQueryPlanner(
-    pub FFI_QueryPlanner,
-    pub Arc<dyn LogicalExtensionCodec + Send>,
-);
-
-impl From<Arc<dyn QueryPlanner>> for FFI_QueryPlanner {
-    fn from(planner: Arc<dyn QueryPlanner>) -> Self {
-        let private_data = Box::new(QueryPlannerPrivateData { planner });
-
-        FFI_QueryPlanner {
-            create_physical_plan: create_physical_plan_fn_wrapper,
-            release: release_fn_wrapper,
-            private_data: Box::into_raw(private_data) as *mut c_void,
-            library_marker_id: crate::get_library_marker_id,
-            clone: clone_fn_wrapper,
-        }
-    }
-}
+pub struct ForeignQueryPlanner(pub FFI_QueryPlanner);
 
 impl From<&FFI_QueryPlanner> for Arc<dyn QueryPlanner> {
     fn from(planner: &FFI_QueryPlanner) -> Self {
         if (planner.library_marker_id)() == crate::get_library_marker_id() {
             Arc::clone(planner.inner())
         } else {
-            Arc::new(ForeignQueryPlanner(
-                planner.clone(),
-                Arc::new(DefaultLogicalExtensionCodec {}),
-            ))
+            Arc::new(ForeignQueryPlanner(planner.clone()))
         }
-    }
-}
-
-impl ForeignQueryPlanner {
-    pub fn new(planner: FFI_QueryPlanner) -> Self {
-        Self(planner, Arc::new(DefaultLogicalExtensionCodec {}))
-    }
-
-    pub fn new_with_logical_codec(
-        planner: FFI_QueryPlanner,
-        codec: Arc<dyn LogicalExtensionCodec + Send>,
-    ) -> Self {
-        Self(planner, codec)
     }
 }
 
@@ -199,27 +215,18 @@ impl QueryPlanner for ForeignQueryPlanner {
         logical_plan: &LogicalPlan,
         session_state: &dyn Session,
     ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+        let codec: Arc<dyn LogicalExtensionCodec> = (&self.0.logical_codec).into();
         let logical_plan_buf =
-            logical_plan_to_bytes_with_extension_codec(logical_plan, self.1.as_ref())?;
-        let task_ctx = session_state.task_ctx();
+            logical_plan_to_bytes_with_extension_codec(logical_plan, codec.as_ref())?;
 
-        // I'm not sure if there is better way to extract
-        // context provider
-        let task_ctx_provider: Arc<dyn TaskContextProvider> =
-            Arc::new(ConstantContextProvider { ctx: task_ctx });
-
-        let task_ctx_provider: FFI_TaskContextProvider = (&task_ctx_provider).into();
-
-        let logical_codec =
-            FFI_LogicalExtensionCodec::new(Arc::clone(&self.1), None, task_ctx_provider);
-
-        let session_ref = FFI_SessionRef::new(session_state, None, logical_codec);
+        let session_ref =
+            FFI_SessionRef::new(session_state, None, self.0.logical_codec.clone());
 
         let plan = df_result!(unsafe {
             (self.0.create_physical_plan)(
                 &self.0,
                 logical_plan_buf.as_ref().into(),
-                &session_ref,
+                session_ref,
             )
             .await
         })?;
@@ -228,26 +235,16 @@ impl QueryPlanner for ForeignQueryPlanner {
     }
 }
 
-// this is temporary if there is better way to do this
-struct ConstantContextProvider {
-    ctx: Arc<TaskContext>,
-}
-
-impl TaskContextProvider for ConstantContextProvider {
-    fn task_ctx(&self) -> Arc<TaskContext> {
-        Arc::clone(&self.ctx)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
     use datafusion_expr::LogicalPlan;
-    use datafusion_physical_plan::{ExecutionPlan, empty::EmptyExec};
+    use datafusion_physical_plan::ExecutionPlan;
+    use datafusion_physical_plan::empty::EmptyExec;
     use datafusion_session::{QueryPlanner, Session};
 
-    use crate::session::planner::{FFI_QueryPlanner, ForeignQueryPlanner};
+    use crate::session::planner::FFI_QueryPlanner;
 
     #[derive(Debug, Default)]
     struct DummyPlanner {}
@@ -267,15 +264,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_end_to_end() -> datafusion::common::Result<()> {
-        let (ctx, _) = crate::util::tests::test_session_and_ctx();
+        let (ctx, task_ctx_provider) = crate::util::tests::test_session_and_ctx();
 
         let df = ctx.sql("select 1 as i").await?;
         let logical_plan = df.logical_plan();
 
         let planner: Arc<dyn QueryPlanner> = Arc::new(DummyPlanner::default());
 
-        let ffi_planner: FFI_QueryPlanner = planner.into();
-        let foreign_planner: ForeignQueryPlanner = ForeignQueryPlanner::new(ffi_planner);
+        let mut ffi_planner =
+            FFI_QueryPlanner::new(planner, None, task_ctx_provider, None);
+        ffi_planner.library_marker_id = crate::mock_foreign_marker_id;
+
+        let foreign_planner: Arc<dyn QueryPlanner> = (&ffi_planner).into();
 
         let empty_exec = foreign_planner
             .create_physical_plan(logical_plan, &ctx.state())
