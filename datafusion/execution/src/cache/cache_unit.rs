@@ -141,7 +141,7 @@ impl DefaultFileStatisticsCacheState {
                 // cache is empty while memory_used > memory_limit, cannot happen
                 debug_assert!(
                     false,
-                    "cache is empty while memory_used > memory_limit, cannot happen"
+                    "This is a bug! Please report it to the Apache DataFusion developers"
                 );
                 return;
             }
