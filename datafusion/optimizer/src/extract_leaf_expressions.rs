@@ -279,7 +279,7 @@ mod tests {
         assert_stages!(plan, @r#"
         ## Original Plan
         Projection: test.id
-          Filter: mock_leaf(test.user, Utf8("status")) = Utf8("active")
+          Filter: leaf_udf(test.user, Utf8("status")) = Utf8("active")
             TableScan: test projection=[id, user]
 
         ## After Extraction
@@ -325,7 +325,7 @@ mod tests {
 
         assert_stages!(plan, @r#"
         ## Original Plan
-        Projection: mock_leaf(test.user, Utf8("name"))
+        Projection: leaf_udf(test.user, Utf8("name"))
           TableScan: test projection=[user]
 
         ## After Extraction
@@ -352,7 +352,7 @@ mod tests {
 
         assert_stages!(plan, @r#"
         ## Original Plan
-        Projection: mock_leaf(test.user, Utf8("name")) IS NOT NULL AS has_name
+        Projection: leaf_udf(test.user, Utf8("name")) IS NOT NULL AS has_name
           TableScan: test projection=[user]
 
         ## After Extraction
@@ -404,7 +404,7 @@ mod tests {
 
         assert_stages!(plan, @r#"
         ## Original Plan
-        Filter: mock_leaf(test.user, Utf8("name")) IS NOT NULL AND mock_leaf(test.user, Utf8("name")) IS NULL
+        Filter: leaf_udf(test.user, Utf8("name")) IS NOT NULL AND leaf_udf(test.user, Utf8("name")) IS NULL
           TableScan: test projection=[id, user]
 
         ## After Extraction
@@ -427,7 +427,7 @@ mod tests {
 
         assert_stages!(plan, @r#"
         ## Original Plan
-        Filter: mock_leaf(test.user, Utf8("name")) = Utf8("test")
+        Filter: leaf_udf(test.user, Utf8("name")) = Utf8("test")
           TableScan: test projection=[id, user]
 
         ## After Extraction
@@ -452,7 +452,7 @@ mod tests {
 
         assert_stages!(plan, @r#"
         ## Original Plan
-        Aggregate: groupBy=[[mock_leaf(test.user, Utf8("status"))]], aggr=[[COUNT(Int32(1))]]
+        Aggregate: groupBy=[[leaf_udf(test.user, Utf8("status"))]], aggr=[[COUNT(Int32(1))]]
           TableScan: test projection=[user]
 
         ## After Extraction
@@ -480,7 +480,7 @@ mod tests {
 
         assert_stages!(plan, @r#"
         ## Original Plan
-        Aggregate: groupBy=[[test.user]], aggr=[[COUNT(mock_leaf(test.user, Utf8("value")))]]
+        Aggregate: groupBy=[[test.user]], aggr=[[COUNT(leaf_udf(test.user, Utf8("value")))]]
           TableScan: test projection=[user]
 
         ## After Extraction
@@ -504,8 +504,8 @@ mod tests {
 
         assert_stages!(plan, @r#"
         ## Original Plan
-        Projection: mock_leaf(test.user, Utf8("name"))
-          Filter: mock_leaf(test.user, Utf8("status")) = Utf8("active")
+        Projection: leaf_udf(test.user, Utf8("name"))
+          Filter: leaf_udf(test.user, Utf8("status")) = Utf8("active")
             TableScan: test projection=[user]
 
         ## After Extraction
@@ -528,7 +528,7 @@ mod tests {
 
         assert_stages!(plan, @r#"
         ## Original Plan
-        Projection: mock_leaf(test.user, Utf8("name")) AS username
+        Projection: leaf_udf(test.user, Utf8("name")) AS username
           TableScan: test projection=[user]
 
         ## After Extraction
@@ -555,8 +555,8 @@ mod tests {
 
         assert_stages!(plan, @r#"
         ## Original Plan
-        Projection: test.user, mock_leaf(test.user, Utf8("label"))
-          Filter: mock_leaf(test.user, Utf8("value")) > Int32(150)
+        Projection: test.user, leaf_udf(test.user, Utf8("label"))
+          Filter: leaf_udf(test.user, Utf8("value")) > Int32(150)
             TableScan: test projection=[user]
 
         ## After Extraction
@@ -580,7 +580,7 @@ mod tests {
 
         assert_stages!(plan, @r#"
         ## Original Plan
-        Projection: mock_leaf(test.user, Utf8("name")), mock_leaf(test.user, Utf8("name")) AS name2
+        Projection: leaf_udf(test.user, Utf8("name")), leaf_udf(test.user, Utf8("name")) AS name2
           TableScan: test projection=[user]
 
         ## After Extraction
@@ -609,7 +609,7 @@ mod tests {
 
         assert_stages!(plan, @r#"
         ## Original Plan
-        Projection: mock_leaf(test.user, Utf8("name"))
+        Projection: leaf_udf(test.user, Utf8("name"))
           Sort: test.user ASC NULLS FIRST
             TableScan: test projection=[user]
 
@@ -635,7 +635,7 @@ mod tests {
 
         assert_stages!(plan, @r#"
         ## Original Plan
-        Projection: mock_leaf(test.user, Utf8("name"))
+        Projection: leaf_udf(test.user, Utf8("name"))
           Limit: skip=0, fetch=10
             TableScan: test projection=[user]
 
@@ -665,7 +665,7 @@ mod tests {
 
         assert_stages!(plan, @r#"
         ## Original Plan
-        Aggregate: groupBy=[[test.user]], aggr=[[COUNT(mock_leaf(test.user, Utf8("value"))) AS cnt]]
+        Aggregate: groupBy=[[test.user]], aggr=[[COUNT(leaf_udf(test.user, Utf8("value"))) AS cnt]]
           TableScan: test projection=[user]
 
         ## After Extraction
@@ -718,7 +718,7 @@ mod tests {
 
         assert_stages!(plan, @r#"
         ## Original Plan
-        Projection: mock_leaf(test.user, Utf8("name")) AS __datafusion_extracted_manual, test.user
+        Projection: leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_manual, test.user
           TableScan: test projection=[user]
 
         ## After Extraction
@@ -743,8 +743,8 @@ mod tests {
 
         assert_stages!(plan, @r#"
         ## Original Plan
-        Filter: mock_leaf(test.user, Utf8("name")) IS NOT NULL
-          Filter: mock_leaf(test.user, Utf8("status")) = Utf8("active")
+        Filter: leaf_udf(test.user, Utf8("name")) IS NOT NULL
+          Filter: leaf_udf(test.user, Utf8("status")) = Utf8("active")
             TableScan: test projection=[id, user]
 
         ## After Extraction
@@ -769,7 +769,7 @@ mod tests {
 
         assert_stages!(plan, @r#"
         ## Original Plan
-        Projection: mock_leaf(test.user, Utf8("name"))
+        Projection: leaf_udf(test.user, Utf8("name"))
           TableScan: test projection=[user]
 
         ## After Extraction
@@ -844,8 +844,8 @@ mod tests {
 
         assert_stages!(plan, @r#"
         ## Original Plan
-        Aggregate: groupBy=[[mock_leaf(test.user, Utf8("name"))]], aggr=[[COUNT(Int32(1))]]
-          Filter: mock_leaf(test.user, Utf8("status")) = Utf8("active")
+        Aggregate: groupBy=[[leaf_udf(test.user, Utf8("name"))]], aggr=[[COUNT(Int32(1))]]
+          Filter: leaf_udf(test.user, Utf8("status")) = Utf8("active")
             TableScan: test projection=[user]
 
         ## After Extraction
@@ -870,8 +870,8 @@ mod tests {
 
         assert_stages!(plan, @r#"
         ## Original Plan
-        Filter: mock_leaf(test.b, Utf8("y")) = Int32(2)
-          Filter: mock_leaf(test.a, Utf8("x")) = Int32(1)
+        Filter: leaf_udf(test.b, Utf8("y")) = Int32(2)
+          Filter: leaf_udf(test.a, Utf8("x")) = Int32(1)
             TableScan: test projection=[a, b, c]
 
         ## After Extraction
@@ -918,7 +918,7 @@ mod tests {
 
         assert_stages!(plan, @r#"
         ## Original Plan
-        Inner Join: mock_leaf(test.user, Utf8("id")) = mock_leaf(right.user, Utf8("id"))
+        Inner Join: leaf_udf(test.user, Utf8("id")) = leaf_udf(right.user, Utf8("id"))
           TableScan: test projection=[id, user]
           TableScan: right projection=[id, user]
 
@@ -954,7 +954,7 @@ mod tests {
 
         assert_stages!(plan, @r#"
         ## Original Plan
-        Inner Join:  Filter: test.user = right.user AND mock_leaf(test.user, Utf8("status")) = Utf8("active")
+        Inner Join:  Filter: test.user = right.user AND leaf_udf(test.user, Utf8("status")) = Utf8("active")
           TableScan: test projection=[id, user]
           TableScan: right projection=[id, user]
 
@@ -991,7 +991,7 @@ mod tests {
 
         assert_stages!(plan, @r#"
         ## Original Plan
-        Inner Join:  Filter: test.user = right.user AND mock_leaf(test.user, Utf8("status")) = Utf8("active") AND mock_leaf(right.user, Utf8("role")) = Utf8("admin")
+        Inner Join:  Filter: test.user = right.user AND leaf_udf(test.user, Utf8("status")) = Utf8("active") AND leaf_udf(right.user, Utf8("role")) = Utf8("admin")
           TableScan: test projection=[id, user]
           TableScan: right projection=[id, user]
 
@@ -1058,8 +1058,8 @@ mod tests {
 
         assert_stages!(plan, @r#"
         ## Original Plan
-        Filter: mock_leaf(test.user, Utf8("status")) = Utf8("active")
-          Inner Join: mock_leaf(test.user, Utf8("id")) = mock_leaf(right.user, Utf8("id"))
+        Filter: leaf_udf(test.user, Utf8("status")) = Utf8("active")
+          Inner Join: leaf_udf(test.user, Utf8("id")) = leaf_udf(right.user, Utf8("id"))
             TableScan: test projection=[id, user]
             TableScan: right projection=[id, user]
 
@@ -1093,7 +1093,7 @@ mod tests {
 
         assert_stages!(plan, @r#"
         ## Original Plan
-        Projection: mock_leaf(test.user, Utf8("status")), mock_leaf(right.user, Utf8("role"))
+        Projection: leaf_udf(test.user, Utf8("status")), leaf_udf(right.user, Utf8("role"))
           Inner Join: test.id = right.id
             TableScan: test projection=[id, user]
             TableScan: right projection=[id, user]
@@ -1125,7 +1125,7 @@ mod tests {
 
         assert_stages!(plan, @r#"
         ## Original Plan
-        Projection: mock_leaf(x, Utf8("a"))
+        Projection: leaf_udf(x, Utf8("a"))
           Filter: x IS NOT NULL
             Projection: test.user AS x
               TableScan: test projection=[user]
@@ -1153,7 +1153,7 @@ mod tests {
 
         assert_stages!(plan, @r#"
         ## Original Plan
-        Projection: mock_leaf(x, Utf8("a")) IS NOT NULL
+        Projection: leaf_udf(x, Utf8("a")) IS NOT NULL
           Filter: x IS NOT NULL
             Projection: test.user AS x
               TableScan: test projection=[user]
@@ -1180,7 +1180,7 @@ mod tests {
 
         assert_stages!(plan, @r#"
         ## Original Plan
-        Filter: mock_leaf(x, Utf8("a")) = Utf8("active")
+        Filter: leaf_udf(x, Utf8("a")) = Utf8("active")
           Projection: test.user AS x
             TableScan: test projection=[user]
 
@@ -1210,7 +1210,7 @@ mod tests {
 
         assert_stages!(plan, @r#"
         ## Original Plan
-        Projection: mock_leaf(sub.user, Utf8("name"))
+        Projection: leaf_udf(sub.user, Utf8("name"))
           SubqueryAlias: sub
             TableScan: test projection=[user]
 
@@ -1237,8 +1237,8 @@ mod tests {
 
         assert_stages!(plan, @r#"
         ## Original Plan
-        Projection: mock_leaf(sub.user, Utf8("name"))
-          Filter: mock_leaf(sub.user, Utf8("status")) = Utf8("active")
+        Projection: leaf_udf(sub.user, Utf8("name"))
+          Filter: leaf_udf(sub.user, Utf8("status")) = Utf8("active")
             SubqueryAlias: sub
               TableScan: test projection=[user]
 
@@ -1265,7 +1265,7 @@ mod tests {
 
         assert_stages!(plan, @r#"
         ## Original Plan
-        Projection: mock_leaf(outer_sub.user, Utf8("name"))
+        Projection: leaf_udf(outer_sub.user, Utf8("name"))
           SubqueryAlias: outer_sub
             SubqueryAlias: inner_sub
               TableScan: test projection=[user]
@@ -1356,7 +1356,7 @@ mod tests {
         assert_stages!(plan, @r#"
         ## Original Plan
         Projection: test.id
-          Filter: mock_leaf(test.user, Utf8("field")) = Utf8("a") AND mock_leaf(test.user, Utf8("field")) = Utf8("b")
+          Filter: leaf_udf(test.user, Utf8("field")) = Utf8("a") AND leaf_udf(test.user, Utf8("field")) = Utf8("b")
             TableScan: test projection=[id, user]
 
         ## After Extraction
@@ -1386,8 +1386,8 @@ mod tests {
 
         assert_stages!(plan, @r#"
         ## Original Plan
-        Projection: test.id, mock_leaf(test.user, Utf8("name"))
-          Filter: mock_leaf(test.user, Utf8("status")) = Utf8("active")
+        Projection: test.id, leaf_udf(test.user, Utf8("name"))
+          Filter: leaf_udf(test.user, Utf8("status")) = Utf8("active")
             TableScan: test projection=[id, user]
 
         ## After Extraction
@@ -1413,8 +1413,8 @@ mod tests {
 
         assert_stages!(plan, @r#"
         ## Original Plan
-        Projection: test.id, mock_leaf(test.user, Utf8("status"))
-          Filter: mock_leaf(test.user, Utf8("status")) > Int32(5)
+        Projection: test.id, leaf_udf(test.user, Utf8("status"))
+          Filter: leaf_udf(test.user, Utf8("status")) > Int32(5)
             TableScan: test projection=[id, user]
 
         ## After Extraction
@@ -1455,8 +1455,8 @@ mod tests {
 
         assert_stages!(plan, @r#"
         ## Original Plan
-        Projection: test.id, mock_leaf(test.user, Utf8("name")), mock_leaf(right.user, Utf8("status"))
-          Left Join:  Filter: test.id = right.id AND mock_leaf(right.user, Utf8("status")) > Int32(5)
+        Projection: test.id, leaf_udf(test.user, Utf8("name")), leaf_udf(right.user, Utf8("status"))
+          Left Join:  Filter: test.id = right.id AND leaf_udf(right.user, Utf8("status")) > Int32(5)
             TableScan: test projection=[id, user]
             TableScan: right projection=[id, user]
 
@@ -1487,8 +1487,8 @@ mod tests {
 
         assert_stages!(plan, @r#"
         ## Original Plan
-        Projection: test.id, mock_leaf(test.user, Utf8("name")), mock_leaf(test.user, Utf8("status"))
-          Filter: mock_leaf(test.user, Utf8("status")) > Int32(5)
+        Projection: test.id, leaf_udf(test.user, Utf8("name")), leaf_udf(test.user, Utf8("status"))
+          Filter: leaf_udf(test.user, Utf8("status")) > Int32(5)
             TableScan: test projection=[id, user]
 
         ## After Extraction
