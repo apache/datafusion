@@ -167,11 +167,17 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Build sqllogictest binary
+        run: |
+          TEST_BIN=$(cargo test --features backtrace,parquet_encryption --profile release-nonlto --test sqllogictests --no-run --message-format=json | sed -n 's/.*"executable":"\([^"]*\)".*/\1/p' | head -n 1)
+          if [ -z "$TEST_BIN" ]; then
+            echo "Could not find sqllogictests test binary"
+            exit 1
+          fi
+          echo "TEST_BIN=$TEST_BIN" >> "$GITHUB_ENV"
       - name: Run sqllogictest
         run: |
-          cargo test --features backtrace,parquet_encryption --profile release-nonlto --test sqllogictests -- --include-sqlite
+          "$TEST_BIN" --include-sqlite
           cargo clean
-
-
 
 
