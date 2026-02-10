@@ -368,16 +368,45 @@ fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
     let converter = RowConverter::new(vec![SortField::new(l.value_type())])?;
     let rows_l = converter.convert_columns(&[Arc::clone(l.values())])?;
     let rows_r = converter.convert_columns(&[Arc::clone(r.values())])?;
+
+    match set_op {
+        SetOp::Union => generic_set_loop::<OffsetSize, true>(
+            l, r, &rows_l, &rows_r, field, &converter,
+        ),
+        SetOp::Intersect => generic_set_loop::<OffsetSize, false>(
+            l, r, &rows_l, &rows_r, field, &converter,
+        ),
+    }
+}
+
+/// Inner loop for set operations, parameterized by const generic to
+/// avoid branching inside the hot loop.
+fn generic_set_loop<OffsetSize: OffsetSizeTrait, const IS_UNION: bool>(
+    l: &GenericListArray<OffsetSize>,
+    r: &GenericListArray<OffsetSize>,
+    rows_l: &arrow::row::Rows,
+    rows_r: &arrow::row::Rows,
+    field: Arc<Field>,
+    converter: &RowConverter,
+) -> Result<ArrayRef> {
     let l_offsets = l.value_offsets();
     let r_offsets = r.value_offsets();
 
     let mut result_offsets = Vec::with_capacity(l.len() + 1);
     result_offsets.push(OffsetSize::usize_as(0));
-    let mut final_rows = Vec::with_capacity(rows_l.num_rows());
+    let initial_capacity = if IS_UNION {
+        // Union can include all elements from both sides
+        rows_l.num_rows()
+    } else {
+        // Intersect result is bounded by the smaller side
+        rows_l.num_rows().min(rows_r.num_rows())
+    };
+
+    let mut final_rows = Vec::with_capacity(initial_capacity);
 
     // Reuse hash sets across iterations
     let mut seen = HashSet::new();
-    let mut r_set = HashSet::new();
+    let mut lookup_set = HashSet::new();
     for i in 0..l.len() {
         let last_offset = *result_offsets.last().unwrap();
 
@@ -391,44 +420,48 @@ fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
         let r_start = r_offsets[i].as_usize();
         let r_end = r_offsets[i + 1].as_usize();
 
-        let mut count = 0usize;
-        // Clear sets for reuse
         seen.clear();
-        r_set.clear();
 
-        match set_op {
-            SetOp::Union => {
-                for idx in l_start..l_end {
-                    let row = rows_l.row(idx);
-                    if seen.insert(row) {
-                        final_rows.push(row);
-                        count += 1;
-                    }
-                }
-                for idx in r_start..r_end {
-                    let row = rows_r.row(idx);
-                    if seen.insert(row) {
-                        final_rows.push(row);
-                        count += 1;
-                    }
+        if IS_UNION {
+            for idx in l_start..l_end {
+                let row = rows_l.row(idx);
+                if seen.insert(row) {
+                    final_rows.push(row);
                 }
             }
-            SetOp::Intersect => {
-                // Build hash set from right array for lookup table
-                // then iterator left array to find common elements.
-                for idx in r_start..r_end {
-                    r_set.insert(rows_r.row(idx));
+            for idx in r_start..r_end {
+                let row = rows_r.row(idx);
+                if seen.insert(row) {
+                    final_rows.push(row);
                 }
-                for idx in l_start..l_end {
-                    let row = rows_l.row(idx);
-                    if r_set.contains(&row) && seen.insert(row) {
-                        final_rows.push(row);
-                        count += 1;
-                    }
+            }
+        } else {
+            let l_len = l_end - l_start;
+            let r_len = r_end - r_start;
+
+            // Select shorter side for lookup, longer side for probing
+            let (lookup_rows, lookup_range, probe_rows, probe_range) = if l_len < r_len {
+                (rows_l, l_start..l_end, rows_r, r_start..r_end)
+            } else {
+                (rows_r, r_start..r_end, rows_l, l_start..l_end)
+            };
+            lookup_set.clear();
+            lookup_set.reserve(lookup_range.len());
+
+            // Build lookup table
+            for idx in lookup_range {
+                lookup_set.insert(lookup_rows.row(idx));
+            }
+
+            // Probe and emit distinct intersected rows
+            for idx in probe_range {
+                let row = probe_rows.row(idx);
+                if lookup_set.contains(&row) && seen.insert(row) {
+                    final_rows.push(row);
                 }
             }
         }
-        result_offsets.push(last_offset + OffsetSize::usize_as(count));
+        result_offsets.push(last_offset + OffsetSize::usize_as(seen.len()));
     }
 
     let final_values = if final_rows.is_empty() {
