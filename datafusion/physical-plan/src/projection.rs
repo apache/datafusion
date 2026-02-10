@@ -27,7 +27,7 @@ use super::{
     SendableRecordBatchStream, SortOrderPushdownResult, Statistics,
 };
 use crate::column_rewriter::PhysicalColumnRewriter;
-use crate::execution_plan::CardinalityEffect;
+use crate::execution_plan::{CardinalityEffect, ReplacePhysicalExpr};
 use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterColumnChecker, FilterDescription,
     FilterPushdownPhase, FilterPushdownPropagation, PushedDownPredicate,
@@ -46,7 +46,9 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
-use datafusion_common::{DataFusionError, JoinSide, Result, internal_err};
+use datafusion_common::{
+    DataFusionError, JoinSide, Result, assert_eq_or_internal_err, internal_err,
+};
 use datafusion_execution::TaskContext;
 use datafusion_expr::ExpressionPlacement;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
@@ -494,6 +496,43 @@ impl ExecutionPlan for ProjectionExec {
                     .with_new_children(vec![new_input])
                     .ok()
             })
+    }
+
+    fn physical_expressions(
+        &self,
+    ) -> Option<Box<dyn Iterator<Item = Arc<dyn PhysicalExpr>> + '_>> {
+        Some(Box::new(self.projector.projection().expr_iter()))
+    }
+
+    fn with_physical_expressions(
+        &self,
+        params: ReplacePhysicalExpr,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let expected_count = self.expr().len();
+        let exprs_count = params.exprs.len();
+        assert_eq_or_internal_err!(
+            expected_count,
+            exprs_count,
+            "Inconsistent number of physical expressions for {}",
+            self.name()
+        );
+
+        let projection_exprs = self
+            .expr()
+            .iter()
+            .zip(params.exprs)
+            .map(|(p, expr)| ProjectionExpr::new(expr, p.alias.clone()))
+            .collect::<Vec<_>>();
+
+        let projection = ProjectionExprs::from(projection_exprs);
+        let input_schema = self.input.schema();
+        let projector = projection.into_projector(&input_schema)?;
+
+        Ok(Some(Arc::new(Self {
+            projector,
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..self.clone()
+        })))
     }
 }
 

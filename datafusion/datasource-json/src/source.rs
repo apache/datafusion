@@ -24,6 +24,7 @@ use std::task::Poll;
 
 use crate::file_format::JsonDecoder;
 
+use datafusion_common::assert_or_internal_err;
 use datafusion_common::error::{DataFusionError, Result};
 use datafusion_common_runtime::JoinSet;
 use datafusion_datasource::decoder::{DecoderDeserializer, deserialize_stream};
@@ -34,7 +35,7 @@ use datafusion_datasource::{
     ListingTableUrl, PartitionedFile, RangeCalculation, as_file_source, calculate_range,
 };
 use datafusion_physical_plan::projection::ProjectionExprs;
-use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
+use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties, PhysicalExpr};
 
 use arrow::json::ReaderBuilder;
 use arrow::{datatypes::SchemaRef, json};
@@ -160,6 +161,20 @@ impl FileSource for JsonSource {
 
     fn projection(&self) -> Option<&ProjectionExprs> {
         Some(&self.projection.source)
+    }
+
+    fn with_filter_and_projection(
+        &self,
+        filter: Option<Arc<dyn PhysicalExpr>>,
+        projection: ProjectionExprs,
+    ) -> Result<Option<Arc<dyn FileSource>>> {
+        assert_or_internal_err!(filter.is_none(), "filter should not be defined");
+
+        let mut conf = self.clone();
+        conf.projection =
+            SplitProjection::new(self.table_schema.file_schema(), &projection);
+
+        Ok(Some(Arc::new(conf)))
     }
 
     fn metrics(&self) -> &ExecutionPlanMetricsSet {

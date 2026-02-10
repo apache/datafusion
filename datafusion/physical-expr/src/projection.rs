@@ -481,7 +481,7 @@ impl ProjectionExprs {
         ))
     }
 
-    /// Create a new [`Projector`] from this projection and an input schema.
+    /// Create a new [`Projector`] by cloning projection expressions.
     ///
     /// A [`Projector`] can be used to apply this projection to record batches.
     ///
@@ -490,9 +490,21 @@ impl ProjectionExprs {
     /// with the given projection expressions.
     /// For example, if an expression only works with integer columns but the input schema has a string column at that index.
     pub fn make_projector(&self, input_schema: &Schema) -> Result<Projector> {
+        self.clone().into_projector(input_schema)
+    }
+
+    /// Create a new [`Projector`] by consuming projection expressions.
+    ///
+    /// A [`Projector`] can be used to apply this projection to record batches.
+    ///
+    /// # Errors
+    /// This function returns an error if the output schema cannot be constructed from the input schema
+    /// with the given projection expressions.
+    /// For example, if an expression only works with integer columns but the input schema has a string column at that index.
+    pub fn into_projector(self, input_schema: &Schema) -> Result<Projector> {
         let output_schema = Arc::new(self.project_schema(input_schema)?);
         Ok(Projector {
-            projection: self.clone(),
+            projection: self,
             output_schema,
             expression_metrics: None,
         })

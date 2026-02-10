@@ -39,7 +39,7 @@ use datafusion_datasource::{TableSchema, as_file_source};
 use arrow::buffer::Buffer;
 use arrow::ipc::reader::{FileDecoder, FileReader, StreamReader};
 use datafusion_common::error::Result;
-use datafusion_common::exec_datafusion_err;
+use datafusion_common::{assert_or_internal_err, exec_datafusion_err};
 use datafusion_datasource::PartitionedFile;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
@@ -50,6 +50,7 @@ use datafusion_physical_plan::projection::ProjectionExprs;
 
 use datafusion_datasource::file_stream::FileOpenFuture;
 use datafusion_datasource::file_stream::FileOpener;
+use datafusion_physical_plan::PhysicalExpr;
 use futures::StreamExt;
 use itertools::Itertools;
 use object_store::{GetOptions, GetRange, GetResultPayload, ObjectStore};
@@ -395,6 +396,20 @@ impl FileSource for ArrowSource {
 
     fn projection(&self) -> Option<&ProjectionExprs> {
         Some(&self.projection.source)
+    }
+
+    fn with_filter_and_projection(
+        &self,
+        filter: Option<Arc<dyn PhysicalExpr>>,
+        projection: ProjectionExprs,
+    ) -> Result<Option<Arc<dyn FileSource>>> {
+        assert_or_internal_err!(filter.is_none(), "filter should not be defined");
+
+        let mut conf = self.clone();
+        conf.projection =
+            SplitProjection::new(self.table_schema.file_schema(), &projection);
+
+        Ok(Some(Arc::new(conf)))
     }
 }
 

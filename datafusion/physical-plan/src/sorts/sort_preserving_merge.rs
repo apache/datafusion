@@ -33,9 +33,10 @@ use crate::{
 use datafusion_common::{Result, assert_eq_or_internal_err, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::MemoryConsumer;
+use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
 
-use crate::execution_plan::{EvaluationType, SchedulingType};
+use crate::execution_plan::{EvaluationType, ReplacePhysicalExpr, SchedulingType};
 use log::{debug, trace};
 
 /// Sort preserving merge execution plan
@@ -408,6 +409,35 @@ impl ExecutionPlan for SortPreservingMergeExec {
             )
             .with_fetch(self.fetch()),
         )))
+    }
+
+    fn physical_expressions<'a>(
+        &'a self,
+    ) -> Option<Box<dyn Iterator<Item = Arc<dyn PhysicalExpr>> + 'a>> {
+        Some(Box::new(
+            self.expr.iter().map(|sort| Arc::clone(&sort.expr)),
+        ))
+    }
+
+    fn with_physical_expressions(
+        &self,
+        params: ReplacePhysicalExpr,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let expected_count = self.expr.len();
+        let exprs_count = params.exprs.len();
+        assert_eq_or_internal_err!(
+            expected_count,
+            exprs_count,
+            "Inconsistent number of physical expressions for {}",
+            self.name()
+        );
+
+        let expr = self.expr.try_with_new_expressions(params.exprs)?;
+        Ok(Some(Arc::new(Self {
+            expr,
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..self.clone()
+        })))
     }
 }
 
