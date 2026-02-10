@@ -15,7 +15,6 @@
 # specific language governing permissions and limitations
 # under the License.
 
--- Test for int8 type
 query I
 SELECT bitmap_bit_position(arrow_cast(1, 'Int8'));
 ----
@@ -41,7 +40,6 @@ SELECT bitmap_bit_position(arrow_cast(-1, 'Int8'));
 ----
 1
 
--- Test for int16 type
 query I
 SELECT bitmap_bit_position(arrow_cast(256, 'Int16'));
 ----
@@ -67,7 +65,6 @@ SELECT bitmap_bit_position(arrow_cast(-1, 'Int16'));
 ----
 1
 
--- Test for int32 type
 query I
 SELECT bitmap_bit_position(arrow_cast(65536, 'Int32'));
 ----
@@ -93,7 +90,6 @@ SELECT bitmap_bit_position(arrow_cast(-1, 'Int32'));
 ----
 1
 
--- Test for int64 type
 query I
 SELECT bitmap_bit_position(arrow_cast(4294967296, 'Int64'));
 ----
