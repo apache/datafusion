@@ -46,6 +46,9 @@ futures = { workspace = true }
 object_store = { workspace = true }
 tokio = { workspace = true }
 
+[dev-dependencies]
+criterion = { workspace = true }
+
 # Note: add additional linter rules in lib.rs.
 # Rust does not support workspace + new linter rules in subcrates yet
 # https://github.com/rust-lang/cargo/issues/13157
@@ -55,3 +58,7 @@ workspace = true
 [lib]
 name = "datafusion_datasource_json"
 path = "src/mod.rs"
+
+[[bench]]
+name = "json_boundary"
+harness = false
