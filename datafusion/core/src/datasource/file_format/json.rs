@@ -59,9 +59,9 @@ mod tests {
     /// Create a temporary JSON file and return (TempDir, path)
     fn create_temp_json(content: &str) -> (tempfile::TempDir, String) {
         let tmp_dir = tempfile::TempDir::new().unwrap();
-        let path = format!("{}/test.json", tmp_dir.path().to_string_lossy());
+        let path = tmp_dir.path().join("test.json");
         std::fs::write(&path, content).unwrap();
-        (tmp_dir, path)
+        (tmp_dir, path.to_string_lossy().to_string())
     }
 
     /// Infer schema from JSON array format file
@@ -395,7 +395,8 @@ mod tests {
     async fn test_write_empty_json_from_sql() -> Result<()> {
         let ctx = SessionContext::new();
         let tmp_dir = tempfile::TempDir::new()?;
-        let path = format!("{}/empty_sql.json", tmp_dir.path().to_string_lossy());
+        let path = tmp_dir.path().join("empty_sql.json");
+        let path = path.to_string_lossy().to_string();
         let df = ctx.sql("SELECT CAST(1 AS BIGINT) AS id LIMIT 0").await?;
         df.write_json(&path, crate::dataframe::DataFrameWriteOptions::new(), None)
             .await?;
@@ -421,7 +422,8 @@ mod tests {
         )?;
 
         let tmp_dir = tempfile::TempDir::new()?;
-        let path = format!("{}/empty_batch.json", tmp_dir.path().to_string_lossy());
+        let path = tmp_dir.path().join("empty_batch.json");
+        let path = path.to_string_lossy().to_string();
         let df = ctx.read_batch(empty_batch.clone())?;
         df.write_json(&path, crate::dataframe::DataFrameWriteOptions::new(), None)
             .await?;
@@ -586,7 +588,8 @@ mod tests {
         use std::io::Write;
 
         let tmp_dir = tempfile::TempDir::new()?;
-        let path = format!("{}/array.json.gz", tmp_dir.path().to_string_lossy());
+        let path = tmp_dir.path().join("array.json.gz");
+        let path = path.to_string_lossy().to_string();
 
         let file = std::fs::File::create(&path)?;
         let mut encoder = GzEncoder::new(file, Compression::default());

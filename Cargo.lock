@@ -2034,7 +2034,6 @@ dependencies = [
  "datafusion-physical-plan",
  "datafusion-session",
  "futures",
- "log",
  "object_store",
  "serde_json",
  "tokio",

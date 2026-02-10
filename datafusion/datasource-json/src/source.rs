@@ -358,14 +358,18 @@ impl FileOpener for JsonOpener {
                         let decompressed_stream =
                             file_compression_type.convert_stream(s.boxed())?;
 
-                        // Channel for bytes: async producer -> sync consumer
+                        // Channel for bytes: async producer -> blocking consumer
+                        // Uses tokio::sync::mpsc so the async send never blocks a
+                        // tokio worker thread; the consumer calls blocking_recv()
+                        // inside spawn_blocking.
                         let (byte_tx, byte_rx) =
-                            std::sync::mpsc::sync_channel::<bytes::Bytes>(
+                            tokio::sync::mpsc::channel::<bytes::Bytes>(
                                 CHANNEL_BUFFER_SIZE,
                             );
 
                         // Channel for results: sync producer -> async consumer
                         let (result_tx, result_rx) = tokio::sync::mpsc::channel(2);
+                        let error_tx = result_tx.clone();
 
                         // Async task: read from object store stream and send bytes to channel
                         // Store the SpawnedTask to keep it alive until stream is dropped
@@ -374,12 +378,16 @@ impl FileOpener for JsonOpener {
                             while let Some(chunk) = decompressed_stream.next().await {
                                 match chunk {
                                     Ok(bytes) => {
-                                        if byte_tx.send(bytes).is_err() {
+                                        if byte_tx.send(bytes).await.is_err() {
                                             break; // Consumer dropped
                                         }
                                     }
                                     Err(e) => {
-                                        log::error!("Error reading JSON stream: {e}");
+                                        let _ = error_tx
+                                            .send(Err(arrow::error::ArrowError::ExternalError(
+                                                Box::new(e),
+                                            )))
+                                            .await;
                                         break;
                                     }
                                 }
@@ -391,14 +399,14 @@ impl FileOpener for JsonOpener {
                         // Store the SpawnedTask to keep it alive until stream is dropped
                         let parse_task = SpawnedTask::spawn_blocking(move || {
                             let channel_reader = ChannelReader::new(byte_rx);
-                            let ndjson_reader = JsonArrayToNdjsonReader::with_capacity(
+                            let mut ndjson_reader = JsonArrayToNdjsonReader::with_capacity(
                                 channel_reader,
                                 JSON_CONVERTER_BUFFER_SIZE,
                             );
 
                             match ReaderBuilder::new(schema)
                                 .with_batch_size(batch_size)
-                                .build(ndjson_reader)
+                                .build(&mut ndjson_reader)
                             {
                                 Ok(arrow_reader) => {
                                     for batch_result in arrow_reader {
@@ -411,6 +419,13 @@ impl FileOpener for JsonOpener {
                                 Err(e) => {
                                     let _ = result_tx.blocking_send(Err(e));
                                 }
+                            }
+
+                            // Validate the JSON array was properly formed
+                            if let Err(e) = ndjson_reader.validate_complete() {
+                                let _ = result_tx.blocking_send(Err(
+                                    arrow::error::ArrowError::JsonError(e.to_string()),
+                                ));
                             }
                             // result_tx dropped here, closes the stream
                         });

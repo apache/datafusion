@@ -18,7 +18,6 @@
 //! Utility types for JSON processing
 
 use std::io::{BufRead, Read};
-use std::sync::mpsc::Receiver;
 
 use bytes::Bytes;
 
@@ -130,6 +129,8 @@ pub struct JsonArrayToNdjsonReader<R: Read> {
     output_filled: usize,
     /// Whether trailing non-whitespace content was detected after ']'
     has_trailing_content: bool,
+    /// Whether leading non-whitespace content was detected before '['
+    has_leading_content: bool,
 }
 
 impl<R: Read> JsonArrayToNdjsonReader<R> {
@@ -156,6 +157,7 @@ impl<R: Read> JsonArrayToNdjsonReader<R> {
             output_pos: 0,
             output_filled: 0,
             has_trailing_content: false,
+            has_leading_content: false,
         }
     }
 
@@ -169,6 +171,12 @@ impl<R: Read> JsonArrayToNdjsonReader<R> {
     /// - Missing closing `]`
     /// - Unexpected trailing content after `]`
     pub fn validate_complete(&self) -> std::io::Result<()> {
+        if self.has_leading_content {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Malformed JSON: unexpected leading content before '['",
+            ));
+        }
         if self.depth != 0 {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -204,8 +212,9 @@ impl<R: Read> JsonArrayToNdjsonReader<R> {
                 // Looking for the opening '[', skip whitespace
                 if byte == b'[' {
                     self.state = JsonArrayState::InArray;
+                } else if !byte.is_ascii_whitespace() {
+                    self.has_leading_content = true;
                 }
-                // Skip whitespace and the '[' itself
                 None
             }
             JsonArrayState::InArray => {
@@ -376,7 +385,7 @@ impl<R: Read> BufRead for JsonArrayToNdjsonReader<R> {
 // │                     byte_tx.send(chunk)                                 │
 // └─────────────────────────────────────────────────────────────────────────┘
 //                                 │
-//                                 ▼ std::sync::mpsc::sync_channel<Bytes>
+//                                 ▼ tokio::sync::mpsc::channel<Bytes>
 //                                 │   (bounded, ~32MB buffer)
 //                                 ▼
 // ┌─────────────────────────────────────────────────────────────────────────┐
@@ -401,19 +410,21 @@ impl<R: Read> BufRead for JsonArrayToNdjsonReader<R> {
 // - Miscellaneous: ~4MB
 //
 
-/// A synchronous `Read` implementation that receives bytes from a channel.
+/// A synchronous `Read` implementation that receives bytes from an async channel.
 ///
 /// This enables true streaming between async and sync contexts without
-/// loading the entire file into memory.
+/// loading the entire file into memory. Uses `tokio::sync::mpsc::Receiver`
+/// with `blocking_recv()` so the async producer never blocks a tokio worker
+/// thread, while the sync consumer (running in `spawn_blocking`) safely blocks.
 pub struct ChannelReader {
-    rx: Receiver<Bytes>,
+    rx: tokio::sync::mpsc::Receiver<Bytes>,
     current: Option<Bytes>,
     pos: usize,
 }
 
 impl ChannelReader {
-    /// Create a new ChannelReader from a receiver.
-    pub fn new(rx: Receiver<Bytes>) -> Self {
+    /// Create a new ChannelReader from a tokio mpsc receiver.
+    pub fn new(rx: tokio::sync::mpsc::Receiver<Bytes>) -> Self {
         Self {
             rx,
             current: None,
@@ -437,13 +448,13 @@ impl Read for ChannelReader {
             }
 
             // Current chunk exhausted, get next from channel
-            match self.rx.recv() {
-                Ok(bytes) => {
+            match self.rx.blocking_recv() {
+                Some(bytes) => {
                     self.current = Some(bytes);
                     self.pos = 0;
                     // Loop back to read from new chunk
                 }
-                Err(_) => return Ok(0), // Channel closed = EOF
+                None => return Ok(0), // Channel closed = EOF
             }
         }
     }
@@ -597,6 +608,39 @@ mod tests {
     }
 
     #[test]
+    fn test_json_array_with_leading_junk() {
+        let input = r#"junk[{"a":1}, {"a":2}]"#;
+        let mut reader = JsonArrayToNdjsonReader::new(input.as_bytes());
+        let mut output = String::new();
+        reader.read_to_string(&mut output).unwrap();
+
+        // Should still extract the valid array content
+        assert_eq!(output, "{\"a\":1}\n{\"a\":2}");
+
+        // But validation should catch the leading junk
+        let result = reader.validate_complete();
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("leading content"),
+            "Expected leading content error, got: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn test_json_array_with_leading_whitespace_ok() {
+        let input = r#"
+  [{"a":1}, {"a":2}]"#;
+        let mut reader = JsonArrayToNdjsonReader::new(input.as_bytes());
+        let mut output = String::new();
+        reader.read_to_string(&mut output).unwrap();
+        assert_eq!(output, "{\"a\":1}\n{\"a\":2}");
+
+        // Leading whitespace should be fine
+        reader.validate_complete().unwrap();
+    }
+
+    #[test]
     fn test_validate_complete_valid_with_trailing_whitespace() {
         let input = r#"[{"a":1},{"a":2}]
     "#; // Trailing whitespace is OK
@@ -690,11 +734,11 @@ mod tests {
     /// Test ChannelReader
     #[test]
     fn test_channel_reader() {
-        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        let (tx, rx) = tokio::sync::mpsc::channel(4);
 
-        // Send some chunks
-        tx.send(Bytes::from("Hello, ")).unwrap();
-        tx.send(Bytes::from("World!")).unwrap();
+        // Send some chunks (try_send is non-async)
+        tx.try_send(Bytes::from("Hello, ")).unwrap();
+        tx.try_send(Bytes::from("World!")).unwrap();
         drop(tx); // Close channel
 
         let mut reader = ChannelReader::new(rx);
@@ -707,9 +751,9 @@ mod tests {
     /// Test ChannelReader with small reads
     #[test]
     fn test_channel_reader_small_reads() {
-        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        let (tx, rx) = tokio::sync::mpsc::channel(4);
 
-        tx.send(Bytes::from("ABCDEFGHIJ")).unwrap();
+        tx.try_send(Bytes::from("ABCDEFGHIJ")).unwrap();
         drop(tx);
 
         let mut reader = ChannelReader::new(rx);
