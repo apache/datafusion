@@ -776,12 +776,7 @@ impl HashJoinExec {
     pub fn null_equality(&self) -> NullEquality {
         self.null_equality
     }
-
-    /// Get the fetch (limit) for this join
-    pub fn fetch(&self) -> Option<usize> {
-        self.fetch
-    }
-
+    
     /// Get the dynamic filter expression for testing purposes.
     /// Returns `None` if no dynamic filter has been set.
     ///
