@@ -776,7 +776,7 @@ impl HashJoinExec {
     pub fn null_equality(&self) -> NullEquality {
         self.null_equality
     }
-    
+
     /// Get the dynamic filter expression for testing purposes.
     /// Returns `None` if no dynamic filter has been set.
     ///
