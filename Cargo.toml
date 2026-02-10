@@ -275,6 +275,3 @@ incremental = false
 inherits = "release"
 debug = true
 strip = false
-
-[patch.crates-io]
-sqlparser = { git = "https://github.com/apache/datafusion-sqlparser-rs.git", rev = "ce678990397f81c621d2df079ad552baae0cdfda" }
