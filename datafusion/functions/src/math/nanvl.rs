@@ -18,15 +18,10 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::utils::make_scalar_function;
-
 use arrow::array::{ArrayRef, AsArray, Float16Array, Float32Array, Float64Array};
 use arrow::datatypes::DataType::{Float16, Float32, Float64};
 use arrow::datatypes::{DataType, Float16Type, Float32Type, Float64Type};
-use datafusion_common::{
-    DataFusionError, Result, ScalarValue, exec_err, internal_err,
-    utils::take_function_args,
-};
+use datafusion_common::{Result, ScalarValue, exec_err, utils::take_function_args};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -106,46 +101,21 @@ impl ScalarUDFImpl for NanvlFunc {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let [x, y] = take_function_args(self.name(), args.args)?;
 
-        match (&x, &y) {
-            (ColumnarValue::Scalar(x), ColumnarValue::Scalar(y)) => {
-                // Scalar fast path: return x unless x is NaN (then return y)
-                let out = match (x, y) {
-                    (ScalarValue::Float64(Some(xv)), _) => {
-                        if xv.is_nan() {
-                            y.clone()
-                        } else {
-                            ScalarValue::Float64(Some(*xv))
-                        }
-                    }
-                    (ScalarValue::Float32(Some(xv)), _) => {
-                        if xv.is_nan() {
-                            y.clone()
-                        } else {
-                            ScalarValue::Float32(Some(*xv))
-                        }
-                    }
-                    (ScalarValue::Float16(Some(xv)), _) => {
-                        if xv.is_nan() {
-                            y.clone()
-                        } else {
-                            ScalarValue::Float16(Some(*xv))
-                        }
-                    }
-                    (ScalarValue::Float64(None), _) => ScalarValue::Float64(None),
-                    (ScalarValue::Float32(None), _) => ScalarValue::Float32(None),
-                    (ScalarValue::Float16(None), _) => ScalarValue::Float16(None),
-                    _ => {
-                        return internal_err!(
-                            "Unexpected scalar types for nanvl: {}, {}",
-                            x.data_type(),
-                            y.data_type()
-                        );
-                    }
-                };
-
-                Ok(ColumnarValue::Scalar(out))
+        match (x, y) {
+            (ColumnarValue::Scalar(ScalarValue::Float16(Some(v))), y) if v.is_nan() => {
+                Ok(y)
             }
-            _ => make_scalar_function(nanvl, vec![])(&[x, y]),
+            (ColumnarValue::Scalar(ScalarValue::Float32(Some(v))), y) if v.is_nan() => {
+                Ok(y)
+            }
+            (ColumnarValue::Scalar(ScalarValue::Float64(Some(v))), y) if v.is_nan() => {
+                Ok(y)
+            }
+            (x @ ColumnarValue::Scalar(_), _) => Ok(x),
+            (x, y) => {
+                let args = ColumnarValue::values_to_arrays(&[x, y])?;
+                Ok(ColumnarValue::Array(nanvl(&args)?))
+            }
         }
     }
 
@@ -155,42 +125,54 @@ impl ScalarUDFImpl for NanvlFunc {
 }
 
 /// Nanvl SQL function
+///
+/// Only propagates nulls from x:
+/// - x is NULL -> output is NULL
+/// - x is NaN -> output is y (even if y is NULL)
+/// - x is not NaN -> output is x (regardless of y)
 fn nanvl(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
         Float64 => {
-            let compute_nanvl = |x: f64, y: f64| {
-                if x.is_nan() { y } else { x }
-            };
-
-            let x = args[0].as_primitive() as &Float64Array;
-            let y = args[1].as_primitive() as &Float64Array;
-            arrow::compute::binary::<_, _, _, Float64Type>(x, y, compute_nanvl)
-                .map(|res| Arc::new(res) as _)
-                .map_err(DataFusionError::from)
+            let x = args[0].as_primitive::<Float64Type>();
+            let y = args[1].as_primitive::<Float64Type>();
+            let result: Float64Array = x
+                .iter()
+                .zip(y.iter())
+                .map(|(xv, yv)| match xv {
+                    None => None,                  // x is null -> null
+                    Some(xv) if xv.is_nan() => yv, // x is NaN -> y
+                    some_xv => some_xv,            // x is valid -> x
+                })
+                .collect();
+            Ok(Arc::new(result) as ArrayRef)
         }
         Float32 => {
-            let compute_nanvl = |x: f32, y: f32| {
-                if x.is_nan() { y } else { x }
-            };
-
-            let x = args[0].as_primitive() as &Float32Array;
-            let y = args[1].as_primitive() as &Float32Array;
-            arrow::compute::binary::<_, _, _, Float32Type>(x, y, compute_nanvl)
-                .map(|res| Arc::new(res) as _)
-                .map_err(DataFusionError::from)
+            let x = args[0].as_primitive::<Float32Type>();
+            let y = args[1].as_primitive::<Float32Type>();
+            let result: Float32Array = x
+                .iter()
+                .zip(y.iter())
+                .map(|(xv, yv)| match xv {
+                    None => None,
+                    Some(xv) if xv.is_nan() => yv,
+                    some_xv => some_xv,
+                })
+                .collect();
+            Ok(Arc::new(result) as ArrayRef)
         }
         Float16 => {
-            let compute_nanvl =
-                |x: <Float16Type as arrow::datatypes::ArrowPrimitiveType>::Native,
-                 y: <Float16Type as arrow::datatypes::ArrowPrimitiveType>::Native| {
-                    if x.is_nan() { y } else { x }
-                };
-
-            let x = args[0].as_primitive() as &Float16Array;
-            let y = args[1].as_primitive() as &Float16Array;
-            arrow::compute::binary::<_, _, _, Float16Type>(x, y, compute_nanvl)
-                .map(|res| Arc::new(res) as _)
-                .map_err(DataFusionError::from)
+            let x = args[0].as_primitive::<Float16Type>();
+            let y = args[1].as_primitive::<Float16Type>();
+            let result: Float16Array = x
+                .iter()
+                .zip(y.iter())
+                .map(|(xv, yv)| match xv {
+                    None => None,
+                    Some(xv) if xv.is_nan() => yv,
+                    some_xv => some_xv,
+                })
+                .collect();
+            Ok(Arc::new(result) as ArrayRef)
         }
         other => exec_err!("Unsupported data type {other:?} for function nanvl"),
     }
