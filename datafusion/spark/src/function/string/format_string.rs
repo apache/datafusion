@@ -1775,6 +1775,9 @@ impl ConversionSpecifier {
                 if strip_trailing_0s {
                     number = trim_trailing_0s(&number).to_owned();
                 }
+                if self.grouping_separator {
+                    number = insert_thousands_separator(&number);
+                }
             }
             if self.alt_form && !number.contains('.') {
                 number += ".";
@@ -2035,7 +2038,7 @@ impl ConversionSpecifier {
             _ => 6,
         };
 
-        let number = match self.conversion_type {
+        let mut number = match self.conversion_type {
             ConversionType::DecFloatLower => {
                 // Format as fixed-point decimal
                 self.format_decimal_fixed(&abs_decimal, precision, strip_trailing_0s)?
@@ -2081,6 +2084,10 @@ impl ConversionSpecifier {
                 );
             }
         };
+
+        if self.grouping_separator {
+            number = insert_thousands_separator(&number);
+        }
 
         // Handle padding
         let NumericParam::Literal(width) = self.width else {
@@ -2335,6 +2342,25 @@ impl FloatBits for f64 {
         let mantissa = bits & 0x000F_FFFF_FFFF_FFFF;
         (sign, exponent, mantissa)
     }
+}
+
+/// Inserts thousands separators (`,`) into the integer part of a numeric string.
+/// For example, `"1234567.89"` becomes `"1,234,567.89"`.
+fn insert_thousands_separator(number: &str) -> String {
+    let (int_part, frac_part) = match number.find('.') {
+        Some(pos) => (&number[..pos], &number[pos..]),
+        None => (number, ""),
+    };
+    let mut result = String::new();
+    let chars: Vec<char> = int_part.chars().collect();
+    for (i, c) in chars.iter().enumerate() {
+        if i > 0 && (chars.len() - i).is_multiple_of(3) {
+            result.push(',');
+        }
+        result.push(*c);
+    }
+    result.push_str(frac_part);
+    result
 }
 
 fn trim_trailing_0s(number: &str) -> &str {
