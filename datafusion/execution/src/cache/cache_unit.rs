@@ -16,9 +16,7 @@
 // under the License.
 
 use crate::cache::CacheAccessor;
-use crate::cache::cache_manager::{
-    CachedFileMetadata, FileStatisticsCache, FileStatisticsCacheEntry,
-};
+use crate::cache::cache_manager::{CachedFileMetadata, FileMetadataCache, FileStatisticsCache, FileStatisticsCacheEntry};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -36,7 +34,13 @@ use object_store::path::Path;
 /// 2. If `Some(cached)`, validate with `cached.is_valid_for(&current_meta)`
 /// 3. If invalid or missing, compute new value and call `put(path, new_value)`
 ///
-/// Uses DashMap for lock-free concurrent access.
+/// # Internal details
+///
+/// The `memory_limit` controls the maximum size of the cache, which uses a
+/// Least Recently Used eviction algorithm. When adding a new entry, if the total
+/// size of the cached entries exceeds `memory_limit`, the least recently used entries
+/// are evicted until the total size is lower than `memory_limit`.
+///
 ///
 /// [`FileStatisticsCache`]: crate::cache::cache_manager::FileStatisticsCache
 #[derive(Default)]
