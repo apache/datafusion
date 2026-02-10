@@ -29,6 +29,7 @@ use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, SchemaRef};
 use datafusion_common::{
     Result, ScalarValue, exec_err,
+    metadata::FieldMetadata,
     nested_struct::validate_struct_compatibility,
     tree_node::{Transformed, TransformedResult, TreeNode},
 };
@@ -368,7 +369,10 @@ impl DefaultPhysicalExprAdapterRewriter {
         };
 
         let null_value = ScalarValue::Null.cast_to(logical_struct_field.data_type())?;
-        Ok(Some(expressions::lit(null_value)))
+        Ok(Some(Arc::new(expressions::Literal::new_with_metadata(
+            null_value,
+            Some(FieldMetadata::from(logical_struct_field.as_ref())),
+        ))))
     }
 
     fn rewrite_column(
@@ -416,22 +420,31 @@ impl DefaultPhysicalExprAdapterRewriter {
                 // If the column is missing from the physical schema fill it in with nulls.
                 // For a different behavior, provide a custom `PhysicalExprAdapter` implementation.
                 let null_value = ScalarValue::Null.cast_to(logical_field.data_type())?;
-                return Ok(Transformed::yes(expressions::lit(null_value)));
+                return Ok(Transformed::yes(Arc::new(
+                    expressions::Literal::new_with_metadata(
+                        null_value,
+                        Some(FieldMetadata::from(logical_field)),
+                    ),
+                )));
             }
         };
         let physical_field = self.physical_file_schema.field(physical_column_index);
 
-        if column.index() == physical_column_index
-            && logical_field.data_type() == physical_field.data_type()
-        {
+        if column.index() == physical_column_index && logical_field == physical_field {
             return Ok(Transformed::no(expr));
         }
 
         let column = self.resolve_column(column, physical_column_index)?;
 
-        if logical_field.data_type() == physical_field.data_type() {
-            // If the data types match, we can use the column as is
+        if logical_field == physical_field {
+            // If the fields match (including metadata/nullability), we can use the column as is
             return Ok(Transformed::yes(Arc::new(column)));
+        }
+
+        if logical_field.data_type() == physical_field.data_type() {
+            // The data type matches, but the field metadata / nullability differs.
+            // Emit a CastColumnExpr so downstream schema construction uses the logical field.
+            return self.create_cast_column_expr(column, logical_field);
         }
 
         // We need to cast the column to the logical data type
@@ -691,6 +704,43 @@ mod tests {
     }
 
     #[test]
+    fn test_rewrite_column_with_metadata_or_nullability_mismatch() -> Result<()> {
+        use std::collections::HashMap;
+
+        let physical_schema = Schema::new(vec![Field::new("a", DataType::Int64, true)]);
+        let logical_schema =
+            Schema::new(vec![Field::new("a", DataType::Int64, false).with_metadata(
+                HashMap::from([("logical_meta".to_string(), "1".to_string())]),
+            )]);
+
+        let factory = DefaultPhysicalExprAdapterFactory;
+        let adapter = factory
+            .create(Arc::new(logical_schema), Arc::new(physical_schema.clone()))
+            .unwrap();
+
+        let result = adapter.rewrite(Arc::new(Column::new("a", 0)))?;
+        let cast = result
+            .as_any()
+            .downcast_ref::<CastColumnExpr>()
+            .expect("Expected CastColumnExpr");
+
+        assert_eq!(cast.target_field().data_type(), &DataType::Int64);
+        assert!(!cast.target_field().is_nullable());
+        assert_eq!(
+            cast.target_field()
+                .metadata()
+                .get("logical_meta")
+                .map(String::as_str),
+            Some("1")
+        );
+
+        // Ensure the expression reports the logical nullability regardless of input schema
+        assert!(!result.nullable(physical_schema.as_ref())?);
+
+        Ok(())
+    }
+
+    #[test]
     fn test_rewrite_multi_column_expr_with_type_cast() {
         let (physical_schema, logical_schema) = create_test_schema();
         let factory = DefaultPhysicalExprAdapterFactory;
@@ -859,6 +909,41 @@ mod tests {
             panic!("Expected literal expression");
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_rewrite_missing_column_propagates_metadata() -> Result<()> {
+        use std::collections::HashMap;
+
+        let physical_schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let logical_schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, true).with_metadata(HashMap::from([(
+                "logical_meta".to_string(),
+                "1".to_string(),
+            )])),
+        ]);
+
+        let factory = DefaultPhysicalExprAdapterFactory;
+        let adapter = factory
+            .create(Arc::new(logical_schema), Arc::new(physical_schema.clone()))
+            .unwrap();
+
+        let result = adapter.rewrite(Arc::new(Column::new("b", 1)))?;
+        let literal = result
+            .as_any()
+            .downcast_ref::<expressions::Literal>()
+            .expect("Expected literal expression");
+
+        assert_eq!(
+            literal
+                .return_field(physical_schema.as_ref())?
+                .metadata()
+                .get("logical_meta")
+                .map(String::as_str),
+            Some("1")
+        );
         Ok(())
     }
 
