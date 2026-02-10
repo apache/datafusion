@@ -28,6 +28,7 @@ use datafusion_functions_nested::set_ops::{ArrayIntersect, ArrayUnion};
 use rand::SeedableRng;
 use rand::prelude::SliceRandom;
 use rand::rngs::StdRng;
+use std::collections::HashSet;
 use std::hint::black_box;
 use std::sync::Arc;
 
@@ -40,30 +41,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     bench_array_intersect(c);
 }
 
-fn invoke_array_union(udf: &impl ScalarUDFImpl, array1: &ArrayRef, array2: &ArrayRef) {
-    black_box(
-        udf.invoke_with_args(ScalarFunctionArgs {
-            args: vec![
-                ColumnarValue::Array(array1.clone()),
-                ColumnarValue::Array(array2.clone()),
-            ],
-            arg_fields: vec![
-                Field::new("arr1", array1.data_type().clone(), false).into(),
-                Field::new("arr2", array2.data_type().clone(), false).into(),
-            ],
-            number_rows: NUM_ROWS,
-            return_field: Field::new("result", array1.data_type().clone(), false).into(),
-            config_options: Arc::new(ConfigOptions::default()),
-        })
-        .unwrap(),
-    );
-}
-
-fn invoke_array_intersect(
-    udf: &impl ScalarUDFImpl,
-    array1: &ArrayRef,
-    array2: &ArrayRef,
-) {
+fn invoke_udf(udf: &impl ScalarUDFImpl, array1: &ArrayRef, array2: &ArrayRef) {
     black_box(
         udf.invoke_with_args(ScalarFunctionArgs {
             args: vec![
@@ -86,22 +64,15 @@ fn bench_array_union(c: &mut Criterion) {
     let mut group = c.benchmark_group("array_union");
     let udf = ArrayUnion::new();
 
-    for &array_size in ARRAY_SIZES {
-        let (array1, array2) = create_arrays_with_overlap(NUM_ROWS, array_size, 0.8);
-        group.bench_with_input(
-            BenchmarkId::new("high_overlap", array_size),
-            &array_size,
-            |b, _| b.iter(|| invoke_array_union(&udf, &array1, &array2)),
-        );
-    }
-
-    for &array_size in ARRAY_SIZES {
-        let (array1, array2) = create_arrays_with_overlap(NUM_ROWS, array_size, 0.2);
-        group.bench_with_input(
-            BenchmarkId::new("low_overlap", array_size),
-            &array_size,
-            |b, _| b.iter(|| invoke_array_union(&udf, &array1, &array2)),
-        );
+    for (overlap_label, overlap_ratio) in &[("high_overlap", 0.8), ("low_overlap", 0.2)] {
+        for &array_size in ARRAY_SIZES {
+            let (array1, array2) = create_arrays_with_overlap(NUM_ROWS, array_size, *overlap_ratio);
+            group.bench_with_input(
+                BenchmarkId::new(*overlap_label, array_size),
+                &array_size,
+                |b, _| b.iter(|| invoke_udf(&udf, &array1, &array2)),
+            );
+        }
     }
 
     group.finish();
@@ -111,22 +82,15 @@ fn bench_array_intersect(c: &mut Criterion) {
     let mut group = c.benchmark_group("array_intersect");
     let udf = ArrayIntersect::new();
 
-    for &array_size in ARRAY_SIZES {
-        let (array1, array2) = create_arrays_with_overlap(NUM_ROWS, array_size, 0.8);
-        group.bench_with_input(
-            BenchmarkId::new("high_overlap", array_size),
-            &array_size,
-            |b, _| b.iter(|| invoke_array_intersect(&udf, &array1, &array2)),
-        );
-    }
-
-    for &array_size in ARRAY_SIZES {
-        let (array1, array2) = create_arrays_with_overlap(NUM_ROWS, array_size, 0.2);
-        group.bench_with_input(
-            BenchmarkId::new("low_overlap", array_size),
-            &array_size,
-            |b, _| b.iter(|| invoke_array_intersect(&udf, &array1, &array2)),
-        );
+    for (overlap_label, overlap_ratio) in &[("high_overlap", 0.8), ("low_overlap", 0.2)] {
+        for &array_size in ARRAY_SIZES {
+            let (array1, array2) = create_arrays_with_overlap(NUM_ROWS, array_size, *overlap_ratio);
+            group.bench_with_input(
+                BenchmarkId::new(*overlap_label, array_size),
+                &array_size,
+                |b, _| b.iter(|| invoke_udf(&udf, &array1, &array2)),
+            );
+        }
     }
 
     group.finish();
@@ -155,7 +119,8 @@ fn create_arrays_with_overlap(
         let mut positions: Vec<usize> = (0..array_size).collect();
         positions.shuffle(&mut rng);
 
-        let overlap_positions = &positions[..overlap_count];
+        let overlap_positions: HashSet<_> =
+            positions[..overlap_count].iter().copied().collect();
 
         for i in 0..array_size {
             if overlap_positions.contains(&i) {
