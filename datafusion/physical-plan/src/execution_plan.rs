@@ -513,6 +513,10 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
 
     /// Returns a fetching variant of this `ExecutionPlan` node, if it supports
     /// fetch limits. Returns `None` otherwise.
+    ///
+    /// See physical optimizer rule [`limit_pushdown`] for details.
+    ///
+    /// [`limit_pushdown`]: https://docs.rs/datafusion/latest/datafusion/physical_optimizer/limit_pushdown/index.html
     fn with_fetch(&self, _limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
         None
     }
