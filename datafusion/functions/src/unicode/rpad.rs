@@ -48,7 +48,10 @@ use unicode_segmentation::UnicodeSegmentation;
 +-----------------------------------------------+
 ```"#,
     standard_argument(name = "str", prefix = "String"),
-    argument(name = "n", description = "String length to pad to."),
+    argument(
+        name = "n",
+        description = "String length to pad to. If the input string is longer than this length, it is truncated."
+    ),
     argument(
         name = "padding_str",
         description = "String expression to pad with. Can be a constant, column, or function, and any combination of string operators. _Default is a space._"
@@ -203,7 +206,8 @@ fn rpad<StringArrayLen: OffsetSizeTrait, FillArrayLen: OffsetSizeTrait>(
     }
 }
 
-/// Extends the string to length 'length' by appending the characters fill (a space by default). If the string is already longer than length then it is truncated.
+/// Extends the string to length 'length' by appending the characters fill (a space by default).
+/// If the string is already longer than length then it is truncated (on the right).
 /// rpad('hi', 5, 'xy') = 'hixyx'
 fn rpad_impl<'a, StringArrType, FillArrType, StringArrayLen>(
     string_array: &StringArrType,
@@ -234,6 +238,17 @@ where
                             let length = if length < 0 { 0 } else { length as usize };
                             if length == 0 {
                                 builder.append_value("");
+                            } else if string.is_ascii() {
+                                // ASCII fast path: byte length == character length
+                                let str_len = string.len();
+                                if length < str_len {
+                                    builder.append_value(&string[..length]);
+                                } else {
+                                    builder.write_str(string)?;
+                                    builder.append_value(
+                                        " ".repeat(length - str_len).as_str(),
+                                    );
+                                }
                             } else {
                                 // Reuse buffer by clearing and refilling
                                 graphemes_buf.clear();
@@ -244,10 +259,9 @@ where
                                         .append_value(graphemes_buf[..length].concat());
                                 } else {
                                     builder.write_str(string)?;
-                                    builder.write_str(
+                                    builder.append_value(
                                         &" ".repeat(length - graphemes_buf.len()),
-                                    )?;
-                                    builder.append_value("");
+                                    );
                                 }
                             }
                         }
@@ -273,27 +287,49 @@ where
                                     );
                                 }
                                 let length = if length < 0 { 0 } else { length as usize };
-                                // Reuse buffer by clearing and refilling
-                                graphemes_buf.clear();
-                                graphemes_buf.extend(string.graphemes(true));
-
-                                if length < graphemes_buf.len() {
-                                    builder
-                                        .append_value(graphemes_buf[..length].concat());
-                                } else if fill.is_empty() {
-                                    builder.append_value(string);
-                                } else {
-                                    builder.write_str(string)?;
-                                    // Reuse fill_chars_buf by clearing and refilling
-                                    fill_chars_buf.clear();
-                                    fill_chars_buf.extend(fill.chars());
-                                    for l in 0..length - graphemes_buf.len() {
-                                        let c = *fill_chars_buf
-                                            .get(l % fill_chars_buf.len())
-                                            .unwrap();
-                                        builder.write_char(c)?;
+                                if string.is_ascii() && fill.is_ascii() {
+                                    // ASCII fast path: byte length == character length,
+                                    // so we skip expensive grapheme segmentation.
+                                    let str_len = string.len();
+                                    if length < str_len {
+                                        builder.append_value(&string[..length]);
+                                    } else if fill.is_empty() {
+                                        builder.append_value(string);
+                                    } else {
+                                        let pad_len = length - str_len;
+                                        let fill_len = fill.len();
+                                        let full_reps = pad_len / fill_len;
+                                        let remainder = pad_len % fill_len;
+                                        builder.write_str(string)?;
+                                        for _ in 0..full_reps {
+                                            builder.write_str(fill)?;
+                                        }
+                                        builder.append_value(&fill[..remainder]);
                                     }
-                                    builder.append_value("");
+                                } else {
+                                    // Reuse buffer by clearing and refilling
+                                    graphemes_buf.clear();
+                                    graphemes_buf.extend(string.graphemes(true));
+
+                                    if length < graphemes_buf.len() {
+                                        builder.append_value(
+                                            graphemes_buf[..length].concat(),
+                                        );
+                                    } else if fill.is_empty() {
+                                        builder.append_value(string);
+                                    } else {
+                                        builder.write_str(string)?;
+                                        // Reuse fill_chars_buf by clearing and refilling
+                                        fill_chars_buf.clear();
+                                        fill_chars_buf.extend(fill.chars());
+                                        for l in 0..length - graphemes_buf.len() {
+                                            let c = *fill_chars_buf
+                                                .get(l % fill_chars_buf.len())
+                                                .unwrap();
+                                            builder.write_char(c)?;
+                                        }
+                                        builder.append_value("");
+                                    }
                                 }
                             }
                             _ => builder.append_null(),
@@ -455,6 +491,17 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::Utf8(None)),
             ],
             Ok(None),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            RPadFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::from("hello")),
+                ColumnarValue::Scalar(ScalarValue::from(2i64)),
+            ],
+            Ok(Some("he")),
             &str,
             Utf8,
             StringArray
