@@ -66,7 +66,8 @@ fn bench_array_union(c: &mut Criterion) {
 
     for (overlap_label, overlap_ratio) in &[("high_overlap", 0.8), ("low_overlap", 0.2)] {
         for &array_size in ARRAY_SIZES {
-            let (array1, array2) = create_arrays_with_overlap(NUM_ROWS, array_size, *overlap_ratio);
+            let (array1, array2) =
+                create_arrays_with_overlap(NUM_ROWS, array_size, *overlap_ratio);
             group.bench_with_input(
                 BenchmarkId::new(*overlap_label, array_size),
                 &array_size,
@@ -84,7 +85,8 @@ fn bench_array_intersect(c: &mut Criterion) {
 
     for (overlap_label, overlap_ratio) in &[("high_overlap", 0.8), ("low_overlap", 0.2)] {
         for &array_size in ARRAY_SIZES {
-            let (array1, array2) = create_arrays_with_overlap(NUM_ROWS, array_size, *overlap_ratio);
+            let (array1, array2) =
+                create_arrays_with_overlap(NUM_ROWS, array_size, *overlap_ratio);
             group.bench_with_input(
                 BenchmarkId::new(*overlap_label, array_size),
                 &array_size,
