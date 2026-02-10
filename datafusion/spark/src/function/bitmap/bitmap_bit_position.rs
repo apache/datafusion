@@ -122,7 +122,7 @@ pub fn bitmap_bit_position_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
             let result: Int64Array = array
                 .as_primitive::<Int64Type>()
                 .iter()
-                .map(|opt| opt.map(|value| bitmap_bit_position(value.into())))
+                .map(|opt| opt.map(bitmap_bit_position))
                 .collect();
             Ok(Arc::new(result))
         }
