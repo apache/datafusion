@@ -856,9 +856,8 @@ EXPLAIN SELECT id, s['value'], s['value'] + 10, s['label'] FROM simple_struct OR
 ----
 logical_plan
 01)Sort: simple_struct.id ASC NULLS LAST, fetch=3
-02)--Projection: simple_struct.id, __common_expr_1 AS simple_struct.s[value], __common_expr_1 AS simple_struct.s[value] + Int64(10), get_field(simple_struct.s, Utf8("label"))
-03)----Projection: get_field(simple_struct.s, Utf8("value")) AS __common_expr_1, simple_struct.id, simple_struct.s
-04)------TableScan: simple_struct projection=[id, s]
+02)--Projection: simple_struct.id, get_field(simple_struct.s, Utf8("value")), get_field(simple_struct.s, Utf8("value")) + Int64(10), get_field(simple_struct.s, Utf8("label"))
+03)----TableScan: simple_struct projection=[id, s]
 physical_plan
 01)SortExec: TopK(fetch=3), expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
 02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[id, get_field(s@1, value) as simple_struct.s[value], get_field(s@1, value) + 10 as simple_struct.s[value] + Int64(10), get_field(s@1, label) as simple_struct.s[label]], file_type=parquet, predicate=DynamicFilter [ empty ]
@@ -969,10 +968,9 @@ query TT
 EXPLAIN SELECT s['value'] + s['value'] as doubled FROM simple_struct WHERE id > 2;
 ----
 logical_plan
-01)Projection: __common_expr_1 + __common_expr_1 AS doubled
-02)--Projection: get_field(simple_struct.s, Utf8("value")) AS __common_expr_1
-03)----Filter: simple_struct.id > Int64(2)
-04)------TableScan: simple_struct projection=[id, s], partial_filters=[simple_struct.id > Int64(2)]
+01)Projection: get_field(simple_struct.s, Utf8("value")) + get_field(simple_struct.s, Utf8("value")) AS doubled
+02)--Filter: simple_struct.id > Int64(2)
+03)----TableScan: simple_struct projection=[id, s], partial_filters=[simple_struct.id > Int64(2)]
 physical_plan
 01)ProjectionExec: expr=[get_field(s@0, value) + get_field(s@0, value) as doubled]
 02)--FilterExec: id@0 > 2, projection=[s@1]
@@ -1277,6 +1275,7 @@ SELECT id, s['value'] FROM simple_struct ORDER BY id, s['label'];
 3 150
 4 300
 5 250
+
 
 ###
 # Test 11a.3: TopK with dropped sort column
@@ -1608,3 +1607,188 @@ physical_plan
 02)--FilterExec: id@0 > 2, projection=[s@1]
 03)----RepartitionExec: partitioning=RoundRobinBatch(32), input_partitions=1
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[id, s], file_type=parquet, predicate=id@0 > 2, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 2, required_guarantees=[]
+
+#####################
+# Section 14: SubqueryAlias tests
+#####################
+
+# Reset target partitions
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+# get_field pushdown through subquery alias with filter
+query TT
+EXPLAIN SELECT t.s['value'] FROM (SELECT * FROM simple_struct) t WHERE t.id > 2;
+----
+logical_plan
+01)Projection: get_field(t.s, Utf8("value"))
+02)--SubqueryAlias: t
+03)----Projection: simple_struct.s
+04)------Filter: simple_struct.id > Int64(2)
+05)--------TableScan: simple_struct projection=[id, s], partial_filters=[simple_struct.id > Int64(2)]
+physical_plan
+01)ProjectionExec: expr=[get_field(s@0, value) as t.s[value]]
+02)--FilterExec: id@0 > 2, projection=[s@1]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[id, s], file_type=parquet, predicate=id@0 > 2, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 2, required_guarantees=[]
+
+# Verify correctness
+query I
+SELECT t.s['value'] FROM (SELECT * FROM simple_struct) t WHERE t.id > 2 ORDER BY t.id;
+----
+150
+300
+250
+
+# Multiple get_field through subquery alias with sort
+query TT
+EXPLAIN SELECT t.s['value'], t.s['label'] FROM (SELECT * FROM simple_struct) t ORDER BY t.s['value'];
+----
+logical_plan
+01)Sort: t.s[value] ASC NULLS LAST
+02)--Projection: get_field(t.s, Utf8("value")), get_field(t.s, Utf8("label"))
+03)----SubqueryAlias: t
+04)------TableScan: simple_struct projection=[s]
+physical_plan
+01)SortExec: expr=[t.s[value]@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[get_field(s@1, value) as t.s[value], get_field(s@1, label) as t.s[label]], file_type=parquet
+
+# Verify correctness
+query IT
+SELECT t.s['value'], t.s['label'] FROM (SELECT * FROM simple_struct) t ORDER BY t.s['value'];
+----
+100 alpha
+150 gamma
+200 beta
+250 epsilon
+300 delta
+
+# Nested subquery aliases
+query TT
+EXPLAIN SELECT u.s['value'] FROM (SELECT * FROM (SELECT * FROM simple_struct) t) u WHERE u.id > 2;
+----
+logical_plan
+01)Projection: get_field(u.s, Utf8("value"))
+02)--SubqueryAlias: u
+03)----SubqueryAlias: t
+04)------Projection: simple_struct.s
+05)--------Filter: simple_struct.id > Int64(2)
+06)----------TableScan: simple_struct projection=[id, s], partial_filters=[simple_struct.id > Int64(2)]
+physical_plan
+01)ProjectionExec: expr=[get_field(s@0, value) as u.s[value]]
+02)--FilterExec: id@0 > 2, projection=[s@1]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[id, s], file_type=parquet, predicate=id@0 > 2, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 2, required_guarantees=[]
+
+# Verify correctness
+query I
+SELECT u.s['value'] FROM (SELECT * FROM (SELECT * FROM simple_struct) t) u WHERE u.id > 2 ORDER BY u.id;
+----
+150
+300
+250
+
+# get_field in filter through subquery alias
+query TT
+EXPLAIN SELECT t.id FROM (SELECT * FROM simple_struct) t WHERE t.s['value'] > 200;
+----
+logical_plan
+01)SubqueryAlias: t
+02)--Projection: simple_struct.id
+03)----Filter: get_field(simple_struct.s, Utf8("value")) > Int64(200)
+04)------TableScan: simple_struct projection=[id, s], partial_filters=[get_field(simple_struct.s, Utf8("value")) > Int64(200)]
+physical_plan
+01)FilterExec: get_field(s@1, value) > 200, projection=[id@0]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[id, s], file_type=parquet
+
+# Verify correctness
+query I
+SELECT t.id FROM (SELECT * FROM simple_struct) t WHERE t.s['value'] > 200 ORDER BY t.id;
+----
+4
+5
+
+#####################
+# Section 15: UNION ALL tests
+#####################
+
+# get_field on UNION ALL result
+query TT
+EXPLAIN SELECT s['value'] FROM (
+    SELECT s FROM simple_struct WHERE id <= 3
+    UNION ALL
+    SELECT s FROM simple_struct WHERE id > 3
+) t;
+----
+logical_plan
+01)Projection: get_field(t.s, Utf8("value"))
+02)--SubqueryAlias: t
+03)----Union
+04)------Projection: simple_struct.s
+05)--------Filter: simple_struct.id <= Int64(3)
+06)----------TableScan: simple_struct projection=[id, s], partial_filters=[simple_struct.id <= Int64(3)]
+07)------Projection: simple_struct.s
+08)--------Filter: simple_struct.id > Int64(3)
+09)----------TableScan: simple_struct projection=[id, s], partial_filters=[simple_struct.id > Int64(3)]
+physical_plan
+01)ProjectionExec: expr=[get_field(s@0, value) as t.s[value]]
+02)--UnionExec
+03)----FilterExec: id@0 <= 3, projection=[s@1]
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[id, s], file_type=parquet, predicate=id@0 <= 3, pruning_predicate=id_null_count@1 != row_count@2 AND id_min@0 <= 3, required_guarantees=[]
+05)----FilterExec: id@0 > 3, projection=[s@1]
+06)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[id, s], file_type=parquet, predicate=id@0 > 3, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 3, required_guarantees=[]
+
+# Verify correctness
+query I
+SELECT s['value'] FROM (
+    SELECT s FROM simple_struct WHERE id <= 3
+    UNION ALL
+    SELECT s FROM simple_struct WHERE id > 3
+) t ORDER BY s['value'];
+----
+100
+150
+200
+250
+300
+
+# Multiple get_field on UNION ALL with ORDER BY
+query TT
+EXPLAIN SELECT s['value'], s['label'] FROM (
+    SELECT s FROM simple_struct WHERE id <= 3
+    UNION ALL
+    SELECT s FROM simple_struct WHERE id > 3
+) t ORDER BY s['value'];
+----
+logical_plan
+01)Sort: t.s[value] ASC NULLS LAST
+02)--Projection: get_field(t.s, Utf8("value")), get_field(t.s, Utf8("label"))
+03)----SubqueryAlias: t
+04)------Union
+05)--------Projection: simple_struct.s
+06)----------Filter: simple_struct.id <= Int64(3)
+07)------------TableScan: simple_struct projection=[id, s], partial_filters=[simple_struct.id <= Int64(3)]
+08)--------Projection: simple_struct.s
+09)----------Filter: simple_struct.id > Int64(3)
+10)------------TableScan: simple_struct projection=[id, s], partial_filters=[simple_struct.id > Int64(3)]
+physical_plan
+01)SortPreservingMergeExec: [t.s[value]@0 ASC NULLS LAST]
+02)--SortExec: expr=[t.s[value]@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[get_field(s@0, value) as t.s[value], get_field(s@0, label) as t.s[label]]
+04)------UnionExec
+05)--------FilterExec: id@0 <= 3, projection=[s@1]
+06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[id, s], file_type=parquet, predicate=id@0 <= 3, pruning_predicate=id_null_count@1 != row_count@2 AND id_min@0 <= 3, required_guarantees=[]
+07)--------FilterExec: id@0 > 3, projection=[s@1]
+08)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[id, s], file_type=parquet, predicate=id@0 > 3, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 3, required_guarantees=[]
+
+# Verify correctness
+query IT
+SELECT s['value'], s['label'] FROM (
+    SELECT s FROM simple_struct WHERE id <= 3
+    UNION ALL
+    SELECT s FROM simple_struct WHERE id > 3
+) t ORDER BY s['value'];
+----
+100 alpha
+150 gamma
+200 beta
+250 epsilon
+300 delta

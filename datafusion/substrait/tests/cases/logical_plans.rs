@@ -20,6 +20,9 @@
 #[cfg(test)]
 mod tests {
     use crate::utils::test::{add_plan_schemas_to_ctx, read_json};
+    use datafusion::common::test_util::format_batches;
+    use std::collections::HashSet;
+
     use datafusion::common::Result;
     use datafusion::dataframe::DataFrame;
     use datafusion::prelude::SessionContext;
@@ -250,7 +253,27 @@ mod tests {
                 );
 
         // Trigger execution to ensure plan validity
-        DataFrame::new(ctx.state(), plan).show().await?;
+        let results = DataFrame::new(ctx.state(), plan).collect().await?;
+
+        assert_snapshot!(
+            format_batches(&results)?,
+            @r"
+        +------+------+
+        | col1 | col2 |
+        +------+------+
+        | 100  | 200  |
+        | 300  | 400  |
+        +------+------+
+        ",
+        );
+
+        // also verify that the output schema has unique field names
+        let schema = results[0].schema();
+        for batch in &results {
+            assert_eq!(schema, batch.schema());
+        }
+        let field_names: HashSet<_> = schema.fields().iter().map(|f| f.name()).collect();
+        assert_eq!(field_names.len(), schema.fields().len());
 
         Ok(())
     }
