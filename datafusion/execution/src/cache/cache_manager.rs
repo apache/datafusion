@@ -449,7 +449,7 @@ pub const DEFAULT_METADATA_CACHE_LIMIT: usize = 50 * 1024 * 1024; // 50M
 pub struct CacheManagerConfig {
     /// Enable caching of file statistics when listing files.
     /// Enabling the cache avoids repeatedly reading file statistics in a DataFusion session.
-    /// Default is disabled. Currently only Parquet files are supported.
+    /// Default is enabled with 1MiB. Currently only Parquet files are supported.
     pub file_statistics_cache: Option<Arc<dyn FileStatisticsCache>>,
     /// Limit of the file statistics cache, in bytes. Default: 1MiB.
     pub file_statistics_cache_limit: usize,
