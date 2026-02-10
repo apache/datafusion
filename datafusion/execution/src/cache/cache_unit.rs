@@ -602,7 +602,7 @@ mod tests {
     fn create_cached_file_metadata_with_stats(
         file_name: &str,
     ) -> (ObjectMeta, CachedFileMetadata) {
-        let series: Vec<i32> = (0..=10).step_by(1).collect();
+        let series: Vec<i32> = (0..=10).collect();
         let values = Int32Array::from(series);
         let offsets = OffsetBuffer::new(ScalarBuffer::from(vec![0]));
         let field = Arc::new(Field::new_list_field(DataType::Int32, false));
