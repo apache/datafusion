@@ -25,7 +25,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use datafusion::error::{DataFusionError, Result};
+use datafusion::common::exec_err;
+use datafusion::error::Result;
 
 /// Discovers all example group directories under the given root.
 ///
@@ -42,10 +43,7 @@ pub fn discover_example_groups(root: &Path) -> Result<Vec<PathBuf>> {
     }
 
     if groups.is_empty() {
-        return Err(DataFusionError::Execution(format!(
-            "No example groups found under: {}",
-            root.display()
-        )));
+        return exec_err!("No example groups found under: {}", root.display());
     }
 
     groups.sort();
