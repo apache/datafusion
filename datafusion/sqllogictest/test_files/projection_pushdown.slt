@@ -1877,25 +1877,26 @@ true 1
 ###
 
 query TT
-EXPLAIN SELECT simple_struct.id, join_right.id
-FROM simple_struct
-INNER JOIN join_right
-  ON simple_struct.id = join_right.id
-  AND join_right.s['role'] = 'admin';
+EXPLAIN
+SELECT s.s['value'], j.s['role']
+FROM join_right j
+INNER JOIN simple_struct s ON s.id = j.id
+WHERE s.s['value'] > j.s['level'];
 ----
 logical_plan
-01)Inner Join: simple_struct.id = join_right.id
-02)--TableScan: simple_struct projection=[id]
-03)--Projection: join_right.id
-04)----Filter: __datafusion_extracted_1 = Utf8("admin")
-05)------Projection: get_field(join_right.s, Utf8("role")) AS __datafusion_extracted_1, join_right.id
-06)--------TableScan: join_right projection=[id, s], partial_filters=[get_field(join_right.s, Utf8("role")) = Utf8("admin")]
+01)Projection: __datafusion_extracted_3 AS s.s[value], __datafusion_extracted_4 AS j.s[role]
+02)--Inner Join: j.id = s.id Filter: __datafusion_extracted_1 > __datafusion_extracted_2
+03)----SubqueryAlias: j
+04)------Projection: get_field(join_right.s, Utf8("level")) AS __datafusion_extracted_2, get_field(join_right.s, Utf8("role")) AS __datafusion_extracted_4, join_right.id
+05)--------TableScan: join_right projection=[id, s]
+06)----SubqueryAlias: s
+07)------Projection: get_field(simple_struct.s, Utf8("value")) AS __datafusion_extracted_1, get_field(simple_struct.s, Utf8("value")) AS __datafusion_extracted_3, simple_struct.id
+08)--------TableScan: simple_struct projection=[id, s]
 physical_plan
-01)ProjectionExec: expr=[id@1 as id, id@0 as id]
-02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0)]
-03)----FilterExec: __datafusion_extracted_1@0 = admin, projection=[id@1]
-04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/join_right.parquet]]}, projection=[get_field(s@1, role) as __datafusion_extracted_1, id], file_type=parquet
-05)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[id], file_type=parquet, predicate=DynamicFilter [ empty ]
+01)ProjectionExec: expr=[__datafusion_extracted_3@1 as s.s[value], __datafusion_extracted_4@0 as j.s[role]]
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@2, id@2)], filter=__datafusion_extracted_1@1 > __datafusion_extracted_2@0, projection=[__datafusion_extracted_4@1, __datafusion_extracted_3@4]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/join_right.parquet]]}, projection=[get_field(s@1, level) as __datafusion_extracted_2, get_field(s@1, role) as __datafusion_extracted_4, id], file_type=parquet
+04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[get_field(s@1, value) as __datafusion_extracted_1, get_field(s@1, value) as __datafusion_extracted_3, id], file_type=parquet, predicate=DynamicFilter [ empty ]
 
 # Verify correctness - only admin roles match (ids 1 and 4)
 query II
