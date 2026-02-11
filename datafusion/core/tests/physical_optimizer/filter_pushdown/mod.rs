@@ -3606,7 +3606,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_is_used() {
 async fn test_filter_with_projection_pushdown() {
     use arrow::array::{Int64Array, RecordBatch, StringArray};
     use datafusion_physical_plan::collect;
-    use datafusion_physical_plan::filter::FilterExecBuilder;
+    use datafusion_physical_plan::filter::FilterExec;
 
     // Create schema: [time, event, size]
     let schema = Arc::new(Schema::new(vec![
@@ -3646,10 +3646,9 @@ async fn test_filter_with_projection_pushdown() {
         Arc::new(Literal::new(ScalarValue::Int64(Some(350)))),
     ));
     let filter1 = Arc::new(
-        FilterExecBuilder::new(time_filter, memory_exec)
-            .apply_projection(Some(vec![1, 2]))
+        FilterExec::try_new(time_filter, memory_exec)
             .unwrap()
-            .build()
+            .with_projection(Some(vec![1, 2]))
             .unwrap(),
     );
 
@@ -3663,10 +3662,9 @@ async fn test_filter_with_projection_pushdown() {
         )))),
     ));
     let filter2 = Arc::new(
-        FilterExecBuilder::new(event_filter, filter1)
-            .apply_projection(Some(vec![1]))
+        FilterExec::try_new(event_filter, filter1)
             .unwrap()
-            .build()
+            .with_projection(Some(vec![1]))
             .unwrap(),
     );
 
