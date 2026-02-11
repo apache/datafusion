@@ -1313,7 +1313,7 @@ mod tests {
             TableScan: test projection=[user]
 
         ## Optimized
-        Projection: leaf_udf(test.user, Utf8("name")) AS leaf_udf(test.user,Utf8("name"))
+        Projection: leaf_udf(test.user, Utf8("name"))
           TableScan: test projection=[user]
         "#)
     }
@@ -1609,7 +1609,7 @@ mod tests {
             TableScan: test projection=[user]
 
         ## Optimized
-        Projection: leaf_udf(test.user, Utf8("name")) AS leaf_udf(test.user,Utf8("name")), leaf_udf(test.user, Utf8("name")) AS name2
+        Projection: leaf_udf(test.user, Utf8("name")), leaf_udf(test.user, Utf8("name")) AS name2
           TableScan: test projection=[user]
         "#)
     }
@@ -1827,7 +1827,7 @@ mod tests {
             TableScan: test projection=[user]
 
         ## Optimized
-        Projection: leaf_udf(test.user, Utf8("name")) AS leaf_udf(test.user,Utf8("name"))
+        Projection: leaf_udf(test.user, Utf8("name"))
           TableScan: test projection=[user]
         "#)
     }
