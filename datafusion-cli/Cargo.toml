@@ -30,6 +30,9 @@ rust-version = { workspace = true }
 [package.metadata.docs.rs]
 all-features = true
 
+[lints]
+workspace = true
+
 [features]
 default = []
 backtrace = ["datafusion/backtrace"]

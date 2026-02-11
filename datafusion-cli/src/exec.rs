@@ -48,6 +48,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufReader;
 use std::io::prelude::*;
+use std::sync::Arc;
 use tokio::signal;
 
 /// run and execute SQL statements and commands, against a context with the given print options
@@ -281,14 +282,14 @@ impl StatementExecutor {
             }
             // As the input stream comes, we can generate results.
             // However, memory safety is not guaranteed.
-            let stream = execute_stream(physical_plan, task_ctx.clone())?;
+            let stream = execute_stream(physical_plan, Arc::clone(&task_ctx))?;
             print_options
                 .print_stream(stream, now, &options.format)
                 .await?;
         } else {
             // Bounded stream; collected results size is limited by the maxrows option
             let schema = physical_plan.schema();
-            let mut stream = execute_stream(physical_plan, task_ctx.clone())?;
+            let mut stream = execute_stream(physical_plan, Arc::clone(&task_ctx))?;
             let mut results = vec![];
             let mut row_count = 0_usize;
             let max_rows = match print_options.maxrows {

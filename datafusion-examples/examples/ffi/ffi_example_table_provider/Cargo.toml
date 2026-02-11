@@ -21,6 +21,9 @@ version = "0.1.0"
 edition = { workspace = true }
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 abi_stable = "0.11.3"
 arrow = { workspace = true }

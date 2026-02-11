@@ -67,7 +67,7 @@ impl CatalogProviderList for DynamicObjectStoreCatalog {
     }
 
     fn catalog(&self, name: &str) -> Option<Arc<dyn CatalogProvider>> {
-        let state = self.state.clone();
+        let state = Weak::clone(&self.state);
         self.inner.catalog(name).map(|catalog| {
             Arc::new(DynamicObjectStoreCatalogProvider::new(catalog, state)) as _
         })
@@ -100,7 +100,7 @@ impl CatalogProvider for DynamicObjectStoreCatalogProvider {
     }
 
     fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
-        let state = self.state.clone();
+        let state = Weak::clone(&self.state);
         self.inner.schema(name).map(|schema| {
             Arc::new(DynamicObjectStoreSchemaProvider::new(schema, state)) as _
         })
@@ -240,12 +240,12 @@ mod tests {
     fn setup_context() -> (SessionContext, Arc<dyn SchemaProvider>) {
         let ctx = SessionContext::new();
         ctx.register_catalog_list(Arc::new(DynamicObjectStoreCatalog::new(
-            ctx.state().catalog_list().clone(),
+            Arc::clone(ctx.state().catalog_list()),
             ctx.state_weak_ref(),
         )));
 
         let provider = &DynamicObjectStoreCatalog::new(
-            ctx.state().catalog_list().clone(),
+            Arc::clone(ctx.state().catalog_list()),
             ctx.state_weak_ref(),
         ) as &dyn CatalogProviderList;
         let catalog = provider

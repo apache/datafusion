@@ -725,7 +725,7 @@ impl ContextProvider for MyContextProvider {
     fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
         let table_name = name.table();
         if let Some(table) = self.tables.get(table_name) {
-            Ok(table.clone())
+            Ok(Arc::clone(table))
         } else {
             plan_err!("table does not exist")
         }
@@ -786,6 +786,6 @@ impl TableSource for MyTableSource {
     }
 
     fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+        Arc::clone(&self.schema)
     }
 }

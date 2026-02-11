@@ -1206,7 +1206,7 @@ fn vec_to_array<T, const N: usize>(v: Vec<T>) -> [T; N] {
 /// Converts a vector of `protobuf::Field`s to `Arc<arrow::Field>`s.
 pub fn parse_proto_fields_to_fields<'a, I>(
     fields: I,
-) -> std::result::Result<Vec<Field>, Error>
+) -> Result<Vec<Field>, Error>
 where
     I: IntoIterator<Item = &'a protobuf::Field>,
 {

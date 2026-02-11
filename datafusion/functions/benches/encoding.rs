@@ -37,7 +37,10 @@ fn criterion_benchmark(c: &mut Criterion) {
             let method = ColumnarValue::Scalar("base64".into());
             let encoded = encoding::encode()
                 .invoke_with_args(ScalarFunctionArgs {
-                    args: vec![ColumnarValue::Array(bin_array.clone()), method.clone()],
+                    args: vec![
+                        ColumnarValue::Array(Arc::clone(&bin_array) as Arc<dyn Array>),
+                        method.clone(),
+                    ],
                     arg_fields: vec![
                         Field::new("a", bin_array.data_type().to_owned(), true).into(),
                         Field::new("b", method.data_type().to_owned(), true).into(),
@@ -79,7 +82,10 @@ fn criterion_benchmark(c: &mut Criterion) {
             ];
             let encoded = encoding::encode()
                 .invoke_with_args(ScalarFunctionArgs {
-                    args: vec![ColumnarValue::Array(bin_array.clone()), method.clone()],
+                    args: vec![
+                        ColumnarValue::Array(Arc::clone(&bin_array) as Arc<dyn Array>),
+                        method.clone(),
+                    ],
                     arg_fields,
                     number_rows: size,
                     return_field: Field::new("f", DataType::Utf8, true).into(),

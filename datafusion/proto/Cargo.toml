@@ -31,6 +31,9 @@ rust-version = { workspace = true }
 [package.metadata.docs.rs]
 all-features = true
 
+[lints]
+workspace = true
+
 [lib]
 name = "datafusion_proto"
 

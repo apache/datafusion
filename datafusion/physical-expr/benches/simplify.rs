@@ -169,8 +169,8 @@ pub fn catalog_sales_predicate(num_partitions: usize) -> Arc<dyn PhysicalExpr> {
     let cs_item_sk: Arc<dyn PhysicalExpr> = Arc::new(Column::new("cs_item_sk", 15));
 
     // Use a simple modulo expression as placeholder for hash
-    let item_hash_mod = modulo(cs_item_sk.clone(), lit_i64(num_partitions as i64));
-    let date_hash_mod = modulo(cs_sold_date_sk.clone(), lit_i64(num_partitions as i64));
+    let item_hash_mod = modulo(Arc::clone(&cs_item_sk), lit_i64(num_partitions as i64));
+    let date_hash_mod = modulo(Arc::clone(&cs_sold_date_sk), lit_i64(num_partitions as i64));
 
     // cs_ship_addr_sk IS NULL
     let is_null_expr: Arc<dyn PhysicalExpr> = Arc::new(IsNullExpr::new(cs_ship_addr_sk));
@@ -179,10 +179,10 @@ pub fn catalog_sales_predicate(num_partitions: usize) -> Arc<dyn PhysicalExpr> {
     let item_when_then: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)> = (0
         ..num_partitions)
         .map(|partition| {
-            let when_expr = eq(item_hash_mod.clone(), lit_i32(partition as i32));
+            let when_expr = eq(Arc::clone(&item_hash_mod), lit_i32(partition as i32));
             let then_expr = and(
-                gte(cs_item_sk.clone(), lit_i64(partition as i64)),
-                lte(cs_item_sk.clone(), lit_i64(18000)),
+                gte(Arc::clone(&cs_item_sk), lit_i64(partition as i64)),
+                lte(Arc::clone(&cs_item_sk), lit_i64(18000)),
             );
             (when_expr, then_expr)
         })
@@ -195,10 +195,10 @@ pub fn catalog_sales_predicate(num_partitions: usize) -> Arc<dyn PhysicalExpr> {
     let date_when_then: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)> = (0
         ..num_partitions)
         .map(|partition| {
-            let when_expr = eq(date_hash_mod.clone(), lit_i32(partition as i32));
+            let when_expr = eq(Arc::clone(&date_hash_mod), lit_i32(partition as i32));
             let then_expr = and(
-                gte(cs_sold_date_sk.clone(), lit_i64(2415000 + partition as i64)),
-                lte(cs_sold_date_sk.clone(), lit_i64(2488070)),
+                gte(Arc::clone(&cs_sold_date_sk), lit_i64(2415000 + partition as i64)),
+                lte(Arc::clone(&cs_sold_date_sk), lit_i64(2488070)),
             );
             (when_expr, then_expr)
         })
@@ -220,8 +220,8 @@ fn web_sales_predicate(num_partitions: usize) -> Arc<dyn PhysicalExpr> {
         Arc::new(Column::new("ws_ship_customer_sk", 8));
 
     // Use simple modulo expression as placeholder for hash
-    let item_hash_mod = modulo(ws_item_sk.clone(), lit_i64(num_partitions as i64));
-    let date_hash_mod = modulo(ws_sold_date_sk.clone(), lit_i64(num_partitions as i64));
+    let item_hash_mod = modulo(Arc::clone(&ws_item_sk), lit_i64(num_partitions as i64));
+    let date_hash_mod = modulo(Arc::clone(&ws_sold_date_sk), lit_i64(num_partitions as i64));
 
     // ws_ship_customer_sk IS NULL
     let is_null_expr: Arc<dyn PhysicalExpr> =
@@ -231,10 +231,10 @@ fn web_sales_predicate(num_partitions: usize) -> Arc<dyn PhysicalExpr> {
     let item_when_then: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)> = (0
         ..num_partitions)
         .map(|partition| {
-            let when_expr = eq(item_hash_mod.clone(), lit_i32(partition as i32));
+            let when_expr = eq(Arc::clone(&item_hash_mod), lit_i32(partition as i32));
             let then_expr = and(
-                gte(ws_item_sk.clone(), lit_i64(partition as i64)),
-                lte(ws_item_sk.clone(), lit_i64(18000)),
+                gte(Arc::clone(&ws_item_sk), lit_i64(partition as i64)),
+                lte(Arc::clone(&ws_item_sk), lit_i64(18000)),
             );
             (when_expr, then_expr)
         })
@@ -247,10 +247,10 @@ fn web_sales_predicate(num_partitions: usize) -> Arc<dyn PhysicalExpr> {
     let date_when_then: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)> = (0
         ..num_partitions)
         .map(|partition| {
-            let when_expr = eq(date_hash_mod.clone(), lit_i32(partition as i32));
+            let when_expr = eq(Arc::clone(&date_hash_mod), lit_i32(partition as i32));
             let then_expr = and(
-                gte(ws_sold_date_sk.clone(), lit_i64(2415000 + partition as i64)),
-                lte(ws_sold_date_sk.clone(), lit_i64(2488070)),
+                gte(Arc::clone(&ws_sold_date_sk), lit_i64(2415000 + partition as i64)),
+                lte(Arc::clone(&ws_sold_date_sk), lit_i64(2488070)),
             );
             (when_expr, then_expr)
         })

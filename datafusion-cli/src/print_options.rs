@@ -115,7 +115,7 @@ impl PrintOptions {
         row_count: usize,
         format_options: &FormatOptions,
     ) -> Result<()> {
-        let stdout = std::io::stdout();
+        let stdout = io::stdout();
         let mut writer = stdout.lock();
 
         self.format.print_batches(
@@ -153,7 +153,7 @@ impl PrintOptions {
             ));
         };
 
-        let stdout = std::io::stdout();
+        let stdout = io::stdout();
         let mut writer = stdout.lock();
 
         let mut row_count = 0_usize;

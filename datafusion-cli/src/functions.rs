@@ -233,8 +233,8 @@ impl TableProvider for ParquetMetadataTable {
         self
     }
 
-    fn schema(&self) -> arrow::datatypes::SchemaRef {
-        self.schema.clone()
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
     }
 
     fn table_type(&self) -> datafusion::logical_expr::TableType {
@@ -436,7 +436,7 @@ impl TableFunctionImpl for ParquetMetadataFunc {
         }
 
         let rb = RecordBatch::try_new(
-            schema.clone(),
+            Arc::clone(&schema),
             vec![
                 Arc::new(StringArray::from(filename_arr)),
                 Arc::new(Int64Array::from(row_group_id_arr)),
@@ -482,8 +482,8 @@ impl TableProvider for MetadataCacheTable {
         self
     }
 
-    fn schema(&self) -> arrow::datatypes::SchemaRef {
-        self.schema.clone()
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
     }
 
     fn table_type(&self) -> datafusion::logical_expr::TableType {
@@ -569,7 +569,7 @@ impl TableFunctionImpl for MetadataCacheFunc {
         }
 
         let batch = RecordBatch::try_new(
-            schema.clone(),
+            Arc::clone(&schema),
             vec![
                 Arc::new(StringArray::from(path_arr)),
                 Arc::new(TimestampMillisecondArray::from(file_modified_arr)),
@@ -600,8 +600,8 @@ impl TableProvider for StatisticsCacheTable {
         self
     }
 
-    fn schema(&self) -> arrow::datatypes::SchemaRef {
-        self.schema.clone()
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
     }
 
     fn table_type(&self) -> datafusion::logical_expr::TableType {
@@ -684,7 +684,7 @@ impl TableFunctionImpl for StatisticsCacheFunc {
         }
 
         let batch = RecordBatch::try_new(
-            schema.clone(),
+            Arc::clone(&schema),
             vec![
                 Arc::new(StringArray::from(path_arr)),
                 Arc::new(TimestampMillisecondArray::from(file_modified_arr)),
@@ -735,8 +735,8 @@ impl TableProvider for ListFilesCacheTable {
         self
     }
 
-    fn schema(&self) -> arrow::datatypes::SchemaRef {
-        self.schema.clone()
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
     }
 
     fn table_type(&self) -> datafusion::logical_expr::TableType {
@@ -862,7 +862,7 @@ impl TableFunctionImpl for ListFilesCacheFunc {
             OffsetBuffer::new(ScalarBuffer::from(Buffer::from_vec(offsets)));
 
         let batch = RecordBatch::try_new(
-            schema.clone(),
+            Arc::clone(&schema),
             vec![
                 Arc::new(StringArray::from(table_arr)),
                 Arc::new(StringArray::from(path_arr)),

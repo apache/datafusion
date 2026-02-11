@@ -16,6 +16,7 @@
 // under the License.
 
 //! Common functions used for testing
+use std::sync::Arc;
 use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_int32_array;
@@ -66,7 +67,7 @@ pub fn add_empty_batches(
         .into_iter()
         .flat_map(|batch| {
             // insert 0, or 1 empty batches before and after the current batch
-            let empty_batch = RecordBatch::new_empty(schema.clone());
+            let empty_batch = RecordBatch::new_empty(Arc::clone(&schema));
             std::iter::repeat_n(empty_batch.clone(), rng.random_range(0..2))
                 .chain(std::iter::once(batch))
                 .chain(std::iter::repeat_n(empty_batch, rng.random_range(0..2)))

@@ -78,8 +78,10 @@ impl FilePruner {
         predicate_creation_errors: Count,
     ) -> Option<Self> {
         let file_stats = partitioned_file.statistics.as_ref()?;
-        let file_stats_pruning =
-            PrunableStatistics::new(vec![file_stats.clone()], Arc::clone(file_schema));
+        let file_stats_pruning = PrunableStatistics::new(
+            vec![Arc::clone(file_stats)],
+            Arc::clone(file_schema),
+        );
         Some(Self {
             predicate_generation: None,
             predicate,

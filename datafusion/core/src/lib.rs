@@ -20,19 +20,12 @@
     html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
 )]
 #![cfg_attr(docsrs, feature(doc_cfg))]
-// Make sure fast / cheap clones on Arc are explicit:
-// https://github.com/apache/datafusion/issues/11143
-//
 // Eliminate unnecessary function calls(some may be not cheap) due to `xxx_or`
 // for performance. Also avoid abusing `xxx_or_else` for readability:
 // https://github.com/apache/datafusion/issues/15802
 #![cfg_attr(
     not(test),
-    deny(
-        clippy::clone_on_ref_ptr,
-        clippy::or_fun_call,
-        clippy::unnecessary_lazy_evaluations
-    )
+    deny(clippy::or_fun_call, clippy::unnecessary_lazy_evaluations)
 )]
 #![warn(missing_docs, clippy::needless_borrow)]
 // Use `allow` instead of `expect` for test configuration to explicitly

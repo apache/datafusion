@@ -48,6 +48,7 @@ use clap::Parser;
 use datafusion::common::config_err;
 use datafusion::config::ConfigOptions;
 use datafusion::execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
+use datafusion::execution::object_store::ObjectStoreRegistry;
 use mimalloc::MiMalloc;
 
 #[global_allocator]
@@ -221,7 +222,9 @@ async fn main_inner() -> Result<()> {
         InstrumentedObjectStoreRegistry::new()
             .with_profile_mode(args.object_store_profiling),
     );
-    rt_builder = rt_builder.with_object_store_registry(instrumented_registry.clone());
+    rt_builder = rt_builder.with_object_store_registry(
+        Arc::clone(&instrumented_registry) as Arc<dyn ObjectStoreRegistry>,
+    );
 
     let runtime_env = rt_builder.build_arc()?;
 
@@ -231,7 +234,7 @@ async fn main_inner() -> Result<()> {
     ctx.refresh_catalogs().await?;
     // install dynamic catalog provider that can register required object stores
     ctx.register_catalog_list(Arc::new(DynamicObjectStoreCatalog::new(
-        ctx.state().catalog_list().clone(),
+        Arc::clone(ctx.state().catalog_list()),
         ctx.state_weak_ref(),
     )));
     // register `parquet_metadata` table function to get metadata from parquet files
@@ -240,24 +243,24 @@ async fn main_inner() -> Result<()> {
     // register `metadata_cache` table function to get the contents of the file metadata cache
     ctx.register_udtf(
         "metadata_cache",
-        Arc::new(MetadataCacheFunc::new(
-            ctx.task_ctx().runtime_env().cache_manager.clone(),
-        )),
+        Arc::new(MetadataCacheFunc::new(Arc::clone(
+            &ctx.task_ctx().runtime_env().cache_manager,
+        ))),
     );
 
     // register `statistics_cache` table function to get the contents of the file statistics cache
     ctx.register_udtf(
         "statistics_cache",
-        Arc::new(StatisticsCacheFunc::new(
-            ctx.task_ctx().runtime_env().cache_manager.clone(),
-        )),
+        Arc::new(StatisticsCacheFunc::new(Arc::clone(
+            &ctx.task_ctx().runtime_env().cache_manager,
+        ))),
     );
 
     ctx.register_udtf(
         "list_files_cache",
-        Arc::new(ListFilesCacheFunc::new(
-            ctx.task_ctx().runtime_env().cache_manager.clone(),
-        )),
+        Arc::new(ListFilesCacheFunc::new(Arc::clone(
+            &ctx.task_ctx().runtime_env().cache_manager,
+        ))),
     );
 
     let mut print_options = PrintOptions {
@@ -568,9 +571,9 @@ mod tests {
         let ctx = SessionContext::new();
         ctx.register_udtf(
             "metadata_cache",
-            Arc::new(MetadataCacheFunc::new(
-                ctx.task_ctx().runtime_env().cache_manager.clone(),
-            )),
+            Arc::new(MetadataCacheFunc::new(Arc::clone(
+                &ctx.task_ctx().runtime_env().cache_manager,
+            ))),
         );
 
         ctx.register_parquet(
@@ -664,9 +667,9 @@ mod tests {
 
         ctx.register_udtf(
             "statistics_cache",
-            Arc::new(StatisticsCacheFunc::new(
-                ctx.task_ctx().runtime_env().cache_manager.clone(),
-            )),
+            Arc::new(StatisticsCacheFunc::new(Arc::clone(
+                &ctx.task_ctx().runtime_env().cache_manager,
+            ))),
         );
 
         for filename in [
@@ -715,9 +718,9 @@ mod tests {
 
         ctx.register_udtf(
             "statistics_cache",
-            Arc::new(StatisticsCacheFunc::new(
-                ctx.task_ctx().runtime_env().cache_manager.clone(),
-            )),
+            Arc::new(StatisticsCacheFunc::new(Arc::clone(
+                &ctx.task_ctx().runtime_env().cache_manager,
+            ))),
         );
 
         for filename in [
@@ -778,9 +781,9 @@ mod tests {
 
         ctx.register_udtf(
             "list_files_cache",
-            Arc::new(ListFilesCacheFunc::new(
-                ctx.task_ctx().runtime_env().cache_manager.clone(),
-            )),
+            Arc::new(ListFilesCacheFunc::new(Arc::clone(
+                &ctx.task_ctx().runtime_env().cache_manager,
+            ))),
         );
 
         ctx.sql(
@@ -816,7 +819,7 @@ mod tests {
 
         assert_eq!(
             2,
-            df.clone()
+            Arc::clone(&df)
                 .filter(col("expires_in").is_not_null())?
                 .count()
                 .await?

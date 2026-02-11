@@ -56,7 +56,7 @@ pub fn compare_split_groups_by_statistics_algorithms(c: &mut Criterion) {
                 ),
                 &(
                     file_groups.clone(),
-                    file_schema.clone(),
+                    Arc::clone(&file_schema),
                     sort_ordering.clone(),
                 ),
                 |b, (fg, schema, order)| {
@@ -79,7 +79,7 @@ pub fn compare_split_groups_by_statistics_algorithms(c: &mut Criterion) {
                     ),
                     &(
                         file_groups.clone(),
-                        file_schema.clone(),
+                        Arc::clone(&file_schema),
                         sort_ordering.clone(),
                         tp,
                     ),

@@ -80,14 +80,18 @@ fn criterion_benchmark(c: &mut Criterion) {
             do_hash_test(b, std::slice::from_ref(&nullable_array));
         });
         c.bench_function(&format!("{name}: multiple, no nulls"), |b| {
-            let arrays = vec![array.clone(), array.clone(), array.clone()];
+            let arrays = vec![
+                Arc::clone(&array),
+                Arc::clone(&array),
+                Arc::clone(&array),
+            ];
             do_hash_test(b, &arrays);
         });
         c.bench_function(&format!("{name}: multiple, nulls"), |b| {
             let arrays = vec![
-                nullable_array.clone(),
-                nullable_array.clone(),
-                nullable_array.clone(),
+                Arc::clone(&nullable_array),
+                Arc::clone(&nullable_array),
+                Arc::clone(&nullable_array),
             ];
             do_hash_test(b, &arrays);
         });
@@ -124,8 +128,7 @@ where
 
 // Returns an new array that is the same as array, but with nulls
 fn add_nulls(array: &ArrayRef) -> ArrayRef {
-    let array_data = array
-        .clone()
+    let array_data = Arc::clone(array)
         .into_data()
         .into_builder()
         .nulls(Some(create_null_mask(array.len())))
