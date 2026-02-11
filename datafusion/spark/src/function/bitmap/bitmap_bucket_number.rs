@@ -20,7 +20,7 @@ use arrow::datatypes::Field;
 use arrow::datatypes::{DataType, FieldRef, Int8Type, Int16Type, Int32Type, Int64Type};
 use datafusion::logical_expr::{ColumnarValue, Signature, TypeSignature, Volatility};
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{Result, internal_err, plan_err};
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_functions::utils::make_scalar_function;
 use std::any::Any;
@@ -84,9 +84,6 @@ impl ScalarUDFImpl for BitmapBucketNumber {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        if args.args.len() != 1 {
-            return plan_err!("bitmap_bucket_number expects exactly 1 argument");
-        }
         make_scalar_function(bitmap_bucket_number_inner, vec![])(&args.args)
     }
 }
@@ -196,7 +193,7 @@ mod tests {
     #[test]
     fn test_bitmap_bucket_number_int64() {
         let input =
-            Int64Array::from(vec![1, 4294967297, 9223372036854775807, -1, -4294967296]);
+            Int64Array::from(vec![1, 4294967297, i64::MAX, -1, -4294967296, i64::MIN]);
         let result: Int64Array = input
             .iter()
             .map(|opt| opt.map(bitmap_bucket_number))
@@ -207,5 +204,6 @@ mod tests {
         assert_eq!(result.value(2), 281474976710656);
         assert_eq!(result.value(3), 0);
         assert_eq!(result.value(4), -131072);
+        assert_eq!(result.value(5), -281474976710656);
     }
 }
