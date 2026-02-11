@@ -394,8 +394,18 @@ fn build_recovery_projection(
             return Ok(input);
         }
 
-        // Schema-defining nodes (Projection, Aggregate): names may differ at some positions.
+        // Schema-defining nodes (Aggregate, Join): names may differ at some
+        // positions because extracted aliases replaced the original expressions.
         // Map positionally, aliasing where the name changed.
+        //
+        // Invariant: `with_new_exprs` on all supported node types (Aggregate,
+        // Filter, Sort, Limit, Join) preserves column order, so positional
+        // mapping is safe here.
+        debug_assert!(
+            orig_len == new_len,
+            "build_recovery_projection: positional mapping requires same field count, \
+             got original={orig_len} vs new={new_len}"
+        );
         let mut proj_exprs = Vec::with_capacity(orig_len);
         for (i, (orig_qualifier, orig_field)) in original_schema.iter().enumerate() {
             let (new_qualifier, new_field) = new_schema.qualified_field(i);
