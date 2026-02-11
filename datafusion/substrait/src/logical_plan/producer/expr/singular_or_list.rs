@@ -18,8 +18,8 @@
 use crate::logical_plan::producer::{SubstraitProducer, negate_if_needed};
 use datafusion::common::DFSchemaRef;
 use datafusion::logical_expr::expr::InList;
-use substrait::proto::expression::{RexType, SingularOrList};
 use substrait::proto::Expression;
+use substrait::proto::expression::{RexType, SingularOrList};
 
 pub fn from_in_list(
     producer: &mut impl SubstraitProducer,
@@ -46,4 +46,3 @@ pub fn from_in_list(
 
     Ok(negate_if_needed(producer, substrait_or_list, *negated))
 }
-
