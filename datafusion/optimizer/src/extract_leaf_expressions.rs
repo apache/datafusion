@@ -200,14 +200,24 @@ fn extract_from_plan(
 
 /// Given an expression, returns the index of the input whose columns fully
 /// cover the expression's column references.
-/// Returns `None` if the expression references columns from multiple inputs.
+/// Returns `None` if the expression references columns from multiple inputs
+/// or if multiple inputs match (ambiguous, e.g. unqualified columns present
+/// in both sides of a join).
 fn find_owning_input(
     expr: &Expr,
     input_column_sets: &[std::collections::HashSet<Column>],
 ) -> Option<usize> {
-    input_column_sets
-        .iter()
-        .position(|cols| has_all_column_refs(expr, cols))
+    let mut found = None;
+    for (idx, cols) in input_column_sets.iter().enumerate() {
+        if has_all_column_refs(expr, cols) {
+            if found.is_some() {
+                // Ambiguous — multiple inputs match
+                return None;
+            }
+            found = Some(idx);
+        }
+    }
+    found
 }
 
 /// Walks an expression tree top-down, extracting `MoveTowardsLeafNodes`
@@ -2211,6 +2221,95 @@ mod tests {
             Projection: leaf_udf(right.user, Utf8("role")) AS __datafusion_extracted_2, right.id
               TableScan: right projection=[id, user]
         "#)
+    }
+
+    /// Join where both sides have same-named columns: a qualified reference
+    /// to the right side must be routed to the right input, not the left.
+    #[test]
+    fn test_extract_from_join_qualified_right_side() -> Result<()> {
+        use datafusion_expr::JoinType;
+
+        let left = test_table_scan_with_struct()?;
+        let right = test_table_scan_with_struct_named("right")?;
+
+        // Filter references right.user explicitly — must route to right side
+        let plan = LogicalPlanBuilder::from(left)
+            .join_on(
+                right,
+                JoinType::Inner,
+                vec![
+                    col("test.id").eq(col("right.id")),
+                    leaf_udf(col("right.user"), "status").eq(lit("active")),
+                ],
+            )?
+            .build()?;
+
+        assert_stages!(plan, @r#"
+        ## Original Plan
+        Inner Join:  Filter: test.id = right.id AND leaf_udf(right.user, Utf8("status")) = Utf8("active")
+          TableScan: test projection=[id, user]
+          TableScan: right projection=[id, user]
+
+        ## After Extraction
+        Projection: test.id, test.user, right.id, right.user
+          Inner Join:  Filter: test.id = right.id AND __datafusion_extracted_1 = Utf8("active")
+            TableScan: test projection=[id, user]
+            Projection: leaf_udf(right.user, Utf8("status")) AS __datafusion_extracted_1, right.id, right.user
+              TableScan: right projection=[id, user]
+
+        ## After Pushdown
+        (same as after extraction)
+
+        ## Optimized
+        (same as after pushdown)
+        "#)
+    }
+
+    /// When both inputs contain the same unqualified column, an unqualified
+    /// column reference is ambiguous and `find_owning_input` must return
+    /// `None` rather than always returning 0 (the left side).
+    #[test]
+    fn test_find_owning_input_ambiguous_unqualified_column() {
+        use std::collections::HashSet;
+
+        // Simulate schema_columns output for two sides of a join where both
+        // have a "user" column — each set contains the qualified and
+        // unqualified form.
+        let left_cols: HashSet<Column> = [
+            Column::new(Some("test"), "user"),
+            Column::new_unqualified("user"),
+        ]
+        .into_iter()
+        .collect();
+
+        let right_cols: HashSet<Column> = [
+            Column::new(Some("right"), "user"),
+            Column::new_unqualified("user"),
+        ]
+        .into_iter()
+        .collect();
+
+        let input_column_sets = vec![left_cols, right_cols];
+
+        // Unqualified "user" matches both sets — must return None (ambiguous)
+        let unqualified = Expr::Column(Column::new_unqualified("user"));
+        assert_eq!(find_owning_input(&unqualified, &input_column_sets), None);
+
+        // Qualified "right.user" matches only the right set — must return Some(1)
+        let qualified_right =
+            Expr::Column(Column::new(Some("right"), "user"));
+        assert_eq!(
+            find_owning_input(&qualified_right, &input_column_sets),
+            Some(1)
+        );
+
+        // Qualified "test.user" matches only the left set — must return Some(0)
+        let qualified_left =
+            Expr::Column(Column::new(Some("test"), "user"));
+        assert_eq!(
+            find_owning_input(&qualified_left, &input_column_sets),
+            Some(0)
+        );
     }
 
     // =========================================================================
