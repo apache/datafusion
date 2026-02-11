@@ -22,7 +22,9 @@ use std::sync::{Arc, OnceLock};
 use std::{any::Any, vec};
 
 use crate::ExecutionPlanProperties;
-use crate::execution_plan::{EmissionType, boundedness_from_children};
+use crate::execution_plan::{
+    EmissionType, ReplacePhysicalExpr, boundedness_from_children,
+};
 use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
@@ -70,8 +72,8 @@ use arrow_schema::DataType;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
-    JoinSide, JoinType, NullEquality, Result, assert_or_internal_err, internal_err,
-    plan_err, project_schema,
+    JoinSide, JoinType, NullEquality, Result, assert_eq_or_internal_err,
+    assert_or_internal_err, internal_err, plan_err, project_schema,
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
@@ -1498,6 +1500,57 @@ impl ExecutionPlan for HashJoinExec {
             }
         }
         Ok(result)
+    }
+
+    fn physical_expressions<'a>(
+        &'a self,
+    ) -> Option<Box<dyn Iterator<Item = Arc<dyn PhysicalExpr>> + 'a>> {
+        self.filter
+            .as_ref()
+            .map(|f| Box::new(std::iter::once(Arc::clone(&f.expression))) as Box<_>)
+    }
+
+    fn with_physical_expressions(
+        &self,
+        mut params: ReplacePhysicalExpr,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let expected_count = self.filter.iter().len();
+        let exprs_count = params.exprs.len();
+        assert_eq_or_internal_err!(
+            expected_count,
+            exprs_count,
+            "Inconsistent number of physical expressions for {}",
+            self.name()
+        );
+
+        let filter = self
+            .filter
+            .as_ref()
+            .zip(params.exprs.pop())
+            .map(|(f, expr)| {
+                JoinFilter::new(expr, f.column_indices.clone(), Arc::clone(&f.schema))
+            });
+
+        Ok(Some(Arc::new(Self {
+            left: Arc::clone(&self.left),
+            right: Arc::clone(&self.right),
+            on: self.on.clone(),
+            filter,
+            join_type: self.join_type,
+            join_schema: Arc::clone(&self.join_schema),
+            // Reset the left_fut to allow re-execution
+            left_fut: Arc::new(OnceAsync::default()),
+            random_state: self.random_state.clone(),
+            mode: self.mode,
+            metrics: ExecutionPlanMetricsSet::new(),
+            projection: self.projection.clone(),
+            column_indices: self.column_indices.clone(),
+            null_equality: self.null_equality,
+            null_aware: self.null_aware,
+            cache: self.cache.clone(),
+            // Reset dynamic filter and bounds accumulator to initial state
+            dynamic_filter: None,
+        })))
     }
 }
 

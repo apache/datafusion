@@ -723,6 +723,51 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ) -> Option<Arc<dyn ExecutionPlan>> {
         None
     }
+
+    /// Returns an iterator over a subset of [`PhysicalExpr`]s that are used by this
+    /// [`ExecutionPlan`].
+    ///
+    /// This method provides a way to inspect the physical expressions within a node without
+    /// knowing its specific type. These expressions could be predicates in a filter, projection
+    /// expressions, or join conditions, etc.
+    ///
+    /// The default implementation returns `None`, indicating that the node either has no physical
+    /// expressions or does not support exposing them.
+    fn physical_expressions<'a>(
+        &'a self,
+    ) -> Option<Box<dyn Iterator<Item = Arc<dyn PhysicalExpr>> + 'a>> {
+        None
+    }
+
+    /// Returns a new `ExecutionPlan` with its physical expressions replaced by the provided
+    /// `exprs`.
+    ///
+    /// This method is the counterpart to [`ExecutionPlan::physical_expressions`]. It allows
+    /// transforming the expressions within a node while preserving the node itself and its
+    /// children.
+    ///
+    /// By default, the behavior of this method is similar to [`ExecutionPlan::reset_state`] in the
+    /// sense that it also resets the internal state of [`ExecutionPlan`].
+    ///
+    /// # Constraints
+    ///
+    /// * The number of expressions in `params.exprs` must match the number of expressions returned
+    ///   by [`ExecutionPlan::physical_expressions`].
+    /// * The order of expressions in `params.exprs` must match the order they were yielded by the
+    ///   iterator from [`ExecutionPlan::physical_expressions`].
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Some(new_plan))` if the expressions were successfully replaced.
+    /// * `Ok(None)` if the node does not support replacing its expressions (the default).
+    /// * `Err` if the number of expressions is incorrect or if another error occurs during
+    ///   replacement.
+    fn with_physical_expressions(
+        &self,
+        _params: ReplacePhysicalExpr,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        Ok(None)
+    }
 }
 
 /// [`ExecutionPlan`] Invariant Level
@@ -1122,6 +1167,28 @@ impl PlanProperties {
     }
 }
 
+/// Parameters for [`ExecutionPlan::with_physical_expressions`]
+#[non_exhaustive]
+#[derive(Debug, Clone)]
+pub struct ReplacePhysicalExpr {
+    /// Input physical expressisons
+    pub exprs: Vec<Arc<dyn PhysicalExpr>>,
+    // We can add recompute_properties: bool here in the future
+}
+
+impl ReplacePhysicalExpr {
+    /// Create a new [`ReplacePhysicalExpr`]
+    pub fn new(exprs: Vec<Arc<dyn PhysicalExpr>>) -> Self {
+        Self { exprs }
+    }
+}
+
+impl From<Vec<Arc<dyn PhysicalExpr>>> for ReplacePhysicalExpr {
+    fn from(exprs: Vec<Arc<dyn PhysicalExpr>>) -> Self {
+        Self::new(exprs)
+    }
+}
+
 macro_rules! check_len {
     ($target:expr, $func_name:ident, $expected_len:expr) => {
         let actual_len = $target.$func_name().len();
@@ -1151,6 +1218,73 @@ pub fn check_default_invariants<P: ExecutionPlan + ?Sized>(
     check_len!(plan, benefits_from_input_partitioning, children_len);
 
     Ok(())
+}
+
+/// Verifies that the [`ExecutionPlan::physical_expressions`] and
+/// [`ExecutionPlan::with_physical_expressions`] implementations are consistent.
+///
+/// It verifies:
+/// 1. `with_physical_expressions` with the same expressions returns a plan with the same expressions.
+/// 2. `with_physical_expressions` with a different number of expressions returns an error.
+///
+/// Returns rewritten plan if it supported expression replacement.
+pub fn check_physical_expressions(
+    plan: Arc<dyn ExecutionPlan>,
+) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
+    let Some(exprs) = plan.physical_expressions() else {
+        if let Some(new_plan) = plan.with_physical_expressions(vec![].into())? {
+            assert_or_internal_err!(
+                plan.physical_expressions().is_none(),
+                "plan.physical_expressions() should return None if it initially returned None, \
+                and we try to rebuild the plan with an empty list of physical expressions"
+            );
+
+            let new_expr = Arc::new(expressions::Column::new("", 0)) as Arc<_>;
+            let result = plan.with_physical_expressions(vec![new_expr].into());
+            assert_or_internal_err!(
+                result.is_err(),
+                "plan.with_physical_expressions() should return error if expressions length doesn't match"
+            );
+
+            return Ok(new_plan);
+        };
+
+        return Ok(plan);
+    };
+
+    let mut exprs = exprs.collect::<Vec<_>>();
+
+    let new_plan = plan
+        .with_physical_expressions(exprs.clone().into())?
+        .unwrap();
+    let new_plan_exprs = new_plan.physical_expressions().unwrap();
+
+    assert_or_internal_err!(
+        exprs.iter().cloned().eq(new_plan_exprs),
+        "plan.with_physical_expressions() should return plan with same expressions"
+    );
+
+    let new_expr = Arc::new(expressions::Column::new("", 0));
+    exprs.push(new_expr);
+
+    let result = new_plan.with_physical_expressions(exprs.clone().into());
+    assert_or_internal_err!(
+        result.is_err(),
+        "plan.with_physical_expressions() should return error if expressions length doesn't match"
+    );
+
+    if exprs.len() > 2 {
+        exprs.pop().unwrap();
+        exprs.pop().unwrap();
+
+        let result = new_plan.with_physical_expressions(exprs.into());
+        assert_or_internal_err!(
+            result.is_err(),
+            "plan.with_physical_expressions() should return error if expressions length doesn't match"
+        );
+    }
+
+    Ok(new_plan)
 }
 
 /// Indicate whether a data exchange is needed for the input of `plan`, which will be very helpful

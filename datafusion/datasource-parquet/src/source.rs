@@ -603,6 +603,17 @@ impl FileSource for ParquetSource {
         Some(&self.projection)
     }
 
+    fn with_filter_and_projection(
+        &self,
+        filter: Option<Arc<dyn PhysicalExpr>>,
+        projection: ProjectionExprs,
+    ) -> datafusion_common::Result<Option<Arc<dyn FileSource>>> {
+        let mut conf = self.clone();
+        conf.predicate = filter;
+        conf.projection = projection;
+        Ok(Some(Arc::new(conf)))
+    }
+
     fn metrics(&self) -> &ExecutionPlanMetricsSet {
         &self.metrics
     }

@@ -103,6 +103,21 @@ pub trait FileSource: Send + Sync {
         None
     }
 
+    /// Returns new file source with given filter and projection.
+    ///
+    /// This method is primarily used during physical plan rewriting (in
+    /// `ExecutionPlan::with_physical_expressions`) to update the expressions within a file source.
+    ///
+    /// It should NOT be used to pass in projections or filters. That pushdown is handled by
+    /// optimizer rules.
+    fn with_filter_and_projection(
+        &self,
+        _filter: Option<Arc<dyn PhysicalExpr>>,
+        _projection: ProjectionExprs,
+    ) -> Result<Option<Arc<dyn FileSource>>> {
+        Ok(None)
+    }
+
     /// Return execution plan metrics
     fn metrics(&self) -> &ExecutionPlanMetricsSet;
 

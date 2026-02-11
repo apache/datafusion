@@ -33,7 +33,9 @@ use std::task::{Context, Poll};
 use std::vec;
 
 use crate::common::SharedMemoryReservation;
-use crate::execution_plan::{boundedness_from_children, emission_type_from_children};
+use crate::execution_plan::{
+    ReplacePhysicalExpr, boundedness_from_children, emission_type_from_children,
+};
 use crate::joins::stream_join_utils::{
     PruningJoinHashMap, SortedFilterExpr, StreamJoinMetrics,
     calculate_filter_expr_intervals, combine_two_batches,
@@ -73,6 +75,7 @@ use datafusion_common::{
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_expr::interval_arithmetic::Interval;
+use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
 use datafusion_physical_expr_common::physical_expr::{PhysicalExprRef, fmt_sql};
@@ -646,6 +649,84 @@ impl ExecutionPlan for SymmetricHashJoinExec {
             self.partition_mode(),
         )
         .map(|e| Some(Arc::new(e) as _))
+    }
+
+    fn physical_expressions<'a>(
+        &'a self,
+    ) -> Option<Box<dyn Iterator<Item = Arc<dyn PhysicalExpr>> + 'a>> {
+        let left_sort_iter = self
+            .left_sort_exprs
+            .as_ref()
+            .map(|lex| lex.iter().map(|sort| Arc::clone(&sort.expr)))
+            .into_iter()
+            .flatten();
+
+        let right_sort_iter = self
+            .right_sort_exprs
+            .as_ref()
+            .map(|lex| lex.iter().map(|sort| Arc::clone(&sort.expr)))
+            .into_iter()
+            .flatten();
+
+        let filter = self
+            .filter
+            .as_ref()
+            .map(|f| Arc::clone(&f.expression))
+            .into_iter();
+
+        Some(Box::new(
+            left_sort_iter.chain(right_sort_iter).chain(filter),
+        ))
+    }
+
+    fn with_physical_expressions(
+        &self,
+        params: ReplacePhysicalExpr,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let filter_exprs_count = self.filter.iter().len();
+        let left_sort_exprs_count =
+            self.left_sort_exprs.as_ref().map(|e| e.len()).unwrap_or(0);
+
+        let right_sort_exprs_count =
+            self.right_sort_exprs.as_ref().map(|e| e.len()).unwrap_or(0);
+
+        let expected_count =
+            filter_exprs_count + left_sort_exprs_count + right_sort_exprs_count;
+
+        let exprs_count = params.exprs.len();
+        assert_eq_or_internal_err!(
+            expected_count,
+            exprs_count,
+            "Inconsistent number of physical expressions for {}",
+            self.name()
+        );
+
+        let mut exprs = params.exprs.into_iter();
+        let left_sort_exprs = self
+            .left_sort_exprs
+            .as_ref()
+            .map(|l| l.try_with_new_expressions(exprs.by_ref().take(l.len())))
+            .transpose()?;
+
+        let right_sort_exprs = self
+            .right_sort_exprs
+            .as_ref()
+            .map(|r| r.try_with_new_expressions(exprs.by_ref().take(r.len())))
+            .transpose()?;
+
+        let filter = self.filter.as_ref().zip(exprs.next()).map(|(f, expr)| {
+            JoinFilter::new(expr, f.column_indices.clone(), Arc::clone(&f.schema))
+        });
+
+        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        Ok(Some(Arc::new(Self {
+            filter,
+            random_state,
+            metrics: ExecutionPlanMetricsSet::new(),
+            left_sort_exprs,
+            right_sort_exprs,
+            ..self.clone()
+        })))
     }
 }
 

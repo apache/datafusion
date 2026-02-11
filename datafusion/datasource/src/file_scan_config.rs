@@ -28,7 +28,8 @@ use arrow::datatypes::FieldRef;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{
-    Constraints, Result, ScalarValue, Statistics, internal_datafusion_err, internal_err,
+    Constraints, Result, ScalarValue, Statistics, assert_eq_or_internal_err,
+    internal_datafusion_err, internal_err,
 };
 use datafusion_execution::{
     SendableRecordBatchStream, TaskContext, object_store::ObjectStoreUrl,
@@ -37,7 +38,7 @@ use datafusion_expr::Operator;
 
 use datafusion_physical_expr::equivalence::project_orderings;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column};
-use datafusion_physical_expr::projection::ProjectionExprs;
+use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
 use datafusion_physical_expr::utils::reassign_expr_columns;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, split_conjunction};
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
@@ -45,7 +46,7 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_plan::SortOrderPushdownResult;
 use datafusion_physical_plan::coop::cooperative;
-use datafusion_physical_plan::execution_plan::SchedulingType;
+use datafusion_physical_plan::execution_plan::{ReplacePhysicalExpr, SchedulingType};
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType,
     display::{ProjectSchemaDisplay, display_orderings},
@@ -932,6 +933,75 @@ impl DataSource for FileScanConfig {
             ..self.clone()
         };
         Some(Arc::new(new_config))
+    }
+
+    fn physical_expressions<'a>(
+        &'a self,
+    ) -> Option<Box<dyn Iterator<Item = Arc<dyn PhysicalExpr>> + 'a>> {
+        let filter = self.file_source.filter().into_iter();
+        let projection = self
+            .file_source
+            .projection()
+            .into_iter()
+            .flat_map(|p| p.expr_iter());
+
+        Some(Box::new(filter.chain(projection)))
+    }
+
+    fn with_physical_expressions(
+        &self,
+        params: ReplacePhysicalExpr,
+    ) -> Result<Option<Arc<dyn DataSource>>> {
+        let filter_count = self.file_source.filter().iter().len();
+        let projection_count = self
+            .file_source
+            .projection()
+            .map(|p| p.expr_iter().count())
+            .unwrap_or(0);
+
+        let expected_count = filter_count + projection_count;
+        let exprs_count = params.exprs.len();
+
+        assert_eq_or_internal_err!(
+            expected_count,
+            exprs_count,
+            "Inconsistent number of physical expressions for FileScanConfig",
+        );
+
+        let mut filter = None;
+        let mut projection = vec![];
+        let mut expr_iter = params.exprs.into_iter();
+
+        if filter_count > 0 {
+            filter = expr_iter.next();
+        }
+
+        if projection_count > 0 {
+            projection = self
+                .file_source
+                .projection()
+                .expect("should have expressions")
+                .iter()
+                .zip(expr_iter)
+                .map(|(p, expr)| ProjectionExpr::new(expr, p.alias.clone()))
+                .collect();
+        }
+
+        let file_source = self
+            .file_source
+            .with_filter_and_projection(filter, projection.into())?;
+
+        match file_source {
+            Some(file_source) => {
+                let conf_builder: FileScanConfigBuilder = self.clone().into();
+                Ok(Some(Arc::new(
+                    conf_builder.with_source(file_source).build(),
+                )))
+            }
+            None => {
+                internal_err!("file source is not rebuilt")
+            }
+        }
     }
 }
 

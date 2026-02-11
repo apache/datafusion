@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_plan::execution_plan::{
-    Boundedness, EmissionType, SchedulingType,
+    Boundedness, EmissionType, ReplacePhysicalExpr, SchedulingType,
 };
 use datafusion_physical_plan::metrics::SplitMetrics;
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
@@ -74,8 +74,8 @@ use datafusion_physical_plan::filter_pushdown::{
 /// ```text
 ///                       ┌─────────────────────┐                              -----► execute path
 ///                       │                     │                              ┄┄┄┄┄► init path
-///                       │   DataSourceExec    │  
-///                       │                     │    
+///                       │   DataSourceExec    │
+///                       │                     │
 ///                       └───────▲─────────────┘
 ///                               ┊  │
 ///                               ┊  │
@@ -220,6 +220,39 @@ pub trait DataSource: Send + Sync + Debug {
     /// Returns a variant of this `DataSource` that is aware of order-sensitivity.
     fn with_preserve_order(&self, _preserve_order: bool) -> Option<Arc<dyn DataSource>> {
         None
+    }
+
+    /// Returns an iterator over a subset of [`PhysicalExpr`]s that are used by this [`DataSource`].
+    fn physical_expressions<'a>(
+        &'a self,
+    ) -> Option<Box<dyn Iterator<Item = Arc<dyn PhysicalExpr>> + 'a>> {
+        None
+    }
+
+    /// Returns a new [`DataSource`] with its physical expressions replaced by the provided
+    /// `exprs`.
+    ///
+    /// By default, this method creates a full clone except for physical expressions, and
+    /// does not recompute properties.
+    ///
+    /// # Constraints
+    ///
+    /// * The number of expressions in `exprs` must match the number of expressions returned by
+    ///   [`DataSource::physical_expressions`].
+    /// * The order of expressions in `exprs` must match the order they were yielded by the
+    ///   iterator from [`DataSource::physical_expressions`].
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Some(new_source))` if the expressions were successfully replaced.
+    /// * `Ok(None)` if the source does not support replacing its expressions (the default).
+    /// * `Err` if the number of expressions is incorrect or if another error occurs during
+    ///   replacement.
+    fn with_physical_expressions(
+        &self,
+        _params: ReplacePhysicalExpr,
+    ) -> Result<Option<Arc<dyn DataSource>>> {
+        Ok(None)
     }
 }
 
@@ -415,6 +448,23 @@ impl ExecutionPlan for DataSourceExec {
                 Arc::new(self.clone().with_data_source(new_data_source))
                     as Arc<dyn ExecutionPlan>
             })
+    }
+
+    fn physical_expressions<'a>(
+        &'a self,
+    ) -> Option<Box<dyn Iterator<Item = Arc<dyn PhysicalExpr>> + 'a>> {
+        self.data_source.physical_expressions()
+    }
+
+    fn with_physical_expressions(
+        &self,
+        params: ReplacePhysicalExpr,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        if let Some(source) = self.data_source.with_physical_expressions(params)? {
+            Ok(Some(Arc::new(self.clone().with_data_source(source))))
+        } else {
+            Ok(None)
+        }
     }
 }
 
