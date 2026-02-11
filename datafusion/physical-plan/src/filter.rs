@@ -32,7 +32,7 @@ use crate::common::can_project;
 use crate::execution_plan::CardinalityEffect;
 use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
-    FilterPushdownPropagation, PushedDown, PushedDownPredicate,
+    FilterPushdownPropagation, PushedDown,
 };
 use crate::metrics::{MetricBuilder, MetricType};
 use crate::projection::{
@@ -590,16 +590,11 @@ impl ExecutionPlan for FilterExec {
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
         if !matches!(phase, FilterPushdownPhase::Pre) {
-            // For non-pre phase, filters pass through unchanged
-            let filter_supports = parent_filters
-                .into_iter()
-                .map(PushedDownPredicate::supported)
-                .collect();
-
-            return Ok(FilterDescription::new().with_child(ChildFilterDescription {
-                parent_filters: filter_supports,
-                self_filters: vec![],
-            }));
+            // Use `ChildFilterDescription::from_child` to remap the columns
+            // before pushing it down.
+            let child =
+                ChildFilterDescription::from_child(&parent_filters, self.input())?;
+            return Ok(FilterDescription::new().with_child(child));
         }
 
         let child = ChildFilterDescription::from_child(&parent_filters, self.input())?
