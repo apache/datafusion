@@ -141,14 +141,11 @@ fn extract_from_plan(
     // Save original output schema before any transformation
     let original_schema = Arc::clone(plan.schema());
 
-    // Clone inputs upfront (before plan is consumed by map_expressions)
-    let owned_inputs: Vec<LogicalPlan> = inputs.into_iter().cloned().collect();
-
-    // Build per-input schemas (kept alive for extractor borrows)
-    let input_schemas: Vec<Arc<DFSchema>> = owned_inputs
-        .iter()
-        .map(|i| Arc::clone(i.schema()))
-        .collect();
+    // Build per-input schemas from borrowed inputs (before plan is consumed
+    // by map_expressions). We only need schemas and column sets for routing;
+    // the actual inputs are cloned later only if extraction succeeds.
+    let input_schemas: Vec<Arc<DFSchema>> =
+        inputs.iter().map(|i| Arc::clone(i.schema())).collect();
 
     // Build per-input extractors
     let mut extractors: Vec<LeafExpressionExtractor> = input_schemas
@@ -172,6 +169,11 @@ fn extract_from_plan(
         return Ok(transformed);
     }
 
+    // Clone inputs now that we know extraction succeeded. We need owned
+    // copies to wrap in extraction projections below each input.
+    let owned_inputs: Vec<LogicalPlan> =
+        transformed.data.inputs().into_iter().cloned().collect();
+
     // Build per-input extraction projections (None means no extractions for that input)
     let new_inputs: Vec<LogicalPlan> = owned_inputs
         .iter()
@@ -184,7 +186,8 @@ fn extract_from_plan(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    // Rebuild and add recovery projection if schema changed
+    // Rebuild the plan keeping its rewritten expressions but replacing
+    // inputs with the new extraction projections.
     let new_plan = transformed
         .data
         .with_new_exprs(transformed.data.expressions(), new_inputs)?;
@@ -298,12 +301,12 @@ fn build_projection_replace_map(projection: &Projection) -> HashMap<String, Expr
 /// After extraction, a node's output schema may differ from the original:
 ///
 /// - **Schema-preserving nodes** (Filter/Sort/Limit): the extraction projection
-///   below adds extra `__extracted_N` columns that bubble up through the node.
-///   Recovery selects only the original columns to hide the extras.
+///   below adds extra `__datafusion_extracted_N` columns that bubble up through
+///   the node. Recovery selects only the original columns to hide the extras.
 ///   ```text
 ///   Original schema: [id, user]
-///   After extraction: [__extracted_1, id, user]   ← extra column leaked through
-///   Recovery: SELECT id, user FROM ...            ← hides __extracted_1
+///   After extraction: [__datafusion_extracted_1, id, user]   ← extra column leaked through
+///   Recovery: SELECT id, user FROM ...                       ← hides __datafusion_extracted_1
 ///   ```
 ///
 /// - **Schema-defining nodes** (Aggregate): same number of columns but names
@@ -311,8 +314,8 @@ fn build_projection_replace_map(projection: &Projection) -> HashMap<String, Expr
 ///   Recovery maps positionally, aliasing where names changed.
 ///   ```text
 ///   Original: [SUM(user['balance'])]
-///   After:    [SUM(__extracted_1)]                ← name changed
-///   Recovery: SUM(__extracted_1) AS "SUM(user['balance'])"
+///   After:    [SUM(__datafusion_extracted_1)]                ← name changed
+///   Recovery: SUM(__datafusion_extracted_1) AS "SUM(user['balance'])"
 ///   ```
 ///
 /// - **Schemas identical** → no recovery projection needed.
@@ -366,10 +369,10 @@ fn build_recovery_projection(
 /// # Example
 ///
 /// Given `Filter: user['status'] = 'active' AND user['name'] IS NOT NULL`:
-/// - `add_extracted(user['status'])` → stores it, returns `col("__extracted_1")`
-/// - `add_extracted(user['name'])`   → stores it, returns `col("__extracted_2")`
+/// - `add_extracted(user['status'])` → stores it, returns `col("__datafusion_extracted_1")`
+/// - `add_extracted(user['name'])`   → stores it, returns `col("__datafusion_extracted_2")`
 /// - `build_extraction_projection()` produces:
-///   `Projection: user['status'] AS __extracted_1, user['name'] AS __extracted_2, <all input columns>`
+///   `Projection: user['status'] AS __datafusion_extracted_1, user['name'] AS __datafusion_extracted_2, <all input columns>`
 struct LeafExpressionExtractor<'a> {
     /// Extracted expressions: maps expression -> alias
     extracted: IndexMap<Expr, String>,
@@ -560,9 +563,9 @@ fn build_extraction_projection_impl(
 ///
 /// After pass 1, the extraction projection sits directly below the filter:
 /// ```text
-/// Projection: id, user                                                       <-- recovery
-///   Filter: __extracted_1 = 'active'
-///     Projection: user['status'] AS __extracted_1, id, user                   <-- extraction
+/// Projection: id, user                                                              <-- recovery
+///   Filter: __datafusion_extracted_1 = 'active'
+///     Projection: user['status'] AS __datafusion_extracted_1, id, user               <-- extraction
 ///       TableScan: t [id, user]
 /// ```
 ///
@@ -570,8 +573,8 @@ fn build_extraction_projection_impl(
 /// and a subsequent `OptimizeProjections` pass removes the (now-redundant)
 /// recovery projection:
 /// ```text
-/// Filter: __extracted_1 = 'active'
-///   Projection: user['status'] AS __extracted_1, id, user                     <-- extraction (pushed down)
+/// Filter: __datafusion_extracted_1 = 'active'
+///   Projection: user['status'] AS __datafusion_extracted_1, id, user                 <-- extraction (pushed down)
 ///     TableScan: t [id, user]
 /// ```
 #[derive(Default, Debug)]
@@ -846,8 +849,9 @@ fn push_extraction_pairs(
 ) -> Result<Option<LogicalPlan>> {
     match proj_input.as_ref() {
         // Merge into existing projection, then try to push the result further down.
-        // Only merge when all outer expressions are captured (pairs + columns).
-        // Uncaptured expressions (e.g. `col AS __common_expr_1`) would be lost
+        // Only merge when every expression in the outer projection is accounted
+        // for as either an extraction pair or a needed column. Uncaptured
+        // expressions (e.g. `col AS __common_expr_1` from CSE) would be lost
         // during the merge since build_extraction_projection_impl only knows
         // about the captured pairs and columns.
         LogicalPlan::Projection(_)
@@ -864,7 +868,7 @@ fn push_extraction_pairs(
 
             // After merging, try to push the result further down, but ONLY
             // if the merged result is still a pure extraction projection
-            // (all __extracted aliases + columns). If the merge inherited
+            // (all __datafusion_extracted aliases + columns). If the merge inherited
             // bare MoveTowardsLeafNodes expressions from the inner projection,
             // pushing would re-extract them into new aliases and fail when
             // the (None, true) fallback can't find the original aliases.
