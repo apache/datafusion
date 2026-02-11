@@ -228,12 +228,12 @@ impl SortedData {
     fn sort_expr(&self) -> Vec<datafusion_expr::SortExpr> {
         match self {
             Self::I32 { .. } | Self::F64 { .. } | Self::Str { .. } => {
-                vec![datafusion_expr::col("x").sort(true, true)]
+                vec![datafusion_expr::col("x").sort().asc().nulls_first()]
             }
             Self::I64Str { .. } => {
                 vec![
-                    datafusion_expr::col("x").sort(true, true),
-                    datafusion_expr::col("y").sort(true, true),
+                    datafusion_expr::col("x").sort().asc().nulls_first(),
+                    datafusion_expr::col("y").sort().asc().nulls_first(),
                 ]
             }
         }

@@ -1656,7 +1656,7 @@ mod tests {
             vec![],
         ))
         .partition_by(vec![col("a"), col("b")])
-        .order_by(vec![col("c").sort(true, true)])
+        .order_by(vec![col("c").sort().asc().nulls_first()])
         .build()
         .unwrap();
 
@@ -1691,7 +1691,7 @@ mod tests {
             vec![],
         ))
         .partition_by(vec![col("$a"), col("$b")])
-        .order_by(vec![col("$c").sort(true, true)])
+        .order_by(vec![col("$c").sort().asc().nulls_first()])
         .build()
         .unwrap();
 
@@ -1722,7 +1722,7 @@ mod tests {
             vec![],
         ))
         .partition_by(vec![col("a"), col("b")])
-        .order_by(vec![col("c").sort(true, true)])
+        .order_by(vec![col("c").sort().asc().nulls_first()])
         .build()
         .unwrap();
 
@@ -1752,7 +1752,7 @@ mod tests {
             vec![],
         ))
         .partition_by(vec![col("a")])
-        .order_by(vec![col("c").sort(true, true)])
+        .order_by(vec![col("c").sort().asc().nulls_first()])
         .build()
         .unwrap();
 
@@ -1784,7 +1784,7 @@ mod tests {
             vec![],
         ))
         .partition_by(vec![add(col("a"), col("b"))]) // PARTITION BY a + b
-        .order_by(vec![col("c").sort(true, true)])
+        .order_by(vec![col("c").sort().asc().nulls_first()])
         .build()
         .unwrap();
 
@@ -1817,7 +1817,7 @@ mod tests {
             vec![],
         ))
         .partition_by(vec![col("a")])
-        .order_by(vec![col("c").sort(true, true)])
+        .order_by(vec![col("c").sort().asc().nulls_first()])
         .build()
         .unwrap();
 
@@ -1849,7 +1849,7 @@ mod tests {
             vec![],
         ))
         .partition_by(vec![col("a")])
-        .order_by(vec![col("c").sort(true, true)])
+        .order_by(vec![col("c").sort().asc().nulls_first()])
         .build()
         .unwrap();
 
@@ -1860,7 +1860,7 @@ mod tests {
             vec![],
         ))
         .partition_by(vec![col("b"), col("a")])
-        .order_by(vec![col("c").sort(true, true)])
+        .order_by(vec![col("c").sort().asc().nulls_first()])
         .build()
         .unwrap();
 
@@ -1891,7 +1891,7 @@ mod tests {
             vec![],
         ))
         .partition_by(vec![col("a")])
-        .order_by(vec![col("c").sort(true, true)])
+        .order_by(vec![col("c").sort().asc().nulls_first()])
         .build()
         .unwrap();
 
@@ -1902,7 +1902,7 @@ mod tests {
             vec![],
         ))
         .partition_by(vec![col("b"), col("a")])
-        .order_by(vec![col("c").sort(true, true)])
+        .order_by(vec![col("c").sort().asc().nulls_first()])
         .build()
         .unwrap();
 

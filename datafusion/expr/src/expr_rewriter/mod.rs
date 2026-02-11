@@ -130,7 +130,7 @@ pub fn normalize_sorts(
         .map(|e| {
             let sort = e.into();
             normalize_col(sort.expr, plan)
-                .map(|expr| Sort::new(expr, sort.asc, sort.nulls_first))
+                .map(|expr| Sort::new(expr, !sort.options.descending, sort.options.nulls_first))
         })
         .collect()
 }

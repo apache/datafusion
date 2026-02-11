@@ -973,7 +973,7 @@ async fn roundtrip_expr_api() -> Result<()> {
         count(lit(1)),
         count_distinct(lit(1)),
         first_value(lit(1), vec![]),
-        first_value(lit(1), vec![lit(2).sort(true, true)]),
+        first_value(lit(1), vec![lit(2).sort().asc().nulls_first()]),
         functions_window::nth_value::first_value(lit(1)),
         functions_window::nth_value::last_value(lit(1)),
         functions_window::nth_value::nth_value(lit(1), 1),
@@ -993,16 +993,16 @@ async fn roundtrip_expr_api() -> Result<()> {
         stddev_pop(lit(2.2)),
         approx_distinct(lit(2)),
         approx_median(lit(2)),
-        approx_percentile_cont(lit(2).sort(true, false), lit(0.5), None),
-        approx_percentile_cont(lit(2).sort(true, false), lit(0.5), Some(lit(50))),
+        approx_percentile_cont(lit(2).sort().asc().nulls_last(), lit(0.5), None),
+        approx_percentile_cont(lit(2).sort().asc().nulls_last(), lit(0.5), Some(lit(50))),
         approx_percentile_cont_with_weight(
-            lit(2).sort(true, false),
+            lit(2).sort().asc().nulls_last(),
             lit(1),
             lit(0.5),
             None,
         ),
         approx_percentile_cont_with_weight(
-            lit(2).sort(true, false),
+            lit(2).sort().asc().nulls_last(),
             lit(1),
             lit(0.5),
             Some(lit(50)),
@@ -1036,13 +1036,13 @@ async fn roundtrip_expr_api() -> Result<()> {
         nth_value(
             col("b"),
             1,
-            vec![col("a").sort(false, false), col("b").sort(true, false)],
+            vec![col("a").sort().desc().nulls_last(), col("b").sort().asc().nulls_last()],
         ),
         nth_value(col("b"), -1, vec![]),
         nth_value(
             col("b"),
             -1,
-            vec![col("a").sort(false, false), col("b").sort(true, false)],
+            vec![col("a").sort().desc().nulls_last(), col("b").sort().asc().nulls_last()],
         ),
     ];
 
@@ -2458,7 +2458,7 @@ fn roundtrip_window() {
         vec![],
     ))
     .partition_by(vec![col("col1")])
-    .order_by(vec![col("col2").sort(true, false)])
+    .order_by(vec![col("col2").sort().asc().nulls_last()])
     .window_frame(WindowFrame::new(Some(false)))
     .build()
     .unwrap();
@@ -2469,7 +2469,7 @@ fn roundtrip_window() {
         vec![],
     ))
     .partition_by(vec![col("col1")])
-    .order_by(vec![col("col2").sort(false, true)])
+    .order_by(vec![col("col2").sort().desc().nulls_first()])
     .window_frame(WindowFrame::new(Some(false)))
     .build()
     .unwrap();
@@ -2486,7 +2486,7 @@ fn roundtrip_window() {
         vec![],
     ))
     .partition_by(vec![col("col1")])
-    .order_by(vec![col("col2").sort(false, false)])
+    .order_by(vec![col("col2").sort().desc().nulls_last()])
     .window_frame(range_number_frame)
     .build()
     .unwrap();
@@ -2503,7 +2503,7 @@ fn roundtrip_window() {
         vec![col("col1")],
     ))
     .partition_by(vec![col("col1")])
-    .order_by(vec![col("col2").sort(true, true)])
+    .order_by(vec![col("col2").sort().asc().nulls_first()])
     .window_frame(row_number_frame.clone())
     .build()
     .unwrap();
@@ -2553,7 +2553,7 @@ fn roundtrip_window() {
         vec![col("col1")],
     ))
     .partition_by(vec![col("col1")])
-    .order_by(vec![col("col2").sort(true, true)])
+    .order_by(vec![col("col2").sort().asc().nulls_first()])
     .window_frame(row_number_frame.clone())
     .build()
     .unwrap();
@@ -2642,7 +2642,7 @@ fn roundtrip_window() {
         vec![col("col1")],
     ))
     .partition_by(vec![col("col1")])
-    .order_by(vec![col("col2").sort(true, true)])
+    .order_by(vec![col("col2").sort().asc().nulls_first()])
     .window_frame(row_number_frame.clone())
     .build()
     .unwrap();
@@ -2663,7 +2663,7 @@ fn roundtrip_window() {
         vec![],
     ))
     .partition_by(vec![col("col1")])
-    .order_by(vec![col("col2").sort(true, false)])
+    .order_by(vec![col("col2").sort().asc().nulls_last()])
     .window_frame(WindowFrame::new(Some(false)))
     .null_treatment(NullTreatment::RespectNulls)
     .build()
@@ -2675,7 +2675,7 @@ fn roundtrip_window() {
         vec![],
     ))
     .partition_by(vec![col("col1")])
-    .order_by(vec![col("col2").sort(true, false)])
+    .order_by(vec![col("col2").sort().asc().nulls_last()])
     .window_frame(WindowFrame::new(Some(false)))
     .null_treatment(NullTreatment::IgnoreNulls)
     .build()
@@ -2687,7 +2687,7 @@ fn roundtrip_window() {
         vec![],
     ))
     .partition_by(vec![col("col1")])
-    .order_by(vec![col("col2").sort(true, false)])
+    .order_by(vec![col("col2").sort().asc().nulls_last()])
     .window_frame(WindowFrame::new(Some(false)))
     .distinct()
     .build()
@@ -2699,7 +2699,7 @@ fn roundtrip_window() {
         vec![],
     ))
     .partition_by(vec![col("col1")])
-    .order_by(vec![col("col2").sort(true, false)])
+    .order_by(vec![col("col2").sort().asc().nulls_last()])
     .window_frame(WindowFrame::new(Some(false)))
     .filter(col("col1").eq(lit(1)))
     .build()

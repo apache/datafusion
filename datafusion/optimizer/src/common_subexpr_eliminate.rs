@@ -34,7 +34,7 @@ use datafusion_expr::expr::{Alias, ScalarFunction};
 use datafusion_expr::logical_plan::{
     Aggregate, Filter, LogicalPlan, Projection, Sort, Window,
 };
-use datafusion_expr::{BinaryExpr, Case, Expr, Operator, SortExpr, col};
+use datafusion_expr::{BinaryExpr, Case, Expr, Operator, SortExpr, col, SortOptions};
 
 const CSE_PREFIX: &str = "__common_expr";
 
@@ -98,9 +98,9 @@ impl CommonSubexprEliminate {
     ) -> Result<Transformed<LogicalPlan>> {
         let Sort { expr, input, fetch } = sort;
         let input = Arc::unwrap_or_clone(input);
-        let (sort_expressions, sort_params): (Vec<_>, Vec<(_, _)>) = expr
+        let (sort_expressions, sort_params): (Vec<_>, Vec<SortOptions>) = expr
             .into_iter()
-            .map(|sort| (sort.expr, (sort.asc, sort.nulls_first)))
+            .map(|sort| (sort.expr, sort.options))
             .unzip();
         let new_sort = self
             .try_unary_plan(sort_expressions, input, config)?
@@ -109,10 +109,9 @@ impl CommonSubexprEliminate {
                     expr: new_expr
                         .into_iter()
                         .zip(sort_params)
-                        .map(|(expr, (asc, nulls_first))| SortExpr {
+                        .map(|(expr, options)| SortExpr {
                             expr,
-                            asc,
-                            nulls_first,
+                            options,
                         })
                         .collect(),
                     input: Arc::new(new_input),

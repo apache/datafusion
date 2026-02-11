@@ -639,13 +639,12 @@ where
         .map(|sort| {
             let SortExpr {
                 expr,
-                asc,
-                nulls_first,
+                options,
             } = sort;
             Ok(protobuf::SortExprNode {
                 expr: Some(serialize_expr(expr, codec)?),
-                asc: *asc,
-                nulls_first: *nulls_first,
+                asc: !options.descending,
+                nulls_first: options.nulls_first,
             })
         })
         .collect::<Result<Vec<_>, Error>>()

@@ -44,7 +44,7 @@ impl DataFrame {
     /// // Sort the data by column "b" and write it to a new location
     /// ctx.read_csv("tests/data/example.csv", CsvReadOptions::new())
     ///     .await?
-    ///     .sort(vec![col("b").sort(true, true)])? // sort by b asc, nulls first
+    ///     .sort(vec![col("b").sort().asc().nulls_first()])? // sort by b asc, nulls first
     ///     .write_parquet(
     ///         "output.parquet",
     ///         DataFrameWriteOptions::new(),

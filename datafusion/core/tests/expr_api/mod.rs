@@ -179,14 +179,14 @@ async fn test_aggregate_ext_order_by() {
     // ORDER BY id ASC
     let agg_asc = agg
         .clone()
-        .order_by(vec![col("id").sort(true, true)])
+        .order_by(vec![col("id").sort().asc().nulls_first()])
         .build()
         .unwrap()
         .alias("asc");
 
     // ORDER BY id DESC
     let agg_desc = agg
-        .order_by(vec![col("id").sort(false, true)])
+        .order_by(vec![col("id").sort().desc().nulls_first()])
         .build()
         .unwrap()
         .alias("desc");
@@ -220,7 +220,7 @@ async fn test_aggregate_ext_order_by() {
 async fn test_aggregate_ext_filter() {
     let agg = first_value_udaf()
         .call(vec![col("i")])
-        .order_by(vec![col("i").sort(true, true)])
+        .order_by(vec![col("i").sort().asc().nulls_first()])
         .filter(col("i").is_not_null())
         .build()
         .unwrap()
@@ -267,7 +267,7 @@ async fn test_aggregate_ext_distinct() {
 async fn test_aggregate_ext_null_treatment() {
     let agg = first_value_udaf()
         .call(vec![col("i")])
-        .order_by(vec![col("i").sort(true, true)]);
+        .order_by(vec![col("i").sort().asc().nulls_first()]);
 
     let agg_respect = agg
         .clone()

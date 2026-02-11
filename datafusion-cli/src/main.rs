@@ -835,7 +835,7 @@ mod tests {
                 "file_size_bytes",
                 "etag",
             ])?
-            .sort(vec![col("filename").sort(true, false)])?;
+            .sort(vec![col("filename").sort().asc().nulls_last()])?;
         let rbs = df.collect().await?;
         assert_snapshot!(batches_to_string(&rbs),@r"
         +---------------------+-----------+-----------------+------+

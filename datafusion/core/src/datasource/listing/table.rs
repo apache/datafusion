@@ -281,7 +281,7 @@ mod tests {
             ),
             // sort expr, but non column
             (
-                vec![vec![col("int_col").add(lit(1)).sort(true, true)]],
+                vec![vec![col("int_col").add(lit(1)).sort().asc().nulls_first()]],
                 Ok(vec![
                     [PhysicalSortExpr {
                         expr: binary(
@@ -301,7 +301,7 @@ mod tests {
             ),
             // ok with one column
             (
-                vec![vec![col("string_col").sort(true, false)]],
+                vec![vec![col("string_col").sort().asc().nulls_last()]],
                 Ok(vec![
                     [PhysicalSortExpr {
                         expr: physical_col("string_col", &schema).unwrap(),
@@ -316,8 +316,8 @@ mod tests {
             // ok with two columns, different options
             (
                 vec![vec![
-                    col("string_col").sort(true, false),
-                    col("int_col").sort(false, true),
+                    col("string_col").sort().asc().nulls_last(),
+                    col("int_col").sort().desc().nulls_first(),
                 ]],
                 Ok(vec![
                     [

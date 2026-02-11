@@ -28,7 +28,7 @@ use crate::expr_fn::binary_expr;
 use crate::function::WindowFunctionSimplification;
 use crate::logical_plan::Subquery;
 use crate::{AggregateUDF, Volatility};
-use crate::{ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
+use crate::{ExprSchemable, Operator, Signature, WindowFrame, WindowUDF, SortOptions};
 
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cse::{HashNode, NormalizeEq, Normalizeable};
@@ -831,10 +831,66 @@ impl TryCast {
 pub struct Sort {
     /// The expression to sort on
     pub expr: Expr,
-    /// The direction of the sort
-    pub asc: bool,
-    /// Whether to put Nulls before all other data values
-    pub nulls_first: bool,
+    /// The sort options
+    pub options: SortOptions,
+}
+
+/// A builder for creating [`Sort`] expressions.
+///
+/// This builder forces the caller to specify both the sort direction
+/// and the null handling to avoid "boolean blindness".
+///
+/// # Example
+/// ```
+/// # use datafusion_expr::col;
+/// let sort_expr = col("foo").sort().asc().nulls_first();
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+pub struct SortBuilder {
+    expr: Expr,
+}
+
+impl SortBuilder {
+    /// Specify ascending sort order.
+    pub fn asc(self) -> SortBuilderOrd {
+        SortBuilderOrd {
+            expr: self.expr,
+            options: SortOptions::new().asc(),
+        }
+    }
+
+    /// Specify descending sort order.
+    pub fn desc(self) -> SortBuilderOrd {
+        SortBuilderOrd {
+            expr: self.expr,
+            options: SortOptions::new().desc(),
+        }
+    }
+}
+
+/// A builder for creating [`Sort`] expressions after the direction has been specified.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+pub struct SortBuilderOrd {
+    expr: Expr,
+    options: SortOptions,
+}
+
+impl SortBuilderOrd {
+    /// Specify that nulls should come first.
+    pub fn nulls_first(self) -> Sort {
+        Sort {
+            expr: self.expr,
+            options: self.options.nulls_first(),
+        }
+    }
+
+    /// Specify that nulls should come last.
+    pub fn nulls_last(self) -> Sort {
+        Sort {
+            expr: self.expr,
+            options: self.options.nulls_last(),
+        }
+    }
 }
 
 impl Sort {
@@ -842,8 +898,10 @@ impl Sort {
     pub fn new(expr: Expr, asc: bool, nulls_first: bool) -> Self {
         Self {
             expr,
-            asc,
-            nulls_first,
+            options: SortOptions {
+                descending: !asc,
+                nulls_first,
+            },
         }
     }
 
@@ -851,8 +909,10 @@ impl Sort {
     pub fn reverse(&self) -> Self {
         Self {
             expr: self.expr.clone(),
-            asc: !self.asc,
-            nulls_first: !self.nulls_first,
+            options: SortOptions {
+                descending: !self.options.descending,
+                nulls_first: !self.options.nulls_first,
+            },
         }
     }
 
@@ -860,8 +920,7 @@ impl Sort {
     pub fn with_expr(&self, expr: Expr) -> Self {
         Self {
             expr,
-            asc: self.asc,
-            nulls_first: self.nulls_first,
+            options: self.options,
         }
     }
 }
@@ -869,12 +928,12 @@ impl Sort {
 impl Display for Sort {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.expr)?;
-        if self.asc {
-            write!(f, " ASC")?;
-        } else {
+        if self.options.descending {
             write!(f, " DESC")?;
+        } else {
+            write!(f, " ASC")?;
         }
-        if self.nulls_first {
+        if self.options.nulls_first {
             write!(f, " NULLS FIRST")?;
         } else {
             write!(f, " NULLS LAST")?;
@@ -1855,9 +1914,15 @@ impl Expr {
     ///
     /// ```
     /// # use datafusion_expr::col;
-    /// let sort_expr = col("foo").sort(true, true); // SORT ASC NULLS_FIRST
+    /// let sort_expr = col("foo").sort().asc().nulls_first(); // SORT ASC NULLS_FIRST
     /// ```
-    pub fn sort(self, asc: bool, nulls_first: bool) -> Sort {
+    pub fn sort(self) -> SortBuilder {
+        SortBuilder { expr: self }
+    }
+
+    /// Create a sort configuration from an existing expression.
+    #[deprecated(since = "46.0.0", note = "Use .sort().asc()/.desc() instead")]
+    pub fn sort_with(self, asc: bool, nulls_first: bool) -> Sort {
         Sort::new(self, asc, nulls_first)
     }
 
@@ -1867,8 +1932,11 @@ impl Expr {
     /// # use datafusion_expr::{col, SortOptions};
     /// let sort_expr = col("foo").sort_by(SortOptions::new().desc().nulls_first());
     /// ```
-    pub fn sort_by(self, options: crate::sort_options::SortOptions) -> Sort {
-        Sort::new(self, !options.descending, options.nulls_first)
+    pub fn sort_by(self, options: SortOptions) -> Sort {
+        Sort {
+            expr: self,
+            options,
+        }
     }
 
 
@@ -2410,8 +2478,7 @@ impl NormalizeEq for Expr {
                         .iter()
                         .zip(other_order_by.iter())
                         .all(|(a, b)| {
-                            a.asc == b.asc
-                                && a.nulls_first == b.nulls_first
+                            a.options == b.options
                                 && a.expr.normalize_eq(&b.expr)
                         })
                     && self_order_by.len() == other_order_by.len()
@@ -2465,8 +2532,7 @@ impl NormalizeEq for Expr {
                         .iter()
                         .zip(other_order_by.iter())
                         .all(|(a, b)| {
-                            a.asc == b.asc
-                                && a.nulls_first == b.nulls_first
+                            a.options == b.options
                                 && a.expr.normalize_eq(&b.expr)
                         })
                     && self_distinct == other_distinct
@@ -3334,8 +3400,8 @@ pub fn schema_name_from_sorts(sorts: &[Sort]) -> Result<String, fmt::Error> {
         if i > 0 {
             write!(&mut s, ", ")?;
         }
-        let ordering = if e.asc { "ASC" } else { "DESC" };
-        let nulls_ordering = if e.nulls_first {
+        let ordering = if e.options.descending { "DESC" } else { "ASC" };
+        let nulls_ordering = if e.options.nulls_first {
             "NULLS FIRST"
         } else {
             "NULLS LAST"

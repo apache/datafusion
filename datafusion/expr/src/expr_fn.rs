@@ -753,7 +753,7 @@ pub fn interval_month_day_nano_lit(value: &str) -> Expr {
 /// // Find the first value in an aggregate sorted by column y
 /// // equivalent to:
 /// // `FIRST_VALUE(x ORDER BY y ASC IGNORE NULLS)`
-/// let sort_expr = col("y").sort(true, true);
+/// let sort_expr = col("y").sort().asc().nulls_first();
 /// let agg = first_value(col("x"))
 ///     .order_by(vec![sort_expr])
 ///     .null_treatment(NullTreatment::IgnoreNulls)
@@ -761,13 +761,13 @@ pub fn interval_month_day_nano_lit(value: &str) -> Expr {
 ///
 /// // Create a window expression for percent rank partitioned on column a
 /// // equivalent to:
-/// // `PERCENT_RANK() OVER (PARTITION BY a ORDER BY b ASC NULLS LAST IGNORE NULLS)`
+/// // `PERCENT_RANK() OVER (PARTITION BY a ORDER BY b ASC NULLS FIRST IGNORE NULLS)`
 /// // percent_rank is an udwf function in another crate
 /// # fn percent_rank() -> Expr {
 /// unimplemented!() }
 /// let window = percent_rank()
 ///     .partition_by(vec![col("a")])
-///     .order_by(vec![col("b").sort(true, true)])
+///     .order_by(vec![col("b").sort().asc().nulls_first()])
 ///     .null_treatment(NullTreatment::IgnoreNulls)
 ///     .build()?;
 /// #     Ok(())

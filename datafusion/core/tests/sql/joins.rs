@@ -42,9 +42,7 @@ async fn join_change_in_planner() -> Result<()> {
         [col("a1")]
             .into_iter()
             .map(|e| {
-                let ascending = true;
-                let nulls_first = false;
-                e.sort(ascending, nulls_first)
+                e.sort().asc().nulls_last()
             })
             .collect::<Vec<_>>(),
     ];
@@ -101,9 +99,7 @@ async fn join_no_order_on_filter() -> Result<()> {
         [col("a1")]
             .into_iter()
             .map(|e| {
-                let ascending = true;
-                let nulls_first = false;
-                e.sort(ascending, nulls_first)
+                e.sort().asc().nulls_last()
             })
             .collect::<Vec<_>>(),
     ];

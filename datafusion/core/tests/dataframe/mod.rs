@@ -1183,7 +1183,7 @@ async fn window_using_aggregates() -> Result<()> {
 
         Expr::from(w)
             .null_treatment(NullTreatment::IgnoreNulls)
-            .order_by(vec![col("c2").sort(true, true), col("c3").sort(true, true)])
+            .order_by(vec![col("c2").sort().asc().nulls_first(), col("c3").sort().asc().nulls_first()])
             .window_frame(WindowFrame::new_bounds(
                 WindowFrameUnits::Rows,
                 WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
@@ -1275,7 +1275,7 @@ async fn window_aggregates_with_filter() -> Result<()> {
         );
 
         Expr::from(w)
-            .order_by(vec![col("ts").sort(true, true)])
+            .order_by(vec![col("ts").sort().asc().nulls_first()])
             .window_frame(WindowFrame::new_bounds(
                 WindowFrameUnits::Rows,
                 WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
@@ -1352,7 +1352,7 @@ async fn test_distinct_sort_by() -> Result<()> {
         .unwrap()
         .distinct()
         .unwrap()
-        .sort(vec![col("c1").sort(true, true)])
+        .sort(vec![col("c1").sort().asc().nulls_first()])
         .unwrap();
 
     let df_results = plan.clone().collect().await?;
@@ -1384,7 +1384,7 @@ async fn test_distinct_sort_by_unprojected() -> Result<()> {
         .distinct()
         .unwrap()
         // try to sort on some value not present in input to distinct
-        .sort(vec![col("c2").sort(true, true)])
+        .sort(vec![col("c2").sort().asc().nulls_first()])
         .unwrap_err();
     assert_snapshot!(err.strip_backtrace(), @"Error during planning: For SELECT DISTINCT, ORDER BY expressions c2 must appear in select list");
 
@@ -1432,10 +1432,10 @@ async fn test_distinct_on_sort_by() -> Result<()> {
         .distinct_on(
             vec![col("c1")],
             vec![col("c1")],
-            Some(vec![col("c1").sort(true, true)]),
+            Some(vec![col("c1").sort().asc().nulls_first()]),
         )
         .unwrap()
-        .sort(vec![col("c1").sort(true, true)])
+        .sort(vec![col("c1").sort().asc().nulls_first()])
         .unwrap();
 
     let df_results = plan.clone().collect().await?;
@@ -1467,11 +1467,11 @@ async fn test_distinct_on_sort_by_unprojected() -> Result<()> {
         .distinct_on(
             vec![col("c1")],
             vec![col("c1")],
-            Some(vec![col("c1").sort(true, true)]),
+            Some(vec![col("c1").sort().asc().nulls_first()]),
         )
         .unwrap()
         // try to sort on some value not present in input to distinct
-        .sort(vec![col("c2").sort(true, true)])
+        .sort(vec![col("c2").sort().asc().nulls_first()])
         .unwrap_err();
     assert_snapshot!(err.strip_backtrace(), @"Error during planning: For SELECT DISTINCT, ORDER BY expressions c2 must appear in select list");
 
@@ -1966,7 +1966,7 @@ async fn with_column_join_same_columns() -> Result<()> {
         )?
         .sort(vec![
             // make the test deterministic
-            col("t1.c1").sort(true, true),
+            col("t1.c1").sort().asc().nulls_first(),
         ])?
         .limit(0, Some(1))?;
 
@@ -2037,9 +2037,9 @@ async fn with_column_renamed() -> Result<()> {
         .filter(col("c2").eq(lit(3)).and(col("c1").eq(lit("a"))))?
         .sort(vec![
             // make the test deterministic
-            col("c1").sort(true, true),
-            col("c2").sort(true, true),
-            col("c3").sort(true, true),
+            col("c1").sort().asc().nulls_first(),
+            col("c2").sort().asc().nulls_first(),
+            col("c3").sort().asc().nulls_first(),
         ])?
         .limit(0, Some(1))?
         .with_column("sum", col("c2") + col("c3"))?;
@@ -2132,12 +2132,12 @@ async fn with_column_renamed_join() -> Result<()> {
         )?
         .sort(vec![
             // make the test deterministic
-            col("t1.c1").sort(true, true),
-            col("t1.c2").sort(true, true),
-            col("t1.c3").sort(true, true),
-            col("t2.c1").sort(true, true),
-            col("t2.c2").sort(true, true),
-            col("t2.c3").sort(true, true),
+            col("t1.c1").sort().asc().nulls_first(),
+            col("t1.c2").sort().asc().nulls_first(),
+            col("t1.c3").sort().asc().nulls_first(),
+            col("t2.c1").sort().asc().nulls_first(),
+            col("t2.c2").sort().asc().nulls_first(),
+            col("t2.c3").sort().asc().nulls_first(),
         ])?
         .limit(0, Some(1))?;
 
@@ -2217,9 +2217,9 @@ async fn with_column_renamed_case_sensitive() -> Result<()> {
         .limit(0, Some(1))?
         .sort(vec![
             // make the test deterministic
-            col("c1").sort(true, true),
-            col("c2").sort(true, true),
-            col("c3").sort(true, true),
+            col("c1").sort().asc().nulls_first(),
+            col("c2").sort().asc().nulls_first(),
+            col("c3").sort().asc().nulls_first(),
         ])?
         .select_columns(&["c1"])?;
 
@@ -2270,9 +2270,9 @@ async fn describe_lookup_via_quoted_identifier() -> Result<()> {
         .limit(0, Some(1))?
         .sort(vec![
             // make the test deterministic
-            col("c1").sort(true, true),
-            col("c2").sort(true, true),
-            col("c3").sort(true, true),
+            col("c1").sort().asc().nulls_first(),
+            col("c2").sort().asc().nulls_first(),
+            col("c3").sort().asc().nulls_first(),
         ])?
         .select_columns(&["c1"])?;
 
@@ -2282,8 +2282,8 @@ async fn describe_lookup_via_quoted_identifier() -> Result<()> {
     describe_result
         .clone()
         .sort(vec![
-            col("describe").sort(true, true),
-            col("CoLu.Mn[\"1\"]").sort(true, true),
+            col("describe").sort().asc().nulls_first(),
+            col("CoLu.Mn[\"1\"]").sort().asc().nulls_first(),
         ])?
         .show()
         .await?;
@@ -2772,7 +2772,7 @@ async fn write_parquet_with_order() -> Result<()> {
         .clone()
         .write_parquet(
             test_path.to_str().unwrap(),
-            DataFrameWriteOptions::new().with_sort_by(vec![col("a").sort(true, true)]),
+            DataFrameWriteOptions::new().with_sort_by(vec![col("a").sort().asc().nulls_first()]),
             None,
         )
         .await?;
@@ -2830,7 +2830,7 @@ async fn write_csv_with_order() -> Result<()> {
         .clone()
         .write_csv(
             test_path.to_str().unwrap(),
-            DataFrameWriteOptions::new().with_sort_by(vec![col("a").sort(true, true)]),
+            DataFrameWriteOptions::new().with_sort_by(vec![col("a").sort().asc().nulls_first()]),
             None,
         )
         .await?;
@@ -2887,7 +2887,7 @@ async fn write_json_with_order() -> Result<()> {
         .clone()
         .write_json(
             test_path.to_str().unwrap(),
-            DataFrameWriteOptions::new().with_sort_by(vec![col("a").sort(true, true)]),
+            DataFrameWriteOptions::new().with_sort_by(vec![col("a").sort().asc().nulls_first()]),
             None,
         )
         .await?;
@@ -2955,7 +2955,7 @@ async fn write_table_with_order() -> Result<()> {
         .write_table(
             "data",
             DataFrameWriteOptions::new()
-                .with_sort_by(vec![col("tablecol1").sort(true, true)]),
+                .with_sort_by(vec![col("tablecol1").sort().asc().nulls_first()]),
         )
         .await?;
 
@@ -2994,7 +2994,7 @@ async fn test_count_wildcard_on_sort() -> Result<()> {
         .table("t1")
         .await?
         .aggregate(vec![col("b")], vec![count_all()])?
-        .sort(vec![count_all().sort(true, false)])?
+        .sort(vec![count_all().sort().asc().nulls_last()])?
         .explain(false, false)?
         .collect()
         .await?;
@@ -3311,7 +3311,7 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(
         "sorted",
         &format!("{testdata}/alltypes_tiny_pages.parquet"),
         ParquetReadOptions::default()
-            .file_sort_order(vec![vec![col("id").sort(true, false)]]),
+            .file_sort_order(vec![vec![col("id").sort().asc().nulls_last().into()]]),
     )
     .await?;
 
@@ -3338,7 +3338,7 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(
         .unwrap();
 
     let source_unsorted_resorted =
-        source_unsorted.sort(vec![col("id").sort(true, false)])?;
+        source_unsorted.sort(vec![col("id").sort().asc().nulls_last()])?;
 
     let union = source_sorted.union(source_unsorted_resorted)?;
 
@@ -3697,7 +3697,7 @@ async fn sort_on_ambiguous_column() -> Result<()> {
             &["a"],
             None,
         )?
-        .sort(vec![col("b").sort(true, true)])
+        .sort(vec![col("b").sort().asc().nulls_first()])
         .unwrap_err();
 
     assert_snapshot!(err.strip_backtrace(), @"Schema error: Ambiguous reference to unqualified field b");
@@ -6621,7 +6621,7 @@ async fn test_dataframe_from_columns() -> Result<()> {
     assert_eq!(df.schema().fields().len(), 3);
     assert_eq!(df.clone().count().await?, 3);
 
-    let rows = df.sort(vec![col("a").sort(true, true)])?;
+    let rows = df.sort(vec![col("a").sort().asc().nulls_first()])?;
     assert_batches_eq!(
         &[
             "+---+-------+-----+",
@@ -6649,7 +6649,7 @@ async fn test_dataframe_macro() -> Result<()> {
     assert_eq!(df.schema().fields().len(), 3);
     assert_eq!(df.clone().count().await?, 3);
 
-    let rows = df.sort(vec![col("a").sort(true, true)])?;
+    let rows = df.sort(vec![col("a").sort().asc().nulls_first()])?;
     assert_batches_eq!(
         &[
             "+---+-------+-----+",

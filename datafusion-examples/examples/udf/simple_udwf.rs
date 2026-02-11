@@ -155,7 +155,7 @@ pub async fn simple_udwf() -> Result<()> {
     let window_expr = smooth_it
         .call(vec![col("speed")]) // smooth_it(speed)
         .partition_by(vec![col("car")]) // PARTITION BY car
-        .order_by(vec![col("time").sort(true, true)]) // ORDER BY time ASC
+        .order_by(vec![col("time").sort().asc().nulls_first()]) // ORDER BY time ASC
         .window_frame(WindowFrame::new(None))
         .build()?;
     let df = ctx.table("cars").await?.window(vec![window_expr])?;

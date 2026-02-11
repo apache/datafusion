@@ -309,7 +309,7 @@ where
 /// // smooth_it(speed) OVER (PARTITION BY car ORDER BY time ASC)
 /// let expr = smooth_it.call(vec![col("speed")])
 ///     .partition_by(vec![col("car")])
-///     .order_by(vec![col("time").sort(true, true)])
+///     .order_by(vec![col("time").sort().asc().nulls_first()])
 ///     .window_frame(WindowFrame::new(None))
 ///     .build()
 ///     .unwrap();

@@ -510,7 +510,7 @@ fn preserve_order_bench(
                  GROUP BY f_dkey \
                  ORDER BY f_dkey";
 
-    let file_sort_order = vec![vec![col("f_dkey").sort(true, false)]];
+    let file_sort_order = vec![vec![col("f_dkey").sort().asc().nulls_last()]];
 
     run_benchmark(
         c,
@@ -643,7 +643,7 @@ fn preserve_order_join_bench(
                  GROUP BY f.f_dkey \
                  ORDER BY f.f_dkey";
 
-    let file_sort_order = vec![vec![col("f_dkey").sort(true, false)]];
+    let file_sort_order = vec![vec![col("f_dkey").sort().asc().nulls_last()]];
 
     run_benchmark(
         c,
@@ -745,8 +745,8 @@ fn preserve_order_window_bench(
                  LIMIT 1000";
 
     let file_sort_order = vec![vec![
-        col("f_dkey").sort(true, false),
-        col("timestamp").sort(true, false),
+        col("f_dkey").sort().asc().nulls_last(),
+        col("timestamp").sort().asc().nulls_last(),
     ]];
 
     run_benchmark(

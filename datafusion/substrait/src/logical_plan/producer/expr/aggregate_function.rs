@@ -82,7 +82,7 @@ fn to_substrait_sort_field(
     sort: &expr::Sort,
     schema: &DFSchemaRef,
 ) -> datafusion::common::Result<SortField> {
-    let sort_kind = match (sort.asc, sort.nulls_first) {
+    let sort_kind = match (!sort.options.descending, sort.options.nulls_first) {
         (true, true) => SortDirection::AscNullsFirst,
         (true, false) => SortDirection::AscNullsLast,
         (false, true) => SortDirection::DescNullsFirst,

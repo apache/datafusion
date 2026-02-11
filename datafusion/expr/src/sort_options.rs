@@ -20,7 +20,7 @@ use arrow::compute::SortOptions as ArrowSortOptions;
 /// Options for sorting.
 ///
 /// This struct implements a builder pattern for creating `SortOptions`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Hash, Default)]
 pub struct SortOptions {
     pub descending: bool,
     pub nulls_first: bool,

@@ -330,7 +330,7 @@ fn simplify_percentile_cont_aggregate(
     let is_descending = params
         .order_by
         .first()
-        .map(|sort| !sort.asc)
+        .map(|sort| sort.options.descending)
         .unwrap_or(false);
 
     let rewrite_target = match percentile {

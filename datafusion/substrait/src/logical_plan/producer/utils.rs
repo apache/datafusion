@@ -61,11 +61,10 @@ pub(crate) fn substrait_sort_field(
 ) -> datafusion::common::Result<SortField> {
     let SortExpr {
         expr,
-        asc,
-        nulls_first,
+        options,
     } = sort;
     let e = producer.handle_expr(expr, schema)?;
-    let d = match (asc, nulls_first) {
+    let d = match (!options.descending, options.nulls_first) {
         (true, true) => SortDirection::AscNullsFirst,
         (true, false) => SortDirection::AscNullsLast,
         (false, true) => SortDirection::DescNullsFirst,

@@ -517,7 +517,7 @@ async fn group_by_string_test(
 
     let provider = MemTable::try_new(schema.clone(), vec![input]).unwrap();
     let provider = if sorted {
-        let sort_expr = datafusion::prelude::col("a").sort(true, true);
+        let sort_expr = Expr::Sort(datafusion::prelude::col("a").sort().asc().nulls_first().into());
         provider.with_sort_order(vec![vec![sort_expr]])
     } else {
         provider

@@ -783,7 +783,7 @@ impl LogicalPlanBuilder {
     ) -> Result<Self> {
         self.sort(
             expr.into_iter()
-                .map(|e| e.into().sort(true, false))
+                .map(|e| e.into().sort().asc().nulls_last())
                 .collect::<Vec<SortExpr>>(),
         )
     }

@@ -115,7 +115,7 @@ async fn query_parquet_demo() -> Result<()> {
         )?
         // Directly parsing the SQL text into a sort expression is not supported yet, so
         // construct it programmatically
-        .sort(vec![col("car").sort(false, false)])?
+        .sort(vec![col("car").sort().desc().nulls_last()])?
         .limit(0, Some(1))?;
 
     let result = df.collect().await?;

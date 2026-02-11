@@ -246,7 +246,7 @@ mod unix_test {
         ]));
 
         // Specify the ordering:
-        let order = vec![vec![datafusion_expr::col("a1").sort(true, false)]];
+        let order = vec![vec![datafusion_expr::col("a1").sort().asc().nulls_last()]];
 
         // Set unbounded sorted files read configuration
         let provider = fifo_table(schema.clone(), left_fifo.clone(), order.clone());

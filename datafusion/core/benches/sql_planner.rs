@@ -214,7 +214,7 @@ fn register_union_order_table_generic<T>(
 
     // tell DataFusion that the table is sorted by all columns
     let sort_order = (0..num_columns)
-        .map(|i| col(format!("c{i}")).sort(true, true))
+        .map(|i| col(format!("c{i}")).sort().asc().nulls_first())
         .collect::<Vec<_>>();
 
     // create the table

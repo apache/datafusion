@@ -70,7 +70,7 @@ impl ParquetTemp {
 /// let parquet_dir = write_csv_to_parquet(&ctx, &csv_path).await?;
 /// let df = ctx.read_parquet(parquet_dir.path_str()?, ParquetReadOptions::default()).await?;
 /// let rows = df
-///    .sort(vec![col("speed").sort(true, true)])?
+///    .sort(vec![col("speed").sort().asc().nulls_first()])?
 ///    .limit(0, Some(5))?;
 /// assert_batches_eq!(
 ///     &[
@@ -146,7 +146,7 @@ mod tests {
             .read_parquet(parquet_dir.path_str()?, ParquetReadOptions::default())
             .await?;
 
-        let rows = df.sort(vec![col("speed").sort(true, true)])?;
+        let rows = df.sort(vec![col("speed").sort().asc().nulls_first()])?;
         assert_batches_eq!(
             &[
                 "+-------+-------+---------------------+",
@@ -198,7 +198,7 @@ mod tests {
             .read_parquet(parquet_dir.path_str()?, ParquetReadOptions::default())
             .await?;
 
-        let rows = df.sort(vec![col("values").sort(true, true)])?;
+        let rows = df.sort(vec![col("values").sort().asc().nulls_first()])?;
         assert_batches_eq!(
             &[
                 "+------------+--------------------------------------+-------------+-------+",

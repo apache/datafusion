@@ -1486,7 +1486,7 @@ mod test {
 
         // Plan C
         // scenario: with a non-projection root logical plan node
-        let sort_expr = expr.sort(true, true);
+        let sort_expr = expr.sort().asc().nulls_first();
         let sort_plan = LogicalPlan::Sort(Sort {
             expr: vec![sort_expr],
             input: Arc::new(plan),
@@ -1609,7 +1609,7 @@ mod test {
 
         // Plan C
         // scenario: with a non-projection root logical plan node
-        let sort_expr = expr.sort(true, true);
+        let sort_expr = expr.sort().asc().nulls_first();
         let sort_plan = LogicalPlan::Sort(Sort {
             expr: vec![sort_expr],
             input: Arc::new(plan),

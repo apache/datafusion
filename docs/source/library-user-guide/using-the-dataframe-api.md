@@ -63,7 +63,7 @@ async fn main() -> Result<()> {
     let dataframe = ctx
         .read_batch(data)?
         .filter(col("bank_account").gt_eq(lit(8000)))? // bank_account >= 8000
-        .sort(vec![col("bank_account").sort(false, true)])?; // ORDER BY bank_account DESC
+        .sort(vec![col("bank_account").sort().desc().nulls_first()])?; // ORDER BY bank_account DESC
 
     Ok(())
 }

@@ -746,15 +746,11 @@ impl Unparser<'_> {
     }
 
     pub fn sort_to_sql(&self, sort: &Sort) -> Result<ast::OrderByExpr> {
-        let Sort {
-            expr,
-            asc,
-            nulls_first,
-        } = sort;
+        let Sort { expr, options } = sort;
         let sql_parser_expr = self.expr_to_sql(expr)?;
 
         let nulls_first = if self.dialect.supports_nulls_first_in_sort() {
-            Some(*nulls_first)
+            Some(options.nulls_first)
         } else {
             None
         };
@@ -762,7 +758,7 @@ impl Unparser<'_> {
         Ok(ast::OrderByExpr {
             expr: sql_parser_expr,
             options: OrderByOptions {
-                asc: Some(*asc),
+                asc: Some(!options.descending),
                 nulls_first,
             },
             with_fill: None,
@@ -2469,8 +2465,8 @@ mod tests {
     #[test]
     fn customer_dialect_support_nulls_first_in_ort() -> Result<()> {
         let tests: Vec<(Sort, &str, bool)> = vec![
-            (col("a").sort(true, true), r#"a ASC NULLS FIRST"#, true),
-            (col("a").sort(true, true), r#"a ASC"#, false),
+            (col("a").sort().asc().nulls_first(), r#"a ASC NULLS FIRST"#, true),
+            (col("a").sort().asc().nulls_first(), r#"a ASC"#, false),
         ];
 
         for (expr, expected, supports_nulls_first_in_sort) in tests {

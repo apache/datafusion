@@ -342,7 +342,7 @@ impl RunOpt {
         let options = if self.sorted {
             let key_column_name = schema.fields()[0].name();
             options
-                .with_file_sort_order(vec![vec![col(key_column_name).sort(true, false)]])
+                .with_file_sort_order(vec![vec![col(key_column_name).sort().asc().nulls_last()]])
         } else {
             options
         };

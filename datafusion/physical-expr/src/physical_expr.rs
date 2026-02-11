@@ -118,16 +118,16 @@ pub fn physical_exprs_bag_equal(
 /// ]);
 ///
 /// let sort_exprs = vec![
-///     vec![SortExpr {
-///         expr: Expr::Column(Column::new(Some("t"), "id")),
-///         asc: true,
-///         nulls_first: false,
-///     }],
-///     vec![SortExpr {
-///         expr: Expr::Column(Column::new(Some("t"), "name")),
-///         asc: false,
-///         nulls_first: true,
-///     }],
+///     vec![SortExpr::new(
+///         Expr::Column(Column::new(Some("t"), "id")),
+///         true,
+///         false,
+///     )],
+///     vec![SortExpr::new(
+///         Expr::Column(Column::new(Some("t"), "name")),
+///         false,
+///         true,
+///     )],
 /// ];
 /// let result = create_ordering(&schema, &sort_exprs).unwrap();
 /// ```
@@ -144,7 +144,7 @@ pub fn create_ordering(
             match &sort.expr {
                 Expr::Column(col) => match expressions::col(&col.name, schema) {
                     Ok(expr) => {
-                        let opts = SortOptions::new(!sort.asc, sort.nulls_first);
+                        let opts = SortOptions::new(sort.options.descending, sort.options.nulls_first);
                         sort_exprs.push(PhysicalSortExpr::new(expr, opts));
                     }
                     // Cannot find expression in the projected_schema, stop iterating
@@ -199,7 +199,7 @@ pub fn create_physical_sort_expr(
     execution_props: &ExecutionProps,
 ) -> Result<PhysicalSortExpr> {
     create_physical_expr(&e.expr, input_dfschema, execution_props).map(|expr| {
-        let options = SortOptions::new(!e.asc, e.nulls_first);
+        let options = SortOptions::new(e.options.descending, e.options.nulls_first);
         PhysicalSortExpr::new(expr, options)
     })
 }

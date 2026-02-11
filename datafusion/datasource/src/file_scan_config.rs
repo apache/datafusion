@@ -1565,7 +1565,7 @@ mod tests {
                     File::new("1", "2023-01-01", vec![Some((0.50, 1.00))]),
                     File::new("2", "2023-01-02", vec![Some((0.00, 1.00))]),
                 ],
-                sort: vec![col("value").sort(true, false)],
+                sort: vec![col("value").sort().asc().nulls_last()],
                 expected_result: Ok(vec![vec!["0", "1"], vec!["2"]]),
             },
             // same input but file '2' is in the middle
@@ -1582,7 +1582,7 @@ mod tests {
                     File::new("2", "2023-01-02", vec![Some((0.00, 1.00))]),
                     File::new("1", "2023-01-01", vec![Some((0.50, 1.00))]),
                 ],
-                sort: vec![col("value").sort(true, false)],
+                sort: vec![col("value").sort().asc().nulls_last()],
                 expected_result: Ok(vec![vec!["0", "1"], vec!["2"]]),
             },
             TestCase {
@@ -1597,7 +1597,7 @@ mod tests {
                     File::new("1", "2023-01-01", vec![Some((0.50, 1.00))]),
                     File::new("2", "2023-01-02", vec![Some((0.00, 1.00))]),
                 ],
-                sort: vec![col("value").sort(false, true)],
+                sort: vec![col("value").sort().desc().nulls_first()],
                 expected_result: Ok(vec![vec!["1", "0"], vec!["2"]]),
             },
             TestCase {
@@ -1616,7 +1616,7 @@ mod tests {
                     File::new_nullable("1", "2023-01-01", vec![Some((Some(0.50), None))]),
                     File::new_nullable("2", "2023-01-02", vec![Some((Some(0.00), None))]),
                 ],
-                sort: vec![col("value").sort(true, false)],
+                sort: vec![col("value").sort().asc().nulls_last()],
                 expected_result: Ok(vec![vec!["0", "1"], vec!["2"]]),
             },
             TestCase {
@@ -1635,7 +1635,7 @@ mod tests {
                     ),
                     File::new_nullable("2", "2023-01-02", vec![Some((None, Some(1.00)))]),
                 ],
-                sort: vec![col("value").sort(true, true)],
+                sort: vec![col("value").sort().asc().nulls_first()],
                 expected_result: Ok(vec![vec!["0", "1"], vec!["2"]]),
             },
             TestCase {
@@ -1650,7 +1650,7 @@ mod tests {
                     File::new("1", "2023-01-01", vec![Some((0.50, 0.99))]),
                     File::new("2", "2023-01-02", vec![Some((1.00, 1.49))]),
                 ],
-                sort: vec![col("value").sort(true, false)],
+                sort: vec![col("value").sort().asc().nulls_last()],
                 expected_result: Ok(vec![vec!["0", "1", "2"]]),
             },
             TestCase {
@@ -1665,7 +1665,7 @@ mod tests {
                     File::new("1", "2023-01-01", vec![Some((0.00, 0.49))]),
                     File::new("2", "2023-01-02", vec![Some((0.00, 0.49))]),
                 ],
-                sort: vec![col("value").sort(true, false)],
+                sort: vec![col("value").sort().asc().nulls_last()],
                 expected_result: Ok(vec![vec!["0"], vec!["1"], vec!["2"]]),
             },
             TestCase {
@@ -1676,7 +1676,7 @@ mod tests {
                     false,
                 )]),
                 files: vec![],
-                sort: vec![col("value").sort(true, false)],
+                sort: vec![col("value").sort().asc().nulls_last()],
                 expected_result: Ok(vec![]),
             },
             TestCase {
@@ -1691,7 +1691,7 @@ mod tests {
                     File::new("1", "2023-01-01", vec![Some((0.00, 0.49))]),
                     File::new("2", "2023-01-02", vec![None]),
                 ],
-                sort: vec![col("value").sort(true, false)],
+                sort: vec![col("value").sort().asc().nulls_last()],
                 expected_result: Err(
                     "construct min/max statistics for split_groups_by_statistics\ncaused by\ncollect min/max values\ncaused by\nget min/max for column: 'value'\ncaused by\nError during planning: statistics not found",
                 ),
@@ -2087,7 +2087,7 @@ mod tests {
         // Setup sort expression
         let exec_props = ExecutionProps::new();
         let df_schema = DFSchema::try_from_qualified_schema("test", schema.as_ref())?;
-        let sort_expr = [col("value").sort(true, false)];
+        let sort_expr = [col("value").sort().asc().nulls_last()];
         let sort_ordering = sort_expr
             .map(|expr| {
                 create_physical_sort_expr(&expr, &df_schema, &exec_props).unwrap()

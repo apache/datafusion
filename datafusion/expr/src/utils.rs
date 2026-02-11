@@ -499,7 +499,7 @@ pub fn generate_sort_key(
     partition_by.iter().for_each(|e| {
         // By default, create sort key with ASC is true and NULLS LAST to be consistent with
         // PostgreSQL's rule: https://www.postgresql.org/docs/current/queries-order.html
-        let e = e.clone().sort(true, false);
+        let e = e.clone().sort().asc().nulls_last();
         if let Some(pos) = normalized_order_by_keys.iter().position(|key| key.eq(&e)) {
             let order_by_key = &order_by[pos];
             if !final_sort_keys.contains(order_by_key) {
@@ -534,14 +534,12 @@ pub fn compare_sort_expr(
 ) -> Ordering {
     let Sort {
         expr: expr_a,
-        asc: asc_a,
-        nulls_first: nulls_first_a,
+        options: options_a,
     } = sort_expr_a;
 
     let Sort {
         expr: expr_b,
-        asc: asc_b,
-        nulls_first: nulls_first_b,
+        options: options_b,
     } = sort_expr_b;
 
     let ref_indexes_a = find_column_indexes_referenced_by_expr(expr_a, schema);
@@ -564,16 +562,16 @@ pub fn compare_sort_expr(
         }
         Ordering::Equal => {}
     }
-    match (asc_a, asc_b) {
-        (true, false) => {
+    match (options_a.descending, options_b.descending) {
+        (false, true) => {
             return Ordering::Greater;
         }
-        (false, true) => {
+        (true, false) => {
             return Ordering::Less;
         }
         _ => {}
     }
-    match (nulls_first_a, nulls_first_b) {
+    match (options_a.nulls_first, options_b.nulls_first) {
         (true, false) => {
             return Ordering::Less;
         }
@@ -1414,41 +1412,21 @@ mod tests {
         for asc_ in asc_or_desc {
             for nulls_first_ in nulls_first_or_last {
                 let order_by = &[
-                    Sort {
-                        expr: col("age"),
-                        asc: asc_,
-                        nulls_first: nulls_first_,
-                    },
-                    Sort {
-                        expr: col("name"),
-                        asc: asc_,
-                        nulls_first: nulls_first_,
-                    },
+                    Sort::new(col("age"), asc_, nulls_first_),
+                    Sort::new(col("name"), asc_, nulls_first_),
                 ];
 
                 let expected = vec![
                     (
-                        Sort {
-                            expr: col("age"),
-                            asc: asc_,
-                            nulls_first: nulls_first_,
-                        },
+                        Sort::new(col("age"), asc_, nulls_first_),
                         true,
                     ),
                     (
-                        Sort {
-                            expr: col("name"),
-                            asc: asc_,
-                            nulls_first: nulls_first_,
-                        },
+                        Sort::new(col("name"), asc_, nulls_first_),
                         true,
                     ),
                     (
-                        Sort {
-                            expr: col("created_at"),
-                            asc: true,
-                            nulls_first: false,
-                        },
+                        Sort::new(col("created_at"), true, false),
                         true,
                     ),
                 ];

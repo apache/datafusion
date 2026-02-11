@@ -1179,7 +1179,7 @@ impl DataFrame {
     pub fn sort_by(self, expr: Vec<Expr>) -> Result<DataFrame> {
         self.sort(
             expr.into_iter()
-                .map(|e| e.sort(true, false))
+                .map(|e| e.sort().asc().nulls_last())
                 .collect::<Vec<SortExpr>>(),
         )
     }
@@ -1202,8 +1202,8 @@ impl DataFrame {
     ///     .read_csv("tests/data/example_long.csv", CsvReadOptions::new())
     ///     .await?;
     /// let df = df.sort(vec![
-    ///     col("a").sort(false, true), // a DESC, nulls first
-    ///     col("b").sort(true, false), // b ASC, nulls last
+    ///     col("a").sort().desc().nulls_first(), // a DESC, nulls first
+    ///     col("b").sort().asc().nulls_last(), // b ASC, nulls last
     /// ])?;
     /// let expected = vec![
     ///     "+---+---+---+",
@@ -2023,7 +2023,7 @@ impl DataFrame {
     /// // Sort the data by column "b" and write it to a new location
     /// ctx.read_csv("tests/data/example.csv", CsvReadOptions::new())
     ///     .await?
-    ///     .sort(vec![col("b").sort(true, true)])? // sort by b asc, nulls first
+    ///     .sort(vec![col("b").sort().asc().nulls_first()])? // sort by b asc, nulls first
     ///     .write_csv(
     ///         "output.csv",
     ///         DataFrameWriteOptions::new(),
@@ -2097,7 +2097,7 @@ impl DataFrame {
     /// // Sort the data by column "b" and write it to a new location
     /// ctx.read_csv("tests/data/example.csv", CsvReadOptions::new())
     ///     .await?
-    ///     .sort(vec![col("b").sort(true, true)])? // sort by b asc, nulls first
+    ///     .sort(vec![col("b").sort().asc().nulls_first()])? // sort by b asc, nulls first
     ///     .write_json("output.json", DataFrameWriteOptions::new(), None)
     ///     .await?;
     /// # fs::remove_file("output.json")?;

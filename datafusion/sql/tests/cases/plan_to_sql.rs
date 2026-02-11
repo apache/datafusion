@@ -1729,7 +1729,7 @@ fn test_sort_with_push_down_fetch() -> Result<()> {
 
     let plan = table_scan(Some("t1"), &schema, None)?
         .project(vec![col("id"), col("age")])?
-        .sort_with_limit(vec![col("age").sort(true, true)], Some(10))?
+        .sort_with_limit(vec![col("age").sort().asc().nulls_first()], Some(10))?
         .build()?;
 
     let sql = plan_to_sql(&plan)?;
@@ -2614,7 +2614,7 @@ fn test_unparse_window() -> Result<()> {
         params: WindowFunctionParams {
             args: vec![],
             partition_by: vec![col("k")],
-            order_by: vec![col("v").sort(true, true)],
+            order_by: vec![col("v").sort().asc().nulls_first()],
             window_frame: WindowFrame::new(None),
             null_treatment: None,
             distinct: false,

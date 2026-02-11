@@ -159,10 +159,10 @@ mod tests {
     fn eliminate_sort_exprs_with_options() -> Result<()> {
         let table_scan = test_table_scan().unwrap();
         let sort_exprs = vec![
-            col("a").sort(true, true),
-            col("b").sort(true, false),
-            col("a").sort(false, false),
-            col("b").sort(false, true),
+            col("a").sort().asc().nulls_first(),
+            col("b").sort().asc().nulls_last(),
+            col("a").sort().desc().nulls_last(),
+            col("b").sort().desc().nulls_first(),
         ];
         let plan = LogicalPlanBuilder::from(table_scan)
             .sort(sort_exprs)?

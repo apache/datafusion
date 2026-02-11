@@ -138,7 +138,7 @@ impl SessionContextGenerator {
                     .dataset
                     .sort_keys
                     .iter()
-                    .map(|key| col(key).sort(true, true))
+                    .map(|key| col(key).sort().asc().nulls_first().into())
                     .collect::<Vec<_>>();
                 (provider.with_sort_order(vec![sort_exprs]), true)
             } else {

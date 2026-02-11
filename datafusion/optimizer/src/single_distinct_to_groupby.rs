@@ -687,7 +687,7 @@ mod tests {
             vec![col("a")],
             false,
             None,
-            vec![col("a").sort(true, false)],
+            vec![col("a").sort().asc().nulls_last()],
             None,
         ));
         let plan = LogicalPlanBuilder::from(table_scan)
@@ -712,7 +712,7 @@ mod tests {
         let expr = count_udaf()
             .call(vec![col("a")])
             .distinct()
-            .order_by(vec![col("a").sort(true, false)])
+            .order_by(vec![col("a").sort().asc().nulls_last()])
             .build()?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(vec![col("c")], vec![sum(col("a")), expr])?
@@ -737,7 +737,7 @@ mod tests {
             .call(vec![col("a")])
             .distinct()
             .filter(col("a").gt(lit(5)))
-            .order_by(vec![col("a").sort(true, false)])
+            .order_by(vec![col("a").sort().asc().nulls_last()])
             .build()?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(vec![col("c")], vec![sum(col("a")), expr])?

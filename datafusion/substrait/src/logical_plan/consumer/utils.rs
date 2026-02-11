@@ -443,11 +443,7 @@ pub async fn from_substrait_sorts(
             None => not_impl_err!("Sort without sort kind is invalid"),
         };
         let (asc, nulls_first) = asc_nullfirst.unwrap();
-        sorts.push(Sort {
-            expr,
-            asc,
-            nulls_first,
-        });
+        sorts.push(Sort::new(expr, asc, nulls_first));
     }
     Ok(sorts)
 }

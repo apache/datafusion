@@ -248,7 +248,7 @@ impl ListingOptions {
     /// # use datafusion_datasource_parquet::file_format::ParquetFormat;
     ///
     /// // Tell datafusion that the files are sorted by column "a"
-    /// let file_sort_order = vec![vec![col("a").sort(true, true)]];
+    /// let file_sort_order = vec![vec![col("a").sort().asc().nulls_first()]];
     ///
     /// let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()))
     ///     .with_file_sort_order(file_sort_order.clone());

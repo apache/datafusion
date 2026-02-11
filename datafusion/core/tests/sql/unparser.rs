@@ -200,7 +200,10 @@ async fn sort_batches(
         .iter()
         // Use Column directly, col() causes the column names to be normalized to lowercase
         .map(|f| {
-            Expr::Column(Column::new_unqualified(f.name().to_string())).sort(true, false)
+            Expr::Column(Column::new_unqualified(f.name().to_string()))
+                .sort()
+                .asc()
+                .nulls_last()
         })
         .collect_vec();
     if !sort_exprs.is_empty() {

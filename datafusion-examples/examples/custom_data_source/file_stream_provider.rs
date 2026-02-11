@@ -180,7 +180,7 @@ mod non_windows {
         ]));
 
         // Specify the ordering:
-        let order = vec![vec![datafusion::logical_expr::col("a1").sort(true, false)]];
+        let order = vec![vec![datafusion::logical_expr::col("a1").sort().asc().nulls_last()]];
 
         let provider = fifo_table(schema.clone(), fifo_path, order.clone());
         ctx.register_table("fifo", provider)?;

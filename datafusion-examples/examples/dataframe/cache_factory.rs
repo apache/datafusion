@@ -70,7 +70,7 @@ pub async fn cache_dataframe_with_custom_logic() -> Result<()> {
         .await?;
 
     let df1 = df_cached.clone().filter(col("car").eq(lit("red")))?;
-    let df2 = df1.clone().sort(vec![col("car").sort(true, false)])?;
+    let df2 = df1.clone().sort(vec![col("car").sort().asc().nulls_last()])?;
 
     // should see log for caching only once
     df_cached.show().await?;
