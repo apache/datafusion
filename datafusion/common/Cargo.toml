@@ -75,7 +75,7 @@ indexmap = { workspace = true }
 itertools = { workspace = true }
 libc = "0.2.180"
 log = { workspace = true }
-object_store = { workspace = true, optional = true }
+object_store = { workspace = true, optional = true, default-features = true }
 parquet = { workspace = true, optional = true, default-features = true }
 paste = { workspace = true }
 recursive = { workspace = true, optional = true }

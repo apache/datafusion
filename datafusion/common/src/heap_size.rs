@@ -29,6 +29,7 @@ use half::f16;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
+use object_store::path::Path;
 
 /// This is a temporary solution until <https://github.com/apache/datafusion/pull/19599> and
 /// <https://github.com/apache/arrow-rs/pull/9138> are resolved.
@@ -176,6 +177,12 @@ impl DFHeapSize for DataType {
             Map(m, b) => m.heap_size() + b.heap_size(),
             RunEndEncoded(a, b) => a.heap_size() + b.heap_size(),
         }
+    }
+}
+
+impl DFHeapSize for Path {
+    fn heap_size(&self) -> usize {
+      self.as_ref().heap_size()
     }
 }
 
