@@ -16,14 +16,16 @@
 // under the License.
 
 use crate::cache::CacheAccessor;
-use crate::cache::cache_manager::{CachedFileMetadata, FileMetadataCache, FileStatisticsCache, FileStatisticsCacheEntry};
+use crate::cache::cache_manager::{
+    CachedFileMetadata, FileMetadataCache, FileStatisticsCache, FileStatisticsCacheEntry,
+};
+use object_store::path::Path;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
 pub use crate::cache::DefaultFilesMetadataCache;
 use crate::cache::lru_queue::LruQueue;
 use datafusion_common::heap_size::DFHeapSize;
-use object_store::path::Path;
 
 /// Default implementation of [`FileStatisticsCache`]
 ///
@@ -550,7 +552,10 @@ mod tests {
         let (meta_2, value_2) = create_cached_file_metadata_with_stats("test2.parquet");
         let (meta_3, value_3) = create_cached_file_metadata_with_stats("test3.parquet");
 
-        let limit_for_2_entries = &meta_1.location.heap_size() + value_1.heap_size() +  &meta_2.location.heap_size() + value_2.heap_size();
+        let limit_for_2_entries = &meta_1.location.heap_size()
+            + value_1.heap_size()
+            + &meta_2.location.heap_size()
+            + value_2.heap_size();
 
         // create a cache with a limit which fits exactly 2 entries
         let cache = DefaultFileStatisticsCache::new(limit_for_2_entries);
@@ -582,7 +587,10 @@ mod tests {
 
         cache.remove(&meta_2.location);
         assert_eq!(cache.len(), 1);
-        assert_eq!(cache.memory_used(),  &meta_3.location.heap_size()  + value_3.heap_size());
+        assert_eq!(
+            cache.memory_used(),
+            &meta_3.location.heap_size() + value_3.heap_size()
+        );
 
         cache.clear();
         assert_eq!(cache.len(), 0);
