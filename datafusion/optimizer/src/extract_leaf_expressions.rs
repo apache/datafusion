@@ -187,8 +187,9 @@ fn extract_from_plan(
                 Some(plan) => Ok(plan),
                 // No extractions for this input — recover the LogicalPlan
                 // without cloning (refcount is 1 since build returned None).
-                None => Ok(Arc::try_unwrap(input_arc)
-                    .unwrap_or_else(|arc| (*arc).clone())),
+                None => {
+                    Ok(Arc::try_unwrap(input_arc).unwrap_or_else(|arc| (*arc).clone()))
+                }
             }
         })
         .collect::<Result<Vec<_>>>()?;
@@ -847,7 +848,10 @@ fn split_and_push_projection(
     // (i.e., they came from column refs inside extracted aliases), a merge
     // into an inner projection will widen the schema with those extra columns,
     // requiring a recovery projection to restore the original schema.
-    if columns_needed.iter().any(|c| !standalone_columns.contains(c)) {
+    if columns_needed
+        .iter()
+        .any(|c| !standalone_columns.contains(c))
+    {
         needs_recovery = true;
     }
 
@@ -935,9 +939,7 @@ fn push_extraction_pairs(
         // alias) or a plain column (Case B). Uncaptured expressions (e.g.
         // `col AS __common_expr_1` from CSE, or complex expressions with
         // extracted sub-parts) would be lost during the merge.
-        LogicalPlan::Projection(_)
-            if proj_exprs_captured == proj.expr.len() =>
-        {
+        LogicalPlan::Projection(_) if proj_exprs_captured == proj.expr.len() => {
             let target_schema = Arc::clone(proj_input.schema());
             let merged = build_extraction_projection_impl(
                 pairs,
@@ -1958,7 +1960,9 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(vec![col("user")], vec![count(lit(1))])?
             .project(vec![
-                leaf_udf(col("user"), "name").is_not_null().alias("has_name"),
+                leaf_udf(col("user"), "name")
+                    .is_not_null()
+                    .alias("has_name"),
                 col("COUNT(Int32(1))"),
             ])?
             .build()?;
@@ -2368,16 +2372,14 @@ mod tests {
         assert_eq!(find_owning_input(&unqualified, &input_column_sets), None);
 
         // Qualified "right.user" matches only the right set — must return Some(1)
-        let qualified_right =
-            Expr::Column(Column::new(Some("right"), "user"));
+        let qualified_right = Expr::Column(Column::new(Some("right"), "user"));
         assert_eq!(
             find_owning_input(&qualified_right, &input_column_sets),
             Some(1)
         );
 
         // Qualified "test.user" matches only the left set — must return Some(0)
-        let qualified_left =
-            Expr::Column(Column::new(Some("test"), "user"));
+        let qualified_left = Expr::Column(Column::new(Some("test"), "user"));
         assert_eq!(
             find_owning_input(&qualified_left, &input_column_sets),
             Some(0)
@@ -2926,8 +2928,7 @@ mod tests {
     /// (e.g. `user`) that is NOT a standalone expression in the projection,
     /// the merge into the inner projection should still succeed.
     #[test]
-    fn test_merge_extraction_into_projection_with_column_ref_inflation() -> Result<()>
-    {
+    fn test_merge_extraction_into_projection_with_column_ref_inflation() -> Result<()> {
         let table_scan = test_table_scan_with_struct()?;
 
         // Inner projection (simulates a trimmed projection)
