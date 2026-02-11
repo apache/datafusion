@@ -249,7 +249,7 @@ fn routing_extract(
                 // Track columns that the parent node references so the
                 // extraction projection includes them as pass-through.
                 // Without this, the extraction projection would only
-                // contain __extracted_N aliases, and the parent couldn't
+                // contain __datafusion_extracted_N aliases, and the parent couldn't
                 // resolve its other column references.
                 if let Expr::Column(col) = &e
                     && let Some(idx) = find_owning_input(&e, input_column_sets)
@@ -673,7 +673,7 @@ fn try_push_input(
 /// nodes, and adds a recovery projection if needed.
 ///
 /// Handles both:
-/// - **Pure extraction projections** (all `__extracted` aliases + columns)
+/// - **Pure extraction projections** (all `__datafusion_extracted` aliases + columns)
 /// - **Mixed projections** (containing `MoveTowardsLeafNodes` sub-expressions)
 ///
 /// Returns `Some(new_subtree)` if extractions were pushed down,
@@ -688,16 +688,16 @@ fn try_push_input(
 ///       TableScan
 ///
 /// Phase 1 (Split):
-///   extraction_pairs: [(user['name'], "__extracted_1")]
-///   recovery_exprs:   [__extracted_1 IS NOT NULL AS has_name, id]
+///   extraction_pairs: [(user['name'], "__datafusion_extracted_1")]
+///   recovery_exprs:   [__datafusion_extracted_1 IS NOT NULL AS has_name, id]
 ///
 /// Phase 2 (Push):
 ///   Push extraction projection through Filter toward TableScan
 ///
 /// Phase 3 (Recovery):
-///   Projection: __extracted_1 IS NOT NULL AS has_name, id       <-- recovery
+///   Projection: __datafusion_extracted_1 IS NOT NULL AS has_name, id       <-- recovery
 ///     Filter: ...
-///       Projection: user['name'] AS __extracted_1, id           <-- extraction (pushed)
+///       Projection: user['name'] AS __datafusion_extracted_1, id           <-- extraction (pushed)
 ///         TableScan
 /// ```
 fn split_and_push_projection(
@@ -711,12 +711,12 @@ fn split_and_push_projection(
     // For each projection expression, collect extraction pairs and build
     // recovery expressions.
     //
-    // Pre-existing `__extracted` aliases are inserted into the extractor's
-    // `IndexMap` with the **full** `Expr::Alias(…)` as the key, so the
-    // alias name participates in equality. This prevents collisions when
-    // CSE rewrites produce the same inner expression under different alias
-    // names (e.g. `__common_expr_4 AS __extracted_1` and
-    // `__common_expr_4 AS __extracted_3`). New extractions from
+    // Pre-existing `__datafusion_extracted` aliases are inserted into the
+    // extractor's `IndexMap` with the **full** `Expr::Alias(…)` as the key,
+    // so the alias name participates in equality. This prevents collisions
+    // when CSE rewrites produce the same inner expression under different
+    // alias names (e.g. `__common_expr_4 AS __datafusion_extracted_1` and
+    // `__common_expr_4 AS __datafusion_extracted_3`). New extractions from
     // `routing_extract` use bare (non-Alias) keys and get normal dedup.
     //
     // When building the final `extraction_pairs`, the Alias wrapper is
@@ -781,7 +781,7 @@ fn split_and_push_projection(
 
             // If the expression was transformed (i.e., has extracted sub-parts),
             // it differs from what the pushed projection outputs → needs recovery.
-            // Also, any non-column, non-__extracted expression needs recovery
+            // Also, any non-column, non-__datafusion_extracted expression needs recovery
             // because the pushed extraction projection won't output it directly.
             if transformed.transformed || !matches!(expr, Expr::Column(_)) {
                 needs_recovery = true;
@@ -820,30 +820,18 @@ fn split_and_push_projection(
     )?;
 
     // ── Phase 3: Recovery ───────────────────────────────────────────────
-    match (pushed, needs_recovery) {
-        (Some(pushed_plan), true) => {
-            // Wrap with recovery projection
-            let recovery = LogicalPlan::Projection(Projection::try_new(
-                recovery_exprs,
-                Arc::new(pushed_plan),
-            )?);
-            Ok(Some(recovery))
-        }
-        (Some(pushed_plan), false) => {
-            // No recovery needed (pure extraction projection)
-            Ok(Some(pushed_plan))
-        }
-        (None, true) => {
-            // Push returned None but we still have extractions to apply.
-            // Build the extraction projection in-place (not pushed) so the
-            // recovery can resolve extracted expressions.
+    // Determine the base plan: either the pushed result or an in-place extraction.
+    let base_plan = match pushed {
+        Some(plan) => plan,
+        None => {
             if !has_new_extractions {
-                // Only pre-existing __extracted aliases and columns, no new
+                // Only pre-existing __datafusion_extracted aliases and columns, no new
                 // extractions from routing_extract. The original projection is
                 // already an extraction projection that couldn't be pushed
                 // further. Return None.
                 return Ok(None);
             }
+            // Build extraction projection in-place (couldn't push down)
             let input_arc = Arc::clone(input);
             let extraction = build_extraction_projection_impl(
                 &extraction_pairs,
@@ -851,17 +839,19 @@ fn split_and_push_projection(
                 &input_arc,
                 input_schema.as_ref(),
             )?;
-            let extraction_plan = LogicalPlan::Projection(extraction);
-            let recovery = LogicalPlan::Projection(Projection::try_new(
-                recovery_exprs,
-                Arc::new(extraction_plan),
-            )?);
-            Ok(Some(recovery))
+            LogicalPlan::Projection(extraction)
         }
-        (None, false) => {
-            // No extractions could be pushed and no recovery needed
-            Ok(None)
-        }
+    };
+
+    // Wrap with recovery projection if the output schema changed
+    if needs_recovery {
+        let recovery = LogicalPlan::Projection(Projection::try_new(
+            recovery_exprs,
+            Arc::new(base_plan),
+        )?);
+        Ok(Some(recovery))
+    } else {
+        Ok(Some(base_plan))
     }
 }
 
@@ -1013,16 +1003,16 @@ fn route_to_inputs(
 ///
 /// ```text
 /// Extraction projection above a Join:
-///   Projection: left.user['name'] AS __extracted_1, right.order['total'] AS __extracted_2, ...
+///   Projection: left.user['name'] AS __datafusion_extracted_1, right.order['total'] AS __datafusion_extracted_2, ...
 ///     Join: left.id = right.user_id
 ///       TableScan: left [id, user]
 ///       TableScan: right [user_id, order]
 ///
 /// After routing each expression to its owning input:
 ///   Join: left.id = right.user_id
-///     Projection: user['name'] AS __extracted_1, id, user              <-- left-side extraction
+///     Projection: user['name'] AS __datafusion_extracted_1, id, user              <-- left-side extraction
 ///       TableScan: left [id, user]
-///     Projection: order['total'] AS __extracted_2, user_id, order      <-- right-side extraction
+///     Projection: order['total'] AS __datafusion_extracted_2, user_id, order      <-- right-side extraction
 ///       TableScan: right [user_id, order]
 /// ```
 fn try_push_into_inputs(
