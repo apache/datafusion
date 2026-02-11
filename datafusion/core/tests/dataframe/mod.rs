@@ -6163,7 +6163,7 @@ async fn test_alias() -> Result<()> {
         .alias("table_alias")?;
     // All output column qualifiers are changed to "table_alias"
     df.schema().columns().iter().for_each(|c| {
-        assert_eq!(c.relation, Some("table_alias".into()));
+        assert_eq!(c.relation, Some(Box::new("table_alias".into())));
     });
 
     let plan = df

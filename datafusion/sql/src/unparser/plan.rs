@@ -47,7 +47,7 @@ use datafusion_expr::expr::OUTER_REFERENCE_COLUMN_PREFIX;
 use datafusion_expr::{
     BinaryExpr, Distinct, Expr, JoinConstraint, JoinType, LogicalPlan,
     LogicalPlanBuilder, Operator, Projection, SortExpr, TableScan, Unnest,
-    UserDefinedLogicalNode, expr::Alias,
+    UserDefinedLogicalNode,
 };
 use sqlparser::ast::{self, Ident, OrderByKind, SetExpr, TableAliasColumnDef};
 use std::{sync::Arc, vec};
@@ -1003,9 +1003,9 @@ impl Unparser<'_> {
     ///
     /// `outer_ref` is the display result of [Expr::OuterReferenceColumn]
     fn check_unnest_placeholder_with_outer_ref(expr: &Expr) -> Option<UnnestInputType> {
-        if let Expr::Alias(Alias { expr, .. }) = expr
-            && let Expr::Column(Column { name, .. }) = expr.as_ref()
-            && let Some(prefix) = name.strip_prefix(UNNEST_PLACEHOLDER)
+        if let Expr::Alias(alias) = expr
+            && let Expr::Column(col) = alias.expr.as_ref()
+            && let Some(prefix) = col.name.strip_prefix(UNNEST_PLACEHOLDER)
         {
             if prefix.starts_with(&format!("({OUTER_REFERENCE_COLUMN_PREFIX}(")) {
                 return Some(UnnestInputType::OuterReference);
@@ -1207,16 +1207,16 @@ impl Unparser<'_> {
 
     fn select_item_to_sql(&self, expr: &Expr) -> Result<ast::SelectItem> {
         match expr {
-            Expr::Alias(Alias { expr, name, .. }) => {
-                let inner = self.expr_to_sql(expr)?;
+            Expr::Alias(alias) => {
+                let inner = self.expr_to_sql(&alias.expr)?;
 
                 // Determine the alias name to use
                 let col_name = if let Some(rewritten_name) =
-                    self.dialect.col_alias_overrides(name)?
+                    self.dialect.col_alias_overrides(&alias.name)?
                 {
                     rewritten_name.to_string()
                 } else {
-                    name.to_string()
+                    alias.name.to_string()
                 };
 
                 Ok(ast::SelectItem::ExprWithAlias {
@@ -1280,22 +1280,13 @@ impl Unparser<'_> {
         let mut object_names = Vec::with_capacity(join_conditions.len());
         for (left, right) in join_conditions {
             match (left, right) {
-                (
-                    Expr::Column(Column {
-                        relation: _,
-                        name: left_name,
-                        spans: _,
-                    }),
-                    Expr::Column(Column {
-                        relation: _,
-                        name: right_name,
-                        spans: _,
-                    }),
-                ) if left_name == right_name => {
+                (Expr::Column(left_col), Expr::Column(right_col))
+                    if left_col.name == right_col.name =>
+                {
                     // For example, if the join condition `t1.id = t2.id`
                     // this is represented as two columns like `[t1.id, t2.id]`
                     // This code forms `id` (without relation name)
-                    let ident = self.new_ident_quoted_if_needs(left_name.to_string());
+                    let ident = self.new_ident_quoted_if_needs(left_col.name.to_string());
                     object_names.push(ast::ObjectName::from(vec![ident]));
                 }
                 // USING is only valid with matching column names; arbitrary expressions

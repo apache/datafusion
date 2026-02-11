@@ -32,7 +32,7 @@ use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
 use datafusion::catalog::{Session, TableFunctionImpl};
-use datafusion::common::{Column, plan_err};
+use datafusion::common::plan_err;
 use datafusion::datasource::TableProvider;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::error::Result;
@@ -329,7 +329,7 @@ impl TableFunctionImpl for ParquetMetadataFunc {
     fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
         let filename = match exprs.first() {
             Some(Expr::Literal(ScalarValue::Utf8(Some(s)), _)) => s, // single quote: parquet_metadata('x.parquet')
-            Some(Expr::Column(Column { name, .. })) => name, // double quote: parquet_metadata("x.parquet")
+            Some(Expr::Column(col)) => &col.name, // double quote: parquet_metadata("x.parquet")
             _ => {
                 return plan_err!(
                     "parquet_metadata requires string argument as its input"

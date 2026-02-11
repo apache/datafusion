@@ -444,7 +444,7 @@ impl LogicalPlan {
                     .exec_columns
                     .iter()
                     .cloned()
-                    .map(Expr::Column)
+                    .map(|c| Expr::Column(c))
                     .collect::<Vec<_>>();
                 exprs.apply_elements(f)
             }

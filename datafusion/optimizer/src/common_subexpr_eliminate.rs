@@ -354,9 +354,8 @@ impl CommonSubexprEliminate {
                                 } else {
                                     expr_rewritten
                                 };
-                                if let Expr::Alias(Alias { expr, name, .. }) =
-                                    expr_rewritten
-                                {
+                                if let Expr::Alias(alias) = expr_rewritten {
+                                    let Alias { expr, name, .. } = *alias;
                                     agg_exprs.push(expr.alias(&name));
                                     proj_exprs
                                         .push(Expr::Column(Column::from_name(name)));

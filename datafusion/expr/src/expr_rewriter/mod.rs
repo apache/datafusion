@@ -22,7 +22,7 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use crate::expr::{Alias, Sort, Unnest};
+use crate::expr::{Sort, Unnest};
 use crate::logical_plan::Projection;
 use crate::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
 
@@ -179,9 +179,9 @@ pub fn create_col_from_scalar_expr(
     subqry_alias: String,
 ) -> Result<Column> {
     match scalar_expr {
-        Expr::Alias(Alias { name, .. }) => Ok(Column::new(
+        Expr::Alias(boxed_alias) => Ok(Column::new(
             Some::<TableReference>(subqry_alias.into()),
-            name,
+            boxed_alias.name.clone(),
         )),
         Expr::Column(col) => Ok(col.with_relation(subqry_alias.into())),
         _ => {
@@ -205,8 +205,8 @@ pub fn unnormalize_cols(exprs: impl IntoIterator<Item = Expr>) -> Vec<Expr> {
 pub fn strip_outer_reference(expr: Expr) -> Expr {
     expr.transform(|expr| {
         Ok({
-            if let Expr::OuterReferenceColumn(_, col) = expr {
-                Transformed::yes(Expr::Column(col))
+            if let Expr::OuterReferenceColumn(outer_ref) = expr {
+                Transformed::yes(Expr::Column(outer_ref.column))
             } else {
                 Transformed::no(expr)
             }
@@ -255,9 +255,10 @@ fn coerce_exprs_for_schema(
             let new_type = dst_schema.field(idx).data_type();
             if new_type != &expr.get_type(src_schema)? {
                 match expr {
-                    Expr::Alias(Alias { expr, name, .. }) => {
-                        Ok(expr.cast_to(new_type, src_schema)?.alias(name))
-                    }
+                    Expr::Alias(boxed_alias) => Ok(boxed_alias
+                        .expr
+                        .cast_to(new_type, src_schema)?
+                        .alias(boxed_alias.name)),
                     #[expect(deprecated)]
                     Expr::Wildcard { .. } => Ok(expr),
                     _ => {
@@ -284,7 +285,7 @@ fn coerce_exprs_for_schema(
 #[inline]
 pub fn unalias(expr: Expr) -> Expr {
     match expr {
-        Expr::Alias(Alias { expr, .. }) => unalias(*expr),
+        Expr::Alias(boxed_alias) => unalias(*boxed_alias.expr),
         _ => expr,
     }
 }

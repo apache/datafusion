@@ -29,7 +29,12 @@ use std::fmt;
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Column {
     /// relation/table reference.
-    pub relation: Option<TableReference>,
+    ///
+    /// Boxed to reduce the size of the `Column` struct (and thus `Expr` enum).
+    /// `TableReference` is ~56 bytes but `Box<TableReference>` is only 8 bytes.
+    /// This keeps `Column` small enough to be stored inline in `Expr` without
+    /// boxing the entire `Column`, avoiding heap allocation on the hottest path.
+    pub relation: Option<Box<TableReference>>,
     /// field/column name.
     pub name: String,
     /// Original source code location, if known
@@ -57,7 +62,7 @@ impl Column {
         name: impl Into<String>,
     ) -> Self {
         Self {
-            relation: relation.map(|r| r.into()),
+            relation: relation.map(|r| Box::new(r.into())),
             name: name.into(),
             spans: Spans::new(),
         }
@@ -91,24 +96,24 @@ impl Column {
         let (relation, name) = match idents.len() {
             1 => (None, idents.remove(0)),
             2 => (
-                Some(TableReference::Bare {
+                Some(Box::new(TableReference::Bare {
                     table: idents.remove(0).into(),
-                }),
+                })),
                 idents.remove(0),
             ),
             3 => (
-                Some(TableReference::Partial {
+                Some(Box::new(TableReference::Partial {
                     schema: idents.remove(0).into(),
                     table: idents.remove(0).into(),
-                }),
+                })),
                 idents.remove(0),
             ),
             4 => (
-                Some(TableReference::Full {
+                Some(Box::new(TableReference::Full {
                     catalog: idents.remove(0).into(),
                     schema: idents.remove(0).into(),
                     table: idents.remove(0).into(),
-                }),
+                })),
                 idents.remove(0),
             ),
             // any expression that failed to parse or has more than 4 period delimited
@@ -321,7 +326,7 @@ impl Column {
     /// Qualifies the column with the given table reference.
     pub fn with_relation(&self, relation: TableReference) -> Self {
         Self {
-            relation: Some(relation),
+            relation: Some(Box::new(relation)),
             ..self.clone()
         }
     }
@@ -350,14 +355,22 @@ impl From<String> for Column {
 /// Create a column, use qualifier and field name
 impl From<(Option<&TableReference>, &Field)> for Column {
     fn from((relation, field): (Option<&TableReference>, &Field)) -> Self {
-        Self::new(relation.cloned(), field.name())
+        Self {
+            relation: relation.map(|r| Box::new(r.clone())),
+            name: field.name().to_string(),
+            spans: Spans::new(),
+        }
     }
 }
 
 /// Create a column, use qualifier and field name
 impl From<(Option<&TableReference>, &FieldRef)> for Column {
     fn from((relation, field): (Option<&TableReference>, &FieldRef)) -> Self {
-        Self::new(relation.cloned(), field.name())
+        Self {
+            relation: relation.map(|r| Box::new(r.clone())),
+            name: field.name().to_string(),
+            spans: Spans::new(),
+        }
     }
 }
 
@@ -380,7 +393,16 @@ impl fmt::Display for Column {
 mod tests {
     use super::*;
     use arrow::datatypes::{DataType, SchemaBuilder};
+    use std::mem::size_of;
     use std::sync::Arc;
+
+    #[test]
+    fn test_column_size() {
+        // Column should be small enough to fit inline in Expr without boxing.
+        // Boxing TableReference (56 bytes -> 8 bytes pointer) shrinks Column
+        // from 104 to 56 bytes, keeping it inline in Expr.
+        assert_eq!(size_of::<Column>(), 56);
+    }
 
     fn create_qualified_schema(qualifier: &str, names: Vec<&str>) -> Result<DFSchema> {
         let mut schema_builder = SchemaBuilder::new();

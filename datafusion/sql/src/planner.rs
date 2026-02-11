@@ -567,7 +567,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             Ok(())
                         } else {
                             Err(field_not_found(
-                                col.relation.clone(),
+                                col.relation.as_deref().cloned(),
                                 col.name.as_str(),
                                 schema,
                             ))

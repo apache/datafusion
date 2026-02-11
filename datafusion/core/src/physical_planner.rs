@@ -79,7 +79,7 @@ use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_expr::dml::{CopyTo, InsertOp};
 use datafusion_expr::expr::{
-    AggregateFunction, AggregateFunctionParams, Alias, GroupingSet, NullTreatment,
+    AggregateFunction, AggregateFunctionParams, GroupingSet, NullTreatment,
     WindowFunction, WindowFunctionParams, physical_name,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
@@ -719,9 +719,9 @@ impl DefaultPhysicalPlanner {
                         } = &window_fun.as_ref().params;
                         generate_sort_key(partition_by, order_by)
                     }
-                    Expr::Alias(Alias { expr, .. }) => {
+                    Expr::Alias(alias) => {
                         // Convert &Box<T> to &T
-                        match &**expr {
+                        match alias.expr.as_ref() {
                             Expr::WindowFunction(window_fun) => {
                                 let WindowFunctionParams {
                                     partition_by,
@@ -2151,7 +2151,7 @@ pub fn create_window_expr(
 ) -> Result<Arc<dyn WindowExpr>> {
     // unpack aliased logical expressions, e.g. "sum(col) over () as total"
     let (name, e) = match e {
-        Expr::Alias(Alias { expr, name, .. }) => (name.clone(), expr.as_ref()),
+        Expr::Alias(alias) => (alias.name.clone(), alias.expr.as_ref()),
         _ => (e.schema_name().to_string(), e),
     };
     create_window_expr_with_name(e, name, logical_schema, execution_props)
@@ -2244,9 +2244,13 @@ pub fn create_aggregate_expr_and_maybe_filter(
     // Some functions like `count_all()` create internal aliases,
     // Unwrap all alias layers to get to the underlying aggregate function
     let (name, human_display, e) = match e {
-        Expr::Alias(Alias { name, .. }) => {
+        Expr::Alias(alias) => {
             let unaliased = e.clone().unalias_nested().data;
-            (Some(name.clone()), e.human_display().to_string(), unaliased)
+            (
+                Some(alias.name.clone()),
+                e.human_display().to_string(),
+                unaliased,
+            )
         }
         Expr::AggregateFunction(_) => (
             Some(e.schema_name().to_string()),

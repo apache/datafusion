@@ -399,7 +399,7 @@ impl DFSchema {
     /// See [Self::index_of_column] for a version that returns an error if the
     /// column is not found
     pub fn maybe_index_of_column(&self, col: &Column) -> Option<usize> {
-        self.index_of_column_by_name(col.relation.as_ref(), &col.name)
+        self.index_of_column_by_name(col.relation.as_deref(), &col.name)
     }
 
     /// Find the index of the column with the given qualifier and name,
@@ -408,13 +408,14 @@ impl DFSchema {
     /// See [Self::maybe_index_of_column] for a version that returns `None` if
     /// the column is not found
     pub fn index_of_column(&self, col: &Column) -> Result<usize> {
-        self.maybe_index_of_column(col)
-            .ok_or_else(|| field_not_found(col.relation.clone(), &col.name, self))
+        self.maybe_index_of_column(col).ok_or_else(|| {
+            field_not_found(col.relation.clone().map(|r| *r), &col.name, self)
+        })
     }
 
     /// Check if the column is in the current schema
     pub fn is_column_from_schema(&self, col: &Column) -> bool {
-        self.index_of_column_by_name(col.relation.as_ref(), &col.name)
+        self.index_of_column_by_name(col.relation.as_deref(), &col.name)
             .is_some()
     }
 
@@ -557,7 +558,7 @@ impl DFSchema {
         &self,
         column: &Column,
     ) -> Result<(Option<&TableReference>, &FieldRef)> {
-        self.qualified_field_with_name(column.relation.as_ref(), &column.name)
+        self.qualified_field_with_name(column.relation.as_deref(), &column.name)
     }
 
     /// Find if the field exists with the given name

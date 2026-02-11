@@ -30,13 +30,13 @@ use arrow::temporal_conversions::SECONDS_IN_DAY;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::{
-    Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, TableReference,
+    DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, TableReference,
     exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err,
     plan_err,
 };
 use datafusion_expr::expr::{
-    self, AggregateFunctionParams, Alias, Between, BinaryExpr, Case, Exists, InList,
-    InSubquery, Like, ScalarFunction, SetComparison, Sort, WindowFunction,
+    self, AggregateFunctionParams, Between, BinaryExpr, Case, Exists, InList, InSubquery,
+    Like, ScalarFunction, SetComparison, Sort, WindowFunction,
 };
 use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
 use datafusion_expr::expr_schema::cast_subquery;
@@ -759,7 +759,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
             | Expr::Wildcard { .. }
             | Expr::GroupingSet(_)
             | Expr::Placeholder(_)
-            | Expr::OuterReferenceColumn(_, _) => Ok(Transformed::no(expr)),
+            | Expr::OuterReferenceColumn(_) => Ok(Transformed::no(expr)),
         }
     }
 }
@@ -1227,15 +1227,13 @@ fn project_with_column_index(
         .into_iter()
         .enumerate()
         .map(|(i, e)| match e {
-            Expr::Alias(Alias { ref name, .. }) if name != schema.field(i).name() => {
+            Expr::Alias(ref alias) if alias.name.as_str() != schema.field(i).name() => {
                 Ok(e.unalias().alias(schema.field(i).name()))
             }
-            Expr::Column(Column {
-                relation: _,
-                ref name,
-                spans: _,
-            }) if name != schema.field(i).name() => Ok(e.alias(schema.field(i).name())),
-            Expr::Alias { .. } | Expr::Column { .. } => Ok(e),
+            Expr::Column(ref col) if col.name.as_str() != schema.field(i).name() => {
+                Ok(e.alias(schema.field(i).name()))
+            }
+            Expr::Alias(_) | Expr::Column(_) => Ok(e),
             #[expect(deprecated)]
             Expr::Wildcard { .. } => {
                 plan_err!("Wildcard should be expanded before type coercion")

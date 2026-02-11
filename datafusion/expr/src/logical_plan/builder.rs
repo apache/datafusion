@@ -25,7 +25,7 @@ use std::iter::once;
 use std::sync::Arc;
 
 use crate::dml::CopyTo;
-use crate::expr::{Alias, PlannedReplaceSelectItem, Sort as SortExpr};
+use crate::expr::{PlannedReplaceSelectItem, Sort as SortExpr};
 use crate::expr_rewriter::{
     coerce_plan_expr_for_schema, normalize_col,
     normalize_col_with_schemas_and_ambiguity_check, normalize_cols, normalize_sorts,
@@ -755,8 +755,8 @@ impl LogicalPlanBuilder {
         // As described in https://github.com/apache/datafusion/issues/5293
         let all_aliases = missing_exprs.iter().all(|e| {
             projection_exprs.iter().any(|proj_expr| {
-                if let Expr::Alias(Alias { expr, .. }) = proj_expr {
-                    e == expr.as_ref()
+                if let Expr::Alias(alias) = proj_expr {
+                    e == alias.expr.as_ref()
                 } else {
                     false
                 }
@@ -829,7 +829,11 @@ impl LogicalPlanBuilder {
         }
 
         // remove pushed down sort columns
-        let new_expr = schema.columns().into_iter().map(Expr::Column).collect();
+        let new_expr = schema
+            .columns()
+            .into_iter()
+            .map(|c| Expr::Column(c))
+            .collect();
 
         let is_distinct = false;
         let plan = Self::add_missing_columns(
@@ -1998,14 +2002,14 @@ fn replace_columns(
     replace: &PlannedReplaceSelectItem,
 ) -> Result<Vec<Expr>> {
     for expr in exprs.iter_mut() {
-        if let Expr::Column(Column { name, .. }) = expr
+        if let Expr::Column(col) = expr
             && let Some((_, new_expr)) = replace
                 .items()
                 .iter()
                 .zip(replace.expressions().iter())
-                .find(|(item, _)| item.column_name.value == *name)
+                .find(|(item, _)| item.column_name.value == col.name)
         {
-            *expr = new_expr.clone().alias(name.clone())
+            *expr = new_expr.clone().alias(col.name.clone())
         }
     }
     Ok(exprs)
@@ -2121,7 +2125,7 @@ pub fn wrap_projection_for_join_if_necessary(
         let mut projection = input_schema
             .columns()
             .into_iter()
-            .map(Expr::Column)
+            .map(|c| Expr::Column(c))
             .collect::<Vec<_>>();
         let join_key_items = alias_join_keys
             .iter()
@@ -2507,10 +2511,11 @@ mod tests {
                         name,
                         spans: _,
                     } = *field;
-                    let Some(TableReference::Bare { table }) = relation else {
-                        return plan_err!(
-                            "wrong relation: {relation:?}, expected table name"
-                        );
+                    let Some(table_ref) = relation else {
+                        return plan_err!("wrong relation: None, expected table name");
+                    };
+                    let TableReference::Bare { table } = *table_ref else {
+                        return plan_err!("wrong relation: expected table name");
                     };
                     assert_eq!(*"employee_csv", *table);
                     assert_eq!("id", &name);

@@ -419,16 +419,16 @@ pub(super) fn inject_column_aliases(
         .zip(aliases)
         .map(|(expr, col_alias)| {
             let relation = match &expr {
-                Expr::Column(col) => col.relation.clone(),
+                Expr::Column(col) => col.relation.as_deref().cloned(),
                 _ => None,
             };
 
-            Expr::Alias(Alias {
+            Expr::Alias(Box::new(Alias {
                 expr: Box::new(expr.clone()),
                 relation,
                 name: col_alias.value,
                 metadata: None,
-            })
+            }))
         })
         .collect::<Vec<_>>();
 

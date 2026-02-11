@@ -45,7 +45,7 @@ use datafusion_common::{
 };
 use datafusion_expr::{
     Between, BinaryExpr, Case, Cast, Expr, GroupingSet, Like, Operator, TryCast,
-    expr::{Alias, Exists, InList, ScalarFunction, SetQuantifier, Sort, WindowFunction},
+    expr::{Exists, InList, ScalarFunction, SetQuantifier, Sort, WindowFunction},
 };
 use sqlparser::ast::helpers::attached_token::AttachedToken;
 use sqlparser::tokenizer::Span;
@@ -192,7 +192,7 @@ impl Unparser<'_> {
                 Ok(self.cast_to_sql(expr, data_type)?)
             }
             Expr::Literal(value, _) => Ok(self.scalar_to_sql(value)?),
-            Expr::Alias(Alias { expr, name: _, .. }) => self.expr_to_sql_inner(expr),
+            Expr::Alias(alias) => self.expr_to_sql_inner(&alias.expr),
             Expr::WindowFunction(window_fun) => {
                 let WindowFunction {
                     fun,
@@ -549,7 +549,7 @@ impl Unparser<'_> {
             Expr::Placeholder(p) => {
                 Ok(ast::Expr::value(ast::Value::Placeholder(p.id.to_string())))
             }
-            Expr::OuterReferenceColumn(_, col) => self.col_to_sql(col),
+            Expr::OuterReferenceColumn(outer_ref) => self.col_to_sql(&outer_ref.column),
             Expr::Unnest(unnest) => self.unnest_to_sql(unnest),
         }
     }
@@ -1908,7 +1908,7 @@ mod tests {
             ((col("a") + col("b")).gt(lit(4)), r#"((a + b) > 4)"#),
             (
                 Expr::Column(Column {
-                    relation: Some(TableReference::partial("a", "b")),
+                    relation: Some(Box::new(TableReference::partial("a", "b"))),
                     name: "c".to_string(),
                     spans: Spans::new(),
                 })
@@ -2285,7 +2285,9 @@ mod tests {
             (
                 Expr::Unnest(Unnest {
                     expr: Box::new(Expr::Column(Column {
-                        relation: Some(TableReference::partial("schema", "table")),
+                        relation: Some(Box::new(TableReference::partial(
+                            "schema", "table",
+                        ))),
                         name: "array_col".to_string(),
                         spans: Spans::new(),
                     })),
