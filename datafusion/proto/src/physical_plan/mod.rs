@@ -34,11 +34,11 @@ use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::sink::DataSinkExec;
 use datafusion_datasource::source::{DataSource, DataSourceExec};
+use datafusion_datasource_arrow::source::ArrowSource;
 #[cfg(feature = "avro")]
 use datafusion_datasource_avro::source::AvroSource;
 use datafusion_datasource_csv::file_format::CsvSink;
 use datafusion_datasource_csv::source::CsvSource;
-use datafusion_datasource_arrow::source::ArrowSource;
 use datafusion_datasource_json::file_format::JsonSink;
 use datafusion_datasource_json::source::JsonSource;
 #[cfg(feature = "parquet")]
