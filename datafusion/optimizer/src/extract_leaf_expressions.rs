@@ -414,11 +414,11 @@ impl<'a> LeafExpressionExtractor<'a> {
         Ok(Expr::Column(Column::new_unqualified(&alias)))
     }
 
-    /// Builds a fresh extraction projection above the given input.
+    /// Builds an extraction projection above the given input, or merges into
+    /// it if the input is already a projection. Delegates to
+    /// [`build_extraction_projection_impl`].
     ///
-    /// Returns `None` if there are no extractions. Otherwise creates a new
-    /// projection that includes extracted expressions (aliased) plus all
-    /// input schema columns for pass-through.
+    /// Returns `None` if there are no extractions.
     fn build_extraction_projection(
         &self,
         input: &Arc<LogicalPlan>,
@@ -426,21 +426,22 @@ impl<'a> LeafExpressionExtractor<'a> {
         if self.extracted.is_empty() {
             return Ok(None);
         }
-        let mut proj_exprs = Vec::new();
-        for (expr, alias) in self.extracted.iter() {
-            proj_exprs.push(expr.clone().alias(alias));
-        }
-        for (qualifier, field) in self.input_schema.iter() {
-            proj_exprs.push(Expr::from((qualifier, field)));
-        }
-        Ok(Some(LogicalPlan::Projection(Projection::try_new(
-            proj_exprs,
-            Arc::clone(input),
-        )?)))
+        let pairs: Vec<(Expr, String)> = self
+            .extracted
+            .iter()
+            .map(|(e, a)| (e.clone(), a.clone()))
+            .collect();
+        let proj = build_extraction_projection_impl(
+            &pairs,
+            &self.columns_needed,
+            input,
+            self.input_schema,
+        )?;
+        Ok(Some(LogicalPlan::Projection(proj)))
     }
 }
 
-/// Build an extraction projection above the target node.
+/// Build an extraction projection above the target node (shared by both passes).
 ///
 /// If the target is an existing projection, merges into it. This requires
 /// resolving column references through the projection's rename mapping:
@@ -2295,15 +2296,11 @@ mod tests {
         ## After Extraction
         Projection: x
           Filter: __datafusion_extracted_1 = Utf8("active")
-            Projection: leaf_udf(x, Utf8("a")) AS __datafusion_extracted_1, x
-              Projection: test.user AS x
-                TableScan: test projection=[user]
-
-        ## After Pushdown
-        Projection: x
-          Filter: __datafusion_extracted_1 = Utf8("active")
             Projection: test.user AS x, leaf_udf(test.user, Utf8("a")) AS __datafusion_extracted_1, test.user
               TableScan: test projection=[user]
+
+        ## After Pushdown
+        (same as after extraction)
 
         ## Optimized
         Projection: x
