@@ -20,7 +20,7 @@ use arrow::datatypes::Field;
 use arrow::datatypes::{DataType, FieldRef, Int8Type, Int16Type, Int32Type, Int64Type};
 use datafusion::logical_expr::{ColumnarValue, Signature, TypeSignature, Volatility};
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{Result, internal_err, plan_err};
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_functions::utils::make_scalar_function;
 use std::any::Any;
@@ -77,16 +77,13 @@ impl ScalarUDFImpl for BitmapBitPosition {
         args: datafusion_expr::ReturnFieldArgs,
     ) -> Result<FieldRef> {
         Ok(Arc::new(Field::new(
-            args.arg_fields[0].name(),
+            self.name(),
             DataType::Int64,
             args.arg_fields[0].is_nullable(),
         )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        if args.args.len() != 1 {
-            return plan_err!("bitmap_bit_position expects exactly 1 argument");
-        }
         make_scalar_function(bitmap_bit_position_inner, vec![])(&args.args)
     }
 }
