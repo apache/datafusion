@@ -5267,3 +5267,30 @@ DROP TABLE issue_19067_left;
 
 statement count 0
 DROP TABLE issue_19067_right;
+
+# Test that empty projections pushed into joins produce correct row counts at runtime.
+# When count(1) is used over a RIGHT/FULL JOIN, the optimizer embeds an empty projection
+# (projection=[]) into the HashJoinExec. This validates that the runtime batch construction
+# handles zero-column output correctly, preserving the correct number of rows.
+
+statement ok
+CREATE TABLE empty_proj_left AS VALUES (1, 'a'), (2, 'b'), (3, 'c');
+
+statement ok
+CREATE TABLE empty_proj_right AS VALUES (1, 'x'), (2, 'y'), (4, 'z');
+
+query I
+SELECT count(1) FROM empty_proj_left RIGHT JOIN empty_proj_right ON empty_proj_left.column1 = empty_proj_right.column1;
+----
+3
+
+query I
+SELECT count(1) FROM empty_proj_left FULL JOIN empty_proj_right ON empty_proj_left.column1 = empty_proj_right.column1;
+----
+4
+
+statement count 0
+DROP TABLE empty_proj_left;
+
+statement count 0
+DROP TABLE empty_proj_right;

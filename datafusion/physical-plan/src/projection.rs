@@ -553,6 +553,15 @@ impl RecordBatchStream for ProjectionStream {
     }
 }
 
+/// Trait for execution plans that can embed a projection, avoiding a separate
+/// [`ProjectionExec`] wrapper.
+///
+/// # Empty projections
+///
+/// `Some(vec![])` is a valid projection that produces zero output columns while
+/// preserving the correct row count. Implementors must ensure that runtime batch
+/// construction still returns batches with the right number of rows even when no
+/// columns are selected (e.g. for `SELECT count(1) … JOIN …`).
 pub trait EmbeddedProjection: ExecutionPlan + Sized {
     fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self>;
 }
