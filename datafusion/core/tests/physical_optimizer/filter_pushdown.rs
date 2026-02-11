@@ -60,7 +60,7 @@ use datafusion_physical_plan::{
     coalesce_partitions::CoalescePartitionsExec,
     collect,
     filter::{FilterExec, FilterExecBuilder},
-    joins::{HashJoinExec, PartitionMode},
+    joins::{DynamicFilterRoutingMode, HashJoinExec, HashJoinExecBuilder, PartitionMode},
     projection::ProjectionExec,
     repartition::RepartitionExec,
     sorts::sort::SortExec,
@@ -179,7 +179,7 @@ fn test_pushdown_into_scan_with_config_options() {
 #[tokio::test]
 async fn test_dynamic_filter_pushdown_through_hash_join_with_topk() {
     use datafusion_common::JoinType;
-    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
+    use datafusion_physical_plan::joins::PartitionMode;
 
     // Create build side with limited values
     let build_batches = vec![
@@ -225,18 +225,12 @@ async fn test_dynamic_filter_pushdown_through_hash_join_with_topk() {
         col("d", &probe_side_schema).unwrap(),
     )];
     let join = Arc::new(
-        HashJoinExec::try_new(
-            build_scan,
-            probe_scan,
-            on,
-            None,
-            &JoinType::Inner,
-            None,
-            PartitionMode::Partitioned,
-            datafusion_common::NullEquality::NullEqualsNothing,
-            false,
-        )
-        .unwrap(),
+        HashJoinExecBuilder::new(build_scan, probe_scan, on, JoinType::Inner)
+            .with_partition_mode(PartitionMode::Partitioned)
+            .with_null_equality(datafusion_common::NullEquality::NullEqualsNothing)
+            .with_dynamic_filter_routing_mode(DynamicFilterRoutingMode::PartitionIndex)
+            .build()
+            .unwrap(),
     );
 
     let join_schema = join.schema();
@@ -290,173 +284,6 @@ async fn test_dynamic_filter_pushdown_through_hash_join_with_topk() {
     -   HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, d@0)]
     -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
     -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, e, f], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ {0: d@0 >= aa AND d@0 <= ab AND d@0 IN (SET) ([aa, ab])} ] AND DynamicFilter [ e@1 IS NULL OR e@1 < bb ]
-    "
-    );
-}
-
-#[tokio::test]
-async fn test_topk_with_partition_index_routing() {
-    let build_side_schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Utf8, false),
-        Field::new("b", DataType::Utf8, false),
-        Field::new("c", DataType::Float64, false),
-    ]));
-
-    let probe_side_schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Utf8, false),
-        Field::new("b", DataType::Utf8, false),
-        Field::new("e", DataType::Float64, false),
-    ]));
-
-    // Build side: different data per partition.
-    //   Partition 0: ("aa", "ba", 1.0) -> bounds a:[aa,aa], b:[ba,ba]
-    //   Partition 1: ("zz", "zz", 2.0) -> bounds a:[zz,zz], b:[zz,zz]
-    let build_p0 = vec![
-        record_batch!(
-            ("a", Utf8, ["aa"]),
-            ("b", Utf8, ["ba"]),
-            ("c", Float64, [1.0])
-        )
-        .unwrap(),
-    ];
-    let build_p1 = vec![
-        record_batch!(
-            ("a", Utf8, ["zz"]),
-            ("b", Utf8, ["zz"]),
-            ("c", Float64, [2.0])
-        )
-        .unwrap(),
-    ];
-
-    // Probe side: each partition has matching and non-matching rows.
-    //   Partition 0: ("aa","ba",10.0) matches p0, ("zz","zz",20.0) does not match p0
-    //   Partition 1: ("zz","zz",30.0) matches p1, ("aa","ba",40.0) does not match p1
-    let probe_p0 = vec![
-        record_batch!(
-            ("a", Utf8, ["aa", "zz"]),
-            ("b", Utf8, ["ba", "zz"]),
-            ("e", Float64, [10.0, 20.0])
-        )
-        .unwrap(),
-    ];
-    let probe_p1 = vec![
-        record_batch!(
-            ("a", Utf8, ["zz", "aa"]),
-            ("b", Utf8, ["zz", "ba"]),
-            ("e", Float64, [30.0, 40.0])
-        )
-        .unwrap(),
-    ];
-
-    let build_scan = TestScanBuilder::new(Arc::clone(&build_side_schema))
-        .with_support(true)
-        .with_batches_for_partition(build_p0)
-        .with_batches_for_partition(build_p1)
-        .with_file_group(FileGroup::new(vec![PartitionedFile::new(
-            "build_0.parquet",
-            123,
-        )]))
-        .with_file_group(FileGroup::new(vec![PartitionedFile::new(
-            "build_1.parquet",
-            123,
-        )]))
-        .build();
-
-    let probe_scan = TestScanBuilder::new(Arc::clone(&probe_side_schema))
-        .with_support(true)
-        .with_batches_for_partition(probe_p0)
-        .with_batches_for_partition(probe_p1)
-        .with_file_group(FileGroup::new(vec![PartitionedFile::new(
-            "probe_0.parquet",
-            123,
-        )]))
-        .with_file_group(FileGroup::new(vec![PartitionedFile::new(
-            "probe_1.parquet",
-            123,
-        )]))
-        .build();
-
-    let on = vec![
-        (
-            col("a", &build_side_schema).unwrap(),
-            col("a", &probe_side_schema).unwrap(),
-        ),
-        (
-            col("b", &build_side_schema).unwrap(),
-            col("b", &probe_side_schema).unwrap(),
-        ),
-    ];
-    let hash_join = Arc::new(
-        HashJoinExec::try_new(
-            build_scan,
-            Arc::clone(&probe_scan),
-            on,
-            None,
-            &JoinType::Inner,
-            None,
-            PartitionMode::Partitioned,
-            datafusion_common::NullEquality::NullEqualsNothing,
-            false,
-        )
-        .unwrap(),
-    );
-
-    let join_schema = hash_join.schema();
-
-    // CoalescePartitionsExec is required so that all HashJoinExec partitions are executed.
-    // Without it, SortExec(preserve_partitioning=false) only executes partition 0,
-    // and the barrier in SharedBuildAccumulator would hang waiting for partition 1.
-    let cp = Arc::new(CoalescePartitionsExec::new(
-        hash_join as Arc<dyn ExecutionPlan>,
-    ));
-
-    // Add TopK, creates a second DynamicFilter on the probe side.
-    // The probe predicate becomes: DynFilter[join] AND DynFilter[topk]
-    let sort_expr = PhysicalSortExpr::new(
-        col("e", &join_schema).unwrap(),
-        SortOptions::default(), // ascending
-    );
-    let plan = Arc::new(
-        SortExec::new(LexOrdering::new(vec![sort_expr]).unwrap(), cp).with_fetch(Some(2)),
-    ) as Arc<dyn ExecutionPlan>;
-
-    let mut session_config = dynamic_filter_session_config();
-    session_config
-        .options_mut()
-        .optimizer
-        .preserve_file_partitions = 1;
-    let (plan, batches) = optimize_and_collect(plan, session_config).await;
-
-    // Verify the plan shows both dynamic filters:
-    let plan_str = format_plan_for_test(&plan).to_string();
-    assert!(
-        plan_str.contains("{0:") && plan_str.contains("1:"),
-        "Expected per-partition bounds in plan, got:\n{plan_str}"
-    );
-    assert!(
-        plan_str.contains("DynamicFilter") && plan_str.contains("AND"),
-        "Expected combined DynamicFilter AND in plan, got:\n{plan_str}"
-    );
-
-    let result = format!("{}", pretty_format_batches(&batches).unwrap());
-
-    let probe_scan_metrics = probe_scan.metrics().unwrap();
-
-    // Per-partition join filtering prunes non-matching rows:
-    //   Probe p0: ("aa","ba") passes p0 bounds, ("zz","zz") filtered out -> 1 row
-    //   Probe p1: ("zz","zz") passes p1 bounds, ("aa","ba") filtered out -> 1 row
-    // Total: 2 rows output from probe scan
-    assert_eq!(probe_scan_metrics.output_rows().unwrap(), 2);
-
-    insta::assert_snapshot!(
-        result,
-        @r"
-    +----+----+-----+----+----+------+
-    | a  | b  | c   | a  | b  | e    |
-    +----+----+-----+----+----+------+
-    | aa | ba | 1.0 | aa | ba | 10.0 |
-    | zz | zz | 2.0 | zz | zz | 30.0 |
-    +----+----+-----+----+----+------+
     "
     );
 }
@@ -1572,17 +1399,16 @@ async fn test_partitioned_hashjoin_no_repartition_dynamic_filter_pushdown() {
         ),
     ];
     let hash_join = Arc::new(
-        HashJoinExec::try_new(
+        HashJoinExecBuilder::new(
             build_scan,
             Arc::clone(&probe_scan),
             on,
-            None,
-            &JoinType::Inner,
-            None,
-            PartitionMode::Partitioned,
-            datafusion_common::NullEquality::NullEqualsNothing,
-            false,
+            JoinType::Inner,
         )
+        .with_partition_mode(PartitionMode::Partitioned)
+        .with_null_equality(datafusion_common::NullEquality::NullEqualsNothing)
+        .with_dynamic_filter_routing_mode(DynamicFilterRoutingMode::PartitionIndex)
+        .build()
         .unwrap(),
     );
 
@@ -1823,7 +1649,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_collect_left() {
 #[tokio::test]
 async fn test_nested_hashjoin_dynamic_filter_pushdown() {
     use datafusion_common::JoinType;
-    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
+    use datafusion_physical_plan::joins::PartitionMode;
 
     // Create test data for three tables: t1, t2, t3
     // t1: small table with limited values (will be build side of outer join)
@@ -1886,18 +1712,12 @@ async fn test_nested_hashjoin_dynamic_filter_pushdown() {
     let inner_join_on =
         vec![(col("c", &t2_schema).unwrap(), col("d", &t3_schema).unwrap())];
     let inner_join = Arc::new(
-        HashJoinExec::try_new(
-            t2_scan,
-            t3_scan,
-            inner_join_on,
-            None,
-            &JoinType::Inner,
-            None,
-            PartitionMode::Partitioned,
-            datafusion_common::NullEquality::NullEqualsNothing,
-            false,
-        )
-        .unwrap(),
+        HashJoinExecBuilder::new(t2_scan, t3_scan, inner_join_on, JoinType::Inner)
+            .with_partition_mode(PartitionMode::Partitioned)
+            .with_null_equality(datafusion_common::NullEquality::NullEqualsNothing)
+            .with_dynamic_filter_routing_mode(DynamicFilterRoutingMode::PartitionIndex)
+            .build()
+            .unwrap(),
     );
 
     // Then create outer join: t1.a = t2.b (from inner join result)
@@ -1906,17 +1726,16 @@ async fn test_nested_hashjoin_dynamic_filter_pushdown() {
         col("b", &inner_join.schema()).unwrap(),
     )];
     let outer_join = Arc::new(
-        HashJoinExec::try_new(
+        HashJoinExecBuilder::new(
             t1_scan,
             inner_join as Arc<dyn ExecutionPlan>,
             outer_join_on,
-            None,
-            &JoinType::Inner,
-            None,
-            PartitionMode::Partitioned,
-            datafusion_common::NullEquality::NullEqualsNothing,
-            false,
+            JoinType::Inner,
         )
+        .with_partition_mode(PartitionMode::Partitioned)
+        .with_null_equality(datafusion_common::NullEquality::NullEqualsNothing)
+        .with_dynamic_filter_routing_mode(DynamicFilterRoutingMode::PartitionIndex)
+        .build()
         .unwrap(),
     ) as Arc<dyn ExecutionPlan>;
 
@@ -1972,9 +1791,6 @@ async fn test_nested_hashjoin_dynamic_filter_pushdown() {
 
 #[tokio::test]
 async fn test_hashjoin_parent_filter_pushdown() {
-    use datafusion_common::JoinType;
-    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
-
     // Create build side with limited values
     let build_batches = vec![
         record_batch!(

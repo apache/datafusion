@@ -996,6 +996,11 @@ config_namespace! {
         ///
         /// Note: This may reduce parallelism, rooting from the I/O level, if the number of distinct
         /// partitions is less than the target_partitions.
+        ///
+        /// Note for partitioned hash join dynamic filtering:
+        /// preserving file partitions can allow partition-index routing (`i -> i`) instead of
+        /// CASE-hash routing, but this assumes build/probe partition indices stay aligned for
+        /// dynamic filter consumers.
         pub preserve_file_partitions: usize, default = 0
 
         /// Should DataFusion repartition data using the partitions keys to execute window

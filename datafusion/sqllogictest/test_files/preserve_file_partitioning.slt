@@ -118,7 +118,7 @@ STORED AS PARQUET;
 1
 
 query I
-COPY (SELECT 'prod' as env, 'log' as service)
+COPY (SELECT 'staging' as env, 'trace' as service)
 TO 'test_files/scratch/preserve_file_partitioning/dimension_partitioned/d_dkey=C/data.parquet'
 STORED AS PARQUET;
 ----
@@ -658,7 +658,7 @@ GROUP BY f.f_dkey, d.env;
 ----
 A dev 772.4
 B prod 614.4
-C prod 2017.6
+C staging 2017.6
 
 ##########
 # TEST 12: Partitioned Join with Matching Partition Counts - With Optimization
@@ -702,7 +702,7 @@ GROUP BY f.f_dkey, d.env;
 ----
 A dev 772.4
 B prod 614.4
-C prod 2017.6
+C staging 2017.6
 
 ##########
 # CLEANUP

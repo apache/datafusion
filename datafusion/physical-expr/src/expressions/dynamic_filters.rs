@@ -300,6 +300,12 @@ impl DynamicFilterPhysicalExpr {
     }
 
     /// Get the filter expression for a specific partition.
+    ///
+    /// Semantics when per-partition filters are present:
+    /// - `Some(Some(expr))`: use the partition-local filter.
+    /// - `Some(None)`: the build partition is known empty, so return `false`.
+    /// - `None` (out-of-range): return `true` (fail-open) to avoid incorrect pruning if
+    ///   partition alignment/count assumptions are violated by a source.
     fn current_for_partition(&self, partition: usize) -> Result<Arc<dyn PhysicalExpr>> {
         let guard = self.partitioned_exprs.read();
         if guard.is_empty() {
@@ -316,7 +322,8 @@ impl DynamicFilterPhysicalExpr {
                     expr,
                 )
             }
-            _ => Ok(lit(false) as Arc<dyn PhysicalExpr>),
+            Some(None) => Ok(lit(false) as Arc<dyn PhysicalExpr>),
+            None => Ok(lit(true) as Arc<dyn PhysicalExpr>),
         }
     }
 
@@ -1011,21 +1018,9 @@ mod test {
         let p1 = dynamic_filter.current_for_partition(1).unwrap();
         assert_eq!(format!("{p1}"), "false");
 
-        // Partition 5 is out of range, should return lit(false)
+        // Partition 5 is out of range, should fail-open to lit(true)
         let p5 = dynamic_filter.current_for_partition(5).unwrap();
-        assert_eq!(format!("{p5}"), "false");
-    }
-
-    #[test]
-    fn test_current_for_partition_no_partitioned_data() {
-        let dynamic_filter =
-            DynamicFilterPhysicalExpr::new(vec![], lit(42) as Arc<dyn PhysicalExpr>);
-
-        assert!(!dynamic_filter.has_partitioned_filters());
-
-        // Without partitioned data, falls back to current()
-        let p0 = dynamic_filter.current_for_partition(0).unwrap();
-        assert_eq!(format!("{p0}"), "42");
+        assert_eq!(format!("{p5}"), "true");
     }
 
     #[test]

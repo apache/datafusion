@@ -47,7 +47,7 @@ use crate::projection::{
     EmbeddedProjection, JoinData, ProjectionExec, try_embed_projection,
     try_pushdown_through_join,
 };
-use crate::repartition::{REPARTITION_RANDOM_STATE, RepartitionExec};
+use crate::repartition::REPARTITION_RANDOM_STATE;
 use crate::spill::get_record_batch_memory_size;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
@@ -256,6 +256,7 @@ pub struct HashJoinExecBuilder {
     filter: Option<JoinFilter>,
     projection: Option<ProjectionRef>,
     partition_mode: PartitionMode,
+    dynamic_filter_routing_mode: DynamicFilterRoutingMode,
     null_equality: NullEquality,
     null_aware: bool,
 }
@@ -275,6 +276,7 @@ impl HashJoinExecBuilder {
             filter: None,
             projection: None,
             partition_mode: PartitionMode::Auto,
+            dynamic_filter_routing_mode: DynamicFilterRoutingMode::CaseHash,
             join_type,
             null_equality: NullEquality::NullEqualsNothing,
             null_aware: false,
@@ -304,6 +306,15 @@ impl HashJoinExecBuilder {
         self
     }
 
+    /// Set dynamic filter routing mode for partitioned joins.
+    pub fn with_dynamic_filter_routing_mode(
+        mut self,
+        mode: DynamicFilterRoutingMode,
+    ) -> Self {
+        self.dynamic_filter_routing_mode = mode;
+        self
+    }
+
     /// Set null equality property.
     pub fn with_null_equality(mut self, null_equality: NullEquality) -> Self {
         self.null_equality = null_equality;
@@ -326,6 +337,7 @@ impl HashJoinExecBuilder {
             filter,
             projection,
             partition_mode,
+            dynamic_filter_routing_mode,
             null_equality,
             null_aware,
         } = self;
@@ -386,6 +398,7 @@ impl HashJoinExecBuilder {
             left_fut: Default::default(),
             random_state,
             mode: partition_mode,
+            dynamic_filter_routing_mode,
             metrics: ExecutionPlanMetricsSet::new(),
             projection,
             column_indices,
@@ -407,10 +420,27 @@ impl From<&HashJoinExec> for HashJoinExecBuilder {
             filter: exec.filter.clone(),
             projection: exec.projection.clone(),
             partition_mode: exec.mode,
+            dynamic_filter_routing_mode: exec.dynamic_filter_routing_mode,
             null_equality: exec.null_equality,
             null_aware: exec.null_aware,
         }
     }
+}
+
+/// Routing mode for partitioned dynamic filters in hash joins.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DynamicFilterRoutingMode {
+    /// Route probe rows by hash (CASE expression).
+    ///
+    /// This mode is safe without partition-index alignment assumptions and is used when the
+    /// optimizer detects hash repartitioning on the relevant path.
+    CaseHash,
+    /// Route by partition index (`i -> i`).
+    ///
+    /// This assumes build/probe partition indices are aligned for dynamic filter consumers:
+    /// the filter for build partition `i` must be applied to probe partition `i`.
+    /// The optimizer should only select this mode when that mapping is expected to hold.
+    PartitionIndex,
 }
 
 #[expect(rustdoc::private_intra_doc_links)]
@@ -630,6 +660,11 @@ pub struct HashJoinExec {
     random_state: SeededRandomState,
     /// Partitioning mode to use
     pub mode: PartitionMode,
+    /// Dynamic filter routing mode for partitioned joins.
+    ///
+    /// `CaseHash` uses hash-based routing and does not require alignment.
+    /// `PartitionIndex` assumes build/probe partition alignment.
+    pub dynamic_filter_routing_mode: DynamicFilterRoutingMode,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// The projection indices of the columns in the output schema of join
@@ -771,32 +806,13 @@ impl HashJoinExec {
 
     /// Determines whether partition-index routing should be used instead of CASE hash routing.
     ///
-    /// Partition-index routing is enabled when:
+    /// Enabled when:
     /// 1. The join is in `Partitioned` mode
-    /// 2. Neither side has a `RepartitionExec(Hash)`, meaning both sides preserve their file
-    ///    partitioning.
+    /// 2. The optimizer selected `DynamicFilterRoutingMode::PartitionIndex`.
     fn should_use_partition_index(&self) -> bool {
-        if self.mode != PartitionMode::Partitioned {
-            return false;
-        }
-        !Self::has_hash_repartition(&self.left)
-            && !Self::has_hash_repartition(&self.right)
-    }
-
-    /// Walk the plan tree looking for a `RepartitionExec` with `Hash` partitioning.
-    fn has_hash_repartition(plan: &Arc<dyn ExecutionPlan>) -> bool {
-        let mut stack = vec![Arc::clone(plan)];
-        while let Some(current) = stack.pop() {
-            if let Some(repart) = current.as_any().downcast_ref::<RepartitionExec>()
-                && matches!(repart.partitioning(), Partitioning::Hash(_, _))
-            {
-                return true;
-            }
-            for child in current.children() {
-                stack.push(Arc::clone(child));
-            }
-        }
-        false
+        matches!(self.mode, PartitionMode::Partitioned)
+            && self.dynamic_filter_routing_mode
+                == DynamicFilterRoutingMode::PartitionIndex
     }
 
     /// Calculate order preservation flags for this hash join.
@@ -940,25 +956,27 @@ impl HashJoinExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let left = self.left();
         let right = self.right();
-        let new_join = HashJoinExec::try_new(
+        let new_join = HashJoinExecBuilder::new(
             Arc::clone(right),
             Arc::clone(left),
-            self.on()
+            self.on
                 .iter()
                 .map(|(l, r)| (Arc::clone(r), Arc::clone(l)))
                 .collect(),
-            self.filter().map(JoinFilter::swap),
-            &self.join_type().swap(),
-            swap_join_projection(
-                left.schema().fields().len(),
-                right.schema().fields().len(),
-                self.projection.as_deref(),
-                self.join_type(),
-            ),
-            partition_mode,
-            self.null_equality(),
-            self.null_aware,
-        )?;
+            self.join_type().swap(),
+        )
+        .with_filter(self.filter().map(JoinFilter::swap))
+        .with_projection(swap_join_projection(
+            left.schema().fields().len(),
+            right.schema().fields().len(),
+            self.projection.as_deref(),
+            self.join_type(),
+        ))
+        .with_partition_mode(partition_mode)
+        .with_null_equality(self.null_equality())
+        .with_null_aware(self.null_aware)
+        .with_dynamic_filter_routing_mode(self.dynamic_filter_routing_mode)
+        .build()?;
         // In case of anti / semi joins or if there is embedded projection in HashJoinExec, output column order is preserved, no need to add projection again
         if matches!(
             self.join_type(),
@@ -1136,6 +1154,8 @@ impl ExecutionPlan for HashJoinExec {
             left_fut: Arc::clone(&self.left_fut),
             random_state: self.random_state.clone(),
             mode: self.mode,
+            // Preserve optimizer-selected routing mode across plan rewrites.
+            dynamic_filter_routing_mode: self.dynamic_filter_routing_mode,
             metrics: ExecutionPlanMetricsSet::new(),
             projection: self.projection.clone(),
             column_indices: self.column_indices.clone(),
@@ -1167,6 +1187,7 @@ impl ExecutionPlan for HashJoinExec {
             left_fut: Arc::new(OnceAsync::default()),
             random_state: self.random_state.clone(),
             mode: self.mode,
+            dynamic_filter_routing_mode: self.dynamic_filter_routing_mode,
             metrics: ExecutionPlanMetricsSet::new(),
             projection: self.projection.clone(),
             column_indices: self.column_indices.clone(),
@@ -1399,18 +1420,21 @@ impl ExecutionPlan for HashJoinExec {
             &schema,
             self.filter(),
         )? {
-            Ok(Some(Arc::new(HashJoinExec::try_new(
-                Arc::new(projected_left_child),
-                Arc::new(projected_right_child),
-                join_on,
-                join_filter,
-                self.join_type(),
+            Ok(Some(Arc::new(
+                HashJoinExecBuilder::new(
+                    Arc::new(projected_left_child),
+                    Arc::new(projected_right_child),
+                    join_on,
+                    self.join_type,
+                )
+                .with_filter(join_filter)
                 // Returned early if projection is not None
-                None,
-                *self.partition_mode(),
-                self.null_equality,
-                self.null_aware,
-            )?)))
+                .with_partition_mode(*self.partition_mode())
+                .with_null_equality(self.null_equality)
+                .with_null_aware(self.null_aware)
+                .with_dynamic_filter_routing_mode(self.dynamic_filter_routing_mode)
+                .build()?,
+            )))
         } else {
             try_embed_projection(projection, self)
         }
@@ -1498,6 +1522,7 @@ impl ExecutionPlan for HashJoinExec {
                     left_fut: Arc::clone(&self.left_fut),
                     random_state: self.random_state.clone(),
                     mode: self.mode,
+                    dynamic_filter_routing_mode: self.dynamic_filter_routing_mode,
                     metrics: ExecutionPlanMetricsSet::new(),
                     projection: self.projection.clone(),
                     column_indices: self.column_indices.clone(),
@@ -5731,148 +5756,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_has_hash_repartition() {
-        let left = build_table(
-            ("a1", &vec![1, 2]),
-            ("b1", &vec![4, 5]),
-            ("c1", &vec![7, 8]),
-        );
-
-        // DataSource -> RepartitionExec(Hash) should return true
-        let schema = left.schema();
-        let hash_exprs =
-            vec![Arc::new(Column::new_with_schema("b1", &schema).unwrap()) as _];
-        let hash_repartition = Arc::new(
-            RepartitionExec::try_new(
-                Arc::clone(&left),
-                Partitioning::Hash(hash_exprs.clone(), 4),
-            )
-            .unwrap(),
-        );
-        assert!(
-            HashJoinExec::has_hash_repartition(
-                &(hash_repartition as Arc<dyn ExecutionPlan>)
-            ),
-            "should detect Hash RepartitionExec"
-        );
-
-        // DataSource -> RepartitionExec(RoundRobin) should return false
-        let round_robin_repartition = Arc::new(
-            RepartitionExec::try_new(Arc::clone(&left), Partitioning::RoundRobinBatch(4))
-                .unwrap(),
-        );
-        assert!(
-            !HashJoinExec::has_hash_repartition(
-                &(round_robin_repartition as Arc<dyn ExecutionPlan>)
-            ),
-            "RoundRobin should not be detected as hash repartition"
-        );
-
-        // DataSource -> RepartitionExec(UnknownPartitioning) should return false
-        let unknown_repartition = Arc::new(
-            RepartitionExec::try_new(
-                Arc::clone(&left),
-                Partitioning::UnknownPartitioning(4),
-            )
-            .unwrap(),
-        );
-        assert!(
-            !HashJoinExec::has_hash_repartition(
-                &(unknown_repartition as Arc<dyn ExecutionPlan>)
-            ),
-            "UnknownPartitioning should not be detected as hash repartition"
-        );
-
-        // Plain DataSource (no RepartitionExec) should return false
-        assert!(
-            !HashJoinExec::has_hash_repartition(&left),
-            "plan without RepartitionExec should return false"
-        );
-
-        // CoalescePartitionsExec -> RepartitionExec(Hash) should return true
-        let coalesce = Arc::new(CoalescePartitionsExec::new(Arc::new(
-            RepartitionExec::try_new(
-                Arc::clone(&left),
-                Partitioning::Hash(hash_exprs.clone(), 4),
-            )
-            .unwrap(),
-        ))) as Arc<dyn ExecutionPlan>;
-        assert!(
-            HashJoinExec::has_hash_repartition(&coalesce),
-            "should traverse through CoalescePartitionsExec to find Hash RepartitionExec"
-        );
-
-        // CoalescePartitionsExec -> DataSource (no RepartitionExec) should return false
-        let coalesce_no_repart = Arc::new(CoalescePartitionsExec::new(Arc::clone(&left)))
-            as Arc<dyn ExecutionPlan>;
-        assert!(
-            !HashJoinExec::has_hash_repartition(&coalesce_no_repart),
-            "should return false when traversing through CoalescePartitionsExec with no RepartitionExec"
-        );
-
-        // Multiple single-child operators -> RepartitionExec(Hash) should return true
-        let deep_chain = Arc::new(CoalescePartitionsExec::new(Arc::new(
-            CoalescePartitionsExec::new(Arc::new(
-                RepartitionExec::try_new(
-                    Arc::clone(&left),
-                    Partitioning::Hash(hash_exprs.clone(), 4),
-                )
-                .unwrap(),
-            )),
-        ))) as Arc<dyn ExecutionPlan>;
-        assert!(
-            HashJoinExec::has_hash_repartition(&deep_chain),
-            "should traverse through multiple single-child operators to find Hash RepartitionExec"
-        );
-
-        // UnionExec with no RepartitionExec on either branch should return false
-        let union_no_repart =
-            crate::union::UnionExec::try_new(vec![Arc::clone(&left), Arc::clone(&left)])
-                .unwrap();
-        assert!(
-            !HashJoinExec::has_hash_repartition(&union_no_repart),
-            "UnionExec with no RepartitionExec on any branch should return false"
-        );
-
-        // UnionExec with RepartitionExec(Hash) on one branch should return true
-        let hash_branch = Arc::new(
-            RepartitionExec::try_new(
-                Arc::clone(&left),
-                Partitioning::Hash(hash_exprs.clone(), 4),
-            )
-            .unwrap(),
-        ) as Arc<dyn ExecutionPlan>;
-        let union_one_hash =
-            crate::union::UnionExec::try_new(vec![Arc::clone(&left), hash_branch])
-                .unwrap();
-        assert!(
-            HashJoinExec::has_hash_repartition(&union_one_hash),
-            "UnionExec with RepartitionExec(Hash) on one branch should return true"
-        );
-
-        // CoalescePartitionsExec -> UnionExec -> ... -> RepartitionExec(Hash) should return true
-        let deep_union = Arc::new(CoalescePartitionsExec::new(
-            crate::union::UnionExec::try_new(vec![
-                Arc::clone(&left),
-                Arc::new(CoalescePartitionsExec::new(Arc::new(
-                    RepartitionExec::try_new(
-                        Arc::clone(&left),
-                        Partitioning::Hash(hash_exprs, 4),
-                    )
-                    .unwrap(),
-                ))) as Arc<dyn ExecutionPlan>,
-            ])
-            .unwrap(),
-        )) as Arc<dyn ExecutionPlan>;
-        assert!(
-            HashJoinExec::has_hash_repartition(&deep_union),
-            "should find RepartitionExec(Hash) through UnionExec and multiple nesting levels"
-        );
-    }
-
-    #[test]
-    fn test_should_use_partition_index() -> Result<()> {
+    fn build_partition_index_mode_test_join(
+        partition_mode: PartitionMode,
+        routing_mode: DynamicFilterRoutingMode,
+    ) -> Result<HashJoinExec> {
         let left = build_table(
             ("a1", &vec![1, 2]),
             ("b1", &vec![4, 5]),
@@ -5883,102 +5770,53 @@ mod tests {
             ("b1", &vec![4, 5]),
             ("c2", &vec![70, 80]),
         );
-        let left_schema = left.schema();
-        let right_schema = right.schema();
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema()).unwrap())
+                as Arc<dyn PhysicalExpr>,
+            Arc::new(Column::new_with_schema("b1", &right.schema()).unwrap())
+                as Arc<dyn PhysicalExpr>,
+        )];
 
-        let make_on = |ls: &Schema,
-                       rs: &Schema|
-         -> Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)> {
-            vec![(
-                Arc::new(Column::new_with_schema("b1", ls).unwrap()) as _,
-                Arc::new(Column::new_with_schema("b1", rs).unwrap()) as _,
-            )]
-        };
+        HashJoinExecBuilder::new(left, right, on, JoinType::Inner)
+            .with_partition_mode(partition_mode)
+            .with_dynamic_filter_routing_mode(routing_mode)
+            .build()
+    }
 
-        let make_hash_repart = |plan: Arc<dyn ExecutionPlan>,
-                                schema: &Schema|
-         -> Arc<dyn ExecutionPlan> {
-            Arc::new(
-                RepartitionExec::try_new(
-                    plan,
-                    Partitioning::Hash(
-                        vec![
-                            Arc::new(Column::new_with_schema("b1", schema).unwrap()) as _
-                        ],
-                        4,
-                    ),
-                )
-                .unwrap(),
-            )
-        };
+    #[test]
+    fn test_should_use_partition_index() -> Result<()> {
+        let cases = [
+            (
+                PartitionMode::CollectLeft,
+                DynamicFilterRoutingMode::PartitionIndex,
+                false,
+                "CollectLeft should never use partition index",
+            ),
+            (
+                PartitionMode::Partitioned,
+                DynamicFilterRoutingMode::PartitionIndex,
+                true,
+                "Partitioned mode with PartitionIndex should use partition index",
+            ),
+            (
+                PartitionMode::Partitioned,
+                DynamicFilterRoutingMode::CaseHash,
+                false,
+                "Partitioned mode with CaseHash should use CASE routing",
+            ),
+            (
+                PartitionMode::Auto,
+                DynamicFilterRoutingMode::PartitionIndex,
+                false,
+                "Auto mode should never use partition index",
+            ),
+        ];
 
-        // CollectLeft mode should never use partition index
-        let join = HashJoinExec::try_new(
-            Arc::clone(&left),
-            Arc::clone(&right),
-            make_on(&left_schema, &right_schema),
-            None,
-            &JoinType::Inner,
-            None,
-            PartitionMode::CollectLeft,
-            NullEquality::NullEqualsNothing,
-            false,
-        )?;
-        assert!(
-            !join.should_use_partition_index(),
-            "CollectLeft should never use partition index"
-        );
-
-        // Partitioned without RepartitionExec should use partition index
-        let join = HashJoinExec::try_new(
-            Arc::clone(&left),
-            Arc::clone(&right),
-            make_on(&left_schema, &right_schema),
-            None,
-            &JoinType::Inner,
-            None,
-            PartitionMode::Partitioned,
-            NullEquality::NullEqualsNothing,
-            false,
-        )?;
-        assert!(
-            join.should_use_partition_index(),
-            "no RepartitionExec on either side, should use partition index"
-        );
-
-        // Partitioned with RepartitionExec(Hash) on both sides should not use partition index
-        let join = HashJoinExec::try_new(
-            make_hash_repart(Arc::clone(&left), &left_schema),
-            make_hash_repart(Arc::clone(&right), &right_schema),
-            make_on(&left_schema, &right_schema),
-            None,
-            &JoinType::Inner,
-            None,
-            PartitionMode::Partitioned,
-            NullEquality::NullEqualsNothing,
-            false,
-        )?;
-        assert!(
-            !join.should_use_partition_index(),
-            "both sides have Hash RepartitionExec, should use CASE routing"
-        );
-
-        // Partitioned with RepartitionExec on only one side should not use partition index
-        let join = HashJoinExec::try_new(
-            make_hash_repart(Arc::clone(&left), &left_schema),
-            Arc::clone(&right),
-            make_on(&left_schema, &right_schema),
-            None,
-            &JoinType::Inner,
-            None,
-            PartitionMode::Partitioned,
-            NullEquality::NullEqualsNothing,
-            false,
-        )?;
-        assert!(
-            !join.should_use_partition_index(),
-            "one side has Hash RepartitionExec, should not use partition index"
-        );
+        for (partition_mode, routing_mode, expected, message) in cases {
+            let join =
+                build_partition_index_mode_test_join(partition_mode, routing_mode)?;
+            assert_eq!(join.should_use_partition_index(), expected, "{message}");
+        }
 
         Ok(())
     }

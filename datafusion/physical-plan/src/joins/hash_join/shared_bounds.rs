@@ -226,9 +226,8 @@ pub(crate) struct SharedBuildAccumulator {
     repartition_random_state: SeededRandomState,
     /// Schema of the probe (right) side for evaluating filter expressions
     probe_schema: Arc<Schema>,
-    /// When true, use partition-index routing instead of CASE hash routing.
-    /// This is enabled when both sides of the hash join preserve their file partitioning
-    /// (no RepartitionExec(Hash)).
+    /// Use partition-index routing (probe partition `i` uses build filter `i`).
+    /// Requires aligned build/probe partitions.
     use_partition_index: bool,
 }
 
@@ -280,7 +279,7 @@ enum AccumulatedBuildData {
 /// - Membership (InList/hash lookup): Enables:
 ///   * Precise filtering (exact value matching)
 ///   * Bloom filter utilization (if present in Parquet files)
-///   * Better pruning for data types where min/max isn't effective (e.g., UUIDs)]]
+///   * Better pruning for data types where min/max isn't effective (e.g., UUIDs)
 ///
 /// Together, they provide complementary benefits and maximize data skipping.
 fn build_partition_filter_expr(
@@ -485,11 +484,15 @@ impl SharedBuildAccumulator {
                                             PushdownStrategy::Empty
                                         ) =>
                                     {
-                                        build_partition_filter_expr(
+                                        let expr = build_partition_filter_expr(
                                             &self.on_right,
                                             partition,
                                             &self.probe_schema,
-                                        )
+                                        )?
+                                        // If no partition-local filter can be built, fall back to
+                                        // neutral predicate for this partition.
+                                        .unwrap_or_else(|| lit(true));
+                                        Ok(Some(expr))
                                     }
                                     _ => Ok(None),
                                 })
