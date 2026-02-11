@@ -17,7 +17,7 @@
 
 use crate::cache::CacheAccessor;
 use crate::cache::cache_manager::{
-    CachedFileMetadata, FileMetadataCache, FileStatisticsCache, FileStatisticsCacheEntry,
+    CachedFileMetadata, FileStatisticsCache, FileStatisticsCacheEntry,
 };
 use object_store::path::Path;
 use std::collections::HashMap;
@@ -552,9 +552,9 @@ mod tests {
         let (meta_2, value_2) = create_cached_file_metadata_with_stats("test2.parquet");
         let (meta_3, value_3) = create_cached_file_metadata_with_stats("test3.parquet");
 
-        let limit_for_2_entries = &meta_1.location.heap_size()
+        let limit_for_2_entries = meta_1.location.heap_size()
             + value_1.heap_size()
-            + &meta_2.location.heap_size()
+            + meta_2.location.heap_size()
             + value_2.heap_size();
 
         // create a cache with a limit which fits exactly 2 entries
@@ -589,7 +589,7 @@ mod tests {
         assert_eq!(cache.len(), 1);
         assert_eq!(
             cache.memory_used(),
-            &meta_3.location.heap_size() + value_3.heap_size()
+            meta_3.location.heap_size() + value_3.heap_size()
         );
 
         cache.clear();
