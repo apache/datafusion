@@ -169,20 +169,27 @@ fn extract_from_plan(
         return Ok(transformed);
     }
 
-    // Clone inputs now that we know extraction succeeded. We need owned
-    // copies to wrap in extraction projections below each input.
-    let owned_inputs: Vec<LogicalPlan> =
-        transformed.data.inputs().into_iter().cloned().collect();
+    // Clone inputs now that we know extraction succeeded. Wrap in Arc
+    // upfront since build_extraction_projection expects &Arc<LogicalPlan>.
+    let owned_inputs: Vec<Arc<LogicalPlan>> = transformed
+        .data
+        .inputs()
+        .into_iter()
+        .map(|i| Arc::new(i.clone()))
+        .collect();
 
     // Build per-input extraction projections (None means no extractions for that input)
     let new_inputs: Vec<LogicalPlan> = owned_inputs
-        .iter()
+        .into_iter()
         .zip(extractors.iter())
-        .map(|(input, extractor)| {
-            let input_arc = Arc::new(input.clone());
-            Ok(extractor
-                .build_extraction_projection(&input_arc)?
-                .unwrap_or_else(|| input.clone()))
+        .map(|(input_arc, extractor)| {
+            match extractor.build_extraction_projection(&input_arc)? {
+                Some(plan) => Ok(plan),
+                // No extractions for this input — recover the LogicalPlan
+                // without cloning (refcount is 1 since build returned None).
+                None => Ok(Arc::try_unwrap(input_arc)
+                    .unwrap_or_else(|arc| (*arc).clone())),
+            }
         })
         .collect::<Result<Vec<_>>>()?;
 
@@ -752,6 +759,10 @@ fn split_and_push_projection(
     let mut recovery_exprs: Vec<Expr> = Vec::with_capacity(proj.expr.len());
     let mut needs_recovery = false;
     let mut has_new_extractions = false;
+    let mut proj_exprs_captured: usize = 0;
+    // Track standalone column expressions (Case B) to detect column refs
+    // from extracted aliases (Case A) that aren't also standalone expressions.
+    let mut standalone_columns: IndexSet<Column> = IndexSet::new();
 
     for (expr, (qualifier, field)) in proj.expr.iter().zip(original_schema.iter()) {
         if let Expr::Alias(alias) = expr
@@ -769,10 +780,13 @@ fn split_and_push_projection(
                 .extracted
                 .insert(expr.clone(), alias_name.clone());
             recovery_exprs.push(Expr::Column(Column::new_unqualified(&alias_name)));
+            proj_exprs_captured += 1;
         } else if let Expr::Column(col) = expr {
             // Plain column pass-through — track it in the extractor
             extractors[0].columns_needed.insert(col.clone());
+            standalone_columns.insert(col.clone());
             recovery_exprs.push(expr.clone());
+            proj_exprs_captured += 1;
         } else {
             // Everything else: run through routing_extract
             let transformed =
@@ -829,6 +843,14 @@ fn split_and_push_projection(
         return Ok(None);
     }
 
+    // If columns_needed has entries that aren't standalone projection columns
+    // (i.e., they came from column refs inside extracted aliases), a merge
+    // into an inner projection will widen the schema with those extra columns,
+    // requiring a recovery projection to restore the original schema.
+    if columns_needed.iter().any(|c| !standalone_columns.contains(c)) {
+        needs_recovery = true;
+    }
+
     // ── Phase 2: Push down ──────────────────────────────────────────────
     let proj_input = Arc::clone(&proj.input);
     let pushed = push_extraction_pairs(
@@ -837,6 +859,7 @@ fn split_and_push_projection(
         proj,
         &proj_input,
         alias_generator,
+        proj_exprs_captured,
     )?;
 
     // ── Phase 3: Recovery ───────────────────────────────────────────────
@@ -903,16 +926,17 @@ fn push_extraction_pairs(
     proj: &Projection,
     proj_input: &Arc<LogicalPlan>,
     alias_generator: &Arc<AliasGenerator>,
+    proj_exprs_captured: usize,
 ) -> Result<Option<LogicalPlan>> {
     match proj_input.as_ref() {
         // Merge into existing projection, then try to push the result further down.
-        // Only merge when every expression in the outer projection is accounted
-        // for as either an extraction pair or a needed column. Uncaptured
-        // expressions (e.g. `col AS __common_expr_1` from CSE) would be lost
-        // during the merge since build_extraction_projection_impl only knows
-        // about the captured pairs and columns.
+        // Only merge when every expression in the outer projection is fully
+        // captured as either an extraction pair (Case A: __datafusion_extracted
+        // alias) or a plain column (Case B). Uncaptured expressions (e.g.
+        // `col AS __common_expr_1` from CSE, or complex expressions with
+        // extracted sub-parts) would be lost during the merge.
         LogicalPlan::Projection(_)
-            if pairs.len() + columns_needed.len() == proj.expr.len() =>
+            if proj_exprs_captured == proj.expr.len() =>
         {
             let target_schema = Arc::clone(proj_input.schema());
             let merged = build_extraction_projection_impl(
@@ -2896,5 +2920,45 @@ mod tests {
             Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.id, leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_2, leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_3
               TableScan: test projection=[id, user]
         "#)
+    }
+
+    /// When an extraction projection's __extracted alias references a column
+    /// (e.g. `user`) that is NOT a standalone expression in the projection,
+    /// the merge into the inner projection should still succeed.
+    #[test]
+    fn test_merge_extraction_into_projection_with_column_ref_inflation() -> Result<()>
+    {
+        let table_scan = test_table_scan_with_struct()?;
+
+        // Inner projection (simulates a trimmed projection)
+        let inner = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("user"), col("id")])?
+            .build()?;
+
+        // Outer projection: __extracted alias + id (but NOT user as standalone).
+        // The alias references `user` internally, inflating columns_needed.
+        let plan = LogicalPlanBuilder::from(inner)
+            .project(vec![
+                leaf_udf(col("user"), "status")
+                    .alias(format!("{EXTRACTED_EXPR_PREFIX}_1")),
+                col("id"),
+            ])?
+            .build()?;
+
+        // Run only PushDownLeafProjections
+        let ctx = OptimizerContext::new().with_max_passes(1);
+        let optimizer =
+            Optimizer::with_rules(vec![Arc::new(PushDownLeafProjections::new())]);
+        let result = optimizer.optimize(plan, &ctx, |_, _| {})?;
+
+        // With the fix: merge succeeds → extraction merged into inner projection.
+        // Without the fix: merge rejected → two separate projections remain.
+        insta::assert_snapshot!(format!("{result}"), @r#"
+        Projection: __datafusion_extracted_1, test.id
+          Projection: test.user, test.id, leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1
+            TableScan: test
+        "#);
+
+        Ok(())
     }
 }
