@@ -60,6 +60,9 @@ mod catalog_listing;
 /// Run all tests that are found in the `tracing` directory
 mod tracing;
 
+/// Run all tests in the `statistics` directory
+mod statistics;
+
 #[cfg(test)]
 #[ctor::ctor]
 fn init() {
