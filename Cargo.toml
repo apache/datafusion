@@ -249,13 +249,13 @@ strip = true      # Eliminate debug information to minimize binary size
 [profile.release-nonlto]
 codegen-units = 16
 debug-assertions = false
-debug = false
-incremental = true
+incremental = false
 inherits = "release"
 lto = false
-opt-level = 2
+opt-level = 3
 overflow-checks = false
 rpath = false
+strip = false            # Retain debug info for flamegraphs
 
 [profile.ci]
 debug = false
