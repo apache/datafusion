@@ -702,7 +702,7 @@ impl Test {
 
         let mut buffer = vec![];
         let props = parquet::file::properties::WriterProperties::builder()
-            .set_max_row_group_size(100)
+            .set_max_row_group_row_count(Some(100))
             .build();
         let mut writer = parquet::arrow::ArrowWriter::try_new(
             &mut buffer,

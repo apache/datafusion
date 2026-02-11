@@ -79,7 +79,7 @@ pub async fn default_column_values() -> Result<()> {
         let mut buf = vec![];
 
         let props = WriterProperties::builder()
-            .set_max_row_group_size(2)
+            .set_max_row_group_row_count(Some(2))
             .build();
 
         let mut writer =

@@ -659,7 +659,7 @@ fn make_demo_file(path: impl AsRef<Path>, value_range: Range<i32>) -> Result<()>
     // enable page statistics for the tag column,
     // for everything else.
     let props = WriterProperties::builder()
-        .set_max_row_group_size(100)
+        .set_max_row_group_row_count(Some(100))
         // compute column chunk (per row group) statistics by default
         .set_statistics_enabled(EnabledStatistics::Chunk)
         // compute column page statistics for the tag column
