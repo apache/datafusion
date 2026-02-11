@@ -136,7 +136,7 @@ fn bitmap_bit_position(value: i64) -> i64 {
     if value > 0 {
         (value - 1) % NUM_BITS
     } else {
-        (-value) % NUM_BITS
+        (value.wrapping_neg()) % NUM_BITS
     }
 }
 
@@ -196,11 +196,13 @@ mod tests {
     #[test]
     fn test_bitmap_bit_position_int64() {
         let result = bitmap_bit_position_inner(&[Arc::new(Int64Array::from(vec![
-            4294967296, -1,
+            4294967296, -1, i64::MIN, i64::MAX
         ]))])
         .unwrap();
         let result = result.as_primitive::<Int64Type>();
         assert_eq!(result.value(0), 32767);
         assert_eq!(result.value(1), 1);
+        assert_eq!(result.value(2), 0);
+        assert_eq!(result.value(3), 32766);
     }
 }
