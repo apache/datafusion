@@ -20,8 +20,7 @@
 //!
 //! # Plan Limit Absorption
 //! In addition to pushing down [`LimitExec`] in the plan, some operators can
-//! "absorb" a limit and stop early during execution. This optimizer rule also includes
-//! limit absorption transformation through [`ExecutionPlan::with_fetch`].
+//! "absorb" a limit and stop early during execution.
 //!
 //! ## Background: vectorized volcano execution model
 //! DataFusion uses a batched volcano model. For most operators, output is
@@ -39,10 +38,26 @@
 //! --- DataSourceExec()
 //! --- DataSourceExec()
 //! ```
+//!
 //! Under this model, `NestedLoopJoinExec` would keep working until it can emit
 //! a full batch (8192 rows), even though the query only needs 10. If the limit
 //! cannot be pushed below the join, we can still embed it inside the join so it
-//! stops once the limit is satisfied.
+//! stops once the limit is satisfied. The transformed plan looks like:
+//!
+//! ```text
+//! NestedLoopJoinExec(on=expr_expensive_and_selective, fetch=10)
+//! --- DataSourceExec()
+//! --- DataSourceExec()
+//! ```
+//!
+//! ## Implementation
+//! The current optimizer rule optionally pushes `fetch` requirements into
+//! operators via [`ExecutionPlan::with_fetch`].
+//!
+//! To support early termination in operators, [`LimitedBatchCoalescer`](https://docs.rs/datafusion/latest/datafusion/physical_plan/coalesce/struct.LimitedBatchCoalescer.html)
+//! can help manage the output buffer.
+//!
+//! Reference implementation in Hash Join: <https://github.com/apache/datafusion/pull/20228>
 
 use std::fmt::Debug;
 use std::sync::Arc;
