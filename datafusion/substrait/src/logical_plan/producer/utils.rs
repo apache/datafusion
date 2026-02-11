@@ -19,8 +19,8 @@ use crate::logical_plan::producer::SubstraitProducer;
 use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
 use datafusion::common::{DFSchemaRef, plan_err};
 use datafusion::logical_expr::SortExpr;
-use substrait::proto::{Expression, SortField};
 use substrait::proto::sort_field::{SortDirection, SortKind};
+use substrait::proto::{Expression, SortField};
 
 // Substrait wants a list of all field names, including nested fields from structs,
 // also from within e.g. lists and maps. However, it does not want the list and map field names
@@ -102,9 +102,9 @@ pub(crate) fn negate_if_needed(
                 substrait::proto::expression::ScalarFunction {
                     function_reference: function_anchor,
                     arguments: vec![substrait::proto::FunctionArgument {
-                        arg_type: Some(substrait::proto::function_argument::ArgType::Value(
-                            expr,
-                        )),
+                        arg_type: Some(
+                            substrait::proto::function_argument::ArgType::Value(expr),
+                        ),
                     }],
                     output_type: None,
                     args: vec![],
@@ -116,4 +116,3 @@ pub(crate) fn negate_if_needed(
         expr
     }
 }
-
