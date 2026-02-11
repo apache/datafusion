@@ -1873,20 +1873,24 @@ ORDER BY simple_struct.id;
 ###
 
 query TT
-EXPLAIN SELECT simple_struct.id, join_right.id
-FROM simple_struct
-INNER JOIN join_right ON simple_struct.id = join_right.id
-WHERE simple_struct.s['value'] > join_right.s['level'];
+EXPLAIN
+SELECT s.s['value'], j.s['role']
+FROM join_right j
+INNER JOIN simple_struct s ON s.id = j.id
+WHERE s.s['value'] > j.s['level'];
 ----
 logical_plan
-01)Projection: simple_struct.id, join_right.id
-02)--Inner Join: simple_struct.id = join_right.id Filter: get_field(simple_struct.s, Utf8("value")) > get_field(join_right.s, Utf8("level"))
-03)----TableScan: simple_struct projection=[id, s]
-04)----TableScan: join_right projection=[id, s]
+01)Projection: get_field(s.s, Utf8("value")), get_field(j.s, Utf8("role"))
+02)--Inner Join: j.id = s.id Filter: get_field(s.s, Utf8("value")) > get_field(j.s, Utf8("level"))
+03)----SubqueryAlias: j
+04)------TableScan: join_right projection=[id, s]
+05)----SubqueryAlias: s
+06)------TableScan: simple_struct projection=[id, s]
 physical_plan
-01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0)], filter=get_field(s@0, value) > get_field(s@1, level), projection=[id@0, id@2]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[id, s], file_type=parquet
-03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/join_right.parquet]]}, projection=[id, s], file_type=parquet, predicate=DynamicFilter [ empty ]
+01)ProjectionExec: expr=[get_field(s@1, value) as s.s[value], get_field(s@0, role) as j.s[role]]
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0)], filter=get_field(s@1, value) > get_field(s@0, level), projection=[s@1, s@3]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/join_right.parquet]]}, projection=[id, s], file_type=parquet
+04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[id, s], file_type=parquet, predicate=DynamicFilter [ empty ]
 
 # Verify correctness - all rows match since value >> level for all ids
 # simple_struct: (1,100), (2,200), (3,150), (4,300), (5,250)
