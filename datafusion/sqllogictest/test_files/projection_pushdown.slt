@@ -1792,3 +1792,117 @@ SELECT s['value'], s['label'] FROM (
 200 beta
 250 epsilon
 300 delta
+
+#####################
+# Section 16: Aggregate / Join edge-case tests
+# Translated from unit tests in extract_leaf_expressions.rs
+#####################
+
+###
+# Test 16.1: Projection with get_field above Aggregate
+# Aggregate blocks pushdown, so the get_field stays in the top projection.
+# (mirrors test_projection_with_leaf_expr_above_aggregate)
+###
+
+query TT
+EXPLAIN SELECT s['label'] IS NOT NULL AS has_label, COUNT(1)
+FROM simple_struct GROUP BY s;
+----
+logical_plan
+01)Projection: get_field(simple_struct.s, Utf8("label")) IS NOT NULL AS has_label, count(Int64(1))
+02)--Aggregate: groupBy=[[simple_struct.s]], aggr=[[count(Int64(1))]]
+03)----TableScan: simple_struct projection=[s]
+physical_plan
+01)ProjectionExec: expr=[get_field(s@0, label) IS NOT NULL as has_label, count(Int64(1))@1 as count(Int64(1))]
+02)--AggregateExec: mode=Single, gby=[s@0 as s], aggr=[count(Int64(1))]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[s], file_type=parquet
+
+# Verify correctness - all labels are non-null
+query BI
+SELECT s['label'] IS NOT NULL AS has_label, COUNT(1)
+FROM simple_struct GROUP BY s ORDER BY COUNT(1);
+----
+true 1
+true 1
+true 1
+true 1
+true 1
+
+###
+# Test 16.2: Join with get_field filter on qualified right side
+# The get_field on join_right.s['role'] must be routed to the right input only.
+# (mirrors test_extract_from_join_qualified_right_side)
+###
+
+query TT
+EXPLAIN SELECT simple_struct.id, join_right.id
+FROM simple_struct
+INNER JOIN join_right
+  ON simple_struct.id = join_right.id
+  AND join_right.s['role'] = 'admin';
+----
+logical_plan
+01)Inner Join: simple_struct.id = join_right.id
+02)--TableScan: simple_struct projection=[id]
+03)--Projection: join_right.id
+04)----Filter: __datafusion_extracted_1 = Utf8("admin")
+05)------Projection: get_field(join_right.s, Utf8("role")) AS __datafusion_extracted_1, join_right.id
+06)--------TableScan: join_right projection=[id, s], partial_filters=[get_field(join_right.s, Utf8("role")) = Utf8("admin")]
+physical_plan
+01)ProjectionExec: expr=[id@1 as id, id@0 as id]
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0)]
+03)----FilterExec: __datafusion_extracted_1@0 = admin, projection=[id@1]
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/join_right.parquet]]}, projection=[get_field(s@1, role) as __datafusion_extracted_1, id], file_type=parquet
+05)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[id], file_type=parquet, predicate=DynamicFilter [ empty ]
+
+# Verify correctness - only admin roles match (ids 1 and 4)
+query II
+SELECT simple_struct.id, join_right.id
+FROM simple_struct
+INNER JOIN join_right
+  ON simple_struct.id = join_right.id
+  AND join_right.s['role'] = 'admin'
+ORDER BY simple_struct.id;
+----
+1 1
+4 4
+
+###
+# Test 16.3: Join with cross-input get_field comparison in WHERE
+# get_field from each side is extracted and routed to its respective input independently.
+# (mirrors test_extract_from_join_cross_input_expression)
+###
+
+query TT
+EXPLAIN SELECT simple_struct.id, join_right.id
+FROM simple_struct
+INNER JOIN join_right ON simple_struct.id = join_right.id
+WHERE simple_struct.s['value'] > join_right.s['level'];
+----
+logical_plan
+01)Projection: simple_struct.id, join_right.id
+02)--Inner Join: simple_struct.id = join_right.id Filter: __datafusion_extracted_1 > __datafusion_extracted_2
+03)----Projection: get_field(simple_struct.s, Utf8("value")) AS __datafusion_extracted_1, simple_struct.id
+04)------TableScan: simple_struct projection=[id, s]
+05)----Projection: get_field(join_right.s, Utf8("level")) AS __datafusion_extracted_2, join_right.id
+06)------TableScan: join_right projection=[id, s]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@1, id@1)], filter=__datafusion_extracted_1@0 > __datafusion_extracted_2@1, projection=[id@1, id@3]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[get_field(s@1, value) as __datafusion_extracted_1, id], file_type=parquet
+03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/join_right.parquet]]}, projection=[get_field(s@1, level) as __datafusion_extracted_2, id], file_type=parquet, predicate=DynamicFilter [ empty ]
+
+# Verify correctness - all rows match since value >> level for all ids
+# simple_struct: (1,100), (2,200), (3,150), (4,300), (5,250)
+# join_right:    (1,10),  (2,5),   (3,1),   (4,8),   (5,3)
+query II
+SELECT simple_struct.id, join_right.id
+FROM simple_struct
+INNER JOIN join_right ON simple_struct.id = join_right.id
+WHERE simple_struct.s['value'] > join_right.s['level']
+ORDER BY simple_struct.id;
+----
+1 1
+2 2
+3 3
+4 4
+5 5
