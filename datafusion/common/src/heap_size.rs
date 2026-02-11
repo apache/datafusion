@@ -26,10 +26,10 @@ use arrow::datatypes::{
 };
 use chrono::{DateTime, Utc};
 use half::f16;
+use object_store::path::Path;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
-use object_store::path::Path;
 
 /// This is a temporary solution until <https://github.com/apache/datafusion/pull/19599> and
 /// <https://github.com/apache/arrow-rs/pull/9138> are resolved.
@@ -182,7 +182,7 @@ impl DFHeapSize for DataType {
 
 impl DFHeapSize for Path {
     fn heap_size(&self) -> usize {
-      self.as_ref().heap_size()
+        self.as_ref().heap_size()
     }
 }
 
