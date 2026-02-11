@@ -82,7 +82,9 @@ use parquet::basic::Type;
 use parquet::encryption::encrypt::FileEncryptionProperties;
 use parquet::errors::ParquetError;
 use parquet::file::metadata::{ParquetMetaData, SortingColumn};
-use parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
+use parquet::file::properties::{
+    DEFAULT_MAX_ROW_GROUP_ROW_COUNT, WriterProperties, WriterPropertiesBuilder,
+};
 use parquet::file::writer::SerializedFileWriter;
 use parquet::schema::types::SchemaDescriptor;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
@@ -1589,7 +1591,9 @@ fn spawn_parquet_parallel_serialization_task(
 ) -> SpawnedTask<Result<(), DataFusionError>> {
     SpawnedTask::spawn(async move {
         let max_buffer_rb = parallel_options.max_buffered_record_batches_per_stream;
-        let max_row_group_rows = writer_props.max_row_group_size();
+        let max_row_group_rows = writer_props
+            .max_row_group_row_count()
+            .unwrap_or(DEFAULT_MAX_ROW_GROUP_ROW_COUNT);
         let mut row_group_index = 0;
         let col_writers =
             row_group_writer_factory.create_column_writers(row_group_index)?;
