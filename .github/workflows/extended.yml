@@ -45,6 +45,8 @@ on:
       - 'datafusion/expr*/**/*.rs'
       - 'datafusion/optimizer/**/*.rs'
       - 'datafusion-testing'
+      - '.github/workflows/extended.yml'
+      - 'Cargo.toml'
   workflow_dispatch:
     inputs:
       pr_number:
