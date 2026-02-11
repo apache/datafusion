@@ -1923,6 +1923,44 @@ mod tests {
         "#)
     }
 
+    /// Projection containing a MoveTowardsLeafNodes sub-expression above an
+    /// Aggregate. Aggregate blocks pushdown, so the (None, true) recovery
+    /// fallback path fires: in-place extraction + recovery projection.
+    #[test]
+    fn test_projection_with_leaf_expr_above_aggregate() -> Result<()> {
+        use datafusion_expr::test::function_stub::count;
+
+        let table_scan = test_table_scan_with_struct()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![col("user")], vec![count(lit(1))])?
+            .project(vec![
+                leaf_udf(col("user"), "name").is_not_null().alias("has_name"),
+                col("COUNT(Int32(1))"),
+            ])?
+            .build()?;
+
+        assert_stages!(plan, @r#"
+        ## Original Plan
+        Projection: leaf_udf(test.user, Utf8("name")) IS NOT NULL AS has_name, COUNT(Int32(1))
+          Aggregate: groupBy=[[test.user]], aggr=[[COUNT(Int32(1))]]
+            TableScan: test projection=[user]
+
+        ## After Extraction
+        (same as original)
+
+        ## After Pushdown
+        Projection: __datafusion_extracted_1 IS NOT NULL AS has_name, COUNT(Int32(1))
+          Projection: leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_1, test.user, COUNT(Int32(1))
+            Aggregate: groupBy=[[test.user]], aggr=[[COUNT(Int32(1))]]
+              TableScan: test projection=[user]
+
+        ## Optimized
+        Projection: leaf_udf(test.user, Utf8("name")) IS NOT NULL AS has_name, COUNT(Int32(1))
+          Aggregate: groupBy=[[test.user]], aggr=[[COUNT(Int32(1))]]
+            TableScan: test projection=[user]
+        "#)
+    }
+
     /// Merging adds new pass-through columns not in the existing extracted projection.
     #[test]
     fn test_merge_with_new_columns() -> Result<()> {
@@ -2320,6 +2358,54 @@ mod tests {
             find_owning_input(&qualified_left, &input_column_sets),
             Some(0)
         );
+    }
+
+    /// Two leaf_udf expressions from different sides of a Join in a Filter.
+    /// Each is routed to its respective input side independently.
+    #[test]
+    fn test_extract_from_join_cross_input_expression() -> Result<()> {
+        let left = test_table_scan_with_struct()?;
+        let right = test_table_scan_with_struct_named("right")?;
+
+        let plan = LogicalPlanBuilder::from(left)
+            .join_on(
+                right,
+                datafusion_expr::JoinType::Inner,
+                vec![col("test.id").eq(col("right.id"))],
+            )?
+            .filter(
+                leaf_udf(col("test.user"), "status")
+                    .eq(leaf_udf(col("right.user"), "status")),
+            )?
+            .build()?;
+
+        assert_stages!(plan, @r#"
+        ## Original Plan
+        Filter: leaf_udf(test.user, Utf8("status")) = leaf_udf(right.user, Utf8("status"))
+          Inner Join:  Filter: test.id = right.id
+            TableScan: test projection=[id, user]
+            TableScan: right projection=[id, user]
+
+        ## After Extraction
+        Projection: test.id, test.user, right.id, right.user
+          Filter: __datafusion_extracted_1 = __datafusion_extracted_2
+            Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1, leaf_udf(right.user, Utf8("status")) AS __datafusion_extracted_2, test.id, test.user, right.id, right.user
+              Inner Join:  Filter: test.id = right.id
+                TableScan: test projection=[id, user]
+                TableScan: right projection=[id, user]
+
+        ## After Pushdown
+        Projection: test.id, test.user, right.id, right.user
+          Filter: __datafusion_extracted_1 = __datafusion_extracted_2
+            Inner Join:  Filter: test.id = right.id
+              Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.id, test.user
+                TableScan: test projection=[id, user]
+              Projection: leaf_udf(right.user, Utf8("status")) AS __datafusion_extracted_2, right.id, right.user
+                TableScan: right projection=[id, user]
+
+        ## Optimized
+        (same as after pushdown)
+        "#)
     }
 
     // =========================================================================
