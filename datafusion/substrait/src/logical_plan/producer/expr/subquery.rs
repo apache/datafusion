@@ -17,12 +17,12 @@
 
 use crate::logical_plan::producer::{SubstraitProducer, negate_if_needed};
 use datafusion::common::{DFSchemaRef, substrait_err};
-use datafusion::logical_expr::expr::{Exists, InSubquery, SetComparison, SetQuantifier};
 use datafusion::logical_expr::{Operator, Subquery};
+use datafusion::logical_expr::expr::{Exists, InSubquery, SetComparison, SetQuantifier};
 use substrait::proto::Expression;
 use substrait::proto::expression::RexType;
-use substrait::proto::expression::subquery::set_comparison::{ComparisonOp, ReductionOp};
 use substrait::proto::expression::subquery::{InPredicate, Scalar, SetPredicate};
+use substrait::proto::expression::subquery::set_comparison::{ComparisonOp, ReductionOp};
 
 pub fn from_in_subquery(
     producer: &mut impl SubstraitProducer,
