@@ -35,8 +35,8 @@ use datafusion_macros::user_doc;
 
 #[user_doc(
     doc_section(label = "String Functions"),
-    description = "Translates characters in a string to specified translation characters.",
-    syntax_example = "translate(str, chars, translation)",
+    description = "Performs character-wise substitution based on a mapping.",
+    syntax_example = "translate(str, from, to)",
     sql_example = r#"```sql
 > select translate('twice', 'wic', 'her');
 +--------------------------------------------------+
@@ -46,10 +46,10 @@ use datafusion_macros::user_doc;
 +--------------------------------------------------+
 ```"#,
     standard_argument(name = "str", prefix = "String"),
-    argument(name = "chars", description = "Characters to translate."),
+    argument(name = "from", description = "The characters to be replaced."),
     argument(
-        name = "translation",
-        description = "Translation characters. Translation characters replace only characters at the same position in the **chars** string."
+        name = "to",
+        description = "The characters to replace them with. Each character in **from** that is found in **str** is replaced by the character at the same index in **to**. Any characters in **from** that don't have a corresponding character in **to** are removed."
     )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
