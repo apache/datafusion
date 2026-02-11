@@ -126,10 +126,8 @@ impl ScalarUDFImpl for NanvlFunc {
 
 /// Nanvl SQL function
 ///
-/// Only propagates nulls from x:
-/// - x is NULL -> output is NULL
-/// - x is NaN -> output is y (even if y is NULL)
-/// - x is not NaN -> output is x (regardless of y)
+/// - x is NaN -> output is y (which may itself be NULL)
+/// - otherwise -> output is x (which may itself be NULL)
 fn nanvl(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
         Float64 => {
@@ -138,10 +136,9 @@ fn nanvl(args: &[ArrayRef]) -> Result<ArrayRef> {
             let result: Float64Array = x
                 .iter()
                 .zip(y.iter())
-                .map(|(xv, yv)| match xv {
-                    None => None,                  // x is null -> null
-                    Some(xv) if xv.is_nan() => yv, // x is NaN -> y
-                    some_xv => some_xv,            // x is valid -> x
+                .map(|(x_value, y_value)| match x_value {
+                    Some(x_value) if x_value.is_nan() => y_value,
+                    _ => x_value,
                 })
                 .collect();
             Ok(Arc::new(result) as ArrayRef)
@@ -152,10 +149,9 @@ fn nanvl(args: &[ArrayRef]) -> Result<ArrayRef> {
             let result: Float32Array = x
                 .iter()
                 .zip(y.iter())
-                .map(|(xv, yv)| match xv {
-                    None => None,
-                    Some(xv) if xv.is_nan() => yv,
-                    some_xv => some_xv,
+                .map(|(x_value, y_value)| match x_value {
+                    Some(x_value) if x_value.is_nan() => y_value,
+                    _ => x_value,
                 })
                 .collect();
             Ok(Arc::new(result) as ArrayRef)
@@ -166,10 +162,9 @@ fn nanvl(args: &[ArrayRef]) -> Result<ArrayRef> {
             let result: Float16Array = x
                 .iter()
                 .zip(y.iter())
-                .map(|(xv, yv)| match xv {
-                    None => None,
-                    Some(xv) if xv.is_nan() => yv,
-                    some_xv => some_xv,
+                .map(|(x_value, y_value)| match x_value {
+                    Some(x_value) if x_value.is_nan() => y_value,
+                    _ => x_value,
                 })
                 .collect();
             Ok(Arc::new(result) as ArrayRef)
