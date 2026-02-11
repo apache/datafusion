@@ -113,7 +113,7 @@ impl DFHeapSize for CachedFileMetadata {
             + self.meta.e_tag.heap_size()
             + self.meta.location.as_ref().heap_size()
             + self.statistics.heap_size()
-        //TODO add ordering once LexOrdering /PhysicalExpr implements DFHeapSize
+        //TODO add ordering once LexOrdering/PhysicalExpr implements DFHeapSize
     }
 }
 
@@ -501,6 +501,7 @@ impl CacheManagerConfig {
         self
     }
 
+    /// Specifies the memory limit for the file statistics cache, in bytes.
     pub fn with_file_statistics_cache_limit(mut self, limit: usize) -> Self {
         self.file_statistics_cache_limit = limit;
         self
