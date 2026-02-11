@@ -35,28 +35,28 @@ on:
       # support extended test suite for release candidate branches,
       # it is not expected to have many changes in these branches,
       # so running extended tests is not a burden
-      - 'branch-*'
+      - "branch-*"
   # Also run for changes to some critical areas that are most likely
   # to trigger errors in extended tests
   pull_request:
-    branches: [ '**' ]
+    branches: ["**"]
     paths:
-      - 'datafusion/physical*/**/*.rs'
-      - 'datafusion/expr*/**/*.rs'
-      - 'datafusion/optimizer/**/*.rs'
-      - 'datafusion-testing'
-      - '.github/workflows/extended.yml'
-      - 'Cargo.toml'
+      - "datafusion/physical*/**/*.rs"
+      - "datafusion/expr*/**/*.rs"
+      - "datafusion/optimizer/**/*.rs"
+      - "datafusion-testing"
+      - ".github/workflows/extended.yml"
+      - "Cargo.toml"
   workflow_dispatch:
     inputs:
       pr_number:
-        description: 'Pull request number'
+        description: "Pull request number"
         type: string
       check_run_id:
-        description: 'Check run ID for status updates'
+        description: "Check run ID for status updates"
         type: string
       pr_head_sha:
-        description: 'PR head SHA'
+        description: "PR head SHA"
         type: string
 
 permissions:
@@ -64,14 +64,13 @@ permissions:
   checks: write
 
 jobs:
-
   # Check crate compiles and base cargo check passes
   linux-build-lib:
     name: linux build test
     runs-on: ubuntu-latest
     # note: do not use amd/rust container to preserve disk space
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
           submodules: true
@@ -95,13 +94,13 @@ jobs:
     runs-on: ubuntu-latest
     # note: do not use amd/rust container to preserve disk space
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
           submodules: true
           fetch-depth: 1
       - name: Free Disk Space (Ubuntu)
-        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be  # v1.3.1
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
       - name: Install Rust
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
@@ -139,7 +138,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
           submodules: true
@@ -160,7 +159,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
           submodules: true
@@ -179,7 +178,8 @@ jobs:
           echo "TEST_BIN=$TEST_BIN" >> "$GITHUB_ENV"
       - name: Run sqllogictest
         run: |
-          "$TEST_BIN" --include-sqlite
+          (
+            cd datafusion/sqllogictest
+            "$TEST_BIN" --include-sqlite
+          )
           cargo clean
-
-
