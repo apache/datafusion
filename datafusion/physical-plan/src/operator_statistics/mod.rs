@@ -784,16 +784,16 @@ impl StatisticsProvider for JoinStatisticsProvider {
 
         /// Estimate equi-join output using NDV of join key columns:
         ///   left_rows * right_rows / product(max(left_ndv_i, right_ndv_i))
-        /// Falls back to Cartesian product if any key lacks NDV on both sides.
+        /// Returns `None` when any key lacks NDV information.
         fn equi_join_estimate(
             on: JoinOnRef,
             left: &Statistics,
             right: &Statistics,
             left_rows: usize,
             right_rows: usize,
-        ) -> usize {
+        ) -> Option<usize> {
             if on.is_empty() {
-                return left_rows.saturating_mul(right_rows);
+                return Some(left_rows.saturating_mul(right_rows));
             }
             let mut ndv_divisor: usize = 1;
             for (left_key, right_key) in on {
@@ -809,21 +809,28 @@ impl StatisticsProvider for JoinStatisticsProvider {
                     (Some(l), Some(r)) if l > 0 && r > 0 => {
                         ndv_divisor = ndv_divisor.saturating_mul(l.max(r));
                     }
-                    _ => return left_rows.saturating_mul(right_rows),
+                    _ => return None,
                 }
             }
             let max_rows = left_rows.saturating_mul(right_rows);
-            max_rows.checked_div(ndv_divisor).unwrap_or(max_rows)
+            Some(max_rows.checked_div(ndv_divisor).unwrap_or(max_rows))
         }
 
         let (inner_estimate, is_exact_cartesian, join_type) = if let Some(hash_join) =
             plan.downcast_ref::<HashJoinExec>()
         {
-            let est =
-                equi_join_estimate(hash_join.on(), left, right, left_rows, right_rows);
+            let Some(est) =
+                equi_join_estimate(hash_join.on(), left, right, left_rows, right_rows)
+            else {
+                return Ok(StatisticsResult::Delegate);
+            };
             (est, false, *hash_join.join_type())
         } else if let Some(smj) = plan.downcast_ref::<SortMergeJoinExec>() {
-            let est = equi_join_estimate(smj.on(), left, right, left_rows, right_rows);
+            let Some(est) =
+                equi_join_estimate(smj.on(), left, right, left_rows, right_rows)
+            else {
+                return Ok(StatisticsResult::Delegate);
+            };
             (est, false, smj.join_type())
         } else if plan.downcast_ref::<CrossJoinExec>().is_some() {
             let both_exact = left.num_rows.is_exact().unwrap_or(false)
@@ -1026,7 +1033,7 @@ mod tests {
     use super::*;
     use crate::filter::FilterExec;
     use crate::projection::ProjectionExec;
-    use crate::statistics::StatisticsArgs;
+    use crate::statistics::{StatisticsArgs, StatisticsContext};
     use crate::{DisplayAs, DisplayFormatType, PlanProperties};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::stats::Precision;
@@ -1908,8 +1915,8 @@ mod tests {
     }
 
     #[test]
-    fn test_join_provider_fallback_cartesian() -> Result<()> {
-        // No NDV available -> Cartesian product estimate
+    fn test_join_provider_delegates_without_ndv() -> Result<()> {
+        // No NDV available -> use the built-in join statistics.
         let left = make_source_with_ndv_2col(100, None);
         let right = make_source_with_ndv_2col(200, None);
         let join = make_hash_join(left, right)?;
@@ -1919,7 +1926,9 @@ mod tests {
             Arc::new(DefaultStatisticsProvider),
         ]);
         let stats = registry.compute(join.as_ref())?;
-        assert_eq!(stats.base.num_rows, Precision::Inexact(20_000));
+        let expected =
+            StatisticsContext::new().compute(join.as_ref(), &StatisticsArgs::new())?;
+        assert_eq!(stats.base.num_rows, expected.num_rows);
         Ok(())
     }
 
@@ -2035,12 +2044,6 @@ mod tests {
         assert_eq!(
             compute_join_rows(1000, Some(100), 500, Some(50), JoinType::RightSemi)?,
             Precision::Inexact(500)
-        );
-        // Cartesian fallback (no NDV): inner = 1000*500 = 500000,
-        // left semi = min(500000, 1000) = 1000 (selectivity = 1.0)
-        assert_eq!(
-            compute_join_rows(1000, None, 500, None, JoinType::LeftSemi)?,
-            Precision::Inexact(1000)
         );
         Ok(())
     }
