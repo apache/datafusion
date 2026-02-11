@@ -276,6 +276,52 @@ fn schema_columns(schema: &DFSchema) -> std::collections::HashSet<Column> {
         .collect()
 }
 
+/// Rewrites extraction pairs and column references from one qualifier
+/// space to another.
+///
+/// Builds a replacement map by zipping `from_schema` (whose qualifiers
+/// currently appear in `pairs` / `columns`) with `to_schema` (the
+/// qualifiers we want), then applies `replace_cols_by_name`.
+///
+/// Used for SubqueryAlias (alias-space -> input-space) and Union
+/// (union output-space -> per-branch input-space).
+fn remap_pairs_and_columns(
+    pairs: &[(Expr, String)],
+    columns: &IndexSet<Column>,
+    from_schema: &DFSchema,
+    to_schema: &DFSchema,
+) -> Result<(Vec<(Expr, String)>, IndexSet<Column>)> {
+    let mut replace_map = HashMap::new();
+    for ((from_q, from_f), (to_q, to_f)) in from_schema.iter().zip(to_schema.iter()) {
+        replace_map.insert(
+            qualified_name(from_q, from_f.name()),
+            Expr::Column(Column::new(to_q.cloned(), to_f.name())),
+        );
+    }
+    let remapped_pairs: Vec<(Expr, String)> = pairs
+        .iter()
+        .map(|(expr, alias)| {
+            Ok((
+                replace_cols_by_name(expr.clone(), &replace_map)?,
+                alias.clone(),
+            ))
+        })
+        .collect::<Result<_>>()?;
+    let remapped_columns: IndexSet<Column> = columns
+        .iter()
+        .filter_map(|col| {
+            let rewritten =
+                replace_cols_by_name(Expr::Column(col.clone()), &replace_map).ok()?;
+            if let Expr::Column(c) = rewritten {
+                Some(c)
+            } else {
+                Some(col.clone())
+            }
+        })
+        .collect();
+    Ok((remapped_pairs, remapped_columns))
+}
+
 // =============================================================================
 // Helper Functions for Extraction Targeting
 // =============================================================================
@@ -896,6 +942,61 @@ fn push_extraction_pairs(
     }
 }
 
+/// Routes extraction pairs and columns to the appropriate inputs.
+///
+/// - **Union**: broadcasts to every input via [`remap_pairs_and_columns`].
+/// - **Other nodes**: routes each expression to the one input that owns
+///   all of its column references (via [`find_owning_input`]).
+///
+/// Returns `None` if any expression can't be routed or no input has pairs.
+fn route_to_inputs(
+    pairs: &[(Expr, String)],
+    columns: &IndexSet<Column>,
+    node: &LogicalPlan,
+    input_column_sets: &[std::collections::HashSet<Column>],
+    input_schemas: &[Arc<DFSchema>],
+) -> Result<Option<(Vec<Vec<(Expr, String)>>, Vec<IndexSet<Column>>)>> {
+    let num_inputs = input_schemas.len();
+    let mut per_input_pairs: Vec<Vec<(Expr, String)>> = vec![vec![]; num_inputs];
+    let mut per_input_columns: Vec<IndexSet<Column>> = vec![IndexSet::new(); num_inputs];
+
+    if matches!(node, LogicalPlan::Union(_)) {
+        // Union output schema and each input schema have the same fields by
+        // index but may differ in qualifiers (e.g. output `s` vs input
+        // `simple_struct.s`). Remap pairs/columns to each input's space.
+        let union_schema = node.schema();
+        for (idx, input_schema) in input_schemas.iter().enumerate() {
+            let (remapped_pairs, remapped_columns) =
+                remap_pairs_and_columns(pairs, columns, union_schema, input_schema)?;
+            per_input_pairs[idx] = remapped_pairs;
+            per_input_columns[idx] = remapped_columns;
+        }
+    } else {
+        for (expr, alias) in pairs {
+            match find_owning_input(expr, input_column_sets) {
+                Some(idx) => per_input_pairs[idx].push((expr.clone(), alias.clone())),
+                None => return Ok(None), // Cross-input expression — bail out
+            }
+        }
+        for col in columns {
+            let col_expr = Expr::Column(col.clone());
+            match find_owning_input(&col_expr, input_column_sets) {
+                Some(idx) => {
+                    per_input_columns[idx].insert(col.clone());
+                }
+                None => return Ok(None), // Ambiguous column — bail out
+            }
+        }
+    }
+
+    // Check at least one input has extractions to push
+    if per_input_pairs.iter().all(|p| p.is_empty()) {
+        return Ok(None);
+    }
+
+    Ok(Some((per_input_pairs, per_input_columns)))
+}
+
 /// Pushes extraction expressions into a node's inputs by routing each
 /// expression to the input that owns all of its column references.
 ///
@@ -938,116 +1039,32 @@ fn try_push_into_inputs(
     // SubqueryAlias remaps qualifiers between input and output.
     // Rewrite pairs/columns from alias-space to input-space before routing.
     let (pairs, columns_needed) = if let LogicalPlan::SubqueryAlias(sa) = node {
-        let mut replace_map = HashMap::new();
-        for ((input_q, input_f), (alias_q, alias_f)) in
-            sa.input.schema().iter().zip(sa.schema.iter())
-        {
-            replace_map.insert(
-                qualified_name(alias_q, alias_f.name()),
-                Expr::Column(Column::new(input_q.cloned(), input_f.name())),
-            );
-        }
-        let remapped_pairs: Vec<(Expr, String)> = pairs
-            .iter()
-            .map(|(expr, alias)| {
-                Ok((
-                    replace_cols_by_name(expr.clone(), &replace_map)?,
-                    alias.clone(),
-                ))
-            })
-            .collect::<Result<_>>()?;
-        let remapped_columns: IndexSet<Column> = columns_needed
-            .iter()
-            .filter_map(|col| {
-                let rewritten =
-                    replace_cols_by_name(Expr::Column(col.clone()), &replace_map).ok()?;
-                if let Expr::Column(c) = rewritten {
-                    Some(c)
-                } else {
-                    Some(col.clone())
-                }
-            })
-            .collect();
-        (remapped_pairs, remapped_columns)
+        remap_pairs_and_columns(pairs, columns_needed, &sa.schema, sa.input.schema())?
     } else {
         (pairs.to_vec(), columns_needed.clone())
     };
     let pairs = &pairs[..];
     let columns_needed = &columns_needed;
 
-    let num_inputs = inputs.len();
-
-    // Build per-input column sets using existing schema_columns()
+    // Build per-input schemas and column sets for routing
     let input_schemas: Vec<Arc<DFSchema>> =
         inputs.iter().map(|i| Arc::clone(i.schema())).collect();
     let input_column_sets: Vec<std::collections::HashSet<Column>> =
         input_schemas.iter().map(|s| schema_columns(s)).collect();
 
-    // Route pairs and columns to inputs.
-    // Union: all inputs share the same schema, so broadcast to every branch.
-    // Everything else (Join, single-input nodes): columns are disjoint across
-    // inputs, so route each expression to its owning input.
-    let broadcast = matches!(node, LogicalPlan::Union(_));
+    // Route pairs and columns to the appropriate inputs
+    let (per_input_pairs, per_input_columns) = match route_to_inputs(
+        pairs,
+        columns_needed,
+        node,
+        &input_column_sets,
+        &input_schemas,
+    )? {
+        Some(routed) => routed,
+        None => return Ok(None),
+    };
 
-    let mut per_input_pairs: Vec<Vec<(Expr, String)>> = vec![vec![]; num_inputs];
-    let mut per_input_columns: Vec<IndexSet<Column>> = vec![IndexSet::new(); num_inputs];
-
-    if broadcast {
-        // Union output schema and each input schema have the same fields by
-        // index but may differ in qualifiers (e.g. output `s` vs input
-        // `simple_struct.s`). Remap pairs/columns to each input's space.
-        let union_schema = node.schema();
-        for (idx, input_schema) in input_schemas.iter().enumerate() {
-            let mut remap = HashMap::new();
-            for ((out_q, out_f), (in_q, in_f)) in
-                union_schema.iter().zip(input_schema.iter())
-            {
-                remap.insert(
-                    qualified_name(out_q, out_f.name()),
-                    Expr::Column(Column::new(in_q.cloned(), in_f.name())),
-                );
-            }
-            per_input_pairs[idx] = pairs
-                .iter()
-                .map(|(expr, alias)| {
-                    Ok((replace_cols_by_name(expr.clone(), &remap)?, alias.clone()))
-                })
-                .collect::<Result<_>>()?;
-            per_input_columns[idx] = columns_needed
-                .iter()
-                .filter_map(|col| {
-                    let rewritten =
-                        replace_cols_by_name(Expr::Column(col.clone()), &remap).ok()?;
-                    if let Expr::Column(c) = rewritten {
-                        Some(c)
-                    } else {
-                        Some(col.clone())
-                    }
-                })
-                .collect();
-        }
-    } else {
-        for (expr, alias) in pairs {
-            match find_owning_input(expr, &input_column_sets) {
-                Some(idx) => per_input_pairs[idx].push((expr.clone(), alias.clone())),
-                None => return Ok(None), // Cross-input expression — bail out
-            }
-        }
-        for col in columns_needed {
-            let col_expr = Expr::Column(col.clone());
-            match find_owning_input(&col_expr, &input_column_sets) {
-                Some(idx) => {
-                    per_input_columns[idx].insert(col.clone());
-                }
-                None => return Ok(None), // Ambiguous column — bail out
-            }
-        }
-    }
-
-    // Check at least one input has extractions to push
-    if per_input_pairs.iter().all(|p| p.is_empty()) {
-        return Ok(None);
-    }
+    let num_inputs = inputs.len();
 
     // Build per-input extraction projections and push them as far as possible
     // immediately. This is critical because map_children preserves cached schemas,
