@@ -5172,8 +5172,11 @@ impl fmt::Debug for ScalarValue {
             ScalarValue::List(_) => write!(f, "List({self})"),
             ScalarValue::LargeList(_) => write!(f, "LargeList({self})"),
             ScalarValue::Struct(struct_arr) => {
-                // ScalarValue Struct should always have a single element
-                assert_eq!(struct_arr.len(), 1);
+                // ScalarValue Struct may have 0 rows (e.g. empty array not foldable) or 1 row
+                if struct_arr.is_empty() {
+                    return write!(f, "Struct({{}})");
+                }
+                assert_eq!(struct_arr.len(), 1, "Struct ScalarValue with >1 row");
 
                 let columns = struct_arr.columns();
                 let fields = struct_arr.fields();
