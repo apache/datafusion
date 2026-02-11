@@ -308,7 +308,7 @@ fn remap_pairs_and_columns(
     columns: &IndexSet<Column>,
     from_schema: &DFSchema,
     to_schema: &DFSchema,
-) -> Result<(Vec<(Expr, String)>, IndexSet<Column>)> {
+) -> Result<ExtractionTarget> {
     let mut replace_map = HashMap::new();
     for ((from_q, from_f), (to_q, to_f)) in from_schema.iter().zip(to_schema.iter()) {
         replace_map.insert(
@@ -337,12 +337,24 @@ fn remap_pairs_and_columns(
             }
         })
         .collect();
-    Ok((remapped_pairs, remapped_columns))
+    Ok(ExtractionTarget {
+        pairs: remapped_pairs,
+        columns: remapped_columns,
+    })
 }
 
 // =============================================================================
-// Helper Functions for Extraction Targeting
+// Helper Types & Functions for Extraction Targeting
 // =============================================================================
+
+/// A bundle of extraction pairs (expression + alias) and standalone columns
+/// that need to be pushed through a plan node.
+struct ExtractionTarget {
+    /// Extracted expressions paired with their generated aliases.
+    pairs: Vec<(Expr, String)>,
+    /// Standalone column references needed by the parent node.
+    columns: IndexSet<Column>,
+}
 
 /// Build a replacement map from a projection: output_column_name -> underlying_expr.
 ///
@@ -991,10 +1003,14 @@ fn route_to_inputs(
     node: &LogicalPlan,
     input_column_sets: &[std::collections::HashSet<Column>],
     input_schemas: &[Arc<DFSchema>],
-) -> Result<Option<(Vec<Vec<(Expr, String)>>, Vec<IndexSet<Column>>)>> {
+) -> Result<Option<Vec<ExtractionTarget>>> {
     let num_inputs = input_schemas.len();
-    let mut per_input_pairs: Vec<Vec<(Expr, String)>> = vec![vec![]; num_inputs];
-    let mut per_input_columns: Vec<IndexSet<Column>> = vec![IndexSet::new(); num_inputs];
+    let mut per_input: Vec<ExtractionTarget> = (0..num_inputs)
+        .map(|_| ExtractionTarget {
+            pairs: vec![],
+            columns: IndexSet::new(),
+        })
+        .collect();
 
     if matches!(node, LogicalPlan::Union(_)) {
         // Union output schema and each input schema have the same fields by
@@ -1002,15 +1018,13 @@ fn route_to_inputs(
         // `simple_struct.s`). Remap pairs/columns to each input's space.
         let union_schema = node.schema();
         for (idx, input_schema) in input_schemas.iter().enumerate() {
-            let (remapped_pairs, remapped_columns) =
+            per_input[idx] =
                 remap_pairs_and_columns(pairs, columns, union_schema, input_schema)?;
-            per_input_pairs[idx] = remapped_pairs;
-            per_input_columns[idx] = remapped_columns;
         }
     } else {
         for (expr, alias) in pairs {
             match find_owning_input(expr, input_column_sets) {
-                Some(idx) => per_input_pairs[idx].push((expr.clone(), alias.clone())),
+                Some(idx) => per_input[idx].pairs.push((expr.clone(), alias.clone())),
                 None => return Ok(None), // Cross-input expression — bail out
             }
         }
@@ -1018,7 +1032,7 @@ fn route_to_inputs(
             let col_expr = Expr::Column(col.clone());
             match find_owning_input(&col_expr, input_column_sets) {
                 Some(idx) => {
-                    per_input_columns[idx].insert(col.clone());
+                    per_input[idx].columns.insert(col.clone());
                 }
                 None => return Ok(None), // Ambiguous column — bail out
             }
@@ -1026,11 +1040,11 @@ fn route_to_inputs(
     }
 
     // Check at least one input has extractions to push
-    if per_input_pairs.iter().all(|p| p.is_empty()) {
+    if per_input.iter().all(|t| t.pairs.is_empty()) {
         return Ok(None);
     }
 
-    Ok(Some((per_input_pairs, per_input_columns)))
+    Ok(Some(per_input))
 }
 
 /// Pushes extraction expressions into a node's inputs by routing each
@@ -1074,13 +1088,16 @@ fn try_push_into_inputs(
 
     // SubqueryAlias remaps qualifiers between input and output.
     // Rewrite pairs/columns from alias-space to input-space before routing.
-    let (pairs, columns_needed) = if let LogicalPlan::SubqueryAlias(sa) = node {
+    let remapped = if let LogicalPlan::SubqueryAlias(sa) = node {
         remap_pairs_and_columns(pairs, columns_needed, &sa.schema, sa.input.schema())?
     } else {
-        (pairs.to_vec(), columns_needed.clone())
+        ExtractionTarget {
+            pairs: pairs.to_vec(),
+            columns: columns_needed.clone(),
+        }
     };
-    let pairs = &pairs[..];
-    let columns_needed = &columns_needed;
+    let pairs = &remapped.pairs[..];
+    let columns_needed = &remapped.columns;
 
     // Build per-input schemas and column sets for routing
     let input_schemas: Vec<Arc<DFSchema>> =
@@ -1089,7 +1106,7 @@ fn try_push_into_inputs(
         input_schemas.iter().map(|s| schema_columns(s)).collect();
 
     // Route pairs and columns to the appropriate inputs
-    let (per_input_pairs, per_input_columns) = match route_to_inputs(
+    let per_input = match route_to_inputs(
         pairs,
         columns_needed,
         node,
@@ -1108,14 +1125,14 @@ fn try_push_into_inputs(
     // schema), the parent node's schema becomes stale.
     let mut new_inputs: Vec<LogicalPlan> = Vec::with_capacity(num_inputs);
     for (idx, input) in inputs.into_iter().enumerate() {
-        if per_input_pairs[idx].is_empty() {
+        if per_input[idx].pairs.is_empty() {
             new_inputs.push(input.clone());
         } else {
             let input_arc = Arc::new(input.clone());
             let target_schema = Arc::clone(input.schema());
             let proj = build_extraction_projection_impl(
-                &per_input_pairs[idx],
-                &per_input_columns[idx],
+                &per_input[idx].pairs,
+                &per_input[idx].columns,
                 &input_arc,
                 target_schema.as_ref(),
             )?;
@@ -1123,7 +1140,7 @@ fn try_push_into_inputs(
             // A merge may deduplicate if the same expression already exists
             // under a different alias, leaving the requested alias missing.
             let proj_schema = proj.schema.as_ref();
-            for (_expr, alias) in &per_input_pairs[idx] {
+            for (_expr, alias) in &per_input[idx].pairs {
                 if !proj_schema.fields().iter().any(|f| f.name() == alias) {
                     return Ok(None);
                 }
