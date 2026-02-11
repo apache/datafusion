@@ -1129,16 +1129,6 @@ impl AggregateExec {
             return;
         }
 
-        // Don't push the dynamic filter if the query includes aggregates like
-        // COUNT, SUM, AVG as they usually require all of the rows matching the WHERE clause
-        let has_non_minmax = self.aggr_expr.iter().any(|aggr_expr| {
-            let fun_name = aggr_expr.fun().name();
-            !fun_name.eq_ignore_ascii_case("min") && !fun_name.eq_ignore_ascii_case("max")
-        });
-        if has_non_minmax {
-            return;
-        }
-
         // Collect supported accumulators
         // It is assumed the order of aggregate expressions are not changed from `AggregateExec`
         // to `AggregateStream`
