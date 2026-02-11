@@ -15,13 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#[macro_use]
-extern crate criterion;
-extern crate arrow;
-extern crate datafusion;
-
 mod data_utils;
-use crate::criterion::Criterion;
+
+use criterion::{Criterion, criterion_group, criterion_main};
 use data_utils::{create_table_provider, make_data};
 use datafusion::execution::context::SessionContext;
 use datafusion::physical_plan::{ExecutionPlan, collect};
