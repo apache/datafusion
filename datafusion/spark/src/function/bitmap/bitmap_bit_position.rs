@@ -196,7 +196,10 @@ mod tests {
     #[test]
     fn test_bitmap_bit_position_int64() {
         let result = bitmap_bit_position_inner(&[Arc::new(Int64Array::from(vec![
-            4294967296, -1, i64::MIN, i64::MAX
+            4294967296,
+            -1,
+            i64::MIN,
+            i64::MAX,
         ]))])
         .unwrap();
         let result = result.as_primitive::<Int64Type>();
