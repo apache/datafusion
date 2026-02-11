@@ -852,10 +852,13 @@ fn coerced_from<'a>(
         (UInt16, Null | UInt8 | UInt16) => Some(type_into.clone()),
         (UInt32, Null | UInt8 | UInt16 | UInt32) => Some(type_into.clone()),
         (UInt64, Null | UInt8 | UInt16 | UInt32 | UInt64) => Some(type_into.clone()),
+        (Float16, Null | Int8 | Int16 | UInt8 | UInt16 | Float16) => {
+            Some(type_into.clone())
+        }
         (
             Float32,
             Null | Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64
-            | Float32,
+            | Float16 | Float32,
         ) => Some(type_into.clone()),
         (
             Float64,
@@ -868,6 +871,7 @@ fn coerced_from<'a>(
             | UInt16
             | UInt32
             | UInt64
+            | Float16
             | Float32
             | Float64
             | Decimal32(_, _)

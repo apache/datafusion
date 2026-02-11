@@ -26,7 +26,7 @@ cd "${SOURCE_DIR}/../" && pwd
 TARGET_FILE="docs/source/user-guide/configs.md"
 PRINT_CONFIG_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --bin print_config_docs"
 PRINT_RUNTIME_CONFIG_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --bin print_runtime_config_docs"
-
+PRETTIER_VERSION="2.7.1"
 
 echo "Inserting header"
 cat <<'EOF' > "$TARGET_FILE"
@@ -238,7 +238,7 @@ Enables the experimental Piecewise Merge Join algorithm.
 EOF
 
 
-echo "Running prettier"
-npx prettier@2.3.2 --write "$TARGET_FILE"
+echo "Running prettier ${PRETTIER_VERSION}"
+npx "prettier@${PRETTIER_VERSION}" --write "$TARGET_FILE"
 
 echo "'$TARGET_FILE' successfully updated!"

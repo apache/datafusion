@@ -726,6 +726,27 @@ SELECT to_hex(CAST(NULL AS int))
 NULL
 
 query T
+SELECT to_hex(0)
+----
+0
+
+# negative values (two's complement encoding)
+query T
+SELECT to_hex(-1)
+----
+ffffffffffffffff
+
+query T
+SELECT to_hex(CAST(-1 AS INT))
+----
+ffffffffffffffff
+
+query T
+SELECT to_hex(CAST(255 AS TINYINT UNSIGNED))
+----
+ff
+
+query T
 SELECT trim(' tom ')
 ----
 tom

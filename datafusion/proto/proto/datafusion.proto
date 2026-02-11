@@ -750,6 +750,7 @@ message PhysicalPlanNode {
     SortMergeJoinExecNode sort_merge_join = 34;
     MemoryScanExecNode memory_scan = 35;
     AsyncFuncExecNode async_func = 36;
+    BufferExecNode buffer = 37;
   }
 }
 
@@ -1437,4 +1438,9 @@ message AsyncFuncExecNode {
   PhysicalPlanNode input = 1;
   repeated PhysicalExprNode async_exprs = 2;
   repeated string async_expr_names = 3;
+}
+
+message BufferExecNode {
+  PhysicalPlanNode input = 1;
+  uint64 capacity = 2;
 }
