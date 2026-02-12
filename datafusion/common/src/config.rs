@@ -1522,7 +1522,8 @@ impl ConfigOptions {
         for entry in s.entries() {
             let _ = writeln!(
                 &mut docs,
-                "| {} | {} | {} |",
+                "| {}<a class=\"headerlink\" href=\"#{}\" title=\"Link to this config\">#</a> | {} | {} |",
+                entry.key,
                 entry.key,
                 entry.value.as_deref().unwrap_or("NULL"),
                 entry.description
