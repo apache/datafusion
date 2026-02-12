@@ -24,7 +24,7 @@ use arrow::array::StringViewArray;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::memory::get_record_batch_memory_size;
-use datafusion_common::{Result, config::SpillCompression};
+use datafusion_common::{DataFusionError, Result, config::SpillCompression};
 use datafusion_execution::SendableRecordBatchStream;
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::runtime_env::RuntimeEnv;
@@ -114,23 +114,24 @@ impl SpillManager {
     /// Note that this expects the caller to provide *non-sliced* batches, so the memory calculation of each batch is accurate.
     pub(crate) fn spill_record_batch_iter_and_return_max_batch_memory(
         &self,
-        iter: impl Iterator<Item = impl Borrow<RecordBatch>>,
+        mut iter: impl Iterator<Item = impl Borrow<RecordBatch>>,
         request_description: &str,
     ) -> Result<Option<(RefCountedTempFile, usize)>> {
         let mut in_progress_file = self.create_in_progress_file(request_description)?;
 
         let mut max_record_batch_size = 0;
 
-        for batch in iter {
+        iter.try_for_each(|batch| {
             let borrowed = batch.borrow();
             if borrowed.num_rows() == 0 {
-                continue;
+                return Ok(());
             }
             in_progress_file.append_batch(borrowed)?;
 
             max_record_batch_size =
                 max_record_batch_size.max(get_record_batch_memory_size(borrowed));
-        }
+            Result::<_, DataFusionError>::Ok(())
+        })?;
 
         let file = in_progress_file.finish()?;
 
