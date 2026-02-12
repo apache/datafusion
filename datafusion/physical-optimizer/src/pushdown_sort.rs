@@ -19,7 +19,7 @@
 //!
 //! This optimizer attempts to push sort requirements down through the execution plan
 //! tree to data sources that can natively handle them (e.g., by scanning files in
-//! reverse order).
+//! reverse order or reordering files based on statistics).
 //!
 //! ## How it works
 //!
@@ -35,19 +35,20 @@
 //!    - `Inexact`: Keep Sort but use optimized input (enables early termination for TopK)
 //!    - `Unsupported`: No change
 //!
-//! ## Current capabilities (Phase 1)
+//! ## Capabilities
 //!
-//! - Reverse scan optimization: when required sort is the reverse of the data source's
-//!   natural ordering, enable reverse scanning (reading row groups in reverse order)
-//! - Supports prefix matching: if data has ordering [A DESC, B ASC] and query needs
-//!   [A ASC], reversing gives [A ASC, B DESC] which satisfies the requirement
+//! - **Reverse scan**: when required sort is the reverse of the data source's natural
+//!   ordering, enable reverse scanning (reading row groups in reverse order)
+//! - **Prefix matching**: if data has ordering [A DESC, B ASC] and query needs [A ASC],
+//!   reversing gives [A ASC, B DESC] which satisfies the requirement
+//! - **File reordering by statistics**: files within each group are sorted by their
+//!   min/max statistics to approximate the requested ordering, improving TopK early
+//!   termination
+//! - **Sort elimination**: when a `FileSource` guarantees within-file ordering (e.g.
+//!   Parquet with matching metadata) and files within each group are non-overlapping,
+//!   `Exact` is returned and the `SortExec` is removed entirely
 //!
-//! TODO Issue: <https://github.com/apache/datafusion/issues/19329>
-//! ## Future enhancements (Phase 2),
-//!
-//! - File reordering based on statistics
-//! - Return `Exact` when files are known to be perfectly sorted
-//! - Complete Sort elimination when ordering is guaranteed
+//! See also: <https://github.com/apache/datafusion/issues/19329>
 
 use crate::PhysicalOptimizerRule;
 use datafusion_common::Result;
