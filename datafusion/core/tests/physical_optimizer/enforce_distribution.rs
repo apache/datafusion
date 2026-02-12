@@ -874,8 +874,7 @@ fn enforce_distribution_disables_dynamic_filtering_for_misaligned_partitioning()
     assert!(
         err.to_string()
             .contains("incompatible partitioning schemes"),
-        "Expected error about incompatible partitioning, got: {}",
-        err
+        "Expected error about incompatible partitioning, got: {err}",
     );
 
     Ok(())
