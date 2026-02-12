@@ -952,7 +952,7 @@ impl FileScanConfig {
     /// so `col1 ASC` would be retained.
     ///
     /// Note that we are checking for ordering *within* *each* file group / partition,
-    /// files in different parttions are read independently and do not affect each other's ordering.
+    /// files in different partitions are read independently and do not affect each other's ordering.
     /// Merging of the multiple partition streams into a single ordered stream is handled
     /// upstream e.g. by `SortPreservingMergeExec`.
     fn validated_output_ordering(&self) -> Vec<LexOrdering> {
