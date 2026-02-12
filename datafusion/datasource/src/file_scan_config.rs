@@ -907,23 +907,23 @@ impl DataSource for FileScanConfig {
 
         match pushdown_result {
             SortOrderPushdownResult::Exact { inner } => {
-                let new_ds = self.rebuild_with_source(inner, true, order)?;
+                let config = self.rebuild_with_source(inner, true, order)?;
                 // rebuild_with_source keeps output_ordering only if all groups are non-overlapping.
                 // If it cleared output_ordering, files overlap despite within-file ordering,
                 // so we downgrade to Inexact.
-                let config = new_ds
-                    .as_any()
-                    .downcast_ref::<FileScanConfig>()
-                    .expect("rebuild_with_source returns FileScanConfig");
                 if config.output_ordering.is_empty() {
-                    Ok(SortOrderPushdownResult::Inexact { inner: new_ds })
+                    Ok(SortOrderPushdownResult::Inexact {
+                        inner: Arc::new(config),
+                    })
                 } else {
-                    Ok(SortOrderPushdownResult::Exact { inner: new_ds })
+                    Ok(SortOrderPushdownResult::Exact {
+                        inner: Arc::new(config),
+                    })
                 }
             }
             SortOrderPushdownResult::Inexact { inner } => {
                 Ok(SortOrderPushdownResult::Inexact {
-                    inner: self.rebuild_with_source(inner, false, order)?,
+                    inner: Arc::new(self.rebuild_with_source(inner, false, order)?),
                 })
             }
             SortOrderPushdownResult::Unsupported => {
@@ -1218,7 +1218,7 @@ impl FileScanConfig {
         new_file_source: Arc<dyn FileSource>,
         is_exact: bool,
         order: &[PhysicalSortExpr],
-    ) -> Result<Arc<dyn DataSource>> {
+    ) -> Result<FileScanConfig> {
         let mut new_config = self.clone();
 
         // Reverse file order (within each group) if the caller is requesting a reversal of this
@@ -1309,7 +1309,7 @@ impl FileScanConfig {
             new_config.output_ordering = vec![];
         }
 
-        Ok(Arc::new(new_config))
+        Ok(new_config)
     }
 
     /// Sort files within each existing file group by their min/max statistics.
@@ -1359,8 +1359,10 @@ impl FileScanConfig {
             let sorted_indices = statistics.min_values_sorted();
 
             // Check if already in order
-            let already_sorted =
-                sorted_indices.iter().enumerate().all(|(pos, (idx, _))| pos == *idx);
+            let already_sorted = sorted_indices
+                .iter()
+                .enumerate()
+                .all(|(pos, (idx, _))| pos == *idx);
 
             let sorted_group: FileGroup = if already_sorted {
                 group.clone()
@@ -2698,11 +2700,7 @@ mod tests {
     }
 
     /// Helper: create a PartitionedFile with Float64 min/max statistics for one column
-    fn make_file_with_stats(
-        name: &str,
-        min: f64,
-        max: f64,
-    ) -> PartitionedFile {
+    fn make_file_with_stats(name: &str, min: f64, max: f64) -> PartitionedFile {
         PartitionedFile::new(name.to_string(), 1024).with_statistics(Arc::new(
             Statistics {
                 num_rows: Precision::Exact(100),
@@ -2797,7 +2795,7 @@ mod tests {
 
         let result = config.try_pushdown_sort(&[sort_expr])?;
         let SortOrderPushdownResult::Inexact { inner } = result else {
-            panic!("Expected Inexact result, got {:?}", result);
+            panic!("Expected Inexact result, got {result:?}");
         };
         let pushed_config = inner
             .as_any()
@@ -3060,7 +3058,7 @@ mod tests {
 
         let result = config.try_pushdown_sort(&[sort_expr])?;
         let SortOrderPushdownResult::Exact { inner } = result else {
-            panic!("Expected Exact result, got {:?}", result);
+            panic!("Expected Exact result, got {result:?}");
         };
         let pushed_config = inner
             .as_any()
@@ -3100,7 +3098,7 @@ mod tests {
 
         let result = config.try_pushdown_sort(&[sort_expr])?;
         let SortOrderPushdownResult::Inexact { inner } = result else {
-            panic!("Expected Inexact (downgraded from Exact), got {:?}", result);
+            panic!("Expected Inexact (downgraded from Exact), got {result:?}");
         };
         let pushed_config = inner
             .as_any()
@@ -3141,7 +3139,7 @@ mod tests {
 
         let result = config.try_pushdown_sort(&[sort_expr])?;
         let SortOrderPushdownResult::Exact { inner } = result else {
-            panic!("Expected Exact result, got {:?}", result);
+            panic!("Expected Exact result, got {result:?}");
         };
         let pushed_config = inner
             .as_any()
