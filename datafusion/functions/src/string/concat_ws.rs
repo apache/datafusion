@@ -221,11 +221,7 @@ impl ScalarUDFImpl for ConcatWsFunc {
                         DataType::Utf8View => {
                             let string_array = as_string_view_array(array)?;
 
-                            data_size += string_array
-                                .data_buffers()
-                                .iter()
-                                .map(|buf| buf.len())
-                                .sum::<usize>();
+                            data_size += string_array.total_buffer_bytes_used();
                             let column = if array.is_nullable() {
                                 ColumnarValueRef::NullableStringViewArray(string_array)
                             } else {
