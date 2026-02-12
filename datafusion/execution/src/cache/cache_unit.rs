@@ -99,7 +99,7 @@ impl DefaultFileStatisticsCacheState {
         key: &Path,
         value: CachedFileMetadata,
     ) -> Option<CachedFileMetadata> {
-        let key_size = key.heap_size();
+        let key_size = key.as_ref().heap_size();
         let entry_size = value.heap_size();
 
         if entry_size + key_size > self.memory_limit {
@@ -114,7 +114,7 @@ impl DefaultFileStatisticsCacheState {
         if let Some(old_entry) = &old_value {
             self.memory_used -= old_entry.heap_size();
         } else {
-            self.memory_used += key.heap_size();
+            self.memory_used += key.as_ref().heap_size();
         }
 
         self.evict_entries();
@@ -124,7 +124,7 @@ impl DefaultFileStatisticsCacheState {
 
     fn remove(&mut self, k: &Path) -> Option<CachedFileMetadata> {
         if let Some(old_entry) = self.lru_queue.remove(k) {
-            self.memory_used -= k.heap_size();
+            self.memory_used -= k.as_ref().heap_size();
             self.memory_used -= old_entry.heap_size();
             Some(old_entry)
         } else {
@@ -148,7 +148,7 @@ impl DefaultFileStatisticsCacheState {
     fn evict_entries(&mut self) {
         while self.memory_used > self.memory_limit {
             if let Some(removed) = self.lru_queue.pop() {
-                self.memory_used -= removed.0.heap_size();
+                self.memory_used -= removed.0.as_ref().heap_size();
                 self.memory_used -= removed.1.heap_size();
             } else {
                 // cache is empty while memory_used > memory_limit, cannot happen
@@ -554,9 +554,9 @@ mod tests {
         let (meta_2, value_2) = create_cached_file_metadata_with_stats("test2.parquet");
         let (meta_3, value_3) = create_cached_file_metadata_with_stats("test3.parquet");
 
-        let limit_for_2_entries = meta_1.location.heap_size()
+        let limit_for_2_entries = meta_1.location.as_ref().heap_size()
             + value_1.heap_size()
-            + meta_2.location.heap_size()
+            + meta_2.location.as_ref().heap_size()
             + value_2.heap_size();
 
         // create a cache with a limit which fits exactly 2 entries
@@ -591,7 +591,7 @@ mod tests {
         assert_eq!(cache.len(), 1);
         assert_eq!(
             cache.memory_used(),
-            meta_3.location.heap_size() + value_3.heap_size()
+            meta_3.location.as_ref().heap_size() + value_3.heap_size()
         );
 
         cache.clear();

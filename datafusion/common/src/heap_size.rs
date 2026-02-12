@@ -26,7 +26,6 @@ use arrow::datatypes::{
 };
 use chrono::{DateTime, Utc};
 use half::f16;
-use object_store::path::Path;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -177,12 +176,6 @@ impl DFHeapSize for DataType {
             Map(m, b) => m.heap_size() + b.heap_size(),
             RunEndEncoded(a, b) => a.heap_size() + b.heap_size(),
         }
-    }
-}
-
-impl DFHeapSize for Path {
-    fn heap_size(&self) -> usize {
-        self.as_ref().heap_size()
     }
 }
 
