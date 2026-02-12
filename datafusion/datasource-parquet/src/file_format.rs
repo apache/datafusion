@@ -1343,8 +1343,7 @@ impl FileSink for ParquetSink {
             MetricBuilder::new(&self.metrics).global_counter("rows_written");
         let bytes_written_counter =
             MetricBuilder::new(&self.metrics).global_counter("bytes_written");
-        let elapsed_compute =
-            MetricBuilder::new(&self.metrics).elapsed_compute(0);
+        let elapsed_compute = MetricBuilder::new(&self.metrics).elapsed_compute(0);
 
         let write_start = std::time::Instant::now();
 
@@ -1430,8 +1429,7 @@ impl FileSink for ParquetSink {
             match result {
                 Ok(r) => {
                     let (path, parquet_meta_data) = r?;
-                    let file_rows =
-                        parquet_meta_data.file_metadata().num_rows() as usize;
+                    let file_rows = parquet_meta_data.file_metadata().num_rows() as usize;
                     let file_bytes: usize = parquet_meta_data
                         .row_groups()
                         .iter()

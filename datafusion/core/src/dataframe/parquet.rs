@@ -536,11 +536,8 @@ mod tests {
         let output_path = tmp_dir.path().join("metrics_parallel.parquet");
         let output_path_str = output_path.to_str().unwrap();
 
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "id",
-            DataType::Int32,
-            false,
-        )]));
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
         let ids: Vec<i32> = (0..50).collect();
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
@@ -558,9 +555,7 @@ mod tests {
         let stream = plan.execute(0, task_ctx)?;
         let _batches: Vec<_> = stream.try_collect().await?;
 
-        let metrics = plan
-            .metrics()
-            .expect("DataSinkExec should return metrics");
+        let metrics = plan.metrics().expect("DataSinkExec should return metrics");
         let aggregated = metrics.aggregate_by_name();
 
         let rows_written = aggregated
