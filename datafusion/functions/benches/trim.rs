@@ -260,6 +260,7 @@ fn run_trim_benchmark(
     group.finish();
 }
 
+#[expect(clippy::too_many_arguments)]
 fn run_space_trim_benchmark(
     c: &mut Criterion,
     group_name: &str,

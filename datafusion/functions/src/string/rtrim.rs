@@ -31,7 +31,7 @@ use datafusion_expr::{
 };
 use datafusion_macros::user_doc;
 
-/// Returns the longest string  with trailing characters removed. If the characters are not specified, whitespace is removed.
+/// Returns the longest string  with trailing characters removed. If the characters are not specified, spaces are removed.
 /// rtrim('testxxzx', 'xyz') = 'test'
 fn rtrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let use_string_view = args[0].data_type() == &DataType::Utf8View;
@@ -46,7 +46,7 @@ fn rtrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 #[user_doc(
     doc_section(label = "String Functions"),
-    description = "Trims the specified trim string from the end of a string. If no trim string is provided, all whitespace is removed from the end of the input string.",
+    description = "Trims the specified trim string from the end of a string. If no trim string is provided, all spaces are removed from the end of the input string.",
     syntax_example = "rtrim(str[, trim_str])",
     alternative_syntax = "trim(TRAILING trim_str FROM str)",
     sql_example = r#"```sql
@@ -66,7 +66,7 @@ fn rtrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     standard_argument(name = "str", prefix = "String"),
     argument(
         name = "trim_str",
-        description = "String expression to trim from the end of the input string. Can be a constant, column, or function, and any combination of arithmetic operators. _Default is whitespace characters._"
+        description = "String expression to trim from the end of the input string. Can be a constant, column, or function, and any combination of arithmetic operators. _Default is a space._"
     ),
     related_udf(name = "btrim"),
     related_udf(name = "ltrim")

@@ -31,7 +31,7 @@ use datafusion_expr::{
 };
 use datafusion_macros::user_doc;
 
-/// Returns the longest string  with leading characters removed. If the characters are not specified, whitespace is removed.
+/// Returns the longest string  with leading characters removed. If the characters are not specified, spaces are removed.
 /// ltrim('zzzytest', 'xyz') = 'test'
 fn ltrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let use_string_view = args[0].data_type() == &DataType::Utf8View;
@@ -46,7 +46,7 @@ fn ltrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 #[user_doc(
     doc_section(label = "String Functions"),
-    description = "Trims the specified trim string from the beginning of a string. If no trim string is provided, all whitespace is removed from the start of the input string.",
+    description = "Trims the specified trim string from the beginning of a string. If no trim string is provided, spaces are removed from the start of the input string.",
     syntax_example = "ltrim(str[, trim_str])",
     sql_example = r#"```sql
 > select ltrim('  datafusion  ');
@@ -65,7 +65,7 @@ fn ltrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     standard_argument(name = "str", prefix = "String"),
     argument(
         name = "trim_str",
-        description = r"String expression to trim from the beginning of the input string. Can be a constant, column, or function, and any combination of arithmetic operators. _Default is whitespace characters._"
+        description = r"String expression to trim from the beginning of the input string. Can be a constant, column, or function, and any combination of arithmetic operators. _Default is a space._"
     ),
     alternative_syntax = "trim(LEADING trim_str FROM str)",
     related_udf(name = "btrim"),
