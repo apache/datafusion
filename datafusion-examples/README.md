@@ -131,9 +131,9 @@ cargo run --example dataframe -- dataframe
 
 #### Category: Single Process
 
-| Subcommand | File Path | Description |
-| --- | --- | --- |
-| event_id | [`extension_types/event_id.rs`](examples/extension_types/event_id.rs) | A custom wrapper around integers that represent event ids |
+| Subcommand | File Path                                                             | Description                                               |
+| ---------- | --------------------------------------------------------------------- | --------------------------------------------------------- |
+| event_id   | [`extension_types/event_id.rs`](examples/extension_types/event_id.rs) | A custom wrapper around integers that represent event ids |
 
 ## External Dependency Examples
 
