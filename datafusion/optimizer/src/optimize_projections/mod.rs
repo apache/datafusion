@@ -565,7 +565,7 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
                     // `f(x)`). Wrapping in a redundant self-alias causes a
                     // cosmetic `f(x) AS f(x)` due to Display vs schema_name
                     // formatting differences. Drop the alias when it matches.
-                    if expr.schema_name().to_string() == name {
+                    if metadata.is_none() && expr.schema_name().to_string() == name {
                         expr
                     } else {
                         Expr::Alias(
