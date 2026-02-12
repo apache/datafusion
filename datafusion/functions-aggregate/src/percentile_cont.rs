@@ -58,15 +58,20 @@ use datafusion_macros::user_doc;
 
 use crate::utils::validate_percentile_expr;
 
-/// Precision multiplier used to quantize the fractional component of the
-/// interpolation weight.
+/// Precision multiplier for linear interpolation calculations.
 ///
-/// We keep this quantization to minimize output changes for Float32/Float64
-/// compared to the previous implementation.
+/// This value of 1,000,000 was chosen to balance precision with overflow safety:
+/// - Provides 6 decimal places of precision for the fractional component
+/// - Small enough to avoid overflow when multiplied with typical numeric values
+/// - Sufficient precision for most statistical applications
 ///
-/// Interpolation is performed in f64 and then cast back to the native type to
-/// avoid overflowing Float16 intermediates.
-const INTERPOLATION_PRECISION: usize = 1_000_000;
+/// The interpolation formula: `lower + (upper - lower) * fraction`
+/// is computed as: `lower + ((upper - lower) * (fraction * PRECISION)) / PRECISION`
+/// to avoid floating-point operations on integer types while maintaining precision.
+///
+/// The interpolation arithmetic is performed in f64 and then cast back to the
+/// native type to avoid overflowing Float16 intermediates.
+const INTERPOLATION_PRECISION: f64 = 1_000_000.0;
 
 create_func!(PercentileCont, percentile_cont_udaf);
 
@@ -788,16 +793,14 @@ where
             let upper_value = *upper_value;
 
             // Linear interpolation.
-            //
-            // We quantize the fractional component (via `INTERPOLATION_PRECISION`) to
-            // minimize output changes for Float32/Float64 compared to the previous
-            // implementation.
-            //
-            // We perform the arithmetic in f64 and then cast back to the native type to
-            // avoid overflowing Float16 intermediates.
+            // We compute a quantized interpolation weight using `INTERPOLATION_PRECISION` because:
+            // 1. Both values come from the input data, so (upper - lower) is bounded by the value range
+            // 2. fraction is between 0 and 1; quantizing it provides stable, predictable results
+            // 3. The result is guaranteed to be between lower_value and upper_value (modulo cast rounding)
+            // 4. Arithmetic is performed in f64 and cast back to avoid overflowing Float16 intermediates
             let fraction = index - (lower_index as f64);
-            let scaled = (fraction * INTERPOLATION_PRECISION as f64) as usize;
-            let weight = scaled as f64 / INTERPOLATION_PRECISION as f64;
+            let scaled = (fraction * INTERPOLATION_PRECISION) as usize;
+            let weight = scaled as f64 / INTERPOLATION_PRECISION;
 
             let lower_f: f64 = lower_value.as_();
             let upper_f: f64 = upper_value.as_();
