@@ -3830,7 +3830,7 @@ mod tests {
 
     /// Tests that when the memory pool is too small to accommodate the sort
     /// reservation during spill, the error is properly propagated as
-    /// ResourcesExhausted rather than silently producing wrong results.
+    /// ResourcesExhausted rather than silently exceeding memory limits.
     #[tokio::test]
     async fn test_sort_reservation_fails_during_spill() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
