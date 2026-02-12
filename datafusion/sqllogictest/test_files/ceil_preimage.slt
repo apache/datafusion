@@ -185,7 +185,8 @@ logical_plan
 01)Filter: ceil(test_data.float_val) = Float64(5.5)
 02)--TableScan: test_data projection=[id, float_val, int_val, decimal_val]
 
-# 8. Boundary: 2^53 is still optimizable for Float64 (2^53 and 2^53-1 are both representable)
+# 8. Boundary: 2^53 is the upper boundary for Float64 integer representability.
+#    At 2^53 (9007199254740992), both 2^53 and 2^53-1 are exactly representable, so preimage optimization is valid.
 query TT
 EXPLAIN SELECT * FROM test_data WHERE ceil(float_val) = 9007199254740992;
 ----
