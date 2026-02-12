@@ -1345,7 +1345,7 @@ impl FileSink for ParquetSink {
             MetricBuilder::new(&self.metrics).global_counter("bytes_written");
         let elapsed_compute = MetricBuilder::new(&self.metrics).elapsed_compute(0);
 
-        let write_start = std::time::Instant::now();
+        let write_start = datafusion_common::instant::Instant::now();
 
         let parquet_opts = &self.parquet_options;
 
