@@ -18,25 +18,190 @@
 # Import common test data
 include ./init_data.slt.part
 
+# -----------------------------------------------------------------------
+# Tests derived from the PySpark regexp_extract documentation:
+# https://spark.apache.org/docs/latest/api/python/reference/pyspark.sql/api/pyspark.sql.functions.regexp_extract.html
+# -----------------------------------------------------------------------
+
+# PySpark example 1: extract first capture group
+# regexp_extract('100-200', r'(\d+)-(\d+)', 1) → '100'
+query T
+SELECT regexp_extract('100-200', '(\d+)-(\d+)', CAST(1 AS INT));
+----
+100
+
+# Extract second capture group
+# regexp_extract('100-200', r'(\d+)-(\d+)', 2) → '200'
+query T
+SELECT regexp_extract('100-200', '(\d+)-(\d+)', CAST(2 AS INT));
+----
+200
+
+# PySpark example 2: no match returns empty string
+# regexp_extract('foo', r'(\d+)', 1) → ''
+query T
+SELECT regexp_extract('foo', '(\d+)', CAST(1 AS INT));
+----
+(empty)
+
+# PySpark example 3: unmatched optional group returns empty string
+# regexp_extract('aaaac', '(a+)(b)?(c)', 2) → ''
+query T
+SELECT regexp_extract('aaaac', '(a+)(b)?(c)', CAST(2 AS INT));
+----
+(empty)
+
+# -----------------------------------------------------------------------
+# Additional coverage
+# -----------------------------------------------------------------------
+
+# idx=0 returns the entire match
+query T
+SELECT regexp_extract('100-200', '(\d+)-(\d+)', CAST(0 AS INT));
+----
+100-200
+
+# Extract first group from partially-matching optional groups
+# regexp_extract('aaaac', '(a+)(b)?(c)', 1) → 'aaaa'
+query T
+SELECT regexp_extract('aaaac', '(a+)(b)?(c)', CAST(1 AS INT));
+----
+aaaa
+
+# Extract third group from partially-matching optional groups
+# regexp_extract('aaaac', '(a+)(b)?(c)', 3) → 'c'
+query T
+SELECT regexp_extract('aaaac', '(a+)(b)?(c)', CAST(3 AS INT));
+----
+c
+
+# Negative group index should error
+query error The value of idx in regexp_extract must be non\-negative, but got \-1
+SELECT regexp_extract('abc', '(a)', CAST(-1 AS INT));
+
+# Group index exceeding the number of groups should error
+query error Regex group index 2 exceeds the number of groups 1 in pattern '\(a\)'
+SELECT regexp_extract('abc', '(a)', CAST(2 AS INT));
+
+# Null input produces null output
+query T
+SELECT regexp_extract(CAST(NULL AS VARCHAR), '(\d+)', CAST(1 AS INT));
+----
+NULL
+
+# Empty string input matches empty pattern group 0
+query T
+SELECT regexp_extract('', '.*', CAST(0 AS INT));
+----
+(empty)
+
+# -----------------------------------------------------------------------
+# Tests for 2-arg form (idx defaults to 1, matching Spark's Catalyst
+# `def this(s, r) = this(s, r, Literal(1))`)
+# -----------------------------------------------------------------------
+
+# 2-arg form: regexp_extract('100-200', r'(\d+)-(\d+)') → '100'
+# idx defaults to 1, extracting first capture group
+query T
+SELECT regexp_extract('100-200', '(\d+)-(\d+)');
+----
+100
+
+# 2-arg form with no match returns empty string
+query T
+SELECT regexp_extract('foo', '(\d+)');
+----
+(empty)
+
+# 2-arg form extracts first group from a single-group pattern
+query T
+SELECT regexp_extract('hello world', '(\w+)');
+----
+hello
+
+# -----------------------------------------------------------------------
+# Batch tests: multiple rows processed in a single query
+# -----------------------------------------------------------------------
 
 statement ok
 CREATE TABLE t_extract (val varchar, pat varchar, idx int) AS VALUES
-    ('100-200', '(\d+)-(\d+)', 1),
-    ('foo',     '(\d+)',      1),
-    ('aaaac',   '(a+)(b)?(c)', 2),
-    ('xyz',     'abc',         0),
-    (NULL,      '(\d+)',       1);
+    ('100-200',     '(\d+)-(\d+)',   1),
+    ('foo',         '(\d+)',         1),
+    ('aaaac',       '(a+)(b)?(c)',   2),
+    ('hello-world', '(\w+)-(\w+)',   2);
 
 query T
-SELECT regexp_extract(val, pat, idx) 
+SELECT regexp_extract(val, pat, idx)
 FROM t_extract
 ORDER BY val;
 ----
 100
 (empty)
 (empty)
-(empty)
-NULL
+world
 
 statement ok
 DROP TABLE t_extract;
+
+# -----------------------------------------------------------------------
+# Batch test: same pattern applied across an entire column (common case)
+# -----------------------------------------------------------------------
+
+statement ok
+CREATE TABLE t_dates (val varchar) AS VALUES
+    ('2024-01-15'),
+    ('2023-12-25'),
+    ('no-date-here'),
+    ('2025-06-30'),
+    ('');
+
+# Extract the year (group 1) using the same date pattern
+query T
+SELECT regexp_extract(val, '(\d{4})-(\d{2})-(\d{2})', CAST(1 AS INT))
+FROM t_dates
+ORDER BY val;
+----
+(empty)
+2023
+2024
+2025
+(empty)
+
+statement ok
+DROP TABLE t_dates;
+
+# -----------------------------------------------------------------------
+# Null handling with batch data
+# -----------------------------------------------------------------------
+
+statement ok
+CREATE TABLE t_nulls (val varchar, pat varchar, idx int) AS VALUES
+    (NULL,    '(\d+)', 1),
+    ('abc',   NULL,    1),
+    ('abc',   '(a)',   NULL);
+
+query T
+SELECT regexp_extract(val, pat, idx)
+FROM t_nulls
+ORDER BY val;
+----
+NULL
+NULL
+NULL
+
+statement ok
+DROP TABLE t_nulls;
+
+# -----------------------------------------------------------------------
+# Pattern with no capture groups (idx=0 returns entire match)
+# -----------------------------------------------------------------------
+
+query T
+SELECT regexp_extract('xyz', 'abc', CAST(0 AS INT));
+----
+(empty)
+
+query T
+SELECT regexp_extract('abc', 'abc', CAST(0 AS INT));
+----
+abc
