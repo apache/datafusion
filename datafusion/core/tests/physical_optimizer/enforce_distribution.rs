@@ -67,8 +67,7 @@ use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlanProperties, PlanProperties, Statistics,
-    displayable,
+    DisplayAs, DisplayFormatType, ExecutionPlanProperties, PlanProperties, displayable,
 };
 use insta::Settings;
 
