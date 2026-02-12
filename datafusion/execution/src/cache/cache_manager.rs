@@ -96,6 +96,7 @@ impl CachedFileMetadata {
 ///
 /// See [`crate::runtime_env::RuntimeEnv`] for more details
 pub trait FileStatisticsCache: CacheAccessor<Path, CachedFileMetadata> {
+    /// Cache memory limit in bytes.
     fn cache_limit(&self) -> usize;
 
     /// Updates the cache with a new memory limit in bytes.
