@@ -430,9 +430,7 @@ fn hash_dictionary_inner<
             }
         }
     } else {
-        for (hash, key) in hashes_buffer.iter_mut().zip(array.keys().iter()) {
-            // SAFETY: Keys are guaranteed to be non-null because we checked nucll_count = 0
-            let key = key.unwrap();
+        for (hash, key) in hashes_buffer.iter_mut().zip(array.keys().values()) {
             let idx = key.as_usize();
             if !HAS_NULL_VALUES || dict_values.is_valid(idx) {
                 if MULTI_COL {
