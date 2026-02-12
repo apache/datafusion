@@ -1325,13 +1325,17 @@ impl FileScanConfig {
         projection_indices: Option<&[usize]>,
     ) -> (Vec<FileGroup>, bool, bool) {
         let mut any_reordered = false;
-        let mut all_non_overlapping = true;
+        // Track how many groups we have positively confirmed as non-overlapping.
+        // Default-safe: if any group is skipped without confirmation, the count
+        // won't match and we'll conservatively keep the SortExec.
+        let mut confirmed_non_overlapping: usize = 0;
         let mut new_groups = Vec::with_capacity(file_groups.len());
 
         for group in file_groups {
             if group.len() <= 1 {
                 // Single-file or empty groups are trivially non-overlapping and already sorted
                 new_groups.push(group.clone());
+                confirmed_non_overlapping += 1;
                 continue;
             }
 
@@ -1350,7 +1354,6 @@ impl FileScanConfig {
                         "Cannot sort file group by statistics: {e}. Keeping original order."
                     );
                     new_groups.push(group.clone());
-                    all_non_overlapping = false;
                     continue;
                 }
             };
@@ -1386,13 +1389,14 @@ impl FileScanConfig {
                 Err(_) => false,
             };
 
-            if !is_non_overlapping {
-                all_non_overlapping = false;
+            if is_non_overlapping {
+                confirmed_non_overlapping += 1;
             }
 
             new_groups.push(sorted_group);
         }
 
+        let all_non_overlapping = confirmed_non_overlapping == file_groups.len();
         (new_groups, any_reordered, all_non_overlapping)
     }
 
