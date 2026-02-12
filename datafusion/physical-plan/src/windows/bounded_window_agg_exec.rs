@@ -65,13 +65,13 @@ use datafusion_physical_expr_common::sort_expr::{
     OrderingRequirements, PhysicalSortExpr,
 };
 
+use crate::execution_plan::CardinalityEffect;
 use ahash::RandomState;
 use futures::stream::Stream;
 use futures::{StreamExt, ready};
 use hashbrown::hash_table::HashTable;
 use indexmap::IndexMap;
 use log::debug;
-use crate::execution_plan::CardinalityEffect;
 
 /// Window execution plan
 #[derive(Debug, Clone)]
