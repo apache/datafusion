@@ -26,8 +26,10 @@ use crate::{
 use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::DataType;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
+use datafusion_physical_expr::expressions::has_non_row_level_dynamic_filter;
 use datafusion_physical_expr::projection::ProjectionExprs;
-use datafusion_physical_expr::utils::reassign_expr_columns;
+use datafusion_physical_expr::split_conjunction;
+use datafusion_physical_expr::utils::{conjunction_opt, reassign_expr_columns};
 use datafusion_physical_expr_adapter::replace_columns_with_literals;
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -459,8 +461,13 @@ impl FileOpener for ParquetOpener {
             // `row_filter` for details.
             // ---------------------------------------------------------------------
 
-            // Filter pushdown: evaluate predicates during scan
-            if let Some(predicate) = pushdown_filters.then_some(predicate).flatten() {
+            // Filter pushdown: evaluate predicates during scan.
+            // Strip dynamic predicates that are not made for row-level filtering
+            if let Some(predicate) = pushdown_filters
+                .then_some(predicate)
+                .flatten()
+                .and_then(|p| strip_non_row_level_dynamic_predicates(&p))
+            {
                 let row_filter = row_filter::build_row_filter(
                     &predicate,
                     &physical_file_schema,
@@ -676,6 +683,22 @@ impl FileOpener for ParquetOpener {
             }
         }))
     }
+}
+
+/// Removes conjuncts containing filters that shouldn't do row row
+/// evaluations.
+fn strip_non_row_level_dynamic_predicates(
+    predicate: &Arc<dyn PhysicalExpr>,
+) -> Option<Arc<dyn PhysicalExpr>> {
+    if !has_non_row_level_dynamic_filter(predicate) {
+        return Some(Arc::clone(predicate));
+    }
+    let kept: Vec<_> = split_conjunction(predicate)
+        .into_iter()
+        .filter(|c| !has_non_row_level_dynamic_filter(c))
+        .cloned()
+        .collect();
+    conjunction_opt(kept)
 }
 
 /// Copies metrics from ArrowReaderMetrics (the metrics collected by the

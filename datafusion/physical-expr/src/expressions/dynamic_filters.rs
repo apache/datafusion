@@ -69,6 +69,16 @@ pub struct DynamicFilterPhysicalExpr {
     inner: Arc<RwLock<Inner>>,
     /// Broadcasts filter state (updates and completion) to all waiters.
     state_watch: watch::Sender<FilterState>,
+    /// Whether this dynamic filter should participate in row-level filtering
+    /// (e.g., as a parquet RowFilter for late materialization).
+    ///
+    /// Defaults to true.
+    ///
+    /// When `false`, the filter is only used for file/row-group level pruning
+    /// via statistics. But Aggregate MIN/MAX dynamic filters can set this to `false`
+    /// because they start as `lit(true)` and tighten slowly, making per-row
+    /// evaluation overhead outweigh any row-pruning benefit.
+    is_row_level: bool,
     /// For testing purposes track the data type and nullability to make sure they don't change.
     /// If they do, there's a bug in the implementation.
     /// But this can have overhead in production, so it's only included in our tests.
@@ -175,9 +185,21 @@ impl DynamicFilterPhysicalExpr {
             remapped_children: None, // Initially no remapped children
             inner: Arc::new(RwLock::new(Inner::new(inner))),
             state_watch,
+            is_row_level: true,
             data_type: Arc::new(RwLock::new(None)),
             nullable: Arc::new(RwLock::new(None)),
         }
+    }
+
+    /// Filter should allow row-level evaluations
+    pub fn with_row_level(mut self, is_row_level: bool) -> Self {
+        self.is_row_level = is_row_level;
+        self
+    }
+
+    /// Check if filter should allow row-level evaluations
+    pub fn is_row_level(&self) -> bool {
+        self.is_row_level
     }
 
     fn remap_children(
@@ -370,6 +392,7 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
             remapped_children: Some(children),
             inner: Arc::clone(&self.inner),
             state_watch: self.state_watch.clone(),
+            is_row_level: self.is_row_level,
             data_type: Arc::clone(&self.data_type),
             nullable: Arc::clone(&self.nullable),
         }))
@@ -448,6 +471,23 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
         // Return the current generation of the expression.
         self.inner.read().generation
     }
+}
+
+/// Returns `true` if the expression tree contains any [`DynamicFilterPhysicalExpr`]
+/// with [`is_row_level()`](DynamicFilterPhysicalExpr::is_row_level) set to `false`.
+pub fn has_non_row_level_dynamic_filter(expr: &Arc<dyn PhysicalExpr>) -> bool {
+    let mut found = false;
+    expr.apply(|e| {
+        if let Some(dynamic) = e.as_any().downcast_ref::<DynamicFilterPhysicalExpr>()
+            && !dynamic.is_row_level()
+        {
+            found = true;
+            return Ok(datafusion_common::tree_node::TreeNodeRecursion::Stop);
+        }
+        Ok(datafusion_common::tree_node::TreeNodeRecursion::Continue)
+    })
+    .expect("this traversal is infallible");
+    found
 }
 
 #[cfg(test)]
