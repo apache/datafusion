@@ -18,35 +18,31 @@
 use std::{ffi::c_void, sync::Arc};
 
 use abi_stable::{
-    std_types::{RResult, RString, RVec},
     StableAbi,
+    std_types::{RResult, RString, RVec},
 };
 use async_ffi::{FfiFuture, FutureExt};
 use async_trait::async_trait;
-use datafusion::{
-    catalog::{Session, TableProvider, TableProviderFactory},
-    error::DataFusionError,
-    execution::session_state::SessionStateBuilder,
-    logical_expr::CreateExternalTable,
-    prelude::SessionContext,
-};
+use datafusion_catalog::{Session, TableProvider, TableProviderFactory};
 use datafusion_common::TableReference;
-use datafusion_proto::{
-    logical_plan::{from_proto, to_proto, DefaultLogicalExtensionCodec},
-    protobuf::{CreateExternalTableNode, SortExprNodeCollection},
+use datafusion_common::error::{DataFusionError, Result};
+use datafusion_execution::TaskContext;
+use datafusion_expr::CreateExternalTable;
+use datafusion_proto::logical_plan::from_proto::{parse_expr, parse_sorts};
+use datafusion_proto::logical_plan::to_proto::{serialize_expr, serialize_sorts};
+use datafusion_proto::logical_plan::{
+    DefaultLogicalExtensionCodec, LogicalExtensionCodec,
 };
+use datafusion_proto::protobuf::{CreateExternalTableNode, SortExprNodeCollection};
 use prost::Message;
 use std::collections::HashMap;
 use tokio::runtime::Handle;
 
-use crate::{
-    df_result, rresult_return,
-    session_config::FFI_SessionConfig,
-    table_provider::{FFI_TableProvider, ForeignTableProvider},
-};
-
-use super::session_config::ForeignSessionConfig;
-use datafusion::error::Result;
+use crate::execution::FFI_TaskContextProvider;
+use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
+use crate::session::{FFI_SessionRef, ForeignSession};
+use crate::table_provider::{FFI_TableProvider, ForeignTableProvider};
+use crate::{df_result, rresult_return};
 
 /// A stable struct for sharing [`TableProviderFactory`] across FFI boundaries.
 ///
@@ -58,7 +54,6 @@ use datafusion::error::Result;
 /// [`FFI_TableProvider`]: crate::table_provider::FFI_TableProvider
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub struct FFI_TableProviderFactory {
     /// Create a TableProvider with the given command.
     ///
@@ -68,12 +63,13 @@ pub struct FFI_TableProviderFactory {
     /// * `session_config` - session configuration
     /// * `cmd_serialized` - a [`CreateExternalTableNode`] protobuf message serialized into bytes
     ///   to pass across the FFI boundary.
-    pub create: unsafe extern "C" fn(
+    create: unsafe extern "C" fn(
         factory: &Self,
-        session_config: &FFI_SessionConfig,
+        session: FFI_SessionRef,
         cmd_serialized: RVec<u8>,
-    )
-        -> FfiFuture<RResult<FFI_TableProvider, RString>>,
+    ) -> FfiFuture<RResult<FFI_TableProvider, RString>>,
+
+    pub logical_codec: FFI_LogicalExtensionCodec,
 
     /// Used to create a clone of the factory. This should only need to be called
     /// by the receiver of the factory.
@@ -88,35 +84,106 @@ pub struct FFI_TableProviderFactory {
     /// Internal data. This is only to be accessed by the provider of the factory.
     /// A [`ForeignTableProviderFactory`] should never attempt to access this data.
     pub private_data: *mut c_void,
+
+    /// Utility to identify when FFI objects are accessed locally through
+    /// the foreign interface. See [`crate::get_library_marker_id`] and
+    /// the crate's `README.md` for more information.
+    pub library_marker_id: extern "C" fn() -> usize,
 }
 
 unsafe impl Send for FFI_TableProviderFactory {}
 unsafe impl Sync for FFI_TableProviderFactory {}
 
 struct FactoryPrivateData {
-    factory: Arc<dyn TableProviderFactory>,
+    factory: Arc<dyn TableProviderFactory + Send>,
     runtime: Option<Handle>,
+}
+
+impl FFI_TableProviderFactory {
+    /// Creates a new [`FFI_TableProvider`].
+    pub fn new(
+        factory: Arc<dyn TableProviderFactory + Send>,
+        runtime: Option<Handle>,
+        task_ctx_provider: impl Into<FFI_TaskContextProvider>,
+        logical_codec: Option<Arc<dyn LogicalExtensionCodec>>,
+    ) -> Self {
+        let task_ctx_provider = task_ctx_provider.into();
+        let logical_codec =
+            logical_codec.unwrap_or_else(|| Arc::new(DefaultLogicalExtensionCodec {}));
+        let logical_codec = FFI_LogicalExtensionCodec::new(
+            logical_codec,
+            runtime.clone(),
+            task_ctx_provider.clone(),
+        );
+        Self::new_with_ffi_codec(factory, runtime, logical_codec)
+    }
+
+    pub fn new_with_ffi_codec(
+        factory: Arc<dyn TableProviderFactory + Send>,
+        runtime: Option<Handle>,
+        logical_codec: FFI_LogicalExtensionCodec,
+    ) -> Self {
+        let private_data = Box::new(FactoryPrivateData { factory, runtime });
+
+        Self {
+            create: create_fn_wrapper,
+            logical_codec,
+            clone: clone_fn_wrapper,
+            release: release_fn_wrapper,
+            version: super::version,
+            private_data: Box::into_raw(private_data) as *mut c_void,
+            library_marker_id: crate::get_library_marker_id,
+        }
+    }
+
+    fn inner(&self) -> &Arc<dyn TableProviderFactory + Send> {
+        let private_data = self.private_data as *const FactoryPrivateData;
+        unsafe { &(*private_data).factory }
+    }
+
+    fn runtime(&self) -> &Option<Handle> {
+        let private_data = self.private_data as *const FactoryPrivateData;
+        unsafe { &(*private_data).runtime }
+    }
+}
+
+impl Clone for FFI_TableProviderFactory {
+    fn clone(&self) -> Self {
+        unsafe { (self.clone)(self) }
+    }
+}
+
+impl Drop for FFI_TableProviderFactory {
+    fn drop(&mut self) {
+        unsafe { (self.release)(self) }
+    }
 }
 
 unsafe extern "C" fn create_fn_wrapper(
     factory: &FFI_TableProviderFactory,
-    session_config: &FFI_SessionConfig,
+    session: FFI_SessionRef,
     cmd_serialized: RVec<u8>,
 ) -> FfiFuture<RResult<FFI_TableProvider, RString>> {
-    let private_data = factory.private_data as *mut FactoryPrivateData;
-    let internal_factory = &(*private_data).factory;
-    let session_config = session_config.clone();
-    let runtime = &(*private_data).runtime;
+    let task_ctx: Result<Arc<TaskContext>, DataFusionError> =
+        (&factory.logical_codec.task_ctx_provider).try_into();
+    let runtime = factory.runtime().clone();
+    let logical_codec: Arc<dyn LogicalExtensionCodec> = (&factory.logical_codec).into();
+    let ffi_logical_codec = factory.logical_codec.clone();
+    let internal_factory = Arc::clone(factory.inner());
 
     async move {
-        let config = rresult_return!(ForeignSessionConfig::try_from(&session_config));
-        let session = SessionStateBuilder::new()
-            .with_default_features()
-            .with_config(config.0)
-            .build();
-        let ctx = SessionContext::new_with_state(session);
+        let mut foreign_session = None;
+        let session = rresult_return!(
+            session
+                .as_local()
+                .map(Ok::<&(dyn Session + Send + Sync), DataFusionError>)
+                .unwrap_or_else(|| {
+                    foreign_session = Some(ForeignSession::try_from(&session)?);
+                    Ok(foreign_session.as_ref().unwrap())
+                })
+        );
 
-        let codec = DefaultLogicalExtensionCodec {};
+        let task_ctx = rresult_return!(task_ctx);
 
         let proto_cmd =
             rresult_return!(CreateExternalTableNode::decode(cmd_serialized.as_ref()));
@@ -141,19 +208,23 @@ unsafe extern "C" fn create_fn_wrapper(
             None
         };
 
-        let mut order_exprs = vec![];
+        let mut order_exprs = Vec::with_capacity(proto_cmd.order_exprs.len());
         for expr in &proto_cmd.order_exprs {
-            let sorts = rresult_return!(from_proto::parse_sorts(
+            let sorts = rresult_return!(parse_sorts(
                 &expr.sort_expr_nodes,
-                &ctx,
-                &codec
+                task_ctx.as_ref(),
+                logical_codec.as_ref(),
             ));
             order_exprs.push(sorts);
         }
 
         let mut column_defaults = HashMap::with_capacity(proto_cmd.column_defaults.len());
         for (col_name, expr) in &proto_cmd.column_defaults {
-            let expr = rresult_return!(from_proto::parse_expr(expr, &ctx, &codec));
+            let expr = rresult_return!(parse_expr(
+                expr,
+                task_ctx.as_ref(),
+                logical_codec.as_ref()
+            ));
             column_defaults.insert(col_name.clone(), expr);
         }
 
@@ -182,56 +253,46 @@ unsafe extern "C" fn create_fn_wrapper(
             column_defaults,
         };
 
-        let provider = rresult_return!(internal_factory.create(&ctx.state(), &cmd).await);
+        let provider = rresult_return!(internal_factory.create(session, &cmd).await);
 
-        RResult::ROk(FFI_TableProvider::new(provider, true, runtime.clone()))
+        RResult::ROk(FFI_TableProvider::new_with_ffi_codec(
+            provider,
+            true,
+            runtime.clone(),
+            ffi_logical_codec,
+        ))
     }
     .into_ffi()
-}
-
-unsafe extern "C" fn release_fn_wrapper(factory: &mut FFI_TableProviderFactory) {
-    let private_data = Box::from_raw(factory.private_data as *mut FactoryPrivateData);
-    drop(private_data);
 }
 
 unsafe extern "C" fn clone_fn_wrapper(
     factory: &FFI_TableProviderFactory,
 ) -> FFI_TableProviderFactory {
-    let old_private_data = factory.private_data as *const FactoryPrivateData;
-    let runtime = (*old_private_data).runtime.clone();
+    let runtime = factory.runtime().clone();
+    let old_factory = Arc::clone(factory.inner());
 
     let private_data = Box::into_raw(Box::new(FactoryPrivateData {
-        factory: Arc::clone(&(*old_private_data).factory),
+        factory: old_factory,
         runtime,
     })) as *mut c_void;
 
     FFI_TableProviderFactory {
         create: create_fn_wrapper,
+        logical_codec: factory.logical_codec.clone(),
         clone: clone_fn_wrapper,
         release: release_fn_wrapper,
         version: super::version,
         private_data,
+        library_marker_id: crate::get_library_marker_id,
     }
 }
 
-impl Drop for FFI_TableProviderFactory {
-    fn drop(&mut self) {
-        unsafe { (self.release)(self) }
-    }
-}
-
-impl FFI_TableProviderFactory {
-    /// Creates a new [`FFI_TableProviderFactory`].
-    pub fn new(factory: Arc<dyn TableProviderFactory>, runtime: Option<Handle>) -> Self {
-        let private_data = Box::new(FactoryPrivateData { factory, runtime });
-
-        Self {
-            create: create_fn_wrapper,
-            clone: clone_fn_wrapper,
-            release: release_fn_wrapper,
-            version: super::version,
-            private_data: Box::into_raw(private_data) as *mut c_void,
-        }
+unsafe extern "C" fn release_fn_wrapper(factory: &mut FFI_TableProviderFactory) {
+    unsafe {
+        debug_assert!(!factory.private_data.is_null());
+        let private_data = Box::from_raw(factory.private_data as *mut FactoryPrivateData);
+        drop(private_data);
+        factory.private_data = std::ptr::null_mut();
     }
 }
 
@@ -242,37 +303,35 @@ impl FFI_TableProviderFactory {
 #[derive(Debug)]
 pub struct ForeignTableProviderFactory(pub FFI_TableProviderFactory);
 
+impl From<&FFI_TableProviderFactory> for Arc<dyn TableProviderFactory> {
+    fn from(factory: &FFI_TableProviderFactory) -> Self {
+        if (factory.library_marker_id)() == crate::get_library_marker_id() {
+            Arc::clone(factory.inner()) as Arc<dyn TableProviderFactory>
+        } else {
+            Arc::new(ForeignTableProviderFactory(factory.clone()))
+        }
+    }
+}
+
 unsafe impl Send for ForeignTableProviderFactory {}
 unsafe impl Sync for ForeignTableProviderFactory {}
-
-impl From<&FFI_TableProviderFactory> for ForeignTableProviderFactory {
-    fn from(factory: &FFI_TableProviderFactory) -> Self {
-        Self(factory.clone())
-    }
-}
-
-impl Clone for FFI_TableProviderFactory {
-    fn clone(&self) -> Self {
-        unsafe { (self.clone)(self) }
-    }
-}
 
 #[async_trait]
 impl TableProviderFactory for ForeignTableProviderFactory {
     async fn create(
         &self,
-        state: &dyn Session,
+        session: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> Result<Arc<dyn TableProvider>> {
-        let session_config: FFI_SessionConfig = state.config().into();
+        let session = FFI_SessionRef::new(session, None, self.0.logical_codec.clone());
 
-        let codec = DefaultLogicalExtensionCodec {};
+        let codec: Arc<dyn LogicalExtensionCodec> = (&self.0.logical_codec).into();
 
         // Serialize CreateExternalTable to protobuf
         let mut converted_order_exprs: Vec<SortExprNodeCollection> = vec![];
         for order in &cmd.order_exprs {
             let temp = SortExprNodeCollection {
-                sort_expr_nodes: to_proto::serialize_sorts(order, &codec)?,
+                sort_expr_nodes: serialize_sorts(order, codec.as_ref())?,
             };
             converted_order_exprs.push(temp);
         }
@@ -281,7 +340,7 @@ impl TableProviderFactory for ForeignTableProviderFactory {
             HashMap::with_capacity(cmd.column_defaults.len());
         for (col_name, expr) in &cmd.column_defaults {
             converted_column_defaults
-                .insert(col_name.clone(), to_proto::serialize_expr(expr, &codec)?);
+                .insert(col_name.clone(), serialize_expr(expr, codec.as_ref())?);
         }
 
         let proto_cmd = CreateExternalTableNode {
@@ -304,11 +363,10 @@ impl TableProviderFactory for ForeignTableProviderFactory {
         let cmd_serialized = proto_cmd.encode_to_vec().into();
 
         let provider = unsafe {
-            let maybe_provider =
-                (self.0.create)(&self.0, &session_config, cmd_serialized).await;
+            let maybe_provider = (self.0.create)(&self.0, session, cmd_serialized).await;
 
             let ffi_provider = df_result!(maybe_provider)?;
-            ForeignTableProvider::from(&ffi_provider)
+            ForeignTableProvider(ffi_provider)
         };
 
         Ok(Arc::new(provider))
@@ -317,35 +375,65 @@ impl TableProviderFactory for ForeignTableProviderFactory {
 
 #[cfg(test)]
 mod tests {
-    use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion::datasource::listing_table_factory::ListingTableFactory;
+    use arrow::datatypes::Schema;
+    use datafusion::prelude::SessionContext;
     use datafusion_common::ToDFSchema;
+    use datafusion_execution::TaskContextProvider;
     use std::collections::HashMap;
 
     use super::*;
 
+    #[derive(Debug)]
+    struct TestTableProviderFactory {}
+
+    #[async_trait]
+    impl TableProviderFactory for TestTableProviderFactory {
+        async fn create(
+            &self,
+            _session: &dyn Session,
+            _cmd: &CreateExternalTable,
+        ) -> Result<Arc<dyn TableProvider>> {
+            use arrow::datatypes::Field;
+            use datafusion::arrow::array::Float32Array;
+            use datafusion::arrow::datatypes::DataType;
+            use datafusion::arrow::record_batch::RecordBatch;
+            use datafusion::datasource::MemTable;
+
+            let schema =
+                Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
+
+            let batch1 = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(Float32Array::from(vec![2.0, 4.0, 8.0]))],
+            )?;
+            let batch2 = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(Float32Array::from(vec![64.0]))],
+            )?;
+
+            Ok(Arc::new(MemTable::try_new(
+                schema,
+                vec![vec![batch1], vec![batch2]],
+            )?))
+        }
+    }
+
     #[tokio::test]
     async fn test_round_trip_ffi_table_provider_factory() -> Result<()> {
-        let factory = Arc::new(ListingTableFactory::new());
+        let ctx = Arc::new(SessionContext::new());
+        let task_ctx_provider = Arc::clone(&ctx) as Arc<dyn TaskContextProvider>;
+        let task_ctx_provider = FFI_TaskContextProvider::from(&task_ctx_provider);
 
-        let ffi_factory = FFI_TableProviderFactory::new(factory, None);
-
-        let foreign_factory: ForeignTableProviderFactory = (&ffi_factory).into();
-
-        let ctx = SessionContext::new();
-
-        // Create a simple external table command
-        let schema = Schema::new(vec![
-            Field::new("a", DataType::Int32, false),
-            Field::new("b", DataType::Utf8, false),
-        ]);
-        let df_schema = schema.to_dfschema_ref()?;
+        let factory = Arc::new(TestTableProviderFactory {});
+        let ffi_factory =
+            FFI_TableProviderFactory::new(factory, None, task_ctx_provider, None);
+        let factory: Arc<dyn TableProviderFactory> = (&ffi_factory).into();
 
         let cmd = CreateExternalTable {
-            schema: df_schema,
+            schema: Schema::empty().to_dfschema_ref()?,
             name: TableReference::bare("test_table"),
-            location: "file:///tmp/test.csv".to_string(),
-            file_type: "CSV".to_string(),
+            location: "test".to_string(),
+            file_type: "test".to_string(),
             table_partition_cols: vec![],
             if_not_exists: false,
             or_replace: false,
@@ -358,32 +446,32 @@ mod tests {
             column_defaults: HashMap::new(),
         };
 
-        let provider = foreign_factory.create(&ctx.state(), &cmd).await?;
+        let provider = factory.create(&ctx.state(), &cmd).await?;
 
-        assert_eq!(provider.schema().fields().len(), 2);
+        assert_eq!(provider.schema().fields().len(), 1);
 
         Ok(())
     }
 
     #[tokio::test]
     async fn test_ffi_table_provider_factory_clone() -> Result<()> {
-        let factory = Arc::new(ListingTableFactory::new());
-        let ffi_factory = FFI_TableProviderFactory::new(factory, None);
+        let ctx = Arc::new(SessionContext::new());
+        let task_ctx_provider = Arc::clone(&ctx) as Arc<dyn TaskContextProvider>;
+        let task_ctx_provider = FFI_TaskContextProvider::from(&task_ctx_provider);
+
+        let factory = Arc::new(TestTableProviderFactory {});
+        let ffi_factory =
+            FFI_TableProviderFactory::new(factory, None, task_ctx_provider, None);
 
         // Test that we can clone the factory
         let cloned_factory = ffi_factory.clone();
-        let foreign_factory: ForeignTableProviderFactory = (&cloned_factory).into();
-
-        let ctx = SessionContext::new();
-
-        let schema = Schema::new(vec![Field::new("c", DataType::Float64, true)]);
-        let df_schema = schema.to_dfschema_ref()?;
+        let factory: Arc<dyn TableProviderFactory> = (&cloned_factory).into();
 
         let cmd = CreateExternalTable {
-            schema: df_schema,
+            schema: Schema::empty().to_dfschema_ref()?,
             name: TableReference::bare("cloned_test"),
-            location: "file:///tmp/cloned.parquet".to_string(),
-            file_type: "PARQUET".to_string(),
+            location: "test".to_string(),
+            file_type: "test".to_string(),
             table_partition_cols: vec![],
             if_not_exists: false,
             or_replace: false,
@@ -396,7 +484,7 @@ mod tests {
             column_defaults: HashMap::new(),
         };
 
-        let provider = foreign_factory.create(&ctx.state(), &cmd).await?;
+        let provider = factory.create(&ctx.state(), &cmd).await?;
         assert_eq!(provider.schema().fields().len(), 1);
 
         Ok(())

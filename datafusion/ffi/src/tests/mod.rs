@@ -34,19 +34,21 @@ use udf_udaf_udwf::{
     create_ffi_stddev_func, create_ffi_sum_func, create_ffi_table_func,
 };
 
-use super::table_provider::FFI_TableProvider;
-use super::udf::FFI_ScalarUDF;
 use crate::catalog_provider::FFI_CatalogProvider;
 use crate::catalog_provider_list::FFI_CatalogProviderList;
 use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
+use crate::table_provider::FFI_TableProvider;
+use crate::table_provider_factory::FFI_TableProviderFactory;
 use crate::tests::catalog::create_catalog_provider_list;
 use crate::udaf::FFI_AggregateUDF;
+use crate::udf::FFI_ScalarUDF;
 use crate::udtf::FFI_TableFunction;
 use crate::udwf::FFI_WindowUDF;
 
 mod async_provider;
 pub mod catalog;
 mod sync_provider;
+mod table_provider_factory;
 mod udf_udaf_udwf;
 pub mod utils;
 
@@ -70,6 +72,10 @@ pub struct ForeignLibraryModule {
         synchronous: bool,
         codec: FFI_LogicalExtensionCodec,
     ) -> FFI_TableProvider,
+
+    /// Constructs the table provider factory
+    pub create_table_factory:
+        extern "C" fn(codec: FFI_LogicalExtensionCodec) -> FFI_TableProviderFactory,
 
     /// Create a scalar UDF
     pub create_scalar_udf: extern "C" fn() -> FFI_ScalarUDF,
@@ -128,6 +134,14 @@ extern "C" fn construct_table_provider(
     }
 }
 
+/// Here we only wish to create a simple table provider as an example.
+/// We create an in-memory table and convert it to it's FFI counterpart.
+extern "C" fn construct_table_provider_factory(
+    codec: FFI_LogicalExtensionCodec,
+) -> FFI_TableProviderFactory {
+    table_provider_factory::create(codec)
+}
+
 #[export_root_module]
 /// This defines the entry point for using the module.
 pub fn get_foreign_library_module() -> ForeignLibraryModuleRef {
@@ -135,6 +149,7 @@ pub fn get_foreign_library_module() -> ForeignLibraryModuleRef {
         create_catalog: create_catalog_provider,
         create_catalog_list: create_catalog_provider_list,
         create_table: construct_table_provider,
+        create_table_factory: construct_table_provider_factory,
         create_scalar_udf: create_ffi_abs_func,
         create_nullary_udf: create_ffi_random_func,
         create_table_function: create_ffi_table_func,
