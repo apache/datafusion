@@ -626,7 +626,7 @@ mod tests {
     ) -> (ObjectMeta, CachedFileMetadata) {
         let series: Vec<i32> = (0..=10).collect();
         let values = Int32Array::from(series);
-        let offsets = OffsetBuffer::new(ScalarBuffer::from(vec![0]));
+        let offsets = OffsetBuffer::new(ScalarBuffer::from(vec![0, 11]));
         let field = Arc::new(Field::new_list_field(DataType::Int32, false));
         let list_array = ListArray::new(field, offsets, Arc::new(values), None);
 
