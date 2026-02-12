@@ -1424,7 +1424,6 @@ impl FileSink for ParquetSink {
             }
         }
 
-        let mut row_count = 0;
         while let Some(result) = file_write_tasks.join_next().await {
             match result {
                 Ok(r) => {
@@ -1435,7 +1434,6 @@ impl FileSink for ParquetSink {
                         .iter()
                         .map(|rg| rg.compressed_size() as usize)
                         .sum();
-                    row_count += parquet_meta_data.file_metadata().num_rows();
                     rows_written_counter.add(file_rows);
                     bytes_written_counter.add(file_bytes);
                     let mut written_files = self.written.lock();
@@ -1461,7 +1459,7 @@ impl FileSink for ParquetSink {
 
         elapsed_compute.add_elapsed(write_start);
 
-        Ok(row_count as u64)
+        Ok(rows_written_counter.value() as u64)
     }
 }
 
