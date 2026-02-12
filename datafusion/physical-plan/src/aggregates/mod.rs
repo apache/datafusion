@@ -1147,7 +1147,7 @@ impl AggregateExec {
             } else if fun_name.eq_ignore_ascii_case("max") {
                 DynamicFilterAggregateType::Max
             } else {
-                continue;
+                return;
             };
 
             // 2. arg should be only 1 column reference
