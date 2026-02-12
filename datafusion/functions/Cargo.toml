@@ -313,7 +313,7 @@ required-features = ["string_expressions"]
 
 [[bench]]
 harness = false
-name = "left"
+name = "left_right"
 required-features = ["unicode_expressions"]
 
 [[bench]]

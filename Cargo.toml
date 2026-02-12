@@ -91,12 +91,12 @@ ahash = { version = "0.8", default-features = false, features = [
     "runtime-rng",
 ] }
 apache-avro = { version = "0.21", default-features = false }
-arrow = { version = "57.2.0", features = [
+arrow = { version = "57.3.0", features = [
     "prettyprint",
     "chrono-tz",
 ] }
 arrow-buffer = { version = "57.2.0", default-features = false }
-arrow-flight = { version = "57.2.0", features = [
+arrow-flight = { version = "57.3.0", features = [
     "flight-sql-experimental",
 ] }
 arrow-ipc = { version = "57.2.0", default-features = false, features = [
@@ -152,21 +152,21 @@ datafusion-substrait = { path = "datafusion/substrait", version = "52.1.0" }
 
 doc-comment = "0.3"
 env_logger = "0.11"
-flate2 = "1.1.8"
+flate2 = "1.1.9"
 futures = "0.3"
 glob = "0.3.0"
 half = { version = "2.7.0", default-features = false }
 hashbrown = { version = "0.16.1" }
 hex = { version = "0.4.3" }
 indexmap = "2.13.0"
-insta = { version = "1.46.1", features = ["glob", "filters"] }
+insta = { version = "1.46.3", features = ["glob", "filters"] }
 itertools = "0.14"
 liblzma = { version = "0.4.4", features = ["static"] }
 log = "^0.4"
 num-traits = { version = "0.2" }
 object_store = { version = "0.12.4", default-features = false }
 parking_lot = "0.12"
-parquet = { version = "57.2.0", default-features = false, features = [
+parquet = { version = "57.3.0", default-features = false, features = [
     "arrow",
     "async",
     "object_store",
@@ -188,6 +188,8 @@ strum_macros = "0.27.2"
 tempfile = "3"
 testcontainers-modules = { version = "0.14" }
 tokio = { version = "1.48", features = ["macros", "rt", "sync"] }
+tokio-stream = "0.1"
+tokio-util = "0.7"
 url = "2.5.7"
 uuid = "1.20"
 zstd = { version = "0.13", default-features = false }

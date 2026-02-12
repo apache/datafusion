@@ -750,6 +750,8 @@ message PhysicalPlanNode {
     SortMergeJoinExecNode sort_merge_join = 34;
     MemoryScanExecNode memory_scan = 35;
     AsyncFuncExecNode async_func = 36;
+    BufferExecNode buffer = 37;
+    ArrowScanExecNode arrow_scan = 38;
   }
 }
 
@@ -849,6 +851,14 @@ message PhysicalExtensionNode {
 message PhysicalExprNode {
   // Was date_time_interval_expr
   reserved 17;
+
+  // Unique identifier for this expression to do deduplication during deserialization.
+  // When serializing, this is set to a unique identifier for each combination of
+  // expression, process and serialization run.
+  // When deserializing, if this ID has been seen before, the cached Arc is returned
+  // instead of creating a new one, enabling reconstruction of referential integrity
+  // across serde roundtrips.
+  optional uint64 expr_id = 30;
 
   oneof ExprType {
     // column references
@@ -1094,6 +1104,10 @@ message JsonScanExecNode {
 }
 
 message AvroScanExecNode {
+  FileScanExecConf base_conf = 1;
+}
+
+message ArrowScanExecNode {
   FileScanExecConf base_conf = 1;
 }
 
@@ -1429,4 +1443,9 @@ message AsyncFuncExecNode {
   PhysicalPlanNode input = 1;
   repeated PhysicalExprNode async_exprs = 2;
   repeated string async_expr_names = 3;
+}
+
+message BufferExecNode {
+  PhysicalPlanNode input = 1;
+  uint64 capacity = 2;
 }
