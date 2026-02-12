@@ -819,7 +819,7 @@ mod tests {
 
         assert_eq!(
             2,
-            Arc::clone(&df)
+            df.clone()
                 .filter(col("expires_in").is_not_null())?
                 .count()
                 .await?

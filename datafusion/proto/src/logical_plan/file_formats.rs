@@ -639,11 +639,9 @@ mod parquet {
                 exec_datafusion_err!("Failed to decode TableParquetOptionsProto: {e:?}")
             })?;
             let options: TableParquetOptions = (&proto).into();
-            Ok(Arc::new(
-                datafusion_datasource_parquet::file_format::ParquetFormatFactory {
-                    options: Some(options),
-                },
-            ))
+            Ok(Arc::new(ParquetFormatFactory {
+                options: Some(options),
+            }))
         }
 
         fn try_encode_file_format(

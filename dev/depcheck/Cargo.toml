@@ -20,7 +20,10 @@
 name = "depcheck"
 edition = "2024"
 
-[lints]\nworkspace = true\n\n# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lints]
+workspace = true
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 cargo = "0.92.0"
