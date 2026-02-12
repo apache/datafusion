@@ -1184,7 +1184,7 @@ impl GroupedHashAggregateStream {
                 // If we can't grow even that, we have no choice but to return an error since we can't spill to disk without sorting the data first.
                 self.reservation.try_grow(sort_memory).map_err(|err| {
                     resources_datafusion_err!(
-                        "Failed to reserver memory for sort during spill: {err}"
+                        "Failed to reserve memory for sort during spill: {err}"
                     )
                 })?;
 
