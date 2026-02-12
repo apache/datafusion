@@ -850,11 +850,13 @@ pub(crate) fn get_reserved_bytes_for_record_batch_size(
 /// Estimate how much memory is needed to sort a `RecordBatch`.
 /// This will just call `get_reserved_bytes_for_record_batch_size` with the
 /// memory size of the record batch and its sliced size.
-pub(super) fn get_reserved_bytes_for_record_batch(batch: &RecordBatch) -> Result<usize> {
-    Ok(get_reserved_bytes_for_record_batch_size(
-        get_record_batch_memory_size(batch),
-        batch.get_sliced_size()?,
-    ))
+pub(crate) fn get_reserved_bytes_for_record_batch(batch: &RecordBatch) -> Result<usize> {
+    batch.get_sliced_size().map(|sliced_size| {
+        get_reserved_bytes_for_record_batch_size(
+            get_record_batch_memory_size(batch),
+            sliced_size,
+        )
+    })
 }
 
 impl Debug for ExternalSorter {

@@ -30,7 +30,7 @@ use crate::aggregates::{
     create_schema, evaluate_group_by, evaluate_many, evaluate_optional,
 };
 use crate::metrics::{BaselineMetrics, MetricBuilder, RecordOutput};
-use crate::sorts::sort::sort_batch;
+use crate::sorts::sort::{get_reserved_bytes_for_record_batch, sort_batch};
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::spill_manager::SpillManager;
 use crate::{PhysicalExpr, aggregates, metrics};
@@ -1110,6 +1110,15 @@ impl GroupedHashAggregateStream {
         let Some(emit) = self.emit(EmitTo::All, true)? else {
             return Ok(());
         };
+
+        // Free accumulated state now that data has been emitted into `emit`.
+        // This must happen before reserving sort memory so the pool has room.
+        self.clear_shrink(self.batch_size);
+        self.update_memory_reservation()?;
+
+        let sort_memory = get_reserved_bytes_for_record_batch(&emit)?;
+        self.reservation.try_grow(sort_memory)?;
+
         let sorted = sort_batch(&emit, &self.spill_state.spill_expr, None)?;
 
         // Spill sorted state to disk
@@ -1121,6 +1130,8 @@ impl GroupedHashAggregateStream {
                 "HashAggSpill",
                 self.batch_size,
             )?;
+
+        self.reservation.shrink(sort_memory);
         match spillfile {
             Some((spillfile, max_record_batch_memory)) => {
                 self.spill_state.spills.push(SortedSpillFile {
