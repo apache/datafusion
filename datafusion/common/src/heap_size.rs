@@ -46,11 +46,7 @@ impl DFHeapSize for Statistics {
     fn heap_size(&self) -> usize {
         self.num_rows.heap_size()
             + self.total_byte_size.heap_size()
-            + self
-                .column_statistics
-                .iter()
-                .map(|s| s.heap_size())
-                .sum::<usize>()
+            + self.column_statistics.heap_size()
     }
 }
 
