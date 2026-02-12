@@ -67,18 +67,10 @@ async fn register_events_table(ctx: &SessionContext) -> Result<DataFrame> {
         schema,
         vec![
             Arc::new(UInt32Array::from(vec![
-                20_01_000000,
-                20_01_000001,
-                21_03_000000,
-                21_03_000001,
-                21_03_000002,
+                2001000000, 2001000001, 2103000000, 2103000001, 2103000002,
             ])),
             Arc::new(UInt32Array::from(vec![
-                2020_01_0000,
-                2020_01_0001,
-                2021_03_0000,
-                2021_03_0001,
-                2021_03_0002,
+                2020010000, 2020010001, 2021030000, 2021030001, 2021030002,
             ])),
             Arc::new(StringArray::from(vec![
                 "First Event Jan 2020",
@@ -167,8 +159,7 @@ impl ExtensionType for EventIdExtensionType {
                 "short" => Ok(IdYearMode::Short),
                 "long" => Ok(IdYearMode::Long),
                 _ => Err(ArrowError::InvalidArgumentError(format!(
-                    "Invalid metadata for event id type: {}",
-                    metadata
+                    "Invalid metadata for event id type: {metadata}"
                 ))),
             },
         }
@@ -256,7 +247,7 @@ impl DisplayIndex for EventIdDisplayIndex<'_> {
                 let month = rest % 100;
                 let year = rest / 100;
 
-                write!(f, "{:02}-{:02}-{:06}", year, month, counter)?;
+                write!(f, "{year:02}-{month:02}-{counter:06}")?;
             }
             IdYearMode::Long => {
                 // Format: YYYY-MM-CCCC
@@ -269,7 +260,7 @@ impl DisplayIndex for EventIdDisplayIndex<'_> {
                 let month = rest % 100;
                 let year = rest / 100;
 
-                write!(f, "{:04}-{:02}-{:04}", year, month, counter)?;
+                write!(f, "{year:04}-{month:02}-{counter:04}")?;
             }
         }
         Ok(())

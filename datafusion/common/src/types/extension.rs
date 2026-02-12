@@ -32,10 +32,10 @@ pub type DFExtensionTypeRef = Arc<dyn DFExtensionType>;
 /// from these operations. The extension type mechanism allows users to define how these operations
 /// apply to a particular extension type.
 ///
-/// For example, adding two values of [`DataType::Int64`] is a sensible thing to do. However, if the
-/// same column is annotated with an extension type like `custom.id`, the correct interpretation of
-/// a column changes. Adding together two `custom.id` values, even though they are stored as
-/// integers, may no longer make sense.
+/// For example, adding two values of [`Int64`](arrow::datatypes::DataType::Int64) is a sensible
+/// thing to do. However, if the same column is annotated with an extension type like `custom.id`,
+/// the correct interpretation of a column changes. Adding together two `custom.id` values, even
+/// though they are stored as integers, may no longer make sense.
 ///
 /// Note that DataFusion's extension type support is still young and therefore might not cover all
 /// relevant use cases. Currently, the following operations can be customized:

@@ -258,7 +258,11 @@ pub trait ExtensionTypeRegistration: Debug + Send + Sync {
 /// A cheaply cloneable pointer to an [ExtensionTypeRegistry].
 pub type ExtensionTypeRegistryRef = Arc<dyn ExtensionTypeRegistry>;
 
-/// Supports registering custom [LogicalType]s, including native types.
+/// Manages [`ExtensionTypeRegistration`]s, which allow users to register custom behavior for
+/// extension types.
+///
+/// Each registration is connected to the extension type name, which can also be looked up to get
+/// the registration.
 pub trait ExtensionTypeRegistry: Debug + Send + Sync {
     /// Returns a reference to registration of an extension type named `name`.
     ///
