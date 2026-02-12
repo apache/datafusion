@@ -19,7 +19,8 @@
 
 use crate::expr::{
     AggregateFunction, BinaryExpr, Cast, Exists, GroupingSet, InList, InSubquery,
-    NullTreatment, Placeholder, TryCast, Unnest, WildcardOptions, WindowFunction,
+    NullTreatment, OuterReference, Placeholder, TryCast, Unnest, WildcardOptions,
+    WindowFunction,
 };
 use crate::function::{
     AccumulatorArgs, AccumulatorFactoryFunction, PartitionEvaluatorFactory,
@@ -86,7 +87,7 @@ pub fn out_ref_col_with_metadata(
     let column = ident.into();
     let field: FieldRef =
         Arc::new(Field::new(column.name(), dt, true).with_metadata(metadata));
-    Expr::OuterReferenceColumn(field, column)
+    Expr::OuterReferenceColumn(Box::new(OuterReference::new(field, column)))
 }
 
 /// Create an unqualified column expression from the provided name, without normalizing

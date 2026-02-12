@@ -30,7 +30,7 @@ use datafusion_common::{
     DFSchema, Result, ScalarValue, ToDFSchema, exec_err, not_impl_err, plan_err,
 };
 use datafusion_expr::execution_props::ExecutionProps;
-use datafusion_expr::expr::{Alias, Cast, InList, Placeholder, ScalarFunction};
+use datafusion_expr::expr::{Cast, InList, Placeholder, ScalarFunction};
 use datafusion_expr::var_provider::VarType;
 use datafusion_expr::var_provider::is_system_variables;
 use datafusion_expr::{
@@ -114,18 +114,22 @@ pub fn create_physical_expr(
     let input_schema = input_dfschema.as_arrow();
 
     match e {
-        Expr::Alias(Alias { expr, metadata, .. }) => {
-            if let Expr::Literal(v, prior_metadata) = expr.as_ref() {
+        Expr::Alias(alias) => {
+            if let Expr::Literal(v, prior_metadata) = alias.expr.as_ref() {
                 let new_metadata = FieldMetadata::merge_options(
                     prior_metadata.as_ref(),
-                    metadata.as_ref(),
+                    alias.metadata.as_ref(),
                 );
                 Ok(Arc::new(Literal::new_with_metadata(
                     v.clone(),
                     new_metadata,
                 )))
             } else {
-                Ok(create_physical_expr(expr, input_dfschema, execution_props)?)
+                Ok(create_physical_expr(
+                    &alias.expr,
+                    input_dfschema,
+                    execution_props,
+                )?)
             }
         }
         Expr::Column(c) => {

@@ -36,8 +36,8 @@ use futures::stream::FuturesUnordered;
 use futures::{StreamExt, TryStreamExt, stream::BoxStream};
 use log::{debug, trace};
 
+use datafusion_common::DFSchema;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{Column, DFSchema};
 use datafusion_expr::{Expr, Volatility};
 use datafusion_physical_expr::create_physical_expr;
 use object_store::path::Path;
@@ -51,8 +51,8 @@ use object_store::{ObjectMeta, ObjectStore};
 pub fn expr_applicable_for_cols(col_names: &[&str], expr: &Expr) -> bool {
     let mut is_applicable = true;
     expr.apply(|expr| match expr {
-        Expr::Column(Column { name, .. }) => {
-            is_applicable &= col_names.contains(&name.as_str());
+        Expr::Column(col) => {
+            is_applicable &= col_names.contains(&col.name.as_str());
             if is_applicable {
                 Ok(TreeNodeRecursion::Jump)
             } else {
@@ -61,7 +61,7 @@ pub fn expr_applicable_for_cols(col_names: &[&str], expr: &Expr) -> bool {
         }
         Expr::Literal(_, _)
         | Expr::Alias(_)
-        | Expr::OuterReferenceColumn(_, _)
+        | Expr::OuterReferenceColumn(_)
         | Expr::ScalarVariable(_, _)
         | Expr::Not(_)
         | Expr::IsNotNull(_)
@@ -251,13 +251,13 @@ fn populate_partition_values<'a>(
     if let Expr::BinaryExpr(BinaryExpr { left, op, right }) = filter {
         match op {
             Operator::Eq => match (left.as_ref(), right.as_ref()) {
-                (Expr::Column(Column { name, .. }), Expr::Literal(val, _))
-                | (Expr::Literal(val, _), Expr::Column(Column { name, .. })) => {
+                (Expr::Column(col), Expr::Literal(val, _))
+                | (Expr::Literal(val, _), Expr::Column(col)) => {
                     if partition_values
-                        .insert(name, PartitionValue::Single(val.to_string()))
+                        .insert(&col.name, PartitionValue::Single(val.to_string()))
                         .is_some()
                     {
-                        partition_values.insert(name, PartitionValue::Multi);
+                        partition_values.insert(&col.name, PartitionValue::Multi);
                     }
                 }
                 _ => {}

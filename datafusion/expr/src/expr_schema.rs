@@ -17,9 +17,8 @@
 
 use super::{Between, Expr, Like, predicate_bounds};
 use crate::expr::{
-    AggregateFunction, AggregateFunctionParams, Alias, BinaryExpr, Cast, InList,
-    InSubquery, Placeholder, ScalarFunction, TryCast, Unnest, WindowFunction,
-    WindowFunctionParams,
+    AggregateFunction, AggregateFunctionParams, BinaryExpr, Cast, InList, InSubquery,
+    Placeholder, ScalarFunction, TryCast, Unnest, WindowFunction, WindowFunctionParams,
 };
 use crate::type_coercion::functions::{UDFCoercionExt, fields_with_udf};
 use crate::udf::ReturnFieldArgs;
@@ -109,16 +108,18 @@ impl ExprSchemable for Expr {
     #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn get_type(&self, schema: &dyn ExprSchema) -> Result<DataType> {
         match self {
-            Expr::Alias(Alias { expr, name, .. }) => match &**expr {
+            Expr::Alias(alias) => match &*alias.expr {
                 Expr::Placeholder(Placeholder { field, .. }) => match &field {
-                    None => schema.data_type(&Column::from_name(name)).cloned(),
+                    None => schema.data_type(&Column::from_name(&alias.name)).cloned(),
                     Some(field) => Ok(field.data_type().clone()),
                 },
-                _ => expr.get_type(schema),
+                _ => alias.expr.get_type(schema),
             },
             Expr::Negative(expr) => expr.get_type(schema),
             Expr::Column(c) => Ok(schema.data_type(c)?.clone()),
-            Expr::OuterReferenceColumn(field, _) => Ok(field.data_type().clone()),
+            Expr::OuterReferenceColumn(outer_ref) => {
+                Ok(outer_ref.field.data_type().clone())
+            }
             Expr::ScalarVariable(field, _) => Ok(field.data_type().clone()),
             Expr::Literal(l, _) => Ok(l.data_type()),
             Expr::Case(case) => {
@@ -212,9 +213,8 @@ impl ExprSchemable for Expr {
     /// column that does not exist in the schema.
     fn nullable(&self, input_schema: &dyn ExprSchema) -> Result<bool> {
         match self {
-            Expr::Alias(Alias { expr, .. }) | Expr::Not(expr) | Expr::Negative(expr) => {
-                expr.nullable(input_schema)
-            }
+            Expr::Alias(alias) => alias.expr.nullable(input_schema),
+            Expr::Not(expr) | Expr::Negative(expr) => expr.nullable(input_schema),
 
             Expr::InList(InList { expr, list, .. }) => {
                 // Avoid inspecting too many expressions.
@@ -246,7 +246,7 @@ impl ExprSchemable for Expr {
                 || high.nullable(input_schema)?),
 
             Expr::Column(c) => input_schema.nullable(c),
-            Expr::OuterReferenceColumn(field, _) => Ok(field.is_nullable()),
+            Expr::OuterReferenceColumn(outer_ref) => Ok(outer_ref.field.is_nullable()),
             Expr::Literal(value, _) => Ok(value.is_null()),
             Expr::Case(case) => {
                 let nullable_then = case
@@ -433,26 +433,22 @@ impl ExprSchemable for Expr {
         let (relation, schema_name) = self.qualified_name();
         #[expect(deprecated)]
         let field = match self {
-            Expr::Alias(Alias {
-                expr,
-                name: _,
-                metadata,
-                ..
-            }) => {
-                let mut combined_metadata = expr.metadata(schema)?;
-                if let Some(metadata) = metadata {
+            Expr::Alias(alias) => {
+                let mut combined_metadata = alias.expr.metadata(schema)?;
+                if let Some(metadata) = &alias.metadata {
                     combined_metadata.extend(metadata.clone());
                 }
 
-                Ok(expr
+                Ok(alias
+                    .expr
                     .to_field(schema)
                     .map(|(_, f)| f)?
                     .with_field_metadata(&combined_metadata))
             }
             Expr::Negative(expr) => expr.to_field(schema).map(|(_, f)| f),
             Expr::Column(c) => schema.field_from_column(c).map(Arc::clone),
-            Expr::OuterReferenceColumn(field, _) => {
-                Ok(Arc::clone(field).renamed(&schema_name))
+            Expr::OuterReferenceColumn(outer_ref) => {
+                Ok(Arc::clone(&outer_ref.field).renamed(&schema_name))
             }
             Expr::ScalarVariable(field, _) => Ok(Arc::clone(field).renamed(&schema_name)),
             Expr::Literal(l, metadata) => Ok(Arc::new(

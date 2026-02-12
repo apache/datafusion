@@ -17,7 +17,6 @@
 
 //! Rewrite for order by expressions
 
-use crate::expr::Alias;
 use crate::expr_rewriter::normalize_col;
 use crate::{Cast, Expr, LogicalPlan, TryCast, expr::Sort};
 
@@ -137,8 +136,8 @@ fn rewrite_in_terms_of_projection(
 /// so avg(c) as average will match avgc
 fn expr_match(needle: &Expr, expr: &Expr) -> bool {
     // check inside aliases
-    if let Expr::Alias(Alias { expr, .. }) = &expr {
-        expr.as_ref() == needle
+    if let Expr::Alias(boxed_alias) = &expr {
+        boxed_alias.expr.as_ref() == needle
     } else {
         expr == needle
     }

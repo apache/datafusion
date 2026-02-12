@@ -21,6 +21,7 @@ use datafusion_common::{
     Column, DFSchema, Result, Span, TableReference, assert_or_internal_err,
     exec_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
 };
+use datafusion_expr::expr::OuterReference;
 use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::{Case, Expr};
 use sqlparser::ast::{CaseWhen, Expr as SQLExpr, Ident};
@@ -81,10 +82,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     outer.qualified_field_with_unqualified_name(normalize_ident.as_str())
                 {
                     // Found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
-                    return Ok(Expr::OuterReferenceColumn(
-                        Arc::clone(field),
-                        Column::from((qualifier, field)),
-                    ));
+                    return Ok(Expr::OuterReferenceColumn(Box::new(OuterReference {
+                        field: Arc::clone(field),
+                        column: Column::from((qualifier, field)),
+                    })));
                 }
             }
 
@@ -190,10 +191,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                 // Found matching field with no spare identifier(s)
                                 Some((field, qualifier, _nested_names)) => {
                                     // Found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
-                                    Ok(Expr::OuterReferenceColumn(
-                                        Arc::clone(field),
-                                        Column::from((qualifier, field)),
-                                    ))
+                                    Ok(Expr::OuterReferenceColumn(Box::new(
+                                        OuterReference {
+                                            field: Arc::clone(field),
+                                            column: Column::from((qualifier, field)),
+                                        },
+                                    )))
                                 }
                                 // Found no matching field, will return a default
                                 None => continue,

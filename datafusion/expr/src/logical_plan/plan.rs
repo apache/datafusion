@@ -2260,7 +2260,11 @@ impl Projection {
 
     /// Create a new Projection using the specified output schema
     pub fn new_from_schema(input: Arc<LogicalPlan>, schema: DFSchemaRef) -> Self {
-        let expr: Vec<Expr> = schema.columns().into_iter().map(Expr::Column).collect();
+        let expr: Vec<Expr> = schema
+            .columns()
+            .into_iter()
+            .map(|c| Expr::Column(c))
+            .collect();
         Self {
             expr,
             input,
@@ -2340,9 +2344,11 @@ impl SubqueryAlias {
                         Expr::Column(Column::new(qualifier.cloned(), field.name()));
                     match alias {
                         None => column,
-                        Some(alias) => {
-                            Expr::Alias(Alias::new(column, qualifier.cloned(), alias))
-                        }
+                        Some(alias) => Expr::Alias(Box::new(Alias::new(
+                            column,
+                            qualifier.cloned(),
+                            alias,
+                        ))),
                     }
                 })
                 .collect();
@@ -4217,7 +4223,7 @@ impl Unnest {
                         Ok(transformed_columns
                             .iter()
                             .map(|(col, field)| {
-                                (col.relation.to_owned(), field.to_owned())
+                                (col.relation.as_deref().cloned(), field.to_owned())
                             })
                             .collect())
                     }
