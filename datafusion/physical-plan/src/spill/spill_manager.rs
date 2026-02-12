@@ -114,7 +114,7 @@ impl SpillManager {
     /// Note that this expects the caller to provide *non-sliced* batches, so the memory calculation of each batch is accurate.
     pub(crate) fn spill_record_batch_iter_and_return_max_batch_memory(
         &self,
-        mut iter: impl Iterator<Item = impl Borrow<RecordBatch>>,
+        mut iter: impl Iterator<Item = Result<impl Borrow<RecordBatch>>>,
         request_description: &str,
     ) -> Result<Option<(RefCountedTempFile, usize)>> {
         let mut in_progress_file = self.create_in_progress_file(request_description)?;
@@ -122,6 +122,7 @@ impl SpillManager {
         let mut max_record_batch_size = 0;
 
         iter.try_for_each(|batch| {
+            let batch = batch?;
             let borrowed = batch.borrow();
             if borrowed.num_rows() == 0 {
                 return Ok(());

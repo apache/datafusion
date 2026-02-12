@@ -40,7 +40,7 @@ use arrow::array::*;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{
     DataFusionError, Result, assert_eq_or_internal_err, assert_or_internal_err,
-    internal_err,
+    internal_err, resources_datafusion_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
@@ -51,6 +51,7 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{GroupsAccumulatorAdapter, PhysicalSortExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
+use crate::sorts::IncrementingSortIterator;
 use datafusion_common::instant::Instant;
 use datafusion_common::utils::memory::get_record_batch_memory_size;
 use futures::ready;
@@ -1049,10 +1050,27 @@ impl GroupedHashAggregateStream {
 
     fn update_memory_reservation(&mut self) -> Result<()> {
         let acc = self.accumulators.iter().map(|x| x.size()).sum::<usize>();
-        let new_size = acc
+        let groups_and_acc_size = acc
             + self.group_values.size()
             + self.group_ordering.size()
             + self.current_group_indices.allocated_size();
+
+        // Reserve extra headroom for sorting during potential spill.
+        // When OOM triggers, group_aggregate_batch has already processed the
+        // latest input batch, so the internal state may have grown well beyond
+        // the last successful reservation. The emit batch reflects this larger
+        // actual state, and the sort needs memory proportional to it.
+        // By reserving headroom equal to the data size, we trigger OOM earlier
+        // (before too much data accumulates), ensuring the freed reservation
+        // after clear_shrink is sufficient to cover the sort memory.
+        let sort_headroom =
+            if self.oom_mode == OutOfMemoryMode::Spill && !self.group_values.is_empty() {
+                acc + self.group_values.size()
+            } else {
+                0
+            };
+
+        let new_size = groups_and_acc_size + sort_headroom;
         let reservation_result = self.reservation.try_resize(new_size);
 
         if reservation_result.is_ok() {
@@ -1114,40 +1132,82 @@ impl GroupedHashAggregateStream {
 
         // Free accumulated state now that data has been emitted into `emit`.
         // This must happen before reserving sort memory so the pool has room.
-        self.clear_shrink(self.batch_size);
+        // Use 0 to minimize allocated capacity and maximize memory available for sorting.
+        self.clear_shrink(0);
         self.update_memory_reservation()?;
 
+        // Our first strategy is to simply sort the batch eagerly, this requires the most peak memory(about 2x of the batch),
+        // but will also mean we can immediately drop the unsorted batch and free its memory.
         let sort_memory = get_reserved_bytes_for_record_batch(&emit)?;
-        self.reservation.try_grow(sort_memory).map_err(|e| {
-            DataFusionError::ResourcesExhausted(format!(
-                "Failed to reserve memory for sort during spill: {e}"
-            ))
-        })?;
+        let spillfile = match self.reservation.try_grow(sort_memory) {
+            Ok(_) => {
+                // Sort the batch into chunks and spill each chunk to disk. This ensures we don't have to hold the entire
+                // batch in memory until the end of the spill, and can both drop it and release memory pressure sooner,
+                // as spilling may take time and other things can happen in the background.
+                let sorted = sort_batch_chunked(
+                    &emit,
+                    &self.spill_state.spill_expr,
+                    self.batch_size,
+                )?;
+                drop(emit);
 
-        // Sort the batch into chunks and spill each chunk to disk. This ensures we don't have to hold the entire
-        // batch in memory until the end of the spill, and can both drop it and release memory pressure sooner,
-        // as spilling may take time and other things can happen in the background.
-        let sorted =
-            sort_batch_chunked(&emit, &self.spill_state.spill_expr, self.batch_size)?;
-        drop(emit);
+                let new_sort_memory: usize =
+                    sorted.iter().map(get_record_batch_memory_size).sum();
+                let mem_to_free = sort_memory.saturating_sub(new_sort_memory);
+                self.reservation.shrink(mem_to_free); // Mem pool should now only hold the memory for the sorted batches.
 
-        let new_sort_memory: usize =
-            sorted.iter().map(get_record_batch_memory_size).sum();
-        let mem_to_free = sort_memory.saturating_sub(new_sort_memory);
-        self.reservation.shrink(mem_to_free); // Mem pool should now only hold the memory for the sorted batches.
+                // Spill sorted state to disk
+                let spillfile = self
+                    .spill_state
+                    .spill_manager
+                    .spill_record_batch_iter_and_return_max_batch_memory(
+                        sorted.into_iter().map(Ok),
+                        "HashAggSpill",
+                    )?;
 
-        // Spill sorted state to disk
-        let spillfile = self
-            .spill_state
-            .spill_manager
-            .spill_record_batch_iter_and_return_max_batch_memory(
-                sorted.into_iter(),
-                "HashAggSpill",
-            )?;
+                // Shrink the remaining memory we allocated
+                self.reservation
+                    .shrink(sort_memory.saturating_sub(mem_to_free));
 
-        // Shrink the remaining memory we allocated
-        self.reservation
-            .shrink(sort_memory.saturating_sub(mem_to_free));
+                spillfile
+            }
+            Err(_) => {
+                // However, if we don't have that peak memory, we can fallback to sorting lazily.
+                // This means we hold the original batch for longer, but we only require reserving the original batch's size,
+                // plus a fraction of it for each batch as we emit it and write it to file.
+                // this is still 2x the batch memory at the *worst case*, but the larger the batch, the smaller the fraction.
+                let batch_size_ratio = self.batch_size as f32 / emit.num_rows() as f32;
+                let batch_memory = get_record_batch_memory_size(&emit);
+                let sort_memory =
+                    batch_memory + (batch_memory as f32 * batch_size_ratio) as usize;
+
+                // If we can't grow even that, we have no choice but to return an error since we can't spill to disk without sorting the data first.
+                self.reservation.try_grow(sort_memory).map_err(|err| {
+                    resources_datafusion_err!(
+                        "Failed to reserver memory for sort during spill: {err}"
+                    )
+                })?;
+
+                let sorted_iter = IncrementingSortIterator::new(
+                    emit,
+                    self.spill_state.spill_expr.clone(),
+                    self.batch_size,
+                );
+                let spillfile = self
+                    .spill_state
+                    .spill_manager
+                    .spill_record_batch_iter_and_return_max_batch_memory(
+                        sorted_iter,
+                        "HashAggSpill",
+                    )?;
+
+                // Shrink the memory we allocated for sorting as the sorting is fully done at this point.
+                self.reservation.shrink(sort_memory);
+
+                spillfile
+            }
+        };
+
         match spillfile {
             Some((spillfile, max_record_batch_memory)) => {
                 self.spill_state.spills.push(SortedSpillFile {
@@ -1165,14 +1225,14 @@ impl GroupedHashAggregateStream {
         Ok(())
     }
 
-    /// Clear memory and shirk capacities to the size of the batch.
+    /// Clear memory and shrink capacities to the given number of rows.
     fn clear_shrink(&mut self, num_rows: usize) {
         self.group_values.clear_shrink(num_rows);
         self.current_group_indices.clear();
         self.current_group_indices.shrink_to(num_rows);
     }
 
-    /// Clear memory and shirk capacities to zero.
+    /// Clear memory and shrink capacities to zero.
     fn clear_all(&mut self) {
         self.clear_shrink(0);
     }
@@ -1211,7 +1271,7 @@ impl GroupedHashAggregateStream {
             // instead.
             // Spilling to disk and reading back also ensures batch size is consistent
             // rather than potentially having one significantly larger last batch.
-            self.spill()?; // TODO: use sort_batch_chunked instead?
+            self.spill()?;
 
             // Mark that we're switching to stream merging mode.
             self.spill_state.is_stream_merging = true;
