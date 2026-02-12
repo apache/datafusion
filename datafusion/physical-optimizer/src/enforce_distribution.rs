@@ -34,6 +34,7 @@ use crate::utils::{
 use arrow::compute::SortOptions;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
+use datafusion_common::plan_err;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_expr::logical_plan::{Aggregate, JoinType};
@@ -1482,18 +1483,46 @@ pub fn ensure_distribution(
 
     // For partitioned hash joins, decide dynamic filter routing mode.
     //
-    // PartitionIndex routing requires that partition `i` on the build side corresponds to
-    // partition `i` on the probe side. This holds when both sides' partitioning comes from
-    // file-grouped sources (via `preserve_file_partitions`) rather than hash repartitioning.
+    // Dynamic filtering requires matching partitioning schemes on both sides:
+    // - PartitionIndex: Both sides use file-grouped partitioning (value-based).
+    //   Partition i on build corresponds to partition i on probe by partition value.
+    // - CaseHash: Both sides use hash repartitioning (hash-based).
+    //   Uses CASE expression with hash(row) % N to route to correct partition filter.
+    //
+    // NOTE: If partitioning schemes are misaligned (one file-grouped, one hash-repartitioned),
+    // the partitioned join itself is incorrect.
+    // Partition assignments don't match:
+    // - File-grouped: partition 0 = all rows where column="A" (value-based)
+    // - Hash-repartitioned: partition 0 = all rows where hash(column) % N == 0 (hash-based)
+    // These are incompatible, so the join will miss matching rows.
     plan = if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>()
         && matches!(hash_join.mode, PartitionMode::Partitioned)
     {
-        let routing_mode =
-            if children[0].data.repartitioned || children[1].data.repartitioned {
-                DynamicFilterRoutingMode::CaseHash
-            } else {
-                DynamicFilterRoutingMode::PartitionIndex
-            };
+        let routing_mode = match (
+            children[0].data.repartitioned,
+            children[1].data.repartitioned,
+        ) {
+            (false, false) => DynamicFilterRoutingMode::PartitionIndex,
+            (true, true) => DynamicFilterRoutingMode::CaseHash,
+            _ => {
+                // Misaligned partitioning schemes
+                return plan_err!(
+                    "Partitioned hash join has incompatible partitioning schemes: \
+                     left side is {}, right side is {}.",
+                    if children[0].data.repartitioned {
+                        "hash-repartitioned"
+                    } else {
+                        "file-grouped"
+                    },
+                    if children[1].data.repartitioned {
+                        "hash-repartitioned"
+                    } else {
+                        "file-grouped"
+                    }
+                );
+            }
+        };
+
         if routing_mode != hash_join.dynamic_filter_routing_mode {
             Arc::new(
                 HashJoinExecBuilder::from(hash_join)

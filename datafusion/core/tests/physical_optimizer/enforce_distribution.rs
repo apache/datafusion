@@ -370,18 +370,16 @@ fn hash_join_exec(
     .unwrap()
 }
 
-fn partitioned_hash_join_exec_with_routing_mode(
+fn partitioned_hash_join_exec(
     left: Arc<dyn ExecutionPlan>,
     right: Arc<dyn ExecutionPlan>,
     join_on: &JoinOn,
     join_type: &JoinType,
-    routing_mode: DynamicFilterRoutingMode,
 ) -> Arc<dyn ExecutionPlan> {
     Arc::new(
         HashJoinExecBuilder::new(left, right, join_on.clone(), *join_type)
             .with_partition_mode(PartitionMode::Partitioned)
             .with_null_equality(NullEquality::NullEqualsNothing)
-            .with_dynamic_filter_routing_mode(routing_mode)
             .build()
             .unwrap(),
     )
@@ -829,15 +827,7 @@ fn enforce_distribution_switches_to_partition_index_without_hash_repartition()
             as Arc<dyn PhysicalExpr>,
     )];
 
-    // Start with the wrong mode and verify EnforceDistribution corrects it when hash repartition
-    // is not inserted.
-    let join = partitioned_hash_join_exec_with_routing_mode(
-        left,
-        right,
-        &join_on,
-        &JoinType::Inner,
-        DynamicFilterRoutingMode::CaseHash,
-    );
+    let join = partitioned_hash_join_exec(left, right, &join_on, &JoinType::Inner);
 
     let optimized = ensure_distribution_helper_transform_up(join, 1)?;
     assert_plan!(optimized, @r"
@@ -859,7 +849,8 @@ fn enforce_distribution_switches_to_partition_index_without_hash_repartition()
 }
 
 #[test]
-fn enforce_distribution_uses_case_hash_if_any_child_has_hash_repartition() -> Result<()> {
+fn enforce_distribution_disables_dynamic_filtering_for_misaligned_partitioning()
+-> Result<()> {
     let left = parquet_exec_multiple();
     let right = parquet_exec();
 
@@ -871,31 +862,21 @@ fn enforce_distribution_uses_case_hash_if_any_child_has_hash_repartition() -> Re
     )];
 
     // One side starts with multiple partitions while target is 1. EnforceDistribution inserts a
-    // hash repartition on one child, and routing mode should be CASE routing.
-    let join = partitioned_hash_join_exec_with_routing_mode(
-        left,
-        right,
-        &join_on,
-        &JoinType::Inner,
-        DynamicFilterRoutingMode::PartitionIndex,
-    );
+    // hash repartition on the left child. The partitioning schemes are now misaligned:
+    // - Left: hash-repartitioned (repartitioned=true)
+    // - Right: file-grouped (repartitioned=false)
+    // This is a correctness bug, so we expect an error.
+    let join = partitioned_hash_join_exec(left, right, &join_on, &JoinType::Inner);
 
-    let optimized = ensure_distribution_helper_transform_up(join, 1)?;
-    assert_plan!(optimized, @r"
-    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0)]
-      RepartitionExec: partitioning=Hash([a@0], 1), input_partitions=2
-        DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], file_type=parquet
-      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-    ");
-    let (hash_join, direct_hash_repartition_children) =
-        first_hash_join_and_direct_hash_repartition_children(&optimized)
-            .expect("expected HashJoinExec");
-
-    assert_eq!(
-        hash_join.dynamic_filter_routing_mode,
-        DynamicFilterRoutingMode::CaseHash,
+    let result = ensure_distribution_helper_transform_up(join, 1);
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("incompatible partitioning schemes"),
+        "Expected error about incompatible partitioning, got: {}",
+        err
     );
-    assert_eq!(direct_hash_repartition_children, 1);
 
     Ok(())
 }
@@ -921,14 +902,9 @@ fn enforce_distribution_uses_case_hash_with_hidden_hash_repartition_through_aggr
     )];
 
     // Both sides are already hash repartitioned, but the hash repartitions are below other
-    // operators not directly under the join. EnforceDistribution should choose CASE routing.
-    let join = partitioned_hash_join_exec_with_routing_mode(
-        left,
-        right,
-        &join_on,
-        &JoinType::Inner,
-        DynamicFilterRoutingMode::PartitionIndex,
-    );
+    // operators not directly under the join. EnforceDistribution should detect both sides are
+    // repartitioned and set CaseHash routing mode.
+    let join = partitioned_hash_join_exec(left, right, &join_on, &JoinType::Inner);
 
     let optimized = ensure_distribution_helper_transform_up(join, 4)?;
     assert_plan!(optimized, @r"
@@ -992,13 +968,8 @@ fn enforce_distribution_ignores_hash_repartition_off_dynamic_filter_path() -> Re
             as Arc<dyn PhysicalExpr>,
     )];
 
-    let join = partitioned_hash_join_exec_with_routing_mode(
-        left,
-        lower_join,
-        &join_on,
-        &JoinType::Inner,
-        DynamicFilterRoutingMode::CaseHash,
-    );
+    // EnforceDistribution should detect no repartition on either side and switch to PartitionIndex.
+    let join = partitioned_hash_join_exec(left, lower_join, &join_on, &JoinType::Inner);
 
     let optimized = ensure_distribution_helper_transform_up(join, 1)?;
     assert_plan!(optimized, @r"
