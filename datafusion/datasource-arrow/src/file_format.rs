@@ -30,22 +30,22 @@ use arrow::error::ArrowError;
 use arrow::ipc::convert::fb_to_schema;
 use arrow::ipc::reader::{FileReader, StreamReader};
 use arrow::ipc::writer::IpcWriteOptions;
-use arrow::ipc::{root_as_message, CompressionType};
+use arrow::ipc::{CompressionType, root_as_message};
 use datafusion_common::error::Result;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    internal_datafusion_err, not_impl_err, DataFusionError, GetExt,
-    Statistics, DEFAULT_ARROW_EXTENSION,
+    DEFAULT_ARROW_EXTENSION, DataFusionError, GetExt, Statistics,
+    internal_datafusion_err, not_impl_err,
 };
 use datafusion_common_runtime::{JoinSet, SpawnedTask};
+use datafusion_datasource::TableSchema;
 use datafusion_datasource::display::FileGroupDisplay;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::sink::{DataSink, DataSinkExec};
 use datafusion_datasource::write::{
-    get_writer_schema, ObjectWriterBuilder, SharedBuffer,
+    ObjectWriterBuilder, SharedBuffer, get_writer_schema,
 };
-use datafusion_datasource::TableSchema;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
@@ -60,10 +60,10 @@ use datafusion_datasource::source::DataSourceExec;
 use datafusion_datasource::write::demux::DemuxedStreamReceiver;
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 use datafusion_session::Session;
-use futures::stream::BoxStream;
 use futures::StreamExt;
+use futures::stream::BoxStream;
 use object_store::{
-    path::Path, GetOptions, GetRange, GetResultPayload, ObjectMeta, ObjectStore,
+    GetOptions, GetRange, GetResultPayload, ObjectMeta, ObjectStore, path::Path,
 };
 use tokio::io::AsyncWriteExt;
 
@@ -549,8 +549,8 @@ mod tests {
     use super::*;
 
     use chrono::DateTime;
-    use datafusion_common::config::TableOptions;
     use datafusion_common::DFSchema;
+    use datafusion_common::config::TableOptions;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_expr::execution_props::ExecutionProps;

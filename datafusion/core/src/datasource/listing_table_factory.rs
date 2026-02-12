@@ -241,6 +241,7 @@ mod tests {
 
     use datafusion_common::parsers::CompressionTypeVariant;
     use datafusion_common::{DFSchema, TableReference};
+    use datafusion_expr::registry::ExtensionTypeRegistryRef;
 
     #[tokio::test]
     async fn test_create_using_non_std_file_ext() {
@@ -609,6 +610,11 @@ mod tests {
             ) -> &HashMap<String, Arc<datafusion_expr::WindowUDF>> {
                 unimplemented!()
             }
+
+            fn extension_type_registry(&self) -> &ExtensionTypeRegistryRef {
+                unreachable!()
+            }
+
             fn runtime_env(&self) -> &Arc<datafusion_execution::runtime_env::RuntimeEnv> {
                 unimplemented!()
             }
