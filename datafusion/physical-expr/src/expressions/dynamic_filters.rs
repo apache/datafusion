@@ -219,11 +219,6 @@ impl DynamicFilterPhysicalExpr {
         }
     }
 
-    /// Get the current generation of the expression.
-    fn current_generation(&self) -> u64 {
-        self.inner.read().generation
-    }
-
     /// Get the current expression.
     /// This will return the current expression with any children
     /// remapped to match calls to [`PhysicalExpr::with_new_children`].
@@ -399,7 +394,6 @@ impl DynamicFilterPhysicalExpr {
     ) -> std::fmt::Result {
         let guard = self.inner.read();
         let current_generation = guard.generation;
-        let inner = Arc::clone(guard.expr());
         let partitioned_exprs = guard.partitioned_exprs.clone();
         drop(guard);
 
@@ -420,7 +414,8 @@ impl DynamicFilterPhysicalExpr {
         } else if current_generation == 1 {
             write!(f, "empty")?;
         } else {
-            render_expr(inner, f)?;
+            let current = self.current().map_err(|_| std::fmt::Error)?;
+            render_expr(current, f)?;
         }
 
         write!(f, " ]")
