@@ -736,7 +736,7 @@ impl DataSource for FileScanConfig {
         let schema = self.file_source.table_schema().table_schema();
         let mut eq_properties = EquivalenceProperties::new_with_orderings(
             Arc::clone(schema),
-            self.output_ordering.clone(),
+            self.validated_output_ordering(),
         )
         .with_constraints(self.constraints.clone());
 
@@ -926,6 +926,33 @@ impl DataSource for FileScanConfig {
 }
 
 impl FileScanConfig {
+    /// Returns only the output orderings that are validated against actual
+    /// file group statistics. Orderings where files within any group are not
+    /// in inter-file sorted order are filtered out.
+    fn validated_output_ordering(&self) -> Vec<LexOrdering> {
+        let schema = self.file_source.table_schema().table_schema();
+        self.output_ordering
+            .iter()
+            .filter(|ordering| {
+                self.file_groups.iter().all(|group| {
+                    if group.len() <= 1 {
+                        return true; // single-file groups are trivially sorted
+                    }
+                    match MinMaxStatistics::new_from_files(
+                        ordering,
+                        schema,
+                        None, // no projection remapping needed at table-schema level
+                        group.iter(),
+                    ) {
+                        Ok(stats) => stats.is_sorted(),
+                        Err(_) => false, // can't prove sorted → reject
+                    }
+                })
+            })
+            .cloned()
+            .collect()
+    }
+
     /// Get the file schema (schema of the files without partition columns)
     pub fn file_schema(&self) -> &SchemaRef {
         self.file_source.table_schema().file_schema()
