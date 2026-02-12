@@ -884,3 +884,386 @@ DROP TABLE signed_parquet;
 
 statement ok
 SET datafusion.optimizer.enable_sort_pushdown = true;
+
+
+# Test 4: Sort elimination with non-overlapping multi-file groups
+# When files are non-overlapping and each file is internally sorted,
+# the optimizer can eliminate the SortExec entirely.
+
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+statement ok
+SET datafusion.execution.collect_statistics = true;
+
+# Create 3 parquet files with non-overlapping ranges for column `id`:
+# file_a: id 1-3 (min=1, max=3)
+# file_b: id 4-6 (min=4, max=6)
+# file_c: id 7-10 (min=7, max=10)
+statement ok
+CREATE TABLE t4_src_a(id INT, value INT) AS VALUES (1, 100), (2, 200), (3, 300);
+
+statement ok
+CREATE TABLE t4_src_b(id INT, value INT) AS VALUES (4, 400), (5, 500), (6, 600);
+
+statement ok
+CREATE TABLE t4_src_c(id INT, value INT) AS VALUES (7, 700), (8, 800), (9, 900), (10, 1000);
+
+query I
+COPY (SELECT * FROM t4_src_a ORDER BY id ASC)
+TO 'test_files/scratch/sort_pushdown/t4_nonoverlap/file_a.parquet';
+----
+3
+
+query I
+COPY (SELECT * FROM t4_src_b ORDER BY id ASC)
+TO 'test_files/scratch/sort_pushdown/t4_nonoverlap/file_b.parquet';
+----
+3
+
+query I
+COPY (SELECT * FROM t4_src_c ORDER BY id ASC)
+TO 'test_files/scratch/sort_pushdown/t4_nonoverlap/file_c.parquet';
+----
+4
+
+statement ok
+CREATE EXTERNAL TABLE t4_sorted(id INT, value INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown/t4_nonoverlap/'
+WITH ORDER (id ASC);
+
+# Test 4.1: ORDER BY id ASC → files are non-overlapping and within-file ordering
+# is guaranteed (ParquetSource returns Exact). After statistics-based sorting,
+# files are in [a, b, c] order. The SortExec should be ELIMINATED.
+# Plan should show just DataSourceExec with output_ordering=[id@0 ASC ...].
+query TT
+EXPLAIN SELECT * FROM t4_sorted ORDER BY id ASC;
+----
+logical_plan
+01)Sort: t4_sorted.id ASC NULLS LAST
+02)--TableScan: t4_sorted projection=[id, value]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/t4_nonoverlap/file_a.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/t4_nonoverlap/file_b.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/t4_nonoverlap/file_c.parquet]]}, projection=[id, value], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
+
+# Test 4.2: Verify result correctness
+query II
+SELECT * FROM t4_sorted ORDER BY id ASC;
+----
+1 100
+2 200
+3 300
+4 400
+5 500
+6 600
+7 700
+8 800
+9 900
+10 1000
+
+# Test 4.3: ORDER BY id ASC LIMIT 3 → Same elimination but with limit pushdown
+query TT
+EXPLAIN SELECT * FROM t4_sorted ORDER BY id ASC LIMIT 3;
+----
+logical_plan
+01)Sort: t4_sorted.id ASC NULLS LAST, fetch=3
+02)--TableScan: t4_sorted projection=[id, value]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/t4_nonoverlap/file_a.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/t4_nonoverlap/file_b.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/t4_nonoverlap/file_c.parquet]]}, projection=[id, value], limit=3, output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
+
+query II
+SELECT * FROM t4_sorted ORDER BY id ASC LIMIT 3;
+----
+1 100
+2 200
+3 300
+
+# Test 4.4: ORDER BY id DESC LIMIT 3 → Reverse case.
+# Since this is the Inexact (reverse_row_groups) path, SortExec stays
+# but reverse_row_groups=true should appear.
+query TT
+EXPLAIN SELECT * FROM t4_sorted ORDER BY id DESC LIMIT 3;
+----
+logical_plan
+01)Sort: t4_sorted.id DESC NULLS FIRST, fetch=3
+02)--TableScan: t4_sorted projection=[id, value]
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[id@0 DESC], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/t4_nonoverlap/file_c.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/t4_nonoverlap/file_b.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/t4_nonoverlap/file_a.parquet]]}, projection=[id, value], file_type=parquet, predicate=DynamicFilter [ empty ], reverse_row_groups=true
+
+query II
+SELECT * FROM t4_sorted ORDER BY id DESC LIMIT 3;
+----
+10 1000
+9 900
+8 800
+
+# Cleanup Test 4
+statement ok
+DROP TABLE t4_src_a;
+
+statement ok
+DROP TABLE t4_src_b;
+
+statement ok
+DROP TABLE t4_src_c;
+
+statement ok
+DROP TABLE t4_sorted;
+
+
+# Test 5: Sort pushdown with overlapping multi-file groups
+# When files overlap, the optimizer uses statistics-based file sorting
+# as a best-effort optimization. SortExec stays (Inexact) to ensure
+# correct final ordering.
+
+# Create 3 parquet files with overlapping ranges:
+# file_x: id range [1, 5]
+# file_y: id range [3, 8]
+# file_z: id range [6, 10]
+statement ok
+CREATE TABLE t5_src_x(id INT, value INT) AS VALUES (1, 10), (2, 20), (3, 30), (4, 40), (5, 50);
+
+statement ok
+CREATE TABLE t5_src_y(id INT, value INT) AS VALUES (3, 31), (4, 41), (5, 51), (6, 61), (7, 71), (8, 81);
+
+statement ok
+CREATE TABLE t5_src_z(id INT, value INT) AS VALUES (6, 62), (7, 72), (8, 82), (9, 92), (10, 102);
+
+query I
+COPY (SELECT * FROM t5_src_x ORDER BY id ASC)
+TO 'test_files/scratch/sort_pushdown/t5_overlap/file_x.parquet';
+----
+5
+
+query I
+COPY (SELECT * FROM t5_src_y ORDER BY id ASC)
+TO 'test_files/scratch/sort_pushdown/t5_overlap/file_y.parquet';
+----
+6
+
+query I
+COPY (SELECT * FROM t5_src_z ORDER BY id ASC)
+TO 'test_files/scratch/sort_pushdown/t5_overlap/file_z.parquet';
+----
+5
+
+statement ok
+CREATE EXTERNAL TABLE t5_overlap(id INT, value INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown/t5_overlap/'
+WITH ORDER (id ASC);
+
+# Test 5.1: ORDER BY id DESC, value DESC LIMIT 5 → The requested sort
+# doesn't exactly reverse the file ordering (two columns vs one), so the
+# Unsupported→statistics fallback path activates. Files are sorted by
+# statistics in DESC order [z, y, x]. SortExec stays (Inexact).
+query TT
+EXPLAIN SELECT * FROM t5_overlap ORDER BY id DESC, value DESC LIMIT 5;
+----
+logical_plan
+01)Sort: t5_overlap.id DESC NULLS FIRST, t5_overlap.value DESC NULLS FIRST, fetch=5
+02)--TableScan: t5_overlap projection=[id, value]
+physical_plan
+01)SortExec: TopK(fetch=5), expr=[id@0 DESC, value@1 DESC], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/t5_overlap/file_x.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/t5_overlap/file_y.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/t5_overlap/file_z.parquet]]}, projection=[id, value], file_type=parquet, predicate=DynamicFilter [ empty ]
+
+# Test 5.2: Verify result correctness with DESC on overlapping files
+query II
+SELECT * FROM t5_overlap ORDER BY id DESC, value DESC LIMIT 5;
+----
+10 102
+9 92
+8 82
+8 81
+7 72
+
+# Cleanup Test 5
+statement ok
+DROP TABLE t5_src_x;
+
+statement ok
+DROP TABLE t5_src_y;
+
+statement ok
+DROP TABLE t5_src_z;
+
+statement ok
+DROP TABLE t5_overlap;
+
+
+# Test 6: File ordering with reverse scan on non-overlapping files
+# Create 3 non-overlapping files with mixed filesystem ordering.
+# When requesting DESC order, the reverse path reverses the file listing
+# order and applies reverse_row_groups=true. Results should be correct
+# regardless of filesystem naming order.
+
+statement ok
+CREATE TABLE t6_src_high(id INT, value INT) AS VALUES (7, 700), (8, 800), (9, 900), (10, 1000);
+
+statement ok
+CREATE TABLE t6_src_mid(id INT, value INT) AS VALUES (4, 400), (5, 500), (6, 600);
+
+statement ok
+CREATE TABLE t6_src_low(id INT, value INT) AS VALUES (1, 100), (2, 200), (3, 300);
+
+# Write files so that alphabetical order puts high-ID file first
+query I
+COPY (SELECT * FROM t6_src_high ORDER BY id ASC)
+TO 'test_files/scratch/sort_pushdown/t6_reorder/aaa_high.parquet';
+----
+4
+
+query I
+COPY (SELECT * FROM t6_src_mid ORDER BY id ASC)
+TO 'test_files/scratch/sort_pushdown/t6_reorder/bbb_mid.parquet';
+----
+3
+
+query I
+COPY (SELECT * FROM t6_src_low ORDER BY id ASC)
+TO 'test_files/scratch/sort_pushdown/t6_reorder/ccc_low.parquet';
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE t6_reorder(id INT, value INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown/t6_reorder/'
+WITH ORDER (id ASC);
+
+# Test 6.1: ORDER BY id DESC LIMIT 3 → Reverse scan with non-overlapping files.
+# The reverse path reverses file listing order and applies reverse_row_groups=true.
+# SortExec stays (Inexact) to ensure correct ordering across files.
+query TT
+EXPLAIN SELECT * FROM t6_reorder ORDER BY id DESC LIMIT 3;
+----
+logical_plan
+01)Sort: t6_reorder.id DESC NULLS FIRST, fetch=3
+02)--TableScan: t6_reorder projection=[id, value]
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[id@0 DESC], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/t6_reorder/ccc_low.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/t6_reorder/bbb_mid.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/t6_reorder/aaa_high.parquet]]}, projection=[id, value], file_type=parquet, predicate=DynamicFilter [ empty ], reverse_row_groups=true
+
+query II
+SELECT * FROM t6_reorder ORDER BY id DESC LIMIT 3;
+----
+10 1000
+9 900
+8 800
+
+# Test 6.2: ORDER BY id DESC (no limit) → Full reverse scan
+query II
+SELECT * FROM t6_reorder ORDER BY id DESC;
+----
+10 1000
+9 900
+8 800
+7 700
+6 600
+5 500
+4 400
+3 300
+2 200
+1 100
+
+# Cleanup Test 6
+statement ok
+DROP TABLE t6_src_high;
+
+statement ok
+DROP TABLE t6_src_mid;
+
+statement ok
+DROP TABLE t6_src_low;
+
+statement ok
+DROP TABLE t6_reorder;
+
+
+# Test 7: Multi-group case with varying target_partitions
+# Reuse non-overlapping files and test with target_partitions=2
+# so files get split across multiple groups.
+
+statement ok
+CREATE TABLE t7_src_a(id INT, value INT) AS VALUES (1, 100), (2, 200), (3, 300);
+
+statement ok
+CREATE TABLE t7_src_b(id INT, value INT) AS VALUES (4, 400), (5, 500), (6, 600);
+
+statement ok
+CREATE TABLE t7_src_c(id INT, value INT) AS VALUES (7, 700), (8, 800), (9, 900), (10, 1000);
+
+query I
+COPY (SELECT * FROM t7_src_a ORDER BY id ASC)
+TO 'test_files/scratch/sort_pushdown/t7_multi/file_a.parquet';
+----
+3
+
+query I
+COPY (SELECT * FROM t7_src_b ORDER BY id ASC)
+TO 'test_files/scratch/sort_pushdown/t7_multi/file_b.parquet';
+----
+3
+
+query I
+COPY (SELECT * FROM t7_src_c ORDER BY id ASC)
+TO 'test_files/scratch/sort_pushdown/t7_multi/file_c.parquet';
+----
+4
+
+# Test 7.1: With target_partitions=2, files get split across 2 groups.
+# Each group's files are sorted by statistics. Plan should show
+# SortPreservingMergeExec with output_ordering (Sort eliminated within
+# each group, merge across groups).
+statement ok
+SET datafusion.execution.target_partitions = 2;
+
+statement ok
+CREATE EXTERNAL TABLE t7_multi(id INT, value INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown/t7_multi/'
+WITH ORDER (id ASC);
+
+query TT
+EXPLAIN SELECT * FROM t7_multi ORDER BY id ASC;
+----
+logical_plan
+01)Sort: t7_multi.id ASC NULLS LAST
+02)--TableScan: t7_multi projection=[id, value]
+physical_plan
+01)SortPreservingMergeExec: [id@0 ASC NULLS LAST]
+02)--DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/t7_multi/file_a.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/t7_multi/file_b.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/t7_multi/file_c.parquet]]}, projection=[id, value], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
+
+# Verify correctness
+query II
+SELECT * FROM t7_multi ORDER BY id ASC;
+----
+1 100
+2 200
+3 300
+4 400
+5 500
+6 600
+7 700
+8 800
+9 900
+10 1000
+
+# Cleanup Test 7
+statement ok
+DROP TABLE t7_src_a;
+
+statement ok
+DROP TABLE t7_src_b;
+
+statement ok
+DROP TABLE t7_src_c;
+
+statement ok
+DROP TABLE t7_multi;
+
+# Reset settings
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+statement ok
+SET datafusion.execution.collect_statistics = true;
