@@ -230,7 +230,7 @@ impl<K: DFHeapSize, V: DFHeapSize> DFHeapSize for HashMap<K, V> {
 impl<T: DFHeapSize> DFHeapSize for Arc<T> {
     fn heap_size(&self) -> usize {
         // Arc stores weak and strong counts on the heap alongside an instance of T
-        2 * size_of::<usize>() + size_of::<T>() + self.as_ref().heap_size()
+        2 * size_of::<usize>() + self.as_ref().heap_size()
     }
 }
 
