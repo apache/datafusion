@@ -21,13 +21,13 @@
 //!
 //! ## Usage
 //! ```bash
-//! cargo run --example dataframe -- [all|my_id]
+//! cargo run --example extension_types -- [all|event_id]
 //! ```
 //!
 //! Each subcommand runs a corresponding example:
 //! - `all` — run all examples included in this module
 //!
-//! - `my_id`
+//! - `event_id`
 //!   (file: event_id.rs, desc: A custom wrapper around integers that represent event ids)
 
 mod event_id;

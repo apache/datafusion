@@ -133,7 +133,7 @@ cargo run --example dataframe -- dataframe
 
 | Subcommand | File Path | Description |
 | --- | --- | --- |
-| my_id | [`extension_types/event_id.rs`](examples/extension_types/event_id.rs) | A custom wrapper around integers that represent event ids |
+| event_id | [`extension_types/event_id.rs`](examples/extension_types/event_id.rs) | A custom wrapper around integers that represent event ids |
 
 ## External Dependency Examples
 

@@ -9,23 +9,7 @@ use uuid::{Bytes, Uuid};
 /// Defines the extension type logic for the canonical `arrow.uuid` extension type.
 ///
 /// See [`DFExtensionType`] for information on DataFusion's extension type mechanism.
-#[derive(Debug)]
-pub struct UuidDFExtensionType();
-
-impl UuidDFExtensionType {
-    /// Create a new instance of [`UuidDFExtensionType`].
-    pub fn new() -> Self {
-        Self {}
-    }
-}
-
-impl Default for UuidDFExtensionType {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl DFExtensionType for UuidDFExtensionType {
+impl DFExtensionType for arrow_schema::extension::Uuid {
     fn create_array_formatter<'fmt>(
         &self,
         array: &'fmt dyn Array,
@@ -56,14 +40,14 @@ struct UuidValueDisplayIndex<'a> {
 impl DisplayIndex for UuidValueDisplayIndex<'_> {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
         if self.array.is_null(idx) {
-            write!(f, "arrow.uuid({})", self.null_str)?;
+            write!(f, "{}", self.null_str)?;
             return Ok(());
         }
 
         let bytes = Bytes::try_from(self.array.value(idx))
             .expect("FixedSizeBinaryArray length checked in create_array_formatter");
         let uuid = Uuid::from_bytes(bytes);
-        write!(f, "arrow.uuid({uuid})")?;
+        write!(f, "{uuid}")?;
         Ok(())
     }
 }
@@ -88,7 +72,7 @@ mod tests {
 
         assert_eq!(
             formatter.value(0).to_string(),
-            "arrow.uuid(00000000-0000-0000-0000-000000000000)"
+            "00000000-0000-0000-0000-000000000000"
         );
     }
 }

@@ -1898,6 +1898,7 @@ dependencies = [
  "apache-avro",
  "arrow",
  "arrow-ipc",
+ "arrow-schema",
  "chrono",
  "criterion",
  "half",
@@ -2152,6 +2153,7 @@ name = "datafusion-expr"
 version = "52.1.0"
 dependencies = [
  "arrow",
+ "arrow-schema",
  "async-trait",
  "chrono",
  "ctor",

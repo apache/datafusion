@@ -21,10 +21,11 @@ use crate::expr_rewriter::FunctionRewrite;
 use crate::planner::ExprPlanner;
 use crate::{AggregateUDF, ScalarUDF, UserDefinedLogicalNode, WindowUDF};
 use arrow::datatypes::Field;
-use datafusion_common::types::DFExtensionTypeRef;
+use arrow_schema::extension::ExtensionType;
+use datafusion_common::types::{DFExtensionType, DFExtensionTypeRef};
 use datafusion_common::{HashMap, Result, not_impl_err, plan_datafusion_err};
 use std::collections::HashSet;
-use std::fmt::Debug;
+use std::fmt::{Debug, Formatter};
 use std::sync::{Arc, RwLock};
 
 /// A registry knows how to build logical expressions out of user-defined function' names
@@ -238,7 +239,7 @@ pub type ExtensionTypeRegistrationRef = Arc<dyn ExtensionTypeRegistration>;
 /// to read the metadata from the field and create the corresponding [`DFExtensionType`] instance
 /// with the correct `n` set.
 ///
-/// The [`SimpleExtensionTypeRegistration`] provides a convenient way of avoiding this complexity
+/// The [`DefaultExtensionTypeRegistration`] provides a convenient way of avoiding this complexity
 /// if the extension type has no parameters.
 pub trait ExtensionTypeRegistration: Debug + Send + Sync {
     /// The name of the extension type.
@@ -321,40 +322,56 @@ pub trait ExtensionTypeRegistry: Debug + Send + Sync {
     ) -> Result<Option<ExtensionTypeRegistrationRef>>;
 }
 
-/// A simple implementation of [ExtensionTypeRegistration] where the extension type instance does
-/// not have any parameters. As a result, the given [`DFExtensionType`] cannot depend on the
-/// metadata that is stored in the field. See [`ExtensionTypeRegistration`] for more details.
-#[derive(Debug)]
-pub struct SimpleExtensionTypeRegistration {
-    /// The name of the extension type.
-    name: String,
-    /// The extension type instance.
-    extension_type: DFExtensionTypeRef,
+/// A default implementation of [ExtensionTypeRegistration] that parses the metadata from the
+/// given extension type and passes it to a constructor function.
+pub struct DefaultExtensionTypeRegistration<
+    TExtensionType: ExtensionType + DFExtensionType + 'static,
+> {
+    /// A function that creates an instance of [`DFExtensionTypeRef`] from the metadata.
+    factory:
+        Box<dyn Fn(TExtensionType::Metadata) -> Result<TExtensionType> + Send + Sync>,
 }
 
-impl SimpleExtensionTypeRegistration {
+impl<TExtensionType: ExtensionType + DFExtensionType + 'static>
+    DefaultExtensionTypeRegistration<TExtensionType>
+{
     /// Creates a new registration for the given `name` and `logical_type`.
     pub fn new_arc(
-        name: &str,
-        extension_type: DFExtensionTypeRef,
+        factory: impl Fn(TExtensionType::Metadata) -> Result<TExtensionType>
+        + Send
+        + Sync
+        + 'static,
     ) -> ExtensionTypeRegistrationRef {
         Arc::new(Self {
-            name: name.to_string(),
-            extension_type,
+            factory: Box::new(factory),
         })
     }
 }
 
-impl ExtensionTypeRegistration for SimpleExtensionTypeRegistration {
+impl<TExtensionType: ExtensionType + DFExtensionType> ExtensionTypeRegistration
+    for DefaultExtensionTypeRegistration<TExtensionType>
+{
     fn type_name(&self) -> &str {
-        &self.name
+        TExtensionType::NAME
     }
 
     fn create_df_extension_type(
         &self,
-        _metadata: Option<&str>,
+        metadata: Option<&str>,
     ) -> Result<DFExtensionTypeRef> {
-        Ok(Arc::clone(&self.extension_type))
+        let metadata = TExtensionType::deserialize_metadata(metadata)?;
+        self.factory.as_ref()(metadata)
+            .map(|extension_type| Arc::new(extension_type) as DFExtensionTypeRef)
+    }
+}
+
+impl<TExtensionType: ExtensionType + DFExtensionType> Debug
+    for DefaultExtensionTypeRegistration<TExtensionType>
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DefaultExtensionTypeRegistration")
+            .field("type_name", &TExtensionType::NAME)
+            .finish()
     }
 }
 

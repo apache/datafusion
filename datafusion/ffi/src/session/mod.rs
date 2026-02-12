@@ -31,19 +31,19 @@ use crate::udf::FFI_ScalarUDF;
 use crate::udwf::FFI_WindowUDF;
 use crate::util::FFIResult;
 use crate::{df_result, rresult, rresult_return};
-use abi_stable::StableAbi;
 use abi_stable::std_types::{RHashMap, RResult, RStr, RString, RVec};
-use arrow_schema::SchemaRef;
+use abi_stable::StableAbi;
 use arrow_schema::ffi::FFI_ArrowSchema;
+use arrow_schema::SchemaRef;
 use async_ffi::{FfiFuture, FutureExt};
 use async_trait::async_trait;
 use datafusion_common::config::{ConfigOptions, TableOptions};
 use datafusion_common::{DFSchema, DataFusionError};
-use datafusion_execution::TaskContext;
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnv;
+use datafusion_execution::TaskContext;
 use datafusion_expr::execution_props::ExecutionProps;
-use datafusion_expr::registry::{ExtensionTypeRegistry, ExtensionTypeRegistryRef};
+use datafusion_expr::registry::{ExtensionTypeRegistryRef, MemoryExtensionTypeRegistry};
 use datafusion_expr::{
     AggregateUDF, AggregateUDFImpl, Expr, LogicalPlan, ScalarUDF, ScalarUDFImpl,
     WindowUDF, WindowUDFImpl,
@@ -51,9 +51,9 @@ use datafusion_expr::{
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_proto::bytes::{logical_plan_from_bytes, logical_plan_to_bytes};
-use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::logical_plan::from_proto::parse_expr;
 use datafusion_proto::logical_plan::to_proto::serialize_expr;
+use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::protobuf::LogicalExprNode;
 use datafusion_session::Session;
 use prost::Message;
@@ -425,7 +425,7 @@ impl TryFrom<&FFI_SessionRef> for ForeignSession {
                 scalar_functions,
                 aggregate_functions,
                 window_functions,
-                extension_types: Default::default(),
+                extension_types: Arc::new(MemoryExtensionTypeRegistry::default()),
                 runtime_env: Default::default(),
                 props: Default::default(),
             })

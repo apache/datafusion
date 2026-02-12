@@ -30,7 +30,6 @@ use crate::datasource::provider_as_source;
 use crate::execution::SessionStateDefaults;
 use crate::execution::context::{EmptySerializerRegistry, FunctionFactory, QueryPlanner};
 use crate::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
-use arrow_schema::extension::ExtensionType;
 use arrow_schema::{DataType, FieldRef};
 use datafusion_catalog::MemoryCatalogProviderList;
 use datafusion_catalog::information_schema::{
@@ -58,9 +57,9 @@ use datafusion_expr::planner::ExprPlanner;
 #[cfg(feature = "sql")]
 use datafusion_expr::planner::{RelationPlanner, TypePlanner};
 use datafusion_expr::registry::{
-    ExtensionTypeRegistration, ExtensionTypeRegistrationRef, ExtensionTypeRegistry,
-    ExtensionTypeRegistryRef, FunctionRegistry, MemoryExtensionTypeRegistry,
-    SerializerRegistry, SimpleExtensionTypeRegistration,
+    DefaultExtensionTypeRegistration, ExtensionTypeRegistration,
+    ExtensionTypeRegistrationRef, ExtensionTypeRegistry, ExtensionTypeRegistryRef,
+    FunctionRegistry, MemoryExtensionTypeRegistry, SerializerRegistry,
 };
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{AggregateUDF, Explain, Expr, LogicalPlan, ScalarUDF, WindowUDF};
@@ -82,7 +81,6 @@ use datafusion_sql::{
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion_common::types::UuidDFExtensionType;
 use itertools::Itertools;
 use log::{debug, info};
 use object_store::ObjectStore;
@@ -1353,10 +1351,10 @@ impl SessionStateBuilder {
     /// May fail if an already registered [`ExtensionTypeRegistry`] raises an error while
     /// registering the canonical extension types.
     pub fn with_canonical_extension_types(mut self) -> datafusion_common::Result<Self> {
-        let canonical_extension_types = vec![SimpleExtensionTypeRegistration::new_arc(
-            arrow_schema::extension::Uuid::NAME,
-            Arc::new(UuidDFExtensionType::new()),
-        )];
+        let uuid = DefaultExtensionTypeRegistration::new_arc(|_| {
+            Ok(arrow_schema::extension::Uuid {})
+        });
+        let canonical_extension_types = vec![uuid];
 
         match &self.extension_types {
             None => {

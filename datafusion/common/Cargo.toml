@@ -66,6 +66,7 @@ apache-avro = { workspace = true, features = [
     "zstandard",
 ], optional = true }
 arrow = { workspace = true }
+arrow-schema = { workspace = true, features = ["canonical_extension_types"] }
 arrow-ipc = { workspace = true }
 chrono = { workspace = true }
 half = { workspace = true }

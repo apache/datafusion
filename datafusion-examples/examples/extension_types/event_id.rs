@@ -24,9 +24,9 @@ use datafusion::error::Result;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::prelude::SessionContext;
 use datafusion_common::internal_err;
-use datafusion_common::types::{DFExtensionType, DFExtensionTypeRef};
+use datafusion_common::types::DFExtensionType;
 use datafusion_expr::registry::{
-    ExtensionTypeRegistration, ExtensionTypeRegistry, MemoryExtensionTypeRegistry,
+    DefaultExtensionTypeRegistration, ExtensionTypeRegistry, MemoryExtensionTypeRegistry,
 };
 use std::fmt::Write;
 use std::sync::Arc;
@@ -48,7 +48,9 @@ pub async fn event_id_example() -> Result<()> {
 fn create_session_context() -> Result<SessionContext> {
     // Create a registry with a reference to the custom extension type implementation.
     let registry = MemoryExtensionTypeRegistry::new();
-    let event_id_registration = Arc::new(EventIdExtensionTypeRegistration {});
+    let event_id_registration = DefaultExtensionTypeRegistration::new_arc(|metadata| {
+        Ok(EventIdExtensionType(metadata))
+    });
     registry.add_extension_type_registration(event_id_registration)?;
 
     // Set the extension type registry in the session state so that DataFusion can use it.
@@ -104,8 +106,8 @@ fn example_schema() -> SchemaRef {
     ]))
 }
 
-/// Represents a 32-bit custom identifier that represents a single event. Using this format is not
-/// a good idea in practice, but it is useful for demonstrating the API usage.
+/// Represents a 32-bit custom identifier that represents a single event. Using this format is
+/// probably not a good idea in practice, but it is useful for demonstrating the API usage.
 ///
 /// An event is constructed of three parts:
 /// - The year
@@ -271,30 +273,6 @@ impl DisplayIndex for EventIdDisplayIndex<'_> {
             }
         }
         Ok(())
-    }
-}
-
-/// The registration is the last piece missing for the extension type implementation. It contains
-/// the logic for deserializing the metadata from the arrow [`Field`]s and creating the extension
-/// type instance. We cannot use the trait from arrow-rs as it's not dyn-compatible (the Metadata
-/// type must be known at compile time).
-///
-/// If an extension type does not have any parameters, the [`SimpleExtensionTypeRegistration`]
-/// provides an easier way of registering it.
-#[derive(Debug)]
-pub struct EventIdExtensionTypeRegistration();
-
-impl ExtensionTypeRegistration for EventIdExtensionTypeRegistration {
-    fn type_name(&self) -> &str {
-        EventIdExtensionType::NAME
-    }
-
-    fn create_df_extension_type(
-        &self,
-        metadata: Option<&str>,
-    ) -> Result<DFExtensionTypeRef> {
-        let metadata = EventIdExtensionType::deserialize_metadata(metadata)?;
-        Ok(Arc::new(EventIdExtensionType(metadata)))
     }
 }
 
