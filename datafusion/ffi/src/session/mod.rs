@@ -46,7 +46,7 @@ use datafusion_proto::protobuf::LogicalExprNode;
 use datafusion_session::Session;
 use prost::Message;
 use tokio::runtime::Handle;
-
+use datafusion_expr::registry::{ExtensionTypeRegistry, ExtensionTypeRegistryRef};
 use crate::arrow_wrappers::WrappedSchema;
 use crate::execution::FFI_TaskContext;
 use crate::execution_plan::FFI_ExecutionPlan;
@@ -356,6 +356,7 @@ pub struct ForeignSession {
     scalar_functions: HashMap<String, Arc<ScalarUDF>>,
     aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
     window_functions: HashMap<String, Arc<WindowUDF>>,
+    extension_types: ExtensionTypeRegistryRef,
     table_options: TableOptions,
     runtime_env: Arc<RuntimeEnv>,
     props: ExecutionProps,
@@ -424,6 +425,7 @@ impl TryFrom<&FFI_SessionRef> for ForeignSession {
                 scalar_functions,
                 aggregate_functions,
                 window_functions,
+                extension_types: Default::default(),
                 runtime_env: Default::default(),
                 props: Default::default(),
             })
@@ -513,6 +515,10 @@ impl Session for ForeignSession {
 
     fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>> {
         &self.window_functions
+    }
+
+    fn extension_type_registry(&self) -> &ExtensionTypeRegistryRef {
+        &self.extension_types
     }
 
     fn runtime_env(&self) -> &Arc<RuntimeEnv> {
