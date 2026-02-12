@@ -491,7 +491,7 @@ mod tests {
 
     #[test]
     fn test_ceil_preimage_float_precision_boundaries() {
-        // 2^53 is exactly representable, and so is 2^53 - 1, so preimage rewrite is valid.
+        // Float64: 2^53 is exactly representable, and so is 2^53 - 1, so preimage rewrite is valid.
         assert_preimage_range(
             ScalarValue::Float64(Some(9_007_199_254_740_992.0)),
             ScalarValue::Float64(Some(9_007_199_254_740_992.0)),
@@ -501,6 +501,17 @@ mod tests {
         // Above 2^53, adjacent integer spacing changes and `n - 1` can collapse to `n`.
         // In that case we conservatively skip preimage rewrite.
         assert_preimage_none(ScalarValue::Float64(Some(9_007_199_254_740_996.0)));
+
+        // Float32: 2^24 is exactly representable, and so is 2^24 - 1, so preimage rewrite is valid.
+        assert_preimage_range(
+            ScalarValue::Float32(Some(16_777_216.0)),
+            ScalarValue::Float32(Some(next_up(16_777_215.0_f32))),
+            ScalarValue::Float32(Some(next_up(16_777_216.0_f32))),
+        );
+
+        // Above 2^24, adjacent integer spacing changes and `n - 1` can collapse to `n`.
+        // In that case we conservatively skip preimage rewrite.
+        assert_preimage_none(ScalarValue::Float32(Some(16_777_220.0)));
     }
 
     #[test]
