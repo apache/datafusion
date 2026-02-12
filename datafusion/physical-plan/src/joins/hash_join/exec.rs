@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashSet;
 use std::fmt;
 use std::mem::size_of;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -1433,21 +1434,15 @@ impl ExecutionPlan for HashJoinExec {
             None => self.column_indices.clone(),
         };
 
-        let mut left_allowed = std::collections::HashSet::new();
-        let mut right_allowed = std::collections::HashSet::new();
-        for (i, ci) in column_indices.iter().enumerate() {
+        let (mut left_allowed, mut right_allowed) = (HashSet::new(), HashSet::new());
+        column_indices.iter().for_each(|ci| {
             match ci.side {
-                JoinSide::Left => {
-                    left_allowed.insert(i);
-                }
-                JoinSide::Right => {
-                    right_allowed.insert(i);
-                }
-                JoinSide::None => {
-                    // Mark columns - don't allow pushdown to either side
-                }
-            }
-        }
+                JoinSide::Left => left_allowed.insert(ci.index),
+                JoinSide::Right => right_allowed.insert(ci.index),
+                // Mark columns - don't allow pushdown to either side
+                JoinSide::None => false,
+            };
+        });
 
         let left_child = if left_preserved {
             ChildFilterDescription::from_child_with_allowed_indices(
