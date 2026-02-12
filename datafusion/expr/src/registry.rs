@@ -239,8 +239,7 @@ pub type ExtensionTypeRegistrationRef = Arc<dyn ExtensionTypeRegistration>;
 /// to read the metadata from the field and create the corresponding [`DFExtensionType`] instance
 /// with the correct `n` set.
 ///
-/// The [`DefaultExtensionTypeRegistration`] provides a convenient way of avoiding this complexity
-/// if the extension type has no parameters.
+/// The [`DefaultExtensionTypeRegistration`] provides a convenient way of creating registrations.
 pub trait ExtensionTypeRegistration: Debug + Send + Sync {
     /// The name of the extension type.
     ///
