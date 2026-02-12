@@ -281,3 +281,30 @@ SELECT true FROM t0 WHERE (REGEXP_MATCH(t0.v1, t0.v1)) NOT ILIKE [];
 
 statement ok
 DROP TABLE t0;
+
+###############################################################################
+## Test that IS NULL / IS NOT NULL / SIMILAR TO / CAST / TRY_CAST validate  ##
+## their inner expressions during type coercion (previously they were in     ##
+## the catch-all branch and skipped validation, which caused panics at       ##
+## runtime for invalid inner expressions like zero-argument function calls). ##
+###############################################################################
+
+# IS NULL should reject invalid inner expression
+query error does not support zero arguments
+SELECT * FROM (SELECT 1) WHERE (STARTS_WITH() IS NULL);
+
+# IS NOT NULL should reject invalid inner expression
+query error does not support zero arguments
+SELECT * FROM (SELECT 1) WHERE (STARTS_WITH() IS NOT NULL);
+
+# SIMILAR TO should reject invalid inner expression
+query error does not support zero arguments
+SELECT * FROM (SELECT 'a') WHERE (STARTS_WITH() SIMILAR TO 'abc%');
+
+# CAST should reject invalid inner expression
+query error does not support zero arguments
+SELECT * FROM (SELECT 1) WHERE CAST(STARTS_WITH() AS STRING) = 'x';
+
+# TRY_CAST should reject invalid inner expression
+query error does not support zero arguments
+SELECT * FROM (SELECT 1) WHERE TRY_CAST(STARTS_WITH() AS INT) = 1;
