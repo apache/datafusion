@@ -237,6 +237,8 @@ fn is_numeric_constant(value: &ScalarValue) -> bool {
             | ScalarValue::UInt64(_)
             | ScalarValue::Float32(_)
             | ScalarValue::Float64(_)
+            | ScalarValue::Decimal32(_, _, _)
+            | ScalarValue::Decimal64(_, _, _)
             | ScalarValue::Decimal128(_, _, _)
             | ScalarValue::Decimal256(_, _, _)
     )
