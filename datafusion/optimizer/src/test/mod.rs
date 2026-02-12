@@ -24,6 +24,7 @@ use datafusion_common::{Result, assert_contains};
 use datafusion_expr::{LogicalPlan, LogicalPlanBuilder, logical_plan::table_scan};
 use std::sync::Arc;
 
+pub mod udfs;
 pub mod user_defined;
 
 pub fn test_table_scan_fields() -> Vec<Field> {
@@ -32,6 +33,28 @@ pub fn test_table_scan_fields() -> Vec<Field> {
         Field::new("b", DataType::UInt32, false),
         Field::new("c", DataType::UInt32, false),
     ]
+}
+
+pub fn test_table_scan_with_struct_fields() -> Vec<Field> {
+    vec![
+        Field::new("id", DataType::UInt32, false),
+        Field::new(
+            "user",
+            DataType::Struct(
+                vec![
+                    Field::new("name", DataType::Utf8, true),
+                    Field::new("status", DataType::Utf8, true),
+                ]
+                .into(),
+            ),
+            true,
+        ),
+    ]
+}
+
+pub fn test_table_scan_with_struct() -> Result<LogicalPlan> {
+    let schema = Schema::new(test_table_scan_with_struct_fields());
+    table_scan(Some("test"), &schema, None)?.build()
 }
 
 /// some tests share a common table with different names
