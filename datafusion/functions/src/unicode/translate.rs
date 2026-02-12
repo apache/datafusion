@@ -284,6 +284,21 @@ mod tests {
             Utf8,
             StringArray
         );
+        // Non-ASCII input with ASCII scalar from/to: exercises the
+        // grapheme fallback within translate_with_map.
+        test_function!(
+            TranslateFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::from("café")),
+                ColumnarValue::Scalar(ScalarValue::from("ae")),
+                ColumnarValue::Scalar(ScalarValue::from("AE"))
+            ],
+            Ok(Some("cAfé")),
+            &str,
+            Utf8,
+            StringArray
+        );
+
         #[cfg(not(feature = "unicode_expressions"))]
         test_function!(
             TranslateFunc::new(),
