@@ -66,6 +66,7 @@ name = "stats_merge"
 
 [dependencies]
 arrow = { workspace = true }
+arrow-schema = { workspace = true, features = ["canonical_extension_types"] }
 arrow-ipc = { workspace = true }
 arrow-schema = { workspace = true, features = ["canonical_extension_types"] }
 chrono = { workspace = true }
