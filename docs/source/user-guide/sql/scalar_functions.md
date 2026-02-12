@@ -1891,7 +1891,7 @@ split_part(str, delimiter, pos)
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **delimiter**: String or character to split on.
-- **pos**: Position of the part to return.
+- **pos**: Position of the part to return (counting from 1). Negative values count backward from the end of the string.
 
 #### Example
 
