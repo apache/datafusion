@@ -816,6 +816,12 @@ impl HashJoinExec {
     /// Enabled when:
     /// 1. The join is in `Partitioned` mode
     /// 2. The optimizer selected `DynamicFilterRoutingMode::PartitionIndex`.
+    ///
+    /// Note: In CollectLeft mode, even when the probe side (right) has misaligned partitonings,
+    /// this works correctly because there is a single shared hash table built from the coalesced
+    /// left side. All probe partitions use the same hash table for lookups. This applies to
+    /// dynamic filters as well, the single build-side filter is sufficient for all probe
+    /// partitions.
     fn should_use_partition_index(&self) -> bool {
         matches!(self.mode, PartitionMode::Partitioned)
             && self.dynamic_filter_routing_mode
