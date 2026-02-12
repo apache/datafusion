@@ -6905,7 +6905,7 @@ select array_intersect(column1, column2),
        array_intersect(column5, column6)
 from array_intersect_table_1D_Boolean;
 ----
-[] [false, true] [false]
+[] [true, false] [false]
 [false] [true] [true]
 
 query ???
@@ -6914,7 +6914,7 @@ select array_intersect(column1, column2),
        array_intersect(column5, column6)
 from large_array_intersect_table_1D_Boolean;
 ----
-[] [false, true] [false]
+[] [true, false] [false]
 [false] [true] [true]
 
 query ???
@@ -6923,8 +6923,8 @@ select array_intersect(column1, column2),
        array_intersect(column5, column6)
 from array_intersect_table_1D_UTF8;
 ----
-[bc] [arrow, rust] []
-[] [arrow, datafusion, rust] [arrow, rust]
+[bc] [rust, arrow] []
+[] [datafusion, rust, arrow] [rust, arrow]
 
 query ???
 select array_intersect(column1, column2),
@@ -6932,8 +6932,8 @@ select array_intersect(column1, column2),
        array_intersect(column5, column6)
 from large_array_intersect_table_1D_UTF8;
 ----
-[bc] [arrow, rust] []
-[] [arrow, datafusion, rust] [arrow, rust]
+[bc] [rust, arrow] []
+[] [datafusion, rust, arrow] [rust, arrow]
 
 query ?
 select array_intersect(column1, column2)

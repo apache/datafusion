@@ -118,7 +118,7 @@ STORED AS PARQUET;
 1
 
 query I
-COPY (SELECT 'staging' as env, 'trace' as service)
+COPY (SELECT 'prod' as env, 'log' as service)
 TO 'test_files/scratch/preserve_file_partitioning/dimension_partitioned/d_dkey=C/data.parquet'
 STORED AS PARQUET;
 ----
@@ -658,13 +658,13 @@ GROUP BY f.f_dkey, d.env;
 ----
 A dev 772.4
 B prod 614.4
-C staging 2017.6
+C prod 2017.6
 
 ##########
 # TEST 12: Partitioned Join with Matching Partition Counts - With Optimization
 # Both tables have 3 partitions matching target_partitions=3
 # No RepartitionExec needed for join - partitions already satisfy the requirement
-# Dynamic filter pushdown avoids hash routing here because preserve_file_partitions
+# Dynamic filter pushdown uses partition-indexed routing because preserve_file_partitions
 # reports Hash partitioning for Hive-style file groups that are not hash-routed.
 ##########
 
@@ -702,7 +702,7 @@ GROUP BY f.f_dkey, d.env;
 ----
 A dev 772.4
 B prod 614.4
-C staging 2017.6
+C prod 2017.6
 
 ##########
 # CLEANUP
