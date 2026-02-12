@@ -1424,9 +1424,7 @@ impl ExecutionPlan for HashJoinExec {
         //    (e.g. nested mark joins both producing "mark" columns).
         let (left_preserved, right_preserved) = lr_is_preserved(self.join_type);
 
-        // Build the set of allowed (name, index) pairs for each side
-        let output_schema = self.schema();
-        let output_fields = output_schema.fields();
+        // Build the set of allowed column indices for each side
         let column_indices: Vec<ColumnIndex> = match self.projection.as_ref() {
             Some(projection) => projection
                 .iter()
@@ -1438,13 +1436,12 @@ impl ExecutionPlan for HashJoinExec {
         let mut left_allowed = std::collections::HashSet::new();
         let mut right_allowed = std::collections::HashSet::new();
         for (i, ci) in column_indices.iter().enumerate() {
-            let name = output_fields[i].name().as_str();
             match ci.side {
                 JoinSide::Left => {
-                    left_allowed.insert((name, i));
+                    left_allowed.insert(i);
                 }
                 JoinSide::Right => {
-                    right_allowed.insert((name, i));
+                    right_allowed.insert(i);
                 }
                 JoinSide::None => {
                     // Mark columns - don't allow pushdown to either side
@@ -1453,7 +1450,7 @@ impl ExecutionPlan for HashJoinExec {
         }
 
         let left_child = if left_preserved {
-            ChildFilterDescription::from_child_with_allowed_columns(
+            ChildFilterDescription::from_child_with_allowed_indices(
                 &parent_filters,
                 left_allowed,
                 self.left(),
@@ -1463,7 +1460,7 @@ impl ExecutionPlan for HashJoinExec {
         };
 
         let mut right_child = if right_preserved {
-            ChildFilterDescription::from_child_with_allowed_columns(
+            ChildFilterDescription::from_child_with_allowed_indices(
                 &parent_filters,
                 right_allowed,
                 self.right(),
