@@ -24,7 +24,7 @@ use std::{any::Any, vec};
 use crate::ExecutionPlanProperties;
 use crate::execution_plan::{EmissionType, boundedness_from_children};
 use crate::filter_pushdown::{
-    ChildPushdownResult, FilterDescription, FilterPushdownPhase,
+    ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
 };
 use crate::joins::Map;
@@ -720,7 +720,9 @@ impl HashJoinExec {
     }
 
     fn allow_join_dynamic_filter_pushdown(&self, config: &ConfigOptions) -> bool {
-        if !config.optimizer.enable_join_dynamic_filter_pushdown {
+        if self.join_type != JoinType::Inner
+            || !config.optimizer.enable_join_dynamic_filter_pushdown
+        {
             return false;
         }
 
@@ -1407,32 +1409,76 @@ impl ExecutionPlan for HashJoinExec {
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         config: &ConfigOptions,
     ) -> Result<FilterDescription> {
-        // Other types of joins can support *some* filters, but restrictions are complex and error prone.
-        // For now we don't support them.
-        // See the logical optimizer rules for more details: datafusion/optimizer/src/push_down_filter.rs
-        // See https://github.com/apache/datafusion/issues/16973 for tracking.
-        if self.join_type != JoinType::Inner {
-            return Ok(FilterDescription::all_unsupported(
-                &parent_filters,
-                &self.children(),
-            ));
+        // This is the physical-plan equivalent of `push_down_all_join` in
+        // `datafusion/optimizer/src/push_down_filter.rs`. That function uses
+        // `lr_is_preserved` to decide which parent predicates can be pushed
+        // past a logical join to its children, then checks column references
+        // to route each predicate to the correct side.
+        //
+        // We apply the same two-level logic here:
+        // 1. `lr_is_preserved` gates whether a side is eligible at all.
+        // 2. For each filter, we check that all column references belong to
+        //    the target child using `(name, index)` pairs via
+        //    `from_child_with_allowed_columns`. This is critical for
+        //    correctness: name-based matching alone can incorrectly push
+        //    filters when different join sides have columns with the same
+        //    name (see https://github.com/apache/datafusion/issues/20213).
+        let (left_preserved, right_preserved) = lr_is_preserved(self.join_type);
+
+        // Build the set of allowed (name, index) pairs for each side.
+        // When a projection is present, the output schema differs from the
+        // raw join schema, so we need to map through the projection.
+        let output_schema = self.schema();
+        let output_fields = output_schema.fields();
+        let column_indices: Vec<ColumnIndex> = match self.projection.as_ref() {
+            Some(projection) => projection
+                .iter()
+                .map(|i| self.column_indices[*i].clone())
+                .collect(),
+            None => self.column_indices.clone(),
+        };
+
+        let mut left_allowed = std::collections::HashSet::new();
+        let mut right_allowed = std::collections::HashSet::new();
+        for (i, ci) in column_indices.iter().enumerate() {
+            let name = output_fields[i].name().as_str();
+            match ci.side {
+                JoinSide::Left => {
+                    left_allowed.insert((name, i));
+                }
+                JoinSide::Right => {
+                    right_allowed.insert((name, i));
+                }
+                JoinSide::None => {
+                    // Mark columns — don't allow pushdown to either side
+                }
+            }
         }
 
-        // Get basic filter descriptions for both children
-        let left_child = crate::filter_pushdown::ChildFilterDescription::from_child(
-            &parent_filters,
-            self.left(),
-        )?;
-        let mut right_child = crate::filter_pushdown::ChildFilterDescription::from_child(
-            &parent_filters,
-            self.right(),
-        )?;
+        let left_child = if left_preserved {
+            ChildFilterDescription::from_child_with_allowed_columns(
+                &parent_filters,
+                left_allowed,
+                self.left(),
+            )?
+        } else {
+            ChildFilterDescription::all_unsupported(&parent_filters)
+        };
+
+        let mut right_child = if right_preserved {
+            ChildFilterDescription::from_child_with_allowed_columns(
+                &parent_filters,
+                right_allowed,
+                self.right(),
+            )?
+        } else {
+            ChildFilterDescription::all_unsupported(&parent_filters)
+        };
 
         // Add dynamic filters in Post phase if enabled
         if matches!(phase, FilterPushdownPhase::Post)
             && self.allow_join_dynamic_filter_pushdown(config)
         {
-            // Add actual dynamic filter to right side (probe side)
             let dynamic_filter = Self::create_dynamic_filter(&self.on);
             right_child = right_child.with_self_filter(dynamic_filter);
         }
@@ -1448,19 +1494,6 @@ impl ExecutionPlan for HashJoinExec {
         child_pushdown_result: ChildPushdownResult,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
-        // Note: this check shouldn't be necessary because we already marked all parent filters as unsupported for
-        // non-inner joins in `gather_filters_for_pushdown`.
-        // However it's a cheap check and serves to inform future devs touching this function that they need to be really
-        // careful pushing down filters through non-inner joins.
-        if self.join_type != JoinType::Inner {
-            // Other types of joins can support *some* filters, but restrictions are complex and error prone.
-            // For now we don't support them.
-            // See the logical optimizer rules for more details: datafusion/optimizer/src/push_down_filter.rs
-            return Ok(FilterPushdownPropagation::all_unsupported(
-                child_pushdown_result,
-            ));
-        }
-
         let mut result = FilterPushdownPropagation::if_any(child_pushdown_result.clone());
         assert_eq!(child_pushdown_result.self_filters.len(), 2); // Should always be 2, we have 2 children
         let right_child_self_filters = &child_pushdown_result.self_filters[1]; // We only push down filters to the right child
@@ -1498,6 +1531,22 @@ impl ExecutionPlan for HashJoinExec {
             }
         }
         Ok(result)
+    }
+}
+
+/// Determines which sides of a join are "preserved" for filter pushdown.
+///
+/// A preserved side means filters on that side's columns can be safely pushed
+/// below the join. This mirrors the logic in the logical optimizer's
+/// `lr_is_preserved` in `datafusion/optimizer/src/push_down_filter.rs`.
+fn lr_is_preserved(join_type: JoinType) -> (bool, bool) {
+    match join_type {
+        JoinType::Inner => (true, true),
+        JoinType::Left => (true, false),
+        JoinType::Right => (false, true),
+        JoinType::Full => (false, false),
+        JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => (true, false),
+        JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => (false, true),
     }
 }
 
@@ -5714,5 +5763,19 @@ mod tests {
                 .to_string()
                 .contains("null_aware anti join only supports single column join key")
         );
+    }
+
+    #[test]
+    fn test_lr_is_preserved() {
+        assert_eq!(lr_is_preserved(JoinType::Inner), (true, true));
+        assert_eq!(lr_is_preserved(JoinType::Left), (true, false));
+        assert_eq!(lr_is_preserved(JoinType::Right), (false, true));
+        assert_eq!(lr_is_preserved(JoinType::Full), (false, false));
+        assert_eq!(lr_is_preserved(JoinType::LeftSemi), (true, false));
+        assert_eq!(lr_is_preserved(JoinType::LeftAnti), (true, false));
+        assert_eq!(lr_is_preserved(JoinType::LeftMark), (true, false));
+        assert_eq!(lr_is_preserved(JoinType::RightSemi), (false, true));
+        assert_eq!(lr_is_preserved(JoinType::RightAnti), (false, true));
+        assert_eq!(lr_is_preserved(JoinType::RightMark), (false, true));
     }
 }

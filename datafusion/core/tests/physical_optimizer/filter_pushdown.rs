@@ -401,7 +401,8 @@ async fn test_static_filter_pushdown_through_hash_join() {
     "
     );
 
-    // Test left join - filters should NOT be pushed down
+    // Test left join: filter on preserved (build) side is pushed down,
+    // filter on non-preserved (probe) side is NOT pushed down.
     let join = Arc::new(
         HashJoinExec::try_new(
             TestScanBuilder::new(Arc::clone(&build_side_schema))
@@ -429,7 +430,6 @@ async fn test_static_filter_pushdown_through_hash_join() {
     let plan =
         Arc::new(FilterExec::try_new(filter, join).unwrap()) as Arc<dyn ExecutionPlan>;
 
-    // Test that filters are NOT pushed down for left join
     insta::assert_snapshot!(
         OptimizationTest::new(plan, FilterPushdown::new(), true),
         @r"
@@ -441,10 +441,9 @@ async fn test_static_filter_pushdown_through_hash_join() {
         -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, e, f], file_type=test, pushdown_supported=true
       output:
         Ok:
-          - FilterExec: a@0 = aa
-          -   HashJoinExec: mode=Partitioned, join_type=Left, on=[(a@0, d@0)]
-          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
-          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, e, f], file_type=test, pushdown_supported=true
+          - HashJoinExec: mode=Partitioned, join_type=Left, on=[(a@0, d@0)]
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = aa
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, e, f], file_type=test, pushdown_supported=true
     "
     );
 }
