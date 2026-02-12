@@ -64,7 +64,7 @@ impl DefaultFileStatisticsCache {
     }
 }
 
-pub struct DefaultFileStatisticsCacheState {
+struct DefaultFileStatisticsCacheState {
     lru_queue: LruQueue<Path, CachedFileMetadata>,
     memory_limit: usize,
     memory_used: usize,
@@ -152,10 +152,17 @@ impl DefaultFileStatisticsCacheState {
                 self.memory_used -= removed.1.heap_size();
             } else {
                 // cache is empty while memory_used > memory_limit, cannot happen
+                log::error!(
+                    "File statistics cache memory accounting bug: memory_used={} but cache is empty. \
+                     Please report this to the Apache DataFusion developers.",
+                    self.memory_used
+                );
                 debug_assert!(
                     false,
-                    "This is a bug! Please report it to the Apache DataFusion developers"
+                    "memory_used={} but cache is empty",
+                    self.memory_used
                 );
+                self.memory_used = 0;
                 return;
             }
         }
