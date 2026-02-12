@@ -73,11 +73,6 @@ pub struct DynamicFilterPhysicalExpr {
     inner: Arc<RwLock<Inner>>,
     /// Broadcasts filter state (updates and completion) to all waiters.
     state_watch: watch::Sender<FilterState>,
-    /// Per-partition filter expressions for partition-index routing.
-    /// When both sides of a hash join preserve their file partitioning (no RepartitionExec(Hash)),
-    /// build-partition i corresponds to probe-partition i. This allows storing per-partition
-    /// filters so that each partition only sees its own bounds, giving tighter pruning.
-    partitioned_exprs: Arc<RwLock<PartitionedFilters>>,
     /// For testing purposes track the data type and nullability to make sure they don't change.
     /// If they do, there's a bug in the implementation.
     /// But this can have overhead in production, so it's only included in our tests.
@@ -95,6 +90,11 @@ struct Inner {
     /// This is redundant with the watch channel state, but allows us to return immediately
     /// from `wait_complete()` without subscribing if already complete.
     is_complete: bool,
+    /// Per-partition filter expressions for partition-index routing.
+    /// When both sides of a hash join preserve their file partitioning (no RepartitionExec(Hash)),
+    /// build-partition i corresponds to probe-partition i. This allows storing per-partition
+    /// filters so that each partition only sees its own bounds, giving tighter filtering.
+    partitioned_exprs: PartitionedFilters,
 }
 
 impl Inner {
@@ -105,6 +105,7 @@ impl Inner {
             generation: 1,
             expr,
             is_complete: false,
+            partitioned_exprs: Vec::new(),
         }
     }
 
@@ -184,7 +185,6 @@ impl DynamicFilterPhysicalExpr {
             remapped_children: None, // Initially no remapped children
             inner: Arc::new(RwLock::new(Inner::new(inner))),
             state_watch,
-            partitioned_exprs: Arc::new(RwLock::new(Vec::new())),
             data_type: Arc::new(RwLock::new(None)),
             nullable: Arc::new(RwLock::new(None)),
         }
@@ -252,11 +252,8 @@ impl DynamicFilterPhysicalExpr {
         // Load the current inner, increment generation, and store the new one
         let mut current = self.inner.write();
         let new_generation = current.generation + 1;
-        *current = Inner {
-            generation: new_generation,
-            expr: new_expr,
-            is_complete: current.is_complete,
-        };
+        current.generation = new_generation;
+        current.expr = new_expr;
         drop(current); // Release the lock before broadcasting
 
         // Broadcast the new state to all waiters
@@ -289,7 +286,7 @@ impl DynamicFilterPhysicalExpr {
         let mut current = self.inner.write();
         let new_generation = current.generation + 1;
         current.generation = new_generation;
-        *self.partitioned_exprs.write() = partition_exprs;
+        current.partitioned_exprs = partition_exprs;
         drop(current);
 
         // Broadcast the new state.
@@ -307,12 +304,17 @@ impl DynamicFilterPhysicalExpr {
     /// - `None` (out-of-range): return `true` (fail-open) to avoid incorrect pruning if
     ///   partition alignment/count assumptions are violated by a source.
     fn current_for_partition(&self, partition: usize) -> Result<Arc<dyn PhysicalExpr>> {
-        let guard = self.partitioned_exprs.read();
-        if guard.is_empty() {
+        let guard = self.inner.read();
+        if guard.partitioned_exprs.is_empty() {
+            let expr = Arc::clone(guard.expr());
             drop(guard);
-            return self.current();
+            return Self::remap_children(
+                &self.children,
+                self.remapped_children.as_ref(),
+                expr,
+            );
         }
-        match guard.get(partition) {
+        match guard.partitioned_exprs.get(partition) {
             Some(Some(expr)) => {
                 let expr = Arc::clone(expr);
                 drop(guard);
@@ -329,7 +331,7 @@ impl DynamicFilterPhysicalExpr {
 
     /// Returns `true` if per-partition filter data has been set.
     fn has_partitioned_filters(&self) -> bool {
-        !self.partitioned_exprs.read().is_empty()
+        !self.inner.read().partitioned_exprs.is_empty()
     }
 
     /// Wait asynchronously for any update to this filter.
@@ -395,13 +397,16 @@ impl DynamicFilterPhysicalExpr {
             &mut std::fmt::Formatter<'_>,
         ) -> std::fmt::Result,
     ) -> std::fmt::Result {
-        let inner = self.current().map_err(|_| std::fmt::Error)?;
-        let current_generation = self.current_generation();
+        let guard = self.inner.read();
+        let current_generation = guard.generation;
+        let inner = Arc::clone(guard.expr());
+        let partitioned_exprs = guard.partitioned_exprs.clone();
+        drop(guard);
+
         write!(f, "DynamicFilter [ ")?;
-        if self.has_partitioned_filters() {
-            let guard = self.partitioned_exprs.read();
+        if !partitioned_exprs.is_empty() {
             write!(f, "{{")?;
-            for (i, partition) in guard.iter().enumerate() {
+            for (i, partition) in partitioned_exprs.iter().enumerate() {
                 if i > 0 {
                     write!(f, ", ")?;
                 }
@@ -444,7 +449,6 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
             remapped_children: Some(children),
             inner: Arc::clone(&self.inner),
             state_watch: self.state_watch.clone(),
-            partitioned_exprs: Arc::clone(&self.partitioned_exprs),
             data_type: Arc::clone(&self.data_type),
             nullable: Arc::clone(&self.nullable),
         }))
