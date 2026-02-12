@@ -256,6 +256,7 @@ pub struct HashJoinExecBuilder {
     filter: Option<JoinFilter>,
     projection: Option<ProjectionRef>,
     partition_mode: PartitionMode,
+    dynamic_filter_routing_mode: DynamicFilterRoutingMode,
     null_equality: NullEquality,
     null_aware: bool,
 }
@@ -275,6 +276,7 @@ impl HashJoinExecBuilder {
             filter: None,
             projection: None,
             partition_mode: PartitionMode::Auto,
+            dynamic_filter_routing_mode: DynamicFilterRoutingMode::CaseHash,
             join_type,
             null_equality: NullEquality::NullEqualsNothing,
             null_aware: false,
@@ -304,6 +306,15 @@ impl HashJoinExecBuilder {
         self
     }
 
+    /// Set dynamic filter routing mode for partitioned joins.
+    pub fn with_dynamic_filter_routing_mode(
+        mut self,
+        mode: DynamicFilterRoutingMode,
+    ) -> Self {
+        self.dynamic_filter_routing_mode = mode;
+        self
+    }
+
     /// Set null equality property.
     pub fn with_null_equality(mut self, null_equality: NullEquality) -> Self {
         self.null_equality = null_equality;
@@ -326,6 +337,7 @@ impl HashJoinExecBuilder {
             filter,
             projection,
             partition_mode,
+            dynamic_filter_routing_mode,
             null_equality,
             null_aware,
         } = self;
@@ -386,6 +398,7 @@ impl HashJoinExecBuilder {
             left_fut: Default::default(),
             random_state,
             mode: partition_mode,
+            dynamic_filter_routing_mode,
             metrics: ExecutionPlanMetricsSet::new(),
             projection,
             column_indices,
@@ -407,10 +420,27 @@ impl From<&HashJoinExec> for HashJoinExecBuilder {
             filter: exec.filter.clone(),
             projection: exec.projection.clone(),
             partition_mode: exec.mode,
+            dynamic_filter_routing_mode: exec.dynamic_filter_routing_mode,
             null_equality: exec.null_equality,
             null_aware: exec.null_aware,
         }
     }
+}
+
+/// Routing mode for partitioned dynamic filters in hash joins.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DynamicFilterRoutingMode {
+    /// Route probe rows by hash (CASE expression).
+    ///
+    /// This mode is safe without partition-index alignment assumptions and is used when the
+    /// optimizer detects hash repartitioning on the relevant path.
+    CaseHash,
+    /// Route by partition index (`i -> i`).
+    ///
+    /// This assumes build/probe partition indices are aligned for dynamic filter consumers:
+    /// the filter for build partition `i` must be applied to probe partition `i`.
+    /// The optimizer should only select this mode when that mapping is expected to hold.
+    PartitionIndex,
 }
 
 #[expect(rustdoc::private_intra_doc_links)]
@@ -630,6 +660,11 @@ pub struct HashJoinExec {
     random_state: SeededRandomState,
     /// Partitioning mode to use
     pub mode: PartitionMode,
+    /// Dynamic filter routing mode for partitioned joins.
+    ///
+    /// `CaseHash` uses hash-based routing and does not require alignment.
+    /// `PartitionIndex` assumes build/probe partition alignment.
+    pub dynamic_filter_routing_mode: DynamicFilterRoutingMode,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// The projection indices of the columns in the output schema of join
@@ -723,19 +758,6 @@ impl HashJoinExec {
         if !config.optimizer.enable_join_dynamic_filter_pushdown {
             return false;
         }
-
-        // `preserve_file_partitions` can report Hash partitioning for Hive-style
-        // file groups, but those partitions are not actually hash-distributed.
-        // Partitioned dynamic filters rely on hash routing, so disable them in
-        // this mode to avoid incorrect results. Follow-up work: enable dynamic
-        // filtering for preserve_file_partitioned scans (issue #20195).
-        // https://github.com/apache/datafusion/issues/20195
-        if config.optimizer.preserve_file_partitions > 0
-            && self.mode == PartitionMode::Partitioned
-        {
-            return false;
-        }
-
         true
     }
 
@@ -787,6 +809,17 @@ impl HashJoinExec {
     #[doc(hidden)]
     pub fn dynamic_filter_for_test(&self) -> Option<&Arc<DynamicFilterPhysicalExpr>> {
         self.dynamic_filter.as_ref().map(|df| &df.filter)
+    }
+
+    /// Determines whether partition-index routing should be used instead of CASE hash routing.
+    ///
+    /// Enabled when:
+    /// 1. The join is in `Partitioned` mode
+    /// 2. The optimizer selected `DynamicFilterRoutingMode::PartitionIndex`.
+    fn should_use_partition_index(&self) -> bool {
+        matches!(self.mode, PartitionMode::Partitioned)
+            && self.dynamic_filter_routing_mode
+                == DynamicFilterRoutingMode::PartitionIndex
     }
 
     /// Calculate order preservation flags for this hash join.
@@ -930,25 +963,27 @@ impl HashJoinExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let left = self.left();
         let right = self.right();
-        let new_join = HashJoinExec::try_new(
+        let new_join = HashJoinExecBuilder::new(
             Arc::clone(right),
             Arc::clone(left),
-            self.on()
+            self.on
                 .iter()
                 .map(|(l, r)| (Arc::clone(r), Arc::clone(l)))
                 .collect(),
-            self.filter().map(JoinFilter::swap),
-            &self.join_type().swap(),
-            swap_join_projection(
-                left.schema().fields().len(),
-                right.schema().fields().len(),
-                self.projection.as_deref(),
-                self.join_type(),
-            ),
-            partition_mode,
-            self.null_equality(),
-            self.null_aware,
-        )?;
+            self.join_type().swap(),
+        )
+        .with_filter(self.filter().map(JoinFilter::swap))
+        .with_projection(swap_join_projection(
+            left.schema().fields().len(),
+            right.schema().fields().len(),
+            self.projection.as_deref(),
+            self.join_type(),
+        ))
+        .with_partition_mode(partition_mode)
+        .with_null_equality(self.null_equality())
+        .with_null_aware(self.null_aware)
+        .with_dynamic_filter_routing_mode(self.dynamic_filter_routing_mode)
+        .build()?;
         // In case of anti / semi joins or if there is embedded projection in HashJoinExec, output column order is preserved, no need to add projection again
         if matches!(
             self.join_type(),
@@ -1126,6 +1161,8 @@ impl ExecutionPlan for HashJoinExec {
             left_fut: Arc::clone(&self.left_fut),
             random_state: self.random_state.clone(),
             mode: self.mode,
+            // Preserve optimizer-selected routing mode across plan rewrites.
+            dynamic_filter_routing_mode: self.dynamic_filter_routing_mode,
             metrics: ExecutionPlanMetricsSet::new(),
             projection: self.projection.clone(),
             column_indices: self.column_indices.clone(),
@@ -1157,6 +1194,7 @@ impl ExecutionPlan for HashJoinExec {
             left_fut: Arc::new(OnceAsync::default()),
             random_state: self.random_state.clone(),
             mode: self.mode,
+            dynamic_filter_routing_mode: self.dynamic_filter_routing_mode,
             metrics: ExecutionPlanMetricsSet::new(),
             projection: self.projection.clone(),
             column_indices: self.column_indices.clone(),
@@ -1267,6 +1305,7 @@ impl ExecutionPlan for HashJoinExec {
         // Initialize build_accumulator lazily with runtime partition counts (only if enabled)
         // Use RepartitionExec's random state (seeds: 0,0,0,0) for partition routing
         let repartition_random_state = REPARTITION_RANDOM_STATE;
+        let use_partition_index = self.should_use_partition_index();
         let build_accumulator = enable_dynamic_filter_pushdown
             .then(|| {
                 self.dynamic_filter.as_ref().map(|df| {
@@ -1284,6 +1323,7 @@ impl ExecutionPlan for HashJoinExec {
                             filter,
                             on_right,
                             repartition_random_state,
+                            use_partition_index,
                         ))
                     })))
                 })
@@ -1384,18 +1424,21 @@ impl ExecutionPlan for HashJoinExec {
             &schema,
             self.filter(),
         )? {
-            Ok(Some(Arc::new(HashJoinExec::try_new(
-                Arc::new(projected_left_child),
-                Arc::new(projected_right_child),
-                join_on,
-                join_filter,
-                self.join_type(),
+            Ok(Some(Arc::new(
+                HashJoinExecBuilder::new(
+                    Arc::new(projected_left_child),
+                    Arc::new(projected_right_child),
+                    join_on,
+                    self.join_type,
+                )
+                .with_filter(join_filter)
                 // Returned early if projection is not None
-                None,
-                *self.partition_mode(),
-                self.null_equality,
-                self.null_aware,
-            )?)))
+                .with_partition_mode(*self.partition_mode())
+                .with_null_equality(self.null_equality)
+                .with_null_aware(self.null_aware)
+                .with_dynamic_filter_routing_mode(self.dynamic_filter_routing_mode)
+                .build()?,
+            )))
         } else {
             try_embed_projection(projection, self)
         }
@@ -1483,6 +1526,7 @@ impl ExecutionPlan for HashJoinExec {
                     left_fut: Arc::clone(&self.left_fut),
                     random_state: self.random_state.clone(),
                     mode: self.mode,
+                    dynamic_filter_routing_mode: self.dynamic_filter_routing_mode,
                     metrics: ExecutionPlanMetricsSet::new(),
                     projection: self.projection.clone(),
                     column_indices: self.column_indices.clone(),
@@ -5714,5 +5758,70 @@ mod tests {
                 .to_string()
                 .contains("null_aware anti join only supports single column join key")
         );
+    }
+
+    fn build_partition_index_mode_test_join(
+        partition_mode: PartitionMode,
+        routing_mode: DynamicFilterRoutingMode,
+    ) -> Result<HashJoinExec> {
+        let left = build_table(
+            ("a1", &vec![1, 2]),
+            ("b1", &vec![4, 5]),
+            ("c1", &vec![7, 8]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 20]),
+            ("b1", &vec![4, 5]),
+            ("c2", &vec![70, 80]),
+        );
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema()).unwrap())
+                as Arc<dyn PhysicalExpr>,
+            Arc::new(Column::new_with_schema("b1", &right.schema()).unwrap())
+                as Arc<dyn PhysicalExpr>,
+        )];
+
+        HashJoinExecBuilder::new(left, right, on, JoinType::Inner)
+            .with_partition_mode(partition_mode)
+            .with_dynamic_filter_routing_mode(routing_mode)
+            .build()
+    }
+
+    #[test]
+    fn test_should_use_partition_index() -> Result<()> {
+        let cases = [
+            (
+                PartitionMode::CollectLeft,
+                DynamicFilterRoutingMode::PartitionIndex,
+                false,
+                "CollectLeft should never use partition index",
+            ),
+            (
+                PartitionMode::Partitioned,
+                DynamicFilterRoutingMode::PartitionIndex,
+                true,
+                "Partitioned mode with PartitionIndex should use partition index",
+            ),
+            (
+                PartitionMode::Partitioned,
+                DynamicFilterRoutingMode::CaseHash,
+                false,
+                "Partitioned mode with CaseHash should use CASE routing",
+            ),
+            (
+                PartitionMode::Auto,
+                DynamicFilterRoutingMode::PartitionIndex,
+                false,
+                "Auto mode should never use partition index",
+            ),
+        ];
+
+        for (partition_mode, routing_mode, expected, message) in cases {
+            let join =
+                build_partition_index_mode_test_join(partition_mode, routing_mode)?;
+            assert_eq!(join.should_use_partition_index(), expected, "{message}");
+        }
+
+        Ok(())
     }
 }

@@ -664,8 +664,8 @@ C prod 2017.6
 # TEST 12: Partitioned Join with Matching Partition Counts - With Optimization
 # Both tables have 3 partitions matching target_partitions=3
 # No RepartitionExec needed for join - partitions already satisfy the requirement
-# Dynamic filter pushdown is disabled in this mode because preserve_file_partitions
-# reports Hash partitioning for Hive-style file groups, which are not hash-routed.
+# Dynamic filter pushdown uses partition-indexed routing because preserve_file_partitions
+# reports Hash partitioning for Hive-style file groups that are not hash-routed.
 ##########
 
 statement ok
@@ -692,7 +692,7 @@ physical_plan
 04)------ProjectionExec: expr=[value@1 as value, f_dkey@2 as f_dkey, env@0 as env]
 05)--------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(d_dkey@1, f_dkey@1)], projection=[env@0, value@2, f_dkey@3]
 06)----------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/dimension_partitioned/d_dkey=A/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/dimension_partitioned/d_dkey=B/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/dimension_partitioned/d_dkey=C/data.parquet]]}, projection=[env, d_dkey], file_type=parquet
-07)----------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=A/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=B/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=C/data.parquet]]}, projection=[value, f_dkey], file_type=parquet
+07)----------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=A/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=B/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=C/data.parquet]]}, projection=[value, f_dkey], file_type=parquet, predicate=DynamicFilter [ empty ]
 
 query TTR rowsort
 SELECT f.f_dkey, d.env, sum(f.value)
