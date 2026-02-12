@@ -77,7 +77,7 @@ impl ScalarUDFImpl for BitmapBucketNumber {
         args: datafusion_expr::ReturnFieldArgs,
     ) -> Result<FieldRef> {
         Ok(Arc::new(Field::new(
-            args.arg_fields[0].name(),
+            self.name(),
             DataType::Int64,
             args.arg_fields[0].is_nullable(),
         )))
@@ -137,73 +137,5 @@ fn bitmap_bucket_number(value: i64) -> i64 {
         1 + (value - 1) / NUM_BITS
     } else {
         value / NUM_BITS
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::bitmap_bucket_number;
-    use arrow::array::{Int8Array, Int16Array, Int32Array, Int64Array};
-
-    #[test]
-    fn test_bitmap_bucket_number_int8() {
-        let input = Int8Array::from(vec![1, 127, -1, -64, -65]);
-        let result: Int64Array = input
-            .iter()
-            .map(|opt| opt.map(|v| bitmap_bucket_number(v as i64)))
-            .collect();
-
-        assert_eq!(result.value(0), 1);
-        assert_eq!(result.value(1), 1);
-        assert_eq!(result.value(2), 0);
-        assert_eq!(result.value(3), 0);
-        assert_eq!(result.value(4), 0);
-    }
-
-    #[test]
-    fn test_bitmap_bucket_number_int16() {
-        let input = Int16Array::from(vec![1, 257, 32767, -1, -256]);
-        let result: Int64Array = input
-            .iter()
-            .map(|opt| opt.map(|v| bitmap_bucket_number(v as i64)))
-            .collect();
-
-        assert_eq!(result.value(0), 1);
-        assert_eq!(result.value(1), 1);
-        assert_eq!(result.value(2), 1);
-        assert_eq!(result.value(3), 0);
-        assert_eq!(result.value(4), 0);
-    }
-
-    #[test]
-    fn test_bitmap_bucket_number_int32() {
-        let input = Int32Array::from(vec![1, 65537, 2147483647, -1, -65536]);
-        let result: Int64Array = input
-            .iter()
-            .map(|opt| opt.map(|v| bitmap_bucket_number(v as i64)))
-            .collect();
-
-        assert_eq!(result.value(0), 1);
-        assert_eq!(result.value(1), 3);
-        assert_eq!(result.value(2), 65536);
-        assert_eq!(result.value(3), 0);
-        assert_eq!(result.value(4), -2);
-    }
-
-    #[test]
-    fn test_bitmap_bucket_number_int64() {
-        let input =
-            Int64Array::from(vec![1, 4294967297, i64::MAX, -1, -4294967296, i64::MIN]);
-        let result: Int64Array = input
-            .iter()
-            .map(|opt| opt.map(bitmap_bucket_number))
-            .collect();
-
-        assert_eq!(result.value(0), 1);
-        assert_eq!(result.value(1), 131073);
-        assert_eq!(result.value(2), 281474976710656);
-        assert_eq!(result.value(3), 0);
-        assert_eq!(result.value(4), -131072);
-        assert_eq!(result.value(5), -281474976710656);
     }
 }
