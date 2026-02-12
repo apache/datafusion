@@ -23,7 +23,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use super::utils::create_schema;
-use crate::execution_plan::EmissionType;
+use crate::execution_plan::{CardinalityEffect, EmissionType};
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::windows::{
     calc_requirements, get_ordered_partition_by_indices, get_partition_by_sort_exprs,
@@ -292,6 +292,10 @@ impl ExecutionPlan for WindowAggExec {
             column_statistics,
             total_byte_size: Precision::Absent,
         })
+    }
+
+    fn cardinality_effect(&self) -> CardinalityEffect {
+        CardinalityEffect::Equal
     }
 }
 

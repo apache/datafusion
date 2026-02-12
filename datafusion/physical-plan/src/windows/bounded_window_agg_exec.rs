@@ -71,6 +71,7 @@ use futures::{StreamExt, ready};
 use hashbrown::hash_table::HashTable;
 use indexmap::IndexMap;
 use log::debug;
+use crate::execution_plan::CardinalityEffect;
 
 /// Window execution plan
 #[derive(Debug, Clone)]
@@ -375,6 +376,10 @@ impl ExecutionPlan for BoundedWindowAggExec {
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         let input_stat = self.input.partition_statistics(partition)?;
         self.statistics_helper(input_stat)
+    }
+
+    fn cardinality_effect(&self) -> CardinalityEffect {
+        CardinalityEffect::Equal
     }
 }
 
