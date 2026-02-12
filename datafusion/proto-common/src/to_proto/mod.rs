@@ -904,6 +904,7 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             skip_arrow_metadata: value.skip_arrow_metadata,
             coerce_int96_opt: value.coerce_int96.clone().map(protobuf::parquet_options::CoerceInt96Opt::CoerceInt96),
             max_predicate_cache_size_opt: value.max_predicate_cache_size.map(|v| protobuf::parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(v as u64)),
+            filter_effectiveness_threshold_opt: Some(protobuf::parquet_options::FilterEffectivenessThresholdOpt::FilterEffectivenessThreshold(value.filter_effectiveness_threshold)),
         })
     }
 }

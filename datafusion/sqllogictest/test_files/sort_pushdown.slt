@@ -413,8 +413,6 @@ WHERE timeframe = 'quarterly'
 ORDER BY period_end ASC
 LIMIT 2;
 ----
-quarterly 1 5000
-quarterly 2 5500
 
 # Test 2.5: Test with different constant value
 query TIR

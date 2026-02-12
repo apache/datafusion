@@ -707,7 +707,7 @@ config_namespace! {
 
         /// (reading) If true, filter expressions are be applied during the parquet decoding operation to
         /// reduce the number of rows decoded. This optimization is sometimes called "late materialization".
-        pub pushdown_filters: bool, default = false
+        pub pushdown_filters: bool, default = true
 
         /// (reading) If true, filter expressions evaluated during the parquet decoding operation
         /// will be reordered heuristically to minimize the cost of evaluation. If false,
@@ -750,6 +750,16 @@ config_namespace! {
         /// but may increase IO and CPU usage. None means use the default
         /// parquet reader setting. 0 means no caching.
         pub max_predicate_cache_size: Option<usize>, default = None
+
+        /// (reading) Minimum filter effectiveness threshold for adaptive filter
+        /// pushdown.
+        /// Only filters that filter out at least this fraction of rows will be
+        /// promoted to row filters during adaptive filter pushdown.
+        /// A value of 1.0 means only filters that filter out all rows will be
+        /// promoted. A value of 0.0 means all filters will be promoted.
+        /// Because there can be a high I/O cost to pushing down ineffective filters,
+        /// recommended values are in the range [0.8, 0.95], depending on random I/0 costs.
+        pub filter_effectiveness_threshold: f64, default = 0.95
 
         // The following options affect writing to parquet files
         // and map to parquet::file::properties::WriterProperties
@@ -928,7 +938,7 @@ config_namespace! {
 
         /// When set to true, the optimizer will attempt to push down Join dynamic filters
         /// into the file scan phase.
-        pub enable_join_dynamic_filter_pushdown: bool, default = true
+        pub enable_join_dynamic_filter_pushdown: bool, default = false
 
         /// When set to true, the optimizer will attempt to push down Aggregate dynamic filters
         /// into the file scan phase.
