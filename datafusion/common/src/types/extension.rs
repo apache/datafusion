@@ -1,6 +1,5 @@
 use crate::error::Result;
 use arrow::array::Array;
-use arrow::datatypes::DataType;
 use arrow::util::display::{ArrayFormatter, FormatOptions};
 use std::fmt::Debug;
 use std::sync::Arc;

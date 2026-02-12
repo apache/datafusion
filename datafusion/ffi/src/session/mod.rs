@@ -20,6 +20,17 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::Arc;
 
+use crate::arrow_wrappers::WrappedSchema;
+use crate::execution::FFI_TaskContext;
+use crate::execution_plan::FFI_ExecutionPlan;
+use crate::physical_expr::FFI_PhysicalExpr;
+use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
+use crate::session::config::FFI_SessionConfig;
+use crate::udaf::FFI_AggregateUDF;
+use crate::udf::FFI_ScalarUDF;
+use crate::udwf::FFI_WindowUDF;
+use crate::util::FFIResult;
+use crate::{df_result, rresult, rresult_return};
 use abi_stable::StableAbi;
 use abi_stable::std_types::{RHashMap, RResult, RStr, RString, RVec};
 use arrow_schema::SchemaRef;
@@ -32,6 +43,7 @@ use datafusion_execution::TaskContext;
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::registry::{ExtensionTypeRegistry, ExtensionTypeRegistryRef};
 use datafusion_expr::{
     AggregateUDF, AggregateUDFImpl, Expr, LogicalPlan, ScalarUDF, ScalarUDFImpl,
     WindowUDF, WindowUDFImpl,
@@ -46,18 +58,6 @@ use datafusion_proto::protobuf::LogicalExprNode;
 use datafusion_session::Session;
 use prost::Message;
 use tokio::runtime::Handle;
-use datafusion_expr::registry::{ExtensionTypeRegistry, ExtensionTypeRegistryRef};
-use crate::arrow_wrappers::WrappedSchema;
-use crate::execution::FFI_TaskContext;
-use crate::execution_plan::FFI_ExecutionPlan;
-use crate::physical_expr::FFI_PhysicalExpr;
-use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
-use crate::session::config::FFI_SessionConfig;
-use crate::udaf::FFI_AggregateUDF;
-use crate::udf::FFI_ScalarUDF;
-use crate::udwf::FFI_WindowUDF;
-use crate::util::FFIResult;
-use crate::{df_result, rresult, rresult_return};
 
 pub mod config;
 

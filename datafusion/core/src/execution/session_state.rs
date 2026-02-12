@@ -57,7 +57,11 @@ use datafusion_expr::expr_rewriter::FunctionRewrite;
 use datafusion_expr::planner::ExprPlanner;
 #[cfg(feature = "sql")]
 use datafusion_expr::planner::{RelationPlanner, TypePlanner};
-use datafusion_expr::registry::{ExtensionTypeRegistration, ExtensionTypeRegistrationRef, ExtensionTypeRegistry, ExtensionTypeRegistryRef, FunctionRegistry, MemoryExtensionTypeRegistry, SerializerRegistry, SimpleExtensionTypeRegistration};
+use datafusion_expr::registry::{
+    ExtensionTypeRegistration, ExtensionTypeRegistrationRef, ExtensionTypeRegistry,
+    ExtensionTypeRegistryRef, FunctionRegistry, MemoryExtensionTypeRegistry,
+    SerializerRegistry, SimpleExtensionTypeRegistration,
+};
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{AggregateUDF, Explain, Expr, LogicalPlan, ScalarUDF, WindowUDF};
 use datafusion_optimizer::simplify_expressions::ExprSimplifier;
@@ -1333,7 +1337,7 @@ impl SessionStateBuilder {
     }
 
     /// Set the map of [`ExtensionTypeRegistration`]s
-    pub fn with_extension_type(
+    pub fn with_extension_type_registry(
         mut self,
         registry: ExtensionTypeRegistryRef,
     ) -> Self {
