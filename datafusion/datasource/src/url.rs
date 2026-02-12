@@ -18,8 +18,8 @@
 use std::sync::Arc;
 
 use datafusion_common::{DataFusionError, Result, TableReference};
-use datafusion_execution::cache::TableScopedPath;
 use datafusion_execution::cache::cache_manager::CachedFileList;
+use datafusion_execution::cache::TableScopedPath;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_session::Session;
 
@@ -28,8 +28,8 @@ use futures::{StreamExt, TryStreamExt};
 use glob::Pattern;
 use itertools::Itertools;
 use log::debug;
-use object_store::path::DELIMITER;
 use object_store::path::Path;
+use object_store::path::DELIMITER;
 use object_store::{ObjectMeta, ObjectStore};
 use url::Url;
 
@@ -511,12 +511,13 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use bytes::Bytes;
-    use datafusion_common::DFSchema;
     use datafusion_common::config::TableOptions;
-    use datafusion_execution::TaskContext;
+    use datafusion_common::DFSchema;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnv;
+    use datafusion_execution::TaskContext;
     use datafusion_expr::execution_props::ExecutionProps;
+    use datafusion_expr::registry::ExtensionTypeRegistryRef;
     use datafusion_expr::{AggregateUDF, Expr, LogicalPlan, ScalarUDF, WindowUDF};
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_plan::ExecutionPlan;
@@ -1217,6 +1218,10 @@ mod tests {
         }
 
         fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>> {
+            unimplemented!()
+        }
+
+        fn extension_type_registry(&self) -> &ExtensionTypeRegistryRef {
             unimplemented!()
         }
 

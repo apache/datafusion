@@ -30,22 +30,22 @@ use arrow::error::ArrowError;
 use arrow::ipc::convert::fb_to_schema;
 use arrow::ipc::reader::{FileReader, StreamReader};
 use arrow::ipc::writer::IpcWriteOptions;
-use arrow::ipc::{CompressionType, root_as_message};
+use arrow::ipc::{root_as_message, CompressionType};
 use datafusion_common::error::Result;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    DEFAULT_ARROW_EXTENSION, DataFusionError, GetExt, Statistics,
-    internal_datafusion_err, not_impl_err,
+    internal_datafusion_err, not_impl_err, DataFusionError, GetExt,
+    Statistics, DEFAULT_ARROW_EXTENSION,
 };
 use datafusion_common_runtime::{JoinSet, SpawnedTask};
-use datafusion_datasource::TableSchema;
 use datafusion_datasource::display::FileGroupDisplay;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::sink::{DataSink, DataSinkExec};
 use datafusion_datasource::write::{
-    ObjectWriterBuilder, SharedBuffer, get_writer_schema,
+    get_writer_schema, ObjectWriterBuilder, SharedBuffer,
 };
+use datafusion_datasource::TableSchema;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
@@ -60,10 +60,10 @@ use datafusion_datasource::source::DataSourceExec;
 use datafusion_datasource::write::demux::DemuxedStreamReceiver;
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 use datafusion_session::Session;
-use futures::StreamExt;
 use futures::stream::BoxStream;
+use futures::StreamExt;
 use object_store::{
-    GetOptions, GetRange, GetResultPayload, ObjectMeta, ObjectStore, path::Path,
+    path::Path, GetOptions, GetRange, GetResultPayload, ObjectMeta, ObjectStore,
 };
 use tokio::io::AsyncWriteExt;
 
@@ -549,11 +549,12 @@ mod tests {
     use super::*;
 
     use chrono::DateTime;
-    use datafusion_common::DFSchema;
     use datafusion_common::config::TableOptions;
+    use datafusion_common::DFSchema;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_expr::execution_props::ExecutionProps;
+    use datafusion_expr::registry::ExtensionTypeRegistryRef;
     use datafusion_expr::{AggregateUDF, Expr, LogicalPlan, ScalarUDF, WindowUDF};
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use object_store::{chunked::ChunkedStore, memory::InMemory, path::Path};
@@ -606,6 +607,10 @@ mod tests {
         }
 
         fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>> {
+            unimplemented!()
+        }
+
+        fn extension_type_registry(&self) -> &ExtensionTypeRegistryRef {
             unimplemented!()
         }
 
