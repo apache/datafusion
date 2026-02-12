@@ -30,7 +30,6 @@ use crate::datasource::provider_as_source;
 use crate::execution::SessionStateDefaults;
 use crate::execution::context::{EmptySerializerRegistry, FunctionFactory, QueryPlanner};
 use crate::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
-use arrow_schema::extension::ExtensionType;
 use arrow_schema::{DataType, FieldRef};
 use datafusion_catalog::MemoryCatalogProviderList;
 use datafusion_catalog::information_schema::{
@@ -58,8 +57,8 @@ use datafusion_expr::planner::ExprPlanner;
 #[cfg(feature = "sql")]
 use datafusion_expr::planner::{RelationPlanner, TypePlanner};
 use datafusion_expr::registry::{
-    ExtensionTypeRegistryRef, FunctionRegistry, MemoryExtensionTypeRegistry,
-    SerializerRegistry,
+    ExtensionTypeRegistrationRef, ExtensionTypeRegistry, ExtensionTypeRegistryRef,
+    FunctionRegistry, MemoryExtensionTypeRegistry, SerializerRegistry,
 };
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{
@@ -85,7 +84,6 @@ use datafusion_sql::{
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion_common::types::UuidDFExtensionType;
 use itertools::Itertools;
 use log::{debug, info};
 use object_store::ObjectStore;
@@ -2276,7 +2274,7 @@ impl ExtensionTypeRegistry for SessionState {
         self.extension_types.extension_type_registration(name)
     }
 
-    fn extension_type_registrations(&self) -> Vec<Arc<dyn ExtensionTypeRegistration>> {
+    fn extension_type_registrations(&self) -> Vec<ExtensionTypeRegistrationRef> {
         self.extension_types.extension_type_registrations()
     }
 
