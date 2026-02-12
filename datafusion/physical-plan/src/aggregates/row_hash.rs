@@ -30,7 +30,7 @@ use crate::aggregates::{
     create_schema, evaluate_group_by, evaluate_many, evaluate_optional,
 };
 use crate::metrics::{BaselineMetrics, MetricBuilder, RecordOutput};
-use crate::sorts::sort::{get_reserved_bytes_for_record_batch, sort_batch};
+use crate::sorts::sort::{get_reserved_bytes_for_record_batch, sort_batch_chunked};
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::spill_manager::SpillManager;
 use crate::{PhysicalExpr, aggregates, metrics};
@@ -52,6 +52,7 @@ use datafusion_physical_expr::{GroupsAccumulatorAdapter, PhysicalSortExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 use datafusion_common::instant::Instant;
+use datafusion_common::utils::memory::get_record_batch_memory_size;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 use log::debug;
@@ -1123,19 +1124,30 @@ impl GroupedHashAggregateStream {
             ))
         })?;
 
-        let sorted = sort_batch(&emit, &self.spill_state.spill_expr, None)?;
+        // Sort the batch into chunks and spill each chunk to disk. This ensures we don't have to hold the entire
+        // batch in memory until the end of the spill, and can both drop it and release memory pressure sooner,
+        // as spilling may take time and other things can happen in the background.
+        let sorted =
+            sort_batch_chunked(&emit, &self.spill_state.spill_expr, self.batch_size)?;
+        drop(emit);
+
+        let new_sort_memory: usize =
+            sorted.iter().map(get_record_batch_memory_size).sum();
+        let mem_to_free = sort_memory.saturating_sub(new_sort_memory);
+        self.reservation.shrink(mem_to_free); // Mem pool should now only hold the memory for the sorted batches.
 
         // Spill sorted state to disk
         let spillfile = self
             .spill_state
             .spill_manager
-            .spill_record_batch_by_size_and_return_max_batch_memory(
-                &sorted,
+            .spill_record_batch_iter_and_return_max_batch_memory(
+                sorted.into_iter(),
                 "HashAggSpill",
-                self.batch_size,
             )?;
 
-        self.reservation.shrink(sort_memory);
+        // Shrink the remaining memory we allocated
+        self.reservation
+            .shrink(sort_memory.saturating_sub(mem_to_free));
         match spillfile {
             Some((spillfile, max_record_batch_memory)) => {
                 self.spill_state.spills.push(SortedSpillFile {
