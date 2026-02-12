@@ -927,8 +927,34 @@ impl DataSource for FileScanConfig {
 
 impl FileScanConfig {
     /// Returns only the output orderings that are validated against actual
-    /// file group statistics. Orderings where files within any group are not
-    /// in inter-file sorted order are filtered out.
+    /// file group statistics.
+    ///
+    /// For example, individual files may be ordered by `col1 ASC`,
+    /// but if we have files with these min/max statistics in a single partition / file group:
+    ///
+    /// - file1: min(col1) = 10, max(col1) = 20
+    /// - file2: min(col1) = 5, max(col1) = 15
+    ///
+    /// Because reading file1 followed by file2 would produce out-of-order output (there is overlap
+    /// in the ranges), we cannot retain `col1 ASC` as a valid output ordering.
+    ///
+    /// Similarly this would not be a valid order (non-overlapping ranges but not ordered):
+    ///
+    /// - file1: min(col1) = 20, max(col1) = 30
+    /// - file2: min(col1) = 10, max(col1) = 15
+    ///
+    /// On the other hand if we had:
+    ///
+    /// - file1: min(col1) = 5, max(col1) = 15
+    /// - file2: min(col1) = 16, max(col1) = 25
+    ///
+    /// Then we know that reading file1 followed by file2 will produce ordered output,
+    /// so `col1 ASC` would be retained.
+    ///
+    /// Note that we are checking for ordering *within* *each* file group / partition,
+    /// files in different parttions are read independently and do not affect each other's ordering.
+    /// Merging of the multiple partition streams into a single ordered stream is handled
+    /// upstream e.g. by `SortPreservingMergeExec`.
     fn validated_output_ordering(&self) -> Vec<LexOrdering> {
         let schema = self.file_source.table_schema().table_schema();
         self.output_ordering
@@ -938,6 +964,7 @@ impl FileScanConfig {
                     if group.len() <= 1 {
                         return true; // single-file groups are trivially sorted
                     }
+                    // TODO: should we cache MinMaxStatistics per file group?
                     match MinMaxStatistics::new_from_files(
                         ordering,
                         schema,
