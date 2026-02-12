@@ -505,8 +505,6 @@ fn hash_map_array(
     let mut values_hashes = vec![0u64; array.entries().len()];
     create_hashes(array.entries().columns(), random_state, &mut values_hashes)?;
 
-    // Combine the hashes for entries on each row with each other.
-    // When `rehash=true`, combine the per-row map hash into the existing accumulator.
     if rehash {
         if let Some(nulls) = nulls {
             for (i, (start, stop)) in
