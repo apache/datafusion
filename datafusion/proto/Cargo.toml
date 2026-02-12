@@ -68,7 +68,7 @@ datafusion-physical-plan = { workspace = true }
 datafusion-proto-common = { workspace = true }
 object_store = { workspace = true }
 pbjson = { workspace = true, optional = true }
-prost = { version = "0.13" }
+prost = { workspace = true }
 serde = { version = "1.0", optional = true }
 serde_json = { workspace = true, optional = true }
 
