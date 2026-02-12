@@ -34,7 +34,7 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_plan::execution_plan::EmissionType;
 use datafusion_physical_plan::joins::utils::ColumnIndex;
 use datafusion_physical_plan::joins::{
-    CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode,
+    CrossJoinExec, HashJoinExec, HashJoinExecBuilder, NestedLoopJoinExec, PartitionMode,
     StreamJoinPartitionMode, SymmetricHashJoinExec,
 };
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
@@ -191,30 +191,18 @@ pub(crate) fn try_collect_left(
             {
                 Ok(Some(hash_join.swap_inputs(PartitionMode::CollectLeft)?))
             } else {
-                Ok(Some(Arc::new(HashJoinExec::try_new(
-                    Arc::clone(left),
-                    Arc::clone(right),
-                    hash_join.on().to_vec(),
-                    hash_join.filter().cloned(),
-                    hash_join.join_type(),
-                    hash_join.projection.clone(),
-                    PartitionMode::CollectLeft,
-                    hash_join.null_equality(),
-                    hash_join.null_aware,
-                )?)))
+                Ok(Some(Arc::new(
+                    HashJoinExecBuilder::from(hash_join)
+                        .with_partition_mode(PartitionMode::CollectLeft)
+                        .build()?,
+                )))
             }
         }
-        (true, false) => Ok(Some(Arc::new(HashJoinExec::try_new(
-            Arc::clone(left),
-            Arc::clone(right),
-            hash_join.on().to_vec(),
-            hash_join.filter().cloned(),
-            hash_join.join_type(),
-            hash_join.projection.clone(),
-            PartitionMode::CollectLeft,
-            hash_join.null_equality(),
-            hash_join.null_aware,
-        )?))),
+        (true, false) => Ok(Some(Arc::new(
+            HashJoinExecBuilder::from(hash_join)
+                .with_partition_mode(PartitionMode::CollectLeft)
+                .build()?,
+        ))),
         (false, true) => {
             // Don't swap null-aware anti joins as they have specific side requirements
             if hash_join.join_type().supports_swap() && !hash_join.null_aware {
@@ -254,17 +242,11 @@ pub(crate) fn partitioned_hash_join(
             PartitionMode::Partitioned
         };
 
-        Ok(Arc::new(HashJoinExec::try_new(
-            Arc::clone(left),
-            Arc::clone(right),
-            hash_join.on().to_vec(),
-            hash_join.filter().cloned(),
-            hash_join.join_type(),
-            hash_join.projection.clone(),
-            partition_mode,
-            hash_join.null_equality(),
-            hash_join.null_aware,
-        )?))
+        Ok(Arc::new(
+            HashJoinExecBuilder::from(hash_join)
+                .with_partition_mode(partition_mode)
+                .build()?,
+        ))
     }
 }
 
