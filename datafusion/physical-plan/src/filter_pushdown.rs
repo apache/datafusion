@@ -40,9 +40,9 @@ use std::sync::Arc;
 use arrow_schema::SchemaRef;
 use datafusion_common::{
     Result,
-    tree_node::{TreeNode, TreeNodeRecursion},
+    tree_node::{Transformed, TreeNode},
 };
-use datafusion_physical_expr::{expressions::Column, utils::reassign_expr_columns};
+use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -315,26 +315,27 @@ pub struct ChildFilterDescription {
 /// 1. Verify that all columns referenced by the filter exist in the target
 /// 2. Remap column indices to match the target schema
 ///
-/// For join nodes, an additional constraint is needed: only columns belonging
-/// to a specific side of the join should be considered valid. This is
-/// controlled by an optional set of allowed column indices (in the parent
-/// schema). When provided, a filter is only eligible if every column
-/// reference's index appears in the allowed set.
+/// `allowed_indices` controls which column indices (in the parent schema) are
+/// considered valid. For single-input nodes this defaults to
+/// `0..child_schema.len()` (all columns are reachable). For join nodes it is
+/// restricted to the subset of output columns that map to the target child,
+/// which is critical when different sides have same-named columns.
 pub(crate) struct FilterRemapper {
     /// The target schema to remap column indices into.
     child_schema: SchemaRef,
-    /// If set, only columns at these indices (in the *parent* schema) are
-    /// considered valid. When `None`, any column whose name exists in
-    /// `child_schema` is valid.
-    allowed_indices: Option<HashSet<usize>>,
+    /// Only columns at these indices (in the *parent* schema) are considered
+    /// valid. For non-join nodes this defaults to `0..child_schema.len()`.
+    allowed_indices: HashSet<usize>,
 }
 
 impl FilterRemapper {
-    /// Create a remapper that accepts any column name present in the target schema.
+    /// Create a remapper that accepts any column whose index falls within
+    /// `0..child_schema.len()` and whose name exists in the target schema.
     pub(crate) fn new(child_schema: SchemaRef) -> Self {
+        let allowed_indices = (0..child_schema.fields().len()).collect();
         Self {
             child_schema,
-            allowed_indices: None,
+            allowed_indices,
         }
     }
 
@@ -347,71 +348,41 @@ impl FilterRemapper {
     ) -> Self {
         Self {
             child_schema,
-            allowed_indices: Some(allowed_indices),
+            allowed_indices,
         }
     }
 
     /// Try to remap a filter's column references to the target schema.
     ///
-    /// Returns `Some(remapped_filter)` if all columns pass validation,
-    /// or `None` if any column is not valid for this target.
+    /// Validates and remaps in a single tree traversal: for each column,
+    /// checks that its index is in the allowed set and that
+    /// its name exists in the target schema, then remaps the index.
+    /// Returns `Some(remapped)` if all columns are valid, or `None` if any
+    /// column fails validation.
     pub(crate) fn try_remap(
         &self,
         filter: &Arc<dyn PhysicalExpr>,
     ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
-        if self.all_columns_in_schema(filter)
-            && self
-                .allowed_indices
-                .as_ref()
-                .map(|allowed| Self::all_columns_in_set(filter, allowed))
-                .unwrap_or(true)
-        {
-            let remapped = reassign_expr_columns(Arc::clone(filter), &self.child_schema)?;
-            Ok(Some(remapped))
-        } else {
-            Ok(None)
-        }
-    }
-
-    fn all_columns_in_schema(&self, filter: &Arc<dyn PhysicalExpr>) -> bool {
-        let names: HashSet<&str> = self
-            .child_schema
-            .fields()
-            .iter()
-            .map(|f| f.name().as_str())
-            .collect();
-        let mut ok = true;
-        filter
-            .apply(|e| {
-                if let Some(col) = e.as_any().downcast_ref::<Column>()
-                    && !names.contains(col.name())
+        let mut all_valid = true;
+        let transformed = Arc::clone(filter).transform_down(|expr| {
+            if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+                if self.allowed_indices.contains(&col.index())
+                    && let Ok(new_index) = self.child_schema.index_of(col.name())
                 {
-                    ok = false;
-                    return Ok(TreeNodeRecursion::Stop);
+                    Ok(Transformed::yes(Arc::new(Column::new(
+                        col.name(),
+                        new_index,
+                    ))))
+                } else {
+                    all_valid = false;
+                    Ok(Transformed::complete(expr))
                 }
-                Ok(TreeNodeRecursion::Continue)
-            })
-            .expect("infallible traversal");
-        ok
-    }
+            } else {
+                Ok(Transformed::no(expr))
+            }
+        })?;
 
-    fn all_columns_in_set(
-        filter: &Arc<dyn PhysicalExpr>,
-        allowed: &HashSet<usize>,
-    ) -> bool {
-        let mut ok = true;
-        filter
-            .apply(|e| {
-                if let Some(col) = e.as_any().downcast_ref::<Column>()
-                    && !allowed.contains(&col.index())
-                {
-                    ok = false;
-                    return Ok(TreeNodeRecursion::Stop);
-                }
-                Ok(TreeNodeRecursion::Continue)
-            })
-            .expect("infallible traversal");
-        ok
+        Ok(all_valid.then_some(transformed.data))
     }
 }
 

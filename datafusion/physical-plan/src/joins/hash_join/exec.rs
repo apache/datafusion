@@ -1435,14 +1435,17 @@ impl ExecutionPlan for HashJoinExec {
         };
 
         let (mut left_allowed, mut right_allowed) = (HashSet::new(), HashSet::new());
-        column_indices.iter().for_each(|ci| {
-            match ci.side {
-                JoinSide::Left => left_allowed.insert(ci.index),
-                JoinSide::Right => right_allowed.insert(ci.index),
-                // Mark columns - don't allow pushdown to either side
-                JoinSide::None => false,
-            };
-        });
+        column_indices
+            .iter()
+            .enumerate()
+            .for_each(|(output_idx, ci)| {
+                match ci.side {
+                    JoinSide::Left => left_allowed.insert(output_idx),
+                    JoinSide::Right => right_allowed.insert(output_idx),
+                    // Mark columns - don't allow pushdown to either side
+                    JoinSide::None => false,
+                };
+            });
 
         let left_child = if left_preserved {
             ChildFilterDescription::from_child_with_allowed_indices(
