@@ -562,6 +562,97 @@ physical_plan
 03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id, info], file_type=parquet
 04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet, predicate=DynamicFilter [ empty ]
 
+# Test 6: Regression test for issue #20213 - dynamic filter applied to wrong table
+# when subquery join has same column names on both sides.
+#
+# The bug: when an outer join pushes a DynamicFilter for column "k" through an
+# inner join where both sides have a column named "k", the name-based routing
+# incorrectly pushed the filter to BOTH sides instead of only the correct one.
+# With small row groups this caused wrong results (0 rows instead of expected).
+
+# Create tables with same column names (k, v) on both sides
+statement ok
+CREATE TABLE issue_20213_t1(k INT, v INT) AS
+SELECT i as k, i as v FROM generate_series(1, 1000) t(i);
+
+statement ok
+CREATE TABLE issue_20213_t2(k INT, v INT) AS
+SELECT i + 100 as k, i as v FROM generate_series(1, 100) t(i);
+
+# Use small row groups to trigger statistics-based pruning
+statement ok
+SET datafusion.execution.parquet.max_row_group_size = 10;
+
+query I
+COPY issue_20213_t1 TO 'test_files/scratch/dynamic_filter_pushdown_config/issue_20213_t1.parquet' STORED AS PARQUET;
+----
+1000
+
+query I
+COPY issue_20213_t2 TO 'test_files/scratch/dynamic_filter_pushdown_config/issue_20213_t2.parquet' STORED AS PARQUET;
+----
+100
+
+# Reset row group size
+statement ok
+SET datafusion.execution.parquet.max_row_group_size = 1000000;
+
+statement ok
+CREATE EXTERNAL TABLE t1_20213(k INT, v INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/dynamic_filter_pushdown_config/issue_20213_t1.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE t2_20213(k INT, v INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/dynamic_filter_pushdown_config/issue_20213_t2.parquet';
+
+# The query from issue #20213: subquery joins t1 and t2 on v, then outer
+# join uses t2's k column. The dynamic filter on k from the outer join
+# must only apply to t2 (k range 101-200), NOT to t1 (k range 1-1000).
+query I
+SELECT count(*) FROM (
+    SELECT t2_20213.k as k, t1_20213.k as k2
+    FROM t1_20213
+    JOIN t2_20213 ON t1_20213.v = t2_20213.v
+) a
+JOIN t2_20213 b ON a.k = b.k
+WHERE b.v < 10;
+----
+9
+
+# Also verify with SELECT * to catch row-level correctness
+query IIII rowsort
+SELECT * FROM (
+    SELECT t2_20213.k as k, t1_20213.k as k2
+    FROM t1_20213
+    JOIN t2_20213 ON t1_20213.v = t2_20213.v
+) a
+JOIN t2_20213 b ON a.k = b.k
+WHERE b.v < 10;
+----
+101 1 101 1
+102 2 102 2
+103 3 103 3
+104 4 104 4
+105 5 105 5
+106 6 106 6
+107 7 107 7
+108 8 108 8
+109 9 109 9
+
+statement ok
+DROP TABLE issue_20213_t1;
+
+statement ok
+DROP TABLE issue_20213_t2;
+
+statement ok
+DROP TABLE t1_20213;
+
+statement ok
+DROP TABLE t2_20213;
+
 # Cleanup
 
 statement ok

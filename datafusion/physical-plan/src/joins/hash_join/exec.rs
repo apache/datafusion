@@ -5762,4 +5762,18 @@ mod tests {
                 .contains("null_aware anti join only supports single column join key")
         );
     }
+
+    #[test]
+    fn test_lr_is_preserved() {
+        assert_eq!(lr_is_preserved(JoinType::Inner), (true, true));
+        assert_eq!(lr_is_preserved(JoinType::Left), (true, false));
+        assert_eq!(lr_is_preserved(JoinType::Right), (false, true));
+        assert_eq!(lr_is_preserved(JoinType::Full), (false, false));
+        assert_eq!(lr_is_preserved(JoinType::LeftSemi), (true, false));
+        assert_eq!(lr_is_preserved(JoinType::LeftAnti), (true, false));
+        assert_eq!(lr_is_preserved(JoinType::LeftMark), (true, false));
+        assert_eq!(lr_is_preserved(JoinType::RightSemi), (false, true));
+        assert_eq!(lr_is_preserved(JoinType::RightAnti), (false, true));
+        assert_eq!(lr_is_preserved(JoinType::RightMark), (false, true));
+    }
 }

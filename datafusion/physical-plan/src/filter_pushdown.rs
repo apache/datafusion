@@ -316,8 +316,8 @@ pub struct ChildFilterDescription {
 /// exist in the target schema. If any column in the filter is not present
 /// in the schema, the filter cannot be pushed down to that child.
 pub(crate) struct FilterColumnChecker<'a> {
-    /// The set of `(column_name, column_index)` pairs that are allowed.
-    allowed_columns: HashSet<(&'a str, usize)>,
+    /// Column names that are allowed.
+    column_names: HashSet<&'a str>,
 }
 
 impl<'a> FilterColumnChecker<'a> {
@@ -325,24 +325,13 @@ impl<'a> FilterColumnChecker<'a> {
     ///
     /// Extracts all column names from the schema's fields to build
     /// a lookup set for efficient column existence checks.
-    pub(crate) fn new_schema(input_schema: &'a Schema) -> Self {
-        let allowed_columns: HashSet<(&str, usize)> = input_schema
+    pub(crate) fn new(input_schema: &'a Schema) -> Self {
+        let column_names: HashSet<&str> = input_schema
             .fields()
             .iter()
-            .enumerate()
-            .map(|(i, f)| (f.name().as_str(), i))
+            .map(|f| f.name().as_str())
             .collect();
-        Self { allowed_columns }
-    }
-
-    /// Creates a new [`FilterColumnChecker`] from an explicit set of
-    /// allowed `(name, index)` pairs.
-    ///
-    /// This is used by join nodes that need to restrict pushdown to columns
-    /// belonging to a specific side of the join, even when different sides
-    /// have columns with the same name (e.g. nested mark joins).
-    pub(crate) fn new_columns(allowed_columns: HashSet<(&'a str, usize)>) -> Self {
-        Self { allowed_columns }
+        Self { column_names }
     }
 
     /// Checks whether a filter expression can be pushed down to the child
@@ -353,6 +342,42 @@ impl<'a> FilterColumnChecker<'a> {
     ///
     /// This method traverses the entire expression tree, checking each
     /// column reference against the available column names.
+    pub(crate) fn can_pushdown(&self, filter: &Arc<dyn PhysicalExpr>) -> bool {
+        let mut can_apply = true;
+        filter
+            .apply(|expr| {
+                if let Some(column) = expr.as_any().downcast_ref::<Column>()
+                    && !self.column_names.contains(column.name())
+                {
+                    can_apply = false;
+                    return Ok(TreeNodeRecursion::Stop);
+                }
+
+                Ok(TreeNodeRecursion::Continue)
+            })
+            .expect("infallible traversal");
+        can_apply
+    }
+}
+
+/// Like [`FilterColumnChecker`] but matches on both column name and index.
+///
+/// This is used by join nodes that need to restrict pushdown to columns
+/// belonging to a specific side of the join, even when different sides
+/// have columns with the same name (e.g. nested mark joins producing
+/// identically-named "mark" columns).
+pub(crate) struct FilterColumnIndexChecker<'a> {
+    /// The set of `(column_name, column_index)` pairs that are allowed.
+    allowed_columns: HashSet<(&'a str, usize)>,
+}
+
+impl<'a> FilterColumnIndexChecker<'a> {
+    pub(crate) fn new(allowed_columns: HashSet<(&'a str, usize)>) -> Self {
+        Self { allowed_columns }
+    }
+
+    /// Checks whether a filter expression can be pushed down, requiring
+    /// that every [`Column`] reference matches an allowed `(name, index)` pair.
     pub(crate) fn can_pushdown(&self, filter: &Arc<dyn PhysicalExpr>) -> bool {
         let mut can_apply = true;
         filter
@@ -387,8 +412,8 @@ impl ChildFilterDescription {
     ) -> Result<Self> {
         let child_schema = child.schema();
 
-        // Build a set of column names in the child schema for quick lookup
-        let checker = FilterColumnChecker::new_schema(&child_schema);
+        // Build a set of column (name, index) pairs in the child schema for quick lookup
+        let checker = FilterColumnChecker::new(&child_schema);
 
         // Analyze each parent filter
         let mut child_parent_filters = Vec::with_capacity(parent_filters.len());
@@ -428,7 +453,7 @@ impl ChildFilterDescription {
         child: &Arc<dyn crate::ExecutionPlan>,
     ) -> Result<Self> {
         let child_schema = child.schema();
-        let checker = FilterColumnChecker::new_columns(allowed_columns);
+        let checker = FilterColumnIndexChecker::new(allowed_columns);
 
         let mut child_parent_filters = Vec::with_capacity(parent_filters.len());
         for filter in parent_filters {

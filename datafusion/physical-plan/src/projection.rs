@@ -384,7 +384,7 @@ impl ExecutionPlan for ProjectionExec {
         // expand alias column to original expr in parent filters
         let invert_alias_map = self.collect_reverse_alias()?;
         let output_schema = self.schema();
-        let checker = FilterColumnChecker::new_schema(&output_schema);
+        let checker = FilterColumnChecker::new(&output_schema);
         let mut child_parent_filters = Vec::with_capacity(parent_filters.len());
 
         for filter in parent_filters {
