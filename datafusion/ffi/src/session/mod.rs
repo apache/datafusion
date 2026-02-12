@@ -49,7 +49,7 @@ use stabby::str::Str as SStr;
 use stabby::string::String as SString;
 use stabby::vec::Vec as SVec;
 use tokio::runtime::Handle;
-
+use datafusion_expr::registry::{ExtensionTypeRegistry, ExtensionTypeRegistryRef};
 use crate::arrow_wrappers::WrappedSchema;
 use crate::execution::FFI_TaskContext;
 use crate::execution_plan::FFI_ExecutionPlan;

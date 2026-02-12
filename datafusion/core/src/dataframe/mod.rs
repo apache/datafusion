@@ -68,6 +68,7 @@ use datafusion_functions_aggregate::expr_fn::{
     avg, count, max, median, min, stddev, sum,
 };
 
+use crate::extension_types::DFArrayFormatterFactory;
 use async_trait::async_trait;
 use datafusion_catalog::Session;
 use datafusion_expr::extension_types::DFArrayFormatterFactory;
