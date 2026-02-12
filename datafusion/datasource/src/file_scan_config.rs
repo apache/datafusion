@@ -946,6 +946,16 @@ impl DataSource for FileScanConfig {
     }
 }
 
+/// Result of sorting files within groups by their min/max statistics.
+struct SortedFileGroups {
+    /// The file groups with files reordered within each group.
+    file_groups: Vec<FileGroup>,
+    /// Whether any group's files were actually reordered.
+    any_reordered: bool,
+    /// Whether every group was positively confirmed as non-overlapping.
+    all_non_overlapping: bool,
+}
+
 impl FileScanConfig {
     /// Get the file schema (schema of the files without partition columns)
     pub fn file_schema(&self) -> &SchemaRef {
@@ -1267,15 +1277,14 @@ impl FileScanConfig {
                     .projection()
                     .as_ref()
                     .and_then(|p| ordered_column_indices_from_projection(p));
-                let (sorted_groups, _, all_non_overlapping) =
-                    Self::sort_files_within_groups_by_statistics(
-                        &new_config.file_groups,
-                        &sort_order,
-                        &projected_schema,
-                        projection_indices.as_deref(),
-                    );
-                new_config.file_groups = sorted_groups;
-                all_non_overlapping
+                let result = Self::sort_files_within_groups_by_statistics(
+                    &new_config.file_groups,
+                    &sort_order,
+                    &projected_schema,
+                    projection_indices.as_deref(),
+                );
+                new_config.file_groups = result.file_groups;
+                result.all_non_overlapping
             } else {
                 false
             }
@@ -1288,14 +1297,13 @@ impl FileScanConfig {
                     .projection()
                     .as_ref()
                     .and_then(|p| ordered_column_indices_from_projection(p));
-                let (_, _, all_non_overlapping) =
-                    Self::sort_files_within_groups_by_statistics(
-                        &new_config.file_groups,
-                        &sort_order,
-                        &projected_schema,
-                        projection_indices.as_deref(),
-                    );
-                all_non_overlapping
+                let result = Self::sort_files_within_groups_by_statistics(
+                    &new_config.file_groups,
+                    &sort_order,
+                    &projected_schema,
+                    projection_indices.as_deref(),
+                );
+                result.all_non_overlapping
             } else {
                 false
             }
@@ -1316,14 +1324,12 @@ impl FileScanConfig {
     ///
     /// No files are moved between groups (parallelism/group composition unchanged).
     /// Groups where statistics are unavailable are kept as-is.
-    ///
-    /// Returns `(new_file_groups, any_reordered, all_groups_non_overlapping)`.
     fn sort_files_within_groups_by_statistics(
         file_groups: &[FileGroup],
         sort_order: &LexOrdering,
         projected_schema: &SchemaRef,
         projection_indices: Option<&[usize]>,
-    ) -> (Vec<FileGroup>, bool, bool) {
+    ) -> SortedFileGroups {
         let mut any_reordered = false;
         // Track how many groups we have positively confirmed as non-overlapping.
         // Default-safe: if any group is skipped without confirmation, the count
@@ -1396,8 +1402,11 @@ impl FileScanConfig {
             new_groups.push(sorted_group);
         }
 
-        let all_non_overlapping = confirmed_non_overlapping == file_groups.len();
-        (new_groups, any_reordered, all_non_overlapping)
+        SortedFileGroups {
+            file_groups: new_groups,
+            any_reordered,
+            all_non_overlapping: confirmed_non_overlapping == file_groups.len(),
+        }
     }
 
     /// Try to sort file groups by statistics as a best-effort optimization.
@@ -1419,20 +1428,19 @@ impl FileScanConfig {
             .as_ref()
             .and_then(|p| ordered_column_indices_from_projection(p));
 
-        let (sorted_groups, any_reordered, _) =
-            Self::sort_files_within_groups_by_statistics(
-                &self.file_groups,
-                &sort_order,
-                &projected_schema,
-                projection_indices.as_deref(),
-            );
+        let result = Self::sort_files_within_groups_by_statistics(
+            &self.file_groups,
+            &sort_order,
+            &projected_schema,
+            projection_indices.as_deref(),
+        );
 
-        if !any_reordered {
+        if !result.any_reordered {
             return Ok(SortOrderPushdownResult::Unsupported);
         }
 
         let mut new_config = self.clone();
-        new_config.file_groups = sorted_groups;
+        new_config.file_groups = result.file_groups;
         new_config.output_ordering = vec![];
         Ok(SortOrderPushdownResult::Inexact {
             inner: Arc::new(new_config),
