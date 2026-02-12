@@ -125,7 +125,7 @@ Default features:
 - `regex_expressions`: regular expression functions, such as `regexp_match`
 - `unicode_expressions`: include Unicode-aware functions such as `character_length`
 - `unparser`: enables support to reverse LogicalPlans back into SQL
-- `recursive_protection`: uses [recursion](https://docs.rs/recursive/latest/recursive/) for stack overflow protection.
+- `recursive_protection`: uses [recursive](https://docs.rs/recursive/latest/recursive/) for stack overflow protection.
 
 Optional features:
 
