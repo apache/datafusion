@@ -1117,7 +1117,11 @@ impl GroupedHashAggregateStream {
         self.update_memory_reservation()?;
 
         let sort_memory = get_reserved_bytes_for_record_batch(&emit)?;
-        self.reservation.try_grow(sort_memory)?;
+        self.reservation.try_grow(sort_memory).map_err(|e| {
+            DataFusionError::ResourcesExhausted(format!(
+                "Failed to reserve memory for sort during spill: {e}"
+            ))
+        })?;
 
         let sorted = sort_batch(&emit, &self.spill_state.spill_expr, None)?;
 
