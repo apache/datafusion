@@ -30,6 +30,7 @@ regexp/
     - regexp_count.slt        // Tests for regexp_count function
     - regexp_match.slt        // Tests for regexp_match function
     - regexp_replace.slt      // Tests for regexp_replace function
+    - regexp_extract.slt      // Tests for regexp_extract function
 ```
 
 ## Tested Functions
@@ -38,6 +39,8 @@ regexp/
 2. `regexp_count`: Count occurrences of a pattern in a string
 3. `regexp_match`: Extract matching substrings
 4. `regexp_replace`: Replace matched substrings
+5. `regexp_extract`: Extract a specific group matched by the Java regex regexp, from the specified string column.
+
 
 ## Test Data
 
