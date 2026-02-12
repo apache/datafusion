@@ -222,7 +222,7 @@ impl FileStatisticsCache for DefaultFileStatisticsCache {
             let path = entry.0.clone();
             let cached = entry.1.clone();
             entries.insert(
-                path.clone(),
+                path,
                 FileStatisticsCacheEntry {
                     object_meta: cached.meta.clone(),
                     num_rows: cached.statistics.num_rows,
