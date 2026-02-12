@@ -103,16 +103,18 @@ impl DefaultFileStatisticsCacheState {
         let entry_size = value.heap_size();
 
         if entry_size + key_size > self.memory_limit {
-            // Remove stale entry if exists
+            // Remove potential stale entry 
             self.remove(key);
             return None;
         }
 
         let old_value = self.lru_queue.put(key.clone(), value);
-        self.memory_used += entry_size + key_size;
+        self.memory_used += entry_size;
 
         if let Some(old_entry) = &old_value {
             self.memory_used -= old_entry.heap_size();
+        } else {
+            self.memory_used += key.heap_size();
         }
 
         self.evict_entries();
