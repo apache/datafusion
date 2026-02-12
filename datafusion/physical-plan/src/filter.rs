@@ -32,7 +32,7 @@ use crate::common::can_project;
 use crate::execution_plan::CardinalityEffect;
 use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
-    FilterPushdownPropagation, PushedDown, PushedDownPredicate,
+    FilterPushdownPropagation, PushedDown,
 };
 use crate::metrics::{MetricBuilder, MetricType};
 use crate::projection::{
@@ -590,16 +590,9 @@ impl ExecutionPlan for FilterExec {
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
         if !matches!(phase, FilterPushdownPhase::Pre) {
-            // For non-pre phase, filters pass through unchanged
-            let filter_supports = parent_filters
-                .into_iter()
-                .map(PushedDownPredicate::supported)
-                .collect();
-
-            return Ok(FilterDescription::new().with_child(ChildFilterDescription {
-                parent_filters: filter_supports,
-                self_filters: vec![],
-            }));
+            let child =
+                ChildFilterDescription::from_child(&parent_filters, self.input())?;
+            return Ok(FilterDescription::new().with_child(child));
         }
 
         let child = ChildFilterDescription::from_child(&parent_filters, self.input())?
@@ -2008,6 +2001,59 @@ mod tests {
         // Schema should have all columns
         let output_schema = filter.schema();
         assert_eq!(output_schema.fields().len(), 2);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_filter_with_projection_remaps_post_phase_parent_filters() -> Result<()> {
+        // Test that FilterExec with a projection must remap parent dynamic
+        // filter column indices from its output schema to the input schema
+        // before passing them to the child.
+        let input_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, false),
+            Field::new("c", DataType::Float64, false),
+        ]));
+        let input = Arc::new(EmptyExec::new(Arc::clone(&input_schema)));
+
+        // FilterExec: a > 0, projection=[c@2]
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(0)))),
+        ));
+        let filter = FilterExecBuilder::new(predicate, input)
+            .apply_projection(Some(vec![2]))?
+            .build()?;
+
+        // Output schema should be [c:Float64]
+        let output_schema = filter.schema();
+        assert_eq!(output_schema.fields().len(), 1);
+        assert_eq!(output_schema.field(0).name(), "c");
+
+        // Simulate a parent dynamic filter referencing output column c@0
+        let parent_filter: Arc<dyn PhysicalExpr> = Arc::new(Column::new("c", 0));
+
+        let config = ConfigOptions::new();
+        let desc = filter.gather_filters_for_pushdown(
+            FilterPushdownPhase::Post,
+            vec![parent_filter],
+            &config,
+        )?;
+
+        // The filter pushed to the child must reference c@2 (input schema),
+        // not c@0 (output schema).
+        let parent_filters = desc.parent_filters();
+        assert_eq!(parent_filters.len(), 1); // one child
+        assert_eq!(parent_filters[0].len(), 1); // one filter
+        let remapped = &parent_filters[0][0].predicate;
+        let display = format!("{remapped}");
+        assert_eq!(
+            display, "c@2",
+            "Post-phase parent filter column index must be remapped \
+             from output schema (c@0) to input schema (c@2)"
+        );
 
         Ok(())
     }

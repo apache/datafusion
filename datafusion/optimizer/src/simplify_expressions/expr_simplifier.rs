@@ -2044,6 +2044,53 @@ impl TreeNodeRewriter for Simplifier<'_> {
                     Transformed::no(Expr::BinaryExpr(BinaryExpr { left, op, right }))
                 }
             }
+            // For case:
+            // date_part('YEAR', expr) IN (literal1, literal2, ...)
+            Expr::InList(InList {
+                expr,
+                list,
+                negated,
+            }) => {
+                if list.len() > THRESHOLD_INLINE_INLIST || list.iter().any(is_null) {
+                    return Ok(Transformed::no(Expr::InList(InList {
+                        expr,
+                        list,
+                        negated,
+                    })));
+                }
+
+                let (op, combiner): (Operator, fn(Expr, Expr) -> Expr) =
+                    if negated { (NotEq, and) } else { (Eq, or) };
+
+                let mut rewritten: Option<Expr> = None;
+                for item in &list {
+                    let PreimageResult::Range { interval, expr } =
+                        get_preimage(expr.as_ref(), item, info)?
+                    else {
+                        return Ok(Transformed::no(Expr::InList(InList {
+                            expr,
+                            list,
+                            negated,
+                        })));
+                    };
+
+                    let range_expr = rewrite_with_preimage(*interval, op, expr)?.data;
+                    rewritten = Some(match rewritten {
+                        None => range_expr,
+                        Some(acc) => combiner(acc, range_expr),
+                    });
+                }
+
+                if let Some(rewritten) = rewritten {
+                    Transformed::yes(rewritten)
+                } else {
+                    Transformed::no(Expr::InList(InList {
+                        expr,
+                        list,
+                        negated,
+                    }))
+                }
+            }
 
             // no additional rewrites possible
             expr => Transformed::no(expr),

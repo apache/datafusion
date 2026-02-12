@@ -55,10 +55,21 @@ use datafusion_physical_plan::{
 use log::{debug, warn};
 use std::{any::Any, fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::Arc};
 
-/// The base configurations for a [`DataSourceExec`], the a physical plan for
-/// any given file format.
+/// [`FileScanConfig`] represents scanning data from a group of files
 ///
-/// Use [`DataSourceExec::from_data_source`] to create a [`DataSourceExec`] from a ``FileScanConfig`.
+/// `FileScanConfig` is used to create a [`DataSourceExec`], the physical plan
+/// for scanning files with a particular file format.
+///
+/// The [`FileSource`] (e.g. `ParquetSource`, `CsvSource`, etc.) is responsible
+/// for creating the actual execution plan to read the files based on a
+/// `FileScanConfig`. Fields in a `FileScanConfig` such as Statistics represent
+/// information about the files **before** any projection or filtering is
+/// applied in the file source.
+///
+/// Use [`FileScanConfigBuilder`] to construct a `FileScanConfig`.
+///
+/// Use [`DataSourceExec::from_data_source`] to create a [`DataSourceExec`] from
+/// a `FileScanConfig`.
 ///
 /// # Example
 /// ```
@@ -157,7 +168,13 @@ pub struct FileScanConfig {
     /// correct results (e.g., for `ORDER BY ... LIMIT` queries). When `false`,
     /// DataFusion may reorder file processing for optimization without affecting correctness.
     pub preserve_order: bool,
-    /// All equivalent lexicographical orderings that describe the schema.
+    /// All equivalent lexicographical output orderings of this file scan, in terms of
+    /// [`FileSource::table_schema`]. See [`FileScanConfigBuilder::with_output_ordering`] for more
+    /// details.
+    ///
+    /// [`Self::eq_properties`] uses this information along with projection
+    /// and filtering information to compute the effective
+    /// [`EquivalenceProperties`]
     pub output_ordering: Vec<LexOrdering>,
     /// File compression type
     pub file_compression_type: FileCompressionType,
@@ -169,8 +186,11 @@ pub struct FileScanConfig {
     /// Expression adapter used to adapt filters and projections that are pushed down into the scan
     /// from the logical schema to the physical schema of the file.
     pub expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
-    /// Unprojected statistics for the table (file schema + partition columns).
-    /// These are projected on-demand via `projected_stats()`.
+    /// Statistics for the entire table (file schema + partition columns).
+    /// See [`FileScanConfigBuilder::with_statistics`] for more details.
+    ///
+    /// The effective statistics are computed on-demand via
+    /// [`ProjectionExprs::project_statistics`].
     ///
     /// Note that this field is pub(crate) because accessing it directly from outside
     /// would be incorrect if there are filters being applied, thus this should be accessed
@@ -283,17 +303,20 @@ impl FileScanConfigBuilder {
         }
     }
 
-    /// Set the maximum number of records to read from this plan. If `None`,
-    /// all records after filtering are returned.
+    /// Set the maximum number of records to read from this plan.
+    ///
+    /// If `None`, all records after filtering are returned.
     pub fn with_limit(mut self, limit: Option<usize>) -> Self {
         self.limit = limit;
         self
     }
 
     /// Set whether the limit should be order-sensitive.
+    ///
     /// When `true`, files must be read in the exact order specified to produce
     /// correct results (e.g., for `ORDER BY ... LIMIT` queries). When `false`,
-    /// DataFusion may reorder file processing for optimization without affecting correctness.
+    /// DataFusion may reorder file processing for optimization without
+    /// affecting correctness.
     pub fn with_preserve_order(mut self, order_sensitive: bool) -> Self {
         self.preserve_order = order_sensitive;
         self
@@ -301,13 +324,14 @@ impl FileScanConfigBuilder {
 
     /// Set the file source for scanning files.
     ///
-    /// This method allows you to change the file source implementation (e.g. ParquetSource, CsvSource, etc.)
-    /// after the builder has been created.
+    /// This method allows you to change the file source implementation (e.g.
+    /// ParquetSource, CsvSource, etc.) after the builder has been created.
     pub fn with_source(mut self, file_source: Arc<dyn FileSource>) -> Self {
         self.file_source = file_source;
         self
     }
 
+    /// Return the table schema
     pub fn table_schema(&self) -> &SchemaRef {
         self.file_source.table_schema().table_schema()
     }
@@ -332,7 +356,12 @@ impl FileScanConfigBuilder {
 
     /// Set the columns on which to project the data using column indices.
     ///
-    /// Indexes that are higher than the number of columns of `file_schema` refer to `table_partition_cols`.
+    /// This method attempts to push down the projection to the underlying file
+    /// source if supported. If the file source does not support projection
+    /// pushdown, an error is returned.
+    ///
+    /// Indexes that are higher than the number of columns of `file_schema`
+    /// refer to `table_partition_cols`.
     pub fn with_projection_indices(
         mut self,
         indices: Option<Vec<usize>>,
@@ -371,8 +400,18 @@ impl FileScanConfigBuilder {
         self
     }
 
-    /// Set the estimated overall statistics of the files, taking `filters` into account.
-    /// Defaults to [`Statistics::new_unknown`].
+    /// Set the statistics of the files, including partition
+    /// columns. Defaults to [`Statistics::new_unknown`].
+    ///
+    /// These statistics are for the entire table (file schema + partition
+    /// columns) before any projection or filtering is applied. Projections are
+    /// applied when statistics are retrieved, and if a filter is present,
+    /// [`FileScanConfig::statistics`] will mark the statistics as inexact
+    /// (counts are not adjusted).
+    ///
+    /// Projections and filters may be applied by the file source, either by
+    /// [`Self::with_projection_indices`] or a preexisting
+    /// [`FileSource::projection`] or [`FileSource::filter`].
     pub fn with_statistics(mut self, statistics: Statistics) -> Self {
         self.statistics = Some(statistics);
         self
@@ -408,6 +447,13 @@ impl FileScanConfigBuilder {
     }
 
     /// Set the output ordering of the files
+    ///
+    /// The expressions are in terms of the entire table schema (file schema +
+    /// partition columns), before any projection or filtering from the file
+    /// scan is applied.
+    ///
+    /// This is used for optimization purposes, e.g. to determine if a file scan
+    /// can satisfy an `ORDER BY` without an additional sort.
     pub fn with_output_ordering(mut self, output_ordering: Vec<LexOrdering>) -> Self {
         self.output_ordering = output_ordering;
         self
@@ -683,6 +729,9 @@ impl DataSource for FileScanConfig {
         Partitioning::UnknownPartitioning(self.file_groups.len())
     }
 
+    /// Computes the effective equivalence properties of this file scan, taking
+    /// into account the file schema, any projections or filters applied by the
+    /// file source, and the output ordering.
     fn eq_properties(&self) -> EquivalenceProperties {
         let schema = self.file_source.table_schema().table_schema();
         let mut eq_properties = EquivalenceProperties::new_with_orderings(
