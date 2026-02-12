@@ -742,12 +742,6 @@ impl ExecutionPlan for TopKExec {
             state: BTreeMap::new(),
         }))
     }
-
-    fn statistics(&self) -> Result<Statistics> {
-        // to improve the optimizability of this plan
-        // better statistics inference could be provided
-        Ok(Statistics::new_unknown(&self.schema()))
-    }
 }
 
 // A very specialized TopK implementation

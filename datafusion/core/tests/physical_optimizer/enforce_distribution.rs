@@ -210,10 +210,6 @@ impl ExecutionPlan for SortRequiredExec {
     ) -> Result<datafusion_physical_plan::SendableRecordBatchStream> {
         unreachable!();
     }
-
-    fn statistics(&self) -> Result<Statistics> {
-        self.input.partition_statistics(None)
-    }
 }
 
 fn parquet_exec() -> Arc<DataSourceExec> {
