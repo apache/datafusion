@@ -190,6 +190,7 @@ impl SortPreservingMergeExec {
     ) -> Self {
         Self {
             input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
             ..Self::clone(self)
         }
     }

@@ -212,6 +212,7 @@ impl PartialSortExec {
     ) -> Self {
         Self {
             input: children.swap_remove(0),
+            metrics_set: ExecutionPlanMetricsSet::new(),
             ..Self::clone(self)
         }
     }
