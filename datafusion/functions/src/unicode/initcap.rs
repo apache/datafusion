@@ -191,7 +191,12 @@ fn initcap_ascii_array<T: OffsetSizeTrait>(
 ) -> ArrayRef {
     let offsets = string_array.offsets();
     let src = string_array.value_data();
+    let first_offset = offsets.first().unwrap().as_usize();
+    let last_offset = offsets.last().unwrap().as_usize();
     let mut out = Vec::with_capacity(src.len());
+
+    // Preserve bytes before the first offset unchanged.
+    out.extend_from_slice(&src[..first_offset]);
 
     for window in offsets.windows(2) {
         let start = window[0].as_usize();
@@ -209,9 +214,12 @@ fn initcap_ascii_array<T: OffsetSizeTrait>(
         }
     }
 
+    // Preserve bytes after the last offset unchanged.
+    out.extend_from_slice(&src[last_offset..]);
+
     let values = Buffer::from_vec(out);
     // SAFETY: ASCII case conversion preserves byte length, so the original
-    // offsets and nulls remain valid for the new value buffer.
+    // offsets and nulls remain valid.
     Arc::new(unsafe {
         GenericStringArray::<T>::new_unchecked(
             offsets.clone(),
@@ -242,13 +250,16 @@ fn initcap_string(input: &str, container: &mut String) {
     let mut prev_is_alphanumeric = false;
 
     if input.is_ascii() {
-        for c in input.chars() {
+        container.reserve(input.len());
+        // SAFETY: each byte is ASCII, so the result is valid UTF-8.
+        let out = unsafe { container.as_mut_vec() };
+        for &b in input.as_bytes() {
             if prev_is_alphanumeric {
-                container.push(c.to_ascii_lowercase());
+                out.push(b.to_ascii_lowercase());
             } else {
-                container.push(c.to_ascii_uppercase());
-            };
-            prev_is_alphanumeric = c.is_ascii_alphanumeric();
+                out.push(b.to_ascii_uppercase());
+            }
+            prev_is_alphanumeric = b.is_ascii_alphanumeric();
         }
     } else {
         for c in input.chars() {
@@ -266,10 +277,11 @@ fn initcap_string(input: &str, container: &mut String) {
 mod tests {
     use crate::unicode::initcap::InitcapFunc;
     use crate::utils::test::test_function;
-    use arrow::array::{Array, StringArray, StringViewArray};
+    use arrow::array::{Array, ArrayRef, StringArray, StringViewArray};
     use arrow::datatypes::DataType::{Utf8, Utf8View};
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
+    use std::sync::Arc;
 
     #[test]
     fn test_functions() -> Result<()> {
@@ -371,6 +383,54 @@ mod tests {
             StringViewArray
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_initcap_ascii_array() -> Result<()> {
+        let array = StringArray::from(vec![
+            Some("hello world"),
+            None,
+            Some("foo-bar_baz/baX"),
+            Some(""),
+            Some("123 abc 456DEF"),
+            Some("ALL CAPS"),
+            Some("already correct"),
+        ]);
+        let args: Vec<ArrayRef> = vec![Arc::new(array)];
+        let result = super::initcap::<i32>(&args)?;
+        let result = result.as_any().downcast_ref::<StringArray>().unwrap();
+
+        assert_eq!(result.len(), 7);
+        assert_eq!(result.value(0), "Hello World");
+        assert!(result.is_null(1));
+        assert_eq!(result.value(2), "Foo-Bar_Baz/Bax");
+        assert_eq!(result.value(3), "");
+        assert_eq!(result.value(4), "123 Abc 456def");
+        assert_eq!(result.value(5), "All Caps");
+        assert_eq!(result.value(6), "Already Correct");
+        Ok(())
+    }
+
+    /// Test that initcap works correctly on a sliced ASCII StringArray.
+    #[test]
+    fn test_initcap_sliced_ascii_array() -> Result<()> {
+        let array = StringArray::from(vec![
+            Some("hello world"),
+            Some("foo bar"),
+            Some("baz qux"),
+        ]);
+        // Slice to get only the last two elements. The resulting array's
+        // offsets are [11, 18, 25] (non-zero start), but value_data still
+        // contains the full original buffer.
+        let sliced = array.slice(1, 2);
+        let args: Vec<ArrayRef> = vec![Arc::new(sliced)];
+        let result = super::initcap::<i32>(&args)?;
+        let result = result.as_any().downcast_ref::<StringArray>().unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result.value(0), "Foo Bar");
+        assert_eq!(result.value(1), "Baz Qux");
         Ok(())
     }
 }
