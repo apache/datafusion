@@ -839,9 +839,35 @@ impl HashJoinExec {
         can_project(&self.schema(), projection.as_deref())?;
         let projection =
             combine_projections(projection.as_ref(), self.projection.as_ref())?;
-        HashJoinExecBuilder::from(self)
-            .with_projection_ref(projection)
-            .build()
+
+        let cache = HashJoinExec::compute_properties(
+            &self.left,
+            &self.right,
+            &self.join_schema,
+            self.join_type,
+            &self.on,
+            self.mode,
+            projection.as_deref(),
+        )?;
+
+        Ok(HashJoinExec {
+            left: Arc::clone(&self.left),
+            right: Arc::clone(&self.right),
+            on: self.on.clone(),
+            filter: self.filter.clone(),
+            join_type: self.join_type,
+            join_schema: Arc::clone(&self.join_schema),
+            left_fut: Arc::clone(&self.left_fut),
+            random_state: self.random_state.clone(),
+            mode: self.mode,
+            metrics: self.metrics.clone(),
+            projection,
+            column_indices: self.column_indices.clone(),
+            null_equality: self.null_equality,
+            null_aware: self.null_aware,
+            cache,
+            dynamic_filter: self.dynamic_filter.clone(),
+        })
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
