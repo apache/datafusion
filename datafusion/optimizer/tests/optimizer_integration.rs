@@ -50,6 +50,7 @@ fn init() {
 fn recursive_cte_with_nested_subquery() -> Result<()> {
     // Covers bailout path in `plan_contains_other_subqueries`, ensuring nested subqueries
     // within recursive CTE branches prevent projection pushdown.
+    // trigger ci
     let sql = r#"
         WITH RECURSIVE numbers(id, level) AS (
             SELECT sub.id, sub.level FROM (
