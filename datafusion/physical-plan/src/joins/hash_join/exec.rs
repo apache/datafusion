@@ -867,6 +867,7 @@ impl HashJoinExec {
             null_aware: self.null_aware,
             cache,
             dynamic_filter: self.dynamic_filter.clone(),
+            fetch: self.fetch,
         })
     }
 
