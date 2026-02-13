@@ -21,7 +21,7 @@ use ahash::RandomState;
 use arrow::array::{
     Array, ArrayRef, ArrowPrimitiveType, DictionaryArray, GenericStringArray, Int32Array,
     Int64Array, ListArray, MapArray, NullBufferBuilder, OffsetSizeTrait, PrimitiveArray,
-    StringViewArray, StructArray, UnionArray, make_array,
+    RunArray, StringViewArray, StructArray, UnionArray, make_array,
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{
@@ -504,7 +504,6 @@ fn dense_union_array(num_rows: usize) -> ArrayRef {
     )
 }
 
-criterion_group!(benches, criterion_benchmark, sliced_array_benchmark);
 fn boolean_array(array_len: usize) -> ArrayRef {
     let mut rng = make_rng();
     Arc::new(
@@ -566,5 +565,5 @@ where
     )
 }
 
-criterion_group!(benches, criterion_benchmark);
+criterion_group!(benches, criterion_benchmark, sliced_array_benchmark);
 criterion_main!(benches);
