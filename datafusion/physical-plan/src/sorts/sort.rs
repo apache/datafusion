@@ -1353,10 +1353,6 @@ impl ExecutionPlan for SortExec {
         Some(self.metrics_set.clone_inner())
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
-    }
-
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         if !self.preserve_partitioning() {
             return self
