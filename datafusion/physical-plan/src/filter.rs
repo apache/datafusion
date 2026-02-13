@@ -494,6 +494,10 @@ impl ExecutionPlan for FilterExec {
         vec![&self.input]
     }
 
+    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        vec![Arc::clone(&self.predicate)]
+    }
+
     fn maintains_input_order(&self) -> Vec<bool> {
         // Tell optimizer this operator doesn't reorder its input
         vec![true]

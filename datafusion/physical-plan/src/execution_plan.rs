@@ -204,6 +204,17 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// joins).
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>>;
 
+    /// Returns all expressions (non-recursively) evaluated by the current
+    /// physical plan node. This does not include expressions in any children.
+    ///
+    /// The returned expressions do not necessarily represent or even contribute
+    /// to the output schema of this node. For example, `FilterExec` returns the
+    /// filter predicate even though the output of a Filter has the same columns
+    /// as the input.
+    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        vec![]
+    }
+
     /// Returns a new `ExecutionPlan` where all existing children were replaced
     /// by the `children`, in order
     fn with_new_children(

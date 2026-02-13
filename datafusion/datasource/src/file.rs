@@ -319,4 +319,33 @@ pub trait FileSource: Send + Sync {
     fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
         None
     }
+
+    /// Returns all physical expressions used by this file source.
+    ///
+    /// This includes:
+    /// - Filter predicates (which may contain dynamic filters)
+    /// - Projection expressions
+    ///
+    /// The default implementation returns filter and projection expressions.
+    /// Implementations can override this to include additional expressions.
+    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        let mut exprs = Vec::new();
+
+        // Add filter expression if present
+        if let Some(filter) = self.filter() {
+            exprs.push(filter);
+        }
+
+        // Add projection expressions if present
+        if let Some(projection) = self.projection() {
+            exprs.extend(
+                projection
+                    .as_ref()
+                    .iter()
+                    .map(|proj_expr| Arc::clone(&proj_expr.expr)),
+            );
+        }
+
+        exprs
+    }
 }

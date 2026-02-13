@@ -307,6 +307,15 @@ impl ExecutionPlan for ProjectionExec {
         vec![&self.input]
     }
 
+    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        self.projector
+            .projection()
+            .as_ref()
+            .iter()
+            .map(|proj_expr| Arc::clone(&proj_expr.expr))
+            .collect()
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,

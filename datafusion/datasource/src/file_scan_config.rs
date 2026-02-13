@@ -923,6 +923,12 @@ impl DataSource for FileScanConfig {
         };
         Some(Arc::new(new_config))
     }
+
+    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        // Return all expressions from the file source (filter, projections, etc.)
+        // This may contain dynamic filters for consumer discovery
+        self.file_source.expressions()
+    }
 }
 
 impl FileScanConfig {

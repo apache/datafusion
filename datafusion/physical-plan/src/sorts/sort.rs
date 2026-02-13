@@ -1225,6 +1225,22 @@ impl ExecutionPlan for SortExec {
         vec![&self.input]
     }
 
+    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        let mut exprs: Vec<Arc<dyn PhysicalExpr>> = self
+            .expr
+            .iter()
+            .map(|sort_expr| Arc::clone(&sort_expr.expr))
+            .collect();
+
+        // Add dynamic filter expression if present (when fetch is Some, TopK mode)
+        if let Some(filter) = &self.filter {
+            let filter_guard = filter.read();
+            exprs.push(filter_guard.expr() as Arc<dyn PhysicalExpr>);
+        }
+
+        exprs
+    }
+
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
         vec![false]
     }

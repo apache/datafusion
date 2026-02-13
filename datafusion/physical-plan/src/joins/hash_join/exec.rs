@@ -1134,6 +1134,28 @@ impl ExecutionPlan for HashJoinExec {
         vec![&self.left, &self.right]
     }
 
+    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        let mut exprs = vec![];
+
+        // Add join key expressions from both sides
+        for (left, right) in &self.on {
+            exprs.push(Arc::clone(left));
+            exprs.push(Arc::clone(right));
+        }
+
+        // Add join filter expressions if present
+        if let Some(filter) = &self.filter {
+            exprs.push(Arc::clone(filter.expression()));
+        }
+
+        // Add dynamic filter expression if present
+        if let Some(df) = &self.dynamic_filter {
+            exprs.push(Arc::clone(&df.filter) as Arc<dyn PhysicalExpr>);
+        }
+
+        exprs
+    }
+
     /// Creates a new HashJoinExec with different children while preserving configuration.
     ///
     /// This method is called during query optimization when the optimizer creates new

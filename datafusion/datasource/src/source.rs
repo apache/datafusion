@@ -211,6 +211,17 @@ pub trait DataSource: Send + Sync + Debug {
     fn with_preserve_order(&self, _preserve_order: bool) -> Option<Arc<dyn DataSource>> {
         None
     }
+
+    /// Returns all physical expressions used by this data source.
+    ///
+    /// This includes filter predicates (which may contain dynamic filters) and any
+    /// other expressions used during data scanning.
+    ///
+    /// The default implementation returns an empty vector. Implementations should
+    /// override this to return their expressions.
+    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        vec![]
+    }
 }
 
 /// [`ExecutionPlan`] that reads one or more files
@@ -260,6 +271,11 @@ impl ExecutionPlan for DataSourceExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         Vec::new()
+    }
+
+    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        // Delegate to the underlying data source
+        self.data_source.expressions()
     }
 
     fn with_new_children(

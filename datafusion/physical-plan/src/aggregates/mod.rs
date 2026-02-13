@@ -1371,6 +1371,30 @@ impl ExecutionPlan for AggregateExec {
         vec![&self.input]
     }
 
+    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        let mut exprs = Vec::new();
+
+        // Add group by expressions
+        exprs.extend(self.group_by.input_exprs());
+
+        // Add aggregate expressions
+        for aggr in self.aggr_expr.iter() {
+            exprs.extend(aggr.expressions());
+        }
+
+        // Add filter expressions (FILTER WHERE clauses)
+        for filter in self.filter_expr.iter().flatten() {
+            exprs.push(Arc::clone(filter));
+        }
+
+        // Add dynamic filter expression if present
+        if let Some(dyn_filter) = &self.dynamic_filter {
+            exprs.push(Arc::clone(&dyn_filter.filter) as Arc<dyn PhysicalExpr>);
+        }
+
+        exprs
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
