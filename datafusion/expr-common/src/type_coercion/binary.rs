@@ -470,7 +470,9 @@ fn bitwise_coercion(left_type: &DataType, right_type: &DataType) -> Option<DataT
         return None;
     }
 
-    if left_type == right_type {
+    let is_integer_dictionary =
+        matches!(left_type, Dictionary(_, value_type) if value_type.is_integer());
+    if left_type == right_type && (left_type.is_integer() || is_integer_dictionary) {
         return Some(left_type.clone());
     }
 
@@ -1793,9 +1795,10 @@ fn binary_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType>
 
 /// Coercion rules for like operations.
 /// This is a union of string coercion rules, dictionary coercion rules, and REE coercion rules
+/// Note: list_coercion is intentionally NOT included here because LIKE is a string pattern
+/// matching operation and is not supported for nested types (List, Struct, etc.)
 pub fn like_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     string_coercion(lhs_type, rhs_type)
-        .or_else(|| list_coercion(lhs_type, rhs_type))
         .or_else(|| binary_to_string_coercion(lhs_type, rhs_type))
         .or_else(|| dictionary_comparison_coercion(lhs_type, rhs_type, false))
         .or_else(|| ree_comparison_coercion(lhs_type, rhs_type, false))

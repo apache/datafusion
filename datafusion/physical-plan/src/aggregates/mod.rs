@@ -1147,7 +1147,7 @@ impl AggregateExec {
             } else if fun_name.eq_ignore_ascii_case("max") {
                 DynamicFilterAggregateType::Max
             } else {
-                continue;
+                return;
             };
 
             // 2. arg should be only 1 column reference
@@ -1401,10 +1401,6 @@ impl ExecutionPlan for AggregateExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
@@ -2485,10 +2481,6 @@ mod tests {
             };
 
             Ok(Box::pin(stream))
-        }
-
-        fn statistics(&self) -> Result<Statistics> {
-            self.partition_statistics(None)
         }
 
         fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
