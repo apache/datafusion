@@ -87,9 +87,17 @@ impl arrow_buffer::MemoryPool for ArrowMemoryPool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory_pool::UnboundedMemoryPool;
+    use crate::memory_pool::{GreedyMemoryPool, UnboundedMemoryPool};
     use arrow::array::{Array, Int32Array};
     use arrow_buffer::MemoryPool;
+
+    // Until https://github.com/apache/arrow-rs/pull/8918 lands, we need to iterate all
+    // buffers in the array. Change once the PR is released.
+    fn claim_array(array: &dyn Array, pool: &dyn MemoryPool) {
+        for buffer in array.to_data().buffers() {
+            buffer.claim(pool);
+        }
+    }
 
     #[test]
     pub fn can_claim_array() {
@@ -97,14 +105,6 @@ mod tests {
 
         let consumer = MemoryConsumer::new("arrow");
         let arrow_pool = ArrowMemoryPool::new(pool, consumer);
-
-        // Until https://github.com/apache/arrow-rs/pull/8918 lands, we need to iterate all the
-        // buffer in the array. Change once the PR is released.
-        fn claim_array(array: &dyn Array, pool: &dyn MemoryPool) {
-            for buffer in array.to_data().buffers() {
-                buffer.claim(pool);
-            }
-        }
 
         let array = Int32Array::from(vec![1, 2, 3, 4, 5]);
         claim_array(&array, &arrow_pool);
@@ -117,5 +117,26 @@ mod tests {
         claim_array(&slice, &arrow_pool);
 
         assert_eq!(arrow_pool.used(), array.get_buffer_memory_size());
+    }
+
+    #[test]
+    pub fn can_claim_array_with_finite_limit() {
+        let pool_capacity = 1024;
+        let pool = Arc::new(GreedyMemoryPool::new(pool_capacity));
+
+        let consumer = MemoryConsumer::new("arrow");
+        let arrow_pool = ArrowMemoryPool::new(pool, consumer);
+
+        assert_eq!(arrow_pool.capacity(), pool_capacity);
+        assert_eq!(arrow_pool.available(), pool_capacity as isize);
+
+        let array = Int32Array::from(vec![1, 2, 3, 4, 5]);
+        claim_array(&array, &arrow_pool);
+
+        assert_eq!(arrow_pool.used(), array.get_buffer_memory_size());
+        assert_eq!(
+            arrow_pool.available(),
+            (pool_capacity - array.get_buffer_memory_size()) as isize
+        );
     }
 }
