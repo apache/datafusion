@@ -960,21 +960,12 @@ impl FileScanConfig {
         self.output_ordering
             .iter()
             .filter(|ordering| {
-                self.file_groups.iter().all(|group| {
-                    if group.len() <= 1 {
-                        return true; // single-file groups are trivially sorted
-                    }
-                    // TODO: should we cache MinMaxStatistics per file group?
-                    match MinMaxStatistics::new_from_files(
-                        ordering,
-                        schema,
-                        None, // no projection remapping needed at table-schema level
-                        group.iter(),
-                    ) {
-                        Ok(stats) => stats.is_sorted(),
-                        Err(_) => false, // can't prove sorted → reject
-                    }
-                })
+                is_ordering_valid_for_file_groups(
+                    &self.file_groups,
+                    ordering,
+                    schema,
+                    None, // no projection remapping needed at table-schema level
+                )
             })
             .cloned()
             .collect()
@@ -1354,6 +1345,33 @@ fn ordered_column_indices_from_projection(
         .collect::<Option<Vec<usize>>>()
 }
 
+/// Check whether a given ordering is valid for all file groups by verifying
+/// that files within each group are sorted according to their min/max statistics.
+///
+/// For single-file (or empty) groups, the ordering is trivially valid.
+/// For multi-file groups, we check that the min/max statistics for the sort
+/// columns are in order and non-overlapping (or touching at boundaries).
+///
+/// `projection` maps projected column indices back to table-schema indices
+/// when validating after projection; pass `None` when validating at
+/// table-schema level.
+fn is_ordering_valid_for_file_groups(
+    file_groups: &[FileGroup],
+    ordering: &LexOrdering,
+    schema: &SchemaRef,
+    projection: Option<&[usize]>,
+) -> bool {
+    file_groups.iter().all(|group| {
+        if group.len() <= 1 {
+            return true; // single-file groups are trivially sorted
+        }
+        match MinMaxStatistics::new_from_files(ordering, schema, projection, group.iter()) {
+            Ok(stats) => stats.is_sorted(),
+            Err(_) => false, // can't prove sorted → reject
+        }
+    })
+}
+
 /// The various listing tables does not attempt to read all files
 /// concurrently, instead they will read files in sequence within a
 /// partition.  This is an important property as it allows plans to
@@ -1420,41 +1438,30 @@ fn get_projected_output_ordering(
     let projected_orderings =
         project_orderings(&base_config.output_ordering, projected_schema);
 
+    let indices = base_config
+        .file_source
+        .projection()
+        .as_ref()
+        .map(|p| ordered_column_indices_from_projection(p));
+
     let mut all_orderings = vec![];
     for new_ordering in projected_orderings {
-        // Check if any file groups are not sorted
-        if base_config.file_groups.iter().any(|group| {
-            if group.len() <= 1 {
-                // File groups with <= 1 files are always sorted
-                return false;
-            }
-
-            let Some(indices) = base_config
-                .file_source
-                .projection()
-                .as_ref()
-                .map(|p| ordered_column_indices_from_projection(p))
-            else {
-                // Can't determine if ordered without a simple projection
-                return true;
-            };
-
-            let statistics = match MinMaxStatistics::new_from_files(
+        let is_valid = match &indices {
+            Some(Some(indices)) => is_ordering_valid_for_file_groups(
+                &base_config.file_groups,
                 &new_ordering,
                 projected_schema,
-                indices.as_deref(),
-                group.iter(),
-            ) {
-                Ok(statistics) => statistics,
-                Err(e) => {
-                    log::trace!("Error fetching statistics for file group: {e}");
-                    // we can't prove that it's ordered, so we have to reject it
-                    return true;
-                }
-            };
+                Some(indices.as_slice()),
+            ),
+            _ => {
+                // Can't determine projection column indices for statistics
+                // check. Still valid if all file groups have at most one
+                // file (single-file groups are trivially sorted).
+                base_config.file_groups.iter().all(|g| g.len() <= 1)
+            }
+        };
 
-            !statistics.is_sorted()
-        }) {
+        if !is_valid {
             debug!(
                 "Skipping specified output ordering {:?}. \
                 Some file groups couldn't be determined to be sorted: {:?}",
