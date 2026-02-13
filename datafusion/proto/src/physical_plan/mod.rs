@@ -1354,7 +1354,8 @@ impl protobuf::PhysicalPlanNode {
         } else {
             None
         };
-        Ok(Arc::new(HashJoinExec::try_new(
+
+        let mut hash_join = HashJoinExec::try_new(
             left,
             right,
             on,
@@ -1364,7 +1365,26 @@ impl protobuf::PhysicalPlanNode {
             partition_mode,
             null_equality.into(),
             hashjoin.null_aware,
-        )?))
+        )?;
+
+        // Deserialize dynamic_filter if present
+        if let Some(dynamic_filter_proto) = &hashjoin.dynamic_filter {
+            // We need to create a schema for deserializing the dynamic filter expression
+            // The dynamic filter applies to the right (probe) side
+            let right_schema = hash_join.right().schema();
+
+            let dynamic_filter_expr = proto_converter.proto_to_physical_expr(
+                dynamic_filter_proto,
+                ctx,
+                right_schema.as_ref(),
+                codec,
+            )?;
+
+            // Set the dynamic filter on the hash join
+            hash_join = hash_join.with_dynamic_filter(dynamic_filter_expr)?;
+        }
+
+        Ok(Arc::new(hash_join))
     }
 
     fn try_into_symmetric_hash_join_physical_plan(
@@ -2381,6 +2401,16 @@ impl protobuf::PhysicalPlanNode {
             PartitionMode::Auto => protobuf::PartitionMode::Auto,
         };
 
+        // Serialize dynamic_filter if present
+        let dynamic_filter = exec
+            .dynamic_filter_for_test()
+            .map(|filter| {
+                // Convert Arc<DynamicFilterPhysicalExpr> to Arc<dyn PhysicalExpr>
+                let expr: Arc<dyn PhysicalExpr> = filter.clone();
+                proto_converter.physical_expr_to_proto(&expr, codec)
+            })
+            .transpose()?;
+
         Ok(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::HashJoin(Box::new(
                 protobuf::HashJoinExecNode {
@@ -2395,6 +2425,7 @@ impl protobuf::PhysicalPlanNode {
                         v.iter().map(|x| *x as u32).collect::<Vec<u32>>()
                     }),
                     null_aware: exec.null_aware,
+                    dynamic_filter,
                 },
             ))),
         })

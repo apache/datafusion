@@ -309,6 +309,51 @@ fn roundtrip_hash_join() -> Result<()> {
 }
 
 #[test]
+fn roundtrip_hash_join_with_dynamic_filter() -> Result<()> {
+    use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
+
+    let field_a = Field::new("col", DataType::Int64, false);
+    let schema_left = Schema::new(vec![field_a.clone()]);
+    let schema_right = Schema::new(vec![field_a]);
+    let on = vec![(
+        Arc::new(Column::new("col", schema_left.index_of("col")?)) as _,
+        Arc::new(Column::new("col", schema_right.index_of("col")?)) as _,
+    )];
+
+    let schema_left = Arc::new(schema_left);
+    let schema_right = Arc::new(schema_right);
+
+    // Create a dynamic filter that would filter the right (probe) side
+    let right_col_expr = Arc::new(Column::new("col", 0)) as Arc<dyn PhysicalExpr>;
+    let placeholder = Arc::new(Literal::new(ScalarValue::Boolean(Some(true))));
+    let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
+        vec![right_col_expr],
+        placeholder,
+    )) as Arc<dyn PhysicalExpr>;
+
+    // Create a hash join with the dynamic filter
+    let hash_join = HashJoinExec::try_new(
+        Arc::new(EmptyExec::new(schema_left.clone())),
+        Arc::new(EmptyExec::new(schema_right.clone())),
+        on.clone(),
+        None,
+        &JoinType::Inner,
+        None,
+        PartitionMode::CollectLeft,
+        NullEquality::NullEqualsNothing,
+        false,
+    )?;
+
+    // Set the dynamic filter
+    let hash_join = hash_join.with_dynamic_filter(dynamic_filter)?;
+
+    // Test round-trip serialization
+    roundtrip_test(Arc::new(hash_join))?;
+
+    Ok(())
+}
+
+#[test]
 fn roundtrip_nested_loop_join() -> Result<()> {
     let field_a = Field::new("col", DataType::Int64, false);
     let schema_left = Schema::new(vec![field_a.clone()]);

@@ -1706,6 +1706,8 @@ pub struct HashJoinExecNode {
     pub projection: ::prost::alloc::vec::Vec<u32>,
     #[prost(bool, tag = "10")]
     pub null_aware: bool,
+    #[prost(message, optional, tag = "11")]
+    pub dynamic_filter: ::core::option::Option<PhysicalExprNode>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SymmetricHashJoinExecNode {
