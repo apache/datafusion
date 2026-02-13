@@ -860,107 +860,111 @@ example, to configure <code class="docutils literal notranslate"><span class="pr
 <td><p>true</p></td>
 <td><p>Enable sort pushdown optimization. When enabled, attempts to push sort requirements down to data sources that can natively handle them (e.g., by reversing file/row group read order). Returns <strong>inexact ordering</strong>: Sort operator is kept for correctness, but optimized input enables early termination for TopK queries (ORDER BY … LIMIT N), providing significant speedup. Memory: No additional overhead (only changes read order). Future: Will add option to detect perfectly sorted data and eliminate Sort completely. Default: true</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.explain.logical_plan_only</p></td>
+<tr class="row-even"><td><p>datafusion.optimizer.enable_leaf_expression_pushdown</p></td>
+<td><p>true</p></td>
+<td><p>When set to true, the optimizer will extract leaf expressions (such as <code class="docutils literal notranslate"><span class="pre">get_field</span></code>) from filter/sort/join nodes into projections closer to the leaf table scans, and push those projections down towards the leaf nodes.</p></td>
+</tr>
+<tr class="row-odd"><td><p>datafusion.explain.logical_plan_only</p></td>
 <td><p>false</p></td>
 <td><p>When set to true, the explain statement will only print logical plans</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.explain.physical_plan_only</p></td>
+<tr class="row-even"><td><p>datafusion.explain.physical_plan_only</p></td>
 <td><p>false</p></td>
 <td><p>When set to true, the explain statement will only print physical plans</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.explain.show_statistics</p></td>
+<tr class="row-odd"><td><p>datafusion.explain.show_statistics</p></td>
 <td><p>false</p></td>
 <td><p>When set to true, the explain statement will print operator statistics for physical plans</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.explain.show_sizes</p></td>
+<tr class="row-even"><td><p>datafusion.explain.show_sizes</p></td>
 <td><p>true</p></td>
 <td><p>When set to true, the explain statement will print the partition sizes</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.explain.show_schema</p></td>
+<tr class="row-odd"><td><p>datafusion.explain.show_schema</p></td>
 <td><p>false</p></td>
 <td><p>When set to true, the explain statement will print schema information</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.explain.format</p></td>
+<tr class="row-even"><td><p>datafusion.explain.format</p></td>
 <td><p>indent</p></td>
 <td><p>Display format of explain. Default is “indent”. When set to “tree”, it will print the plan in a tree-rendered format.</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.explain.tree_maximum_render_width</p></td>
+<tr class="row-odd"><td><p>datafusion.explain.tree_maximum_render_width</p></td>
 <td><p>240</p></td>
 <td><p>(format=tree only) Maximum total width of the rendered tree. When set to 0, the tree will have no width limit.</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.explain.analyze_level</p></td>
+<tr class="row-even"><td><p>datafusion.explain.analyze_level</p></td>
 <td><p>dev</p></td>
 <td><p>Verbosity level for “EXPLAIN ANALYZE”. Default is “dev” “summary” shows common metrics for high-level insights. “dev” provides deep operator-level introspection for developers.</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.sql_parser.parse_float_as_decimal</p></td>
+<tr class="row-odd"><td><p>datafusion.sql_parser.parse_float_as_decimal</p></td>
 <td><p>false</p></td>
 <td><p>When set to true, SQL parser will parse float as decimal type</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.sql_parser.enable_ident_normalization</p></td>
+<tr class="row-even"><td><p>datafusion.sql_parser.enable_ident_normalization</p></td>
 <td><p>true</p></td>
 <td><p>When set to true, SQL parser will normalize ident (convert ident to lowercase when not quoted)</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.sql_parser.enable_options_value_normalization</p></td>
+<tr class="row-odd"><td><p>datafusion.sql_parser.enable_options_value_normalization</p></td>
 <td><p>false</p></td>
 <td><p>When set to true, SQL parser will normalize options value (convert value to lowercase). Note that this option is ignored and will be removed in the future. All case-insensitive values are normalized automatically.</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.sql_parser.dialect</p></td>
+<tr class="row-even"><td><p>datafusion.sql_parser.dialect</p></td>
 <td><p>generic</p></td>
 <td><p>Configure the SQL dialect used by DataFusion’s parser; supported values include: Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, Ansi, DuckDB and Databricks.</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.sql_parser.support_varchar_with_length</p></td>
+<tr class="row-odd"><td><p>datafusion.sql_parser.support_varchar_with_length</p></td>
 <td><p>true</p></td>
 <td><p>If true, permit lengths for <code class="docutils literal notranslate"><span class="pre">VARCHAR</span></code> such as <code class="docutils literal notranslate"><span class="pre">VARCHAR(20)</span></code>, but ignore the length. If false, error if a <code class="docutils literal notranslate"><span class="pre">VARCHAR</span></code> with a length is specified. The Arrow type system does not have a notion of maximum string length and thus DataFusion can not enforce such limits.</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.sql_parser.map_string_types_to_utf8view</p></td>
+<tr class="row-even"><td><p>datafusion.sql_parser.map_string_types_to_utf8view</p></td>
 <td><p>true</p></td>
 <td><p>If true, string types (VARCHAR, CHAR, Text, and String) are mapped to <code class="docutils literal notranslate"><span class="pre">Utf8View</span></code> during SQL planning. If false, they are mapped to <code class="docutils literal notranslate"><span class="pre">Utf8</span></code>. Default is true.</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.sql_parser.collect_spans</p></td>
+<tr class="row-odd"><td><p>datafusion.sql_parser.collect_spans</p></td>
 <td><p>false</p></td>
 <td><p>When set to true, the source locations relative to the original SQL query (i.e. <a class="reference external" href="https://docs.rs/sqlparser/latest/sqlparser/tokenizer/struct.Span.html"><code class="docutils literal notranslate"><span class="pre">Span</span></code></a>) will be collected and recorded in the logical plan nodes.</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.sql_parser.recursion_limit</p></td>
+<tr class="row-even"><td><p>datafusion.sql_parser.recursion_limit</p></td>
 <td><p>50</p></td>
 <td><p>Specifies the recursion depth limit when parsing complex SQL Queries</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.sql_parser.default_null_ordering</p></td>
+<tr class="row-odd"><td><p>datafusion.sql_parser.default_null_ordering</p></td>
 <td><p>nulls_max</p></td>
 <td><p>Specifies the default null ordering for query results. There are 4 options: - <code class="docutils literal notranslate"><span class="pre">nulls_max</span></code>: Nulls appear last in ascending order. - <code class="docutils literal notranslate"><span class="pre">nulls_min</span></code>: Nulls appear first in ascending order. - <code class="docutils literal notranslate"><span class="pre">nulls_first</span></code>: Nulls always be first in any order. - <code class="docutils literal notranslate"><span class="pre">nulls_last</span></code>: Nulls always be last in any order. By default, <code class="docutils literal notranslate"><span class="pre">nulls_max</span></code> is used to follow Postgres’s behavior. postgres rule: <a class="reference external" href="https://www.postgresql.org/docs/current/queries-order.html">https://www.postgresql.org/docs/current/queries-order.html</a></p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.format.safe</p></td>
+<tr class="row-even"><td><p>datafusion.format.safe</p></td>
 <td><p>true</p></td>
 <td><p>If set to <code class="docutils literal notranslate"><span class="pre">true</span></code> any formatting errors will be written to the output instead of being converted into a [<code class="docutils literal notranslate"><span class="pre">std::fmt::Error</span></code>]</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.format.null</p></td>
+<tr class="row-odd"><td><p>datafusion.format.null</p></td>
 <td><p></p></td>
 <td><p>Format string for nulls</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.format.date_format</p></td>
+<tr class="row-even"><td><p>datafusion.format.date_format</p></td>
 <td><p>%Y-%m-%d</p></td>
 <td><p>Date format for date arrays</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.format.datetime_format</p></td>
+<tr class="row-odd"><td><p>datafusion.format.datetime_format</p></td>
 <td><p>%Y-%m-%dT%H:%M:%S%.f</p></td>
 <td><p>Format for DateTime arrays</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.format.timestamp_format</p></td>
+<tr class="row-even"><td><p>datafusion.format.timestamp_format</p></td>
 <td><p>%Y-%m-%dT%H:%M:%S%.f</p></td>
 <td><p>Timestamp format for timestamp arrays</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.format.timestamp_tz_format</p></td>
+<tr class="row-odd"><td><p>datafusion.format.timestamp_tz_format</p></td>
 <td><p>NULL</p></td>
 <td><p>Timestamp format for timestamp with timezone arrays. When <code class="docutils literal notranslate"><span class="pre">None</span></code>, ISO 8601 format is used.</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.format.time_format</p></td>
+<tr class="row-even"><td><p>datafusion.format.time_format</p></td>
 <td><p>%H:%M:%S%.f</p></td>
 <td><p>Time format for time arrays</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.format.duration_format</p></td>
+<tr class="row-odd"><td><p>datafusion.format.duration_format</p></td>
 <td><p>pretty</p></td>
 <td><p>Duration format. Can be either <code class="docutils literal notranslate"><span class="pre">&quot;pretty&quot;</span></code> or <code class="docutils literal notranslate"><span class="pre">&quot;ISO8601&quot;</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.format.types_info</p></td>
+<tr class="row-even"><td><p>datafusion.format.types_info</p></td>
 <td><p>false</p></td>
 <td><p>Show types in visual representation batches</p></td>
 </tr>
