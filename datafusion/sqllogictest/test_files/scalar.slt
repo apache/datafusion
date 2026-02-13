@@ -765,11 +765,11 @@ select nanvl(null, 64);
 ----
 NULL
 
-# nanvl scalar nulls #1
+# nanvl scalar nulls #1 - x is not NaN, so return x even if y is NULL
 query R rowsort
 select nanvl(2, null);
 ----
-NULL
+2
 
 # nanvl scalar nulls #2
 query R rowsort
