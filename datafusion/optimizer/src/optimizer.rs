@@ -93,7 +93,7 @@ pub trait OptimizerRule: Debug {
     ///
     /// # Notes for implementations:
     ///
-    /// # Return the same plan if no changes were made
+    /// ## Return the same plan if no changes were made
     ///
     /// If there are no suitable transformations for the input plan,
     /// the optimizer should simply return it unmodified.
@@ -104,16 +104,19 @@ pub trait OptimizerRule: Debug {
     ///
     /// ## Matching on functions
     ///
-    /// The rule should avoid function specific transformations, and instead use
-    /// methods on [`ScalarUDFImpl`], [`AggregateUDFImpl`]. Specifically the
+    /// The rule should avoid function-specific transformations, and instead use
+    /// methods on [`ScalarUDFImpl`] and [`AggregateUDFImpl`]. Specifically, the
     /// rule should not check function names as functions can be overridden, and
     /// may not have the same semantics as the functions provided with
     /// DataFusion.
     ///
-    /// For example if a rule rewrites a function based on the check
-    /// `func.name() == 'sum'`, if rewrite the plan incorrectly  if the
-    /// registered `sum` function has different behavior / semantics (for
-    /// example the sum from the datafusion-spark crate)
+    /// For example, if a rule rewrites a function based on the check
+    /// `func.name() == "sum"`, it may rewrite the plan incorrectly if the
+    /// registered `sum` function has different semantics (for example, the
+    /// `sum` function from the `datafusion-spark` crate).
+    ///
+    /// [`ScalarUDFImpl`]: datafusion_expr::ScalarUDFImpl
+    /// [`AggregateUDFImpl`]: datafusion_expr::ScalarUDFImpl
     fn rewrite(
         &self,
         _plan: LogicalPlan,
