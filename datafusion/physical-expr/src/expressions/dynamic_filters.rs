@@ -69,6 +69,10 @@ pub struct DynamicFilterPhysicalExpr {
     inner: Arc<RwLock<Inner>>,
     /// Broadcasts filter state (updates and completion) to all waiters.
     state_watch: watch::Sender<FilterState>,
+    /// Cached result of `remap_children` to avoid redundant tree walks in `current()`.
+    /// Stores (source_expr_from_inner, remapped_result). Invalidated when the source
+    /// pointer changes (i.e., after `update()` replaces the inner expression).
+    cached_current: RwLock<Option<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>>,
     /// For testing purposes track the data type and nullability to make sure they don't change.
     /// If they do, there's a bug in the implementation.
     /// But this can have overhead in production, so it's only included in our tests.
@@ -175,6 +179,7 @@ impl DynamicFilterPhysicalExpr {
             remapped_children: None, // Initially no remapped children
             inner: Arc::new(RwLock::new(Inner::new(inner))),
             state_watch,
+            cached_current: RwLock::new(None),
             data_type: Arc::new(RwLock::new(None)),
             nullable: Arc::new(RwLock::new(None)),
         }
@@ -218,8 +223,31 @@ impl DynamicFilterPhysicalExpr {
     /// This will return the current expression with any children
     /// remapped to match calls to [`PhysicalExpr::with_new_children`].
     pub fn current(&self) -> Result<Arc<dyn PhysicalExpr>> {
-        let expr = Arc::clone(self.inner.read().expr());
-        Self::remap_children(&self.children, self.remapped_children.as_ref(), expr)
+        let source = Arc::clone(self.inner.read().expr());
+
+        // Fast path: no remapping needed
+        if self.remapped_children.is_none() {
+            return Ok(source);
+        }
+
+        // Check cache: if source hasn't changed, return cached remap
+        {
+            let cache = self.cached_current.read();
+            if let Some((cached_source, cached_result)) = cache.as_ref() {
+                if Arc::ptr_eq(cached_source, &source) {
+                    return Ok(Arc::clone(cached_result));
+                }
+            }
+        }
+
+        // Cache miss: recompute and cache
+        let remapped = Self::remap_children(
+            &self.children,
+            self.remapped_children.as_ref(),
+            Arc::clone(&source),
+        )?;
+        *self.cached_current.write() = Some((source, Arc::clone(&remapped)));
+        Ok(remapped)
     }
 
     /// Update the current expression and notify all waiters.
@@ -370,6 +398,7 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
             remapped_children: Some(children),
             inner: Arc::clone(&self.inner),
             state_watch: self.state_watch.clone(),
+            cached_current: RwLock::new(None),
             data_type: Arc::clone(&self.data_type),
             nullable: Arc::clone(&self.nullable),
         }))
