@@ -70,14 +70,22 @@ pub struct DynamicFilterPhysicalExpr {
     /// Broadcasts filter state (updates and completion) to all waiters.
     state_watch: watch::Sender<FilterState>,
     /// Cached result of `remap_children` to avoid redundant tree walks in `current()`.
-    /// Stores (source_expr_from_inner, remapped_result). Invalidated when the source
-    /// pointer changes (i.e., after `update()` replaces the inner expression).
-    cached_current: RwLock<Option<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>>,
+    /// Invalidated when the source pointer changes (i.e., after `update()` replaces the inner expression).
+    cached_current: RwLock<Option<CachedCurrent>>,
     /// For testing purposes track the data type and nullability to make sure they don't change.
     /// If they do, there's a bug in the implementation.
     /// But this can have overhead in production, so it's only included in our tests.
     data_type: Arc<RwLock<Option<DataType>>>,
     nullable: Arc<RwLock<Option<bool>>>,
+}
+
+/// Cached result of remapping children in [`DynamicFilterPhysicalExpr::current`].
+#[derive(Debug)]
+struct CachedCurrent {
+    /// The source expression pointer used as the cache key.
+    source: Arc<dyn PhysicalExpr>,
+    /// The remapped result corresponding to `source`.
+    remapped: Arc<dyn PhysicalExpr>,
 }
 
 #[derive(Debug)]
@@ -233,10 +241,10 @@ impl DynamicFilterPhysicalExpr {
         // Check cache: if source hasn't changed, return cached remap
         {
             let cache = self.cached_current.read();
-            if let Some((cached_source, cached_result)) = cache.as_ref() {
-                if Arc::ptr_eq(cached_source, &source) {
-                    return Ok(Arc::clone(cached_result));
-                }
+            if let Some(cached) = cache.as_ref()
+                && Arc::ptr_eq(&cached.source, &source)
+            {
+                return Ok(Arc::clone(&cached.remapped));
             }
         }
 
@@ -246,7 +254,10 @@ impl DynamicFilterPhysicalExpr {
             self.remapped_children.as_ref(),
             Arc::clone(&source),
         )?;
-        *self.cached_current.write() = Some((source, Arc::clone(&remapped)));
+        *self.cached_current.write() = Some(CachedCurrent {
+            source,
+            remapped: Arc::clone(&remapped),
+        });
         Ok(remapped)
     }
 
