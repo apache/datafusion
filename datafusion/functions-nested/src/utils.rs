@@ -22,7 +22,7 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field, Fields};
 
 use arrow::array::{
-    Array, ArrayRef, BooleanArray, GenericListArray, OffsetSizeTrait, Scalar, UInt32Array,
+    Array, ArrayRef, BooleanArray, GenericListArray, OffsetSizeTrait, Scalar,
 };
 use arrow::buffer::OffsetBuffer;
 use datafusion_common::cast::{
@@ -161,8 +161,7 @@ pub(crate) fn compare_element_to_list(
         );
     }
 
-    let indices = UInt32Array::from(vec![row_index as u32]);
-    let element_array_row = arrow::compute::take(element_array, &indices, None)?;
+    let element_array_row = element_array.slice(row_index, 1);
 
     // Compute all positions in list_row_array (that is itself an
     // array) that are equal to `from_array_row`
