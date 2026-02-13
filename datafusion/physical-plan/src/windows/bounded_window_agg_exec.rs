@@ -312,6 +312,14 @@ impl ExecutionPlan for BoundedWindowAggExec {
         vec![&self.input]
     }
 
+    fn expressions(&self) -> Vec<Arc<dyn datafusion_physical_expr::PhysicalExpr>> {
+        // Collect expressions from all window functions
+        self.window_expr
+            .iter()
+            .flat_map(|window_expr| window_expr.expressions())
+            .collect()
+    }
+
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
         let partition_bys = self.window_expr()[0].partition_by();
         let order_keys = self.window_expr()[0].order_by();

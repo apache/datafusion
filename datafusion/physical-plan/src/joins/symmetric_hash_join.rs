@@ -449,6 +449,20 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         vec![&self.left, &self.right]
     }
 
+    fn expressions(&self) -> Vec<Arc<dyn crate::PhysicalExpr>> {
+        let mut exprs = vec![];
+        // Add join keys from both sides
+        for (left, right) in &self.on {
+            exprs.push(Arc::clone(left));
+            exprs.push(Arc::clone(right));
+        }
+        // Add join filter expressions if present
+        if let Some(filter) = &self.filter {
+            exprs.push(Arc::clone(filter.expression()));
+        }
+        exprs
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,

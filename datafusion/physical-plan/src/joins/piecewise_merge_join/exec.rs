@@ -485,6 +485,11 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
         vec![&self.buffered, &self.streamed]
     }
 
+    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        // Return the two expressions being compared in the range predicate
+        vec![Arc::clone(&self.on.0), Arc::clone(&self.on.1)]
+    }
+
     fn required_input_distribution(&self) -> Vec<Distribution> {
         vec![
             Distribution::SinglePartition,

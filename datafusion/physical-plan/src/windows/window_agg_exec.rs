@@ -214,6 +214,14 @@ impl ExecutionPlan for WindowAggExec {
         vec![&self.input]
     }
 
+    fn expressions(&self) -> Vec<Arc<dyn crate::PhysicalExpr>> {
+        // Collect expressions from all window functions
+        self.window_expr
+            .iter()
+            .flat_map(|window_expr| window_expr.expressions())
+            .collect()
+    }
+
     fn maintains_input_order(&self) -> Vec<bool> {
         vec![true]
     }

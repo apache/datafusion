@@ -535,6 +535,15 @@ impl ExecutionPlan for NestedLoopJoinExec {
         vec![&self.left, &self.right]
     }
 
+    fn expressions(&self) -> Vec<Arc<dyn crate::PhysicalExpr>> {
+        let mut exprs = vec![];
+        // Add join filter expressions if present
+        if let Some(filter) = &self.filter {
+            exprs.push(Arc::clone(filter.expression()));
+        }
+        exprs
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
