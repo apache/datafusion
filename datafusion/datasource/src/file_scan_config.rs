@@ -1365,7 +1365,8 @@ fn is_ordering_valid_for_file_groups(
         if group.len() <= 1 {
             return true; // single-file groups are trivially sorted
         }
-        match MinMaxStatistics::new_from_files(ordering, schema, projection, group.iter()) {
+        match MinMaxStatistics::new_from_files(ordering, schema, projection, group.iter())
+        {
             Ok(stats) => stats.is_sorted(),
             Err(_) => false, // can't prove sorted → reject
         }
