@@ -73,7 +73,7 @@ mod config_field {
     #[test]
     fn test_macro() {
         #[derive(Debug)]
-        #[allow(dead_code)]
+        #[expect(dead_code)]
         struct E;
 
         impl std::fmt::Display for E {
@@ -84,7 +84,7 @@ mod config_field {
 
         impl std::error::Error for E {}
 
-        #[allow(dead_code)]
+        #[expect(dead_code)]
         #[derive(Default)]
         struct S;
 

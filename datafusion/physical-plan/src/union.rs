@@ -36,7 +36,11 @@ use crate::execution_plan::{
     InvariantLevel, boundedness_from_children, check_default_invariants,
     emission_type_from_children,
 };
-use crate::filter_pushdown::{FilterDescription, FilterPushdownPhase};
+use crate::filter::FilterExec;
+use crate::filter_pushdown::{
+    ChildPushdownResult, FilterDescription, FilterPushdownPhase,
+    FilterPushdownPropagation, PushedDown,
+};
 use crate::metrics::BaselineMetrics;
 use crate::projection::{ProjectionExec, make_with_child};
 use crate::stream::ObservedStream;
@@ -49,7 +53,9 @@ use datafusion_common::{
     Result, assert_or_internal_err, exec_err, internal_datafusion_err,
 };
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr, calculate_union};
+use datafusion_physical_expr::{
+    EquivalenceProperties, PhysicalExpr, calculate_union, conjunction,
+};
 
 use futures::Stream;
 use itertools::Itertools;
@@ -370,6 +376,83 @@ impl ExecutionPlan for UnionExec {
     ) -> Result<FilterDescription> {
         FilterDescription::from_children(parent_filters, &self.children())
     }
+
+    fn handle_child_pushdown_result(
+        &self,
+        phase: FilterPushdownPhase,
+        child_pushdown_result: ChildPushdownResult,
+        _config: &ConfigOptions,
+    ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+        // Pre phase: handle heterogeneous pushdown by wrapping individual
+        // children with FilterExec and reporting all filters as handled.
+        // Post phase: use default behavior to let the filter creator decide how to handle
+        // filters that weren't fully pushed down.
+        if !matches!(phase, FilterPushdownPhase::Pre) {
+            return Ok(FilterPushdownPropagation::if_all(child_pushdown_result));
+        }
+
+        // UnionExec needs specialized filter pushdown handling when children have
+        // heterogeneous pushdown support. Without this, when some children support
+        // pushdown and others don't, the default behavior would leave FilterExec
+        // above UnionExec, re-applying filters to outputs of all children—including
+        // those that already applied the filters via pushdown. This specialized
+        // implementation adds FilterExec only to children that don't support
+        // pushdown, avoiding redundant filtering and improving performance.
+        //
+        // Example: Given Child1 (no pushdown support) and Child2 (has pushdown support)
+        //   Default behavior:          This implementation:
+        //   FilterExec                 UnionExec
+        //     UnionExec                  FilterExec
+        //       Child1                     Child1
+        //       Child2(filter)           Child2(filter)
+
+        // Collect unsupported filters for each child
+        let mut unsupported_filters_per_child = vec![Vec::new(); self.inputs.len()];
+        for parent_filter_result in child_pushdown_result.parent_filters.iter() {
+            for (child_idx, &child_result) in
+                parent_filter_result.child_results.iter().enumerate()
+            {
+                if matches!(child_result, PushedDown::No) {
+                    unsupported_filters_per_child[child_idx]
+                        .push(Arc::clone(&parent_filter_result.filter));
+                }
+            }
+        }
+
+        // Wrap children that have unsupported filters with FilterExec
+        let mut new_children = self.inputs.clone();
+        for (child_idx, unsupported_filters) in
+            unsupported_filters_per_child.iter().enumerate()
+        {
+            if !unsupported_filters.is_empty() {
+                let combined_filter = conjunction(unsupported_filters.clone());
+                new_children[child_idx] = Arc::new(FilterExec::try_new(
+                    combined_filter,
+                    Arc::clone(&self.inputs[child_idx]),
+                )?);
+            }
+        }
+
+        // Check if any children were modified
+        let children_modified = new_children
+            .iter()
+            .zip(self.inputs.iter())
+            .any(|(new, old)| !Arc::ptr_eq(new, old));
+
+        let all_filters_pushed =
+            vec![PushedDown::Yes; child_pushdown_result.parent_filters.len()];
+        let propagation = if children_modified {
+            let updated_node = UnionExec::try_new(new_children)?;
+            FilterPushdownPropagation::with_parent_pushdown_result(all_filters_pushed)
+                .with_updated_node(updated_node)
+        } else {
+            FilterPushdownPropagation::with_parent_pushdown_result(all_filters_pushed)
+        };
+
+        // Report all parent filters as supported since we've ensured they're applied
+        // on all children (either pushed down or via FilterExec)
+        Ok(propagation)
+    }
 }
 
 /// Combines multiple input streams by interleaving them.
@@ -593,8 +676,20 @@ fn union_schema(inputs: &[Arc<dyn ExecutionPlan>]) -> Result<SchemaRef> {
     }
 
     let first_schema = inputs[0].schema();
+    let first_field_count = first_schema.fields().len();
 
-    let fields = (0..first_schema.fields().len())
+    // validate that all inputs have the same number of fields
+    for (idx, input) in inputs.iter().enumerate().skip(1) {
+        let field_count = input.schema().fields().len();
+        if field_count != first_field_count {
+            return exec_err!(
+                "UnionExec/InterleaveExec requires all inputs to have the same number of fields. \
+                 Input 0 has {first_field_count} fields, but input {idx} has {field_count} fields"
+            );
+        }
+    }
+
+    let fields = (0..first_field_count)
         .map(|i| {
             // We take the name from the left side of the union to match how names are coerced during logical planning,
             // which also uses the left side names.
@@ -759,6 +854,18 @@ mod tests {
         let f = Field::new("f", DataType::Int32, true);
         let g = Field::new("g", DataType::Int32, true);
         let schema = Arc::new(Schema::new(vec![a, b, c, d, e, f, g]));
+
+        Ok(schema)
+    }
+
+    fn create_test_schema2() -> Result<SchemaRef> {
+        let a = Field::new("a", DataType::Int32, true);
+        let b = Field::new("b", DataType::Int32, true);
+        let c = Field::new("c", DataType::Int32, true);
+        let d = Field::new("d", DataType::Int32, true);
+        let e = Field::new("e", DataType::Int32, true);
+        let f = Field::new("f", DataType::Int32, true);
+        let schema = Arc::new(Schema::new(vec![a, b, c, d, e, f]));
 
         Ok(schema)
     }
@@ -1051,5 +1158,24 @@ mod tests {
         assert_eq!(union.inputs().len(), 2);
 
         Ok(())
+    }
+
+    #[test]
+    fn test_union_schema_mismatch() {
+        // Test that UnionExec properly rejects inputs with different field counts
+        let schema = create_test_schema().unwrap();
+        let schema2 = create_test_schema2().unwrap();
+        let memory_exec1 =
+            Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&schema), None).unwrap());
+        let memory_exec2 =
+            Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&schema2), None).unwrap());
+
+        let result = UnionExec::try_new(vec![memory_exec1, memory_exec2]);
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().to_string().contains(
+                "UnionExec/InterleaveExec requires all inputs to have the same number of fields"
+            )
+        );
     }
 }

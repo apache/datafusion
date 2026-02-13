@@ -37,6 +37,6 @@ They are provided for informational purposes and can be used by custom
 - **Foreign keys and check constraints**: These constraints are parsed
   but are not validated or used during query planning.
 
-[`tableconstraint`]: https://docs.rs/datafusion/latest/datafusion/sql/planner/enum.TableConstraint.html
-[`constraints`]: https://docs.rs/datafusion/latest/datafusion/common/functional_dependencies/struct.Constraints.html
-[`field`]: https://docs.rs/arrow/latest/arrow/datatype/struct.Field.html
+[`tableconstraint`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/sqlparser/ast/enum.TableConstraint.html
+[`constraints`]: https://docs.rs/datafusion/latest/datafusion/common/struct.Constraints.html
+[`field`]: https://docs.rs/arrow/latest/arrow/datatypes/struct.Field.html

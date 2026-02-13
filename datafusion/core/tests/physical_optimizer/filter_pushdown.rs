@@ -58,20 +58,19 @@ use datafusion_physical_plan::{
     aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy},
     coalesce_partitions::CoalescePartitionsExec,
     collect,
-    filter::FilterExec,
+    filter::{FilterExec, FilterExecBuilder},
+    projection::ProjectionExec,
     repartition::RepartitionExec,
     sorts::sort::SortExec,
 };
 
+use super::pushdown_utils::{
+    OptimizationTest, TestNode, TestScanBuilder, TestSource, format_plan_for_test,
+};
 use datafusion_physical_plan::union::UnionExec;
 use futures::StreamExt;
 use object_store::{ObjectStore, memory::InMemory};
 use regex::Regex;
-use util::{OptimizationTest, TestNode, TestScanBuilder, format_plan_for_test};
-
-use crate::physical_optimizer::filter_pushdown::util::TestSource;
-
-mod util;
 
 #[test]
 fn test_pushdown_into_scan() {
@@ -480,9 +479,10 @@ fn test_filter_with_projection() {
     let projection = vec![1, 0];
     let predicate = col_lit_predicate("a", "foo", &schema());
     let plan = Arc::new(
-        FilterExec::try_new(predicate, Arc::clone(&scan))
+        FilterExecBuilder::new(predicate, Arc::clone(&scan))
+            .apply_projection(Some(projection))
             .unwrap()
-            .with_projection(Some(projection))
+            .build()
             .unwrap(),
     );
 
@@ -505,9 +505,10 @@ fn test_filter_with_projection() {
     let projection = vec![1];
     let predicate = col_lit_predicate("a", "foo", &schema());
     let plan = Arc::new(
-        FilterExec::try_new(predicate, scan)
+        FilterExecBuilder::new(predicate, scan)
+            .apply_projection(Some(projection))
             .unwrap()
-            .with_projection(Some(projection))
+            .build()
             .unwrap(),
     );
     insta::assert_snapshot!(
@@ -564,9 +565,9 @@ fn test_pushdown_through_aggregates_on_grouping_columns() {
     let scan = TestScanBuilder::new(schema()).with_support(true).build();
 
     let filter = Arc::new(
-        FilterExec::try_new(col_lit_predicate("a", "foo", &schema()), scan)
-            .unwrap()
+        FilterExecBuilder::new(col_lit_predicate("a", "foo", &schema()), scan)
             .with_batch_size(10)
+            .build()
             .unwrap(),
     );
 
@@ -596,9 +597,9 @@ fn test_pushdown_through_aggregates_on_grouping_columns() {
 
     let predicate = col_lit_predicate("b", "bar", &schema());
     let plan = Arc::new(
-        FilterExec::try_new(predicate, aggregate)
-            .unwrap()
+        FilterExecBuilder::new(predicate, aggregate)
             .with_batch_size(100)
+            .build()
             .unwrap(),
     );
 
@@ -1807,6 +1808,67 @@ fn test_filter_pushdown_through_union() {
     );
 }
 
+#[test]
+fn test_filter_pushdown_through_union_mixed_support() {
+    // Test case where one child supports filter pushdown and one doesn't
+    let scan1 = TestScanBuilder::new(schema()).with_support(true).build();
+    let scan2 = TestScanBuilder::new(schema()).with_support(false).build();
+
+    let union = UnionExec::try_new(vec![scan1, scan2]).unwrap();
+
+    let predicate = col_lit_predicate("a", "foo", &schema());
+    let plan = Arc::new(FilterExec::try_new(predicate, union).unwrap());
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: a@0 = foo
+        -   UnionExec
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+      output:
+        Ok:
+          - UnionExec
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
+          -   FilterExec: a@0 = foo
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+    "
+    );
+}
+
+#[test]
+fn test_filter_pushdown_through_union_does_not_support() {
+    // Test case where one child supports filter pushdown and one doesn't
+    let scan1 = TestScanBuilder::new(schema()).with_support(false).build();
+    let scan2 = TestScanBuilder::new(schema()).with_support(false).build();
+
+    let union = UnionExec::try_new(vec![scan1, scan2]).unwrap();
+
+    let predicate = col_lit_predicate("a", "foo", &schema());
+    let plan = Arc::new(FilterExec::try_new(predicate, union).unwrap());
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
+        @"
+    OptimizationTest:
+      input:
+        - FilterExec: a@0 = foo
+        -   UnionExec
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+      output:
+        Ok:
+          - UnionExec
+          -   FilterExec: a@0 = foo
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+          -   FilterExec: a@0 = foo
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+    "
+    );
+}
+
 /// Schema:
 /// a: String
 /// b: String
@@ -1822,6 +1884,234 @@ static TEST_SCHEMA: LazyLock<SchemaRef> = LazyLock::new(|| {
 
 fn schema() -> SchemaRef {
     Arc::clone(&TEST_SCHEMA)
+}
+
+struct ProjectionDynFilterTestCase {
+    schema: SchemaRef,
+    batches: Vec<RecordBatch>,
+    projection: Vec<(Arc<dyn PhysicalExpr>, String)>,
+    sort_expr: PhysicalSortExpr,
+    expected_plans: Vec<String>,
+}
+
+async fn run_projection_dyn_filter_case(case: ProjectionDynFilterTestCase) {
+    let ProjectionDynFilterTestCase {
+        schema,
+        batches,
+        projection,
+        sort_expr,
+        expected_plans,
+    } = case;
+
+    let scan = TestScanBuilder::new(Arc::clone(&schema))
+        .with_support(true)
+        .with_batches(batches)
+        .build();
+
+    let projection_exec = Arc::new(ProjectionExec::try_new(projection, scan).unwrap());
+
+    let sort = Arc::new(
+        SortExec::new(LexOrdering::new(vec![sort_expr]).unwrap(), projection_exec)
+            .with_fetch(Some(2)),
+    ) as Arc<dyn ExecutionPlan>;
+
+    let mut config = ConfigOptions::default();
+    config.execution.parquet.pushdown_filters = true;
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+
+    let optimized_plan = FilterPushdown::new_post_optimization()
+        .optimize(Arc::clone(&sort), &config)
+        .unwrap();
+
+    pretty_assertions::assert_eq!(
+        format_plan_for_test(&optimized_plan).trim(),
+        expected_plans[0].trim()
+    );
+
+    let config = SessionConfig::new().with_batch_size(2);
+    let session_ctx = SessionContext::new_with_config(config);
+    session_ctx.register_object_store(
+        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
+        Arc::new(InMemory::new()),
+    );
+    let state = session_ctx.state();
+    let task_ctx = state.task_ctx();
+    let mut stream = optimized_plan.execute(0, Arc::clone(&task_ctx)).unwrap();
+    for (idx, expected_plan) in expected_plans.iter().enumerate().skip(1) {
+        stream.next().await.unwrap().unwrap();
+        let formatted_plan = format_plan_for_test(&optimized_plan);
+        pretty_assertions::assert_eq!(
+            formatted_plan.trim(),
+            expected_plan.trim(),
+            "Mismatch at iteration {}",
+            idx
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_topk_with_projection_transformation_on_dyn_filter() {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int32, false),
+        Field::new("b", DataType::Utf8, false),
+        Field::new("c", DataType::Float64, false),
+    ]));
+    let simple_abc = vec![
+        record_batch!(
+            ("a", Int32, [1, 2, 3]),
+            ("b", Utf8, ["x", "y", "z"]),
+            ("c", Float64, [1.0, 2.0, 3.0])
+        )
+        .unwrap(),
+    ];
+
+    // Case 1: Reordering [b, a]
+    run_projection_dyn_filter_case(ProjectionDynFilterTestCase {
+        schema: Arc::clone(&schema),
+        batches: simple_abc.clone(),
+        projection: vec![
+            (col("b", &schema).unwrap(), "b".to_string()),
+            (col("a", &schema).unwrap(), "a".to_string()),
+        ],
+        sort_expr: PhysicalSortExpr::new(
+            Arc::new(Column::new("a", 1)),
+            SortOptions::default(),
+        ),
+        expected_plans: vec![
+r#"  - SortExec: TopK(fetch=2), expr=[a@1 ASC], preserve_partitioning=[false]
+  -   ProjectionExec: expr=[b@1 as b, a@0 as a]
+  -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ empty ]"#.to_string(),
+r#"  - SortExec: TopK(fetch=2), expr=[a@1 ASC], preserve_partitioning=[false], filter=[a@1 IS NULL OR a@1 < 2]
+  -   ProjectionExec: expr=[b@1 as b, a@0 as a]
+  -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 IS NULL OR a@0 < 2 ]"#.to_string()]
+    })
+    .await;
+
+    // Case 2: Pruning [a]
+    run_projection_dyn_filter_case(ProjectionDynFilterTestCase {
+        schema: Arc::clone(&schema),
+        batches: simple_abc.clone(),
+        projection: vec![(col("a", &schema).unwrap(), "a".to_string())],
+        sort_expr: PhysicalSortExpr::new(
+            Arc::new(Column::new("a", 0)),
+            SortOptions::default(),
+        ),
+        expected_plans: vec![
+            r#"  - SortExec: TopK(fetch=2), expr=[a@0 ASC], preserve_partitioning=[false]
+  -   ProjectionExec: expr=[a@0 as a]
+  -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ empty ]"#.to_string(),
+            r#"  - SortExec: TopK(fetch=2), expr=[a@0 ASC], preserve_partitioning=[false], filter=[a@0 IS NULL OR a@0 < 2]
+  -   ProjectionExec: expr=[a@0 as a]
+  -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 IS NULL OR a@0 < 2 ]"#.to_string(),
+        ],
+    })
+    .await;
+
+    // Case 3: Identity [a, b]
+    run_projection_dyn_filter_case(ProjectionDynFilterTestCase {
+        schema: Arc::clone(&schema),
+        batches: simple_abc.clone(),
+        projection: vec![
+            (col("a", &schema).unwrap(), "a".to_string()),
+            (col("b", &schema).unwrap(), "b".to_string()),
+        ],
+        sort_expr: PhysicalSortExpr::new(
+            Arc::new(Column::new("a", 0)),
+            SortOptions::default(),
+        ),
+        expected_plans: vec![
+            r#"  - SortExec: TopK(fetch=2), expr=[a@0 ASC], preserve_partitioning=[false]
+  -   ProjectionExec: expr=[a@0 as a, b@1 as b]
+  -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ empty ]"#.to_string(),
+            r#"  - SortExec: TopK(fetch=2), expr=[a@0 ASC], preserve_partitioning=[false], filter=[a@0 IS NULL OR a@0 < 2]
+  -   ProjectionExec: expr=[a@0 as a, b@1 as b]
+  -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 IS NULL OR a@0 < 2 ]"#.to_string(),
+        ],
+    })
+    .await;
+
+    // Case 4: Expressions [a + 1, b]
+    run_projection_dyn_filter_case(ProjectionDynFilterTestCase {
+        schema: Arc::clone(&schema),
+        batches: simple_abc.clone(),
+        projection: vec![
+            (
+                Arc::new(BinaryExpr::new(
+                    col("a", &schema).unwrap(),
+                    Operator::Plus,
+                    Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+                )),
+                "a_plus_1".to_string(),
+            ),
+            (col("b", &schema).unwrap(), "b".to_string()),
+        ],
+        sort_expr: PhysicalSortExpr::new(
+            Arc::new(Column::new("a_plus_1", 0)),
+            SortOptions::default(),
+        ),
+        expected_plans: vec![
+            r#"  - SortExec: TopK(fetch=2), expr=[a_plus_1@0 ASC], preserve_partitioning=[false]
+  -   ProjectionExec: expr=[a@0 + 1 as a_plus_1, b@1 as b]
+  -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ empty ]"#.to_string(),
+            r#"  - SortExec: TopK(fetch=2), expr=[a_plus_1@0 ASC], preserve_partitioning=[false], filter=[a_plus_1@0 IS NULL OR a_plus_1@0 < 3]
+  -   ProjectionExec: expr=[a@0 + 1 as a_plus_1, b@1 as b]
+  -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 + 1 IS NULL OR a@0 + 1 < 3 ]"#.to_string(),
+        ],
+    })
+    .await;
+
+    // Case 5: [a as b, b as a] (swapped columns)
+    run_projection_dyn_filter_case(ProjectionDynFilterTestCase {
+        schema: Arc::clone(&schema),
+        batches: simple_abc.clone(),
+        projection: vec![
+            (col("a", &schema).unwrap(), "b".to_string()),
+            (col("b", &schema).unwrap(), "a".to_string()),
+        ],
+        sort_expr: PhysicalSortExpr::new(
+            Arc::new(Column::new("b", 0)),
+            SortOptions::default(),
+        ),
+        expected_plans: vec![
+            r#"  - SortExec: TopK(fetch=2), expr=[b@0 ASC], preserve_partitioning=[false]
+  -   ProjectionExec: expr=[a@0 as b, b@1 as a]
+  -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ empty ]"#.to_string(),
+            r#"  - SortExec: TopK(fetch=2), expr=[b@0 ASC], preserve_partitioning=[false], filter=[b@0 IS NULL OR b@0 < 2]
+  -   ProjectionExec: expr=[a@0 as b, b@1 as a]
+  -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 IS NULL OR a@0 < 2 ]"#.to_string(),
+        ],
+    })
+    .await;
+
+    // Case 6: Confusing expr [a + 1 as a, b]
+    run_projection_dyn_filter_case(ProjectionDynFilterTestCase {
+        schema: Arc::clone(&schema),
+        batches: simple_abc.clone(),
+        projection: vec![
+            (
+                Arc::new(BinaryExpr::new(
+                    col("a", &schema).unwrap(),
+                    Operator::Plus,
+                    Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+                )),
+                "a".to_string(),
+            ),
+            (col("b", &schema).unwrap(), "b".to_string()),
+        ],
+        sort_expr: PhysicalSortExpr::new(
+            Arc::new(Column::new("a", 0)),
+            SortOptions::default(),
+        ),
+        expected_plans: vec![
+            r#"  - SortExec: TopK(fetch=2), expr=[a@0 ASC], preserve_partitioning=[false]
+  -   ProjectionExec: expr=[a@0 + 1 as a, b@1 as b]
+  -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ empty ]"#.to_string(),
+            r#"  - SortExec: TopK(fetch=2), expr=[a@0 ASC], preserve_partitioning=[false], filter=[a@0 IS NULL OR a@0 < 3]
+  -   ProjectionExec: expr=[a@0 + 1 as a, b@1 as b]
+  -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 + 1 IS NULL OR a@0 + 1 < 3 ]"#.to_string(),
+        ],
+    })
+    .await;
 }
 
 /// Returns a predicate that is a binary expression col = lit
@@ -3490,4 +3780,91 @@ async fn test_hashjoin_dynamic_filter_pushdown_is_used() {
             "is_used() should return {expected_is_used} when probe side support is {probe_supports_pushdown}"
         );
     }
+}
+
+/// Regression test for https://github.com/apache/datafusion/issues/20109
+#[tokio::test]
+async fn test_filter_with_projection_pushdown() {
+    use arrow::array::{Int64Array, RecordBatch, StringArray};
+    use datafusion_physical_plan::collect;
+    use datafusion_physical_plan::filter::FilterExecBuilder;
+
+    // Create schema: [time, event, size]
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("time", DataType::Int64, false),
+        Field::new("event", DataType::Utf8, false),
+        Field::new("size", DataType::Int64, false),
+    ]));
+
+    // Create sample data
+    let timestamps = vec![100i64, 200, 300, 400, 500];
+    let events = vec!["Ingestion", "Ingestion", "Query", "Ingestion", "Query"];
+    let sizes = vec![10i64, 20, 30, 40, 50];
+
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int64Array::from(timestamps)),
+            Arc::new(StringArray::from(events)),
+            Arc::new(Int64Array::from(sizes)),
+        ],
+    )
+    .unwrap();
+
+    // Create data source
+    let memory_exec = datafusion_datasource::memory::MemorySourceConfig::try_new_exec(
+        &[vec![batch]],
+        schema.clone(),
+        None,
+    )
+    .unwrap();
+
+    // First FilterExec: time < 350 with projection=[event@1, size@2]
+    let time_col = col("time", &memory_exec.schema()).unwrap();
+    let time_filter = Arc::new(BinaryExpr::new(
+        time_col,
+        Operator::Lt,
+        Arc::new(Literal::new(ScalarValue::Int64(Some(350)))),
+    ));
+    let filter1 = Arc::new(
+        FilterExecBuilder::new(time_filter, memory_exec)
+            .apply_projection(Some(vec![1, 2]))
+            .unwrap()
+            .build()
+            .unwrap(),
+    );
+
+    // Second FilterExec: event = 'Ingestion' with projection=[size@1]
+    let event_col = col("event", &filter1.schema()).unwrap();
+    let event_filter = Arc::new(BinaryExpr::new(
+        event_col,
+        Operator::Eq,
+        Arc::new(Literal::new(ScalarValue::Utf8(Some(
+            "Ingestion".to_string(),
+        )))),
+    ));
+    let filter2 = Arc::new(
+        FilterExecBuilder::new(event_filter, filter1)
+            .apply_projection(Some(vec![1]))
+            .unwrap()
+            .build()
+            .unwrap(),
+    );
+
+    // Apply filter pushdown optimization
+    let config = ConfigOptions::default();
+    let optimized_plan = FilterPushdown::new()
+        .optimize(Arc::clone(&filter2) as Arc<dyn ExecutionPlan>, &config)
+        .unwrap();
+
+    // Execute the optimized plan - this should not error
+    let ctx = SessionContext::new();
+    let result = collect(optimized_plan, ctx.task_ctx()).await.unwrap();
+
+    // Verify results: should return rows where time < 350 AND event = 'Ingestion'
+    // That's rows with time=100,200 (both have event='Ingestion'), so sizes 10,20
+    let expected = [
+        "+------+", "| size |", "+------+", "| 10   |", "| 20   |", "+------+",
+    ];
+    assert_batches_eq!(expected, &result);
 }

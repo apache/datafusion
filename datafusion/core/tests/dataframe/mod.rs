@@ -43,6 +43,7 @@ use datafusion_functions_nested::make_array::make_array_udf;
 use datafusion_functions_window::expr_fn::{first_value, lead, row_number};
 use insta::assert_snapshot;
 use object_store::local::LocalFileSystem;
+use rstest::rstest;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -56,9 +57,7 @@ use datafusion::error::Result;
 use datafusion::execution::context::SessionContext;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::logical_expr::{ColumnarValue, Volatility};
-use datafusion::prelude::{
-    CsvReadOptions, JoinType, NdJsonReadOptions, ParquetReadOptions,
-};
+use datafusion::prelude::{CsvReadOptions, JoinType, ParquetReadOptions};
 use datafusion::test_util::{
     parquet_test_data, populate_csv_partitions, register_aggregate_csv, test_table,
     test_table_with_cache_factory, test_table_with_name,
@@ -93,6 +92,7 @@ use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties, displayable};
 
 use datafusion::error::Result as DataFusionResult;
+use datafusion::execution::options::JsonReadOptions;
 use datafusion_functions_window::expr_fn::lag;
 
 // Get string representation of the plan
@@ -2895,7 +2895,7 @@ async fn write_json_with_order() -> Result<()> {
     ctx.register_json(
         "data",
         test_path.to_str().unwrap(),
-        NdJsonReadOptions::default().schema(&schema),
+        JsonReadOptions::default().schema(&schema),
     )
     .await?;
 
@@ -4801,7 +4801,7 @@ async fn unnest_with_redundant_columns() -> Result<()> {
         @r"
     Projection: shapes.shape_id [shape_id:UInt32]
       Unnest: lists[shape_id2|depth=1] structs[] [shape_id:UInt32, shape_id2:UInt32;N]
-        Aggregate: groupBy=[[shapes.shape_id]], aggr=[[array_agg(shapes.shape_id) AS shape_id2]] [shape_id:UInt32, shape_id2:List(Field { data_type: UInt32, nullable: true });N]
+        Aggregate: groupBy=[[shapes.shape_id]], aggr=[[array_agg(shapes.shape_id) AS shape_id2]] [shape_id:UInt32, shape_id2:List(UInt32);N]
           TableScan: shapes projection=[shape_id] [shape_id:UInt32]
     "
     );
@@ -5615,30 +5615,33 @@ async fn test_dataframe_placeholder_like_expression() -> Result<()> {
     Ok(())
 }
 
+#[rstest]
+#[case(DataType::Utf8)]
+#[case(DataType::LargeUtf8)]
+#[case(DataType::Utf8View)]
 #[tokio::test]
-async fn write_partitioned_parquet_results() -> Result<()> {
-    // create partitioned input file and context
-    let tmp_dir = TempDir::new()?;
-
-    let ctx = SessionContext::new();
-
+async fn write_partitioned_parquet_results(#[case] string_type: DataType) -> Result<()> {
     // Create an in memory table with schema C1 and C2, both strings
     let schema = Arc::new(Schema::new(vec![
-        Field::new("c1", DataType::Utf8, false),
-        Field::new("c2", DataType::Utf8, false),
+        Field::new("c1", string_type.clone(), false),
+        Field::new("c2", string_type.clone(), false),
     ]));
 
-    let record_batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(StringArray::from(vec!["abc", "def"])),
-            Arc::new(StringArray::from(vec!["123", "456"])),
-        ],
-    )?;
+    let columns = [
+        Arc::new(StringArray::from(vec!["abc", "def"])) as ArrayRef,
+        Arc::new(StringArray::from(vec!["123", "456"])) as ArrayRef,
+    ]
+    .map(|col| arrow::compute::cast(&col, &string_type).unwrap())
+    .to_vec();
+
+    let record_batch = RecordBatch::try_new(schema.clone(), columns)?;
 
     let mem_table = Arc::new(MemTable::try_new(schema, vec![vec![record_batch]])?);
 
     // Register the table in the context
+    // create partitioned input file and context
+    let tmp_dir = TempDir::new()?;
+    let ctx = SessionContext::new();
     ctx.register_table("test", mem_table)?;
 
     let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
@@ -5665,6 +5668,7 @@ async fn write_partitioned_parquet_results() -> Result<()> {
 
     // Check that the c2 column is gone and that c1 is abc.
     let results = filter_df.collect().await?;
+    insta::allow_duplicates! {
     assert_snapshot!(
        batches_to_string(&results),
         @r"
@@ -5674,7 +5678,7 @@ async fn write_partitioned_parquet_results() -> Result<()> {
     | abc |
     +-----+
     "
-    );
+    )};
 
     // Read the entire set of parquet files
     let df = ctx
@@ -5687,9 +5691,10 @@ async fn write_partitioned_parquet_results() -> Result<()> {
 
     // Check that the df has the entire set of data
     let results = df.collect().await?;
-    assert_snapshot!(
-        batches_to_sort_string(&results),
-        @r"
+    insta::allow_duplicates! {
+        assert_snapshot!(
+            batches_to_sort_string(&results),
+            @r"
     +-----+-----+
     | c1  | c2  |
     +-----+-----+
@@ -5697,7 +5702,8 @@ async fn write_partitioned_parquet_results() -> Result<()> {
     | def | 456 |
     +-----+-----+
     "
-    );
+        )
+    };
 
     Ok(())
 }
@@ -6315,7 +6321,7 @@ async fn register_non_json_file() {
         .register_json(
             "data",
             "tests/data/test_binary.parquet",
-            NdJsonReadOptions::default(),
+            JsonReadOptions::default(),
         )
         .await;
     assert_contains!(
@@ -6528,7 +6534,7 @@ async fn test_fill_null_all_columns() -> Result<()> {
 async fn test_insert_into_casting_support() -> Result<()> {
     // Testing case1:
     // Inserting query schema mismatch: Expected table field 'a' with type Float16, but got 'a' with type Utf8.
-    // And the cast is not supported from Utf8 to Float16.
+    // And the cast is not supported from Binary to Float16.
 
     // Create a new schema with one field called "a" of type Float16, and setting nullable to false
     let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Float16, false)]));
@@ -6539,7 +6545,10 @@ async fn test_insert_into_casting_support() -> Result<()> {
     let initial_table = Arc::new(MemTable::try_new(schema.clone(), vec![vec![]])?);
     session_ctx.register_table("t", initial_table.clone())?;
 
-    let mut write_df = session_ctx.sql("values ('a123'), ('b456')").await.unwrap();
+    let mut write_df = session_ctx
+        .sql("values (x'a123'), (x'b456')")
+        .await
+        .unwrap();
 
     write_df = write_df
         .clone()
@@ -6553,7 +6562,7 @@ async fn test_insert_into_casting_support() -> Result<()> {
 
     assert_contains!(
         e.to_string(),
-        "Inserting query schema mismatch: Expected table field 'a' with type Float16, but got 'a' with type Utf8."
+        "Inserting query schema mismatch: Expected table field 'a' with type Float16, but got 'a' with type Binary."
     );
 
     // Testing case2:

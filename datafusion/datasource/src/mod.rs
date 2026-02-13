@@ -24,7 +24,6 @@
 // https://github.com/apache/datafusion/issues/11143
 #![cfg_attr(not(test), deny(clippy::clone_on_ref_ptr))]
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
-#![deny(clippy::allow_attributes)]
 
 //! A table that uses the `ObjectStore` listing capability
 //! to get the list of files to process.
@@ -574,7 +573,7 @@ mod tests {
     use datafusion_execution::object_store::{
         DefaultObjectStoreRegistry, ObjectStoreRegistry,
     };
-    use object_store::{local::LocalFileSystem, path::Path};
+    use object_store::{ObjectStoreExt, local::LocalFileSystem, path::Path};
     use std::{collections::HashMap, ops::Not, sync::Arc};
     use url::Url;
 

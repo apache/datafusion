@@ -37,7 +37,7 @@ use datafusion_physical_expr_adapter::{
     DefaultPhysicalExprAdapter, DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter,
     PhysicalExprAdapterFactory,
 };
-use object_store::{ObjectStore, memory::InMemory, path::Path};
+use object_store::{ObjectStore, ObjectStoreExt, memory::InMemory, path::Path};
 use parquet::arrow::ArrowWriter;
 
 async fn write_parquet(batch: RecordBatch, store: Arc<dyn ObjectStore>, path: &str) {
@@ -63,15 +63,15 @@ impl PhysicalExprAdapterFactory for CustomPhysicalExprAdapterFactory {
         &self,
         logical_file_schema: SchemaRef,
         physical_file_schema: SchemaRef,
-    ) -> Arc<dyn PhysicalExprAdapter> {
-        Arc::new(CustomPhysicalExprAdapter {
+    ) -> Result<Arc<dyn PhysicalExprAdapter>> {
+        Ok(Arc::new(CustomPhysicalExprAdapter {
             logical_file_schema: Arc::clone(&logical_file_schema),
             physical_file_schema: Arc::clone(&physical_file_schema),
             inner: Arc::new(DefaultPhysicalExprAdapter::new(
                 logical_file_schema,
                 physical_file_schema,
             )),
-        })
+        }))
     }
 }
 

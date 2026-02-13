@@ -36,7 +36,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_expr::logical_plan::JoinType;
+use datafusion_expr::logical_plan::{Aggregate, JoinType};
 use datafusion_physical_expr::expressions::{Column, NoOp};
 use datafusion_physical_expr::utils::map_columns_before_projection;
 use datafusion_physical_expr::{
@@ -49,7 +49,7 @@ use datafusion_physical_plan::aggregates::{
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::execution_plan::EmissionType;
 use datafusion_physical_plan::joins::{
-    CrossJoinExec, HashJoinExec, PartitionMode, SortMergeJoinExec,
+    CrossJoinExec, HashJoinExec, HashJoinExecBuilder, PartitionMode, SortMergeJoinExec,
 };
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::repartition::RepartitionExec;
@@ -305,18 +305,19 @@ pub fn adjust_input_keys_ordering(
                     Vec<(PhysicalExprRef, PhysicalExprRef)>,
                     Vec<SortOptions>,
                 )| {
-                    HashJoinExec::try_new(
+                    HashJoinExecBuilder::new(
                         Arc::clone(left),
                         Arc::clone(right),
                         new_conditions.0,
-                        filter.clone(),
-                        join_type,
-                        // TODO: although projection is not used in the join here, because projection pushdown is after enforce_distribution. Maybe we need to handle it later. Same as filter.
-                        projection.clone(),
-                        PartitionMode::Partitioned,
-                        *null_equality,
-                        *null_aware,
+                        *join_type,
                     )
+                    .with_filter(filter.clone())
+                    // TODO: although projection is not used in the join here, because projection pushdown is after enforce_distribution. Maybe we need to handle it later. Same as filter.
+                    .with_projection_ref(projection.clone())
+                    .with_partition_mode(PartitionMode::Partitioned)
+                    .with_null_equality(*null_equality)
+                    .with_null_aware(*null_aware)
+                    .build()
                     .map(|e| Arc::new(e) as _)
                 };
                 return reorder_partitioned_join_keys(
@@ -638,17 +639,20 @@ pub fn reorder_join_keys_to_inputs(
                     right_keys,
                 } = join_keys;
                 let new_join_on = new_join_conditions(&left_keys, &right_keys);
-                return Ok(Arc::new(HashJoinExec::try_new(
-                    Arc::clone(left),
-                    Arc::clone(right),
-                    new_join_on,
-                    filter.clone(),
-                    join_type,
-                    projection.clone(),
-                    PartitionMode::Partitioned,
-                    *null_equality,
-                    *null_aware,
-                )?));
+                return Ok(Arc::new(
+                    HashJoinExecBuilder::new(
+                        Arc::clone(left),
+                        Arc::clone(right),
+                        new_join_on,
+                        *join_type,
+                    )
+                    .with_filter(filter.clone())
+                    .with_projection_ref(projection.clone())
+                    .with_partition_mode(PartitionMode::Partitioned)
+                    .with_null_equality(*null_equality)
+                    .with_null_aware(*null_aware)
+                    .build()?,
+                ));
             }
         }
     } else if let Some(SortMergeJoinExec {
@@ -1301,10 +1305,25 @@ pub fn ensure_distribution(
             // Allow subset satisfaction when:
             // 1. Current partition count >= threshold
             // 2. Not a partitioned join since must use exact hash matching for joins
+            // 3. Not a grouping set aggregate (requires exact hash including __grouping_id)
             let current_partitions = child.plan.output_partitioning().partition_count();
+
+            // Check if the hash partitioning requirement includes __grouping_id column.
+            // Grouping set aggregates (ROLLUP, CUBE, GROUPING SETS) require exact hash
+            // partitioning on all group columns including __grouping_id to ensure partial
+            // aggregates from different partitions are correctly combined.
+            let requires_grouping_id = matches!(&requirement, Distribution::HashPartitioned(exprs)
+                if exprs.iter().any(|expr| {
+                    expr.as_any()
+                        .downcast_ref::<Column>()
+                        .is_some_and(|col| col.name() == Aggregate::INTERNAL_GROUPING_ID)
+                })
+            );
+
             let allow_subset_satisfy_partitioning = current_partitions
                 >= subset_satisfaction_threshold
-                && !is_partitioned_join;
+                && !is_partitioned_join
+                && !requires_grouping_id;
 
             // When `repartition_file_scans` is set, attempt to increase
             // parallelism at the source.

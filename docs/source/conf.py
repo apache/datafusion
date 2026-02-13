@@ -117,6 +117,8 @@ html_sidebars = {
     "**": ["docs-sidebar.html"],
 }
 
+html_favicon = '_static/favicon.svg'
+
 # tell myst_parser to auto-generate anchor links for headers h1, h2, h3
 myst_heading_anchors = 3
 

@@ -346,9 +346,10 @@ impl FileOpener for ParquetOpener {
             // Don't load the page index yet. Since it is not stored inline in
             // the footer, loading the page index if it is not needed will do
             // unnecessary I/O. We decide later if it is needed to evaluate the
-            // pruning predicates. Thus default to not requesting if from the
+            // pruning predicates. Thus default to not requesting it from the
             // underlying reader.
-            let mut options = ArrowReaderOptions::new().with_page_index(false);
+            let mut options =
+                ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Skip);
             #[cfg(feature = "parquet_encryption")]
             if let Some(fd_val) = file_decryption_properties {
                 options = options.with_file_decryption_properties(Arc::clone(&fd_val));
@@ -412,7 +413,7 @@ impl FileOpener for ParquetOpener {
             let rewriter = expr_adapter_factory.create(
                 Arc::clone(&logical_file_schema),
                 Arc::clone(&physical_file_schema),
-            );
+            )?;
             let simplifier = PhysicalExprSimplifier::new(&physical_file_schema);
             predicate = predicate
                 .map(|p| simplifier.simplify(rewriter.rewrite(p)?))
@@ -436,7 +437,7 @@ impl FileOpener for ParquetOpener {
                     reader_metadata,
                     &mut async_file_reader,
                     // Since we're manually loading the page index the option here should not matter but we pass it in for consistency
-                    options.with_page_index(true),
+                    options.with_page_index_policy(PageIndexPolicy::Optional),
                 )
                 .await?;
             }
@@ -581,7 +582,7 @@ impl FileOpener for ParquetOpener {
 
             // ----------------------------------------------------------
             // Step: potentially reverse the access plan for performance.
-            // See `ParquetSource::try_reverse_output` for the rationale.
+            // See `ParquetSource::try_pushdown_sort` for the rationale.
             // ----------------------------------------------------------
             if reverse_row_groups {
                 prepared_plan = prepared_plan.reverse(file_metadata.as_ref())?;
@@ -739,6 +740,10 @@ fn constant_value_from_stats(
         && !min.is_null()
         && matches!(column_stats.null_count, Precision::Exact(0))
     {
+        // Cast to the expected data type if needed (e.g., Utf8 -> Dictionary)
+        if min.data_type() != *data_type {
+            return min.cast_to(data_type).ok();
+        }
         return Some(min.clone());
     }
 
@@ -1033,7 +1038,7 @@ mod test {
     };
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
     use futures::{Stream, StreamExt};
-    use object_store::{ObjectStore, memory::InMemory, path::Path};
+    use object_store::{ObjectStore, ObjectStoreExt, memory::InMemory, path::Path};
     use parquet::arrow::ArrowWriter;
     use parquet::file::properties::WriterProperties;
 
@@ -1730,7 +1735,7 @@ mod test {
         // Write parquet file with multiple row groups
         // Force small row groups by setting max_row_group_size
         let props = WriterProperties::builder()
-            .set_max_row_group_size(3) // Force each batch into its own row group
+            .set_max_row_group_row_count(Some(3)) // Force each batch into its own row group
             .build();
 
         let data_len = write_parquet_batches(
@@ -1830,7 +1835,7 @@ mod test {
                 .unwrap(); // 4 rows
 
         let props = WriterProperties::builder()
-            .set_max_row_group_size(4)
+            .set_max_row_group_row_count(Some(4))
             .build();
 
         let data_len = write_parquet_batches(
@@ -1917,7 +1922,7 @@ mod test {
         let batch3 = record_batch!(("a", Int32, vec![Some(7), Some(8)])).unwrap();
 
         let props = WriterProperties::builder()
-            .set_max_row_group_size(2)
+            .set_max_row_group_row_count(Some(2))
             .build();
 
         let data_len = write_parquet_batches(

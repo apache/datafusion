@@ -32,7 +32,7 @@ When making changes that require DataFusion users to make changes to their code
 as part of an upgrade please consider adding documentation to the version
 specific [Upgrade Guide]
 
-[upgrade guide]: ../library-user-guide/upgrading.md
+[upgrade guide]: ../library-user-guide/upgrading/index
 
 ## Breaking Changes
 

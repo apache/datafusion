@@ -111,11 +111,43 @@ SELECT isnan(1.0::FLOAT), isnan('NaN'::FLOAT), isnan(-'NaN'::FLOAT), isnan(NULL:
 ----
 false true true NULL
 
+# isnan: non-float numeric inputs are never NaN
+query BBBB
+SELECT isnan(1::INT), isnan(0::INT), isnan(NULL::INT), isnan(123::BIGINT)
+----
+false false NULL false
+
+query BBBB
+SELECT isnan(1::INT UNSIGNED), isnan(0::INT UNSIGNED), isnan(NULL::INT UNSIGNED), isnan(255::TINYINT UNSIGNED)
+----
+false false NULL false
+
+query BBBB
+SELECT isnan(1::DECIMAL(10,2)), isnan(0::DECIMAL(10,2)), isnan(NULL::DECIMAL(10,2)), isnan(-1::DECIMAL(10,2))
+----
+false false NULL false
+
 # iszero
 query BBBB
 SELECT iszero(1.0), iszero(0.0), iszero(-0.0), iszero(NULL)
 ----
 false true true NULL
+
+# iszero: integers / unsigned / decimals
+query BBBB
+SELECT iszero(1::INT), iszero(0::INT), iszero(NULL::INT), iszero(-1::INT)
+----
+false true NULL false
+
+query BBBB
+SELECT iszero(1::INT UNSIGNED), iszero(0::INT UNSIGNED), iszero(NULL::INT UNSIGNED), iszero(255::TINYINT UNSIGNED)
+----
+false true NULL false
+
+query BBBB
+SELECT iszero(1::DECIMAL(10,2)), iszero(0::DECIMAL(10,2)), iszero(NULL::DECIMAL(10,2)), iszero(-1::DECIMAL(10,2))
+----
+false true NULL false
 
 # abs: empty argument
 statement error

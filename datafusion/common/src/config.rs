@@ -757,7 +757,7 @@ config_namespace! {
         /// (writing) Sets best effort maximum size of data page in bytes
         pub data_pagesize_limit: usize, default = 1024 * 1024
 
-        /// (writing) Sets write_batch_size in bytes
+        /// (writing) Sets write_batch_size in rows
         pub write_batch_size: usize, default = 1024
 
         /// (writing) Sets parquet writer version
@@ -2248,7 +2248,7 @@ impl TableOptions {
 /// Options that control how Parquet files are read, including global options
 /// that apply to all columns and optional column-specific overrides
 ///
-/// Closely tied to [`ParquetWriterOptions`](crate::file_options::parquet_writer::ParquetWriterOptions).
+/// Closely tied to `ParquetWriterOptions` (see `crate::file_options::parquet_writer::ParquetWriterOptions` when the "parquet" feature is enabled).
 /// Properties not included in [`TableParquetOptions`] may not be configurable at the external API
 /// (e.g. sorting_columns).
 #[derive(Clone, Default, Debug, PartialEq)]
@@ -3065,6 +3065,22 @@ config_namespace! {
         /// If not specified, the default level for the compression algorithm is used.
         pub compression_level: Option<u32>, default = None
         pub schema_infer_max_rec: Option<usize>, default = None
+       /// The JSON format to use when reading files.
+       ///
+       /// When `true` (default), expects newline-delimited JSON (NDJSON):
+       /// ```text
+       /// {"key1": 1, "key2": "val"}
+       /// {"key1": 2, "key2": "vals"}
+       /// ```
+       ///
+       /// When `false`, expects JSON array format:
+       /// ```text
+       /// [
+       ///   {"key1": 1, "key2": "val"},
+       ///   {"key1": 2, "key2": "vals"}
+       /// ]
+       /// ```
+       pub newline_delimited: bool, default = true
     }
 }
 
