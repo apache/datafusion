@@ -31,9 +31,7 @@ use super::{
     DisplayAs, ExecutionPlanProperties, RecordBatchStream, SendableRecordBatchStream,
 };
 use crate::coalesce::LimitedBatchCoalescer;
-use crate::execution_plan::{
-    CardinalityEffect, EvaluationType, SchedulingType, has_same_children_properties,
-};
+use crate::execution_plan::{CardinalityEffect, EvaluationType, SchedulingType};
 use crate::hash_utils::create_hashes;
 use crate::metrics::{BaselineMetrics, SpillMetrics};
 use crate::projection::{ProjectionExec, all_columns, make_with_child, update_expr};

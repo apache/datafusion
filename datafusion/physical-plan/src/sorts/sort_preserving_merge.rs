@@ -36,9 +36,7 @@ use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
 
-use crate::execution_plan::{
-    EvaluationType, SchedulingType, has_same_children_properties,
-};
+use crate::execution_plan::{EvaluationType, SchedulingType};
 use log::{debug, trace};
 
 /// Sort preserving merge execution plan

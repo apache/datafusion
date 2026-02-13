@@ -35,7 +35,7 @@ use super::{
 use crate::check_if_same_properties;
 use crate::execution_plan::{
     InvariantLevel, boundedness_from_children, check_default_invariants,
-    emission_type_from_children, has_same_children_properties,
+    emission_type_from_children,
 };
 use crate::filter::FilterExec;
 use crate::filter_pushdown::{

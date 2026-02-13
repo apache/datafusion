@@ -23,9 +23,7 @@ use std::any::Any;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
-use crate::execution_plan::{
-    EmissionType, boundedness_from_children, has_same_children_properties,
-};
+use crate::execution_plan::{EmissionType, boundedness_from_children};
 use crate::expressions::PhysicalSortExpr;
 use crate::joins::sort_merge_join::metrics::SortMergeJoinMetrics;
 use crate::joins::sort_merge_join::stream::SortMergeJoinStream;

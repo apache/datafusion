@@ -1450,9 +1450,9 @@ pub fn has_same_children_properties(
 #[macro_export]
 macro_rules! check_if_same_properties {
     ($plan: expr, $children: expr) => {
-        if has_same_children_properties(&$plan, &$children)? {
+        if $crate::execution_plan::has_same_children_properties(&$plan, &$children)? {
             let plan = $plan.with_new_children_and_same_properties($children);
-            return Ok(Arc::new(plan));
+            return Ok(::std::sync::Arc::new(plan));
         }
     };
 }

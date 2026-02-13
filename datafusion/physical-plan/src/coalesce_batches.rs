@@ -37,7 +37,7 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
 
 use crate::coalesce::{LimitedBatchCoalescer, PushBatchStatus};
-use crate::execution_plan::{CardinalityEffect, has_same_children_properties};
+use crate::execution_plan::CardinalityEffect;
 use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,

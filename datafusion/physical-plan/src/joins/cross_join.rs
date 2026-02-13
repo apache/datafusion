@@ -25,9 +25,7 @@ use super::utils::{
     OnceAsync, OnceFut, StatefulStreamResult, adjust_right_output_partitioning,
     reorder_output_after_swap,
 };
-use crate::execution_plan::{
-    EmissionType, boundedness_from_children, has_same_children_properties,
-};
+use crate::execution_plan::{EmissionType, boundedness_from_children};
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::projection::{
     ProjectionExec, join_allows_pushdown, join_table_borders, new_join_children,

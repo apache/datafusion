@@ -41,9 +41,7 @@ use std::fmt::Formatter;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 
-use crate::execution_plan::{
-    EmissionType, boundedness_from_children, has_same_children_properties,
-};
+use crate::execution_plan::{EmissionType, boundedness_from_children};
 
 use crate::joins::piecewise_merge_join::classic_join::{
     ClassicPWMJStream, PiecewiseMergeJoinStreamState,

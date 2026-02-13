@@ -27,9 +27,7 @@ use super::{
     DisplayAs, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
-use crate::execution_plan::{
-    Boundedness, CardinalityEffect, has_same_children_properties,
-};
+use crate::execution_plan::{Boundedness, CardinalityEffect};
 use crate::{
     DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
     check_if_same_properties,

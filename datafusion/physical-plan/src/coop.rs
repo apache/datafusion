@@ -94,7 +94,7 @@ use arrow_schema::Schema;
 use datafusion_common::{Result, Statistics, assert_eq_or_internal_err};
 use datafusion_execution::TaskContext;
 
-use crate::execution_plan::{SchedulingType, has_same_children_properties};
+use crate::execution_plan::SchedulingType;
 use crate::stream::RecordBatchStreamAdapter;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use futures::{Stream, StreamExt};

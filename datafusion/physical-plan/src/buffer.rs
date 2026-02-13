@@ -18,9 +18,7 @@
 //! [`BufferExec`] decouples production and consumption on messages by buffering the input in the
 //! background up to a certain capacity.
 
-use crate::execution_plan::{
-    CardinalityEffect, SchedulingType, has_same_children_properties,
-};
+use crate::execution_plan::{CardinalityEffect, SchedulingType};
 use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,

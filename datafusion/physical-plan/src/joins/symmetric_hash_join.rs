@@ -34,9 +34,7 @@ use std::vec;
 
 use crate::check_if_same_properties;
 use crate::common::SharedMemoryReservation;
-use crate::execution_plan::{
-    boundedness_from_children, emission_type_from_children, has_same_children_properties,
-};
+use crate::execution_plan::{boundedness_from_children, emission_type_from_children};
 use crate::joins::stream_join_utils::{
     PruningJoinHashMap, SortedFilterExpr, StreamJoinMetrics,
     calculate_filter_expr_intervals, combine_two_batches,

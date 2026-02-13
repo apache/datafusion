@@ -27,7 +27,7 @@ use super::{
     SendableRecordBatchStream, SortOrderPushdownResult, Statistics,
 };
 use crate::column_rewriter::PhysicalColumnRewriter;
-use crate::execution_plan::{CardinalityEffect, has_same_children_properties};
+use crate::execution_plan::CardinalityEffect;
 use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterColumnChecker, FilterDescription,
     FilterPushdownPhase, FilterPushdownPropagation, PushedDownPredicate,

@@ -16,7 +16,6 @@
 // under the License.
 
 use crate::coalesce::LimitedBatchCoalescer;
-use crate::execution_plan::has_same_children_properties;
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{

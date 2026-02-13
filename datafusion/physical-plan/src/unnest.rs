@@ -26,7 +26,6 @@ use super::metrics::{
     RecordOutput,
 };
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
-use crate::execution_plan::has_same_children_properties;
 use crate::{
     DisplayFormatType, Distribution, ExecutionPlan, RecordBatchStream,
     SendableRecordBatchStream, check_if_same_properties,
