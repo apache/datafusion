@@ -55,7 +55,7 @@ use crate::projection::{
 };
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
-    PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
+    PlanProperties, RecordBatchStream, SendableRecordBatchStream,
     joins::StreamJoinPartitionMode,
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
 };
@@ -486,11 +486,6 @@ impl ExecutionPlan for SymmetricHashJoinExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        // TODO stats: it is not possible in general to know the output size of joins
-        Ok(Statistics::new_unknown(&self.schema()))
     }
 
     fn execute(

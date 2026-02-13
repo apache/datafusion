@@ -110,6 +110,7 @@ mod tests {
     #[cfg(feature = "parquet")]
     use crate::datasource::file_format::parquet::ParquetFormat;
     use crate::datasource::listing::table::ListingTableConfigExt;
+    use crate::execution::options::JsonReadOptions;
     use crate::prelude::*;
     use crate::{
         datasource::{
@@ -808,7 +809,7 @@ mod tests {
                     .register_json(
                         "t",
                         tmp_dir.path().to_str().unwrap(),
-                        NdJsonReadOptions::default()
+                        JsonReadOptions::default()
                             .schema(schema.as_ref())
                             .file_compression_type(file_compression_type),
                     )

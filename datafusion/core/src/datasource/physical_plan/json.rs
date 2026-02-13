@@ -32,7 +32,7 @@ mod tests {
 
     use crate::dataframe::DataFrameWriteOptions;
     use crate::execution::SessionState;
-    use crate::prelude::{CsvReadOptions, NdJsonReadOptions, SessionContext};
+    use crate::prelude::{CsvReadOptions, JsonReadOptions, SessionContext};
     use crate::test::partitioned_file_groups;
     use datafusion_common::Result;
     use datafusion_common::cast::{as_int32_array, as_int64_array, as_string_array};
@@ -136,7 +136,7 @@ mod tests {
             .get_ext_with_compression(&file_compression_type)
             .unwrap();
 
-        let read_options = NdJsonReadOptions::default()
+        let read_options = JsonReadOptions::default()
             .file_extension(ext.as_str())
             .file_compression_type(file_compression_type.to_owned());
         let frame = ctx.read_json(path, read_options).await.unwrap();
@@ -389,7 +389,7 @@ mod tests {
         let path = format!("{TEST_DATA_BASE}/1.json");
 
         // register json file with the execution context
-        ctx.register_json("test", path.as_str(), NdJsonReadOptions::default())
+        ctx.register_json("test", path.as_str(), JsonReadOptions::default())
             .await?;
 
         // register a local file system object store for /tmp directory
@@ -431,7 +431,7 @@ mod tests {
         }
 
         // register each partition as well as the top level dir
-        let json_read_option = NdJsonReadOptions::default();
+        let json_read_option = JsonReadOptions::default();
         ctx.register_json(
             "part0",
             &format!("{out_dir}/{part_0_name}"),
@@ -511,7 +511,7 @@ mod tests {
         async fn read_test_data(schema_infer_max_records: usize) -> Result<SchemaRef> {
             let ctx = SessionContext::new();
 
-            let options = NdJsonReadOptions {
+            let options = JsonReadOptions {
                 schema_infer_max_records,
                 ..Default::default()
             };
@@ -587,7 +587,7 @@ mod tests {
             .get_ext_with_compression(&file_compression_type)
             .unwrap();
 
-        let read_option = NdJsonReadOptions::default()
+        let read_option = JsonReadOptions::default()
             .file_compression_type(file_compression_type)
             .file_extension(ext.as_str());
 

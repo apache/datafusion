@@ -483,6 +483,7 @@ message JsonOptions {
   CompressionTypeVariant compression = 1; // Compression type
   optional uint64 schema_infer_max_rec = 2; // Optional max records for schema inference
   optional uint32 compression_level = 3; // Optional compression level
+  optional bool newline_delimited = 4; // Whether to read as newline-delimited JSON (default true). When false, expects JSON array format [{},...]
 }
 
 message TableParquetOptions {

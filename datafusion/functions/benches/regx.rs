@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-extern crate criterion;
-
 use arrow::array::builder::StringBuilder;
 use arrow::array::{ArrayRef, AsArray, Int64Array, StringArray, StringViewArray};
 use arrow::compute::cast;

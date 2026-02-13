@@ -181,10 +181,6 @@ impl ExecutionPlan for StatisticsValidation {
         unimplemented!("This plan only serves for testing statistics")
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        Ok(self.stats.clone())
-    }
-
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         if partition.is_some() {
             Ok(Statistics::new_unknown(&self.schema))
