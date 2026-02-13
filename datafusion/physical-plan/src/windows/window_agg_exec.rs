@@ -214,7 +214,7 @@ impl ExecutionPlan for WindowAggExec {
         vec![&self.input]
     }
 
-    fn expressions(&self) -> Vec<Arc<dyn crate::PhysicalExpr>> {
+    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
         // Collect expressions from all window functions
         self.window_expr
             .iter()

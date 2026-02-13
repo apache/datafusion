@@ -899,10 +899,10 @@ impl ExecutionPlan for RepartitionExec {
         vec![&self.input]
     }
 
-    fn expressions(&self) -> Vec<Arc<dyn datafusion_physical_expr::PhysicalExpr>> {
+    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
         // Return hash partition expressions if this is a hash repartition
         match self.partitioning() {
-            datafusion_physical_expr::Partitioning::Hash(exprs, _) => exprs.clone(),
+            Partitioning::Hash(exprs, _) => exprs.clone(),
             _ => vec![],
         }
     }

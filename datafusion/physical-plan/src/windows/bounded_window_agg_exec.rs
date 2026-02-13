@@ -312,7 +312,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
         vec![&self.input]
     }
 
-    fn expressions(&self) -> Vec<Arc<dyn datafusion_physical_expr::PhysicalExpr>> {
+    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
         // Collect expressions from all window functions
         self.window_expr
             .iter()
