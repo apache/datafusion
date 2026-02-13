@@ -661,7 +661,6 @@ impl HashJoinExec {
 
     /// Set the dynamic filter for proto deserialization purposes.
     /// This method is intended for use during proto deserialization only.
-    /// Returns an error if the provided expression is not a DynamicFilterPhysicalExpr.
     #[doc(hidden)]
     pub fn with_dynamic_filter(
         mut self,
@@ -669,25 +668,18 @@ impl HashJoinExec {
     ) -> Result<Self> {
         use crate::expressions::DynamicFilterPhysicalExpr;
 
-        // Verify it's actually a DynamicFilterPhysicalExpr and cast it
-        if let Some(_) = filter_expr.as_any().downcast_ref::<DynamicFilterPhysicalExpr>() {
-            // This is safe because we just checked the type
-            // We can't downcast Arc<dyn T> directly, but we can use the Arc's data pointer
-            // after verifying the type
-            let raw_ptr = Arc::into_raw(filter_expr);
-            let typed_ptr = raw_ptr as *const DynamicFilterPhysicalExpr;
-            // Safety: We verified the type above, so this cast is safe
-            let filter = unsafe { Arc::from_raw(typed_ptr) };
+        // Cast Arc<dyn PhysicalExpr> to Arc<DynamicFilterPhysicalExpr>
+        // We assume the caller has provided the correct type
+        let raw_ptr = Arc::into_raw(filter_expr);
+        let typed_ptr = raw_ptr as *const DynamicFilterPhysicalExpr;
+        // Safety: The caller must ensure this is actually a DynamicFilterPhysicalExpr
+        let filter = unsafe { Arc::from_raw(typed_ptr) };
 
-            self.dynamic_filter = Some(HashJoinExecDynamicFilter {
-                filter,
-                build_accumulator: OnceLock::new(),
-            });
-            Ok(self)
-        } else {
-            let type_name = std::any::type_name_of_val(filter_expr.as_ref());
-            plan_err!("Expected DynamicFilterPhysicalExpr but got: {}", type_name)
-        }
+        self.dynamic_filter = Some(HashJoinExecDynamicFilter {
+            filter,
+            build_accumulator: OnceLock::new(),
+        });
+        Ok(self)
     }
 
     /// Calculate order preservation flags for this hash join.
