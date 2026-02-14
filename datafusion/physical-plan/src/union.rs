@@ -33,8 +33,8 @@ use super::{
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
 };
 use crate::execution_plan::{
-    InvariantLevel, boundedness_from_children, check_default_invariants,
-    emission_type_from_children,
+    CardinalityEffect, InvariantLevel, boundedness_from_children,
+    check_default_invariants, emission_type_from_children,
 };
 use crate::filter::FilterExec;
 use crate::filter_pushdown::{
@@ -341,6 +341,10 @@ impl ExecutionPlan for UnionExec {
                 .reduce(stats_union)
                 .unwrap_or_else(|| Statistics::new_unknown(&self.schema())))
         }
+    }
+
+    fn cardinality_effect(&self) -> CardinalityEffect {
+        CardinalityEffect::GreaterEqual
     }
 
     fn supports_limit_pushdown(&self) -> bool {
