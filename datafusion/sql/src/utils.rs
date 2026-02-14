@@ -374,7 +374,7 @@ pub(crate) fn rewrite_recursive_unnests_bottom_up(
 pub const UNNEST_PLACEHOLDER: &str = "__unnest_placeholder";
 
 /*
-This is only usedful when used with transform down up
+This is only useful when used with transform down up
 A full example of how the transformation works:
  */
 struct RecursiveUnnestRewriter<'a> {
@@ -496,7 +496,7 @@ impl TreeNodeRewriter for RecursiveUnnestRewriter<'_> {
     type Node = Expr;
 
     /// This downward traversal needs to keep track of:
-    /// - Whether or not some unnest expr has been visited from the top util the current node
+    /// - Whether or not some unnest expr has been visited from the top until the current node
     /// - If some unnest expr has been visited, maintain a stack of such information, this
     ///   is used to detect if some recursive unnest expr exists (e.g **unnest(unnest(unnest(3d column))))**
     fn f_down(&mut self, expr: Expr) -> Result<Transformed<Expr>> {

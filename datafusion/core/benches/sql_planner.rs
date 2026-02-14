@@ -78,6 +78,21 @@ fn create_table_provider(column_prefix: &str, num_columns: usize) -> Arc<MemTabl
         .unwrap()
 }
 
+/// Create a table provider with a struct column: `id` (Int32) and `props` (Struct { value: Int32, label: Utf8 })
+fn create_struct_table_provider() -> Arc<MemTable> {
+    let struct_fields = Fields::from(vec![
+        Field::new("value", DataType::Int32, true),
+        Field::new("label", DataType::Utf8, true),
+    ]);
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, true),
+        Field::new("props", DataType::Struct(struct_fields), true),
+    ]));
+    MemTable::try_new(schema, vec![vec![]])
+        .map(Arc::new)
+        .unwrap()
+}
+
 fn create_context() -> SessionContext {
     let ctx = SessionContext::new();
     ctx.register_table("t1", create_table_provider("a", 200))
@@ -87,6 +102,10 @@ fn create_context() -> SessionContext {
     ctx.register_table("t700", create_table_provider("c", 700))
         .unwrap();
     ctx.register_table("t1000", create_table_provider("d", 1000))
+        .unwrap();
+    ctx.register_table("struct_t1", create_struct_table_provider())
+        .unwrap();
+    ctx.register_table("struct_t2", create_struct_table_provider())
         .unwrap();
     ctx
 }
@@ -422,6 +441,25 @@ fn criterion_benchmark(c: &mut Criterion) {
                  FROM t1, t2 WHERE t1.a7 = t2.b8",
             );
         });
+    });
+
+    let struct_agg_sort_query = "SELECT \
+         struct_t1.props['label'], \
+         SUM(struct_t1.props['value']), \
+         MAX(struct_t2.props['value']), \
+         COUNT(*) \
+     FROM struct_t1 \
+     JOIN struct_t2 ON struct_t1.id = struct_t2.id \
+     WHERE struct_t1.props['value'] > 50 \
+     GROUP BY struct_t1.props['label'] \
+     ORDER BY SUM(struct_t1.props['value']) DESC";
+
+    // -- Struct column benchmarks --
+    c.bench_function("logical_plan_struct_join_agg_sort", |b| {
+        b.iter(|| logical_plan(&ctx, &rt, struct_agg_sort_query))
+    });
+    c.bench_function("physical_plan_struct_join_agg_sort", |b| {
+        b.iter(|| physical_plan(&ctx, &rt, struct_agg_sort_query))
     });
 
     // -- Sorted Queries --

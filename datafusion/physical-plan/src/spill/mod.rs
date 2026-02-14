@@ -310,6 +310,11 @@ impl IPCStreamWriter {
         Ok((delta_num_rows, delta_num_bytes))
     }
 
+    pub fn flush(&mut self) -> Result<()> {
+        self.writer.flush()?;
+        Ok(())
+    }
+
     /// Finish the writer
     pub fn finish(&mut self) -> Result<()> {
         self.writer.finish().map_err(Into::into)

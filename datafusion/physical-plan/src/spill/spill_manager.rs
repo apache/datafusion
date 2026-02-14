@@ -188,6 +188,19 @@ impl SpillManager {
 
         Ok(spawn_buffered(stream, self.batch_read_buffer_capacity))
     }
+
+    /// Same as `read_spill_as_stream`, but without buffering.
+    pub fn read_spill_as_stream_unbuffered(
+        &self,
+        spill_file_path: RefCountedTempFile,
+        max_record_batch_memory: Option<usize>,
+    ) -> Result<SendableRecordBatchStream> {
+        Ok(Box::pin(cooperative(SpillReaderStream::new(
+            Arc::clone(&self.schema),
+            spill_file_path,
+            max_record_batch_memory,
+        ))))
+    }
 }
 
 pub(crate) trait GetSlicedSize {
