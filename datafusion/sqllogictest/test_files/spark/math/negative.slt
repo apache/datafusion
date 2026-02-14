@@ -283,16 +283,16 @@ statement ok
 set datafusion.execution.enable_ansi_mode = true;
 
 # Test ANSI mode: negative of minimum values should error (overflow)
-query error DataFusion error: Arrow error: Compute error: Int8 overflow on negative\(\-128\)
+query error DataFusion error: Execution error: Int8 overflow on negative\(\-128\)
 SELECT negative((-128)::tinyint);
 
-query error DataFusion error: Arrow error: Compute error: Int16 overflow on negative\(\-32768\)
+query error DataFusion error: Execution error: Int16 overflow on negative\(\-32768\)
 SELECT negative((-32768)::smallint);
 
-query error DataFusion error: Arrow error: Compute error: Int32 overflow on negative\(\-2147483648\)
+query error DataFusion error: Execution error: Int32 overflow on negative\(\-2147483648\)
 SELECT negative((-2147483648)::int);
 
-query error DataFusion error: Arrow error: Compute error: Int64 overflow on negative\(\-9223372036854775808\)
+query error DataFusion error: Execution error: Int64 overflow on negative\(\-9223372036854775808\)
 SELECT negative((-9223372036854775808)::bigint);
 
 # Test ANSI mode: negative of (MIN+1) should succeed (boundary test)
@@ -320,7 +320,7 @@ SELECT negative((-9223372036854775807)::bigint);
 statement ok
 CREATE TABLE min_values_ansi AS VALUES (-2147483648);
 
-query error DataFusion error: Arrow error: Compute error: Int32 overflow on negative\(\-2147483648\)
+query error DataFusion error: Arrow error: External error: Execution error: Int32 overflow on negative\(\-2147483648\)
 SELECT negative(column1::int) FROM min_values_ansi;
 
 statement ok

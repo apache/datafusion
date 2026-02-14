@@ -20,7 +20,7 @@ use arrow::array::*;
 use arrow::datatypes::{DataType, IntervalDayTime, IntervalMonthDayNano, IntervalUnit};
 use bigdecimal::num_traits::WrappingNeg;
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{Result, ScalarValue, not_impl_err};
+use datafusion_common::{Result, ScalarValue, exec_err, not_impl_err};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
     Volatility,
@@ -105,10 +105,11 @@ macro_rules! impl_integer_array_negative {
         let result: PrimitiveArray<$type> = if $enable_ansi_mode {
             array.try_unary(|x| {
                 x.checked_neg().ok_or_else(|| {
-                    arrow::error::ArrowError::ComputeError(format!(
-                        "{} overflow on negative({x})",
-                        $type_name
-                    ))
+                    arrow::error::ArrowError::from(
+                        (exec_err!("{} overflow on negative({x})", $type_name)
+                            as Result<(), _>)
+                            .unwrap_err(),
+                    )
                 })
             })?
         } else {
@@ -135,10 +136,11 @@ macro_rules! impl_decimal_array_negative {
             array
                 .try_unary(|x| {
                     x.checked_neg().ok_or_else(|| {
-                        arrow::error::ArrowError::ComputeError(format!(
-                            "{} overflow on negative({x})",
-                            $type_name
-                        ))
+                        arrow::error::ArrowError::from(
+                            (exec_err!("{} overflow on negative({x})", $type_name)
+                                as Result<(), _>)
+                                .unwrap_err(),
+                        )
                     })
                 })?
                 .with_data_type(array.data_type().clone())
@@ -154,10 +156,9 @@ macro_rules! impl_integer_scalar_negative {
     ($v:expr, $type_name:expr, $variant:ident, $enable_ansi_mode:expr) => {{
         let result = if $enable_ansi_mode {
             $v.checked_neg().ok_or_else(|| {
-                arrow::error::ArrowError::ComputeError(format!(
-                    "{} overflow on negative({})",
-                    $type_name, $v
-                ))
+                (exec_err!("{} overflow on negative({})", $type_name, $v)
+                    as Result<(), _>)
+                    .unwrap_err()
             })?
         } else {
             $v.wrapping_neg()
@@ -171,10 +172,9 @@ macro_rules! impl_decimal_scalar_negative {
     ($v:expr, $precision:expr, $scale:expr, $type_name:expr, $variant:ident, $enable_ansi_mode:expr) => {{
         let result = if $enable_ansi_mode {
             $v.checked_neg().ok_or_else(|| {
-                arrow::error::ArrowError::ComputeError(format!(
-                    "{} overflow on negative({})",
-                    $type_name, $v
-                ))
+                (exec_err!("{} overflow on negative({})", $type_name, $v)
+                    as Result<(), _>)
+                    .unwrap_err()
             })?
         } else {
             $v.wrapping_neg()
@@ -257,17 +257,21 @@ fn spark_negative(
                 let result: PrimitiveArray<IntervalDayTimeType> = if enable_ansi_mode {
                     array.try_unary(|x| {
                         let days = x.days.checked_neg().ok_or_else(|| {
-                            arrow::error::ArrowError::ComputeError(format!(
-                                "IntervalDayTime overflow on negative (days: {})",
-                                x.days
-                            ))
+                            arrow::error::ArrowError::from(
+                                (exec_err!(
+                                    "IntervalDayTime overflow on negative (days: {})",
+                                    x.days
+                                ) as Result<(), _>)
+                                    .unwrap_err(),
+                            )
                         })?;
-                        let milliseconds = x.milliseconds.checked_neg().ok_or_else(|| {
-                            arrow::error::ArrowError::ComputeError(format!(
+                        let milliseconds =
+                            x.milliseconds.checked_neg().ok_or_else(|| {
+                                arrow::error::ArrowError::from((exec_err!(
                                 "IntervalDayTime overflow on negative (milliseconds: {})",
                                 x.milliseconds
-                            ))
-                        })?;
+                            ) as Result<(), _>).unwrap_err())
+                            })?;
                         Ok::<_, arrow::error::ArrowError>(IntervalDayTime {
                             days,
                             milliseconds,
@@ -287,22 +291,19 @@ fn spark_negative(
                 {
                     array.try_unary(|x| {
                         let months = x.months.checked_neg().ok_or_else(|| {
-                            arrow::error::ArrowError::ComputeError(format!(
+                            arrow::error::ArrowError::from((exec_err!(
                                 "IntervalMonthDayNano overflow on negative (months: {})",
                                 x.months
-                            ))
+                            ) as Result<(), _>).unwrap_err())
                         })?;
                         let days = x.days.checked_neg().ok_or_else(|| {
-                            arrow::error::ArrowError::ComputeError(format!(
-                                "IntervalMonthDayNano overflow on negative (days: {})",
-                                x.days
-                            ))
+                            arrow::error::ArrowError::from((exec_err!("IntervalMonthDayNano overflow on negative (days: {})", x.days) as Result<(), _>).unwrap_err())
                         })?;
                         let nanoseconds = x.nanoseconds.checked_neg().ok_or_else(|| {
-                            arrow::error::ArrowError::ComputeError(format!(
+                            arrow::error::ArrowError::from((exec_err!(
                                 "IntervalMonthDayNano overflow on negative (nanoseconds: {})",
                                 x.nanoseconds
-                            ))
+                            ) as Result<(), _>).unwrap_err())
                         })?;
                         Ok::<_, arrow::error::ArrowError>(IntervalMonthDayNano {
                             months,
@@ -405,16 +406,18 @@ fn spark_negative(
             ScalarValue::IntervalDayTime(Some(v)) => {
                 let result = if enable_ansi_mode {
                     let days = v.days.checked_neg().ok_or_else(|| {
-                        arrow::error::ArrowError::ComputeError(format!(
+                        (exec_err!(
                             "IntervalDayTime overflow on negative (days: {})",
                             v.days
-                        ))
+                        ) as Result<(), _>)
+                            .unwrap_err()
                     })?;
                     let milliseconds = v.milliseconds.checked_neg().ok_or_else(|| {
-                        arrow::error::ArrowError::ComputeError(format!(
+                        (exec_err!(
                             "IntervalDayTime overflow on negative (milliseconds: {})",
                             v.milliseconds
-                        ))
+                        ) as Result<(), _>)
+                            .unwrap_err()
                     })?;
                     IntervalDayTime { days, milliseconds }
                 } else {
@@ -430,22 +433,25 @@ fn spark_negative(
             ScalarValue::IntervalMonthDayNano(Some(v)) => {
                 let result = if enable_ansi_mode {
                     let months = v.months.checked_neg().ok_or_else(|| {
-                        arrow::error::ArrowError::ComputeError(format!(
+                        (exec_err!(
                             "IntervalMonthDayNano overflow on negative (months: {})",
                             v.months
-                        ))
+                        ) as Result<(), _>)
+                            .unwrap_err()
                     })?;
                     let days = v.days.checked_neg().ok_or_else(|| {
-                        arrow::error::ArrowError::ComputeError(format!(
+                        (exec_err!(
                             "IntervalMonthDayNano overflow on negative (days: {})",
                             v.days
-                        ))
+                        ) as Result<(), _>)
+                            .unwrap_err()
                     })?;
                     let nanoseconds = v.nanoseconds.checked_neg().ok_or_else(|| {
-                        arrow::error::ArrowError::ComputeError(format!(
+                        (exec_err!(
                             "IntervalMonthDayNano overflow on negative (nanoseconds: {})",
                             v.nanoseconds
-                        ))
+                        ) as Result<(), _>)
+                            .unwrap_err()
                     })?;
                     IntervalMonthDayNano {
                         months,
