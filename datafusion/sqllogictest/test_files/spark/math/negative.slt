@@ -320,7 +320,7 @@ SELECT negative((-9223372036854775807)::bigint);
 statement ok
 CREATE TABLE min_values_ansi AS VALUES (-2147483648);
 
-query error DataFusion error: Arrow error: External error: Execution error: Int32 overflow on negative\(\-2147483648\)
+query error DataFusion error: Execution error: Int32 overflow on negative\(\-2147483648\)
 SELECT negative(column1::int) FROM min_values_ansi;
 
 statement ok
