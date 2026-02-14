@@ -116,11 +116,12 @@ explain select * from (select column1, unnest(column2) as o from d) where o['a']
 ----
 physical_plan
 01)ProjectionExec: expr=[column1@0 as column1, __unnest_placeholder(d.column2,depth=1)@1 as o]
-02)--FilterExec: get_field(__unnest_placeholder(d.column2,depth=1)@1, a) = 1
+02)--FilterExec: __datafusion_extracted_1@0 = 1, projection=[column1@1, __unnest_placeholder(d.column2,depth=1)@2]
 03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-04)------UnnestExec
-05)--------ProjectionExec: expr=[column1@0 as column1, column2@1 as __unnest_placeholder(d.column2)]
-06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+04)------ProjectionExec: expr=[get_field(__unnest_placeholder(d.column2,depth=1)@1, a) as __datafusion_extracted_1, column1@0 as column1, __unnest_placeholder(d.column2,depth=1)@1 as __unnest_placeholder(d.column2,depth=1)]
+05)--------UnnestExec
+06)----------ProjectionExec: expr=[column1@0 as column1, column2@1 as __unnest_placeholder(d.column2)]
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 drop table d;

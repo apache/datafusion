@@ -15,13 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#[macro_use]
-extern crate criterion;
-
 use arrow::array::{ArrayRef, Int64Array, ListArray};
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Field};
-use criterion::{BenchmarkId, Criterion};
+use criterion::{
+    criterion_group, criterion_main, {BenchmarkId, Criterion},
+};
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_functions_nested::set_ops::{ArrayIntersect, ArrayUnion};
