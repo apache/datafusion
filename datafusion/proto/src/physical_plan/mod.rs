@@ -3806,15 +3806,27 @@ impl PhysicalProtoConverterExtension for DeduplicatingSerializer {
         expr: &Arc<dyn PhysicalExpr>,
         codec: &dyn PhysicalExtensionCodec,
     ) -> Result<protobuf::PhysicalExprNode> {
+        use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
+
         let mut proto = serialize_physical_expr_with_converter(expr, codec, self)?;
 
         // Hash session_id, pointer address, and process ID together to create expr_id.
         // - session_id: random per serializer, prevents collisions when merging serializations
         // - ptr: unique address per Arc within a process
         // - pid: prevents collisions if serializer is shared across processes
+        //
+        // Special case for DynamicFilterPhysicalExpr: use inner Arc address instead of outer Arc.
+        // This ensures that remapped filters (which have different outer Arcs but share the same
+        // inner Arc for state synchronization) get the same expr_id and are properly deduplicated.
+        let ptr_to_hash = if let Some(dynamic_filter) = expr.as_any().downcast_ref::<DynamicFilterPhysicalExpr>() {
+            dynamic_filter.inner_id()
+        } else {
+            Arc::as_ptr(expr) as *const () as u64
+        };
+
         let mut hasher = DefaultHasher::new();
         self.session_id.hash(&mut hasher);
-        (Arc::as_ptr(expr) as *const () as u64).hash(&mut hasher);
+        ptr_to_hash.hash(&mut hasher);
         std::process::id().hash(&mut hasher);
         proto.expr_id = Some(hasher.finish());
 
@@ -3905,8 +3917,17 @@ impl PhysicalProtoConverterExtension for DeduplicatingDeserializer {
 /// on demand for each operation.
 ///
 /// [`DynamicFilterPhysicalExpr`]: https://docs.rs/datafusion-physical-expr/latest/datafusion_physical_expr/expressions/struct.DynamicFilterPhysicalExpr.html
-#[derive(Debug, Default, Clone, Copy)]
-pub struct DeduplicatingProtoConverter {}
+pub struct DeduplicatingProtoConverter {
+    serializer: DeduplicatingSerializer,
+}
+
+impl Default for DeduplicatingProtoConverter {
+    fn default() -> Self {
+        Self {
+            serializer: DeduplicatingSerializer::new(),
+        }
+    }
+}
 
 impl PhysicalProtoConverterExtension for DeduplicatingProtoConverter {
     fn proto_to_execution_plan(
@@ -3927,11 +3948,10 @@ impl PhysicalProtoConverterExtension for DeduplicatingProtoConverter {
     where
         Self: Sized,
     {
-        let serializer = DeduplicatingSerializer::new();
         protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             Arc::clone(plan),
             codec,
-            &serializer,
+            &self.serializer,
         )
     }
 
@@ -3954,8 +3974,7 @@ impl PhysicalProtoConverterExtension for DeduplicatingProtoConverter {
         expr: &Arc<dyn PhysicalExpr>,
         codec: &dyn PhysicalExtensionCodec,
     ) -> Result<protobuf::PhysicalExprNode> {
-        let serializer = DeduplicatingSerializer::new();
-        serializer.physical_expr_to_proto(expr, codec)
+        self.serializer.physical_expr_to_proto(expr, codec)
     }
 }
 
