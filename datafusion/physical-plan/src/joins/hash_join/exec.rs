@@ -80,7 +80,9 @@ use datafusion_functions_aggregate_common::min_max::{MaxAccumulator, MinAccumula
 use datafusion_physical_expr::equivalence::{
     ProjectionMapping, join_equivalence_properties,
 };
-use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
+use datafusion_physical_expr::expressions::{
+    AdaptiveSelectivityFilterExpr, DynamicFilterPhysicalExpr, SelectivityConfig, lit,
+};
 use datafusion_physical_expr::projection::{ProjectionRef, combine_projections};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 
@@ -1466,7 +1468,25 @@ impl ExecutionPlan for HashJoinExec {
         {
             // Add actual dynamic filter to right side (probe side)
             let dynamic_filter = Self::create_dynamic_filter(&self.on);
-            right_child = right_child.with_self_filter(dynamic_filter);
+
+            // Optionally wrap with selectivity tracking
+            let filter_expr: Arc<dyn PhysicalExpr> = if config
+                .optimizer
+                .enable_adaptive_filter_selectivity_tracking
+            {
+                let selectivity_config = SelectivityConfig {
+                    threshold: config.optimizer.adaptive_filter_selectivity_threshold,
+                    min_rows: config.optimizer.adaptive_filter_min_rows_for_selectivity,
+                };
+                Arc::new(AdaptiveSelectivityFilterExpr::new(
+                    dynamic_filter,
+                    selectivity_config,
+                ))
+            } else {
+                dynamic_filter
+            };
+
+            right_child = right_child.with_self_filter(filter_expr);
         }
 
         Ok(FilterDescription::new()
@@ -1500,10 +1520,31 @@ impl ExecutionPlan for HashJoinExec {
         if let Some(filter) = right_child_self_filters.first() {
             // Note that we don't check PushdDownPredicate::discrimnant because even if nothing said
             // "yes, I can fully evaluate this filter" things might still use it for statistics -> it's worth updating
-            let predicate = Arc::clone(&filter.predicate);
-            if let Ok(dynamic_filter) =
-                Arc::downcast::<DynamicFilterPhysicalExpr>(predicate)
-            {
+
+            // Try to extract the DynamicFilterPhysicalExpr, either directly or from a AdaptiveSelectivityFilterExpr wrapper
+            let maybe_dynamic_filter: Option<Arc<DynamicFilterPhysicalExpr>> = {
+                let predicate = Arc::clone(&filter.predicate);
+                // First, try direct downcast to DynamicFilterPhysicalExpr
+                // Using .clone() instead of Arc::clone because it enables implicit coercion to Arc<dyn Any>
+                #[expect(clippy::clone_on_ref_ptr)]
+                if let Ok(df) =
+                    Arc::downcast::<DynamicFilterPhysicalExpr>(predicate.clone())
+                {
+                    Some(df)
+                } else if let Some(wrapper) = predicate
+                    .as_any()
+                    .downcast_ref::<AdaptiveSelectivityFilterExpr>(
+                ) {
+                    // Try to get it from a AdaptiveSelectivityFilterExpr wrapper
+                    #[expect(clippy::clone_on_ref_ptr)]
+                    Arc::downcast::<DynamicFilterPhysicalExpr>(wrapper.inner().clone())
+                        .ok()
+                } else {
+                    None
+                }
+            };
+
+            if let Some(dynamic_filter) = maybe_dynamic_filter {
                 // We successfully pushed down our self filter - we need to make a new node with the dynamic filter
                 let new_node = Arc::new(HashJoinExec {
                     left: Arc::clone(&self.left),

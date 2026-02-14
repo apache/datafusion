@@ -1115,6 +1115,34 @@ config_namespace! {
         /// See: <https://trino.io/docs/current/admin/dynamic-filtering.html#dynamic-filter-collection-thresholds>
         pub hash_join_inlist_pushdown_max_distinct_values: usize, default = 150
 
+        /// Minimum number of rows to process before making a selectivity decision
+        /// for adaptive filtering of join dynamic filters.
+        ///
+        /// The filter will remain in a tracking state until this many rows have been
+        /// processed. This ensures statistical stability before making the disable decision.
+        /// Only used when `enable_adaptive_filter_selectivity_tracking` is true.
+        pub adaptive_filter_min_rows_for_selectivity: usize, default = 100_000
+
+        /// Selectivity threshold for adaptive disabling of join dynamic filters.
+        ///
+        /// If the filter passes this fraction or more of rows, it will be disabled.
+        /// Value should be between 0.0 and 1.0.
+        ///
+        /// For example, 0.95 means if 95% or more of rows pass the filter, it will be disabled.
+        /// Only used when `enable_adaptive_filter_selectivity_tracking` is true.
+        pub adaptive_filter_selectivity_threshold: f64, default = 0.50
+
+        /// Enable selectivity-based disabling of dynamic filters from joins.
+        ///
+        /// When enabled, join dynamic filters that pass most rows (above the threshold)
+        /// will be automatically disabled to avoid evaluation overhead. This is useful
+        /// when the build side of a join covers most of the probe side values, making
+        /// the filter expensive to evaluate for little benefit.
+        ///
+        /// The selectivity tracking resets when the dynamic filter is updated (e.g., when
+        /// the hash table is built), allowing the filter to be re-evaluated with new data.
+        pub enable_adaptive_filter_selectivity_tracking: bool, default = true
+
         /// The default filter selectivity used by Filter Statistics
         /// when an exact selectivity cannot be determined. Valid values are
         /// between 0 (no selectivity) and 100 (all rows are selected).

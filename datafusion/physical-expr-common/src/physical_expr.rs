@@ -595,7 +595,6 @@ pub fn snapshot_physical_expr(
 
 /// Take a snapshot of the given `PhysicalExpr` if it is dynamic.
 ///
-/// Take a snapshot of this `PhysicalExpr` if it is dynamic.
 /// This is used to capture the current state of `PhysicalExpr`s that may contain
 /// dynamic references to other operators in order to serialize it over the wire
 /// or treat it via downcast matching.

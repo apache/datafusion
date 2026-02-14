@@ -158,7 +158,7 @@ physical_plan
 01)ProjectionExec: expr=[id@1 as id, data@2 as data, info@0 as info]
 02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0)], projection=[info@1, id@2, data@3]
 03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id, info], file_type=parquet
-04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet, predicate=DynamicFilter [ empty ]
+04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet, predicate=AdaptiveSelectivity [ DynamicFilter [ empty ] ]
 
 # Disable Join dynamic filter pushdown
 statement ok
@@ -213,7 +213,7 @@ physical_plan
 01)ProjectionExec: expr=[id@1 as id, data@2 as data, info@0 as info]
 02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0)], projection=[info@1, id@2, data@3]
 03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id, info], file_type=parquet
-04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet, predicate=DynamicFilter [ empty ]
+04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet, predicate=AdaptiveSelectivity [ DynamicFilter [ empty ] ]
 
 # Enable TopK, disable Join
 statement ok
@@ -436,7 +436,7 @@ physical_plan
 01)ProjectionExec: expr=[id@1 as id, data@2 as data, info@0 as info]
 02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0)], projection=[info@1, id@2, data@3]
 03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id, info], file_type=parquet
-04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet, predicate=DynamicFilter [ empty ]
+04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet, predicate=AdaptiveSelectivity [ DynamicFilter [ empty ] ]
 
 # Cleanup
 
@@ -476,3 +476,104 @@ SET datafusion.optimizer.enable_aggregate_dynamic_filter_pushdown = true;
 
 statement ok
 SET datafusion.optimizer.enable_dynamic_filter_pushdown = true;
+
+# Test 6: Adaptive selectivity-based dynamic filter disabling configuration
+# These options control automatic disabling of dynamic filters that pass most rows
+
+statement ok
+set datafusion.catalog.information_schema = true
+
+# Verify default values for adaptive selectivity tracking config options
+query T
+SELECT value FROM information_schema.df_settings
+WHERE name = 'datafusion.optimizer.enable_adaptive_filter_selectivity_tracking';
+----
+true
+
+query T
+SELECT value FROM information_schema.df_settings
+WHERE name = 'datafusion.optimizer.adaptive_filter_selectivity_threshold';
+----
+0.5
+
+query T
+SELECT value FROM information_schema.df_settings
+WHERE name = 'datafusion.optimizer.adaptive_filter_min_rows_for_selectivity';
+----
+100000
+
+# Enable adaptive selectivity tracking
+statement ok
+SET datafusion.optimizer.enable_adaptive_filter_selectivity_tracking = true;
+
+# Verify it's enabled
+query T
+SELECT value FROM information_schema.df_settings
+WHERE name = 'datafusion.optimizer.enable_adaptive_filter_selectivity_tracking';
+----
+true
+
+# Set custom threshold and min_rows
+statement ok
+SET datafusion.optimizer.adaptive_filter_selectivity_threshold = 0.80;
+
+statement ok
+SET datafusion.optimizer.adaptive_filter_min_rows_for_selectivity = 5000;
+
+# Verify custom values
+query T
+SELECT value FROM information_schema.df_settings
+WHERE name = 'datafusion.optimizer.adaptive_filter_selectivity_threshold';
+----
+0.8
+
+query T
+SELECT value FROM information_schema.df_settings
+WHERE name = 'datafusion.optimizer.adaptive_filter_min_rows_for_selectivity';
+----
+5000
+
+statement ok
+set datafusion.catalog.information_schema = false
+
+# Test that join queries still work correctly with adaptive selectivity tracking enabled
+statement ok
+CREATE TABLE sel_left(id INT, data VARCHAR) AS VALUES
+(1, 'left1'),
+(2, 'left2'),
+(3, 'left3'),
+(4, 'left4'),
+(5, 'left5');
+
+statement ok
+CREATE TABLE sel_right(id INT, info VARCHAR) AS VALUES
+(1, 'right1'),
+(3, 'right3'),
+(5, 'right5');
+
+# Verify join returns correct results with adaptive selectivity tracking enabled
+query ITT rowsort
+SELECT l.id, l.data, r.info
+FROM sel_left l
+INNER JOIN sel_right r ON l.id = r.id;
+----
+1 left1 right1
+3 left3 right3
+5 left5 right5
+
+# Cleanup selectivity test tables
+statement ok
+DROP TABLE sel_left;
+
+statement ok
+DROP TABLE sel_right;
+
+# Reset adaptive selectivity tracking configs to defaults
+statement ok
+SET datafusion.optimizer.enable_adaptive_filter_selectivity_tracking = false;
+
+statement ok
+SET datafusion.optimizer.adaptive_filter_selectivity_threshold = 0.95;
+
+statement ok
+SET datafusion.optimizer.adaptive_filter_min_rows_for_selectivity = 10000;
