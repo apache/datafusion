@@ -895,7 +895,16 @@ message PhysicalExprNode {
     UnknownColumn unknown_column = 20;
 
     PhysicalHashExprNode hash_expr = 21;
+
+    PhysicalDynamicFilterExprNode dynamic_filter = 22;
   }
+}
+
+message PhysicalDynamicFilterExprNode {
+  // The child expressions (columns referenced by this filter)
+  repeated PhysicalExprNode children = 1;
+  // The initial/placeholder expression (typically lit(true))
+  PhysicalExprNode initial_expr = 2;
 }
 
 message PhysicalScalarUdfNode {

@@ -353,6 +353,110 @@ fn roundtrip_hash_join_with_dynamic_filter() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn roundtrip_hash_join_with_dynamic_filter_optimized() -> Result<()> {
+    use datafusion::prelude::SessionContext;
+    use datafusion_common::config::ConfigOptions;
+    use datafusion::physical_optimizer::PhysicalOptimizerRule;
+    use datafusion::physical_optimizer::filter_pushdown::FilterPushdown;
+    use datafusion::arrow::array::Int32Array;
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use arrow::array::RecordBatch;
+
+    // Create a session context with dynamic filter pushdown enabled
+    let mut config = ConfigOptions::default();
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+
+    let ctx = SessionContext::new_with_config(config.into());
+
+    // Create build_table: (id, value)
+    let build_batch = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("value", DataType::Int32, false),
+        ])),
+        vec![
+            Arc::new(Int32Array::from(vec![1, 2])),
+            Arc::new(Int32Array::from(vec![100, 200])),
+        ],
+    )?;
+    ctx.register_batch("build_table", build_batch)?;
+
+    // Create probe_table: (id, data)
+    let probe_batch = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("data", DataType::Int32, false),
+        ])),
+        vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4])),
+            Arc::new(Int32Array::from(vec![10, 20, 30, 40])),
+        ],
+    )?;
+    ctx.register_batch("probe_table", probe_batch)?;
+
+    // Execute join query
+    let df = ctx.sql("SELECT * FROM build_table b JOIN probe_table p ON b.id = p.id").await?;
+    let (state, logical_plan) = df.into_parts();
+
+    // Create physical plan
+    let physical_plan = state.create_physical_plan(&logical_plan).await?;
+
+    // Apply FilterPushdown optimizer
+    let filter_pushdown = FilterPushdown::new_post_optimization();
+    let optimized_plan = filter_pushdown.optimize(physical_plan, state.config().options())?;
+
+    println!("=== BEFORE SERIALIZATION ===");
+    println!("{}", datafusion::physical_plan::displayable(optimized_plan.as_ref()).indent(true));
+
+    // Check if HashJoinExec has a dynamic filter
+    fn check_hash_join_filter(plan: &Arc<dyn ExecutionPlan>) -> bool {
+        if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>() {
+            if hash_join.dynamic_filter_for_test().is_some() {
+                println!("✓ Found HashJoinExec with dynamic filter");
+                return true;
+            }
+        }
+        for child in plan.children() {
+            if check_hash_join_filter(child) {
+                return true;
+            }
+        }
+        false
+    }
+
+    let has_filter_before = check_hash_join_filter(&optimized_plan);
+    println!("Has dynamic filter before: {}", has_filter_before);
+
+    // Serialize
+    let codec = datafusion_proto::physical_plan::DefaultPhysicalExtensionCodec {};
+    let proto_converter = datafusion_proto::physical_plan::DefaultPhysicalProtoConverter;
+    let proto = datafusion_proto::protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
+        optimized_plan.clone(),
+        &codec,
+        &proto_converter,
+    )?;
+
+    // Deserialize
+    let task_ctx = state.task_ctx();
+    let deserialized_plan = proto.try_into_physical_plan(
+        &task_ctx,
+        &codec,
+    )?;
+
+    println!("\n=== AFTER DESERIALIZATION ===");
+    println!("{}", datafusion::physical_plan::displayable(deserialized_plan.as_ref()).indent(true));
+
+    // Check if HashJoinExec still has a dynamic filter
+    let has_filter_after = check_hash_join_filter(&deserialized_plan);
+    println!("Has dynamic filter after: {}", has_filter_after);
+
+    assert_eq!(has_filter_before, has_filter_after,
+        "Dynamic filter should be preserved through serialization");
+
+    Ok(())
+}
+
 #[test]
 fn roundtrip_nested_loop_join() -> Result<()> {
     let field_a = Field::new("col", DataType::Int64, false);

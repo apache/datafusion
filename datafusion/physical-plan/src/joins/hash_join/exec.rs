@@ -668,12 +668,22 @@ impl HashJoinExec {
     ) -> Result<Self> {
         use crate::expressions::DynamicFilterPhysicalExpr;
 
-        // Cast Arc<dyn PhysicalExpr> to Arc<DynamicFilterPhysicalExpr>
-        // We assume the caller has provided the correct type
-        let raw_ptr = Arc::into_raw(filter_expr);
-        let typed_ptr = raw_ptr as *const DynamicFilterPhysicalExpr;
-        // Safety: The caller must ensure this is actually a DynamicFilterPhysicalExpr
-        let filter = unsafe { Arc::from_raw(typed_ptr) };
+        // Verify it's actually a DynamicFilterPhysicalExpr
+        if !filter_expr.as_any().is::<DynamicFilterPhysicalExpr>() {
+            return internal_err!(
+                "Expected DynamicFilterPhysicalExpr but got: {:?}",
+                filter_expr
+            );
+        }
+
+        // Safety: We just verified it's a DynamicFilterPhysicalExpr above.
+        // We need to convert Arc<dyn PhysicalExpr> to Arc<DynamicFilterPhysicalExpr>.
+        // This is safe because:
+        // 1. We verified the concrete type above
+        // 2. Both Arc pointers have the same memory layout and point to the same allocation
+        // 3. We're only changing the compile-time type information, not the runtime data
+        let raw_ptr = Arc::into_raw(filter_expr) as *const () as *const DynamicFilterPhysicalExpr;
+        let filter = unsafe { Arc::from_raw(raw_ptr) };
 
         self.dynamic_filter = Some(HashJoinExecDynamicFilter {
             filter,

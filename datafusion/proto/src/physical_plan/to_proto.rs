@@ -256,6 +256,36 @@ pub fn serialize_physical_expr_with_converter(
     codec: &dyn PhysicalExtensionCodec,
     proto_converter: &dyn PhysicalProtoConverterExtension,
 ) -> Result<protobuf::PhysicalExprNode> {
+    use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
+
+    // Check for DynamicFilterPhysicalExpr BEFORE snapshotting,
+    // because snapshot() returns the inner expression, not the wrapper
+    if let Some(dynamic_filter) = value.as_any().downcast_ref::<DynamicFilterPhysicalExpr>() {
+        let children = serialize_physical_exprs(
+            &dynamic_filter.children().into_iter().cloned().collect::<Vec<_>>(),
+            codec,
+            proto_converter,
+        )?;
+
+        // Serialize the current inner expression
+        // For new/unupdated filters this will be lit(true)
+        // For updated filters this will be the actual filter condition
+        let current_expr = dynamic_filter.current()?;
+        let initial_expr_proto = Box::new(
+            proto_converter.physical_expr_to_proto(&current_expr, codec)?
+        );
+
+        return Ok(protobuf::PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(protobuf::physical_expr_node::ExprType::DynamicFilter(
+                Box::new(protobuf::PhysicalDynamicFilterExprNode {
+                    children,
+                    initial_expr: Some(initial_expr_proto),
+                }),
+            )),
+        });
+    }
+
     // Snapshot the expr in case it has dynamic predicate state so
     // it can be serialized
     let value = snapshot_physical_expr(Arc::clone(value))?;
