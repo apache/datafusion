@@ -666,8 +666,6 @@ impl HashJoinExec {
         mut self,
         filter_expr: Arc<dyn PhysicalExpr>,
     ) -> Result<Self> {
-        use crate::expressions::DynamicFilterPhysicalExpr;
-
         // Verify it's actually a DynamicFilterPhysicalExpr
         if !filter_expr.as_any().is::<DynamicFilterPhysicalExpr>() {
             return internal_err!(

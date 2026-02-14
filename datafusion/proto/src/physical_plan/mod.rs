@@ -51,6 +51,7 @@ use datafusion_functions_table::generate_series::{
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::async_scalar_function::AsyncFuncExpr;
+use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
 use datafusion_physical_expr::{LexOrdering, LexRequirement, PhysicalExprRef};
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, LimitOptions, PhysicalGroupBy,
@@ -3806,8 +3807,6 @@ impl PhysicalProtoConverterExtension for DeduplicatingSerializer {
         expr: &Arc<dyn PhysicalExpr>,
         codec: &dyn PhysicalExtensionCodec,
     ) -> Result<protobuf::PhysicalExprNode> {
-        use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
-
         let mut proto = serialize_physical_expr_with_converter(expr, codec, self)?;
 
         // Hash session_id, pointer address, and process ID together to create expr_id.

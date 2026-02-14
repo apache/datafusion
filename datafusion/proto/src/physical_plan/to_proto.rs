@@ -32,6 +32,7 @@ use datafusion_datasource_json::file_format::JsonSink;
 use datafusion_datasource_parquet::file_format::ParquetSink;
 use datafusion_expr::WindowFrame;
 use datafusion_physical_expr::ScalarFunctionExpr;
+use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
 use datafusion_physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
 use datafusion_physical_expr_common::physical_expr::snapshot_physical_expr;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
@@ -256,8 +257,6 @@ pub fn serialize_physical_expr_with_converter(
     codec: &dyn PhysicalExtensionCodec,
     proto_converter: &dyn PhysicalProtoConverterExtension,
 ) -> Result<protobuf::PhysicalExprNode> {
-    use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
-
     // Check for DynamicFilterPhysicalExpr BEFORE snapshotting,
     // because snapshot() returns the inner expression, not the wrapper
     if let Some(dynamic_filter) = value.as_any().downcast_ref::<DynamicFilterPhysicalExpr>() {
