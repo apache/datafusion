@@ -957,18 +957,7 @@ impl FileScanConfig {
     /// upstream e.g. by `SortPreservingMergeExec`.
     fn validated_output_ordering(&self) -> Vec<LexOrdering> {
         let schema = self.file_source.table_schema().table_schema();
-        self.output_ordering
-            .iter()
-            .filter(|ordering| {
-                is_ordering_valid_for_file_groups(
-                    &self.file_groups,
-                    ordering,
-                    schema,
-                    None, // no projection remapping needed at table-schema level
-                )
-            })
-            .cloned()
-            .collect()
+        validate_orderings(&self.output_ordering, schema, &self.file_groups, None)
     }
 
     /// Get the file schema (schema of the files without partition columns)
@@ -1373,6 +1362,23 @@ fn is_ordering_valid_for_file_groups(
     })
 }
 
+/// Filters orderings to retain only those valid for all file groups,
+/// verified via min/max statistics.
+fn validate_orderings(
+    orderings: &[LexOrdering],
+    schema: &SchemaRef,
+    file_groups: &[FileGroup],
+    projection: Option<&[usize]>,
+) -> Vec<LexOrdering> {
+    orderings
+        .iter()
+        .filter(|ordering| {
+            is_ordering_valid_for_file_groups(file_groups, ordering, schema, projection)
+        })
+        .cloned()
+        .collect()
+}
+
 /// The various listing tables does not attempt to read all files
 /// concurrently, instead they will read files in sequence within a
 /// partition.  This is an important property as it allows plans to
@@ -1445,35 +1451,41 @@ fn get_projected_output_ordering(
         .as_ref()
         .map(|p| ordered_column_indices_from_projection(p));
 
-    let mut all_orderings = vec![];
-    for new_ordering in projected_orderings {
-        let is_valid = match &indices {
-            Some(Some(indices)) => is_ordering_valid_for_file_groups(
-                &base_config.file_groups,
-                &new_ordering,
+    match indices {
+        Some(Some(indices)) => {
+            // Simple column projection — validate with statistics
+            validate_orderings(
+                &projected_orderings,
                 projected_schema,
+                &base_config.file_groups,
                 Some(indices.as_slice()),
-            ),
-            _ => {
-                // Can't determine projection column indices for statistics
-                // check. Still valid if all file groups have at most one
-                // file (single-file groups are trivially sorted).
-                base_config.file_groups.iter().all(|g| g.len() <= 1)
-            }
-        };
-
-        if !is_valid {
-            debug!(
-                "Skipping specified output ordering {:?}. \
-                Some file groups couldn't be determined to be sorted: {:?}",
-                base_config.output_ordering[0], base_config.file_groups
-            );
-            continue;
+            )
         }
-
-        all_orderings.push(new_ordering);
+        None => {
+            // No projection — validate with statistics (no remapping needed)
+            validate_orderings(
+                &projected_orderings,
+                projected_schema,
+                &base_config.file_groups,
+                None,
+            )
+        }
+        Some(None) => {
+            // Complex projection (expressions, not simple columns) — can't
+            // determine column indices for statistics. Still valid if all
+            // file groups have at most one file.
+            if base_config.file_groups.iter().all(|g| g.len() <= 1) {
+                projected_orderings
+            } else {
+                debug!(
+                    "Skipping specified output orderings. \
+                     Some file groups couldn't be determined to be sorted: {:?}",
+                    base_config.file_groups
+                );
+                vec![]
+            }
+        }
     }
-    all_orderings
 }
 
 /// Convert type to a type suitable for use as a `ListingTable`
