@@ -34,7 +34,9 @@ use datafusion_functions::utils::make_scalar_function;
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#map>
 ///
 /// Creates a map from alternating key-value pairs.
+/// Supports 0 or more pairs.
 /// Example: map(key1, value1, key2, value2, ...) -> {key1: value1, key2: value2, ...}
+/// Example: map() -> {}
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Map {
     signature: Signature,
@@ -68,14 +70,15 @@ impl ScalarUDFImpl for Map {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.is_empty() {
-            return exec_err!("map requires at least one pair of arguments, got 0");
-        }
         if !arg_types.len().is_multiple_of(2) {
             return exec_err!(
                 "map requires an even number of arguments, got {}",
                 arg_types.len()
             );
+        }
+
+        if arg_types.is_empty() {
+            return Ok(map_type_from_key_value_types(&DataType::Null, &DataType::Null));
         }
 
         let key_type = arg_types
@@ -104,6 +107,18 @@ impl ScalarUDFImpl for Map {
 }
 
 fn map_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.is_empty() {
+        let offsets = OffsetBuffer::new(vec![0].into());
+        return map_from_keys_values_offsets_nulls(
+            &new_null_array(&DataType::Null, 0),
+            &new_null_array(&DataType::Null, 0),
+            offsets.as_ref(),
+            offsets.as_ref(),
+            None,
+            None,
+        );
+    }
+
     let num_rows = args[0].len();
     let num_pairs = args.len() / 2;
 
