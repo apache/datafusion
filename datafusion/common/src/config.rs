@@ -712,7 +712,7 @@ config_namespace! {
         /// (reading) If true, filter expressions evaluated during the parquet decoding operation
         /// will be reordered heuristically to minimize the cost of evaluation. If false,
         /// the filters are applied in the same order as written in the query
-        pub reorder_filters: bool, default = false
+        pub reorder_filters: bool, default = true
 
         /// (reading) Force the use of RowSelections for filter results, when
         /// pushdown_filters is enabled. If false, the reader will automatically
@@ -928,7 +928,7 @@ config_namespace! {
 
         /// When set to true, the optimizer will attempt to push down Join dynamic filters
         /// into the file scan phase.
-        pub enable_join_dynamic_filter_pushdown: bool, default = false
+        pub enable_join_dynamic_filter_pushdown: bool, default = true
 
         /// When set to true, the optimizer will attempt to push down Aggregate dynamic filters
         /// into the file scan phase.
@@ -954,7 +954,7 @@ config_namespace! {
         pub repartition_aggregations: bool, default = true
 
         /// Minimum total files size in bytes to perform file scan repartitioning.
-        pub repartition_file_min_size: usize, default = 128 * 1024
+        pub repartition_file_min_size: usize, default = 10 * 1024 * 1024
 
         /// Should DataFusion repartition data using the join keys to execute joins in parallel
         /// using the provided `target_partitions` level
