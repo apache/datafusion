@@ -72,7 +72,7 @@ use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeE
 use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlanProperties, Partitioning, PlanProperties,
-    Statistics, displayable,
+    displayable,
 };
 use insta::Settings;
 
@@ -213,10 +213,6 @@ impl ExecutionPlan for SortRequiredExec {
         _context: Arc<datafusion::execution::context::TaskContext>,
     ) -> Result<datafusion_physical_plan::SendableRecordBatchStream> {
         unreachable!();
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        self.input.partition_statistics(None)
     }
 }
 
