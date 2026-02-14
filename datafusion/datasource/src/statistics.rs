@@ -266,11 +266,12 @@ impl MinMaxStatistics {
     }
 
     /// Check if the min/max statistics are in order and non-overlapping
+    /// (or touching at boundaries)
     pub fn is_sorted(&self) -> bool {
         self.max_by_sort_order
             .iter()
             .zip(self.min_by_sort_order.iter().skip(1))
-            .all(|(max, next_min)| max < next_min)
+            .all(|(max, next_min)| max <= next_min)
     }
 }
 
