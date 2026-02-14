@@ -78,7 +78,10 @@ impl ScalarUDFImpl for Map {
         }
 
         if arg_types.is_empty() {
-            return Ok(map_type_from_key_value_types(&DataType::Null, &DataType::Null));
+            return Ok(map_type_from_key_value_types(
+                &DataType::Null,
+                &DataType::Null,
+            ));
         }
 
         let key_type = arg_types

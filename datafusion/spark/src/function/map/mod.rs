@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub mod map_func;
 pub mod map_from_arrays;
 pub mod map_from_entries;
+pub mod map_func;
 pub mod str_to_map;
 mod utils;
 
