@@ -34,6 +34,7 @@ use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::sink::DataSinkExec;
 use datafusion_datasource::source::{DataSource, DataSourceExec};
+use datafusion_datasource_arrow::source::ArrowSource;
 #[cfg(feature = "avro")]
 use datafusion_datasource_avro::source::AvroSource;
 use datafusion_datasource_csv::file_format::CsvSink;
@@ -198,6 +199,9 @@ impl protobuf::PhysicalPlanNode {
             }
             PhysicalPlanType::MemoryScan(scan) => {
                 self.try_into_memory_scan_physical_plan(scan, ctx, codec, proto_converter)
+            }
+            PhysicalPlanType::ArrowScan(scan) => {
+                self.try_into_arrow_scan_physical_plan(scan, ctx, codec, proto_converter)
             }
             PhysicalPlanType::CoalesceBatches(coalesce_batches) => self
                 .try_into_coalesce_batches_physical_plan(
@@ -770,6 +774,27 @@ impl protobuf::PhysicalPlanNode {
             codec,
             proto_converter,
             Arc::new(JsonSource::new(table_schema)),
+        )?;
+        Ok(DataSourceExec::from_data_source(scan_conf))
+    }
+
+    fn try_into_arrow_scan_physical_plan(
+        &self,
+        scan: &protobuf::ArrowScanExecNode,
+        ctx: &TaskContext,
+        codec: &dyn PhysicalExtensionCodec,
+        proto_converter: &dyn PhysicalProtoConverterExtension,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let base_conf = scan.base_conf.as_ref().ok_or_else(|| {
+            internal_datafusion_err!("base_conf in ArrowScanExecNode is missing.")
+        })?;
+        let table_schema = parse_table_schema_from_proto(base_conf)?;
+        let scan_conf = parse_protobuf_file_scan_config(
+            base_conf,
+            ctx,
+            codec,
+            proto_converter,
+            Arc::new(ArrowSource::new_file_source(table_schema)),
         )?;
         Ok(DataSourceExec::from_data_source(scan_conf))
     }
@@ -2856,6 +2881,23 @@ impl protobuf::PhysicalPlanNode {
                 return Ok(Some(protobuf::PhysicalPlanNode {
                     physical_plan_type: Some(PhysicalPlanType::JsonScan(
                         protobuf::JsonScanExecNode {
+                            base_conf: Some(serialize_file_scan_config(
+                                scan_conf,
+                                codec,
+                                proto_converter,
+                            )?),
+                        },
+                    )),
+                }));
+            }
+        }
+
+        if let Some(scan_conf) = data_source.as_any().downcast_ref::<FileScanConfig>() {
+            let source = scan_conf.file_source();
+            if let Some(_arrow_source) = source.as_any().downcast_ref::<ArrowSource>() {
+                return Ok(Some(protobuf::PhysicalPlanNode {
+                    physical_plan_type: Some(PhysicalPlanType::ArrowScan(
+                        protobuf::ArrowScanExecNode {
                             base_conf: Some(serialize_file_scan_config(
                                 scan_conf,
                                 codec,

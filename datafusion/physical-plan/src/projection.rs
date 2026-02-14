@@ -342,10 +342,6 @@ impl ExecutionPlan for ProjectionExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
-    }
-
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         let input_stats = self.input.partition_statistics(partition)?;
         let output_schema = self.schema();
@@ -553,6 +549,15 @@ impl RecordBatchStream for ProjectionStream {
     }
 }
 
+/// Trait for execution plans that can embed a projection, avoiding a separate
+/// [`ProjectionExec`] wrapper.
+///
+/// # Empty projections
+///
+/// `Some(vec![])` is a valid projection that produces zero output columns while
+/// preserving the correct row count. Implementors must ensure that runtime batch
+/// construction still returns batches with the right number of rows even when no
+/// columns are selected (e.g. for `SELECT count(1) … JOIN …`).
 pub trait EmbeddedProjection: ExecutionPlan + Sized {
     fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self>;
 }
@@ -563,6 +568,15 @@ pub fn try_embed_projection<Exec: EmbeddedProjection + 'static>(
     projection: &ProjectionExec,
     execution_plan: &Exec,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    // If the projection has no expressions at all (e.g., ProjectionExec: expr=[]),
+    // embed an empty projection into the execution plan so it outputs zero columns.
+    // This avoids allocating throwaway null arrays for build-side columns
+    // when no output columns are actually needed (e.g., count(1) over a right join).
+    if projection.expr().is_empty() {
+        let new_execution_plan = Arc::new(execution_plan.with_projection(Some(vec![]))?);
+        return Ok(Some(new_execution_plan));
+    }
+
     // Collect all column indices from the given projection expressions.
     let projection_index = collect_column_indices(projection.expr());
 
