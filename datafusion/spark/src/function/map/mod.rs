@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub mod map_expr;
+pub mod map_func;
 pub mod map_from_arrays;
 pub mod map_from_entries;
 pub mod str_to_map;
@@ -25,7 +25,7 @@ use datafusion_expr::ScalarUDF;
 use datafusion_functions::make_udf_function;
 use std::sync::Arc;
 
-make_udf_function!(map_expr::Map, map_);
+make_udf_function!(map_func::Map, map_);
 make_udf_function!(map_from_arrays::MapFromArrays, map_from_arrays);
 make_udf_function!(map_from_entries::MapFromEntries, map_from_entries);
 make_udf_function!(str_to_map::SparkStrToMap, str_to_map);
