@@ -28,6 +28,7 @@ use crate::physical_expr::physical_exprs_bag_equal;
 use arrow::array::*;
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::compute::kernels::boolean::{not, or_kleene};
+use arrow::compute::kernels::cmp::eq as arrow_eq;
 use arrow::compute::{SortOptions, take};
 use arrow::datatypes::*;
 use arrow::util::bit_iterator::BitIndexIterator;
@@ -773,11 +774,26 @@ impl PhysicalExpr for InListExpr {
             None => {
                 // No static filter: iterate through each expression, compare, and OR results
                 let value = value.into_array(num_rows)?;
-                let found = self.list.iter().map(|expr| expr.evaluate(batch)).try_fold(
-                    BooleanArray::new(BooleanBuffer::new_unset(num_rows), None),
-                    |result, expr| -> Result<BooleanArray> {
-                        let rhs = match expr? {
-                            ColumnarValue::Array(array) => {
+                let use_arrow_eq =
+                    !value.data_type().is_nested();
+                let mut found = BooleanArray::new(
+                    BooleanBuffer::new_unset(num_rows),
+                    None,
+                );
+
+                for expr in &self.list {
+                    // Short-circuit: if every row is already true, skip remaining list items
+                    if found.true_count() == num_rows {
+                        break;
+                    }
+
+                    let rhs = match expr.evaluate(batch)? {
+                        ColumnarValue::Array(array) => {
+                            if use_arrow_eq {
+                                // Vectorized Arrow eq kernel for primitive/string/binary types
+                                arrow_eq(&value, &array)?
+                            } else {
+                                // Row-by-row comparator for nested types (Struct, List, etc.)
                                 let cmp = make_comparator(
                                     value.as_ref(),
                                     array.as_ref(),
@@ -785,42 +801,52 @@ impl PhysicalExpr for InListExpr {
                                 )?;
                                 (0..num_rows)
                                     .map(|i| {
-                                        if value.is_null(i) || array.is_null(i) {
+                                        if value.is_null(i)
+                                            || array.is_null(i)
+                                        {
                                             return None;
                                         }
                                         Some(cmp(i, i).is_eq())
                                     })
                                     .collect::<BooleanArray>()
                             }
-                            ColumnarValue::Scalar(scalar) => {
-                                // Check if scalar is null once, before the loop
-                                if scalar.is_null() {
-                                    // If scalar is null, all comparisons return null
-                                    BooleanArray::from(vec![None; num_rows])
-                                } else {
-                                    // Convert scalar to 1-element array
-                                    let array = scalar.to_array()?;
-                                    let cmp = make_comparator(
-                                        value.as_ref(),
-                                        array.as_ref(),
-                                        SortOptions::default(),
-                                    )?;
-                                    // Compare each row of value with the single scalar element
-                                    (0..num_rows)
-                                        .map(|i| {
-                                            if value.is_null(i) {
-                                                None
-                                            } else {
-                                                Some(cmp(i, 0).is_eq())
-                                            }
-                                        })
-                                        .collect::<BooleanArray>()
-                                }
+                        }
+                        ColumnarValue::Scalar(scalar) => {
+                            if scalar.is_null() {
+                                // null compared to anything is null
+                                BooleanArray::new(
+                                    BooleanBuffer::new_unset(num_rows),
+                                    Some(NullBuffer::new_null(num_rows)),
+                                )
+                            } else if use_arrow_eq {
+                                // Vectorized scalar comparison
+                                let scalar_datum =
+                                    scalar.to_scalar()?;
+                                arrow_eq(&value, &scalar_datum)?
+                            } else {
+                                // Row-by-row comparator for nested types
+                                let array = scalar.to_array()?;
+                                let cmp = make_comparator(
+                                    value.as_ref(),
+                                    array.as_ref(),
+                                    SortOptions::default(),
+                                )?;
+                                (0..num_rows)
+                                    .map(|i| {
+                                        if value.is_null(i) {
+                                            None
+                                        } else {
+                                            Some(
+                                                cmp(i, 0).is_eq(),
+                                            )
+                                        }
+                                    })
+                                    .collect::<BooleanArray>()
                             }
-                        };
-                        Ok(or_kleene(&result, &rhs)?)
-                    },
-                )?;
+                        }
+                    };
+                    found = or_kleene(&found, &rhs)?;
+                }
 
                 if self.negated { not(&found)? } else { found }
             }

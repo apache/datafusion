@@ -24,6 +24,7 @@ use arrow::record_batch::RecordBatch;
 use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
 use datafusion_physical_expr::expressions::{col, in_list, lit};
+use datafusion_physical_expr::PhysicalExpr;
 use rand::distr::Alphanumeric;
 use rand::prelude::*;
 use std::any::TypeId;
@@ -219,6 +220,164 @@ fn bench_realistic_mixed_strings<A>(
     }
 }
 
+/// Benchmarks the dynamic evaluation path (no static filter) by including
+/// a column reference in the IN list, which prevents static filter creation.
+fn do_bench_dynamic(
+    c: &mut Criterion,
+    name: &str,
+    values: ArrayRef,
+    list_cols: Vec<ArrayRef>,
+    _match_percent: f64,
+) {
+    let mut fields = vec![Field::new(
+        "a",
+        values.data_type().clone(),
+        true,
+    )];
+    let mut columns: Vec<ArrayRef> = vec![values];
+
+    // Build list expressions: mix of column refs (forces dynamic path)
+    let schema_fields: Vec<Field> = list_cols
+        .iter()
+        .enumerate()
+        .map(|(i, col_arr)| {
+            let name = format!("b{i}");
+            fields.push(Field::new(
+                &name,
+                col_arr.data_type().clone(),
+                true,
+            ));
+            columns.push(Arc::clone(col_arr));
+            Field::new(&name, col_arr.data_type().clone(), true)
+        })
+        .collect();
+
+    let schema = Schema::new(fields);
+    let list_exprs: Vec<Arc<dyn PhysicalExpr>> = schema_fields
+        .iter()
+        .map(|f| col(f.name(), &schema).unwrap())
+        .collect();
+
+    let expr = in_list(
+        col("a", &schema).unwrap(),
+        list_exprs,
+        &false,
+        &schema,
+    )
+    .unwrap();
+    let batch =
+        RecordBatch::try_new(Arc::new(schema), columns).unwrap();
+
+    c.bench_function(name, |b| {
+        b.iter(|| black_box(expr.evaluate(black_box(&batch)).unwrap()))
+    });
+}
+
+/// Benchmarks the dynamic IN list path for Int32 arrays with column references.
+fn bench_dynamic_int32(c: &mut Criterion) {
+    let mut rng = StdRng::seed_from_u64(42);
+
+    for list_size in [3, 8, 28] {
+        for match_percent in [0.0, 0.5, 1.0] {
+            for null_percent in [0.0, 0.2] {
+                // Generate the "needle" column
+                let values: Int32Array = (0..ARRAY_LENGTH)
+                    .map(|_| {
+                        rng.random_bool(1.0 - null_percent)
+                            .then(|| rng.random_range(0..1000))
+                    })
+                    .collect();
+
+                // Generate list columns with controlled match rate
+                let list_cols: Vec<ArrayRef> = (0..list_size)
+                    .map(|_| {
+                        let col: Int32Array = (0..ARRAY_LENGTH)
+                            .map(|row| {
+                                if rng.random_bool(1.0 - null_percent) {
+                                    if rng.random_bool(match_percent) {
+                                        // Copy from values to create a match
+                                        if values.is_null(row) {
+                                            Some(rng.random_range(0..1000))
+                                        } else {
+                                            Some(values.value(row))
+                                        }
+                                    } else {
+                                        // Random value (unlikely to match)
+                                        Some(rng.random_range(1000..2000))
+                                    }
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+                        Arc::new(col) as ArrayRef
+                    })
+                    .collect();
+
+                do_bench_dynamic(
+                    c,
+                    &format!(
+                        "in_list_dynamic/Int32/list={}/match={}%/nulls={}%",
+                        list_size,
+                        (match_percent * 100.0) as u32,
+                        (null_percent * 100.0) as u32
+                    ),
+                    Arc::new(values),
+                    list_cols,
+                    match_percent,
+                );
+            }
+        }
+    }
+}
+
+/// Benchmarks the dynamic IN list path for Utf8 arrays with column references.
+fn bench_dynamic_utf8(c: &mut Criterion) {
+    let mut rng = StdRng::seed_from_u64(99);
+
+    for list_size in [3, 8, 28] {
+        for match_percent in [0.0, 0.5, 1.0] {
+            // Generate the "needle" column
+            let value_strings: Vec<Option<String>> = (0..ARRAY_LENGTH)
+                .map(|_| {
+                    rng.random_bool(0.8)
+                        .then(|| random_string(&mut rng, 12))
+                })
+                .collect();
+            let values: StringArray = value_strings.iter().map(|s| s.as_deref()).collect();
+
+            // Generate list columns with controlled match rate
+            let list_cols: Vec<ArrayRef> = (0..list_size)
+                .map(|_| {
+                    let col: StringArray = (0..ARRAY_LENGTH)
+                        .map(|row| {
+                            if rng.random_bool(match_percent) {
+                                // Copy from values to create a match
+                                value_strings[row].as_deref()
+                            } else {
+                                Some("no_match_value_xyz")
+                            }
+                        })
+                        .collect();
+                    Arc::new(col) as ArrayRef
+                })
+                .collect();
+
+            do_bench_dynamic(
+                c,
+                &format!(
+                    "in_list_dynamic/Utf8/list={}/match={}%",
+                    list_size,
+                    (match_percent * 100.0) as u32,
+                ),
+                Arc::new(values),
+                list_cols,
+                match_percent,
+            );
+        }
+    }
+}
+
 /// Entry point: registers in_list benchmarks for string and numeric array types.
 fn criterion_benchmark(c: &mut Criterion) {
     let mut rng = StdRng::seed_from_u64(120320);
@@ -266,6 +425,10 @@ fn criterion_benchmark(c: &mut Criterion) {
         |rng| rng.random(),
         |v| ScalarValue::TimestampNanosecond(Some(v), None),
     );
+
+    // Dynamic path benchmarks (non-constant list expressions)
+    bench_dynamic_int32(c);
+    bench_dynamic_utf8(c);
 }
 
 criterion_group! {
