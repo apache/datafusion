@@ -2043,9 +2043,9 @@ mod test {
         ));
 
         // Creates a DynamicFilterPhysicalExpr with per-partition bounds:
-        // - Partition 0: a >= 1 AND a <= 3 (matches all rows)
-        // - Partition 1: a >= 10 AND a <= 20 (excludes all rows via row group stats)
-        // - Partition 2: a >= 2 AND a <= 4 (matches some rows)
+        // - Partition 0: a >= 1 AND a <= 2 (tests row group with min=1, max=3 matches)
+        // - Partition 1: a >= 10 AND a <= 20 (tests row group pruning, no overlap)
+        // - Partition 2: a >= 3 AND a <= 3 (tests row group with min=3, max=3 matches)
         let p0_filter = Arc::new(BinaryExpr::new(
             Arc::new(BinaryExpr::new(
                 Arc::clone(&col_a),
@@ -2056,7 +2056,7 @@ mod test {
             Arc::new(BinaryExpr::new(
                 Arc::clone(&col_a),
                 datafusion_expr::Operator::LtEq,
-                datafusion_physical_expr::expressions::lit(3i32) as Arc<dyn PhysicalExpr>,
+                datafusion_physical_expr::expressions::lit(2i32) as Arc<dyn PhysicalExpr>,
             )) as Arc<dyn PhysicalExpr>,
         )) as Arc<dyn PhysicalExpr>;
 
@@ -2080,13 +2080,13 @@ mod test {
             Arc::new(BinaryExpr::new(
                 Arc::clone(&col_a),
                 datafusion_expr::Operator::GtEq,
-                datafusion_physical_expr::expressions::lit(2i32) as Arc<dyn PhysicalExpr>,
+                datafusion_physical_expr::expressions::lit(3i32) as Arc<dyn PhysicalExpr>,
             )) as Arc<dyn PhysicalExpr>,
             datafusion_expr::Operator::And,
             Arc::new(BinaryExpr::new(
                 Arc::clone(&col_a),
                 datafusion_expr::Operator::LtEq,
-                datafusion_physical_expr::expressions::lit(4i32) as Arc<dyn PhysicalExpr>,
+                datafusion_physical_expr::expressions::lit(3i32) as Arc<dyn PhysicalExpr>,
             )) as Arc<dyn PhysicalExpr>,
         )) as Arc<dyn PhysicalExpr>;
 
@@ -2094,7 +2094,7 @@ mod test {
             .update_partitioned(vec![Some(p0_filter), Some(p1_filter), Some(p2_filter)])
             .unwrap();
 
-        // Partition 0: should read all 3 rows (a >= 1 AND a <= 3 matches)
+        // Partition 0: row group [1,3] overlaps with filter [1,1], so reads all 3 rows
         let opener_p0 = ParquetOpenerBuilder::new()
             .with_store(Arc::clone(&store))
             .with_schema(Arc::clone(&schema))
@@ -2108,7 +2108,7 @@ mod test {
         let (_, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(
             num_rows, 3,
-            "Partition 0 should read all 3 rows (filter a >= 1 AND a <= 3)"
+            "Partition 0 should read all 3 rows (row group stats [1,3] overlap with filter [1,1])"
         );
 
         // Partition 1: should read 0 rows (a >= 10 AND a <= 20 excludes all)
@@ -2128,7 +2128,7 @@ mod test {
             "Partition 1 should read 0 rows (filter a >= 10 AND a <= 20 excludes all data)"
         );
 
-        // Partition 2: should read all 3 rows (a >= 2 AND a <= 4 matches)
+        // Partition 2: row group [1,3] overlaps with filter [3,3], so reads all 3 rows
         let opener_p2 = ParquetOpenerBuilder::new()
             .with_store(Arc::clone(&store))
             .with_schema(Arc::clone(&schema))
@@ -2142,7 +2142,7 @@ mod test {
         let (_, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(
             num_rows, 3,
-            "Partition 2 should read 3 rows (filter a >= 2 AND a <= 4)"
+            "Partition 2 should read all 3 rows (row group stats [1,3] overlap with filter [3,3])"
         );
     }
 }

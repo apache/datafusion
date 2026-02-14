@@ -1481,6 +1481,15 @@ pub fn ensure_distribution(
         plan.with_new_children(children_plans)?
     };
 
+    /// Helper to describe partitioning scheme for error messages
+    fn partitioning_scheme_name(is_repartitioned: bool) -> &'static str {
+        if is_repartitioned {
+            "hash-repartitioned"
+        } else {
+            "file-grouped"
+        }
+    }
+
     // For partitioned hash joins, decide dynamic filter routing mode.
     //
     // Dynamic filtering requires matching partitioning schemes on both sides:
@@ -1509,16 +1518,8 @@ pub fn ensure_distribution(
                 return plan_err!(
                     "Partitioned hash join has incompatible partitioning schemes: \
                      left side is {}, right side is {}.",
-                    if children[0].data.repartitioned {
-                        "hash-repartitioned"
-                    } else {
-                        "file-grouped"
-                    },
-                    if children[1].data.repartitioned {
-                        "hash-repartitioned"
-                    } else {
-                        "file-grouped"
-                    }
+                    partitioning_scheme_name(children[0].data.repartitioned),
+                    partitioning_scheme_name(children[1].data.repartitioned)
                 );
             }
         };

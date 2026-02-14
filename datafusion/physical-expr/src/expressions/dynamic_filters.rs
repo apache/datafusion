@@ -56,6 +56,8 @@ type PartitionedFilters = Vec<Option<Arc<dyn PhysicalExpr>>>;
 /// implement `ExecutionPlan::reset_state` to remain compatible with recursive queries and other situations where
 /// the same `ExecutionPlan` is reused with different data.
 ///
+/// This means `evaluate()` doesn't need partition context since it's already resolved during snapshotting.
+///
 /// For more background, please also see the [Dynamic Filters: Passing Information Between Operators During Execution for 25x Faster Queries blog]
 ///
 /// [Dynamic Filters: Passing Information Between Operators During Execution for 25x Faster Queries blog]: https://datafusion.apache.org/blog/2025/09/10/dynamic-filters
@@ -298,6 +300,11 @@ impl DynamicFilterPhysicalExpr {
     /// - `Some(None)`: the build partition is known empty, so return `false`.
     /// - `None` (out-of-range): return `true` (fail-open) to avoid incorrect pruning if
     ///   partition alignment/count assumptions are violated by a source.
+    ///
+    /// Returns:
+    /// - `Ok(Expr)`: Dynamic filter expression to be used for the given partition
+    /// - `Ok(lit(false))`: Filters out everything on probe side (build side is empty for this partition)
+    /// - `Ok(lit(true))`: No filtering applied, returns probe data as-is (fail-open for safety)
     fn current_for_partition(&self, partition: usize) -> Result<Arc<dyn PhysicalExpr>> {
         let guard = self.inner.read();
         if guard.partitioned_exprs.is_empty() {

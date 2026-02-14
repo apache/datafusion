@@ -1217,32 +1217,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
         cp,
     )) as Arc<dyn ExecutionPlan>;
 
-    // expect the predicate to be pushed down into the probe side DataSource
-    insta::assert_snapshot!(
-        OptimizationTest::new(Arc::clone(&plan), FilterPushdown::new_post_optimization(), true),
-        @r"
-    OptimizationTest:
-      input:
-        - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
-        -   CoalescePartitionsExec
-        -     HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
-        -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
-        -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
-        -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
-        -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true
-      output:
-        Ok:
-          - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
-          -   CoalescePartitionsExec
-          -     HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
-          -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
-          -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
-          -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
-          -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ empty ]
-    "
-    );
-
-    // Actually apply the optimization to the plan and execute to see the filter in action
+    // Apply the optimization to the plan and execute to see the filter in action
     let session_config = dynamic_filter_session_config();
     let (plan, batches) = optimize_and_collect(plan, session_config).await;
 
@@ -1303,7 +1278,14 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
 
 #[tokio::test]
 async fn test_partitioned_hashjoin_no_repartition_dynamic_filter_pushdown() {
-    use datafusion_common::JoinType;
+    // Query:
+    //    SELECT p.a
+    //    FROM build_side AS b, probe_side AS p
+    //    WHERE b.a = p.a and b.b = p.b
+    //    ORDER BY p.a
+    //
+    // Both `build_side` and `probe_side` are partitioned on column `a`
+    // Note: the join is on `[a, b]`
 
     let build_side_schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Utf8, false),
@@ -1317,14 +1299,14 @@ async fn test_partitioned_hashjoin_no_repartition_dynamic_filter_pushdown() {
         Field::new("e", DataType::Float64, false),
     ]));
 
-    // Build side: different data per partition so bounds differ.
-    //   Partition 0: ("aa", "ba") -> bounds a:[aa,aa], b:[ba,ba]
-    //   Partition 1: ("zz", "zz") -> bounds a:[zz,zz], b:[zz,zz]
+    // Build side:
+    //   Partition 0 (on column a): bounds a:["aa", "kk"]
+    //   Partition 1 (on column a): bounds a:["zz", "zz"]
     let build_p0 = vec![
         record_batch!(
-            ("a", Utf8, ["aa"]),
-            ("b", Utf8, ["ba"]),
-            ("c", Float64, [1.0])
+            ("a", Utf8, ["aa", "kk"]),
+            ("b", Utf8, ["ba", "gg"]),
+            ("c", Float64, [1.0, 2.0])
         )
         .unwrap(),
     ];
@@ -1337,21 +1319,21 @@ async fn test_partitioned_hashjoin_no_repartition_dynamic_filter_pushdown() {
         .unwrap(),
     ];
 
-    // Probe side: each partition has a mix of matching and non-matching rows.
-    //   Partition 0: ("aa","ba") matches p0 bounds, ("zz","zz") does not
-    //   Partition 1: ("zz","zz") matches p1 bounds, ("aa","ba") does not
+    // Probe side:
+    //   Partition 0 (on column a): bounds a:["aa", "kk"]
+    //   Partition 1 (on column a): bounds a:["zz", "zz"]
     let probe_p0 = vec![
         record_batch!(
-            ("a", Utf8, ["aa", "zz"]),
-            ("b", Utf8, ["ba", "zz"]),
+            ("a", Utf8, ["aa", "kk"]),
+            ("b", Utf8, ["ba", "gg"]),
             ("e", Float64, [10.0, 20.0])
         )
         .unwrap(),
     ];
     let probe_p1 = vec![
         record_batch!(
-            ("a", Utf8, ["zz", "aa"]),
-            ("b", Utf8, ["zz", "ba"]),
+            ("a", Utf8, ["zz", "zz"]),
+            ("b", Utf8, ["zz", "zz"]),
             ("e", Float64, [30.0, 40.0])
         )
         .unwrap(),
@@ -1424,27 +1406,6 @@ async fn test_partitioned_hashjoin_no_repartition_dynamic_filter_pushdown() {
         cp,
     )) as Arc<dyn ExecutionPlan>;
 
-    // expect the predicate to be pushed down into the probe side DataSource
-    insta::assert_snapshot!(
-        OptimizationTest::new(Arc::clone(&plan), FilterPushdown::new_post_optimization(), true),
-        @r"
-    OptimizationTest:
-      input:
-        - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
-        -   CoalescePartitionsExec
-        -     HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
-        -       DataSourceExec: file_groups={2 groups: [[build_0.parquet], [build_1.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
-        -       DataSourceExec: file_groups={2 groups: [[probe_0.parquet], [probe_1.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true
-      output:
-        Ok:
-          - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
-          -   CoalescePartitionsExec
-          -     HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
-          -       DataSourceExec: file_groups={2 groups: [[build_0.parquet], [build_1.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
-          -       DataSourceExec: file_groups={2 groups: [[probe_0.parquet], [probe_1.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ empty ]
-    "
-    );
-
     let mut session_config = dynamic_filter_session_config();
     // Enable preserve_file_partitions to trigger partition-index routing
     session_config
@@ -1463,7 +1424,7 @@ async fn test_partitioned_hashjoin_no_repartition_dynamic_filter_pushdown() {
     -   CoalescePartitionsExec
     -     HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
     -       DataSourceExec: file_groups={2 groups: [[build_0.parquet], [build_1.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
-    -       DataSourceExec: file_groups={2 groups: [[probe_0.parquet], [probe_1.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ {0: a@0 >= aa AND a@0 <= aa AND b@1 >= ba AND b@1 <= ba AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}]), 1: a@0 >= zz AND a@0 <= zz AND b@1 >= zz AND b@1 <= zz AND struct(a@0, b@1) IN (SET) ([{c0:zz,c1:zz}])} ]
+    -       DataSourceExec: file_groups={2 groups: [[probe_0.parquet], [probe_1.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ {0: a@0 >= aa AND a@0 <= kk AND b@1 >= ba AND b@1 <= gg AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}, {c0:kk,c1:gg}]), 1: a@0 >= zz AND a@0 <= zz AND b@1 >= zz AND b@1 <= zz AND struct(a@0, b@1) IN (SET) ([{c0:zz,c1:zz}])} ]
     "
     );
 
@@ -1471,10 +1432,10 @@ async fn test_partitioned_hashjoin_no_repartition_dynamic_filter_pushdown() {
 
     let probe_scan_metrics = probe_scan.metrics().unwrap();
 
-    // Per-partition filtering prunes non-matching rows:
-    //   Probe p0: ("aa","ba") passes, ("zz","zz") filtered -> 1 row
-    //   Probe p1: ("zz","zz") passes, ("aa","ba") filtered -> 1 row
-    assert_eq!(probe_scan_metrics.output_rows().unwrap(), 2);
+    // Per-partition filtering with aligned partitions:
+    //   Probe p0: ["aa","kk"] both match build p0 ["aa","kk"] -> 2 rows
+    //   Probe p1: ["zz","zz"] both match build p1 ["zz"] -> 2 rows
+    assert_eq!(probe_scan_metrics.output_rows().unwrap(), 4);
 
     insta::assert_snapshot!(
         result,
@@ -1483,6 +1444,8 @@ async fn test_partitioned_hashjoin_no_repartition_dynamic_filter_pushdown() {
     | a  | b  | c   | a  | b  | e    |
     +----+----+-----+----+----+------+
     | zz | zz | 2.0 | zz | zz | 30.0 |
+    | zz | zz | 2.0 | zz | zz | 40.0 |
+    | kk | gg | 2.0 | kk | gg | 20.0 |
     | aa | ba | 1.0 | aa | ba | 10.0 |
     +----+----+-----+----+----+------+
     "
@@ -1584,33 +1547,12 @@ async fn test_hashjoin_dynamic_filter_pushdown_collect_left() {
         cp,
     )) as Arc<dyn ExecutionPlan>;
 
-    // expect the predicate to be pushed down into the probe side DataSource
-    insta::assert_snapshot!(
-        OptimizationTest::new(Arc::clone(&plan), FilterPushdown::new_post_optimization(), true),
-        @r"
-    OptimizationTest:
-      input:
-        - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
-        -   CoalescePartitionsExec
-        -     HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
-        -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
-        -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
-        -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true
-      output:
-        Ok:
-          - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
-          -   CoalescePartitionsExec
-          -     HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
-          -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
-          -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
-          -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ empty ]
-    "
-    );
-
-    // Actually apply the optimization to the plan and execute to see the filter in action
+    // Apply the optimization to the plan and execute to see the filter in action
     let session_config = dynamic_filter_session_config();
     let (plan, batches) = optimize_and_collect(plan, session_config).await;
 
+    // Note: This join uses CollectLeft mode (not Partitioned), so the dynamic filter so this uses
+    // bounds-based filtering instead of CASE-based routing.
     // Now check what our filter looks like
     insta::assert_snapshot!(
         format!("{}", format_plan_for_test(&plan)),

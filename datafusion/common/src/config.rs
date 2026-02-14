@@ -1009,7 +1009,7 @@ config_namespace! {
         ///                 │     mode=Partitioned      │
         ///                 │┌───────┐┌───────┐┌───────┐│
         ///                 ││ Hash  ││ Hash  ││ Hash  ││
-        ///                 ││Table 1││Table 2││Table 2││
+        ///                 ││Table 1││Table 2││Table 3││
         ///                 ││       ││       ││       ││
         ///                 ││ key=A ││ key=B ││ key=C ││
         ///                 │└───▲───┘└───▲───┘└───▲───┘│
