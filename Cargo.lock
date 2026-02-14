@@ -233,7 +233,7 @@ checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
 [[package]]
 name = "arrow"
 version = "57.3.0"
-source = "git+https://github.com/apache/arrow-rs.git?branch=main#7d16cd039b74fc24a766eb852856278de7f4567b"
+source = "git+https://github.com/apache/arrow-rs.git?branch=main#39a2b71e55e3fa12ee06defb1d133f828bb383f3"
 dependencies = [
  "arrow-arith",
  "arrow-array",
@@ -255,7 +255,7 @@ dependencies = [
 [[package]]
 name = "arrow-arith"
 version = "57.3.0"
-source = "git+https://github.com/apache/arrow-rs.git?branch=main#7d16cd039b74fc24a766eb852856278de7f4567b"
+source = "git+https://github.com/apache/arrow-rs.git?branch=main#39a2b71e55e3fa12ee06defb1d133f828bb383f3"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -268,7 +268,7 @@ dependencies = [
 [[package]]
 name = "arrow-array"
 version = "57.3.0"
-source = "git+https://github.com/apache/arrow-rs.git?branch=main#7d16cd039b74fc24a766eb852856278de7f4567b"
+source = "git+https://github.com/apache/arrow-rs.git?branch=main#39a2b71e55e3fa12ee06defb1d133f828bb383f3"
 dependencies = [
  "ahash",
  "arrow-buffer",
@@ -286,7 +286,7 @@ dependencies = [
 [[package]]
 name = "arrow-buffer"
 version = "57.3.0"
-source = "git+https://github.com/apache/arrow-rs.git?branch=main#7d16cd039b74fc24a766eb852856278de7f4567b"
+source = "git+https://github.com/apache/arrow-rs.git?branch=main#39a2b71e55e3fa12ee06defb1d133f828bb383f3"
 dependencies = [
  "bytes",
  "half",
@@ -297,7 +297,7 @@ dependencies = [
 [[package]]
 name = "arrow-cast"
 version = "57.3.0"
-source = "git+https://github.com/apache/arrow-rs.git?branch=main#7d16cd039b74fc24a766eb852856278de7f4567b"
+source = "git+https://github.com/apache/arrow-rs.git?branch=main#39a2b71e55e3fa12ee06defb1d133f828bb383f3"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -318,7 +318,7 @@ dependencies = [
 [[package]]
 name = "arrow-csv"
 version = "57.3.0"
-source = "git+https://github.com/apache/arrow-rs.git?branch=main#7d16cd039b74fc24a766eb852856278de7f4567b"
+source = "git+https://github.com/apache/arrow-rs.git?branch=main#39a2b71e55e3fa12ee06defb1d133f828bb383f3"
 dependencies = [
  "arrow-array",
  "arrow-cast",
@@ -332,7 +332,7 @@ dependencies = [
 [[package]]
 name = "arrow-data"
 version = "57.3.0"
-source = "git+https://github.com/apache/arrow-rs.git?branch=main#7d16cd039b74fc24a766eb852856278de7f4567b"
+source = "git+https://github.com/apache/arrow-rs.git?branch=main#39a2b71e55e3fa12ee06defb1d133f828bb383f3"
 dependencies = [
  "arrow-buffer",
  "arrow-schema",
@@ -344,7 +344,7 @@ dependencies = [
 [[package]]
 name = "arrow-flight"
 version = "57.3.0"
-source = "git+https://github.com/apache/arrow-rs.git?branch=main#7d16cd039b74fc24a766eb852856278de7f4567b"
+source = "git+https://github.com/apache/arrow-rs.git?branch=main#39a2b71e55e3fa12ee06defb1d133f828bb383f3"
 dependencies = [
  "arrow-arith",
  "arrow-array",
@@ -371,7 +371,7 @@ dependencies = [
 [[package]]
 name = "arrow-ipc"
 version = "57.3.0"
-source = "git+https://github.com/apache/arrow-rs.git?branch=main#7d16cd039b74fc24a766eb852856278de7f4567b"
+source = "git+https://github.com/apache/arrow-rs.git?branch=main#39a2b71e55e3fa12ee06defb1d133f828bb383f3"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -386,7 +386,7 @@ dependencies = [
 [[package]]
 name = "arrow-json"
 version = "57.3.0"
-source = "git+https://github.com/apache/arrow-rs.git?branch=main#7d16cd039b74fc24a766eb852856278de7f4567b"
+source = "git+https://github.com/apache/arrow-rs.git?branch=main#39a2b71e55e3fa12ee06defb1d133f828bb383f3"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -409,7 +409,7 @@ dependencies = [
 [[package]]
 name = "arrow-ord"
 version = "57.3.0"
-source = "git+https://github.com/apache/arrow-rs.git?branch=main#7d16cd039b74fc24a766eb852856278de7f4567b"
+source = "git+https://github.com/apache/arrow-rs.git?branch=main#39a2b71e55e3fa12ee06defb1d133f828bb383f3"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -421,7 +421,7 @@ dependencies = [
 [[package]]
 name = "arrow-row"
 version = "57.3.0"
-source = "git+https://github.com/apache/arrow-rs.git?branch=main#7d16cd039b74fc24a766eb852856278de7f4567b"
+source = "git+https://github.com/apache/arrow-rs.git?branch=main#39a2b71e55e3fa12ee06defb1d133f828bb383f3"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -433,7 +433,7 @@ dependencies = [
 [[package]]
 name = "arrow-schema"
 version = "57.3.0"
-source = "git+https://github.com/apache/arrow-rs.git?branch=main#7d16cd039b74fc24a766eb852856278de7f4567b"
+source = "git+https://github.com/apache/arrow-rs.git?branch=main#39a2b71e55e3fa12ee06defb1d133f828bb383f3"
 dependencies = [
  "bitflags",
  "serde",
@@ -444,7 +444,7 @@ dependencies = [
 [[package]]
 name = "arrow-select"
 version = "57.3.0"
-source = "git+https://github.com/apache/arrow-rs.git?branch=main#7d16cd039b74fc24a766eb852856278de7f4567b"
+source = "git+https://github.com/apache/arrow-rs.git?branch=main#39a2b71e55e3fa12ee06defb1d133f828bb383f3"
 dependencies = [
  "ahash",
  "arrow-array",
@@ -457,7 +457,7 @@ dependencies = [
 [[package]]
 name = "arrow-string"
 version = "57.3.0"
-source = "git+https://github.com/apache/arrow-rs.git?branch=main#7d16cd039b74fc24a766eb852856278de7f4567b"
+source = "git+https://github.com/apache/arrow-rs.git?branch=main#39a2b71e55e3fa12ee06defb1d133f828bb383f3"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -2732,7 +2732,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2876,7 +2876,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4112,7 +4112,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4348,7 +4348,7 @@ dependencies = [
 [[package]]
 name = "parquet"
 version = "57.3.0"
-source = "git+https://github.com/apache/arrow-rs.git?branch=main#7d16cd039b74fc24a766eb852856278de7f4567b"
+source = "git+https://github.com/apache/arrow-rs.git?branch=main#39a2b71e55e3fa12ee06defb1d133f828bb383f3"
 dependencies = [
  "ahash",
  "arrow-array",
@@ -4729,7 +4729,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "343d3bd7056eda839b03204e68deff7d1b13aba7af2b2fd16890697274262ee7"
 dependencies = [
  "heck",
- "itertools 0.14.0",
+ "itertools 0.13.0",
  "log",
  "multimap",
  "petgraph",
@@ -4748,7 +4748,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27c6023962132f4b30eb4c172c91ce92d933da334c59c23cddee82358ddafb0b"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.13.0",
  "proc-macro2",
  "quote",
  "syn 2.0.114",
@@ -4850,7 +4850,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.60.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -5217,7 +5217,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -5916,7 +5916,7 @@ dependencies = [
  "getrandom 0.3.4",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6824,7 +6824,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
