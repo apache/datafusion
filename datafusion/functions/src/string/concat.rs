@@ -120,13 +120,10 @@ impl ScalarUDFImpl for ConcatFunc {
             }
         });
 
-        let array_len = args
-            .iter()
-            .filter_map(|x| match x {
-                ColumnarValue::Array(array) => Some(array.len()),
-                _ => None,
-            })
-            .next();
+        let array_len = args.iter().find_map(|x| match x {
+            ColumnarValue::Array(array) => Some(array.len()),
+            _ => None,
+        });
 
         // Scalar
         if array_len.is_none() {
