@@ -639,7 +639,8 @@ impl FileOpener for ParquetOpener {
                     )
                 })?
             } else {
-                projection.try_map_exprs(|expr| reassign_expr_columns(expr, &stream_schema))?
+                projection
+                    .try_map_exprs(|expr| reassign_expr_columns(expr, &stream_schema))?
             };
 
             let projector = projection.make_projector(&stream_schema)?;

@@ -541,7 +541,8 @@ impl FileSource for ParquetSource {
             .as_ref()
             .map(|time_unit| parse_coerce_int96_string(time_unit.as_str()).unwrap());
 
-        let field_id_read_enabled = self.table_parquet_options.global.field_id_read_enabled;
+        let field_id_read_enabled =
+            self.table_parquet_options.global.field_id_read_enabled;
 
         let opener = Arc::new(ParquetOpener {
             partition_index: partition,

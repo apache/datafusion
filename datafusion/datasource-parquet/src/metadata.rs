@@ -345,9 +345,11 @@ impl<'a> DFParquetMetadata<'a> {
         )?;
 
         // Apply type coercions without field ID matching (statistics use name-based matching)
-        if let Some(merged) =
-            apply_file_schema_type_coercions(logical_file_schema, &physical_file_schema, false)
-        {
+        if let Some(merged) = apply_file_schema_type_coercions(
+            logical_file_schema,
+            &physical_file_schema,
+            false,
+        ) {
             physical_file_schema = merged;
         }
 

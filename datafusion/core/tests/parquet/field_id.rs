@@ -18,7 +18,7 @@
 //! Integration tests for Parquet field ID support
 
 use arrow::array::{
-    Array, Int32Array, Int64Array, RecordBatch, StringArray, StringViewArray
+    Array, Int32Array, Int64Array, RecordBatch, StringArray, StringViewArray,
 };
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::prelude::*;
@@ -97,9 +97,9 @@ async fn test_read_parquet_with_field_ids_enabled() -> Result<()> {
     ctx.register_parquet(
         "test",
         file_path.to_str().unwrap(),
-        ParquetReadOptions::default()
+        ParquetReadOptions::default(),
     )
-        .await?;
+    .await?;
 
     let df = ctx.sql("SELECT user_id, amount, name FROM test").await?;
     let results = df.collect().await?;
@@ -144,11 +144,12 @@ async fn test_read_parquet_with_field_ids_disabled() -> Result<()> {
     // Create context with field ID reading disabled (default)
     let ctx = SessionContext::new();
 
-    ctx.register_parquet("test",
-                         file_path.to_str().unwrap(),
-                         ParquetReadOptions::default()
+    ctx.register_parquet(
+        "test",
+        file_path.to_str().unwrap(),
+        ParquetReadOptions::default(),
     )
-        .await?;
+    .await?;
 
     let df = ctx.sql("SELECT user_id, amount FROM test").await?;
     let results = df.collect().await?;
@@ -193,11 +194,12 @@ async fn test_schema_evolution_renamed_columns() -> Result<()> {
         .await?;
 
     // Register table with original names
-    ctx.register_parquet("test",
-                         file_path.to_str().unwrap(),
-                         ParquetReadOptions::default()
+    ctx.register_parquet(
+        "test",
+        file_path.to_str().unwrap(),
+        ParquetReadOptions::default(),
     )
-        .await?;
+    .await?;
 
     // Query should work with original names
     let df = ctx.sql("SELECT user_id, amount FROM test").await?;
@@ -248,11 +250,12 @@ async fn test_schema_evolution_reordered_columns() -> Result<()> {
         .collect()
         .await?;
 
-    ctx.register_parquet("test",
-                         file_path.to_str().unwrap(),
-                         ParquetReadOptions::default()
+    ctx.register_parquet(
+        "test",
+        file_path.to_str().unwrap(),
+        ParquetReadOptions::default(),
     )
-        .await?;
+    .await?;
 
     // Query columns in different order: c, a, b
     let df = ctx.sql("SELECT c, a, b FROM test").await?;
@@ -315,10 +318,12 @@ async fn test_projection_with_field_ids() -> Result<()> {
         .collect()
         .await?;
 
-    ctx.register_parquet("test",
-                         file_path.to_str().unwrap(),
-                         ParquetReadOptions::default()
-    ).await?;
+    ctx.register_parquet(
+        "test",
+        file_path.to_str().unwrap(),
+        ParquetReadOptions::default(),
+    )
+    .await?;
 
     // Project only columns a and c
     let df = ctx.sql("SELECT a, c FROM test").await?;
@@ -370,14 +375,17 @@ async fn test_filter_with_field_ids() -> Result<()> {
         .collect()
         .await?;
 
-    ctx.register_parquet("test",
-                         file_path.to_str().unwrap(),
-                         ParquetReadOptions::default()
+    ctx.register_parquet(
+        "test",
+        file_path.to_str().unwrap(),
+        ParquetReadOptions::default(),
     )
-        .await?;
+    .await?;
 
     // Filter with field IDs
-    let df = ctx.sql("SELECT id, value FROM test WHERE value > 25").await?;
+    let df = ctx
+        .sql("SELECT id, value FROM test WHERE value > 25")
+        .await?;
     let results = df.collect().await?;
 
     assert_eq!(results.len(), 1);
@@ -424,9 +432,9 @@ async fn test_aggregation_with_field_ids() -> Result<()> {
     ctx.register_parquet(
         "test",
         file_path.to_str().unwrap(),
-        ParquetReadOptions::default()
+        ParquetReadOptions::default(),
     )
-        .await?;
+    .await?;
 
     // Aggregate with field IDs
     let df = ctx
@@ -440,25 +448,24 @@ async fn test_aggregation_with_field_ids() -> Result<()> {
     // Get category column - it might be StringArray or StringViewArray depending on config
     let category_col = results[0].column(0);
     let categories: Vec<&str> = match category_col.data_type() {
-        DataType::Utf8 => {
-            category_col
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap()
-                .iter()
-                .map(|v| v.unwrap())
-                .collect()
-        }
-        DataType::Utf8View => {
-            category_col
-                .as_any()
-                .downcast_ref::<StringViewArray>()
-                .unwrap()
-                .iter()
-                .map(|v| v.unwrap())
-                .collect()
-        }
-        _ => panic!("Unexpected data type for category column: {:?}", category_col.data_type()),
+        DataType::Utf8 => category_col
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap()
+            .iter()
+            .map(|v| v.unwrap())
+            .collect(),
+        DataType::Utf8View => category_col
+            .as_any()
+            .downcast_ref::<StringViewArray>()
+            .unwrap()
+            .iter()
+            .map(|v| v.unwrap())
+            .collect(),
+        _ => panic!(
+            "Unexpected data type for category column: {:?}",
+            category_col.data_type()
+        ),
     };
 
     let totals = results[0]
@@ -504,8 +511,12 @@ async fn test_fallback_to_name_when_no_field_ids() -> Result<()> {
         .collect()
         .await?;
 
-    ctx.register_parquet("test", file_path.to_str().unwrap(), ParquetReadOptions::default())
-        .await?;
+    ctx.register_parquet(
+        "test",
+        file_path.to_str().unwrap(),
+        ParquetReadOptions::default(),
+    )
+    .await?;
 
     // Should fall back to name-based matching
     let df = ctx.sql("SELECT user_id, amount FROM test").await?;

@@ -686,8 +686,10 @@ pub(crate) mod tests {
         metadata2.insert("PARQUET:field_id".to_string(), "2".to_string());
 
         let source_schema = Schema::new(vec![
-            Field::new("user_id", DataType::Int64, false).with_metadata(metadata1.clone()),
-            Field::new("amount", DataType::Float64, false).with_metadata(metadata2.clone()),
+            Field::new("user_id", DataType::Int64, false)
+                .with_metadata(metadata1.clone()),
+            Field::new("amount", DataType::Float64, false)
+                .with_metadata(metadata2.clone()),
         ]);
 
         // Target schema: renamed columns but same field IDs
@@ -698,10 +700,16 @@ pub(crate) mod tests {
 
         // Should match by field ID, not name
         let index = find_field_index("user_id", &source_schema, &target_schema)?;
-        assert_eq!(index, 0, "user_id (field_id=1) should match customer_id at index 0");
+        assert_eq!(
+            index, 0,
+            "user_id (field_id=1) should match customer_id at index 0"
+        );
 
         let index = find_field_index("amount", &source_schema, &target_schema)?;
-        assert_eq!(index, 1, "amount (field_id=2) should match price at index 1");
+        assert_eq!(
+            index, 1,
+            "amount (field_id=2) should match price at index 1"
+        );
 
         Ok(())
     }
@@ -752,15 +760,20 @@ pub(crate) mod tests {
         ]);
 
         // Should fall back to name-based matching
-        assert_eq!(find_field_index("user_id", &source_schema, &target_schema)?, 0);
-        assert_eq!(find_field_index("amount", &source_schema, &target_schema)?, 1);
+        assert_eq!(
+            find_field_index("user_id", &source_schema, &target_schema)?,
+            0
+        );
+        assert_eq!(
+            find_field_index("amount", &source_schema, &target_schema)?,
+            1
+        );
 
         Ok(())
     }
 
     #[test]
     fn test_find_field_index_mixed_field_ids() -> Result<()> {
-
         // Source schema: some fields have IDs, some don't
         let mut metadata1 = HashMap::new();
         metadata1.insert("PARQUET:field_id".to_string(), "1".to_string());
@@ -786,13 +799,9 @@ pub(crate) mod tests {
 
     #[test]
     fn test_find_field_index_not_found() {
-        let source_schema = Schema::new(vec![
-            Field::new("a", DataType::Int64, false),
-        ]);
+        let source_schema = Schema::new(vec![Field::new("a", DataType::Int64, false)]);
 
-        let target_schema = Schema::new(vec![
-            Field::new("b", DataType::Int64, false),
-        ]);
+        let target_schema = Schema::new(vec![Field::new("b", DataType::Int64, false)]);
 
         // Should fail to find non-existent field
         let result = find_field_index("a", &source_schema, &target_schema);
@@ -801,7 +810,6 @@ pub(crate) mod tests {
 
     #[test]
     fn test_reassign_expr_columns_with_field_ids_simple() -> Result<()> {
-
         // Source schema: full file schema
         let mut meta1 = HashMap::new();
         meta1.insert("PARQUET:field_id".to_string(), "1".to_string());
@@ -826,18 +834,22 @@ pub(crate) mod tests {
         let expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new("age", 2));
 
         // After transformation, should reference age at index 1 in target schema
-        let result = reassign_expr_columns_with_field_ids(expr, &source_schema, &target_schema)?;
+        let result =
+            reassign_expr_columns_with_field_ids(expr, &source_schema, &target_schema)?;
 
         let column = result.as_any().downcast_ref::<Column>().unwrap();
         assert_eq!(column.name(), "age");
-        assert_eq!(column.index(), 1, "age should be at index 1 in target schema");
+        assert_eq!(
+            column.index(),
+            1,
+            "age should be at index 1 in target schema"
+        );
 
         Ok(())
     }
 
     #[test]
     fn test_reassign_expr_columns_with_field_ids_complex() -> Result<()> {
-
         // Source schema
         let mut meta1 = HashMap::new();
         meta1.insert("PARQUET:field_id".to_string(), "1".to_string());
@@ -867,27 +879,39 @@ pub(crate) mod tests {
         )?;
 
         // After transformation: a@0 + c@1
-        let result = reassign_expr_columns_with_field_ids(expr, &source_schema, &target_schema)?;
+        let result =
+            reassign_expr_columns_with_field_ids(expr, &source_schema, &target_schema)?;
 
         // Verify it's still a binary expression
         let binary_expr = result.as_any().downcast_ref::<BinaryExpr>().unwrap();
 
         // Check left side (a)
-        let left_col = binary_expr.left().as_any().downcast_ref::<Column>().unwrap();
+        let left_col = binary_expr
+            .left()
+            .as_any()
+            .downcast_ref::<Column>()
+            .unwrap();
         assert_eq!(left_col.name(), "a");
         assert_eq!(left_col.index(), 0);
 
         // Check right side (c)
-        let right_col = binary_expr.right().as_any().downcast_ref::<Column>().unwrap();
+        let right_col = binary_expr
+            .right()
+            .as_any()
+            .downcast_ref::<Column>()
+            .unwrap();
         assert_eq!(right_col.name(), "c");
-        assert_eq!(right_col.index(), 1, "c should be remapped from index 2 to 1");
+        assert_eq!(
+            right_col.index(),
+            1,
+            "c should be remapped from index 2 to 1"
+        );
 
         Ok(())
     }
 
     #[test]
     fn test_reassign_expr_columns_with_field_ids_renamed_columns() -> Result<()> {
-
         // Source schema (file schema with old names)
         let mut meta1 = HashMap::new();
         meta1.insert("PARQUET:field_id".to_string(), "1".to_string());
@@ -909,11 +933,16 @@ pub(crate) mod tests {
         let expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new("user_id", 0));
 
         // After transformation, should still reference by old name but correct index
-        let result = reassign_expr_columns_with_field_ids(expr, &source_schema, &target_schema)?;
+        let result =
+            reassign_expr_columns_with_field_ids(expr, &source_schema, &target_schema)?;
 
         let column = result.as_any().downcast_ref::<Column>().unwrap();
         assert_eq!(column.name(), "user_id", "Name should remain user_id");
-        assert_eq!(column.index(), 0, "Should match customer_id at index 0 via field_id");
+        assert_eq!(
+            column.index(),
+            0,
+            "Should match customer_id at index 0 via field_id"
+        );
 
         Ok(())
     }
@@ -936,7 +965,8 @@ pub(crate) mod tests {
         let expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new("c", 2));
 
         // Should fall back to name-based matching
-        let result = reassign_expr_columns_with_field_ids(expr, &source_schema, &target_schema)?;
+        let result =
+            reassign_expr_columns_with_field_ids(expr, &source_schema, &target_schema)?;
 
         let column = result.as_any().downcast_ref::<Column>().unwrap();
         assert_eq!(column.name(), "c");
