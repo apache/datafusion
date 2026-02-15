@@ -754,9 +754,14 @@ config_namespace! {
         /// (reading) Minimum bytes/sec throughput for adaptive filter pushdown.
         /// Filters that achieve at least this throughput (bytes_saved / eval_time)
         /// are promoted to row filters.
-        /// f64::INFINITY (default) = no filters promoted (feature disabled).
+        /// f64::INFINITY = no filters promoted (feature disabled).
         /// 0.0 = all filters pushed as row filters (no adaptive logic).
-        pub filter_pushdown_min_bytes_per_sec: f64, default = f64::INFINITY
+        /// Default: 104857600.0 (100 MB/s) — empirically tuned across
+        /// TPC-H, TPC-DS, and ClickBench benchmarks on an m4 MacBook Pro.
+        /// The optimal value for this setting likely depeonds on the relative
+        /// cost of CPU vs. IO in your environment, and to some extent the shape
+        /// of your query.
+        pub filter_pushdown_min_bytes_per_sec: f64, default = 104_857_600.0
 
         /// (reading) Correlation ratio threshold for grouping filters.
         /// The ratio is P(A ∧ B) / (P(A) * P(B)):
