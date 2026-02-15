@@ -2516,15 +2516,15 @@ mod tests {
 #[cfg(test)]
 mod udtf_tests {
     use super::*;
-    use datafusion_catalog::{TableFunctionImpl, TableProvider, TableFunction};
-    use datafusion_expr::{Expr, TableType};
-    use std::sync::Arc;
-    use std::any::Any;
-    use arrow::datatypes::{SchemaRef, Schema, Field, DataType};
-    use datafusion_physical_plan::ExecutionPlan;
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use async_trait::async_trait;
     use datafusion_catalog::Session;
+    use datafusion_catalog::{TableFunction, TableFunctionImpl, TableProvider};
     use datafusion_common::{Result, plan_err};
+    use datafusion_expr::{Expr, TableType};
+    use datafusion_physical_plan::ExecutionPlan;
+    use std::any::Any;
+    use std::sync::Arc;
 
     #[derive(Debug)]
     struct MockTableProvider {
@@ -2533,9 +2533,15 @@ mod udtf_tests {
 
     #[async_trait]
     impl TableProvider for MockTableProvider {
-        fn as_any(&self) -> &dyn Any { self }
-        fn schema(&self) -> SchemaRef { self.schema.clone() }
-        fn table_type(&self) -> TableType { TableType::Base }
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn schema(&self) -> SchemaRef {
+            self.schema.clone()
+        }
+        fn table_type(&self) -> TableType {
+            TableType::Base
+        }
         async fn scan(
             &self,
             _state: &dyn Session,
@@ -2544,7 +2550,9 @@ mod udtf_tests {
             _limit: Option<usize>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             let schema = self.schema.clone();
-            Ok(Arc::new(datafusion_physical_plan::empty::EmptyExec::new(schema)))
+            Ok(Arc::new(datafusion_physical_plan::empty::EmptyExec::new(
+                schema,
+            )))
         }
     }
 
@@ -2561,13 +2569,19 @@ mod udtf_tests {
                         Expr::Column(c) if c.name == "index" => {
                             // Success!
                         }
-                        _ => return plan_err!("Expected Column('index') on left side, got {:?}", be.left),
+                        _ => {
+                            return plan_err!(
+                                "Expected Column('index') on left side, got {:?}",
+                                be.left
+                            );
+                        }
                     }
                 }
                 _ => return plan_err!("Expected BinaryExpr, got {:?}", args[0]),
             }
 
-            let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+            let schema =
+                Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
             Ok(Arc::new(MockTableProvider { schema }))
         }
 
@@ -2582,30 +2596,31 @@ mod udtf_tests {
             "scan_with".to_string(),
             Arc::new(NoCoerceUDTF {}),
         ));
-        
+
         let state = SessionStateBuilder::new()
             .with_default_features()
             .with_table_function_list(vec![udtf])
             .build();
-            
+
         let provider = SessionContextProvider {
             state: &state,
             tables: HashMap::new(),
         };
 
         // SQL: SELECT * FROM scan_with(index=1)
-        let args = vec![
-            Expr::BinaryExpr(datafusion_expr::BinaryExpr {
-                left: Box::new(Expr::Column(datafusion_common::Column::from_name("index"))),
-                op: datafusion_expr::Operator::Eq,
-                right: Box::new(Expr::Literal(datafusion_common::ScalarValue::Int32(Some(1)), None)),
-            })
-        ];
+        let args = vec![Expr::BinaryExpr(datafusion_expr::BinaryExpr {
+            left: Box::new(Expr::Column(datafusion_common::Column::from_name("index"))),
+            op: datafusion_expr::Operator::Eq,
+            right: Box::new(Expr::Literal(
+                datafusion_common::ScalarValue::Int32(Some(1)),
+                None,
+            )),
+        })];
 
         let source = provider.get_table_function_source("scan_with", args)?;
         assert_eq!(source.schema().fields().len(), 1);
         assert_eq!(source.schema().field(0).name(), "a");
-        
+
         Ok(())
     }
 
@@ -2615,7 +2630,8 @@ mod udtf_tests {
         struct CoerceUDTF {}
         impl TableFunctionImpl for CoerceUDTF {
             fn call(&self, _args: &[Expr]) -> Result<Arc<dyn TableProvider>> {
-                let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+                let schema =
+                    Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
                 Ok(Arc::new(MockTableProvider { schema }))
             }
         }
@@ -2624,33 +2640,39 @@ mod udtf_tests {
             "scan_with".to_string(),
             Arc::new(CoerceUDTF {}),
         ));
-        
+
         let state = SessionStateBuilder::new()
             .with_default_features()
             .with_table_function_list(vec![udtf])
             .build();
-            
+
         let provider = SessionContextProvider {
             state: &state,
             tables: HashMap::new(),
         };
 
         // In SQL: SELECT * FROM scan_with(unknown_col=1)
-        let args = vec![
-            Expr::BinaryExpr(datafusion_expr::BinaryExpr {
-                left: Box::new(Expr::Column(datafusion_common::Column::from_name("unknown_col"))),
-                op: datafusion_expr::Operator::Eq,
-                right: Box::new(Expr::Literal(datafusion_common::ScalarValue::Int32(Some(1)), None)),
-            })
-        ];
+        let args = vec![Expr::BinaryExpr(datafusion_expr::BinaryExpr {
+            left: Box::new(Expr::Column(datafusion_common::Column::from_name(
+                "unknown_col",
+            ))),
+            op: datafusion_expr::Operator::Eq,
+            right: Box::new(Expr::Literal(
+                datafusion_common::ScalarValue::Int32(Some(1)),
+                None,
+            )),
+        })];
 
         // Should fail because coercion is ON and "unknown_col" is not in the empty schema.
         let res = provider.get_table_function_source("scan_with", args);
         match res {
             Ok(_) => panic!("Expected error, but got success"),
-            Err(e) => assert!(e.to_string().contains("Schema error: No field named unknown_col")),
+            Err(e) => assert!(
+                e.to_string()
+                    .contains("Schema error: No field named unknown_col")
+            ),
         }
-        
+
         Ok(())
     }
 }
