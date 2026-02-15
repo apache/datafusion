@@ -1356,10 +1356,10 @@ impl DisplayAs for FileScanConfig {
         write!(f, "file_groups=")?;
         FileGroupsDisplay(&self.file_groups).fmt_as(t, f)?;
 
-        if let Ok(schema) = self.projected_schema() {
-            if !schema.fields().is_empty() {
-                write!(f, ", projection={}", ProjectSchemaDisplay(&schema))?;
-            }
+        if let Ok(schema) = self.projected_schema()
+            && !schema.fields().is_empty()
+        {
+            write!(f, ", projection={}", ProjectSchemaDisplay(&schema))?;
         }
 
         if let Some(limit) = self.limit {
