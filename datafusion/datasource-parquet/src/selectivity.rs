@@ -33,6 +33,22 @@ use datafusion_physical_expr_common::physical_expr::{
     OptionalFilterPhysicalExpr, PhysicalExpr,
 };
 
+/// Internal representation of the promotion strategy derived from `min_bytes_per_sec`.
+///
+/// This avoids fragile float comparisons (`== 0.0`, `== INFINITY`) scattered
+/// throughout the code and makes the intent explicit.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum PromotionStrategy {
+    /// Feature disabled — no filters are promoted to row filters.
+    /// Corresponds to `min_bytes_per_sec == f64::INFINITY`.
+    Disabled,
+    /// All filters are pushed as row filters unconditionally.
+    /// Corresponds to `min_bytes_per_sec == 0.0`.
+    AllPromoted,
+    /// Only filters with bytes/sec throughput >= threshold are promoted.
+    Threshold(f64),
+}
+
 /// Result of partitioning filters based on their effectiveness.
 ///
 /// Filters are split into two groups:
@@ -133,13 +149,13 @@ struct CorrelationStats {
 /// of the expression to ensure stable hash/eq values even as the dynamic expression
 /// updates. This is critical for HashMap correctness.
 #[derive(Clone, Debug)]
-pub struct ExprKey(Arc<dyn PhysicalExpr>);
+pub(crate) struct ExprKey(Arc<dyn PhysicalExpr>);
 
 impl ExprKey {
     /// Create a new ExprKey from an expression.
     ///
     /// For dynamic expressions, this takes a snapshot to ensure stable hash/eq.
-    pub fn new(expr: &Arc<dyn PhysicalExpr>) -> Self {
+    pub(crate) fn new(expr: &Arc<dyn PhysicalExpr>) -> Self {
         // Try to get a snapshot; if available, use it for stable hash/eq
         let stable_expr = expr
             .snapshot()
@@ -169,11 +185,11 @@ impl Eq for ExprKey {}
 #[derive(Debug, Clone, Default)]
 pub struct SelectivityStats {
     /// Number of rows that matched (passed) the filter
-    pub rows_matched: u64,
+    rows_matched: u64,
     /// Total number of rows evaluated
-    pub rows_total: u64,
+    rows_total: u64,
     /// Cumulative evaluation time in nanoseconds
-    pub eval_nanos: u64,
+    eval_nanos: u64,
 }
 
 impl SelectivityStats {
@@ -184,6 +200,21 @@ impl SelectivityStats {
             rows_total,
             eval_nanos,
         }
+    }
+
+    /// Number of rows that matched (passed) the filter.
+    pub fn rows_matched(&self) -> u64 {
+        self.rows_matched
+    }
+
+    /// Total number of rows evaluated.
+    pub fn rows_total(&self) -> u64 {
+        self.rows_total
+    }
+
+    /// Cumulative evaluation time in nanoseconds.
+    pub fn eval_nanos(&self) -> u64 {
+        self.eval_nanos
     }
 
     /// Returns the filter effectiveness (fraction of rows filtered out).
@@ -212,8 +243,8 @@ impl SelectivityStats {
         }
         let rows_pruned = self.rows_total - self.rows_matched;
         let bytes_saved = rows_pruned as f64 * bytes_per_row;
-        let secs = self.eval_nanos as f64 / 1_000_000_000.0;
-        Some(bytes_saved / secs)
+        // Single division for better floating-point precision
+        Some(bytes_saved * 1_000_000_000.0 / self.eval_nanos as f64)
     }
 
     /// Update stats with new observations.
@@ -320,6 +351,17 @@ impl SelectivityTracker {
         self.min_bytes_per_sec
     }
 
+    /// Derive the promotion strategy from the configured `min_bytes_per_sec`.
+    fn promotion_strategy(&self) -> PromotionStrategy {
+        if self.min_bytes_per_sec.is_infinite() {
+            PromotionStrategy::Disabled
+        } else if self.min_bytes_per_sec == 0.0 {
+            PromotionStrategy::AllPromoted
+        } else {
+            PromotionStrategy::Threshold(self.min_bytes_per_sec)
+        }
+    }
+
     /// Returns the effective minimum rows for collection, taking into account
     /// the fraction-based threshold if it has been resolved.
     fn effective_min_rows(&self) -> u64 {
@@ -387,28 +429,36 @@ impl SelectivityTracker {
 
     /// Partition filters into row_filters and post_scan based on bytes/sec throughput.
     ///
-    /// Filters start as post-scan to collect clean, uncorrelated stats. A filter
-    /// is promoted to row filter only when its measured bytes/sec throughput
-    /// exceeds `min_bytes_per_sec`.
+    /// This is the non-grouped variant used primarily for testing. For production
+    /// use, prefer [`partition_filters_grouped`] which also handles correlation-based
+    /// grouping.
     ///
-    /// - `min_bytes_per_sec == 0.0`: all filters pushed as row filters (skip adaptive logic)
-    /// - `min_bytes_per_sec == f64::INFINITY`: no filter promoted (feature disabled)
+    /// - `AllPromoted` (0.0): all filters pushed as row filters
+    /// - `Disabled` (INFINITY): no filter promoted
+    /// - `Threshold`: filters meeting threshold → row_filters, others → post_scan
     /// - Unknown filters (no stats) → post-scan (to collect clean stats)
-    /// - Filters meeting threshold → row_filters (promoted)
-    /// - Filters below threshold → post_scan
     pub fn partition_filters(
         &self,
         filters: Vec<Arc<dyn PhysicalExpr>>,
         bytes_per_row: Option<f64>,
     ) -> PartitionedFilters {
-        // 0.0 threshold = push all filters as row filters (skip adaptive logic)
-        if self.min_bytes_per_sec == 0.0 {
-            return PartitionedFilters {
-                row_filters: filters,
-                post_scan: Vec::new(),
-            };
+        match self.promotion_strategy() {
+            PromotionStrategy::AllPromoted => {
+                return PartitionedFilters {
+                    row_filters: filters,
+                    post_scan: Vec::new(),
+                };
+            }
+            PromotionStrategy::Disabled => {
+                return PartitionedFilters {
+                    row_filters: Vec::new(),
+                    post_scan: filters,
+                };
+            }
+            PromotionStrategy::Threshold(_) => {}
         }
 
+        let threshold = self.min_bytes_per_sec;
         let mut row_filters = Vec::new();
         let mut post_scan = Vec::new();
 
@@ -417,9 +467,7 @@ impl SelectivityTracker {
             match (self.stats.get(&key), bytes_per_row) {
                 (Some(stats), Some(bpr)) => {
                     match stats.bytes_per_sec(bpr) {
-                        Some(bps) if bps >= self.min_bytes_per_sec => {
-                            row_filters.push(filter)
-                        }
+                        Some(bps) if bps >= threshold => row_filters.push(filter),
                         _ => post_scan.push(filter), // below threshold or no timing → stay post-scan
                     }
                 }
@@ -446,49 +494,65 @@ impl SelectivityTracker {
         &self,
         filters: Vec<Arc<dyn PhysicalExpr>>,
     ) -> PartitionedFiltersGrouped {
-        let bytes_per_row = self.avg_bytes_per_row();
-        // During collection phase, all filters go to post-scan for measurement.
-        // (min_bytes_per_sec == 0.0 disables the adaptive check, but we still
-        //  respect the collection phase for correlation gathering.)
-        if self.min_bytes_per_sec != 0.0 && self.in_collection_phase() {
+        let strategy = self.promotion_strategy();
+
+        // Disabled: nothing is promoted.
+        if strategy == PromotionStrategy::Disabled {
             return PartitionedFiltersGrouped {
                 row_filter_groups: Vec::new(),
                 post_scan: filters,
             };
         }
 
-        // Separate effective vs ineffective filters using bytes/sec metric.
-        // When min_bytes_per_sec == 0.0, all filters are treated as effective.
+        let bytes_per_row = self.avg_bytes_per_row();
+
+        // During collection phase (only for Threshold strategy), all filters go
+        // to post-scan for accurate marginal and joint measurement.
+        // AllPromoted skips collection — filters are always promoted.
+        if strategy != PromotionStrategy::AllPromoted && self.in_collection_phase() {
+            return PartitionedFiltersGrouped {
+                row_filter_groups: Vec::new(),
+                post_scan: filters,
+            };
+        }
+
+        // Separate effective vs ineffective filters.
+        // AllPromoted: all filters are effective (skip threshold check).
+        // Threshold: only filters exceeding the throughput threshold are effective.
         let mut effective = Vec::new();
         let mut post_scan = Vec::new();
 
-        if self.min_bytes_per_sec == 0.0 {
-            effective = filters;
-        } else {
-            for filter in filters {
-                let key = ExprKey::new(&filter);
-                match (self.stats.get(&key), bytes_per_row) {
-                    (Some(stats), Some(bpr)) => {
-                        match stats.bytes_per_sec(bpr) {
-                            Some(bps) if bps >= self.min_bytes_per_sec => {
-                                effective.push(filter);
-                            }
-                            _ => {
-                                // Below threshold: drop optional filters entirely,
-                                // demote mandatory filters to post-scan.
-                                if filter
-                                    .as_any()
-                                    .downcast_ref::<OptionalFilterPhysicalExpr>()
-                                    .is_none()
-                                {
-                                    post_scan.push(filter);
+        match strategy {
+            PromotionStrategy::AllPromoted => {
+                effective = filters;
+            }
+            PromotionStrategy::Threshold(threshold) => {
+                for filter in filters {
+                    let key = ExprKey::new(&filter);
+                    match (self.stats.get(&key), bytes_per_row) {
+                        (Some(stats), Some(bpr)) => {
+                            match stats.bytes_per_sec(bpr) {
+                                Some(bps) if bps >= threshold => {
+                                    effective.push(filter);
+                                }
+                                _ => {
+                                    // Below threshold: drop optional filters entirely,
+                                    // demote mandatory filters to post-scan.
+                                    if filter
+                                        .as_any()
+                                        .downcast_ref::<OptionalFilterPhysicalExpr>()
+                                        .is_none()
+                                    {
+                                        post_scan.push(filter);
+                                    }
                                 }
                             }
                         }
+                        _ => post_scan.push(filter), // unknown → post-scan to learn
                     }
-                    _ => post_scan.push(filter), // unknown → post-scan to learn
                 }
             }
+            PromotionStrategy::Disabled => unreachable!(),
         }
 
         // Group effective filters by correlation using union-find
@@ -630,10 +694,10 @@ impl SelectivityTracker {
         // Check all pairs for correlation
         for i in 0..n {
             for j in (i + 1)..n {
-                if let Some(ratio) = self.correlation_ratio(&filters[i], &filters[j]) {
-                    if ratio > self.correlation_threshold {
-                        union(&mut parent, &mut rank, i, j);
-                    }
+                if let Some(ratio) = self.correlation_ratio(&filters[i], &filters[j])
+                    && ratio > self.correlation_threshold
+                {
+                    union(&mut parent, &mut rank, i, j);
                 }
             }
         }
@@ -659,7 +723,7 @@ impl SelectivityTracker {
 }
 
 /// Union-find: find with path compression
-fn find(parent: &mut Vec<usize>, i: usize) -> usize {
+fn find(parent: &mut [usize], i: usize) -> usize {
     if parent[i] != i {
         parent[i] = find(parent, parent[i]);
     }
@@ -667,7 +731,7 @@ fn find(parent: &mut Vec<usize>, i: usize) -> usize {
 }
 
 /// Union-find: union by rank
-fn union(parent: &mut Vec<usize>, rank: &mut Vec<usize>, a: usize, b: usize) {
+fn union(parent: &mut [usize], rank: &mut [usize], a: usize, b: usize) {
     let root_a = find(parent, a);
     let root_b = find(parent, b);
     if root_a == root_b {
@@ -791,19 +855,19 @@ mod tests {
     #[test]
     fn test_selectivity_stats_update() {
         let mut stats = SelectivityStats::default();
-        assert_eq!(stats.rows_matched, 0);
-        assert_eq!(stats.rows_total, 0);
-        assert_eq!(stats.eval_nanos, 0);
+        assert_eq!(stats.rows_matched(), 0);
+        assert_eq!(stats.rows_total(), 0);
+        assert_eq!(stats.eval_nanos(), 0);
 
         stats.update(20, 100, 500);
-        assert_eq!(stats.rows_matched, 20);
-        assert_eq!(stats.rows_total, 100);
-        assert_eq!(stats.eval_nanos, 500);
+        assert_eq!(stats.rows_matched(), 20);
+        assert_eq!(stats.rows_total(), 100);
+        assert_eq!(stats.eval_nanos(), 500);
 
         stats.update(30, 100, 300);
-        assert_eq!(stats.rows_matched, 50);
-        assert_eq!(stats.rows_total, 200);
-        assert_eq!(stats.eval_nanos, 800);
+        assert_eq!(stats.rows_matched(), 50);
+        assert_eq!(stats.rows_total(), 200);
+        assert_eq!(stats.eval_nanos(), 800);
         assert_eq!(stats.effectiveness(), 0.75); // 150/200 filtered = 0.75
     }
 

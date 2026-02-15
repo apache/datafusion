@@ -96,8 +96,12 @@ use super::supported_predicates::supports_list_predicates;
 /// to update selectivity statistics after processing completes.
 #[derive(Debug, Clone)]
 pub struct FilterMetrics {
-    /// The original filter expression (before any rewriting for the file schema)
-    pub expr: Arc<dyn PhysicalExpr>,
+    /// The original filter expressions that make up this predicate.
+    /// A single-element vec means a standalone filter; multiple elements
+    /// means a compound predicate built from correlated filters.
+    /// Only single-element metrics are fed back into the selectivity tracker,
+    /// because compound metrics cannot be attributed to individual filters.
+    pub exprs: Vec<Arc<dyn PhysicalExpr>>,
     /// Counter for rows that matched (passed) this filter
     rows_matched: metrics::Count,
     /// Counter for rows that were pruned (filtered out) by this filter
@@ -135,6 +139,9 @@ pub struct RowFilterWithMetrics {
     /// Metrics for each filter expression, in the order they appear in the row filter.
     /// These can be read after the stream completes to update selectivity statistics.
     pub filter_metrics: Vec<FilterMetrics>,
+    /// Filter expressions that could not be built into row filters and must be
+    /// applied as post-scan filters to preserve correctness.
+    pub unbuildable_filters: Vec<Arc<dyn PhysicalExpr>>,
 }
 
 /// A "compiled" predicate passed to `ParquetRecordBatchStream` to perform
@@ -763,7 +770,7 @@ pub fn build_row_filter_with_metrics(
             })
             .collect();
 
-    // no candidates
+    // no candidates (non-grouped path has no unbuildable tracking)
     if candidates_with_exprs.is_empty() {
         return Ok(None);
     }
@@ -801,7 +808,7 @@ pub fn build_row_filter_with_metrics(
 
         // Store references to the metrics for the filter
         filter_metrics.push(FilterMetrics {
-            expr: original_expr,
+            exprs: vec![original_expr],
             rows_matched: predicate_rows_matched.clone(),
             rows_pruned: predicate_rows_pruned.clone(),
             eval_time: local_eval_time.clone(),
@@ -835,6 +842,7 @@ pub fn build_row_filter_with_metrics(
     Ok(Some(RowFilterWithMetrics {
         row_filter: RowFilter::new(arrow_predicates),
         filter_metrics,
+        unbuildable_filters: vec![],
     }))
 }
 
@@ -873,9 +881,10 @@ pub fn build_row_filter_from_groups(
     let time = &file_metrics.row_pushdown_eval_time;
 
     // For each group, combine into a single expression and build a candidate.
-    // Track original expressions for metrics.
+    // Track original expressions for metrics and unbuildable filters.
     let mut candidates_with_exprs: Vec<(Vec<Arc<dyn PhysicalExpr>>, FilterCandidate)> =
         Vec::new();
+    let mut unbuildable_filters: Vec<Arc<dyn PhysicalExpr>> = Vec::new();
 
     for group in filter_groups {
         if group.is_empty() {
@@ -885,23 +894,32 @@ pub fn build_row_filter_from_groups(
         // Combine group into a single expression with conjunction
         let combined_expr = conjunction(group.iter().cloned());
 
-        match FilterCandidateBuilder::new(combined_expr.clone(), Arc::clone(file_schema))
-            .build(metadata)
+        match FilterCandidateBuilder::new(
+            Arc::clone(&combined_expr),
+            Arc::clone(file_schema),
+        )
+        .build(metadata)
         {
             Ok(Some(candidate)) => {
                 candidates_with_exprs.push((group, candidate));
             }
             Ok(None) | Err(_) => {
-                // Compound can't push down -- these filters will need to be
-                // handled as post-scan. For now, try each individually.
+                // Compound can't push down — try each individually.
+                // Any filter that still can't be built must be returned as
+                // unbuildable so the caller can apply it as a post-scan filter.
                 for expr in group {
-                    if let Ok(Some(candidate)) = FilterCandidateBuilder::new(
+                    match FilterCandidateBuilder::new(
                         Arc::clone(&expr),
                         Arc::clone(file_schema),
                     )
                     .build(metadata)
                     {
-                        candidates_with_exprs.push((vec![expr], candidate));
+                        Ok(Some(candidate)) => {
+                            candidates_with_exprs.push((vec![expr], candidate));
+                        }
+                        _ => {
+                            unbuildable_filters.push(expr);
+                        }
                     }
                 }
             }
@@ -909,7 +927,16 @@ pub fn build_row_filter_from_groups(
     }
 
     if candidates_with_exprs.is_empty() {
-        return Ok(None);
+        if unbuildable_filters.is_empty() {
+            return Ok(None);
+        }
+        // No buildable candidates, but there are unbuildable filters that
+        // the caller must apply as post-scan to preserve correctness.
+        return Ok(Some(RowFilterWithMetrics {
+            row_filter: RowFilter::new(vec![]),
+            filter_metrics: vec![],
+            unbuildable_filters,
+        }));
     }
 
     if reorder_predicates {
@@ -936,20 +963,20 @@ pub fn build_row_filter_from_groups(
     {
         let is_last = idx == total_candidates - 1;
 
-        // Create per-predicate metrics shared by all exprs in the group
+        // Create per-predicate metrics for this group
         let predicate_rows_matched = metrics::Count::new();
         let predicate_rows_pruned = metrics::Count::new();
         let local_eval_time = metrics::Time::new();
 
-        // All original expressions in the group share the same counters
-        for original_expr in original_exprs {
-            filter_metrics.push(FilterMetrics {
-                expr: original_expr,
-                rows_matched: predicate_rows_matched.clone(),
-                rows_pruned: predicate_rows_pruned.clone(),
-                eval_time: local_eval_time.clone(),
-            });
-        }
+        // One FilterMetrics entry per predicate, storing all original
+        // expressions in the group. Only single-element groups will have
+        // their stats fed back into the selectivity tracker.
+        filter_metrics.push(FilterMetrics {
+            exprs: original_exprs,
+            rows_matched: predicate_rows_matched.clone(),
+            rows_pruned: predicate_rows_pruned.clone(),
+            eval_time: local_eval_time.clone(),
+        });
 
         // For global metrics tracking
         let global_rows_pruned = rows_pruned.clone();
@@ -976,6 +1003,7 @@ pub fn build_row_filter_from_groups(
     Ok(Some(RowFilterWithMetrics {
         row_filter: RowFilter::new(arrow_predicates),
         filter_metrics,
+        unbuildable_filters,
     }))
 }
 
@@ -1004,6 +1032,7 @@ struct DatafusionArrowPredicateWithMetrics {
 }
 
 impl DatafusionArrowPredicateWithMetrics {
+    #[allow(clippy::too_many_arguments)]
     fn try_new(
         candidate: FilterCandidate,
         metadata: &ParquetMetaData,

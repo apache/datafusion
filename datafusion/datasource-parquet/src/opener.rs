@@ -606,18 +606,15 @@ impl FileOpener for ParquetOpener {
                 }
             }
 
-            // Acquire tracker lock once for both partitioning and row filter building.
-            let (post_scan_filters, projection, mask) = {
+            // Partition filters under a brief read lock, then release it.
+            let PartitionedFiltersGrouped {
+                row_filter_groups,
+                mut post_scan,
+            } = {
                 let tracker = selectivity_tracker.read();
-
-                let PartitionedFiltersGrouped {
-                    row_filter_groups,
-                    post_scan,
-                } = if let Some(predicate) =
+                if let Some(predicate) =
                     pushdown_filters.then_some(predicate.as_ref()).flatten()
                 {
-                    // Split predicate into conjuncts and partition based on selectivity
-                    // and correlation
                     let conjuncts: Vec<Arc<dyn PhysicalExpr>> =
                         split_conjunction(predicate)
                             .into_iter()
@@ -625,16 +622,50 @@ impl FileOpener for ParquetOpener {
                             .collect();
                     tracker.partition_filters_grouped(conjuncts)
                 } else {
-                    PartitionedFiltersGrouped {
-                        row_filter_groups: vec![],
-                        post_scan: vec![],
-                    }
+                    PartitionedFiltersGrouped::default()
+                }
+            };
+            // read lock released
+
+            // Build row filter from groups of correlated filters.
+            // build_row_filter_from_groups needs a brief read lock for reordering.
+            if !row_filter_groups.is_empty() {
+                let row_filter_result = {
+                    let tracker = selectivity_tracker.read();
+                    row_filter::build_row_filter_from_groups(
+                        row_filter_groups,
+                        &physical_file_schema,
+                        builder.metadata(),
+                        reorder_predicates,
+                        &file_metrics,
+                        &tracker,
+                    )
                 };
 
-                // Include columns needed by post-scan filters in the projection mask,
-                // but don't add filter expressions as projection columns.
+                match row_filter_result {
+                    Ok(Some(result)) => {
+                        if !result.filter_metrics.is_empty() {
+                            builder = builder.with_row_filter(result.row_filter);
+                        }
+                        filter_metrics = result.filter_metrics;
+                        // Unbuildable filters must be applied as post-scan
+                        // to preserve correctness.
+                        post_scan.extend(result.unbuildable_filters);
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        debug!("Ignoring error building row filter: {e}");
+                    }
+                };
+            }
+
+            let post_scan_filters = post_scan;
+
+            // Include columns needed by post-scan filters in the projection mask,
+            // but don't add filter expressions as projection columns.
+            let mask = {
                 let mut all_indices: Vec<usize> = projection.column_indices();
-                for filter in &post_scan {
+                for filter in &post_scan_filters {
                     for col in datafusion_physical_expr::utils::collect_columns(filter) {
                         let idx = col.index();
                         if !all_indices.contains(&idx) {
@@ -642,42 +673,16 @@ impl FileOpener for ParquetOpener {
                         }
                     }
                 }
-                let mask = ProjectionMask::roots(builder.parquet_schema(), all_indices);
-
-                // Build row filter from groups of correlated filters
-                if !row_filter_groups.is_empty() {
-                    let row_filter_result = row_filter::build_row_filter_from_groups(
-                        row_filter_groups,
-                        &physical_file_schema,
-                        builder.metadata(),
-                        reorder_predicates,
-                        &file_metrics,
-                        &tracker,
-                    );
-
-                    match row_filter_result {
-                        Ok(Some(result)) => {
-                            builder = builder.with_row_filter(result.row_filter);
-                            filter_metrics = result.filter_metrics;
-                        }
-                        Ok(None) => {}
-                        Err(e) => {
-                            debug!("Ignoring error building row filter: {e}");
-                        }
-                    };
-                }
-
-                (post_scan, projection, mask)
+                ProjectionMask::roots(builder.parquet_schema(), all_indices)
             };
-            // tracker lock released here
 
             // Apply limit to the reader only when there are no post-scan filters.
             // If post-scan filters exist, the limit must be enforced after filtering
             // (otherwise the reader stops reading before the filter can find matches).
-            if post_scan_filters.is_empty() {
-                if let Some(limit) = limit {
-                    builder = builder.with_limit(limit);
-                }
+            if post_scan_filters.is_empty()
+                && let Some(limit) = limit
+            {
+                builder = builder.with_limit(limit);
             }
 
             let stream = builder
@@ -823,8 +828,10 @@ fn apply_post_scan_filters(
     let combined_mask = if collecting {
         // Collection phase: evaluate each filter individually with timing
         // to gather per-filter stats for adaptive decisions.
-        let mut tracker = selectivity_tracker.write();
-
+        // Evaluation and correlation computation happen without the lock;
+        // only the brief tracker updates acquire the write lock.
+        let mut per_filter_stats: Vec<(u64, u64)> =
+            Vec::with_capacity(filter_exprs.len());
         let mut bool_arrays = Vec::with_capacity(filter_exprs.len());
         for expr in filter_exprs {
             let start = datafusion_common::instant::Instant::now();
@@ -832,61 +839,78 @@ fn apply_post_scan_filters(
             let nanos = start.elapsed().as_nanos() as u64;
             let bool_arr = as_boolean_array(result.as_ref()).clone();
             let matched = bool_arr.true_count() as u64;
-            tracker.update(expr, matched, input_rows, nanos);
+            per_filter_stats.push((matched, nanos));
             bool_arrays.push(bool_arr);
         }
 
         // Compute pairwise joint pass counts for correlation tracking.
         // Only when 2+ filters and <= 10 filters (to bound O(n^2) cost).
         let n = filter_exprs.len();
-        if n >= 2 && n <= 10 {
+        let mut pairwise_stats: Vec<(usize, usize, u64)> = Vec::new();
+        if (2..=10).contains(&n) {
             for i in 0..n {
                 for j in (i + 1)..n {
                     let both = and(&bool_arrays[i], &bool_arrays[j])?;
-                    tracker.update_correlation(
-                        &filter_exprs[i],
-                        &filter_exprs[j],
-                        both.true_count() as u64,
-                        input_rows,
-                    );
+                    pairwise_stats.push((i, j, both.true_count() as u64));
                 }
             }
         }
 
-        // Combine all boolean arrays with AND
-        match bool_arrays.len() {
-            1 => bool_arrays.into_iter().next().unwrap(),
-            _ => {
-                let mut iter = bool_arrays.into_iter();
-                let mut acc = iter.next().unwrap();
-                for arr in iter {
-                    acc = and(&acc, &arr)?;
-                }
-                acc
+        // Now acquire the write lock briefly to update the tracker.
+        {
+            let mut tracker = selectivity_tracker.write();
+            for (idx, (matched, nanos)) in per_filter_stats.into_iter().enumerate() {
+                tracker.update(&filter_exprs[idx], matched, input_rows, nanos);
+            }
+            for (i, j, both_passed) in pairwise_stats {
+                tracker.update_correlation(
+                    &filter_exprs[i],
+                    &filter_exprs[j],
+                    both_passed,
+                    input_rows,
+                );
             }
         }
+
+        // Combine all boolean arrays with AND
+        and_boolean_arrays(bool_arrays)
     } else {
         // Post-collection: stats are frozen. Evaluate all filters together
         // without per-filter tracking overhead.
-        let mut combined: Option<arrow::array::BooleanArray> = None;
-        for expr in filter_exprs {
-            let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
-            let bool_arr = as_boolean_array(result.as_ref()).clone();
-            combined = Some(match combined {
-                Some(mask) => and(&mask, &bool_arr)?,
-                None => bool_arr,
-            });
-        }
-        combined.unwrap()
+        let bool_arrays: Vec<arrow::array::BooleanArray> = filter_exprs
+            .iter()
+            .map(|expr| {
+                let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+                Ok(as_boolean_array(result.as_ref()).clone())
+            })
+            .collect::<Result<_>>()?;
+        and_boolean_arrays(bool_arrays)
     };
 
     Ok(filter_record_batch(&batch, &combined_mask)?)
 }
 
+/// Combine multiple boolean arrays with AND, returning a single boolean array.
+///
+/// Panics if `arrays` is empty.
+fn and_boolean_arrays(
+    arrays: Vec<arrow::array::BooleanArray>,
+) -> arrow::array::BooleanArray {
+    use arrow::compute::and;
+    let mut iter = arrays.into_iter();
+    let mut acc = iter.next().expect("at least one boolean array");
+    for arr in iter {
+        acc = and(&acc, &arr).expect("boolean AND should not fail on same-length arrays");
+    }
+    acc
+}
+
 /// Compute the average bytes per row from parquet metadata for the projected columns.
 ///
-/// Uses compressed column sizes as an approximation. Returns `None` if the file
-/// has zero rows.
+/// Uses **compressed** column sizes as an approximation of the I/O savings from
+/// late materialization. This can diverge from actual savings when heavy dictionary
+/// encoding, RLE, or bloom filters cause the compressed-to-uncompressed ratio to
+/// vary significantly between columns. Returns `None` if the file has zero rows.
 fn compute_bytes_per_row(
     metadata: &parquet::file::metadata::ParquetMetaData,
     col_indices: &[usize],
@@ -1021,6 +1045,13 @@ impl<S> SelectivityUpdatingStream<S> {
     fn update_selectivity(&mut self) {
         let mut tracker = self.selectivity_tracker.write();
         for (i, metrics) in self.filter_metrics.iter().enumerate() {
+            // Only feed stats back for single-filter predicates.
+            // Compound predicates (multiple correlated filters grouped together)
+            // have shared metrics that can't be attributed to individual filters.
+            if metrics.exprs.len() != 1 {
+                continue;
+            }
+
             let current_matched = metrics.get_rows_matched() as u64;
             let current_total = metrics.get_rows_total() as u64;
             let current_nanos = metrics.get_eval_nanos() as u64;
@@ -1031,7 +1062,12 @@ impl<S> SelectivityUpdatingStream<S> {
             let delta_nanos = current_nanos - last_nanos;
 
             if delta_total > 0 {
-                tracker.update(&metrics.expr, delta_matched, delta_total, delta_nanos);
+                tracker.update(
+                    &metrics.exprs[0],
+                    delta_matched,
+                    delta_total,
+                    delta_nanos,
+                );
                 self.last_reported[i] = (current_matched, current_total, current_nanos);
             }
         }
@@ -1058,10 +1094,14 @@ where
                 self.done = true;
                 Poll::Ready(None)
             }
-            Some(result) => {
-                // Update selectivity after each batch
+            Some(Ok(batch)) => {
+                // Update selectivity after each successful batch
                 self.update_selectivity();
-                Poll::Ready(Some(result))
+                Poll::Ready(Some(Ok(batch)))
+            }
+            Some(Err(e)) => {
+                // Don't update selectivity on error — metrics may be partial/corrupt
+                Poll::Ready(Some(Err(e)))
             }
         }
     }
