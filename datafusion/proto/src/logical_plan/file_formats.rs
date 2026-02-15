@@ -423,8 +423,8 @@ mod parquet {
                 schema_force_view_types: global_options.global.schema_force_view_types,
                 binary_as_string: global_options.global.binary_as_string,
                 skip_arrow_metadata: global_options.global.skip_arrow_metadata,
-                coerce_int96_opt: global_options.global.coerce_int96.map(|compression| {
-                    parquet_options::CoerceInt96Opt::CoerceInt96(compression.to_string())
+                coerce_int96_opt: global_options.global.coerce_int96.map(|time_unit| {
+                    parquet_options::CoerceInt96Opt::CoerceInt96(time_unit.to_string())
                 }),
                 max_predicate_cache_size_opt: global_options.global.max_predicate_cache_size.map(|size| {
                     parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(size as u64)

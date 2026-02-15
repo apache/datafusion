@@ -732,12 +732,15 @@ config_namespace! {
         /// BLOB instead.
         pub binary_as_string: bool, default = false
 
-        /// (reading) If true, parquet reader will read columns of
+        /// (reading) If set, parquet reader will read columns of
         /// physical type int96 as originating from a different resolution
-        /// than nanosecond. This is useful for reading data from systems like Spark
-        /// which stores microsecond resolution timestamps in an int96 allowing it
-        /// to write values with a larger date range than 64-bit timestamps with
-        /// nanosecond resolution.
+        /// than nanosecond.
+        /// Note that `None` means **do not apply any coercion**,
+        /// which is different from using `Some(DFTimeUnit::Nanosecond)`.
+        /// This is useful
+        /// for reading data from systems like Spark which stores microsecond
+        /// resolution timestamps in an int96 allowing it to write values with
+        /// a larger date range than 64-bit timestamps with nanosecond resolution.
         pub coerce_int96: Option<DFTimeUnit>, default = None
 
         /// (reading) Use any available bloom filters when reading parquet files
@@ -3541,9 +3544,10 @@ mod tests {
         config
             .set("datafusion.execution.parquet.coerce_int96", "ns")
             .unwrap();
-        assert_eq!(config.execution.parquet.coerce_int96, Some(DFTimeUnit::NS));
-
-        // ... tests for "us", "ms", "s" ...
+        assert_eq!(
+            config.execution.parquet.coerce_int96,
+            Some(DFTimeUnit::Nanosecond)
+        );
 
         // Invalid value should error immediately at SET time
         let err = config

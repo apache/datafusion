@@ -114,27 +114,22 @@ impl From<parquet::file::properties::WriterVersion> for DFParquetWriterVersion {
 /// via `SET` commands or proto deserialization.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DFTimeUnit {
-    /// Nanoseconds
     #[default]
-    NS,
-    /// Microseconds
-    US,
-    /// Milliseconds
-    MS,
-    /// Seconds
-    S,
+    Nanosecond,
+    Microsecond,
+    Millisecond,
+    Second,
 }
 
-/// Implement parsing strings to `DFTimeUnit`
 impl FromStr for DFTimeUnit {
     type Err = DataFusionError;
 
     fn from_str(s: &str) -> Result<Self> {
         match s.to_lowercase().as_str() {
-            "ns" => Ok(DFTimeUnit::NS),
-            "us" => Ok(DFTimeUnit::US),
-            "ms" => Ok(DFTimeUnit::MS),
-            "s" => Ok(DFTimeUnit::S),
+            "ns" => Ok(DFTimeUnit::Nanosecond),
+            "us" => Ok(DFTimeUnit::Microsecond),
+            "ms" => Ok(DFTimeUnit::Millisecond),
+            "s" => Ok(DFTimeUnit::Second),
             other => Err(DataFusionError::Configuration(format!(
                 "Invalid parquet coerce_int96: {other}. Expected one of: ns, us, ms, s"
             ))),
@@ -145,10 +140,10 @@ impl FromStr for DFTimeUnit {
 impl Display for DFTimeUnit {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
-            DFTimeUnit::NS => "ns",
-            DFTimeUnit::US => "us",
-            DFTimeUnit::MS => "ms",
-            DFTimeUnit::S => "s",
+            DFTimeUnit::Nanosecond => "ns",
+            DFTimeUnit::Microsecond => "us",
+            DFTimeUnit::Millisecond => "ms",
+            DFTimeUnit::Second => "s",
         };
         write!(f, "{s}")
     }
@@ -173,10 +168,10 @@ impl ConfigField for DFTimeUnit {
 impl From<DFTimeUnit> for arrow::datatypes::TimeUnit {
     fn from(value: DFTimeUnit) -> Self {
         match value {
-            DFTimeUnit::NS => arrow::datatypes::TimeUnit::Nanosecond,
-            DFTimeUnit::US => arrow::datatypes::TimeUnit::Microsecond,
-            DFTimeUnit::MS => arrow::datatypes::TimeUnit::Millisecond,
-            DFTimeUnit::S => arrow::datatypes::TimeUnit::Second,
+            DFTimeUnit::Nanosecond => arrow::datatypes::TimeUnit::Nanosecond,
+            DFTimeUnit::Microsecond => arrow::datatypes::TimeUnit::Microsecond,
+            DFTimeUnit::Millisecond => arrow::datatypes::TimeUnit::Millisecond,
+            DFTimeUnit::Second => arrow::datatypes::TimeUnit::Second,
         }
     }
 }
@@ -189,10 +184,10 @@ impl From<DFTimeUnit> for arrow::datatypes::TimeUnit {
 impl From<arrow::datatypes::TimeUnit> for DFTimeUnit {
     fn from(value: arrow::datatypes::TimeUnit) -> Self {
         match value {
-            arrow::datatypes::TimeUnit::Nanosecond => DFTimeUnit::NS,
-            arrow::datatypes::TimeUnit::Microsecond => DFTimeUnit::US,
-            arrow::datatypes::TimeUnit::Millisecond => DFTimeUnit::MS,
-            arrow::datatypes::TimeUnit::Second => DFTimeUnit::S,
+            arrow::datatypes::TimeUnit::Nanosecond => DFTimeUnit::Nanosecond,
+            arrow::datatypes::TimeUnit::Microsecond => DFTimeUnit::Microsecond,
+            arrow::datatypes::TimeUnit::Millisecond => DFTimeUnit::Millisecond,
+            arrow::datatypes::TimeUnit::Second => DFTimeUnit::Second,
         }
     }
 }
