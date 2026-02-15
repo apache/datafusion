@@ -295,10 +295,10 @@ fn find_field_index(
         // TODO: For nested schemas, this needs to recursively match field IDs
         // through the struct hierarchy
         for (idx, target_field) in target_schema.fields().iter().enumerate() {
-            if let Some(target_field_id) = get_field_id(target_field) {
-                if source_field_id == target_field_id {
-                    return Ok(idx);
-                }
+            if let Some(target_field_id) = get_field_id(target_field)
+                && source_field_id == target_field_id
+            {
+                return Ok(idx);
             }
         }
     }

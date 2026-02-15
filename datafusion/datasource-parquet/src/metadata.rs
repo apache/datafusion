@@ -83,7 +83,7 @@ pub struct DFParquetMetadata<'a> {
 /// field IDs at all nesting levels. See PARQUET_FIELD_ID_IMPLEMENTATION.md
 /// for details on nested schema support.
 fn add_field_ids_to_arrow_schema(
-    arrow_schema: Schema,
+    arrow_schema: &Schema,
     parquet_schema: &SchemaDescriptor,
 ) -> Result<Schema> {
     use arrow::datatypes::Field;
@@ -244,7 +244,8 @@ impl<'a> DFParquetMetadata<'a> {
 
         // Add field IDs if requested
         if self.enable_field_ids {
-            schema = add_field_ids_to_arrow_schema(schema, file_metadata.schema_descr())?;
+            schema =
+                add_field_ids_to_arrow_schema(&schema, file_metadata.schema_descr())?;
         }
 
         // Apply INT96 coercion if configured
