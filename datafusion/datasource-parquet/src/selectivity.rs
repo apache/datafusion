@@ -29,7 +29,9 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_physical_expr_common::physical_expr::{
+    OptionalFilterPhysicalExpr, PhysicalExpr,
+};
 
 /// Result of partitioning filters based on their effectiveness.
 ///
@@ -260,6 +262,10 @@ pub struct SelectivityTracker {
     /// Resolved minimum rows after notify_dataset_rows() is called.
     /// None = not yet resolved (use min_rows_for_collection as-is).
     resolved_min_rows: Option<u64>,
+    /// Cumulative compressed bytes across all files (for avg bytes_per_row).
+    total_file_bytes: f64,
+    /// Cumulative rows across all files (for avg bytes_per_row).
+    total_file_rows: u64,
 }
 
 impl Default for SelectivityTracker {
@@ -284,6 +290,8 @@ impl SelectivityTracker {
             min_rows_for_collection: 10_000,
             collection_fraction: 0.0,
             resolved_min_rows: None,
+            total_file_bytes: 0.0,
+            total_file_rows: 0,
         }
     }
 
@@ -302,6 +310,8 @@ impl SelectivityTracker {
             min_rows_for_collection,
             collection_fraction,
             resolved_min_rows: None,
+            total_file_bytes: 0.0,
+            total_file_rows: 0,
         }
     }
 
@@ -313,7 +323,8 @@ impl SelectivityTracker {
     /// Returns the effective minimum rows for collection, taking into account
     /// the fraction-based threshold if it has been resolved.
     fn effective_min_rows(&self) -> u64 {
-        self.resolved_min_rows.unwrap_or(self.min_rows_for_collection)
+        self.resolved_min_rows
+            .unwrap_or(self.min_rows_for_collection)
     }
 
     /// Notify the tracker of the total dataset row count so the fraction-based
@@ -326,6 +337,23 @@ impl SelectivityTracker {
             let fraction_rows = (self.collection_fraction * total_rows as f64) as u64;
             self.resolved_min_rows =
                 Some(self.min_rows_for_collection.max(fraction_rows));
+        }
+    }
+
+    /// Record the bytes_per_row and row count for a file, contributing to the
+    /// running average used by `partition_filters_grouped`.
+    pub fn update_bytes_per_row(&mut self, bytes_per_row: f64, file_rows: u64) {
+        self.total_file_bytes += bytes_per_row * file_rows as f64;
+        self.total_file_rows += file_rows;
+    }
+
+    /// Returns the running-average bytes per row across all files seen so far,
+    /// or `None` if no files have been recorded.
+    pub fn avg_bytes_per_row(&self) -> Option<f64> {
+        if self.total_file_rows == 0 {
+            None
+        } else {
+            Some(self.total_file_bytes / self.total_file_rows as f64)
         }
     }
 
@@ -417,8 +445,8 @@ impl SelectivityTracker {
     pub fn partition_filters_grouped(
         &self,
         filters: Vec<Arc<dyn PhysicalExpr>>,
-        bytes_per_row: Option<f64>,
     ) -> PartitionedFiltersGrouped {
+        let bytes_per_row = self.avg_bytes_per_row();
         // During collection phase, all filters go to post-scan for measurement.
         // (min_bytes_per_sec == 0.0 disables the adaptive check, but we still
         //  respect the collection phase for correlation gathering.)
@@ -445,7 +473,17 @@ impl SelectivityTracker {
                             Some(bps) if bps >= self.min_bytes_per_sec => {
                                 effective.push(filter);
                             }
-                            _ => post_scan.push(filter),
+                            _ => {
+                                // Below threshold: drop optional filters entirely,
+                                // demote mandatory filters to post-scan.
+                                if filter
+                                    .as_any()
+                                    .downcast_ref::<OptionalFilterPhysicalExpr>()
+                                    .is_none()
+                                {
+                                    post_scan.push(filter);
+                                }
+                            }
                         }
                     }
                     _ => post_scan.push(filter), // unknown → post-scan to learn
@@ -459,7 +497,12 @@ impl SelectivityTracker {
         // Sort groups by combined effectiveness descending (most selective first)
         let mut row_filter_groups: Vec<Vec<Arc<dyn PhysicalExpr>>> = groups
             .into_iter()
-            .map(|indices| indices.into_iter().map(|i| Arc::clone(&effective[i])).collect())
+            .map(|indices| {
+                indices
+                    .into_iter()
+                    .map(|i| Arc::clone(&effective[i]))
+                    .collect()
+            })
             .collect();
 
         row_filter_groups.sort_by(|a, b| {
@@ -775,10 +818,7 @@ mod tests {
         let PartitionedFilters {
             row_filters,
             post_scan,
-        } = tracker.partition_filters(
-            vec![filter1.clone(), filter2.clone()],
-            Some(10.0),
-        );
+        } = tracker.partition_filters(vec![filter1.clone(), filter2.clone()], Some(10.0));
 
         // Unknown filters → post-scan (to collect clean stats)
         assert_eq!(row_filters.len(), 0);
@@ -796,10 +836,7 @@ mod tests {
         let PartitionedFilters {
             row_filters,
             post_scan,
-        } = tracker.partition_filters(
-            vec![filter1.clone(), filter2.clone()],
-            Some(10.0),
-        );
+        } = tracker.partition_filters(vec![filter1.clone(), filter2.clone()], Some(10.0));
 
         assert_eq!(row_filters.len(), 2);
         assert_eq!(post_scan.len(), 0);
@@ -820,10 +857,7 @@ mod tests {
         let PartitionedFilters {
             row_filters,
             post_scan,
-        } = tracker.partition_filters(
-            vec![filter1.clone(), filter2.clone()],
-            Some(10.0),
-        );
+        } = tracker.partition_filters(vec![filter1.clone(), filter2.clone()], Some(10.0));
 
         // filter1 at 800 bytes/sec >= 100 → promoted
         // filter2 at 10 bytes/sec < 100 → stays post-scan
@@ -1009,10 +1043,8 @@ mod tests {
         let filter_b = make_filter("a", 10);
 
         // No stats → collection phase → all post_scan
-        let result = tracker.partition_filters_grouped(
-            vec![filter_a.clone(), filter_b.clone()],
-            Some(10.0),
-        );
+        let result =
+            tracker.partition_filters_grouped(vec![filter_a.clone(), filter_b.clone()]);
 
         assert!(result.row_filter_groups.is_empty());
         assert_eq!(result.post_scan.len(), 2);
@@ -1031,10 +1063,8 @@ mod tests {
         // P(A)=0.1, P(B)=0.1, P(A∧B)=0.01 (independent)
         tracker.update_correlation(&filter_a, &filter_b, 1, 100);
 
-        let result = tracker.partition_filters_grouped(
-            vec![filter_a.clone(), filter_b.clone()],
-            Some(10.0),
-        );
+        let result =
+            tracker.partition_filters_grouped(vec![filter_a.clone(), filter_b.clone()]);
 
         // Independent: each in own group
         assert_eq!(result.row_filter_groups.len(), 2);
@@ -1059,10 +1089,8 @@ mod tests {
         // ratio = 0.25 / (0.3*0.4) = 2.08 > 1.5
         tracker.update_correlation(&filter_a, &filter_b, 25, 100);
 
-        let result = tracker.partition_filters_grouped(
-            vec![filter_a.clone(), filter_b.clone()],
-            Some(10.0),
-        );
+        let result =
+            tracker.partition_filters_grouped(vec![filter_a.clone(), filter_b.clone()]);
 
         // Correlated: both in one group
         assert_eq!(result.row_filter_groups.len(), 1);
@@ -1102,15 +1130,12 @@ mod tests {
         // B-D independent
         tracker.update_correlation(&filter_b, &filter_d, 14, 100);
 
-        let result = tracker.partition_filters_grouped(
-            vec![
-                filter_a.clone(),
-                filter_b.clone(),
-                filter_c.clone(),
-                filter_d.clone(),
-            ],
-            Some(10.0),
-        );
+        let result = tracker.partition_filters_grouped(vec![
+            filter_a.clone(),
+            filter_b.clone(),
+            filter_c.clone(),
+            filter_d.clone(),
+        ]);
 
         // Should get 2 groups: {A,B} and {C,D}
         assert_eq!(result.row_filter_groups.len(), 2);
@@ -1130,8 +1155,7 @@ mod tests {
         let filter_a = make_filter("a", 5);
         tracker.update(&filter_a, 10, 100, 0);
 
-        let result =
-            tracker.partition_filters_grouped(vec![filter_a.clone()], Some(10.0));
+        let result = tracker.partition_filters_grouped(vec![filter_a.clone()]);
 
         // Single filter: one group of one
         assert_eq!(result.row_filter_groups.len(), 1);
@@ -1147,6 +1171,9 @@ mod tests {
         let filter_a = make_filter("a", 5);
         let filter_b = make_filter("a", 10);
 
+        // Feed bytes_per_row into tracker (10 bytes/row)
+        tracker.update_bytes_per_row(10.0, 1000);
+
         // A has high throughput: 90 rows pruned * 10 bpr = 900 bytes saved / 1sec = 900 bps
         tracker.update(&filter_a, 10, 100, 1_000_000_000);
         // B has low throughput: 50 rows pruned * 10 bpr = 500 bytes saved / 100sec = 5 bps
@@ -1155,10 +1182,8 @@ mod tests {
         // Correlation doesn't matter since B is below threshold
         tracker.update_correlation(&filter_a, &filter_b, 8, 100);
 
-        let result = tracker.partition_filters_grouped(
-            vec![filter_a.clone(), filter_b.clone()],
-            Some(10.0),
-        );
+        let result =
+            tracker.partition_filters_grouped(vec![filter_a.clone(), filter_b.clone()]);
 
         // A promoted (900 >= 100), B stays post-scan (5 < 100)
         assert_eq!(result.row_filter_groups.len(), 1);
@@ -1168,8 +1193,7 @@ mod tests {
 
     #[test]
     fn test_notify_dataset_rows_resolves_fraction() {
-        let mut tracker =
-            SelectivityTracker::new_with_config(0.0, 1.5, 100, 0.05);
+        let mut tracker = SelectivityTracker::new_with_config(0.0, 1.5, 100, 0.05);
         // Before notify, effective_min_rows = min_rows_for_collection
         assert_eq!(tracker.effective_min_rows(), 100);
 
@@ -1180,8 +1204,7 @@ mod tests {
 
     #[test]
     fn test_notify_dataset_rows_floor_behavior() {
-        let mut tracker =
-            SelectivityTracker::new_with_config(0.0, 1.5, 1000, 0.05);
+        let mut tracker = SelectivityTracker::new_with_config(0.0, 1.5, 1000, 0.05);
         // 5% of 10_000 = 500, but min_rows = 1000 is larger
         tracker.notify_dataset_rows(10_000);
         assert_eq!(tracker.effective_min_rows(), 1000);
@@ -1189,8 +1212,7 @@ mod tests {
 
     #[test]
     fn test_notify_dataset_rows_fraction_disabled() {
-        let mut tracker =
-            SelectivityTracker::new_with_config(0.0, 1.5, 100, 0.0);
+        let mut tracker = SelectivityTracker::new_with_config(0.0, 1.5, 100, 0.0);
         tracker.notify_dataset_rows(1_000_000);
         // fraction = 0.0, so resolved_min_rows stays None
         assert_eq!(tracker.effective_min_rows(), 100);
@@ -1200,8 +1222,7 @@ mod tests {
     fn test_collection_phase_with_fraction() {
         let filter = make_filter("a", 5);
 
-        let mut tracker =
-            SelectivityTracker::new_with_config(0.0, 1.5, 100, 0.05);
+        let mut tracker = SelectivityTracker::new_with_config(0.0, 1.5, 100, 0.05);
         // 5% of 100_000 = 5000
         tracker.notify_dataset_rows(100_000);
         assert_eq!(tracker.effective_min_rows(), 5000);
@@ -1213,5 +1234,187 @@ mod tests {
         // Record enough to pass threshold
         tracker.update(&filter, 1000, 5000, 50_000_000);
         assert!(!tracker.in_collection_phase());
+    }
+
+    // ---- Optional filter drop tests ----
+
+    #[test]
+    fn test_optional_filter_dropped_when_ineffective() {
+        // Threshold 100 bytes/sec
+        let mut tracker = SelectivityTracker::new_with_config(100.0, 1.5, 100, 0.0);
+
+        let mandatory_filter = make_filter("a", 5);
+        let inner_optional = make_filter("c", 1);
+        let optional_filter: Arc<dyn PhysicalExpr> =
+            Arc::new(OptionalFilterPhysicalExpr::new(inner_optional));
+
+        // Feed bytes_per_row into tracker (10 bytes/row)
+        tracker.update_bytes_per_row(10.0, 1000);
+
+        // Both have low throughput: 5 bps (50 pruned * 10 bpr = 500 bytes / 100s)
+        tracker.update(&mandatory_filter, 50, 100, 100_000_000_000);
+        tracker.update(&optional_filter, 50, 100, 100_000_000_000);
+
+        let result = tracker.partition_filters_grouped(vec![
+            mandatory_filter.clone(),
+            optional_filter.clone(),
+        ]);
+
+        // Mandatory filter demoted to post_scan (not dropped)
+        assert_eq!(result.post_scan.len(), 1);
+        assert!(
+            result
+                .post_scan
+                .iter()
+                .any(|f| ExprKey::new(f) == ExprKey::new(&mandatory_filter))
+        );
+        // Optional filter dropped entirely — not in row_filter_groups or post_scan
+        assert!(result.row_filter_groups.is_empty());
+        assert!(
+            !result
+                .post_scan
+                .iter()
+                .any(|f| ExprKey::new(f) == ExprKey::new(&optional_filter))
+        );
+    }
+
+    #[test]
+    fn test_optional_filter_promoted_when_effective() {
+        // Threshold 100 bytes/sec
+        let mut tracker = SelectivityTracker::new_with_config(100.0, 1.5, 100, 0.0);
+
+        let inner_optional = make_filter("a", 5);
+        let optional_filter: Arc<dyn PhysicalExpr> =
+            Arc::new(OptionalFilterPhysicalExpr::new(inner_optional));
+
+        // Feed bytes_per_row into tracker (10 bytes/row)
+        tracker.update_bytes_per_row(10.0, 1000);
+
+        // High throughput: 900 bps (90 pruned * 10 bpr = 900 bytes / 1s)
+        tracker.update(&optional_filter, 10, 100, 1_000_000_000);
+
+        let result = tracker.partition_filters_grouped(vec![optional_filter.clone()]);
+
+        // Optional filter promoted to row_filter_groups when effective
+        assert_eq!(result.row_filter_groups.len(), 1);
+        assert_eq!(result.post_scan.len(), 0);
+    }
+
+    #[test]
+    fn test_mandatory_filter_demoted_not_dropped() {
+        // Threshold 100 bytes/sec
+        let mut tracker = SelectivityTracker::new_with_config(100.0, 1.5, 100, 0.0);
+
+        let mandatory_filter = make_filter("a", 5);
+
+        // Feed bytes_per_row into tracker (10 bytes/row)
+        tracker.update_bytes_per_row(10.0, 1000);
+
+        // Low throughput: 5 bps
+        tracker.update(&mandatory_filter, 50, 100, 100_000_000_000);
+
+        let result = tracker.partition_filters_grouped(vec![mandatory_filter.clone()]);
+
+        // Mandatory filter demoted to post_scan, NOT dropped
+        assert!(result.row_filter_groups.is_empty());
+        assert_eq!(result.post_scan.len(), 1);
+    }
+
+    #[test]
+    fn test_mixed_optional_mandatory_scenario() {
+        // Threshold 100 bytes/sec
+        let mut tracker = SelectivityTracker::new_with_config(100.0, 1.5, 100, 0.0);
+
+        let mandatory_effective = make_filter("a", 5);
+        let mandatory_ineffective = make_filter("a", 10);
+        let optional_effective_inner = make_filter("c", 1);
+        let optional_effective: Arc<dyn PhysicalExpr> =
+            Arc::new(OptionalFilterPhysicalExpr::new(optional_effective_inner));
+        let optional_ineffective_inner = make_filter("d", 2);
+        let optional_ineffective: Arc<dyn PhysicalExpr> =
+            Arc::new(OptionalFilterPhysicalExpr::new(optional_ineffective_inner));
+
+        // Feed bytes_per_row into tracker (10 bytes/row)
+        tracker.update_bytes_per_row(10.0, 1000);
+
+        // mandatory_effective: 900 bps → promoted
+        tracker.update(&mandatory_effective, 10, 100, 1_000_000_000);
+        // mandatory_ineffective: 5 bps → post_scan
+        tracker.update(&mandatory_ineffective, 50, 100, 100_000_000_000);
+        // optional_effective: 900 bps → promoted
+        tracker.update(&optional_effective, 10, 100, 1_000_000_000);
+        // optional_ineffective: 5 bps → DROPPED
+        tracker.update(&optional_ineffective, 50, 100, 100_000_000_000);
+
+        let result = tracker.partition_filters_grouped(vec![
+            mandatory_effective.clone(),
+            mandatory_ineffective.clone(),
+            optional_effective.clone(),
+            optional_ineffective.clone(),
+        ]);
+
+        // 2 effective filters promoted (mandatory_effective + optional_effective)
+        let total_promoted: usize =
+            result.row_filter_groups.iter().map(|g| g.len()).sum();
+        assert_eq!(total_promoted, 2);
+
+        // Only mandatory_ineffective in post_scan (optional_ineffective dropped)
+        assert_eq!(result.post_scan.len(), 1);
+        assert!(
+            result
+                .post_scan
+                .iter()
+                .any(|f| ExprKey::new(f) == ExprKey::new(&mandatory_ineffective))
+        );
+    }
+
+    // ---- avg_bytes_per_row accumulation tests ----
+
+    #[test]
+    fn test_avg_bytes_per_row_empty() {
+        let tracker = SelectivityTracker::new(100.0);
+        assert!(tracker.avg_bytes_per_row().is_none());
+    }
+
+    #[test]
+    fn test_avg_bytes_per_row_single_file() {
+        let mut tracker = SelectivityTracker::new(100.0);
+        // 10 bytes/row, 1000 rows
+        tracker.update_bytes_per_row(10.0, 1000);
+        let avg = tracker.avg_bytes_per_row().unwrap();
+        assert!((avg - 10.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_avg_bytes_per_row_multiple_files() {
+        let mut tracker = SelectivityTracker::new(100.0);
+        // File 1: 10 bytes/row, 1000 rows → 10_000 total bytes
+        tracker.update_bytes_per_row(10.0, 1000);
+        // File 2: 20 bytes/row, 3000 rows → 60_000 total bytes
+        tracker.update_bytes_per_row(20.0, 3000);
+        // Weighted average: 70_000 / 4000 = 17.5
+        let avg = tracker.avg_bytes_per_row().unwrap();
+        assert!((avg - 17.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_partition_filters_grouped_uses_avg_bytes_per_row() {
+        // Verify that partition_filters_grouped uses the internal avg_bytes_per_row
+        let mut tracker = SelectivityTracker::new_with_config(100.0, 1.5, 100, 0.0);
+
+        let filter = make_filter("a", 5);
+
+        // No bytes_per_row recorded → can't compute throughput → post_scan
+        tracker.update(&filter, 10, 100, 1_000_000_000);
+        let result = tracker.partition_filters_grouped(vec![filter.clone()]);
+        assert!(result.row_filter_groups.is_empty());
+        assert_eq!(result.post_scan.len(), 1);
+
+        // Now feed bytes_per_row → throughput can be computed
+        tracker.update_bytes_per_row(10.0, 1000);
+        // 90 pruned * 10 bpr = 900 bytes / 1s = 900 bps >= 100 → promoted
+        let result = tracker.partition_filters_grouped(vec![filter.clone()]);
+        assert_eq!(result.row_filter_groups.len(), 1);
+        assert_eq!(result.post_scan.len(), 0);
     }
 }

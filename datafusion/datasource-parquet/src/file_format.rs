@@ -524,7 +524,8 @@ impl FileFormat for ParquetFormat {
             .cloned()
             .ok_or_else(|| internal_datafusion_err!("Expected ParquetSource"))?;
         source = source.with_table_parquet_options(self.options.clone());
-        source = source.with_filter_pushdown_min_bytes_per_sec(filter_pushdown_min_bytes_per_sec);
+        source = source
+            .with_filter_pushdown_min_bytes_per_sec(filter_pushdown_min_bytes_per_sec);
 
         // Use the CachedParquetFileReaderFactory
         let metadata_cache = state.runtime_env().cache_manager.get_file_metadata_cache();

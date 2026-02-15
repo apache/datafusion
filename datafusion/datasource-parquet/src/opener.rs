@@ -588,11 +588,24 @@ impl FileOpener for ParquetOpener {
             // metrics from the arrow reader itself
             let arrow_reader_metrics = ArrowReaderMetrics::enabled();
 
-            // Compute bytes_per_row from file metadata for the bytes/sec metric.
+            // Compute bytes_per_row from file metadata and feed it into the
+            // selectivity tracker's running average (used by partition_filters_grouped).
             let bytes_per_row = compute_bytes_per_row(
                 file_metadata.as_ref(),
                 &projection.column_indices(),
             );
+            if let Some(bpr) = bytes_per_row {
+                let file_rows: u64 = file_metadata
+                    .row_groups()
+                    .iter()
+                    .map(|rg| rg.num_rows() as u64)
+                    .sum();
+                if file_rows > 0 {
+                    selectivity_tracker
+                        .write()
+                        .update_bytes_per_row(bpr, file_rows);
+                }
+            }
 
             // Acquire tracker lock once for both partitioning and row filter building.
             let (post_scan_filters, projection, mask) = {
@@ -611,7 +624,7 @@ impl FileOpener for ParquetOpener {
                             .into_iter()
                             .map(Arc::clone)
                             .collect();
-                    tracker.partition_filters_grouped(conjuncts, bytes_per_row)
+                    tracker.partition_filters_grouped(conjuncts)
                 } else {
                     PartitionedFiltersGrouped {
                         row_filter_groups: vec![],
@@ -623,18 +636,14 @@ impl FileOpener for ParquetOpener {
                 // but don't add filter expressions as projection columns.
                 let mut all_indices: Vec<usize> = projection.column_indices();
                 for filter in &post_scan {
-                    for col in datafusion_physical_expr::utils::collect_columns(filter)
-                    {
+                    for col in datafusion_physical_expr::utils::collect_columns(filter) {
                         let idx = col.index();
                         if !all_indices.contains(&idx) {
                             all_indices.push(idx);
                         }
                     }
                 }
-                let mask = ProjectionMask::roots(
-                    builder.parquet_schema(),
-                    all_indices,
-                );
+                let mask = ProjectionMask::roots(builder.parquet_schema(), all_indices);
 
                 // Build row filter from groups of correlated filters
                 if !row_filter_groups.is_empty() {

@@ -895,9 +895,11 @@ pub fn build_row_filter_from_groups(
                 // Compound can't push down -- these filters will need to be
                 // handled as post-scan. For now, try each individually.
                 for expr in group {
-                    if let Ok(Some(candidate)) =
-                        FilterCandidateBuilder::new(Arc::clone(&expr), Arc::clone(file_schema))
-                            .build(metadata)
+                    if let Ok(Some(candidate)) = FilterCandidateBuilder::new(
+                        Arc::clone(&expr),
+                        Arc::clone(file_schema),
+                    )
+                    .build(metadata)
                     {
                         candidates_with_exprs.push((vec![expr], candidate));
                     }

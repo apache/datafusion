@@ -638,8 +638,7 @@ impl FileSource for ParquetSource {
 
         // Notify the selectivity tracker of the total dataset row count
         // so fraction-based collection thresholds can be resolved.
-        if let Some(&total_rows) = base_config.statistics().num_rows.get_value()
-        {
+        if let Some(&total_rows) = base_config.statistics().num_rows.get_value() {
             self.selectivity_tracker
                 .write()
                 .notify_dataset_rows(total_rows as u64);
