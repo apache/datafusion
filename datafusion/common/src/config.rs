@@ -709,6 +709,13 @@ config_namespace! {
         /// reduce the number of rows decoded. This optimization is sometimes called "late materialization".
         pub pushdown_filters: bool, default = false
 
+        /// (reading) If true, dynamic filter expressions (from operators like
+        /// TopK, Join, Aggregate) are included when building parquet row-level
+        /// filters (RowFilter / late materialization). If false, dynamic filters
+        /// are only used for pruning (file, row group, page level) and are
+        /// excluded before building the RowFilter.
+        pub dynamic_filter_pushdown: bool, default = false
+
         /// (reading) If true, filter expressions evaluated during the parquet decoding operation
         /// will be reordered heuristically to minimize the cost of evaluation. If false,
         /// the filters are applied in the same order as written in the query

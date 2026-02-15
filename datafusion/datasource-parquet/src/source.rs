@@ -398,6 +398,11 @@ impl ParquetSource {
         self.table_parquet_options.global.pushdown_filters
     }
 
+    /// Return the value of `dynamic_filter_pushdown`
+    fn dynamic_filter_pushdown(&self) -> bool {
+        self.table_parquet_options.global.dynamic_filter_pushdown
+    }
+
     /// If true, the `RowFilter` made by `pushdown_filters` may try to
     /// minimize the cost of filter evaluation by reordering the
     /// predicate [`Expr`]s. If false, the predicates are applied in
@@ -555,6 +560,7 @@ impl FileSource for ParquetSource {
             metrics: self.metrics().clone(),
             parquet_file_reader_factory,
             pushdown_filters: self.pushdown_filters(),
+            dynamic_filter_pushdown: self.dynamic_filter_pushdown(),
             reorder_filters: self.reorder_filters(),
             force_filter_selections: self.force_filter_selections(),
             enable_page_index: self.enable_page_index(),
