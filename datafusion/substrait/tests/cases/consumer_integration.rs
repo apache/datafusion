@@ -608,7 +608,7 @@ mod tests {
         assert_snapshot!(
             plan_str,
             @r#"
-        Projection: left.count(Int64(1)) AS count_first, left.category, left.count(Int64(1)):1 AS count_second, right.count(Int64(1)) AS right.count(Int64(1))__temp__0 AS count_third
+        Projection: left.count(Int64(1)) AS count_first, left.category, left.count(Int64(1)):1 AS count_second, right.count(Int64(1)) AS count_third
           Left Join: left.id = right.id
             SubqueryAlias: left
               Projection: left.id, left.count(Int64(1)), left.id:1, left.category, right.id AS id:2, right.count(Int64(1)) AS count(Int64(1)):1

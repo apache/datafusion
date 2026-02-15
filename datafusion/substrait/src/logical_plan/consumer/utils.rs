@@ -359,70 +359,86 @@ fn compatible_nullabilities(
 }
 
 pub(super) struct NameTracker {
-    /// Tracks seen schema names (from expr.schema_name())
-    seen_schema_names: HashSet<String>,
-    /// Tracks seen qualified names (the name part from expr.qualified_name())
-    seen_qualified_names: HashSet<String>,
-}
-
-pub(super) enum NameTrackerStatus {
-    NeverSeen,
-    SeenBefore,
+    /// Tracks seen qualified field references as (qualifier, name) pairs.
+    /// Qualified columns are stored as (Some(qualifier), name).
+    /// Unqualified columns/expressions are stored as (None, name).
+    seen_qualified: HashSet<(Option<String>, String)>,
+    /// Tracks just the column names that have been seen with a qualifier.
+    /// Used to detect ambiguous references (qualified + unqualified with same name).
+    qualified_names: HashSet<String>,
+    /// Tracks just the column names that have been seen without a qualifier.
+    /// Used to detect ambiguous references.
+    unqualified_names: HashSet<String>,
 }
 
 impl NameTracker {
     pub(super) fn new() -> Self {
         NameTracker {
-            seen_schema_names: HashSet::default(),
-            seen_qualified_names: HashSet::default(),
+            seen_qualified: HashSet::default(),
+            qualified_names: HashSet::default(),
+            unqualified_names: HashSet::default(),
         }
     }
 
-    /// Gets a unique name that is unique in both schema names and qualified names
-    fn get_unique_name(
-        &mut self,
-        schema_name: String,
-        qualified_name: String,
-    ) -> (String, NameTrackerStatus) {
-        // Check if both names are unique
-        let schema_unique = !self.seen_schema_names.contains(&schema_name);
-        let qualified_unique = !self.seen_qualified_names.contains(&qualified_name);
-
-        if schema_unique && qualified_unique {
-            // Both are unique, mark them as seen and return
-            self.seen_schema_names.insert(schema_name.clone());
-            self.seen_qualified_names.insert(qualified_name);
-            return (schema_name, NameTrackerStatus::NeverSeen);
+    /// Checks if adding a field with the given qualifier and name would cause a schema conflict.
+    /// Conflicts can be:
+    /// 1. Duplicate qualified names: same (qualifier, name) pair
+    /// 2. Duplicate unqualified names: both unqualified with same name
+    /// 3. Ambiguous reference: qualified name + unqualified name with same column name
+    fn would_conflict(&self, qualifier: &Option<String>, name: &str) -> bool {
+        // Check for exact duplicate
+        if self.seen_qualified.contains(&(qualifier.clone(), name.to_string())) {
+            return true;
         }
 
-        // Need to generate a unique name
-        let mut counter = 0;
-        loop {
-            let candidate_name = format!("{schema_name}__temp__{counter}");
-
-            // Check if the candidate is unique in both sets
-            if !self.seen_schema_names.contains(&candidate_name)
-                && !self.seen_qualified_names.contains(&candidate_name)
-            {
-                self.seen_schema_names.insert(candidate_name.clone());
-                self.seen_qualified_names.insert(candidate_name.clone());
-                return (candidate_name, NameTrackerStatus::SeenBefore);
+        // Check for ambiguous reference
+        match qualifier {
+            Some(_) => {
+                // Adding a qualified name - conflicts if unqualified version exists
+                self.unqualified_names.contains(name)
             }
-            counter += 1;
+            None => {
+                // Adding an unqualified name - conflicts if qualified version exists
+                self.qualified_names.contains(name)
+            }
         }
+    }
+
+    fn insert(&mut self, qualifier: Option<String>, name: String) {
+        match &qualifier {
+            Some(_) => {
+                self.qualified_names.insert(name.clone());
+            }
+            None => {
+                self.unqualified_names.insert(name.clone());
+            }
+        }
+        self.seen_qualified.insert((qualifier, name));
     }
 
     pub(super) fn get_uniquely_named_expr(
         &mut self,
         expr: Expr,
     ) -> datafusion::common::Result<Expr> {
-        // Get both the schema name and the qualified name
-        let schema_name = expr.schema_name().to_string();
-        let (_qualifier, qualified_name) = expr.qualified_name();
+        let (qualifier, name) = expr.qualified_name();
+        let qualifier_str = qualifier.map(|q| q.to_string());
 
-        match self.get_unique_name(schema_name, qualified_name) {
-            (_, NameTrackerStatus::NeverSeen) => Ok(expr),
-            (name, NameTrackerStatus::SeenBefore) => Ok(expr.alias(name)),
+        if !self.would_conflict(&qualifier_str, &name) {
+            self.insert(qualifier_str, name);
+            return Ok(expr);
+        }
+
+        // Need to generate a unique alias
+        let schema_name = expr.schema_name().to_string();
+        let mut counter = 0;
+        loop {
+            let candidate_name = format!("{schema_name}__temp__{counter}");
+            // Aliases are unqualified, so check if this unqualified name would conflict
+            if !self.would_conflict(&None, &candidate_name) {
+                self.insert(None, candidate_name.clone());
+                return Ok(expr.alias(candidate_name));
+            }
+            counter += 1;
         }
     }
 }
