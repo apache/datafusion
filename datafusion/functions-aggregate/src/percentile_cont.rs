@@ -76,9 +76,9 @@ const INTERPOLATION_PRECISION: f64 = 1_000_000.0;
 create_func!(PercentileCont, percentile_cont_udaf);
 
 /// Computes the exact percentile continuous of a set of numbers
-pub fn percentile_cont(order_by: Sort, percentile: Expr) -> Expr {
-    let expr = order_by.expr.clone();
-    let args = vec![expr, percentile];
+pub fn percentile_cont(expr: Expr, percentile: Expr, asc: bool) -> Expr {
+    let args = vec![expr.clone(), percentile];
+    let order_by = Sort::new(expr, asc, false);
 
     Expr::AggregateFunction(AggregateFunction::new_udf(
         percentile_cont_udaf(),
