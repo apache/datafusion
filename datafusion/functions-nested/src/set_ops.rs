@@ -276,6 +276,12 @@ impl ArrayDistinct {
     }
 }
 
+impl Default for ArrayDistinct {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ScalarUDFImpl for ArrayDistinct {
     fn as_any(&self) -> &dyn Any {
         self

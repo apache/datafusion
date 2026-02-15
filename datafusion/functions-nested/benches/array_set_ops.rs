@@ -102,33 +102,37 @@ fn bench_array_distinct(c: &mut Criterion) {
     let mut group = c.benchmark_group("array_distinct");
     let udf = ArrayDistinct::new();
 
-    for (duplicate_label, duplicate_ratio) in &[("high_duplicate", 0.8), ("low_duplicate", 0.2)] {
+    for (duplicate_label, duplicate_ratio) in
+        &[("high_duplicate", 0.8), ("low_duplicate", 0.2)]
+    {
         for &array_size in ARRAY_SIZES {
             let array =
                 create_array_with_duplicates(NUM_ROWS, array_size, *duplicate_ratio);
             group.bench_with_input(
                 BenchmarkId::new(*duplicate_label, array_size),
                 &array_size,
-                |b, _| b.iter(|| {
-                    black_box(
-                        udf.invoke_with_args(ScalarFunctionArgs {
-                            args: vec![ColumnarValue::Array(array.clone())],
-                            arg_fields: vec![
-                                Field::new("arr", array.data_type().clone(), false)
-                                    .into(),
-                            ],
-                            number_rows: NUM_ROWS,
-                            return_field: Field::new(
-                                "result",
-                                array.data_type().clone(),
-                                false,
-                            )
+                |b, _| {
+                    b.iter(|| {
+                        black_box(
+                            udf.invoke_with_args(ScalarFunctionArgs {
+                                args: vec![ColumnarValue::Array(array.clone())],
+                                arg_fields: vec![
+                                    Field::new("arr", array.data_type().clone(), false)
+                                        .into(),
+                                ],
+                                number_rows: NUM_ROWS,
+                                return_field: Field::new(
+                                    "result",
+                                    array.data_type().clone(),
+                                    false,
+                                )
                                 .into(),
-                            config_options: Arc::new(ConfigOptions::default()),
-                        })
+                                config_options: Arc::new(ConfigOptions::default()),
+                            })
                             .unwrap(),
-                    )
-                }),
+                        )
+                    })
+                },
             );
         }
     }
@@ -247,7 +251,7 @@ fn create_array_with_duplicates(
             Arc::new(values),
             None,
         )
-            .unwrap(),
+        .unwrap(),
     )
 }
 
