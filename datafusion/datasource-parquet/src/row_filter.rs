@@ -1032,7 +1032,7 @@ struct DatafusionArrowPredicateWithMetrics {
 }
 
 impl DatafusionArrowPredicateWithMetrics {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn try_new(
         candidate: FilterCandidate,
         metadata: &ParquetMetaData,

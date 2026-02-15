@@ -876,10 +876,7 @@ pub struct ParquetOptions {
     pub filter_pushdown_min_bytes_per_sec_opt: ::core::option::Option<
         parquet_options::FilterPushdownMinBytesPerSecOpt,
     >,
-    #[prost(
-        oneof = "parquet_options::FilterCorrelationThresholdOpt",
-        tags = "36"
-    )]
+    #[prost(oneof = "parquet_options::FilterCorrelationThresholdOpt", tags = "36")]
     pub filter_correlation_threshold_opt: ::core::option::Option<
         parquet_options::FilterCorrelationThresholdOpt,
     >,

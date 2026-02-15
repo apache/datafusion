@@ -430,7 +430,7 @@ impl SelectivityTracker {
     /// Partition filters into row_filters and post_scan based on bytes/sec throughput.
     ///
     /// This is the non-grouped variant used primarily for testing. For production
-    /// use, prefer [`partition_filters_grouped`] which also handles correlation-based
+    /// use, prefer [`Self::partition_filters_grouped`] which also handles correlation-based
     /// grouping.
     ///
     /// - `AllPromoted` (0.0): all filters pushed as row filters
