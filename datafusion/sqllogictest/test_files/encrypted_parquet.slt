@@ -85,10 +85,5 @@ float_field float
 )
 STORED AS PARQUET LOCATION 'test_files/scratch/encrypted_parquet/'
 
-query RR
+query error DataFusion error: Parquet error: Parquet error: Parquet file has an encrypted footer but decryption properties were not provided
 SELECT * FROM parquet_table
-----
-1 2
-5 6
-3 4
--1 -1
