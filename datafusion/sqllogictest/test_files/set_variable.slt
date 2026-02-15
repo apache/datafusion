@@ -447,3 +447,9 @@ datafusion.runtime.max_temp_directory_size
 datafusion.runtime.memory_limit
 datafusion.runtime.metadata_cache_limit
 datafusion.runtime.temp_directory
+
+statement error DataFusion error: Error during planning: Failed to parse number from 'datafusion\.runtime\.max_temp_directory_size', limit 'invalid_size'
+SET datafusion.runtime.max_temp_directory_size = 'invalid_size'
+
+statement error DataFusion error: Error during planning: Unsupported unit 'B' in 'datafusion\.runtime\.max_temp_directory_size', limit '1024B'\. Unit must be one of: 'K', 'M', 'G'
+SET datafusion.runtime.max_temp_directory_size = '1024B'
