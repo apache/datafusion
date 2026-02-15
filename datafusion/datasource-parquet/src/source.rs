@@ -541,9 +541,6 @@ impl FileSource for ParquetSource {
             .as_ref()
             .map(|time_unit| parse_coerce_int96_string(time_unit.as_str()).unwrap());
 
-        let field_id_read_enabled =
-            self.table_parquet_options.global.field_id_read_enabled;
-
         let opener = Arc::new(ParquetOpener {
             partition_index: partition,
             projection: self.projection.clone(),
@@ -571,7 +568,10 @@ impl FileSource for ParquetSource {
             encryption_factory: self.get_encryption_factory_with_config(),
             max_predicate_cache_size: self.max_predicate_cache_size(),
             reverse_row_groups: self.reverse_row_groups,
-            field_id_read_enabled,
+            field_id_read_enabled: self
+                .table_parquet_options
+                .global
+                .field_id_read_enabled,
         });
         Ok(opener)
     }
