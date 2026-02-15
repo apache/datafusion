@@ -905,6 +905,9 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             coerce_int96_opt: value.coerce_int96.clone().map(protobuf::parquet_options::CoerceInt96Opt::CoerceInt96),
             max_predicate_cache_size_opt: value.max_predicate_cache_size.map(|v| protobuf::parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(v as u64)),
             filter_pushdown_min_bytes_per_sec_opt: Some(protobuf::parquet_options::FilterPushdownMinBytesPerSecOpt::FilterPushdownMinBytesPerSec(value.filter_pushdown_min_bytes_per_sec)),
+            filter_correlation_threshold_opt: Some(protobuf::parquet_options::FilterCorrelationThresholdOpt::FilterCorrelationThreshold(value.filter_correlation_threshold)),
+            filter_statistics_collection_min_rows_opt: Some(protobuf::parquet_options::FilterStatisticsCollectionMinRowsOpt::FilterStatisticsCollectionMinRows(value.filter_statistics_collection_min_rows)),
+            filter_statistics_collection_fraction_opt: Some(protobuf::parquet_options::FilterStatisticsCollectionFractionOpt::FilterStatisticsCollectionFraction(value.filter_statistics_collection_fraction)),
         })
     }
 }

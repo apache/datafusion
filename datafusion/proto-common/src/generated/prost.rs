@@ -876,6 +876,27 @@ pub struct ParquetOptions {
     pub filter_pushdown_min_bytes_per_sec_opt: ::core::option::Option<
         parquet_options::FilterPushdownMinBytesPerSecOpt,
     >,
+    #[prost(
+        oneof = "parquet_options::FilterCorrelationThresholdOpt",
+        tags = "36"
+    )]
+    pub filter_correlation_threshold_opt: ::core::option::Option<
+        parquet_options::FilterCorrelationThresholdOpt,
+    >,
+    #[prost(
+        oneof = "parquet_options::FilterStatisticsCollectionMinRowsOpt",
+        tags = "37"
+    )]
+    pub filter_statistics_collection_min_rows_opt: ::core::option::Option<
+        parquet_options::FilterStatisticsCollectionMinRowsOpt,
+    >,
+    #[prost(
+        oneof = "parquet_options::FilterStatisticsCollectionFractionOpt",
+        tags = "38"
+    )]
+    pub filter_statistics_collection_fraction_opt: ::core::option::Option<
+        parquet_options::FilterStatisticsCollectionFractionOpt,
+    >,
 }
 /// Nested message and enum types in `ParquetOptions`.
 pub mod parquet_options {
@@ -938,6 +959,21 @@ pub mod parquet_options {
     pub enum FilterPushdownMinBytesPerSecOpt {
         #[prost(double, tag = "35")]
         FilterPushdownMinBytesPerSec(f64),
+    }
+    #[derive(Clone, Copy, PartialEq, ::prost::Oneof)]
+    pub enum FilterCorrelationThresholdOpt {
+        #[prost(double, tag = "36")]
+        FilterCorrelationThreshold(f64),
+    }
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum FilterStatisticsCollectionMinRowsOpt {
+        #[prost(uint64, tag = "37")]
+        FilterStatisticsCollectionMinRows(u64),
+    }
+    #[derive(Clone, Copy, PartialEq, ::prost::Oneof)]
+    pub enum FilterStatisticsCollectionFractionOpt {
+        #[prost(double, tag = "38")]
+        FilterStatisticsCollectionFraction(f64),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]

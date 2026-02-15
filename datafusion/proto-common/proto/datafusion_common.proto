@@ -607,6 +607,18 @@ message ParquetOptions {
   oneof filter_pushdown_min_bytes_per_sec_opt {
     double filter_pushdown_min_bytes_per_sec = 35;
   }
+
+  oneof filter_correlation_threshold_opt {
+    double filter_correlation_threshold = 36;
+  }
+
+  oneof filter_statistics_collection_min_rows_opt {
+    uint64 filter_statistics_collection_min_rows = 37;
+  }
+
+  oneof filter_statistics_collection_fraction_opt {
+    double filter_statistics_collection_fraction = 38;
+  }
 }
 
 enum JoinSide {

@@ -253,6 +253,13 @@ pub struct SelectivityTracker {
     /// During collection, all filters go to post-scan for accurate measurement.
     /// Default: 10_000
     min_rows_for_collection: u64,
+    /// Fraction of total dataset rows for collection phase (0.0 = disabled).
+    /// When > 0 and dataset size is known, effective threshold =
+    /// max(min_rows_for_collection, (fraction * total_rows) as u64).
+    collection_fraction: f64,
+    /// Resolved minimum rows after notify_dataset_rows() is called.
+    /// None = not yet resolved (use min_rows_for_collection as-is).
+    resolved_min_rows: Option<u64>,
 }
 
 impl Default for SelectivityTracker {
@@ -275,6 +282,8 @@ impl SelectivityTracker {
             min_bytes_per_sec,
             correlation_threshold: 1.5,
             min_rows_for_collection: 10_000,
+            collection_fraction: 0.0,
+            resolved_min_rows: None,
         }
     }
 
@@ -283,6 +292,7 @@ impl SelectivityTracker {
         min_bytes_per_sec: f64,
         correlation_threshold: f64,
         min_rows_for_collection: u64,
+        collection_fraction: f64,
     ) -> Self {
         Self {
             stats: HashMap::new(),
@@ -290,12 +300,33 @@ impl SelectivityTracker {
             min_bytes_per_sec,
             correlation_threshold,
             min_rows_for_collection,
+            collection_fraction,
+            resolved_min_rows: None,
         }
     }
 
     /// Get the min bytes/sec threshold.
     pub fn min_bytes_per_sec(&self) -> f64 {
         self.min_bytes_per_sec
+    }
+
+    /// Returns the effective minimum rows for collection, taking into account
+    /// the fraction-based threshold if it has been resolved.
+    fn effective_min_rows(&self) -> u64 {
+        self.resolved_min_rows.unwrap_or(self.min_rows_for_collection)
+    }
+
+    /// Notify the tracker of the total dataset row count so the fraction-based
+    /// threshold can be resolved.
+    ///
+    /// When `collection_fraction > 0`, computes:
+    /// `resolved_min_rows = max(min_rows_for_collection, (fraction * total_rows) as u64)`
+    pub fn notify_dataset_rows(&mut self, total_rows: u64) {
+        if self.collection_fraction > 0.0 {
+            let fraction_rows = (self.collection_fraction * total_rows as f64) as u64;
+            self.resolved_min_rows =
+                Some(self.min_rows_for_collection.max(fraction_rows));
+        }
     }
 
     /// Get the effectiveness for a filter expression, if known.
@@ -314,7 +345,8 @@ impl SelectivityTracker {
     /// Returns false if no stats exist yet (no filters registered) or if
     /// min_rows_for_collection is 0 (collection disabled).
     pub fn in_collection_phase(&self) -> bool {
-        if self.min_rows_for_collection == 0 {
+        let min_rows = self.effective_min_rows();
+        if min_rows == 0 {
             return false;
         }
         if self.stats.is_empty() {
@@ -322,9 +354,7 @@ impl SelectivityTracker {
             // so the first file's filters go to post-scan for measurement
             return true;
         }
-        self.stats
-            .values()
-            .any(|s| s.rows_total < self.min_rows_for_collection)
+        self.stats.values().any(|s| s.rows_total < min_rows)
     }
 
     /// Partition filters into row_filters and post_scan based on bytes/sec throughput.
@@ -498,16 +528,15 @@ impl SelectivityTracker {
         let stats_b = self.stats.get(&key_b)?;
 
         // Need sufficient data
-        if stats_a.rows_total < self.min_rows_for_collection
-            || stats_b.rows_total < self.min_rows_for_collection
-        {
+        let min_rows = self.effective_min_rows();
+        if stats_a.rows_total < min_rows || stats_b.rows_total < min_rows {
             return None;
         }
 
         let pair_key = PairKey::new(&key_a, &key_b);
         let pair_stats = self.correlations.get(&pair_key)?;
 
-        if pair_stats.rows_total < self.min_rows_for_collection {
+        if pair_stats.rows_total < min_rows {
             return None;
         }
 
@@ -890,7 +919,7 @@ mod tests {
 
     #[test]
     fn test_correlation_stats_update() {
-        let mut tracker = SelectivityTracker::new_with_config(0.0, 1.5, 100);
+        let mut tracker = SelectivityTracker::new_with_config(0.0, 1.5, 100, 0.0);
 
         let filter_a = make_filter("a", 5);
         let filter_b = make_filter("a", 10);
@@ -916,7 +945,7 @@ mod tests {
 
     #[test]
     fn test_correlation_ratio_independent() {
-        let mut tracker = SelectivityTracker::new_with_config(0.0, 1.5, 100);
+        let mut tracker = SelectivityTracker::new_with_config(0.0, 1.5, 100, 0.0);
 
         let filter_a = make_filter("a", 5);
         let filter_b = make_filter("a", 10);
@@ -932,7 +961,7 @@ mod tests {
 
     #[test]
     fn test_correlation_ratio_insufficient_data() {
-        let mut tracker = SelectivityTracker::new_with_config(0.0, 1.5, 1000);
+        let mut tracker = SelectivityTracker::new_with_config(0.0, 1.5, 1000, 0.0);
 
         let filter_a = make_filter("a", 5);
         let filter_b = make_filter("a", 10);
@@ -947,7 +976,7 @@ mod tests {
 
     #[test]
     fn test_in_collection_phase() {
-        let mut tracker = SelectivityTracker::new_with_config(100.0, 1.5, 1000);
+        let mut tracker = SelectivityTracker::new_with_config(100.0, 1.5, 1000, 0.0);
 
         // No stats yet - in collection phase
         assert!(tracker.in_collection_phase());
@@ -966,7 +995,7 @@ mod tests {
 
     #[test]
     fn test_in_collection_phase_disabled() {
-        let tracker = SelectivityTracker::new_with_config(100.0, 1.5, 0);
+        let tracker = SelectivityTracker::new_with_config(100.0, 1.5, 0, 0.0);
 
         // min_rows = 0 means collection is disabled
         assert!(!tracker.in_collection_phase());
@@ -974,7 +1003,7 @@ mod tests {
 
     #[test]
     fn test_partition_filters_grouped_collection_phase() {
-        let tracker = SelectivityTracker::new_with_config(100.0, 1.5, 10_000);
+        let tracker = SelectivityTracker::new_with_config(100.0, 1.5, 10_000, 0.0);
 
         let filter_a = make_filter("a", 5);
         let filter_b = make_filter("a", 10);
@@ -991,7 +1020,7 @@ mod tests {
 
     #[test]
     fn test_partition_filters_grouped_all_independent() {
-        let mut tracker = SelectivityTracker::new_with_config(0.0, 1.5, 100);
+        let mut tracker = SelectivityTracker::new_with_config(0.0, 1.5, 100, 0.0);
 
         let filter_a = make_filter("a", 5);
         let filter_b = make_filter("a", 10);
@@ -1018,7 +1047,7 @@ mod tests {
 
     #[test]
     fn test_partition_filters_grouped_correlated() {
-        let mut tracker = SelectivityTracker::new_with_config(0.0, 1.5, 100);
+        let mut tracker = SelectivityTracker::new_with_config(0.0, 1.5, 100, 0.0);
 
         let filter_a = make_filter("a", 5);
         let filter_b = make_filter("a", 10);
@@ -1043,7 +1072,7 @@ mod tests {
 
     #[test]
     fn test_partition_filters_grouped_mixed() {
-        let mut tracker = SelectivityTracker::new_with_config(0.0, 1.5, 100);
+        let mut tracker = SelectivityTracker::new_with_config(0.0, 1.5, 100, 0.0);
 
         let filter_a = make_filter("a", 5);
         let filter_b = make_filter("a", 10);
@@ -1096,7 +1125,7 @@ mod tests {
 
     #[test]
     fn test_partition_filters_grouped_single_filter() {
-        let mut tracker = SelectivityTracker::new_with_config(0.0, 1.5, 100);
+        let mut tracker = SelectivityTracker::new_with_config(0.0, 1.5, 100, 0.0);
 
         let filter_a = make_filter("a", 5);
         tracker.update(&filter_a, 10, 100, 0);
@@ -1113,7 +1142,7 @@ mod tests {
     #[test]
     fn test_partition_filters_grouped_with_low_throughput() {
         // Use a bytes/sec threshold: 100 bytes/sec
-        let mut tracker = SelectivityTracker::new_with_config(100.0, 1.5, 100);
+        let mut tracker = SelectivityTracker::new_with_config(100.0, 1.5, 100, 0.0);
 
         let filter_a = make_filter("a", 5);
         let filter_b = make_filter("a", 10);
@@ -1135,5 +1164,54 @@ mod tests {
         assert_eq!(result.row_filter_groups.len(), 1);
         assert_eq!(result.row_filter_groups[0].len(), 1);
         assert_eq!(result.post_scan.len(), 1);
+    }
+
+    #[test]
+    fn test_notify_dataset_rows_resolves_fraction() {
+        let mut tracker =
+            SelectivityTracker::new_with_config(0.0, 1.5, 100, 0.05);
+        // Before notify, effective_min_rows = min_rows_for_collection
+        assert_eq!(tracker.effective_min_rows(), 100);
+
+        // 5% of 10_000 = 500, which is > 100
+        tracker.notify_dataset_rows(10_000);
+        assert_eq!(tracker.effective_min_rows(), 500);
+    }
+
+    #[test]
+    fn test_notify_dataset_rows_floor_behavior() {
+        let mut tracker =
+            SelectivityTracker::new_with_config(0.0, 1.5, 1000, 0.05);
+        // 5% of 10_000 = 500, but min_rows = 1000 is larger
+        tracker.notify_dataset_rows(10_000);
+        assert_eq!(tracker.effective_min_rows(), 1000);
+    }
+
+    #[test]
+    fn test_notify_dataset_rows_fraction_disabled() {
+        let mut tracker =
+            SelectivityTracker::new_with_config(0.0, 1.5, 100, 0.0);
+        tracker.notify_dataset_rows(1_000_000);
+        // fraction = 0.0, so resolved_min_rows stays None
+        assert_eq!(tracker.effective_min_rows(), 100);
+    }
+
+    #[test]
+    fn test_collection_phase_with_fraction() {
+        let filter = make_filter("a", 5);
+
+        let mut tracker =
+            SelectivityTracker::new_with_config(0.0, 1.5, 100, 0.05);
+        // 5% of 100_000 = 5000
+        tracker.notify_dataset_rows(100_000);
+        assert_eq!(tracker.effective_min_rows(), 5000);
+
+        // Record 200 rows — still in collection (200 < 5000)
+        tracker.update(&filter, 80, 200, 10_000_000);
+        assert!(tracker.in_collection_phase());
+
+        // Record enough to pass threshold
+        tracker.update(&filter, 1000, 5000, 50_000_000);
+        assert!(!tracker.in_collection_phase());
     }
 }

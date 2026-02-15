@@ -851,7 +851,7 @@ impl protobuf::PhysicalPlanNode {
             let mut source =
                 ParquetSource::new(table_schema).with_table_parquet_options(options);
 
-            source = source.with_filter_pushdown_min_bytes_per_sec(
+            source = source.with_filter_pushdown_min_bytes_per_sec_opt(
                 ctx.session_config()
                     .options()
                     .execution

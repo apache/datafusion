@@ -5731,6 +5731,15 @@ impl serde::Serialize for ParquetOptions {
         if self.filter_pushdown_min_bytes_per_sec_opt.is_some() {
             len += 1;
         }
+        if self.filter_correlation_threshold_opt.is_some() {
+            len += 1;
+        }
+        if self.filter_statistics_collection_min_rows_opt.is_some() {
+            len += 1;
+        }
+        if self.filter_statistics_collection_fraction_opt.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion_common.ParquetOptions", len)?;
         if self.enable_page_index {
             struct_ser.serialize_field("enablePageIndex", &self.enable_page_index)?;
@@ -5903,6 +5912,29 @@ impl serde::Serialize for ParquetOptions {
                 }
             }
         }
+        if let Some(v) = self.filter_correlation_threshold_opt.as_ref() {
+            match v {
+                parquet_options::FilterCorrelationThresholdOpt::FilterCorrelationThreshold(v) => {
+                    struct_ser.serialize_field("filterCorrelationThreshold", v)?;
+                }
+            }
+        }
+        if let Some(v) = self.filter_statistics_collection_min_rows_opt.as_ref() {
+            match v {
+                parquet_options::FilterStatisticsCollectionMinRowsOpt::FilterStatisticsCollectionMinRows(v) => {
+                    #[allow(clippy::needless_borrow)]
+                    #[allow(clippy::needless_borrows_for_generic_args)]
+                    struct_ser.serialize_field("filterStatisticsCollectionMinRows", ToString::to_string(&v).as_str())?;
+                }
+            }
+        }
+        if let Some(v) = self.filter_statistics_collection_fraction_opt.as_ref() {
+            match v {
+                parquet_options::FilterStatisticsCollectionFractionOpt::FilterStatisticsCollectionFraction(v) => {
+                    struct_ser.serialize_field("filterStatisticsCollectionFraction", v)?;
+                }
+            }
+        }
         struct_ser.end()
     }
 }
@@ -5976,6 +6008,12 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             "maxPredicateCacheSize",
             "filter_pushdown_min_bytes_per_sec",
             "filterPushdownMinBytesPerSec",
+            "filter_correlation_threshold",
+            "filterCorrelationThreshold",
+            "filter_statistics_collection_min_rows",
+            "filterStatisticsCollectionMinRows",
+            "filter_statistics_collection_fraction",
+            "filterStatisticsCollectionFraction",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -6013,6 +6051,9 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             CoerceInt96,
             MaxPredicateCacheSize,
             FilterPushdownMinBytesPerSec,
+            FilterCorrelationThreshold,
+            FilterStatisticsCollectionMinRows,
+            FilterStatisticsCollectionFraction,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -6067,6 +6108,9 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             "coerceInt96" | "coerce_int96" => Ok(GeneratedField::CoerceInt96),
                             "maxPredicateCacheSize" | "max_predicate_cache_size" => Ok(GeneratedField::MaxPredicateCacheSize),
                             "filterPushdownMinBytesPerSec" | "filter_pushdown_min_bytes_per_sec" => Ok(GeneratedField::FilterPushdownMinBytesPerSec),
+                            "filterCorrelationThreshold" | "filter_correlation_threshold" => Ok(GeneratedField::FilterCorrelationThreshold),
+                            "filterStatisticsCollectionMinRows" | "filter_statistics_collection_min_rows" => Ok(GeneratedField::FilterStatisticsCollectionMinRows),
+                            "filterStatisticsCollectionFraction" | "filter_statistics_collection_fraction" => Ok(GeneratedField::FilterStatisticsCollectionFraction),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -6119,6 +6163,9 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                 let mut coerce_int96_opt__ = None;
                 let mut max_predicate_cache_size_opt__ = None;
                 let mut filter_pushdown_min_bytes_per_sec_opt__ = None;
+                let mut filter_correlation_threshold_opt__ = None;
+                let mut filter_statistics_collection_min_rows_opt__ = None;
+                let mut filter_statistics_collection_fraction_opt__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::EnablePageIndex => {
@@ -6333,6 +6380,24 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             }
                             filter_pushdown_min_bytes_per_sec_opt__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| parquet_options::FilterPushdownMinBytesPerSecOpt::FilterPushdownMinBytesPerSec(x.0));
                         }
+                        GeneratedField::FilterCorrelationThreshold => {
+                            if filter_correlation_threshold_opt__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("filterCorrelationThreshold"));
+                            }
+                            filter_correlation_threshold_opt__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| parquet_options::FilterCorrelationThresholdOpt::FilterCorrelationThreshold(x.0));
+                        }
+                        GeneratedField::FilterStatisticsCollectionMinRows => {
+                            if filter_statistics_collection_min_rows_opt__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("filterStatisticsCollectionMinRows"));
+                            }
+                            filter_statistics_collection_min_rows_opt__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| parquet_options::FilterStatisticsCollectionMinRowsOpt::FilterStatisticsCollectionMinRows(x.0));
+                        }
+                        GeneratedField::FilterStatisticsCollectionFraction => {
+                            if filter_statistics_collection_fraction_opt__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("filterStatisticsCollectionFraction"));
+                            }
+                            filter_statistics_collection_fraction_opt__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| parquet_options::FilterStatisticsCollectionFractionOpt::FilterStatisticsCollectionFraction(x.0));
+                        }
                     }
                 }
                 Ok(ParquetOptions {
@@ -6369,6 +6434,9 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     coerce_int96_opt: coerce_int96_opt__,
                     max_predicate_cache_size_opt: max_predicate_cache_size_opt__,
                     filter_pushdown_min_bytes_per_sec_opt: filter_pushdown_min_bytes_per_sec_opt__,
+                    filter_correlation_threshold_opt: filter_correlation_threshold_opt__,
+                    filter_statistics_collection_min_rows_opt: filter_statistics_collection_min_rows_opt__,
+                    filter_statistics_collection_fraction_opt: filter_statistics_collection_fraction_opt__,
                 })
             }
         }

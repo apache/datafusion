@@ -427,6 +427,9 @@ mod parquet {
                     parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(size as u64)
                 }),
                 filter_pushdown_min_bytes_per_sec_opt: Some(parquet_options::FilterPushdownMinBytesPerSecOpt::FilterPushdownMinBytesPerSec(global_options.global.filter_pushdown_min_bytes_per_sec)),
+                filter_correlation_threshold_opt: Some(parquet_options::FilterCorrelationThresholdOpt::FilterCorrelationThreshold(global_options.global.filter_correlation_threshold)),
+                filter_statistics_collection_min_rows_opt: Some(parquet_options::FilterStatisticsCollectionMinRowsOpt::FilterStatisticsCollectionMinRows(global_options.global.filter_statistics_collection_min_rows)),
+                filter_statistics_collection_fraction_opt: Some(parquet_options::FilterStatisticsCollectionFractionOpt::FilterStatisticsCollectionFraction(global_options.global.filter_statistics_collection_fraction)),
             }),
             column_specific_options: column_specific_options.into_iter().map(|(column_name, options)| {
                 ParquetColumnSpecificOptions {
@@ -529,8 +532,15 @@ mod parquet {
             filter_pushdown_min_bytes_per_sec: proto.filter_pushdown_min_bytes_per_sec_opt.as_ref().map(|opt| match opt {
                 parquet_options::FilterPushdownMinBytesPerSecOpt::FilterPushdownMinBytesPerSec(v) => *v,
             }).unwrap_or(f64::INFINITY),
-            filter_correlation_threshold: 1.5,
-            filter_statistics_collection_min_rows: 10_000,
+            filter_correlation_threshold: proto.filter_correlation_threshold_opt.as_ref().map(|opt| match opt {
+                parquet_options::FilterCorrelationThresholdOpt::FilterCorrelationThreshold(v) => *v,
+            }).unwrap_or(1.5),
+            filter_statistics_collection_min_rows: proto.filter_statistics_collection_min_rows_opt.as_ref().map(|opt| match opt {
+                parquet_options::FilterStatisticsCollectionMinRowsOpt::FilterStatisticsCollectionMinRows(v) => *v,
+            }).unwrap_or(10_000),
+            filter_statistics_collection_fraction: proto.filter_statistics_collection_fraction_opt.as_ref().map(|opt| match opt {
+                parquet_options::FilterStatisticsCollectionFractionOpt::FilterStatisticsCollectionFraction(v) => *v,
+            }).unwrap_or(0.0),
         }
         }
     }

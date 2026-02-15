@@ -355,6 +355,7 @@ impl ParquetSource {
                 opts.filter_pushdown_min_bytes_per_sec,
                 opts.filter_correlation_threshold,
                 opts.filter_statistics_collection_min_rows,
+                opts.filter_statistics_collection_fraction,
             ),
         ));
         self.table_parquet_options = table_parquet_options;
@@ -511,6 +512,7 @@ impl ParquetSource {
                 min_bytes_per_sec,
                 opts.filter_correlation_threshold,
                 opts.filter_statistics_collection_min_rows,
+                opts.filter_statistics_collection_fraction,
             ),
         ));
         self
@@ -633,6 +635,16 @@ impl FileSource for ParquetSource {
             reverse_row_groups: self.reverse_row_groups,
             selectivity_tracker: Arc::clone(&self.selectivity_tracker),
         });
+
+        // Notify the selectivity tracker of the total dataset row count
+        // so fraction-based collection thresholds can be resolved.
+        if let Some(&total_rows) = base_config.statistics().num_rows.get_value()
+        {
+            self.selectivity_tracker
+                .write()
+                .notify_dataset_rows(total_rows as u64);
+        }
+
         Ok(opener)
     }
 

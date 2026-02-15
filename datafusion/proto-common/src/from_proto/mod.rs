@@ -1093,8 +1093,15 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             filter_pushdown_min_bytes_per_sec: value.filter_pushdown_min_bytes_per_sec_opt.map(|opt| match opt {
                 protobuf::parquet_options::FilterPushdownMinBytesPerSecOpt::FilterPushdownMinBytesPerSec(v) => v,
             }).unwrap_or(f64::INFINITY),
-            filter_correlation_threshold: 1.5,
-            filter_statistics_collection_min_rows: 10_000,
+            filter_correlation_threshold: value.filter_correlation_threshold_opt.map(|opt| match opt {
+                protobuf::parquet_options::FilterCorrelationThresholdOpt::FilterCorrelationThreshold(v) => v,
+            }).unwrap_or(1.5),
+            filter_statistics_collection_min_rows: value.filter_statistics_collection_min_rows_opt.map(|opt| match opt {
+                protobuf::parquet_options::FilterStatisticsCollectionMinRowsOpt::FilterStatisticsCollectionMinRows(v) => v,
+            }).unwrap_or(10_000),
+            filter_statistics_collection_fraction: value.filter_statistics_collection_fraction_opt.map(|opt| match opt {
+                protobuf::parquet_options::FilterStatisticsCollectionFractionOpt::FilterStatisticsCollectionFraction(v) => v,
+            }).unwrap_or(0.0),
         })
     }
 }
