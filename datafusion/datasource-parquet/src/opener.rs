@@ -606,12 +606,12 @@ impl FileOpener for ParquetOpener {
                 }
             }
 
-            // Partition filters under a brief read lock, then release it.
+            // Partition filters under a brief write lock (needed for decision caching).
             let PartitionedFiltersGrouped {
                 row_filter_groups,
                 mut post_scan,
             } = {
-                let tracker = selectivity_tracker.read();
+                let mut tracker = selectivity_tracker.write();
                 if let Some(predicate) =
                     pushdown_filters.then_some(predicate.as_ref()).flatten()
                 {
@@ -1045,13 +1045,6 @@ impl<S> SelectivityUpdatingStream<S> {
     fn update_selectivity(&mut self) {
         let mut tracker = self.selectivity_tracker.write();
         for (i, metrics) in self.filter_metrics.iter().enumerate() {
-            // Only feed stats back for single-filter predicates.
-            // Compound predicates (multiple correlated filters grouped together)
-            // have shared metrics that can't be attributed to individual filters.
-            if metrics.exprs.len() != 1 {
-                continue;
-            }
-
             let current_matched = metrics.get_rows_matched() as u64;
             let current_total = metrics.get_rows_total() as u64;
             let current_nanos = metrics.get_eval_nanos() as u64;
@@ -1063,7 +1056,7 @@ impl<S> SelectivityUpdatingStream<S> {
 
             if delta_total > 0 {
                 tracker.update(
-                    &metrics.exprs[0],
+                    &metrics.expr,
                     delta_matched,
                     delta_total,
                     delta_nanos,

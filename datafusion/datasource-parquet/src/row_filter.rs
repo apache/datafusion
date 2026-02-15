@@ -96,12 +96,11 @@ use super::supported_predicates::supports_list_predicates;
 /// to update selectivity statistics after processing completes.
 #[derive(Debug, Clone)]
 pub struct FilterMetrics {
-    /// The original filter expressions that make up this predicate.
-    /// A single-element vec means a standalone filter; multiple elements
-    /// means a compound predicate built from correlated filters.
-    /// Only single-element metrics are fed back into the selectivity tracker,
-    /// because compound metrics cannot be attributed to individual filters.
-    pub exprs: Vec<Arc<dyn PhysicalExpr>>,
+    /// The filter expression for this predicate.
+    /// For standalone filters this is the original expression.
+    /// For compound predicates (correlated filters), this is the conjunction.
+    /// Stats are fed back into the selectivity tracker keyed on this expression.
+    pub expr: Arc<dyn PhysicalExpr>,
     /// Counter for rows that matched (passed) this filter
     rows_matched: metrics::Count,
     /// Counter for rows that were pruned (filtered out) by this filter
@@ -808,7 +807,7 @@ pub fn build_row_filter_with_metrics(
 
         // Store references to the metrics for the filter
         filter_metrics.push(FilterMetrics {
-            exprs: vec![original_expr],
+            expr: original_expr,
             rows_matched: predicate_rows_matched.clone(),
             rows_pruned: predicate_rows_pruned.clone(),
             eval_time: local_eval_time.clone(),
@@ -882,7 +881,7 @@ pub fn build_row_filter_from_groups(
 
     // For each group, combine into a single expression and build a candidate.
     // Track original expressions for metrics and unbuildable filters.
-    let mut candidates_with_exprs: Vec<(Vec<Arc<dyn PhysicalExpr>>, FilterCandidate)> =
+    let mut candidates_with_exprs: Vec<(Arc<dyn PhysicalExpr>, FilterCandidate)> =
         Vec::new();
     let mut unbuildable_filters: Vec<Arc<dyn PhysicalExpr>> = Vec::new();
 
@@ -901,7 +900,7 @@ pub fn build_row_filter_from_groups(
         .build(metadata)
         {
             Ok(Some(candidate)) => {
-                candidates_with_exprs.push((group, candidate));
+                candidates_with_exprs.push((combined_expr, candidate));
             }
             Ok(None) | Err(_) => {
                 // Compound can't push down — try each individually.
@@ -915,7 +914,7 @@ pub fn build_row_filter_from_groups(
                     .build(metadata)
                     {
                         Ok(Some(candidate)) => {
-                            candidates_with_exprs.push((vec![expr], candidate));
+                            candidates_with_exprs.push((Arc::clone(&expr), candidate));
                         }
                         _ => {
                             unbuildable_filters.push(expr);
@@ -958,7 +957,7 @@ pub fn build_row_filter_from_groups(
     let mut filter_metrics = Vec::new();
     let mut arrow_predicates = Vec::with_capacity(total_candidates);
 
-    for (idx, (original_exprs, candidate)) in
+    for (idx, (original_expr, candidate)) in
         candidates_with_exprs.into_iter().enumerate()
     {
         let is_last = idx == total_candidates - 1;
@@ -968,11 +967,10 @@ pub fn build_row_filter_from_groups(
         let predicate_rows_pruned = metrics::Count::new();
         let local_eval_time = metrics::Time::new();
 
-        // One FilterMetrics entry per predicate, storing all original
-        // expressions in the group. Only single-element groups will have
-        // their stats fed back into the selectivity tracker.
+        // One FilterMetrics entry per predicate, keyed on the conjunction
+        // expression (or original expression for single filters).
         filter_metrics.push(FilterMetrics {
-            exprs: original_exprs,
+            expr: original_expr,
             rows_matched: predicate_rows_matched.clone(),
             rows_pruned: predicate_rows_pruned.clone(),
             eval_time: local_eval_time.clone(),

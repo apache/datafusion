@@ -29,6 +29,7 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+use datafusion_physical_expr::utils::conjunction;
 use datafusion_physical_expr_common::physical_expr::{
     OptionalFilterPhysicalExpr, PhysicalExpr,
 };
@@ -73,6 +74,21 @@ pub struct PartitionedFiltersGrouped {
     pub row_filter_groups: Vec<Vec<Arc<dyn PhysicalExpr>>>,
     /// Filters to apply post-scan (ineffective or in collection phase)
     pub post_scan: Vec<Arc<dyn PhysicalExpr>>,
+}
+
+/// Cached partitioning decision to avoid re-evaluating promotion/demotion
+/// on every call to `partition_filters_grouped`.
+///
+/// The decision is reused until `effective_min_rows()` additional rows have
+/// been observed, at which point a fresh evaluation is triggered.
+#[derive(Debug)]
+struct CachedDecision {
+    /// Maps each promoted filter's ExprKey → group index
+    promoted: HashMap<ExprKey, usize>,
+    /// Number of groups
+    num_groups: usize,
+    /// `total_file_rows` when the decision was made
+    decided_at_rows: u64,
 }
 
 /// Canonical pair key: always stores (lesser, greater) by hash for (A,B)==(B,A).
@@ -297,6 +313,8 @@ pub struct SelectivityTracker {
     total_file_bytes: f64,
     /// Cumulative rows across all files (for avg bytes_per_row).
     total_file_rows: u64,
+    /// Cached partitioning decision; replayed until enough new rows arrive.
+    cached_decision: Option<CachedDecision>,
 }
 
 impl Default for SelectivityTracker {
@@ -323,6 +341,7 @@ impl SelectivityTracker {
             resolved_min_rows: None,
             total_file_bytes: 0.0,
             total_file_rows: 0,
+            cached_decision: None,
         }
     }
 
@@ -343,6 +362,7 @@ impl SelectivityTracker {
             resolved_min_rows: None,
             total_file_bytes: 0.0,
             total_file_rows: 0,
+            cached_decision: None,
         }
     }
 
@@ -491,7 +511,7 @@ impl SelectivityTracker {
     ///    compound ArrowPredicate. Independent filters remain as separate predicates.
     ///    Filters below the throughput threshold stay post-scan.
     pub fn partition_filters_grouped(
-        &self,
+        &mut self,
         filters: Vec<Arc<dyn PhysicalExpr>>,
     ) -> PartitionedFiltersGrouped {
         let strategy = self.promotion_strategy();
@@ -514,6 +534,14 @@ impl SelectivityTracker {
                 row_filter_groups: Vec::new(),
                 post_scan: filters,
             };
+        }
+
+        // Replay cached decision if not enough new rows have arrived.
+        if let Some(ref cached) = self.cached_decision {
+            let rows_since = self.total_file_rows.saturating_sub(cached.decided_at_rows);
+            if rows_since < self.effective_min_rows() {
+                return self.apply_cached_decision(cached, filters);
+            }
         }
 
         // Separate effective vs ineffective filters.
@@ -558,16 +586,41 @@ impl SelectivityTracker {
         // Group effective filters by correlation using union-find
         let groups = self.group_by_correlation(&effective);
 
-        // Sort groups by combined effectiveness descending (most selective first)
-        let mut row_filter_groups: Vec<Vec<Arc<dyn PhysicalExpr>>> = groups
-            .into_iter()
-            .map(|indices| {
-                indices
-                    .into_iter()
-                    .map(|i| Arc::clone(&effective[i]))
-                    .collect()
-            })
-            .collect();
+        // Build groups and check compound demotion
+        let mut row_filter_groups: Vec<Vec<Arc<dyn PhysicalExpr>>> = Vec::new();
+        for indices in groups {
+            let group: Vec<Arc<dyn PhysicalExpr>> = indices
+                .into_iter()
+                .map(|i| Arc::clone(&effective[i]))
+                .collect();
+
+            if group.len() > 1 {
+                if let PromotionStrategy::Threshold(threshold) = strategy {
+                    let combined = conjunction(group.iter().map(Arc::clone));
+                    let key = ExprKey::new(&combined);
+                    if let (Some(stats), Some(bpr)) =
+                        (self.stats.get(&key), bytes_per_row)
+                    {
+                        if let Some(bps) = stats.bytes_per_sec(bpr) {
+                            if bps < threshold {
+                                for expr in group {
+                                    if expr
+                                        .as_any()
+                                        .downcast_ref::<OptionalFilterPhysicalExpr>()
+                                        .is_none()
+                                    {
+                                        post_scan.push(expr);
+                                    }
+                                }
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
+
+            row_filter_groups.push(group);
+        }
 
         row_filter_groups.sort_by(|a, b| {
             let eff_a = self.group_effectiveness(a);
@@ -577,8 +630,64 @@ impl SelectivityTracker {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
+        // Cache the decision for replay until enough new rows arrive.
+        let mut promoted = HashMap::new();
+        for (group_idx, group) in row_filter_groups.iter().enumerate() {
+            for filter in group {
+                promoted.insert(ExprKey::new(filter), group_idx);
+            }
+        }
+        self.cached_decision = Some(CachedDecision {
+            promoted,
+            num_groups: row_filter_groups.len(),
+            decided_at_rows: self.total_file_rows,
+        });
+
         PartitionedFiltersGrouped {
             row_filter_groups,
+            post_scan,
+        }
+    }
+
+    /// Replay a cached partitioning decision without re-evaluating promotion.
+    fn apply_cached_decision(
+        &self,
+        cached: &CachedDecision,
+        filters: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> PartitionedFiltersGrouped {
+        let mut groups: Vec<Vec<Arc<dyn PhysicalExpr>>> =
+            (0..cached.num_groups).map(|_| Vec::new()).collect();
+        let mut post_scan = Vec::new();
+
+        for filter in filters {
+            let key = ExprKey::new(&filter);
+            if let Some(&group_idx) = cached.promoted.get(&key) {
+                groups[group_idx].push(filter);
+            } else {
+                // Not promoted: drop optional, demote mandatory
+                if filter
+                    .as_any()
+                    .downcast_ref::<OptionalFilterPhysicalExpr>()
+                    .is_none()
+                {
+                    post_scan.push(filter);
+                }
+            }
+        }
+
+        groups.retain(|g| !g.is_empty());
+
+        // Re-sort by effectiveness (stats are still updating between decisions)
+        groups.sort_by(|a, b| {
+            let eff_a = self.group_effectiveness(a);
+            let eff_b = self.group_effectiveness(b);
+            eff_b
+                .partial_cmp(&eff_a)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        PartitionedFiltersGrouped {
+            row_filter_groups: groups,
             post_scan,
         }
     }
@@ -753,6 +862,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, col, lit};
+    use datafusion_physical_expr::utils::conjunction;
     use std::sync::Arc;
 
     fn test_schema() -> Schema {
@@ -1101,7 +1211,7 @@ mod tests {
 
     #[test]
     fn test_partition_filters_grouped_collection_phase() {
-        let tracker = SelectivityTracker::new_with_config(100.0, 1.5, 10_000, 0.0);
+        let mut tracker = SelectivityTracker::new_with_config(100.0, 1.5, 10_000, 0.0);
 
         let filter_a = make_filter("a", 5);
         let filter_b = make_filter("a", 10);
@@ -1480,5 +1590,115 @@ mod tests {
         let result = tracker.partition_filters_grouped(vec![filter.clone()]);
         assert_eq!(result.row_filter_groups.len(), 1);
         assert_eq!(result.post_scan.len(), 0);
+    }
+
+    #[test]
+    fn test_cached_decision_reuse_and_reevaluation() {
+        // min_rows_for_collection = 100, so effective_min_rows() = 100
+        let mut tracker = SelectivityTracker::new_with_config(100.0, 1.5, 100, 0.0);
+
+        let filter_a = make_filter("a", 5);
+        let filter_b = make_filter("a", 10);
+
+        // Feed bytes_per_row
+        tracker.update_bytes_per_row(10.0, 1000);
+
+        // filter_a: high throughput (900 bps) → promoted
+        tracker.update(&filter_a, 10, 100, 1_000_000_000);
+        // filter_b: low throughput (5 bps) → post_scan
+        tracker.update(&filter_b, 50, 100, 100_000_000_000);
+
+        // First call after collection: computes fresh decision and caches it.
+        let result = tracker.partition_filters_grouped(vec![
+            filter_a.clone(),
+            filter_b.clone(),
+        ]);
+        assert_eq!(result.row_filter_groups.len(), 1); // filter_a promoted
+        assert_eq!(result.post_scan.len(), 1); // filter_b demoted
+        assert!(tracker.cached_decision.is_some());
+        let decided_at = tracker.cached_decision.as_ref().unwrap().decided_at_rows;
+
+        // Add a small number of rows (< effective_min_rows = 100)
+        tracker.update_bytes_per_row(10.0, 50);
+
+        // Meanwhile make filter_b effective by adding enough high-throughput data
+        // to overcome the initial poor stats.
+        // After: matched=60, total=10100, nanos=101_000_000_000
+        //   pruned=10040, bytes_saved=100400, time=101s → ~994 bps >= 100
+        tracker.update(&filter_b, 10, 10000, 1_000_000_000);
+
+        // Second call: should replay cached decision (only 50 rows since last decision).
+        let result = tracker.partition_filters_grouped(vec![
+            filter_a.clone(),
+            filter_b.clone(),
+        ]);
+        // Still cached: filter_b stays demoted even though its stats improved
+        assert_eq!(result.row_filter_groups.len(), 1);
+        assert_eq!(result.post_scan.len(), 1);
+        // decided_at_rows unchanged
+        assert_eq!(
+            tracker.cached_decision.as_ref().unwrap().decided_at_rows,
+            decided_at
+        );
+
+        // Now add enough rows to trigger re-evaluation (>= 100 total since decision)
+        tracker.update_bytes_per_row(10.0, 50); // total 100 new rows
+
+        // Third call: re-evaluates because rows_since >= effective_min_rows
+        let result = tracker.partition_filters_grouped(vec![
+            filter_a.clone(),
+            filter_b.clone(),
+        ]);
+        // Now filter_b should also be promoted
+        let total_promoted: usize =
+            result.row_filter_groups.iter().map(|g| g.len()).sum();
+        assert_eq!(total_promoted, 2);
+        assert_eq!(result.post_scan.len(), 0);
+        // decided_at_rows updated
+        assert!(
+            tracker.cached_decision.as_ref().unwrap().decided_at_rows > decided_at
+        );
+    }
+
+    #[test]
+    fn test_partition_filters_grouped_compound_demotion() {
+        // Threshold 100 bytes/sec
+        let mut tracker = SelectivityTracker::new_with_config(100.0, 1.5, 100, 0.0);
+
+        let filter_a = make_filter("a", 5);
+        let filter_b = make_filter("a", 10);
+
+        // Feed bytes_per_row (10 bytes/row)
+        tracker.update_bytes_per_row(10.0, 1000);
+
+        // Both individual filters have high throughput so they pass individual threshold
+        // A: 90 pruned * 10 bpr = 900 bytes / 1s = 900 bps
+        tracker.update(&filter_a, 10, 100, 1_000_000_000);
+        // B: 90 pruned * 10 bpr = 900 bytes / 1s = 900 bps
+        tracker.update(&filter_b, 10, 100, 1_000_000_000);
+
+        // Make A and B correlated so they group together
+        // P(A)=0.1, P(B)=0.1, P(A∧B)=0.08
+        // ratio = 0.08 / (0.1*0.1) = 8.0 > 1.5
+        tracker.update_correlation(&filter_a, &filter_b, 8, 100);
+
+        // Now feed low-throughput stats for the conjunction of A AND B.
+        // This simulates a compound filter that is slow overall.
+        let combined = conjunction(
+            [Arc::clone(&filter_a), Arc::clone(&filter_b)].into_iter(),
+        );
+        // 50 pruned * 10 bpr = 500 bytes / 100s = 5 bps (well below 100)
+        tracker.update(&combined, 50, 100, 100_000_000_000);
+
+        let result =
+            tracker.partition_filters_grouped(vec![filter_a.clone(), filter_b.clone()]);
+
+        // The compound group should be demoted: both filters move to post_scan
+        assert!(
+            result.row_filter_groups.is_empty(),
+            "expected no promoted groups, got {}",
+            result.row_filter_groups.len()
+        );
+        assert_eq!(result.post_scan.len(), 2);
     }
 }
