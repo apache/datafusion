@@ -942,16 +942,69 @@ impl FileScanConfig {
     /// Returns only the output orderings that are validated against actual
     /// file group statistics.
     ///
+    /// The various listing tables do not attempt to read all files
+    /// concurrently, instead they read files in sequence within a
+    /// partition. This is an important property as it allows plans to
+    /// run against 1000s of files and not try to open them all
+    /// concurrently.
+    ///
+    /// However, it means if we assign more than one file to a partition
+    /// the output sort order will not be preserved unless the files'
+    /// min/max statistics prove the combined stream is still ordered.
+    ///
+    /// When only 1 file is assigned to each partition, each partition is
+    /// correctly sorted on `(A, B, C)`:
+    ///
+    /// ```text
+    /// ┏ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ┓
+    ///   ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐ ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─  ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─  ┌ ─ ─ ─ ─ ─ ─ ─ ─ ┐
+    /// ┃   ┌───────────────┐     ┌──────────────┐ │   ┌──────────────┐ │   ┌─────────────┐   ┃
+    ///   │ │   1.parquet   │ │ │ │  2.parquet   │   │ │  3.parquet   │   │ │  4.parquet  │ │
+    /// ┃   │ Sort: A, B, C │     │Sort: A, B, C │ │   │Sort: A, B, C │ │   │Sort: A, B, C│   ┃
+    ///   │ └───────────────┘ │ │ └──────────────┘   │ └──────────────┘   │ └─────────────┘ │
+    /// ┃  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─   ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘  ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘  ─ ─ ─ ─ ─ ─ ─ ─ ─  ┃
+    ///      Partition 1          Partition 2          Partition 3          Partition 4
+    /// ┃                                                                                        ┃
+    ///  ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━
+    ///                                      DataSourceExec
+    /// ```
+    ///
+    /// However, when more than 1 file is assigned to each partition, each
+    /// partition is NOT necessarily sorted on `(A, B, C)`. Once the second
+    /// file is scanned, the same values for A, B and C can be repeated in
+    /// the same sorted stream:
+    ///
+    /// ```text
+    /// ┏ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━
+    ///   ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐ ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─  ┃
+    /// ┃   ┌───────────────┐     ┌──────────────┐ │
+    ///   │ │   1.parquet   │ │ │ │  2.parquet   │   ┃
+    /// ┃   │ Sort: A, B, C │     │Sort: A, B, C │ │
+    ///   │ └───────────────┘ │ │ └──────────────┘   ┃
+    /// ┃   ┌───────────────┐     ┌──────────────┐ │
+    ///   │ │   3.parquet   │ │ │ │  4.parquet   │   ┃
+    /// ┃   │ Sort: A, B, C │     │Sort: A, B, C │ │
+    ///   │ └───────────────┘ │ │ └──────────────┘   ┃
+    /// ┃  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─   ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
+    ///      Partition 1          Partition 2         ┃
+    /// ┃
+    ///  ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ┛
+    ///              DataSourceExec
+    /// ```
+    ///
     /// For example, individual files may be ordered by `col1 ASC`,
-    /// but if we have files with these min/max statistics in a single partition / file group:
+    /// but if we have files with these min/max statistics in a single
+    /// partition / file group:
     ///
     /// - file1: min(col1) = 10, max(col1) = 20
     /// - file2: min(col1) = 5, max(col1) = 15
     ///
-    /// Because reading file1 followed by file2 would produce out-of-order output (there is overlap
-    /// in the ranges), we cannot retain `col1 ASC` as a valid output ordering.
+    /// Because reading file1 followed by file2 would produce out-of-order
+    /// output (there is overlap in the ranges), we cannot retain `col1 ASC`
+    /// as a valid output ordering.
     ///
-    /// Similarly this would not be a valid order (non-overlapping ranges but not ordered):
+    /// Similarly this would not be a valid order (non-overlapping ranges
+    /// but not ordered):
     ///
     /// - file1: min(col1) = 20, max(col1) = 30
     /// - file2: min(col1) = 10, max(col1) = 15
@@ -961,13 +1014,14 @@ impl FileScanConfig {
     /// - file1: min(col1) = 5, max(col1) = 15
     /// - file2: min(col1) = 16, max(col1) = 25
     ///
-    /// Then we know that reading file1 followed by file2 will produce ordered output,
-    /// so `col1 ASC` would be retained.
+    /// Then we know that reading file1 followed by file2 will produce
+    /// ordered output, so `col1 ASC` would be retained.
     ///
-    /// Note that we are checking for ordering *within* *each* file group / partition,
-    /// files in different partitions are read independently and do not affect each other's ordering.
-    /// Merging of the multiple partition streams into a single ordered stream is handled
-    /// upstream e.g. by `SortPreservingMergeExec`.
+    /// Note that we are checking for ordering *within* *each* file group /
+    /// partition — files in different partitions are read independently and
+    /// do not affect each other's ordering. Merging of the multiple
+    /// partition streams into a single ordered stream is handled upstream
+    /// e.g. by `SortPreservingMergeExec`.
     fn validated_output_ordering(&self) -> Vec<LexOrdering> {
         let schema = self.file_source.table_schema().table_schema();
         validate_orderings(&self.output_ordering, schema, &self.file_groups, None)
