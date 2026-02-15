@@ -387,7 +387,10 @@ impl NameTracker {
     /// 3. Ambiguous reference: qualified name + unqualified name with same column name
     fn would_conflict(&self, qualifier: &Option<String>, name: &str) -> bool {
         // Check for exact duplicate
-        if self.seen_qualified.contains(&(qualifier.clone(), name.to_string())) {
+        if self
+            .seen_qualified
+            .contains(&(qualifier.clone(), name.to_string()))
+        {
             return true;
         }
 
