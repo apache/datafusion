@@ -47,6 +47,7 @@ datafusion-catalog = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-physical-plan = { workspace = true }
+futures = { workspace = true }
 parking_lot = { workspace = true }
 paste = { workspace = true }
 

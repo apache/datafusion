@@ -2320,6 +2320,7 @@ dependencies = [
  "datafusion-common",
  "datafusion-expr",
  "datafusion-physical-plan",
+ "futures",
  "parking_lot",
  "paste",
 ]

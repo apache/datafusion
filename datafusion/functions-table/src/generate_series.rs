@@ -28,8 +28,12 @@ use datafusion_catalog::TableFunctionImpl;
 use datafusion_catalog::TableProvider;
 use datafusion_common::{Result, ScalarValue, plan_err};
 use datafusion_expr::{Expr, TableType};
-use datafusion_physical_plan::ExecutionPlan;
-use datafusion_physical_plan::memory::{LazyBatchGenerator, LazyMemoryExec};
+#[expect(deprecated)]
+use datafusion_physical_plan::memory::LazyBatchGenerator;
+use datafusion_physical_plan::memory::{LazyMemoryExec, LazyPartition};
+use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
+use datafusion_physical_plan::{ExecutionPlan, SendableRecordBatchStream};
+use futures::stream;
 use parking_lot::RwLock;
 use std::any::Any;
 use std::fmt;
@@ -48,6 +52,7 @@ impl Empty {
     }
 }
 
+#[expect(deprecated)]
 impl LazyBatchGenerator for Empty {
     fn as_any(&self) -> &dyn Any {
         self
@@ -238,100 +243,213 @@ impl GenerateSeriesTable {
         Self { schema, args }
     }
 
+    pub fn as_partition(&self, batch_size: usize) -> Result<Arc<dyn LazyPartition>> {
+        Ok(Arc::new(GenerateSeriesPartition::new(
+            self.schema(),
+            self.args.clone(),
+            batch_size,
+        )))
+    }
+
+    #[deprecated(
+        note = "Use GenerateSeriesPartition via GenerateSeriesTable::as_partition instead"
+    )]
+    #[expect(deprecated)]
     pub fn as_generator(
         &self,
         batch_size: usize,
     ) -> Result<Arc<RwLock<dyn LazyBatchGenerator>>> {
-        let generator: Arc<RwLock<dyn LazyBatchGenerator>> = match &self.args {
-            GenSeriesArgs::ContainsNull { name } => Arc::new(RwLock::new(Empty { name })),
-            GenSeriesArgs::Int64Args {
-                start,
-                end,
-                step,
-                include_end,
-                name,
-            } => Arc::new(RwLock::new(GenericSeriesState {
-                schema: self.schema(),
-                start: *start,
-                end: *end,
-                step: *step,
-                current: *start,
+        let generator: Arc<RwLock<dyn LazyBatchGenerator>> =
+            match build_generate_series_state(
+                Arc::clone(&self.schema),
+                &self.args,
                 batch_size,
-                include_end: *include_end,
-                name,
-            })),
-            GenSeriesArgs::TimestampArgs {
-                start,
-                end,
-                step,
-                tz,
-                include_end,
-                name,
-            } => {
-                let parsed_tz = tz
-                    .as_ref()
-                    .map(|s| Tz::from_str(s.as_ref()))
-                    .transpose()
-                    .map_err(|e| {
-                        datafusion_common::internal_datafusion_err!(
-                            "Failed to parse timezone: {e}"
-                        )
-                    })?
-                    .unwrap_or_else(|| Tz::from_str("+00:00").unwrap());
-                Arc::new(RwLock::new(GenericSeriesState {
-                    schema: self.schema(),
-                    start: TimestampValue {
-                        value: *start,
-                        parsed_tz: Some(parsed_tz),
-                        tz_str: tz.clone(),
-                    },
-                    end: TimestampValue {
-                        value: *end,
-                        parsed_tz: Some(parsed_tz),
-                        tz_str: tz.clone(),
-                    },
-                    step: *step,
-                    current: TimestampValue {
-                        value: *start,
-                        parsed_tz: Some(parsed_tz),
-                        tz_str: tz.clone(),
-                    },
-                    batch_size,
-                    include_end: *include_end,
-                    name,
-                }))
+            )? {
+                GenerateSeriesState::Empty { name } => {
+                    Arc::new(RwLock::new(Empty { name }))
+                }
+                GenerateSeriesState::Int64(state) => Arc::new(RwLock::new(state)),
+                GenerateSeriesState::Timestamp(state) => Arc::new(RwLock::new(state)),
+            };
+
+        Ok(generator)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct GenerateSeriesPartition {
+    schema: SchemaRef,
+    args: GenSeriesArgs,
+    batch_size: usize,
+}
+
+impl GenerateSeriesPartition {
+    pub fn new(schema: SchemaRef, args: GenSeriesArgs, batch_size: usize) -> Self {
+        Self {
+            schema,
+            args,
+            batch_size,
+        }
+    }
+
+    pub fn args(&self) -> &GenSeriesArgs {
+        &self.args
+    }
+
+    pub fn batch_size(&self) -> usize {
+        self.batch_size
+    }
+}
+
+impl fmt::Display for GenerateSeriesPartition {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match &self.args {
+            GenSeriesArgs::ContainsNull { name } => write!(f, "{name}: empty"),
+            GenSeriesArgs::Int64Args {
+                start, end, name, ..
             }
-            GenSeriesArgs::DateArgs {
-                start,
-                end,
-                step,
-                include_end,
-                name,
-            } => Arc::new(RwLock::new(GenericSeriesState {
-                schema: self.schema(),
+            | GenSeriesArgs::TimestampArgs {
+                start, end, name, ..
+            }
+            | GenSeriesArgs::DateArgs {
+                start, end, name, ..
+            } => {
+                write!(
+                    f,
+                    "{name}: start={start}, end={end}, batch_size={}",
+                    self.batch_size
+                )
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum GenerateSeriesState {
+    Empty { name: &'static str },
+    Int64(GenericSeriesState<i64>),
+    Timestamp(GenericSeriesState<TimestampValue>),
+}
+
+impl GenerateSeriesState {
+    fn generate_next_batch(&mut self) -> Result<Option<RecordBatch>> {
+        match self {
+            Self::Empty { .. } => Ok(None),
+            Self::Int64(state) => state.next_batch(),
+            Self::Timestamp(state) => state.next_batch(),
+        }
+    }
+}
+
+fn build_generate_series_state(
+    schema: SchemaRef,
+    args: &GenSeriesArgs,
+    batch_size: usize,
+) -> Result<GenerateSeriesState> {
+    match args {
+        GenSeriesArgs::ContainsNull { name } => Ok(GenerateSeriesState::Empty { name }),
+        GenSeriesArgs::Int64Args {
+            start,
+            end,
+            step,
+            include_end,
+            name,
+        } => Ok(GenerateSeriesState::Int64(GenericSeriesState {
+            schema,
+            start: *start,
+            end: *end,
+            step: *step,
+            current: *start,
+            batch_size,
+            include_end: *include_end,
+            name,
+        })),
+        GenSeriesArgs::TimestampArgs {
+            start,
+            end,
+            step,
+            tz,
+            include_end,
+            name,
+        } => {
+            let parsed_tz = parse_timezone(tz.as_ref())?;
+            Ok(GenerateSeriesState::Timestamp(GenericSeriesState {
+                schema,
                 start: TimestampValue {
                     value: *start,
-                    parsed_tz: None,
-                    tz_str: None,
+                    parsed_tz: Some(parsed_tz),
+                    tz_str: tz.clone(),
                 },
                 end: TimestampValue {
                     value: *end,
-                    parsed_tz: None,
-                    tz_str: None,
+                    parsed_tz: Some(parsed_tz),
+                    tz_str: tz.clone(),
                 },
                 step: *step,
                 current: TimestampValue {
                     value: *start,
-                    parsed_tz: None,
-                    tz_str: None,
+                    parsed_tz: Some(parsed_tz),
+                    tz_str: tz.clone(),
                 },
                 batch_size,
                 include_end: *include_end,
                 name,
-            })),
-        };
+            }))
+        }
+        GenSeriesArgs::DateArgs {
+            start,
+            end,
+            step,
+            include_end,
+            name,
+        } => Ok(GenerateSeriesState::Timestamp(GenericSeriesState {
+            schema,
+            start: TimestampValue {
+                value: *start,
+                parsed_tz: None,
+                tz_str: None,
+            },
+            end: TimestampValue {
+                value: *end,
+                parsed_tz: None,
+                tz_str: None,
+            },
+            step: *step,
+            current: TimestampValue {
+                value: *start,
+                parsed_tz: None,
+                tz_str: None,
+            },
+            batch_size,
+            include_end: *include_end,
+            name,
+        })),
+    }
+}
 
-        Ok(generator)
+impl LazyPartition for GenerateSeriesPartition {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+
+    fn execute(&self) -> Result<SendableRecordBatchStream> {
+        let state = build_generate_series_state(
+            Arc::clone(&self.schema),
+            &self.args,
+            self.batch_size,
+        )?;
+        let schema = Arc::clone(&self.schema);
+
+        let stream = stream::try_unfold(state, |mut state| async move {
+            let batch = state.generate_next_batch()?;
+            Ok(batch.map(|batch| (batch, state)))
+        });
+
+        Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
     }
 }
 
@@ -375,14 +493,8 @@ impl<T: SeriesValue> GenericSeriesState<T> {
     pub fn current(&self) -> &T {
         &self.current
     }
-}
 
-impl<T: SeriesValue> LazyBatchGenerator for GenericSeriesState<T> {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn generate_next_batch(&mut self) -> Result<Option<RecordBatch>> {
+    pub fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
         let mut buf = Vec::with_capacity(self.batch_size);
 
         while buf.len() < self.batch_size
@@ -401,6 +513,17 @@ impl<T: SeriesValue> LazyBatchGenerator for GenericSeriesState<T> {
         let array = self.current.create_array(buf)?;
         let batch = RecordBatch::try_new(Arc::clone(&self.schema), vec![array])?;
         Ok(Some(batch))
+    }
+}
+
+#[expect(deprecated)]
+impl<T: SeriesValue> LazyBatchGenerator for GenericSeriesState<T> {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn generate_next_batch(&mut self) -> Result<Option<RecordBatch>> {
+        self.next_batch()
     }
 
     fn reset_state(&self) -> Arc<RwLock<dyn LazyBatchGenerator>> {
@@ -441,6 +564,19 @@ fn validate_interval_step(step: IntervalMonthDayNano) -> Result<()> {
     Ok(())
 }
 
+fn parse_timezone(tz: Option<&Arc<str>>) -> Result<Tz> {
+    match tz {
+        Some(tz) => Tz::from_str(tz.as_ref()).map_err(|e| {
+            datafusion_common::internal_datafusion_err!("Failed to parse timezone: {e}")
+        }),
+        None => Tz::from_str("+00:00").map_err(|e| {
+            datafusion_common::internal_datafusion_err!(
+                "Failed to parse default timezone: {e}"
+            )
+        }),
+    }
+}
+
 #[async_trait]
 impl TableProvider for GenerateSeriesTable {
     fn as_any(&self) -> &dyn Any {
@@ -463,10 +599,10 @@ impl TableProvider for GenerateSeriesTable {
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let batch_size = state.config_options().execution.batch_size;
-        let generator = self.as_generator(batch_size)?;
+        let partition = self.as_partition(batch_size)?;
 
         Ok(Arc::new(
-            LazyMemoryExec::try_new(self.schema(), vec![generator])?
+            LazyMemoryExec::try_new_with_partitions(self.schema(), vec![partition])?
                 .with_projection(projection.cloned()),
         ))
     }
@@ -760,14 +896,20 @@ impl TableFunctionImpl for RangeFunc {
 }
 
 #[cfg(test)]
+#[expect(deprecated)]
 mod generate_series_tests {
     use std::sync::Arc;
 
+    use arrow::array::Int64Array;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::Result;
+    #[expect(deprecated)]
     use datafusion_physical_plan::memory::LazyBatchGenerator;
+    use futures::TryStreamExt;
 
-    use crate::generate_series::GenericSeriesState;
+    use crate::generate_series::{
+        GenSeriesArgs, GenerateSeriesTable, GenericSeriesState,
+    };
 
     #[test]
     fn test_generic_series_state_reset() -> Result<()> {
@@ -792,6 +934,52 @@ mod generate_series_tests {
 
         assert_eq!(batch, reset_batch);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_generate_series_partition_execute() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int64,
+            false,
+        )]));
+        let table = GenerateSeriesTable::new(
+            Arc::clone(&schema),
+            GenSeriesArgs::Int64Args {
+                start: 1,
+                end: 5,
+                step: 1,
+                include_end: true,
+                name: "generate_series",
+            },
+        );
+        let partition = table.as_partition(2)?;
+        assert_eq!(
+            partition.to_string(),
+            "generate_series: start=1, end=5, batch_size=2"
+        );
+
+        let batches =
+            futures::executor::block_on(partition.execute()?.try_collect::<Vec<_>>())?;
+        assert_eq!(batches.len(), 3);
+        assert_eq!(
+            batches
+                .iter()
+                .flat_map(|batch| {
+                    batch
+                        .column(0)
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .unwrap()
+                        .values()
+                        .iter()
+                        .copied()
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3, 4, 5]
+        );
         Ok(())
     }
 }
