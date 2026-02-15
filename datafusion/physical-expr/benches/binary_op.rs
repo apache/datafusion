@@ -203,14 +203,14 @@ fn benchmark_binary_op_in_short_circuit(c: &mut Criterion) {
     let expr_and = BinaryExpr::new(
         Arc::new(Column::new("a", 0)),
         Operator::And,
-        logical2physical(&right_condition_and, &schema),
+        logical2physical(&right_condition_and, Arc::clone(&schema)),
     );
 
     // a OR ((b ~ regex) OR (c ~ regex))
     let expr_or = BinaryExpr::new(
         Arc::new(Column::new("a", 0)),
         Operator::Or,
-        logical2physical(&right_condition_or, &schema),
+        logical2physical(&right_condition_or, schema),
     );
 
     // Each scenario when the test operator is `and`

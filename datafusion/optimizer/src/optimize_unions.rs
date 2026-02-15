@@ -22,7 +22,6 @@ use datafusion_common::Result;
 use datafusion_common::tree_node::Transformed;
 use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
 use datafusion_expr::{Distinct, LogicalPlan, Projection, Union};
-use itertools::Itertools;
 use std::sync::Arc;
 
 #[derive(Default, Debug)]
@@ -64,11 +63,11 @@ impl OptimizerRule for OptimizeUnions {
                 let inputs = inputs
                     .into_iter()
                     .flat_map(extract_plans_from_union)
-                    .map(|plan| coerce_plan_expr_for_schema(plan, &schema))
+                    .map(|plan| coerce_plan_expr_for_schema(Arc::new(plan), &schema))
                     .collect::<Result<Vec<_>>>()?;
 
                 Ok(Transformed::yes(LogicalPlan::Union(Union {
-                    inputs: inputs.into_iter().map(Arc::new).collect_vec(),
+                    inputs,
                     schema,
                 })))
             }
@@ -79,12 +78,14 @@ impl OptimizerRule for OptimizeUnions {
                             .into_iter()
                             .map(extract_plan_from_distinct)
                             .flat_map(extract_plans_from_union)
-                            .map(|plan| coerce_plan_expr_for_schema(plan, &schema))
+                            .map(|plan| {
+                                coerce_plan_expr_for_schema(Arc::new(plan), &schema)
+                            })
                             .collect::<Result<Vec<_>>>()?;
 
                         Ok(Transformed::yes(LogicalPlan::Distinct(Distinct::All(
                             Arc::new(LogicalPlan::Union(Union {
-                                inputs: inputs.into_iter().map(Arc::new).collect_vec(),
+                                inputs,
                                 schema: Arc::clone(&schema),
                             })),
                         ))))
