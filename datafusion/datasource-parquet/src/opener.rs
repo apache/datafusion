@@ -577,9 +577,8 @@ impl FileOpener for ParquetOpener {
             // Apply the prepared plan to the builder
             builder = prepared_plan.apply_to_builder(builder);
 
-            if let Some(limit) = limit {
-                builder = builder.with_limit(limit)
-            }
+            // Note: limit is applied later, after filter partitioning,
+            // because post-scan filters must run before limiting.
 
             if let Some(max_predicate_cache_size) = max_predicate_cache_size {
                 builder = builder.with_max_predicate_cache_size(max_predicate_cache_size);
@@ -671,6 +670,15 @@ impl FileOpener for ParquetOpener {
                 (post_scan, projection, mask)
             };
             // tracker lock released here
+
+            // Apply limit to the reader only when there are no post-scan filters.
+            // If post-scan filters exist, the limit must be enforced after filtering
+            // (otherwise the reader stops reading before the filter can find matches).
+            if post_scan_filters.is_empty() {
+                if let Some(limit) = limit {
+                    builder = builder.with_limit(limit);
+                }
+            }
 
             let stream = builder
                 .with_projection(mask)
