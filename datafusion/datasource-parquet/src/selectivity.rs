@@ -594,28 +594,25 @@ impl SelectivityTracker {
                 .map(|i| Arc::clone(&effective[i]))
                 .collect();
 
-            if group.len() > 1 {
-                if let PromotionStrategy::Threshold(threshold) = strategy {
-                    let combined = conjunction(group.iter().map(Arc::clone));
-                    let key = ExprKey::new(&combined);
-                    if let (Some(stats), Some(bpr)) =
-                        (self.stats.get(&key), bytes_per_row)
-                    {
-                        if let Some(bps) = stats.bytes_per_sec(bpr) {
-                            if bps < threshold {
-                                for expr in group {
-                                    if expr
-                                        .as_any()
-                                        .downcast_ref::<OptionalFilterPhysicalExpr>()
-                                        .is_none()
-                                    {
-                                        post_scan.push(expr);
-                                    }
-                                }
-                                continue;
-                            }
+            if group.len() > 1
+                && let PromotionStrategy::Threshold(threshold) = strategy
+            {
+                let combined = conjunction(group.iter().map(Arc::clone));
+                let key = ExprKey::new(&combined);
+                if let (Some(stats), Some(bpr)) = (self.stats.get(&key), bytes_per_row)
+                    && let Some(bps) = stats.bytes_per_sec(bpr)
+                    && bps < threshold
+                {
+                    for expr in group {
+                        if expr
+                            .as_any()
+                            .downcast_ref::<OptionalFilterPhysicalExpr>()
+                            .is_none()
+                        {
+                            post_scan.push(expr);
                         }
                     }
+                    continue;
                 }
             }
 
@@ -1609,10 +1606,8 @@ mod tests {
         tracker.update(&filter_b, 50, 100, 100_000_000_000);
 
         // First call after collection: computes fresh decision and caches it.
-        let result = tracker.partition_filters_grouped(vec![
-            filter_a.clone(),
-            filter_b.clone(),
-        ]);
+        let result =
+            tracker.partition_filters_grouped(vec![filter_a.clone(), filter_b.clone()]);
         assert_eq!(result.row_filter_groups.len(), 1); // filter_a promoted
         assert_eq!(result.post_scan.len(), 1); // filter_b demoted
         assert!(tracker.cached_decision.is_some());
@@ -1628,10 +1623,8 @@ mod tests {
         tracker.update(&filter_b, 10, 10000, 1_000_000_000);
 
         // Second call: should replay cached decision (only 50 rows since last decision).
-        let result = tracker.partition_filters_grouped(vec![
-            filter_a.clone(),
-            filter_b.clone(),
-        ]);
+        let result =
+            tracker.partition_filters_grouped(vec![filter_a.clone(), filter_b.clone()]);
         // Still cached: filter_b stays demoted even though its stats improved
         assert_eq!(result.row_filter_groups.len(), 1);
         assert_eq!(result.post_scan.len(), 1);
@@ -1645,19 +1638,15 @@ mod tests {
         tracker.update_bytes_per_row(10.0, 50); // total 100 new rows
 
         // Third call: re-evaluates because rows_since >= effective_min_rows
-        let result = tracker.partition_filters_grouped(vec![
-            filter_a.clone(),
-            filter_b.clone(),
-        ]);
+        let result =
+            tracker.partition_filters_grouped(vec![filter_a.clone(), filter_b.clone()]);
         // Now filter_b should also be promoted
         let total_promoted: usize =
             result.row_filter_groups.iter().map(|g| g.len()).sum();
         assert_eq!(total_promoted, 2);
         assert_eq!(result.post_scan.len(), 0);
         // decided_at_rows updated
-        assert!(
-            tracker.cached_decision.as_ref().unwrap().decided_at_rows > decided_at
-        );
+        assert!(tracker.cached_decision.as_ref().unwrap().decided_at_rows > decided_at);
     }
 
     #[test]
@@ -1684,9 +1673,7 @@ mod tests {
 
         // Now feed low-throughput stats for the conjunction of A AND B.
         // This simulates a compound filter that is slow overall.
-        let combined = conjunction(
-            [Arc::clone(&filter_a), Arc::clone(&filter_b)].into_iter(),
-        );
+        let combined = conjunction([Arc::clone(&filter_a), Arc::clone(&filter_b)]);
         // 50 pruned * 10 bpr = 500 bytes / 100s = 5 bps (well below 100)
         tracker.update(&combined, 50, 100, 100_000_000_000);
 

@@ -1055,12 +1055,7 @@ impl<S> SelectivityUpdatingStream<S> {
             let delta_nanos = current_nanos - last_nanos;
 
             if delta_total > 0 {
-                tracker.update(
-                    &metrics.expr,
-                    delta_matched,
-                    delta_total,
-                    delta_nanos,
-                );
+                tracker.update(&metrics.expr, delta_matched, delta_total, delta_nanos);
                 self.last_reported[i] = (current_matched, current_total, current_nanos);
             }
         }

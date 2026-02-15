@@ -957,8 +957,7 @@ pub fn build_row_filter_from_groups(
     let mut filter_metrics = Vec::new();
     let mut arrow_predicates = Vec::with_capacity(total_candidates);
 
-    for (idx, (original_expr, candidate)) in
-        candidates_with_exprs.into_iter().enumerate()
+    for (idx, (original_expr, candidate)) in candidates_with_exprs.into_iter().enumerate()
     {
         let is_last = idx == total_candidates - 1;
 
