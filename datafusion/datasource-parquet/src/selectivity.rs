@@ -25,7 +25,7 @@
 //! out many rows) may not be worth the I/O cost of late materialization. By tracking
 //! effectiveness across files, we can learn which filters are worth pushing down.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -85,6 +85,8 @@ pub struct PartitionedFiltersGrouped {
 struct CachedDecision {
     /// Maps each promoted filter's ExprKey → group index
     promoted: HashMap<ExprKey, usize>,
+    /// Filters explicitly sent to post_scan
+    demoted: HashSet<ExprKey>,
     /// Number of groups
     num_groups: usize,
     /// `total_file_rows` when the decision was made
@@ -634,8 +636,11 @@ impl SelectivityTracker {
                 promoted.insert(ExprKey::new(filter), group_idx);
             }
         }
+        let demoted: HashSet<ExprKey> =
+            post_scan.iter().map(|f| ExprKey::new(f)).collect();
         self.cached_decision = Some(CachedDecision {
             promoted,
+            demoted,
             num_groups: row_filter_groups.len(),
             decided_at_rows: self.total_file_rows,
         });
@@ -660,8 +665,8 @@ impl SelectivityTracker {
             let key = ExprKey::new(&filter);
             if let Some(&group_idx) = cached.promoted.get(&key) {
                 groups[group_idx].push(filter);
-            } else {
-                // Not promoted: drop optional, demote mandatory
+            } else if cached.demoted.contains(&key) {
+                // Explicitly demoted: drop optional, keep mandatory as post-scan
                 if filter
                     .as_any()
                     .downcast_ref::<OptionalFilterPhysicalExpr>()
@@ -669,6 +674,11 @@ impl SelectivityTracker {
                 {
                     post_scan.push(filter);
                 }
+            } else {
+                // Unknown filter (likely unbuildable in previous file).
+                // Promote as its own group — build_row_filter_from_groups will
+                // handle it if still unbuildable in this file's schema.
+                groups.push(vec![filter]);
             }
         }
 
