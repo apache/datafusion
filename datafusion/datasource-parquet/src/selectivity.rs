@@ -637,7 +637,7 @@ impl SelectivityTracker {
             }
         }
         let demoted: HashSet<ExprKey> =
-            post_scan.iter().map(|f| ExprKey::new(f)).collect();
+            post_scan.iter().map(ExprKey::new).collect();
         self.cached_decision = Some(CachedDecision {
             promoted,
             demoted,
