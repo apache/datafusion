@@ -797,7 +797,12 @@ impl PhysicalExpr for OptionalFilterPhysicalExpr {
     }
 
     fn snapshot(&self) -> Result<Option<Arc<dyn PhysicalExpr>>> {
-        self.inner.snapshot()
+        // Always unwrap the Optional wrapper for snapshot consumers (e.g. PruningPredicate).
+        // If inner has a snapshot, use it; otherwise return the inner directly.
+        Ok(Some(match self.inner.snapshot()? {
+            Some(snap) => snap,
+            None => Arc::clone(&self.inner),
+        }))
     }
 
     fn snapshot_generation(&self) -> u64 {
