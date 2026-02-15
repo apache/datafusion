@@ -602,10 +602,10 @@ async fn test_disk_spill_limit_reached() -> Result<()> {
         .await
         .unwrap();
 
-    let err = df.collect().await.unwrap_err();
-    assert_contains!(
-        err.to_string(),
-        "The used disk space during the spilling process has exceeded the allowable limit"
+    let error_message = df.collect().await.unwrap_err().to_string();
+    assert!(
+        error_message.contains("The used disk space during the spilling process has exceeded the allowable limit") &&
+            error_message.contains("datafusion.runtime.max_temp_directory_size"),
     );
 
     Ok(())

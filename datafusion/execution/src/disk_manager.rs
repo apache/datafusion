@@ -420,7 +420,8 @@ impl RefCountedTempFile {
         let global_disk_usage = self.disk_manager.used_disk_space.load(Ordering::Relaxed);
         if global_disk_usage > self.disk_manager.max_temp_directory_size {
             return resources_err!(
-                "The used disk space during the spilling process has exceeded the allowable limit of {}. Try increasing the `max_temp_directory_size` in the disk manager configuration.",
+                "The used disk space during the spilling process has exceeded the allowable limit of {}. \
+                Please try increasing the config: `datafusion.runtime.max_temp_directory_size`.",
                 human_readable_size(self.disk_manager.max_temp_directory_size as usize)
             );
         }
