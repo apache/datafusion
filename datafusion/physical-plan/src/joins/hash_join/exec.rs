@@ -81,7 +81,7 @@ use datafusion_functions_aggregate_common::min_max::{MaxAccumulator, MinAccumula
 use datafusion_physical_expr::equivalence::{
     ProjectionMapping, join_equivalence_properties,
 };
-use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
+use datafusion_physical_expr::expressions::{Column, DynamicFilterPhysicalExpr, lit};
 use datafusion_physical_expr::projection::{ProjectionRef, combine_projections};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 
@@ -1447,6 +1447,51 @@ impl ExecutionPlan for HashJoinExec {
                 };
             });
 
+        // For semi/anti joins, the non-preserved side's columns are not in the
+        // output, but filters on join key columns can still be pushed there.
+        // We find output columns that are join keys on the preserved side and
+        // add their output indices to the non-preserved side's allowed set.
+        // The name-based remap in FilterRemapper will then match them to the
+        // corresponding column in the non-preserved child's schema.
+        match self.join_type {
+            JoinType::LeftSemi | JoinType::LeftAnti => {
+                let left_key_indices: HashSet<usize> = self
+                    .on
+                    .iter()
+                    .filter_map(|(left_key, _)| {
+                        left_key
+                            .as_any()
+                            .downcast_ref::<Column>()
+                            .map(|c| c.index())
+                    })
+                    .collect();
+                for (output_idx, ci) in column_indices.iter().enumerate() {
+                    if ci.side == JoinSide::Left && left_key_indices.contains(&ci.index) {
+                        right_allowed.insert(output_idx);
+                    }
+                }
+            }
+            JoinType::RightSemi | JoinType::RightAnti => {
+                let right_key_indices: HashSet<usize> = self
+                    .on
+                    .iter()
+                    .filter_map(|(_, right_key)| {
+                        right_key
+                            .as_any()
+                            .downcast_ref::<Column>()
+                            .map(|c| c.index())
+                    })
+                    .collect();
+                for (output_idx, ci) in column_indices.iter().enumerate() {
+                    if ci.side == JoinSide::Right && right_key_indices.contains(&ci.index)
+                    {
+                        left_allowed.insert(output_idx);
+                    }
+                }
+            }
+            _ => {}
+        }
+
         let left_child = if left_preserved {
             ChildFilterDescription::from_child_with_allowed_indices(
                 &parent_filters,
@@ -1538,8 +1583,13 @@ fn lr_is_preserved(join_type: JoinType) -> (bool, bool) {
         JoinType::Left => (true, false),
         JoinType::Right => (false, true),
         JoinType::Full => (false, false),
-        JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => (true, false),
-        JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => (false, true),
+        // Filters in semi/anti joins are either on the preserved side, or on join keys,
+        // as all output columns come from the preserved side. Join key filters can be
+        // safely pushed down into the other side.
+        JoinType::LeftSemi | JoinType::LeftAnti => (true, true),
+        JoinType::RightSemi | JoinType::RightAnti => (true, true),
+        JoinType::LeftMark => (true, false),
+        JoinType::RightMark => (false, true),
     }
 }
 
@@ -5764,11 +5814,11 @@ mod tests {
         assert_eq!(lr_is_preserved(JoinType::Left), (true, false));
         assert_eq!(lr_is_preserved(JoinType::Right), (false, true));
         assert_eq!(lr_is_preserved(JoinType::Full), (false, false));
-        assert_eq!(lr_is_preserved(JoinType::LeftSemi), (true, false));
-        assert_eq!(lr_is_preserved(JoinType::LeftAnti), (true, false));
+        assert_eq!(lr_is_preserved(JoinType::LeftSemi), (true, true));
+        assert_eq!(lr_is_preserved(JoinType::LeftAnti), (true, true));
         assert_eq!(lr_is_preserved(JoinType::LeftMark), (true, false));
-        assert_eq!(lr_is_preserved(JoinType::RightSemi), (false, true));
-        assert_eq!(lr_is_preserved(JoinType::RightAnti), (false, true));
+        assert_eq!(lr_is_preserved(JoinType::RightSemi), (true, true));
+        assert_eq!(lr_is_preserved(JoinType::RightAnti), (true, true));
         assert_eq!(lr_is_preserved(JoinType::RightMark), (false, true));
     }
 }

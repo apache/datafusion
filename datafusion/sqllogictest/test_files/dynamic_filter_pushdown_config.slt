@@ -311,6 +311,73 @@ physical_plan
 02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet
 03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id], file_type=parquet
 
+# Test 2c: Parent dynamic filter (from TopK) pushed through semi/anti joins
+# Sort on the join key (id) so the TopK dynamic filter pushes to BOTH sides.
+
+# SEMI JOIN with TopK parent: TopK generates a dynamic filter on `id` (join key)
+# that pushes through the RightSemi join to both the build and probe sides.
+query TT
+EXPLAIN SELECT l.*
+FROM left_parquet l
+WHERE l.id IN (SELECT r.id FROM right_parquet r)
+ORDER BY l.id LIMIT 2;
+----
+logical_plan
+01)Sort: l.id ASC NULLS LAST, fetch=2
+02)--LeftSemi Join: l.id = __correlated_sq_1.id
+03)----SubqueryAlias: l
+04)------TableScan: left_parquet projection=[id, data]
+05)----SubqueryAlias: __correlated_sq_1
+06)------SubqueryAlias: r
+07)--------TableScan: right_parquet projection=[id]
+physical_plan
+01)SortExec: TopK(fetch=2), expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(id@0, id@0)]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id], file_type=parquet, predicate=DynamicFilter [ empty ]
+04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet, predicate=DynamicFilter [ empty ]
+
+# Correctness check
+query IT
+SELECT l.*
+FROM left_parquet l
+WHERE l.id IN (SELECT r.id FROM right_parquet r)
+ORDER BY l.id LIMIT 2;
+----
+1 left1
+3 left3
+
+# ANTI JOIN with TopK parent: TopK generates a dynamic filter on `id` (join key)
+# that pushes through the LeftAnti join to both the preserved and non-preserved sides.
+query TT
+EXPLAIN SELECT l.*
+FROM left_parquet l
+WHERE l.id NOT IN (SELECT r.id FROM right_parquet r)
+ORDER BY l.id LIMIT 2;
+----
+logical_plan
+01)Sort: l.id ASC NULLS LAST, fetch=2
+02)--LeftAnti Join: l.id = __correlated_sq_1.id
+03)----SubqueryAlias: l
+04)------TableScan: left_parquet projection=[id, data]
+05)----SubqueryAlias: __correlated_sq_1
+06)------SubqueryAlias: r
+07)--------TableScan: right_parquet projection=[id]
+physical_plan
+01)SortExec: TopK(fetch=2), expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(id@0, id@0)]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet, predicate=DynamicFilter [ empty ]
+04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id], file_type=parquet, predicate=DynamicFilter [ empty ]
+
+# Correctness check
+query IT
+SELECT l.*
+FROM left_parquet l
+WHERE l.id NOT IN (SELECT r.id FROM right_parquet r)
+ORDER BY l.id LIMIT 2;
+----
+2 left2
+4 left4
+
 # Test 3: Test independent control
 
 # Disable TopK, keep Join enabled
@@ -568,7 +635,7 @@ physical_plan
 # The bug: when an outer join pushes a DynamicFilter for column "k" through an
 # inner join where both sides have a column named "k", the name-based routing
 # incorrectly pushed the filter to BOTH sides instead of only the correct one.
-# With small row groups this caused wrong results (0 rows instead of expected).
+# This caused wrong results (0 rows instead of expected).
 
 # Create tables with same column names (k, v) on both sides
 statement ok
@@ -579,7 +646,7 @@ statement ok
 CREATE TABLE issue_20213_t2(k INT, v INT) AS
 SELECT i + 100 as k, i as v FROM generate_series(1, 100) t(i);
 
-# Use small row groups to trigger statistics-based pruning
+# Use small row groups to make statistics-based pruning more likely to manifest the bug
 statement ok
 SET datafusion.execution.parquet.max_row_group_size = 10;
 
