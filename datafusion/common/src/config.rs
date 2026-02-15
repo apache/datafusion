@@ -751,15 +751,30 @@ config_namespace! {
         /// parquet reader setting. 0 means no caching.
         pub max_predicate_cache_size: Option<usize>, default = None
 
-        /// (reading) Minimum filter effectiveness threshold for adaptive filter
-        /// pushdown.
-        /// Only filters that filter out at least this fraction of rows will be
-        /// promoted to row filters during adaptive filter pushdown.
-        /// A value of 1.0 means only filters that filter out all rows will be
-        /// promoted. A value of 0.0 means all filters will be promoted.
-        /// Because there can be a high I/O cost to pushing down ineffective filters,
-        /// recommended values are in the range [0.8, 0.95], depending on random I/0 costs.
-        pub filter_effectiveness_threshold: f64, default = 0.8
+        /// (reading) Minimum bytes/sec throughput for adaptive filter pushdown.
+        /// Filters that achieve at least this throughput (bytes_saved / eval_time)
+        /// are promoted to row filters.
+        /// f64::INFINITY (default) = no filters promoted (feature disabled).
+        /// 0.0 = all filters pushed as row filters (no adaptive logic).
+        pub filter_pushdown_min_bytes_per_sec: f64, default = f64::INFINITY
+
+        /// (reading) Correlation ratio threshold for grouping filters.
+        /// The ratio is P(A ∧ B) / (P(A) * P(B)):
+        ///   1.0 = independent (keep separate for late materialization benefit)
+        ///   1.5 = filters co-pass 50% more often than chance (default threshold)
+        ///   2.0 = filters co-pass twice as often as chance (conservative)
+        /// Higher values = less grouping = more late materialization, more overhead.
+        /// Lower values = more grouping = less overhead, less late materialization.
+        /// Set to f64::MAX to disable grouping entirely.
+        pub filter_correlation_threshold: f64, default = 1.5
+
+        /// (reading) Minimum rows of post-scan evaluation before statistics-based
+        /// optimization activates. During collection, all filters are evaluated
+        /// as post-scan to gather accurate marginal and joint selectivity statistics.
+        /// Used for BOTH individual filter effectiveness decisions AND correlation-
+        /// based grouping. Larger values = more accurate estimates, longer collection.
+        /// Set to 0 to disable the collection phase entirely.
+        pub filter_statistics_collection_min_rows: u64, default = 10_000
 
         // The following options affect writing to parquet files
         // and map to parquet::file::properties::WriterProperties

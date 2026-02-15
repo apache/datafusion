@@ -170,7 +170,7 @@ mod tests {
                 source = source
                     .with_pushdown_filters(true)
                     .with_reorder_filters(true)
-                    .with_filter_effectiveness_threshold(0.0);
+                    .with_filter_pushdown_min_bytes_per_sec(0.0);
             } else {
                 source = source.with_pushdown_filters(false);
             }

@@ -329,10 +329,16 @@ impl ParquetSource {
         }
     }
 
-    /// Set the selectivity for converting filters to pre-materialization row filters.
-    pub fn with_filter_pushdown_selectivity(mut self, selectivity: f64) -> Self {
+    /// Set the min bytes/sec threshold for adaptive filter pushdown.
+    ///
+    /// - `f64::INFINITY` (default) = no filters promoted (feature disabled)
+    /// - `0.0` = all filters pushed as row filters (no adaptive logic)
+    pub fn with_filter_pushdown_min_bytes_per_sec(
+        mut self,
+        min_bytes_per_sec: f64,
+    ) -> Self {
         self.selectivity_tracker = Arc::new(parking_lot::RwLock::new(
-            crate::selectivity::SelectivityTracker::new(selectivity),
+            crate::selectivity::SelectivityTracker::new(min_bytes_per_sec),
         ));
         self
     }
@@ -342,10 +348,14 @@ impl ParquetSource {
         mut self,
         table_parquet_options: TableParquetOptions,
     ) -> Self {
-        // Update the selectivity tracker threshold from the config
-        let threshold = table_parquet_options.global.filter_effectiveness_threshold;
+        // Update the selectivity tracker from the config
+        let opts = &table_parquet_options.global;
         self.selectivity_tracker = Arc::new(parking_lot::RwLock::new(
-            crate::selectivity::SelectivityTracker::new(threshold),
+            crate::selectivity::SelectivityTracker::new_with_config(
+                opts.filter_pushdown_min_bytes_per_sec,
+                opts.filter_correlation_threshold,
+                opts.filter_statistics_collection_min_rows,
+            ),
         ));
         self.table_parquet_options = table_parquet_options;
         self
@@ -481,28 +491,36 @@ impl ParquetSource {
         self.table_parquet_options.global.max_predicate_cache_size
     }
 
-    /// Set the minimum filter effectiveness threshold for adaptive filter pushdown.
+    /// Set the minimum bytes/sec throughput for adaptive filter pushdown.
     ///
-    /// When `pushdown_filters` is enabled, filters that don't filter out at least
-    /// this fraction of rows will be demoted from row-level filters to post-scan filters.
-    /// This helps avoid the I/O cost of late materialization for filters that aren't
-    /// selective enough. Valid values are 0.0 to 1.0, where 0.8 means filters must
-    /// filter out at least 80% of rows to remain as row filters. Defaults to 0.8.
-    pub fn with_filter_effectiveness_threshold(mut self, threshold: f64) -> Self {
+    /// When `pushdown_filters` is enabled, filters are evaluated post-scan to
+    /// collect timing stats. Filters achieving at least this bytes/sec throughput
+    /// are promoted to row filters.
+    /// - `f64::INFINITY` (default) = no filters promoted (feature disabled)
+    /// - `0.0` = all filters pushed as row filters (no adaptive logic)
+    pub fn with_filter_pushdown_min_bytes_per_sec_opt(
+        mut self,
+        min_bytes_per_sec: f64,
+    ) -> Self {
         self.table_parquet_options
             .global
-            .filter_effectiveness_threshold = threshold;
+            .filter_pushdown_min_bytes_per_sec = min_bytes_per_sec;
+        let opts = &self.table_parquet_options.global;
         self.selectivity_tracker = Arc::new(parking_lot::RwLock::new(
-            crate::selectivity::SelectivityTracker::new(threshold),
+            crate::selectivity::SelectivityTracker::new_with_config(
+                min_bytes_per_sec,
+                opts.filter_correlation_threshold,
+                opts.filter_statistics_collection_min_rows,
+            ),
         ));
         self
     }
 
-    /// Return the filter effectiveness threshold.
-    pub fn filter_effectiveness_threshold(&self) -> f64 {
+    /// Return the filter pushdown min bytes/sec threshold.
+    pub fn filter_pushdown_min_bytes_per_sec(&self) -> f64 {
         self.table_parquet_options
             .global
-            .filter_effectiveness_threshold
+            .filter_pushdown_min_bytes_per_sec
     }
 
     #[cfg(feature = "parquet_encryption")]

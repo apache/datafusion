@@ -851,12 +851,12 @@ impl protobuf::PhysicalPlanNode {
             let mut source =
                 ParquetSource::new(table_schema).with_table_parquet_options(options);
 
-            source = source.with_filter_pushdown_selectivity(
+            source = source.with_filter_pushdown_min_bytes_per_sec(
                 ctx.session_config()
                     .options()
                     .execution
                     .parquet
-                    .filter_effectiveness_threshold,
+                    .filter_pushdown_min_bytes_per_sec,
             );
 
             if let Some(predicate) = predicate {

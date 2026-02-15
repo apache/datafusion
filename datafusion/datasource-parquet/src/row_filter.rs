@@ -102,6 +102,8 @@ pub struct FilterMetrics {
     rows_matched: metrics::Count,
     /// Counter for rows that were pruned (filtered out) by this filter
     rows_pruned: metrics::Count,
+    /// Cumulative evaluation time for this filter
+    eval_time: metrics::Time,
 }
 
 impl FilterMetrics {
@@ -118,6 +120,11 @@ impl FilterMetrics {
     /// Get the total number of rows evaluated by this filter
     pub fn get_rows_total(&self) -> usize {
         self.get_rows_matched() + self.get_rows_pruned()
+    }
+
+    /// Get the cumulative evaluation time in nanoseconds for this filter
+    pub fn get_eval_nanos(&self) -> usize {
+        self.eval_time.value()
     }
 }
 
@@ -790,12 +797,14 @@ pub fn build_row_filter_with_metrics(
         // Create per-predicate metrics for selectivity tracking
         let predicate_rows_matched = metrics::Count::new();
         let predicate_rows_pruned = metrics::Count::new();
+        let local_eval_time = metrics::Time::new();
 
         // Store references to the metrics for the filter
         filter_metrics.push(FilterMetrics {
             expr: original_expr,
             rows_matched: predicate_rows_matched.clone(),
             rows_pruned: predicate_rows_pruned.clone(),
+            eval_time: local_eval_time.clone(),
         });
 
         // For global metrics tracking:
@@ -817,6 +826,146 @@ pub fn build_row_filter_with_metrics(
             global_rows_pruned,
             global_rows_matched,
             time.clone(),
+            local_eval_time,
+        )?;
+
+        arrow_predicates.push(Box::new(arrow_pred) as Box<dyn ArrowPredicate>);
+    }
+
+    Ok(Some(RowFilterWithMetrics {
+        row_filter: RowFilter::new(arrow_predicates),
+        filter_metrics,
+    }))
+}
+
+/// Build a [`RowFilter`] from groups of correlated filter expressions.
+///
+/// Each group of correlated filters is combined into a single compound
+/// `ArrowPredicate` using `conjunction()`. This avoids redundant column
+/// decoding passes for correlated filters that barely prune extra rows
+/// when evaluated separately.
+///
+/// # Arguments
+/// * `filter_groups` - Groups of correlated filter expressions. Each inner Vec
+///   is combined with AND into a single ArrowPredicate.
+/// * `file_schema` - The Arrow schema of the parquet file
+/// * `metadata` - Parquet file metadata used for cost estimation
+/// * `reorder_predicates` - If true, reorder predicates to minimize I/O
+/// * `file_metrics` - Metrics for tracking filter performance
+/// * `selectivity_tracker` - Tracker containing effectiveness data for filter reordering
+///
+/// # Returns
+/// * `Ok(Some(result))` containing the row filter and per-expression metrics
+/// * `Ok(None)` if no expressions can be used as a RowFilter
+/// * `Err(e)` if an error occurs while building the filter
+pub fn build_row_filter_from_groups(
+    filter_groups: Vec<Vec<Arc<dyn PhysicalExpr>>>,
+    file_schema: &SchemaRef,
+    metadata: &ParquetMetaData,
+    reorder_predicates: bool,
+    file_metrics: &ParquetFileMetrics,
+    selectivity_tracker: &SelectivityTracker,
+) -> Result<Option<RowFilterWithMetrics>> {
+    use datafusion_physical_expr::utils::conjunction;
+
+    let rows_pruned = &file_metrics.pushdown_rows_pruned;
+    let rows_matched = &file_metrics.pushdown_rows_matched;
+    let time = &file_metrics.row_pushdown_eval_time;
+
+    // For each group, combine into a single expression and build a candidate.
+    // Track original expressions for metrics.
+    let mut candidates_with_exprs: Vec<(Vec<Arc<dyn PhysicalExpr>>, FilterCandidate)> =
+        Vec::new();
+
+    for group in filter_groups {
+        if group.is_empty() {
+            continue;
+        }
+
+        // Combine group into a single expression with conjunction
+        let combined_expr = conjunction(group.iter().cloned());
+
+        match FilterCandidateBuilder::new(combined_expr.clone(), Arc::clone(file_schema))
+            .build(metadata)
+        {
+            Ok(Some(candidate)) => {
+                candidates_with_exprs.push((group, candidate));
+            }
+            Ok(None) | Err(_) => {
+                // Compound can't push down -- these filters will need to be
+                // handled as post-scan. For now, try each individually.
+                for expr in group {
+                    if let Ok(Some(candidate)) =
+                        FilterCandidateBuilder::new(Arc::clone(&expr), Arc::clone(file_schema))
+                            .build(metadata)
+                    {
+                        candidates_with_exprs.push((vec![expr], candidate));
+                    }
+                }
+            }
+        }
+    }
+
+    if candidates_with_exprs.is_empty() {
+        return Ok(None);
+    }
+
+    if reorder_predicates {
+        candidates_with_exprs.sort_unstable_by(|(_, c1), (_, c2)| {
+            let eff1 = selectivity_tracker.get_effectiveness(&c1.expr);
+            let eff2 = selectivity_tracker.get_effectiveness(&c2.expr);
+
+            match (eff1, eff2) {
+                (Some(e1), Some(e2)) => e2.partial_cmp(&e1).unwrap_or(Ordering::Equal),
+                _ => match c1.can_use_index.cmp(&c2.can_use_index) {
+                    Ordering::Equal => c1.required_bytes.cmp(&c2.required_bytes),
+                    ord => ord,
+                },
+            }
+        });
+    }
+
+    let total_candidates = candidates_with_exprs.len();
+    let mut filter_metrics = Vec::new();
+    let mut arrow_predicates = Vec::with_capacity(total_candidates);
+
+    for (idx, (original_exprs, candidate)) in
+        candidates_with_exprs.into_iter().enumerate()
+    {
+        let is_last = idx == total_candidates - 1;
+
+        // Create per-predicate metrics shared by all exprs in the group
+        let predicate_rows_matched = metrics::Count::new();
+        let predicate_rows_pruned = metrics::Count::new();
+        let local_eval_time = metrics::Time::new();
+
+        // All original expressions in the group share the same counters
+        for original_expr in original_exprs {
+            filter_metrics.push(FilterMetrics {
+                expr: original_expr,
+                rows_matched: predicate_rows_matched.clone(),
+                rows_pruned: predicate_rows_pruned.clone(),
+                eval_time: local_eval_time.clone(),
+            });
+        }
+
+        // For global metrics tracking
+        let global_rows_pruned = rows_pruned.clone();
+        let global_rows_matched = if is_last {
+            rows_matched.clone()
+        } else {
+            metrics::Count::new()
+        };
+
+        let arrow_pred = DatafusionArrowPredicateWithMetrics::try_new(
+            candidate,
+            metadata,
+            predicate_rows_pruned,
+            predicate_rows_matched,
+            global_rows_pruned,
+            global_rows_matched,
+            time.clone(),
+            local_eval_time,
         )?;
 
         arrow_predicates.push(Box::new(arrow_pred) as Box<dyn ArrowPredicate>);
@@ -846,8 +995,10 @@ struct DatafusionArrowPredicateWithMetrics {
     global_rows_pruned: metrics::Count,
     /// Global: how many rows passed (only tracked by last predicate)
     global_rows_matched: metrics::Count,
-    /// how long was spent evaluating this predicate
+    /// how long was spent evaluating this predicate (global timer)
     time: metrics::Time,
+    /// per-filter evaluation time (for selectivity tracking)
+    local_time: metrics::Time,
 }
 
 impl DatafusionArrowPredicateWithMetrics {
@@ -859,6 +1010,7 @@ impl DatafusionArrowPredicateWithMetrics {
         global_rows_pruned: metrics::Count,
         global_rows_matched: metrics::Count,
         time: metrics::Time,
+        local_time: metrics::Time,
     ) -> Result<Self> {
         let physical_expr =
             reassign_expr_columns(candidate.expr, &candidate.filter_schema)?;
@@ -877,6 +1029,7 @@ impl DatafusionArrowPredicateWithMetrics {
             global_rows_pruned,
             global_rows_matched,
             time,
+            local_time,
         })
     }
 }
@@ -887,7 +1040,8 @@ impl ArrowPredicate for DatafusionArrowPredicateWithMetrics {
     }
 
     fn evaluate(&mut self, batch: RecordBatch) -> ArrowResult<BooleanArray> {
-        let mut timer = self.time.timer();
+        let mut global_timer = self.time.timer();
+        let mut local_timer = self.local_time.timer();
 
         self.physical_expr
             .evaluate(&batch)
@@ -905,7 +1059,8 @@ impl ArrowPredicate for DatafusionArrowPredicateWithMetrics {
                 self.global_rows_pruned.add(num_pruned);
                 self.global_rows_matched.add(num_matched);
 
-                timer.stop();
+                local_timer.stop();
+                global_timer.stop();
                 Ok(bool_arr)
             })
             .map_err(|e| {

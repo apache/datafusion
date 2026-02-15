@@ -1953,7 +1953,7 @@ async fn test_topk_dynamic_filter_pushdown_integration() {
     cfg.options_mut()
         .execution
         .parquet
-        .filter_effectiveness_threshold = 0.0;
+        .filter_pushdown_min_bytes_per_sec = 0.0;
     let ctx = SessionContext::new_with_config(cfg);
     ctx.register_object_store(
         ObjectStoreUrl::parse("memory://").unwrap().as_ref(),

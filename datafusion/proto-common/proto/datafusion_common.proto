@@ -604,8 +604,8 @@ message ParquetOptions {
     uint64 max_predicate_cache_size = 33;
   }
 
-  oneof filter_effectiveness_threshold_opt {
-    double filter_effectiveness_threshold = 35;
+  oneof filter_pushdown_min_bytes_per_sec_opt {
+    double filter_pushdown_min_bytes_per_sec = 35;
   }
 }
 

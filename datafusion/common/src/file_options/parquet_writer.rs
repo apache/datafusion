@@ -209,7 +209,9 @@ impl ParquetOptions {
             coerce_int96: _,     // not used for writer props
             skip_arrow_metadata: _,
             max_predicate_cache_size: _,
-            filter_effectiveness_threshold: _, // not used for writer props
+            filter_pushdown_min_bytes_per_sec: _, // not used for writer props
+            filter_correlation_threshold: _,   // not used for writer props
+            filter_statistics_collection_min_rows: _, // not used for writer props
         } = self;
 
         let mut builder = WriterProperties::builder()
@@ -461,7 +463,7 @@ mod tests {
             skip_arrow_metadata: defaults.skip_arrow_metadata,
             coerce_int96: None,
             max_predicate_cache_size: defaults.max_predicate_cache_size,
-            filter_effectiveness_threshold: defaults.filter_effectiveness_threshold,
+            filter_pushdown_min_bytes_per_sec: defaults.filter_pushdown_min_bytes_per_sec,
         }
     }
 
@@ -576,8 +578,8 @@ mod tests {
                 binary_as_string: global_options_defaults.binary_as_string,
                 skip_arrow_metadata: global_options_defaults.skip_arrow_metadata,
                 coerce_int96: None,
-                filter_effectiveness_threshold: global_options_defaults
-                    .filter_effectiveness_threshold,
+                filter_pushdown_min_bytes_per_sec: global_options_defaults
+                    .filter_pushdown_min_bytes_per_sec,
             },
             column_specific_options,
             key_value_metadata,

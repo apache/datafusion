@@ -872,9 +872,9 @@ pub struct ParquetOptions {
     pub max_predicate_cache_size_opt: ::core::option::Option<
         parquet_options::MaxPredicateCacheSizeOpt,
     >,
-    #[prost(oneof = "parquet_options::FilterEffectivenessThresholdOpt", tags = "35")]
-    pub filter_effectiveness_threshold_opt: ::core::option::Option<
-        parquet_options::FilterEffectivenessThresholdOpt,
+    #[prost(oneof = "parquet_options::FilterPushdownMinBytesPerSecOpt", tags = "35")]
+    pub filter_pushdown_min_bytes_per_sec_opt: ::core::option::Option<
+        parquet_options::FilterPushdownMinBytesPerSecOpt,
     >,
 }
 /// Nested message and enum types in `ParquetOptions`.
@@ -935,9 +935,9 @@ pub mod parquet_options {
         MaxPredicateCacheSize(u64),
     }
     #[derive(Clone, Copy, PartialEq, ::prost::Oneof)]
-    pub enum FilterEffectivenessThresholdOpt {
+    pub enum FilterPushdownMinBytesPerSecOpt {
         #[prost(double, tag = "35")]
-        FilterEffectivenessThreshold(f64),
+        FilterPushdownMinBytesPerSec(f64),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]

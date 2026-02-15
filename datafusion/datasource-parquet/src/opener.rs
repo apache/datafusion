@@ -19,19 +19,18 @@
 
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::row_group_filter::RowGroupAccessPlanFilter;
-use crate::selectivity::{PartitionedFilters, SelectivityTracker};
+use crate::selectivity::{PartitionedFiltersGrouped, SelectivityTracker};
 use crate::{
     ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
     apply_file_schema_type_coercions, coerce_int96_to_resolution, row_filter,
 };
-use arrow::array::{AsArray, RecordBatch, RecordBatchOptions};
+use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::DataType;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
-use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
+use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::split_conjunction;
 use datafusion_physical_expr::utils::reassign_expr_columns;
 use datafusion_physical_expr_adapter::replace_columns_with_literals;
-use itertools::Itertools;
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -42,13 +41,12 @@ use datafusion_common::encryption::FileDecryptionProperties;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
     ColumnStatistics, DataFusionError, Result, ScalarValue, Statistics, exec_err,
-    internal_datafusion_err,
 };
 use datafusion_datasource::{PartitionedFile, TableSchema};
 use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::{
-    PhysicalExpr, fmt_sql, is_dynamic_physical_expr,
+    PhysicalExpr, is_dynamic_physical_expr,
 };
 use datafusion_physical_plan::metrics::{
     Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder, PruningMetrics,
@@ -468,7 +466,7 @@ impl FileOpener for ParquetOpener {
 
             // Filter pushdown: evaluate predicates during scan
             // First, partition filters based on selectivity tracking
-            // filter_metrics will be populated if we successfully build a row filter
+            // filter_metrics from row filter building (used by SelectivityUpdatingStream)
             let mut filter_metrics: Vec<row_filter::FilterMetrics> = vec![];
 
             if force_filter_selections {
@@ -590,86 +588,58 @@ impl FileOpener for ParquetOpener {
             // metrics from the arrow reader itself
             let arrow_reader_metrics = ArrowReaderMetrics::enabled();
 
+            // Compute bytes_per_row from file metadata for the bytes/sec metric.
+            let bytes_per_row = compute_bytes_per_row(
+                file_metadata.as_ref(),
+                &projection.column_indices(),
+            );
+
             // Acquire tracker lock once for both partitioning and row filter building.
-            // We hold it through the projection extension code (which doesn't need it)
-            // to avoid the deadlock from release-and-reacquire pattern.
-            let (post_scan_filters, original_projection_len, projection, mask) = {
+            let (post_scan_filters, projection, mask) = {
                 let tracker = selectivity_tracker.read();
 
-                let PartitionedFilters {
-                    row_filters,
+                let PartitionedFiltersGrouped {
+                    row_filter_groups,
                     post_scan,
                 } = if let Some(predicate) =
                     pushdown_filters.then_some(predicate.as_ref()).flatten()
                 {
                     // Split predicate into conjuncts and partition based on selectivity
+                    // and correlation
                     let conjuncts: Vec<Arc<dyn PhysicalExpr>> =
                         split_conjunction(predicate)
                             .into_iter()
                             .map(Arc::clone)
                             .collect();
-                    // #[cfg(debug_assertions)]
-                    // {
-                    //     use datafusion_physical_expr_common::physical_expr::fmt_sql;
-                    //     for (expr, selectivity) in tracker.iter() {
-                    //         println!(
-                    //             "effectiveness for expr {}: {:.2}%",
-                    //             fmt_sql(expr.as_ref()),
-                    //             selectivity.effectiveness() * 100.0,
-                    //         );
-                    //     }
-                    // }
-                    tracker.partition_filters(conjuncts)
+                    tracker.partition_filters_grouped(conjuncts, bytes_per_row)
                 } else {
-                    PartitionedFilters {
-                        row_filters: vec![],
+                    PartitionedFiltersGrouped {
+                        row_filter_groups: vec![],
                         post_scan: vec![],
                     }
                 };
 
-                // #[cfg(debug_assertions)]
-                // {
-                //     println!(
-                //         "ParquetOpener: pushing down {} filters, deferring {} filters",
-                //         row_filters.len(),
-                //         post_scan.len(),
-                //     );
-                //     if !row_filters.is_empty() {
-                //         println!("  Row filters:");
-                //         for filter in &row_filters {
-                //             use datafusion_physical_expr_common::physical_expr::fmt_sql;
-                //             println!("    {}", fmt_sql(filter.as_ref()));
-                //         }
-                //     }
-                // }
-
-                // Extend projection with post-scan filter expressions BEFORE computing
-                // column indices, so the mask includes columns needed by filters.
-                let original_projection_len = projection.as_ref().len();
-                let projection = if post_scan.is_empty() {
-                    projection
-                } else {
-                    let mut extended_exprs: Vec<ProjectionExpr> =
-                        projection.iter().cloned().collect();
-
-                    for (i, filter) in post_scan.iter().enumerate() {
-                        extended_exprs.push(ProjectionExpr {
-                            expr: Arc::clone(filter),
-                            alias: format!("__filter_{i}"),
-                        });
+                // Include columns needed by post-scan filters in the projection mask,
+                // but don't add filter expressions as projection columns.
+                let mut all_indices: Vec<usize> = projection.column_indices();
+                for filter in &post_scan {
+                    for col in datafusion_physical_expr::utils::collect_columns(filter)
+                    {
+                        let idx = col.index();
+                        if !all_indices.contains(&idx) {
+                            all_indices.push(idx);
+                        }
                     }
+                }
+                let mask = ProjectionMask::roots(
+                    builder.parquet_schema(),
+                    all_indices,
+                );
 
-                    ProjectionExprs::new(extended_exprs)
-                };
-
-                // Now compute column indices (includes filter columns)
-                let indices = projection.column_indices();
-                let mask = ProjectionMask::roots(builder.parquet_schema(), indices);
-
-                // Build row filter with only the high-effectiveness filters
-                if !row_filters.is_empty() {
-                    let row_filter_result = row_filter::build_row_filter_with_metrics(
-                        row_filters,
+                // Build row filter from groups of correlated filters
+                if !row_filter_groups.is_empty() {
+                    let row_filter_result = row_filter::build_row_filter_from_groups(
+                        row_filter_groups,
                         &physical_file_schema,
                         builder.metadata(),
                         reorder_predicates,
@@ -689,7 +659,7 @@ impl FileOpener for ParquetOpener {
                     };
                 }
 
-                (post_scan, original_projection_len, projection, mask)
+                (post_scan, projection, mask)
             };
             // tracker lock released here
 
@@ -717,41 +687,43 @@ impl FileOpener for ParquetOpener {
             let projection = projection
                 .try_map_exprs(|expr| reassign_expr_columns(expr, &stream_schema))?;
 
-            let projector = projection.make_projector(&stream_schema)?;
+            // Rebase post-scan filter expressions to the stream schema
+            let rebased_post_scan: Vec<Arc<dyn PhysicalExpr>> = post_scan_filters
+                .iter()
+                .map(|f| reassign_expr_columns(Arc::clone(f), &stream_schema))
+                .collect::<Result<_>>()?;
 
-            // Pre-compute the data schema for post-scan filtering (excludes filter columns)
-            let post_scan_data_schema = if !post_scan_filters.is_empty() {
-                let proj_schema = projector.output_schema();
-                Some(Arc::new(arrow::datatypes::Schema::new(
-                    proj_schema.fields()[..original_projection_len].to_vec(),
-                )))
-            } else {
-                None
-            };
+            let projector = projection.make_projector(&stream_schema)?;
 
             // Clone for use in the stream mapping closure
             let post_scan_tracker = Arc::clone(&selectivity_tracker);
 
             let stream = stream.map_err(DataFusionError::from).map(move |b| {
-                b.and_then(|mut b| {
+                b.and_then(|b| {
                     copy_arrow_reader_metrics(
                         &arrow_reader_metrics,
                         &predicate_cache_inner_records,
                         &predicate_cache_records,
                     );
-                    b = projector.project_batch(&b)?;
 
-                    // Apply post-scan filters if present
-                    if let Some(ref data_schema) = post_scan_data_schema {
+                    // Apply post-scan filters BEFORE projection.
+                    // Filters evaluate against the raw stream batch which contains
+                    // all columns needed by both filters and projections.
+                    let b = if !rebased_post_scan.is_empty() {
                         let start = datafusion_common::instant::Instant::now();
-                        b = apply_post_scan_filters(
+                        let filtered = apply_post_scan_filters(
                             b,
-                            Arc::clone(data_schema),
-                            &post_scan_filters,
+                            &rebased_post_scan,
                             &post_scan_tracker,
                         )?;
                         filter_apply_time.add_elapsed(start);
-                    }
+                        filtered
+                    } else {
+                        b
+                    };
+
+                    // Then project to output columns
+                    let b = projector.project_batch(&b)?;
 
                     if replace_schema {
                         // Ensure the output batch has the expected schema.
@@ -777,11 +749,8 @@ impl FileOpener for ParquetOpener {
                 })
             });
 
-            // ----------------------------------------------------------------------
-            // Step: wrap the stream so a dynamic filter can stop the file scan early
-            // ----------------------------------------------------------------------
-
-            // Wrap with SelectivityUpdatingStream if we have filter metrics to track
+            // Wrap with SelectivityUpdatingStream to feed row filter stats
+            // (including per-filter timing) back into the tracker for demotion.
             let stream = if !filter_metrics.is_empty() {
                 SelectivityUpdatingStream::new(
                     stream,
@@ -809,19 +778,11 @@ impl FileOpener for ParquetOpener {
 
 /// Apply post-scan filters to a record batch.
 ///
-/// This function:
-/// 1. Extracts the filter columns (boolean arrays) from the end of the batch
-/// 2. Tracks per-filter selectivity for adaptive filter reordering
-/// 3. Combines them with AND
-/// 4. Applies the combined filter mask to the data columns
-/// 5. Returns a new batch with only the data columns
-///
-/// The selectivity tracking here provides accurate measurements because all
-/// post-scan filters see the same input rows (unlike row filters which run
-/// sequentially and see progressively fewer rows).
+/// During the collection phase, evaluates each filter individually with timing
+/// to collect per-filter stats for adaptive decisions. Once collection is done,
+/// stats are frozen and all filters are evaluated together without tracking.
 fn apply_post_scan_filters(
     batch: RecordBatch,
-    data_schema: SchemaRef,
     filter_exprs: &[Arc<dyn PhysicalExpr>],
     selectivity_tracker: &parking_lot::RwLock<SelectivityTracker>,
 ) -> Result<RecordBatch> {
@@ -833,60 +794,101 @@ fn apply_post_scan_filters(
         return Ok(batch);
     }
 
-    let (_batch_schema, columns, num_rows) = batch.into_parts();
-    let num_data_cols = data_schema.fields().len();
+    let input_rows = batch.num_rows() as u64;
 
-    // Extract data columns and filter columns
-    let data_columns: Vec<_> = columns[..num_data_cols].to_vec();
-    let filter_columns: Vec<_> = columns[num_data_cols..].to_vec();
-
-    // Track per-filter selectivity before combining.
-    // This gives us accurate marginal selectivity since all filters see the same input.
-    let input_rows = num_rows as u64;
-    if input_rows > 0 {
-        let mut rows_matched = Vec::with_capacity(filter_exprs.len());
-        for (expr, col) in filter_exprs.iter().zip_eq(filter_columns.iter()) {
-            let bool_arr = col.as_boolean_opt().ok_or_else(|| internal_datafusion_err!(
-                "Expected filter expression to evaluate to boolean, got {}\nFilter expression: {}",
-                col.data_type(),
-                fmt_sql(expr.as_ref())
-            ))?;
-            rows_matched.push(bool_arr.true_count() as u64);
-        }
-        let mut tracker = selectivity_tracker.write();
-        for (expr, rows_matched) in filter_exprs.iter().zip_eq(rows_matched.into_iter()) {
-            tracker.update(expr, rows_matched, input_rows);
-        }
+    if input_rows == 0 {
+        return Ok(batch);
     }
 
-    // Combine filter columns with AND (avoiding unnecessary clones)
-    let combined_mask = match filter_columns.len() {
-        0 => None,
-        1 => Some(as_boolean_array(filter_columns[0].as_ref()).clone()),
-        _ => {
-            // Start with and() of first two - creates a new array, no clone needed
-            let first = as_boolean_array(filter_columns[0].as_ref());
-            let second = as_boolean_array(filter_columns[1].as_ref());
-            let mut acc = and(first, second)?;
-            for col in &filter_columns[2..] {
-                acc = and(&acc, as_boolean_array(col.as_ref()))?;
-            }
-            Some(acc)
+    // Check if we're still collecting stats (read lock is cheap)
+    let collecting = selectivity_tracker.read().in_collection_phase();
+
+    let combined_mask = if collecting {
+        // Collection phase: evaluate each filter individually with timing
+        // to gather per-filter stats for adaptive decisions.
+        let mut tracker = selectivity_tracker.write();
+
+        let mut bool_arrays = Vec::with_capacity(filter_exprs.len());
+        for expr in filter_exprs {
+            let start = datafusion_common::instant::Instant::now();
+            let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+            let nanos = start.elapsed().as_nanos() as u64;
+            let bool_arr = as_boolean_array(result.as_ref()).clone();
+            let matched = bool_arr.true_count() as u64;
+            tracker.update(expr, matched, input_rows, nanos);
+            bool_arrays.push(bool_arr);
         }
-    };
 
-    // Create batch with data columns only
-    let opts = RecordBatchOptions::new().with_row_count(Some(num_rows));
-    let data_batch = RecordBatch::try_new_with_options(data_schema, data_columns, &opts)?;
+        // Compute pairwise joint pass counts for correlation tracking.
+        // Only when 2+ filters and <= 10 filters (to bound O(n^2) cost).
+        let n = filter_exprs.len();
+        if n >= 2 && n <= 10 {
+            for i in 0..n {
+                for j in (i + 1)..n {
+                    let both = and(&bool_arrays[i], &bool_arrays[j])?;
+                    tracker.update_correlation(
+                        &filter_exprs[i],
+                        &filter_exprs[j],
+                        both.true_count() as u64,
+                        input_rows,
+                    );
+                }
+            }
+        }
 
-    // Apply the filter
-    let filtered = if let Some(mask) = combined_mask {
-        filter_record_batch(&data_batch, &mask)?
+        // Combine all boolean arrays with AND
+        match bool_arrays.len() {
+            1 => bool_arrays.into_iter().next().unwrap(),
+            _ => {
+                let mut iter = bool_arrays.into_iter();
+                let mut acc = iter.next().unwrap();
+                for arr in iter {
+                    acc = and(&acc, &arr)?;
+                }
+                acc
+            }
+        }
     } else {
-        data_batch
+        // Post-collection: stats are frozen. Evaluate all filters together
+        // without per-filter tracking overhead.
+        let mut combined: Option<arrow::array::BooleanArray> = None;
+        for expr in filter_exprs {
+            let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+            let bool_arr = as_boolean_array(result.as_ref()).clone();
+            combined = Some(match combined {
+                Some(mask) => and(&mask, &bool_arr)?,
+                None => bool_arr,
+            });
+        }
+        combined.unwrap()
     };
 
-    Ok(filtered)
+    Ok(filter_record_batch(&batch, &combined_mask)?)
+}
+
+/// Compute the average bytes per row from parquet metadata for the projected columns.
+///
+/// Uses compressed column sizes as an approximation. Returns `None` if the file
+/// has zero rows.
+fn compute_bytes_per_row(
+    metadata: &parquet::file::metadata::ParquetMetaData,
+    col_indices: &[usize],
+) -> Option<f64> {
+    let total_rows: i64 = metadata.row_groups().iter().map(|rg| rg.num_rows()).sum();
+    if total_rows == 0 {
+        return None;
+    }
+    let total_bytes: i64 = metadata
+        .row_groups()
+        .iter()
+        .flat_map(|rg| {
+            col_indices
+                .iter()
+                .filter(|&&i| i < rg.num_columns())
+                .map(move |&i| rg.column(i).compressed_size())
+        })
+        .sum();
+    Some(total_bytes as f64 / total_rows as f64)
 }
 
 /// Copies metrics from ArrowReaderMetrics (the metrics collected by the
@@ -967,6 +969,87 @@ fn constant_value_from_stats(
     None
 }
 
+/// Wraps an inner stream to feed row filter metrics (matched/pruned/timing)
+/// into the [`SelectivityTracker`] after each batch.
+///
+/// This enables the demotion half of the adaptive cycle: if a promoted row
+/// filter is not pulling its weight (because another row filter already prunes
+/// most rows), its incremental bytes/sec drops and it gets demoted back to
+/// post-scan.
+struct SelectivityUpdatingStream<S> {
+    inner: S,
+    done: bool,
+    filter_metrics: Vec<row_filter::FilterMetrics>,
+    /// (matched, total, nanos) per filter — for computing deltas
+    last_reported: Vec<(u64, u64, u64)>,
+    selectivity_tracker: Arc<parking_lot::RwLock<SelectivityTracker>>,
+}
+
+impl<S> SelectivityUpdatingStream<S> {
+    fn new(
+        inner: S,
+        filter_metrics: Vec<row_filter::FilterMetrics>,
+        selectivity_tracker: Arc<parking_lot::RwLock<SelectivityTracker>>,
+    ) -> Self {
+        let n = filter_metrics.len();
+        Self {
+            inner,
+            done: false,
+            filter_metrics,
+            last_reported: vec![(0, 0, 0); n],
+            selectivity_tracker,
+        }
+    }
+
+    fn update_selectivity(&mut self) {
+        let mut tracker = self.selectivity_tracker.write();
+        for (i, metrics) in self.filter_metrics.iter().enumerate() {
+            let current_matched = metrics.get_rows_matched() as u64;
+            let current_total = metrics.get_rows_total() as u64;
+            let current_nanos = metrics.get_eval_nanos() as u64;
+
+            let (last_matched, last_total, last_nanos) = self.last_reported[i];
+            let delta_matched = current_matched - last_matched;
+            let delta_total = current_total - last_total;
+            let delta_nanos = current_nanos - last_nanos;
+
+            if delta_total > 0 {
+                tracker.update(&metrics.expr, delta_matched, delta_total, delta_nanos);
+                self.last_reported[i] = (current_matched, current_total, current_nanos);
+            }
+        }
+    }
+}
+
+impl<S> Stream for SelectivityUpdatingStream<S>
+where
+    S: Stream<Item = Result<RecordBatch>> + Unpin,
+{
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        if self.done {
+            return Poll::Ready(None);
+        }
+        match ready!(self.inner.poll_next_unpin(cx)) {
+            None => {
+                // Stream complete — flush final deltas
+                self.update_selectivity();
+                self.done = true;
+                Poll::Ready(None)
+            }
+            Some(result) => {
+                // Update selectivity after each batch
+                self.update_selectivity();
+                Poll::Ready(Some(result))
+            }
+        }
+    }
+}
+
 /// Wraps an inner RecordBatchStream and a [`FilePruner`]
 ///
 /// This can terminate the scan early when some dynamic filters is updated after
@@ -1041,92 +1124,6 @@ where
             Some(input_batch) => {
                 let output = self.check_prune(input_batch);
                 Poll::Ready(output.transpose())
-            }
-        }
-    }
-}
-
-/// A stream wrapper that updates the [`SelectivityTracker`] after each batch.
-///
-/// This captures per-filter metrics during stream processing and updates the shared
-/// selectivity tracker incrementally after each batch. This allows the system to
-/// learn filter effectiveness quickly, potentially promoting effective filters
-/// to row filters mid-stream for subsequent files.
-struct SelectivityUpdatingStream<S> {
-    /// The inner stream producing record batches
-    inner: S,
-    /// Has the stream finished processing?
-    done: bool,
-    /// Per-filter metrics collected during stream processing
-    filter_metrics: Vec<row_filter::FilterMetrics>,
-    /// Last reported values for each filter (to compute deltas)
-    last_reported: Vec<(u64, u64)>, // (matched, total) per filter
-    /// Shared selectivity tracker to update when stream completes
-    selectivity_tracker: Arc<parking_lot::RwLock<SelectivityTracker>>,
-}
-
-impl<S> SelectivityUpdatingStream<S> {
-    fn new(
-        stream: S,
-        filter_metrics: Vec<row_filter::FilterMetrics>,
-        selectivity_tracker: Arc<parking_lot::RwLock<SelectivityTracker>>,
-    ) -> Self {
-        let last_reported = vec![(0, 0); filter_metrics.len()];
-        Self {
-            inner: stream,
-            done: false,
-            filter_metrics,
-            last_reported,
-            selectivity_tracker,
-        }
-    }
-
-    /// Update the selectivity tracker with metrics accumulated since last update.
-    /// Uses delta tracking to avoid double-counting rows.
-    fn update_selectivity(&mut self) {
-        let mut tracker = self.selectivity_tracker.write();
-        for (i, metrics) in self.filter_metrics.iter().enumerate() {
-            let current_matched = metrics.get_rows_matched() as u64;
-            let current_total = metrics.get_rows_total() as u64;
-
-            let (last_matched, last_total) = self.last_reported[i];
-            let delta_matched = current_matched - last_matched;
-            let delta_total = current_total - last_total;
-
-            // Only update if we have new rows since last update
-            if delta_total > 0 {
-                tracker.update(&metrics.expr, delta_matched, delta_total);
-                self.last_reported[i] = (current_matched, current_total);
-            }
-        }
-    }
-}
-
-impl<S> Stream for SelectivityUpdatingStream<S>
-where
-    S: Stream<Item = Result<RecordBatch>> + Unpin,
-{
-    type Item = Result<RecordBatch>;
-
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        if self.done {
-            return Poll::Ready(None);
-        }
-
-        match ready!(self.inner.poll_next_unpin(cx)) {
-            None => {
-                // Stream completed - final update to selectivity tracker
-                self.done = true;
-                self.update_selectivity();
-                Poll::Ready(None)
-            }
-            Some(result) => {
-                // Update selectivity after each batch for faster learning
-                self.update_selectivity();
-                Poll::Ready(Some(result))
             }
         }
     }
@@ -1498,8 +1495,11 @@ mod test {
                 max_predicate_cache_size: self.max_predicate_cache_size,
                 reverse_row_groups: self.reverse_row_groups,
                 preserve_order: self.preserve_order,
+                // Tests use 0.0 threshold to push all filters as row filters
+                // (skipping adaptive logic), and min_rows_for_collection=0 to
+                // disable the collection phase.
                 selectivity_tracker: Arc::new(parking_lot::RwLock::new(
-                    SelectivityTracker::default(),
+                    SelectivityTracker::new_with_config(0.0, 1.5, 0),
                 )),
             }
         }
