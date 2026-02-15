@@ -475,6 +475,7 @@ mod parquet {
                 parquet_options::MetadataSizeHintOpt::MetadataSizeHint(size) => *size as usize,
             }),
             pushdown_filters: proto.pushdown_filters,
+            dynamic_filter_pushdown: proto.dynamic_filter_pushdown,
             reorder_filters: proto.reorder_filters,
             force_filter_selections: proto.force_filter_selections,
             data_pagesize_limit: proto.data_pagesize_limit as usize,
