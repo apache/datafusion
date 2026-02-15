@@ -1045,10 +1045,9 @@ fn strip_dynamic_filters(
     if let Some(literal) = expr
         .as_any()
         .downcast_ref::<datafusion_physical_expr::expressions::Literal>()
+        && literal.value() == &ScalarValue::Boolean(Some(true))
     {
-        if literal.value() == &ScalarValue::Boolean(Some(true)) {
-            return None;
-        }
+        return None;
     }
     Some(expr)
 }
