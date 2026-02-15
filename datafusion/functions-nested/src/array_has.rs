@@ -353,7 +353,18 @@ fn array_has_dispatch_for_scalar(
         )));
     }
     let eq_array = compare_with_eq(values, needle, is_nested)?;
-    let mut final_contained = vec![None; haystack.len()];
+
+    // When a haystack element is null, `eq()` returns null (not false).
+    // In Arrow, a null BooleanArray entry has validity=0 but an
+    // undefined value bit that may happen to be 1. Since set_indices()
+    // operates on the raw value buffer and ignores validity, we AND the
+    // values with the validity bitmap to clear any undefined bits at
+    // null positions. This ensures set_indices() only yields positions
+    // where the comparison genuinely returned true.
+    let eq_bits = match eq_array.nulls() {
+        Some(nulls) => eq_array.values() & nulls.inner(),
+        None => eq_array.values().clone(),
+    };
 
     // Check validity buffer to distinguish between null and empty arrays
     let validity = match &haystack {
@@ -362,24 +373,34 @@ fn array_has_dispatch_for_scalar(
         ArrayWrapper::LargeList(arr) => arr.nulls(),
     };
 
-    for (i, (start, end)) in haystack.offsets().tuple_windows().enumerate() {
-        let length = end - start;
+    let offsets: Vec<usize> = haystack.offsets().collect();
+    let mut matches = eq_bits.set_indices().peekable();
+    let mut final_contained = vec![Some(false); haystack.len()];
+
+    for (i, window) in offsets.windows(2).enumerate() {
+        let end = window[1];
 
         // Check if the array at this position is null
         if let Some(validity_buffer) = validity
             && !validity_buffer.is_valid(i)
         {
             final_contained[i] = None; // null array -> null result
+            // Advance past any match positions in this null row's range.
+            while matches.peek().is_some_and(|&p| p < end) {
+                matches.next();
+            }
             continue;
         }
 
-        // For non-null arrays: length is 0 for empty arrays
-        if length == 0 {
-            final_contained[i] = Some(false); // empty array -> false
-        } else {
-            let sliced_array = eq_array.slice(start, length);
-            final_contained[i] = Some(sliced_array.true_count() > 0);
+        // Check if any match falls within this row's range.
+        if matches.peek().is_some_and(|&p| p < end) {
+            final_contained[i] = Some(true);
+            // Advance past remaining matches in this row.
+            while matches.peek().is_some_and(|&p| p < end) {
+                matches.next();
+            }
         }
+        // else: no match in range, stays Some(false)
     }
 
     Ok(Arc::new(BooleanArray::from(final_contained)))
