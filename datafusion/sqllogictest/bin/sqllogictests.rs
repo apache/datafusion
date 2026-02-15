@@ -491,7 +491,7 @@ async fn run_test_file_with_postgres(
     runner.with_column_validator(strict_column_validator);
     runner.with_normalizer(value_normalizer);
     runner.with_validator(validator);
-    let result = run_file_in_runner(path, runner, filters).await;
+    let result = run_file_in_runner(path, runner, filters, false).await;
     pb.finish_and_clear();
     result
 }
