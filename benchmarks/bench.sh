@@ -42,7 +42,7 @@ DATAFUSION_DIR=${DATAFUSION_DIR:-$SCRIPT_DIR/..}
 DATA_DIR=${DATA_DIR:-$SCRIPT_DIR/data}
 CARGO_COMMAND=${CARGO_COMMAND:-"cargo run --release"}
 PREFER_HASH_JOIN=${PREFER_HASH_JOIN:-true}
-VIRTUAL_ENV=${VIRTUAL_ENV:-$SCRIPT_DIR/venv}
+UV_PROJECT=${UV_PROJECT:-$SCRIPT_DIR}
 
 usage() {
     echo "
@@ -144,7 +144,7 @@ CARGO_COMMAND       command that runs the benchmark binary
 DATAFUSION_DIR      directory to use (default $DATAFUSION_DIR)
 RESULTS_NAME        folder where the benchmark files are stored
 PREFER_HASH_JOIN    Prefer hash join algorithm (default true)
-VENV_PATH           Python venv to use for compare and venv commands (default ./venv, override by <your-venv>/bin/activate)
+UV_PROJECT          Path to the benchmarks project for uv (default $SCRIPT_DIR)
 DATAFUSION_*        Set the given datafusion configuration
 "
     exit 1
@@ -708,7 +708,7 @@ run_compile_profile() {
     local data_path="${DATA_DIR}/tpch_sf1"
 
     echo "Running compile profile benchmark..."
-    local cmd=(python3 "${runner}" --data "${data_path}")
+    local cmd=(uv run --project "${UV_PROJECT}" python3 "${runner}" --data "${data_path}")
     if [ ${#profiles[@]} -gt 0 ]; then
         cmd+=(--profiles "${profiles[@]}")
     fi
@@ -923,75 +923,13 @@ data_h2o() {
     SIZE=${1:-"SMALL"}
     DATA_FORMAT=${2:-"CSV"}
 
-    # Function to compare Python versions
-    version_ge() {
-        [ "$(printf '%s\n' "$1" "$2" | sort -V | head -n1)" = "$2" ]
-    }
-
-    export PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
-
-    # Find the highest available Python version (3.10 or higher)
-    REQUIRED_VERSION="3.10"
-    PYTHON_CMD=$(command -v python3 || true)
-
-    if [ -n "$PYTHON_CMD" ]; then
-        PYTHON_VERSION=$($PYTHON_CMD -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-        if version_ge "$PYTHON_VERSION" "$REQUIRED_VERSION"; then
-            echo "Found Python version $PYTHON_VERSION, which is suitable."
-        else
-            echo "Python version $PYTHON_VERSION found, but version $REQUIRED_VERSION or higher is required."
-            PYTHON_CMD=""
-        fi
-    fi
-
-   # Search for suitable Python versions if the default is unsuitable
-   if [ -z "$PYTHON_CMD" ]; then
-       # Loop through all available Python3 commands on the system
-       for CMD in $(compgen -c | grep -E '^python3(\.[0-9]+)?$'); do
-           if command -v "$CMD" &> /dev/null; then
-               PYTHON_VERSION=$($CMD -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-               if version_ge "$PYTHON_VERSION" "$REQUIRED_VERSION"; then
-                   PYTHON_CMD="$CMD"
-                   echo "Found suitable Python version: $PYTHON_VERSION ($CMD)"
-                   break
-               fi
-           fi
-       done
-   fi
-
-    # If no suitable Python version found, exit with an error
-    if [ -z "$PYTHON_CMD" ]; then
-        echo "Python 3.10 or higher is required. Please install it."
-        return 1
-    fi
-
-    echo "Using Python command: $PYTHON_CMD"
-
-    # Install falsa and other dependencies
-    echo "Installing falsa..."
-
-    # Set virtual environment directory
-    VIRTUAL_ENV="${PWD}/venv"
-
-    # Create a virtual environment using the detected Python command
-    $PYTHON_CMD -m venv "$VIRTUAL_ENV"
-
-    # Activate the virtual environment and install dependencies
-    source "$VIRTUAL_ENV/bin/activate"
-
-    # Ensure 'falsa' is installed (avoid unnecessary reinstall)
-    pip install --quiet --upgrade falsa
-
     # Create directory if it doesn't exist
     H2O_DIR="${DATA_DIR}/h2o"
     mkdir -p "${H2O_DIR}"
 
     # Generate h2o test data
     echo "Generating h2o test data in ${H2O_DIR} with size=${SIZE} and format=${DATA_FORMAT}"
-    falsa groupby --path-prefix="${H2O_DIR}" --size "${SIZE}" --data-format "${DATA_FORMAT}"
-
-    # Deactivate virtual environment after completion
-    deactivate
+    uv run --project "${UV_PROJECT}" falsa groupby --path-prefix="${H2O_DIR}" --size "${SIZE}" --data-format "${DATA_FORMAT}"
 }
 
 data_h2o_join() {
@@ -999,75 +937,13 @@ data_h2o_join() {
     SIZE=${1:-"SMALL"}
     DATA_FORMAT=${2:-"CSV"}
 
-    # Function to compare Python versions
-    version_ge() {
-        [ "$(printf '%s\n' "$1" "$2" | sort -V | head -n1)" = "$2" ]
-    }
-
-    export PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
-
-    # Find the highest available Python version (3.10 or higher)
-    REQUIRED_VERSION="3.10"
-    PYTHON_CMD=$(command -v python3 || true)
-
-    if [ -n "$PYTHON_CMD" ]; then
-        PYTHON_VERSION=$($PYTHON_CMD -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-        if version_ge "$PYTHON_VERSION" "$REQUIRED_VERSION"; then
-            echo "Found Python version $PYTHON_VERSION, which is suitable."
-        else
-            echo "Python version $PYTHON_VERSION found, but version $REQUIRED_VERSION or higher is required."
-            PYTHON_CMD=""
-        fi
-    fi
-
-   # Search for suitable Python versions if the default is unsuitable
-   if [ -z "$PYTHON_CMD" ]; then
-       # Loop through all available Python3 commands on the system
-       for CMD in $(compgen -c | grep -E '^python3(\.[0-9]+)?$'); do
-           if command -v "$CMD" &> /dev/null; then
-               PYTHON_VERSION=$($CMD -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-               if version_ge "$PYTHON_VERSION" "$REQUIRED_VERSION"; then
-                   PYTHON_CMD="$CMD"
-                   echo "Found suitable Python version: $PYTHON_VERSION ($CMD)"
-                   break
-               fi
-           fi
-       done
-   fi
-
-    # If no suitable Python version found, exit with an error
-    if [ -z "$PYTHON_CMD" ]; then
-        echo "Python 3.10 or higher is required. Please install it."
-        return 1
-    fi
-
-    echo "Using Python command: $PYTHON_CMD"
-
-    # Install falsa and other dependencies
-    echo "Installing falsa..."
-
-    # Set virtual environment directory
-    VIRTUAL_ENV="${PWD}/venv"
-
-    # Create a virtual environment using the detected Python command
-    $PYTHON_CMD -m venv "$VIRTUAL_ENV"
-
-    # Activate the virtual environment and install dependencies
-    source "$VIRTUAL_ENV/bin/activate"
-
-    # Ensure 'falsa' is installed (avoid unnecessary reinstall)
-    pip install --quiet --upgrade falsa
-
     # Create directory if it doesn't exist
     H2O_DIR="${DATA_DIR}/h2o"
     mkdir -p "${H2O_DIR}"
 
     # Generate h2o test data
     echo "Generating h2o test data in ${H2O_DIR} with size=${SIZE} and format=${DATA_FORMAT}"
-    falsa join --path-prefix="${H2O_DIR}" --size "${SIZE}" --data-format "${DATA_FORMAT}"
-
-    # Deactivate virtual environment after completion
-    deactivate
+    uv run --project "${UV_PROJECT}" falsa join --path-prefix="${H2O_DIR}" --size "${SIZE}" --data-format "${DATA_FORMAT}"
 }
 
 # Runner for h2o groupby benchmark
@@ -1269,7 +1145,7 @@ compare_benchmarks() {
             echo "--------------------"
             echo "Benchmark ${BENCH}"
             echo "--------------------"
-            PATH=$VIRTUAL_ENV/bin:$PATH python3 "${SCRIPT_DIR}"/compare.py $OPTS "${RESULTS_FILE1}" "${RESULTS_FILE2}"
+            uv run --project "${UV_PROJECT}" python3 "${SCRIPT_DIR}"/compare.py $OPTS "${RESULTS_FILE1}" "${RESULTS_FILE2}"
         else
             echo "Note: Skipping ${RESULTS_FILE1} as ${RESULTS_FILE2} does not exist"
         fi
@@ -1385,8 +1261,8 @@ run_clickbench_sorted() {
 }
 
 setup_venv() {
-    python3 -m venv "$VIRTUAL_ENV"
-    PATH=$VIRTUAL_ENV/bin:$PATH python3 -m pip install -r requirements.txt
+    echo "Setting up Python environment via uv..."
+    uv sync --project "${UV_PROJECT}"
 }
 
 # And start the process up

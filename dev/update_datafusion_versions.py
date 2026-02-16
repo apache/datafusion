@@ -19,7 +19,7 @@
 # Script that updates versions for datafusion crates, locally
 #
 # dependencies:
-# pip install tomlkit
+# uv sync --project dev
 
 import re
 import argparse
