@@ -2130,6 +2130,7 @@ version = "52.1.0"
 dependencies = [
  "arrow",
  "async-trait",
+ "bytes",
  "chrono",
  "dashmap",
  "datafusion-common",
@@ -2143,6 +2144,7 @@ dependencies = [
  "parquet",
  "rand 0.9.2",
  "tempfile",
+ "tokio",
  "url",
 ]
 

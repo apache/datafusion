@@ -23,11 +23,20 @@ use dashmap::DashMap;
 use datafusion_common::{
     DataFusionError, Result, exec_err, internal_datafusion_err, not_impl_err,
 };
-use object_store::ObjectStore;
+use bytes::Bytes;
+use object_store::{
+    GetOptions, GetResult, MultipartUpload, ObjectMeta, ObjectStore, PutMultipartOptions,
+    PutOptions, PutResult, PutPayload,
+};
+use object_store::path::Path;
 #[cfg(not(target_arch = "wasm32"))]
 use object_store::local::LocalFileSystem;
 use std::sync::Arc;
 use url::Url;
+use std::fmt::{Debug, Display, Formatter};
+use std::ops::Range;
+use async_trait::async_trait;
+use futures::stream::BoxStream;
 
 /// A parsed URL identifying a particular [`ObjectStore`] instance
 ///
@@ -101,9 +110,213 @@ impl AsRef<Url> for ObjectStoreUrl {
     }
 }
 
-impl std::fmt::Display for ObjectStoreUrl {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        self.as_str().fmt(f)
+impl Display for ObjectStoreUrl {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+/// An [`ObjectStore`] wrapper for [`LocalFileSystem`] that coalesces small adjacent range requests
+/// into larger requests to reduce the number of I/O operations.
+///
+/// This is particularly useful for local file access with many small non-contiguous
+/// reads (e.g. Parquet page index pruning) where seeking or frequent system calls
+/// can impact performance on certain hardware or networked filesystems.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug)]
+pub struct LocalCoalesceObjectStore {
+    inner: LocalFileSystem,
+    /// The maximum gap in bytes between two ranges that will be coalesced.
+    /// Recommended range: 4KB (OS page size) to 64KB (SSD block size).
+    max_gap: usize,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl LocalCoalesceObjectStore {
+    /// Create a new `LocalCoalesceObjectStore` wrapping a default [`LocalFileSystem`].
+    pub fn new(max_gap: usize) -> Self {
+        Self {
+            inner: LocalFileSystem::new(),
+            max_gap,
+        }
+    }
+
+    /// Create a new `LocalCoalesceObjectStore` wrapping the provided [`LocalFileSystem`].
+    pub fn new_with_inner(inner: LocalFileSystem, max_gap: usize) -> Self {
+        Self { inner, max_gap }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Display for LocalCoalesceObjectStore {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "LocalCoalesceObjectStore(inner={}, max_gap={})",
+            self.inner, self.max_gap
+        )
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[async_trait]
+impl ObjectStore for LocalCoalesceObjectStore {
+    async fn put(
+        &self,
+        location: &Path,
+        payload: PutPayload,
+    ) -> object_store::Result<PutResult> {
+        self.inner.put(location, payload).await
+    }
+
+    async fn put_opts(
+        &self,
+        location: &Path,
+        payload: PutPayload,
+        opts: PutOptions,
+    ) -> object_store::Result<PutResult> {
+        self.inner.put_opts(location, payload, opts).await
+    }
+
+    async fn get(&self, location: &Path) -> object_store::Result<GetResult> {
+        self.inner.get(location).await
+    }
+
+    async fn get_opts(
+        &self,
+        location: &Path,
+        options: GetOptions,
+    ) -> object_store::Result<GetResult> {
+        self.inner.get_opts(location, options).await
+    }
+
+    async fn get_range(
+        &self,
+        location: &Path,
+        range: Range<u64>,
+    ) -> object_store::Result<Bytes> {
+        self.inner.get_range(location, range).await
+    }
+
+    async fn get_ranges(
+        &self,
+        location: &Path,
+        ranges: &[Range<u64>],
+    ) -> object_store::Result<Vec<Bytes>> {
+        if ranges.len() <= 1 {
+            return self.inner.get_ranges(location, ranges).await;
+        }
+
+        // Tag each range with its original index to reconstruct the order later
+        let mut indexed_ranges: Vec<(usize, Range<u64>)> = ranges
+            .iter()
+            .enumerate()
+            .map(|(i, r)| (i, r.clone()))
+            .collect();
+
+        // Sort by range start to identify adjacent/close ranges
+        indexed_ranges.sort_by_key(|(_, r)| r.start);
+
+        // Coalesce ranges that are within max_gap of each other
+        let mut coalesced: Vec<(Range<u64>, Vec<(usize, Range<usize>)>)> = vec![];
+        for (idx, range) in indexed_ranges {
+            if let Some((coalesced_range, members)) = coalesced.last_mut() {
+                let gap = range.start.saturating_sub(coalesced_range.end);
+                if gap <= self.max_gap as u64 {
+                    // Extend the coalesced range to include the new range
+                    coalesced_range.end = coalesced_range.end.max(range.end);
+                    let start_in_coalesced = (range.start - coalesced_range.start) as usize;
+                    let end_in_coalesced = (range.end - coalesced_range.start) as usize;
+                    members.push((idx, start_in_coalesced..end_in_coalesced));
+                    continue;
+                }
+            }
+            // Start a new coalesced range
+            let start = range.start;
+            let end = range.end;
+            coalesced.push((start..end, vec![(idx, 0..(end - start) as usize)]));
+        }
+
+        // Fetch the coalesced ranges from the inner LocalFileSystem
+        let fetch_ranges: Vec<Range<u64>> =
+            coalesced.iter().map(|(r, _)| r.clone()).collect();
+        let coalesced_bytes = self.inner.get_ranges(location, &fetch_ranges).await?;
+
+        // Reconstruct the original requested ranges by slicing the coalesced bytes
+        let mut results = vec![None; ranges.len()];
+        for (bytes, (_, members)) in
+            coalesced_bytes.into_iter().zip(coalesced.into_iter())
+        {
+            for (original_idx, slice_range) in members {
+                results[original_idx] = Some(bytes.slice(slice_range));
+            }
+        }
+
+        Ok(results
+            .into_iter()
+            .map(|o| o.expect("All ranges should have been populated"))
+            .collect())
+    }
+
+    async fn head(&self, location: &Path) -> object_store::Result<ObjectMeta> {
+        self.inner.head(location).await
+    }
+
+    async fn delete(&self, location: &Path) -> object_store::Result<()> {
+        self.inner.delete(location).await
+    }
+
+    fn list(
+        &self,
+        prefix: Option<&Path>,
+    ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+        self.inner.list(prefix)
+    }
+
+    async fn list_with_delimiter(
+        &self,
+        prefix: Option<&Path>,
+    ) -> object_store::Result<object_store::ListResult> {
+        self.inner.list_with_delimiter(prefix).await
+    }
+
+    async fn copy(&self, from: &Path, to: &Path) -> object_store::Result<()> {
+        self.inner.copy(from, to).await
+    }
+
+    async fn copy_if_not_exists(
+        &self,
+        from: &Path,
+        to: &Path,
+    ) -> object_store::Result<()> {
+        self.inner.copy_if_not_exists(from, to).await
+    }
+
+    async fn rename(&self, from: &Path, to: &Path) -> object_store::Result<()> {
+        self.inner.rename(from, to).await
+    }
+
+    async fn rename_if_not_exists(
+        &self,
+        from: &Path,
+        to: &Path,
+    ) -> object_store::Result<()> {
+        self.inner.rename_if_not_exists(from, to).await
+    }
+
+    async fn put_multipart(
+        &self,
+        location: &Path,
+    ) -> object_store::Result<Box<dyn MultipartUpload>> {
+        self.inner.put_multipart(location).await
+    }
+
+    async fn put_multipart_opts(
+        &self,
+        location: &Path,
+        opts: PutMultipartOptions,
+    ) -> object_store::Result<Box<dyn MultipartUpload>> {
+        self.inner.put_multipart_opts(location, opts).await
     }
 }
 
@@ -148,7 +361,7 @@ impl std::fmt::Display for ObjectStoreUrl {
 /// <!-- is in a different crate so normal rustdoc links don't work -->
 /// [`ListingTableUrl`]: https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.ListingTableUrl.html
 /// [`ObjectStore`]: object_store::ObjectStore
-pub trait ObjectStoreRegistry: Send + Sync + std::fmt::Debug + 'static {
+pub trait ObjectStoreRegistry: Send + Sync + Debug + 'static {
     /// If a store with the same key existed before, it is replaced and returned
     fn register_store(
         &self,
@@ -183,8 +396,8 @@ pub struct DefaultObjectStoreRegistry {
     object_stores: DashMap<String, Arc<dyn ObjectStore>>,
 }
 
-impl std::fmt::Debug for DefaultObjectStoreRegistry {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl Debug for DefaultObjectStoreRegistry {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         f.debug_struct("DefaultObjectStoreRegistry")
             .field(
                 "schemes",
@@ -205,11 +418,15 @@ impl Default for DefaultObjectStoreRegistry {
 }
 
 impl DefaultObjectStoreRegistry {
-    /// This will register [`LocalFileSystem`] to handle `file://` paths
+    /// This will register [`LocalCoalesceObjectStore`] to handle `file://` paths
     #[cfg(not(target_arch = "wasm32"))]
     pub fn new() -> Self {
         let object_stores: DashMap<String, Arc<dyn ObjectStore>> = DashMap::new();
-        object_stores.insert("file://".to_string(), Arc::new(LocalFileSystem::new()));
+        // Use 64KB as default max gap for local filesystem coalescing
+        object_stores.insert(
+            "file://".to_string(),
+            Arc::new(LocalCoalesceObjectStore::new(64 * 1024)),
+        );
         Self { object_stores }
     }
 
@@ -223,7 +440,7 @@ impl DefaultObjectStoreRegistry {
 
 ///
 /// Stores are registered based on the scheme, host and port of the provided URL
-/// with a [`LocalFileSystem::new`] automatically registered for `file://` (if the
+/// with a [`LocalCoalesceObjectStore`] automatically registered for `file://` (if the
 /// target arch is not `wasm32`).
 ///
 /// For example:
@@ -330,5 +547,41 @@ mod tests {
         let url = ObjectStoreUrl::parse("s3://username:password@host:123").unwrap();
         let key = get_url_key(&url.url);
         assert_eq!(key.as_str(), "s3://host:123");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
+    async fn test_local_coalesce_object_store() {
+        use std::io::Write;
+        let mut temp_file = tempfile::NamedTempFile::new().unwrap();
+        let data = b"0123456789abcdefghijklmnopqrstuvwxyz";
+        temp_file.write_all(data).unwrap();
+        let path = Path::from(temp_file.path().to_str().unwrap());
+
+        let store = LocalCoalesceObjectStore::new(4); // 4 bytes gap
+
+        // Test overlapping and close ranges
+        let ranges = vec![
+            0..2,   // "01"
+            3..5,   // "34" - gap 1 byte (<= 4)
+            10..12, // "ab" - gap 5 bytes (> 4)
+            12..14, // "cd" - gap 0 bytes
+        ];
+
+        let results = store.get_ranges(&path, &ranges).await.unwrap();
+        assert_eq!(results.len(), 4);
+        assert_eq!(results[0], Bytes::from_static(b"01"));
+        assert_eq!(results[1], Bytes::from_static(b"34"));
+        assert_eq!(results[2], Bytes::from_static(b"ab"));
+        assert_eq!(results[3], Bytes::from_static(b"cd"));
+
+        // Test out of order ranges
+        let ranges = vec![
+            10..12, // "ab"
+            0..2,   // "01"
+        ];
+        let results = store.get_ranges(&path, &ranges).await.unwrap();
+        assert_eq!(results[0], Bytes::from_static(b"ab"));
+        assert_eq!(results[1], Bytes::from_static(b"01"));
     }
 }
