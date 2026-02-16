@@ -18,8 +18,8 @@
 //! Regex expressions
 
 use arrow::array::{
-    Array, ArrayRef, AsArray, GenericStringArray, LargeStringArray, StringArray,
-    StringViewArray,
+    Array, ArrayRef, AsArray, BooleanArray, GenericStringArray, LargeStringArray,
+    StringArray, StringViewArray,
 };
 use arrow::compute::kernels::regexp;
 use arrow::datatypes::DataType;
@@ -133,27 +133,47 @@ impl ScalarUDFImpl for RegexpLikeFunc {
         args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
         let args = &args.args;
-        let is_scalar = args
-            .iter()
-            .all(|arg| matches!(arg, ColumnarValue::Scalar(_)));
+        match args.len() {
+            2 | 3 => {}
+            other => {
+                return exec_err!(
+                    "`regexp_like` was called with {other} arguments. It requires at least 2 and at most 3."
+                );
+            }
+        }
 
-        if is_scalar {
+        if args
+            .iter()
+            .all(|arg| matches!(arg, ColumnarValue::Scalar(_)))
+        {
             return regexp_like_scalar(args);
         }
 
-        let len = args
-            .iter()
-            .fold(Option::<usize>::None, |acc, arg| match arg {
-                ColumnarValue::Scalar(_) => acc,
-                ColumnarValue::Array(a) => Some(a.len()),
-            });
+        match args.as_slice() {
+            [ColumnarValue::Array(values), ColumnarValue::Scalar(pattern)] => {
+                let pattern = scalar_string(pattern)?;
+                let array = regexp_like_array_scalar(values, pattern, None)?;
+                return Ok(ColumnarValue::Array(array));
+            }
+            [
+                ColumnarValue::Array(values),
+                ColumnarValue::Scalar(pattern),
+                ColumnarValue::Scalar(flags),
+            ] => {
+                let flags = scalar_string(flags)?;
+                if flags == Some("g") {
+                    return plan_err!(
+                        "regexp_like() does not support the \"global\" option"
+                    );
+                }
+                let pattern = scalar_string(pattern)?;
+                let array = regexp_like_array_scalar(values, pattern, flags)?;
+                return Ok(ColumnarValue::Array(array));
+            }
+            _ => {}
+        }
 
-        let inferred_length = len.unwrap_or(1);
-        let args = args
-            .iter()
-            .map(|arg| arg.to_array(inferred_length))
-            .collect::<Result<Vec<_>>>()?;
-
+        let args = ColumnarValue::values_to_arrays(args)?;
         regexp_like(&args).map(ColumnarValue::Array)
     }
 
@@ -329,16 +349,42 @@ fn scalar_string(value: &ScalarValue) -> Result<Option<&str>> {
     }
 }
 
-fn regexp_like_scalar(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    match args.len() {
-        2 | 3 => {}
-        other => {
-            return exec_err!(
-                "`regexp_like` was called with {other} arguments. It requires at least 2 and at most 3."
-            );
-        }
+fn regexp_like_array_scalar(
+    values: &ArrayRef,
+    pattern: Option<&str>,
+    flags: Option<&str>,
+) -> Result<ArrayRef> {
+    use DataType::*;
+
+    if pattern.is_none() {
+        return Ok(Arc::new(BooleanArray::new_null(values.len())));
     }
 
+    let pattern = pattern.unwrap();
+    let array = match values.data_type() {
+        Utf8 => {
+            let array = values.as_string::<i32>();
+            regexp::regexp_is_match_scalar(array, pattern, flags)?
+        }
+        Utf8View => {
+            let array = values.as_string_view();
+            regexp::regexp_is_match_scalar(array, pattern, flags)?
+        }
+        LargeUtf8 => {
+            let array = values.as_string::<i64>();
+            regexp::regexp_is_match_scalar(array, pattern, flags)?
+        }
+        other => {
+            return internal_err!(
+                "Unsupported data type {other:?} for function `regexp_like`"
+            );
+        }
+    };
+
+    Ok(Arc::new(array))
+}
+
+fn regexp_like_scalar(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let flags = if args.len() == 3 {
         match &args[2] {
             ColumnarValue::Scalar(v) => scalar_string(v)?,
