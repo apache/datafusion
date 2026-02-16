@@ -21,7 +21,7 @@
 //!
 //! ## Usage
 //! ```bash
-//! cargo run --example data_io -- [all|catalog|json_shredding|parquet_adv_idx|parquet_emb_idx|parquet_enc_with_kms|parquet_enc|parquet_exec_visitor|parquet_idx|query_http_csv|remote_catalog]
+//! cargo run --example data_io -- [all|catalog|in_memory_object_store|json_shredding|parquet_adv_idx|parquet_emb_idx|parquet_enc_with_kms|parquet_enc|parquet_exec_visitor|parquet_idx|query_http_csv|remote_catalog]
 //! ```
 //!
 //! Each subcommand runs a corresponding example:
@@ -29,6 +29,9 @@
 //!
 //! - `catalog`
 //!   (file: catalog.rs, desc: Register tables into a custom catalog)
+//!
+//! - `in_memory_object_store`
+//!   (file: in_memory_object_store.rs, desc: Read CSV/JSON/Parquet from an in-memory object store)
 //!
 //! - `json_shredding`
 //!   (file: json_shredding.rs, desc: Implement filter rewriting for JSON shredding)
@@ -58,6 +61,7 @@
 //!   (file: remote_catalog.rs, desc: Interact with a remote catalog)
 
 mod catalog;
+mod in_memory_object_store;
 mod json_shredding;
 mod parquet_advanced_index;
 mod parquet_embedded_index;
@@ -77,6 +81,7 @@ use strum_macros::{Display, EnumIter, EnumString, VariantNames};
 enum ExampleKind {
     All,
     Catalog,
+    InMemoryObjectStore,
     JsonShredding,
     ParquetAdvIdx,
     ParquetEmbIdx,
@@ -104,6 +109,9 @@ impl ExampleKind {
                 }
             }
             ExampleKind::Catalog => catalog::catalog().await?,
+            ExampleKind::InMemoryObjectStore => {
+                in_memory_object_store::in_memory_object_store().await?
+            }
             ExampleKind::JsonShredding => json_shredding::json_shredding().await?,
             ExampleKind::ParquetAdvIdx => {
                 parquet_advanced_index::parquet_advanced_index().await?

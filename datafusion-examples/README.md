@@ -91,6 +91,7 @@ cargo run --example dataframe -- dataframe
 | Subcommand           | File Path                                                                                 | Description                                            |
 | -------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------ |
 | catalog              | [`data_io/catalog.rs`](examples/data_io/catalog.rs)                                       | Register tables into a custom catalog                  |
+| in_memory_object_store | [`data_io/in_memory_object_store.rs`](examples/data_io/in_memory_object_store.rs)       | Read CSV/JSON/Parquet from an in-memory object store   |
 | json_shredding       | [`data_io/json_shredding.rs`](examples/data_io/json_shredding.rs)                         | Implement filter rewriting for JSON shredding          |
 | parquet_adv_idx      | [`data_io/parquet_advanced_index.rs`](examples/data_io/parquet_advanced_index.rs)         | Create a secondary index across multiple parquet files |
 | parquet_emb_idx      | [`data_io/parquet_embedded_index.rs`](examples/data_io/parquet_embedded_index.rs)         | Store a custom index inside Parquet files              |
