@@ -87,7 +87,7 @@ async fn group_by_none() {
         .with_query("select median(request_bytes) from t")
         .with_expected_errors(vec![
             "Resources exhausted: Additional allocation failed",
-            "with top memory consumers (across reservations) as:\n  AggregateStream",
+            "with top memory consumers (across reservations) using 'greedy' pool as:\n  AggregateStream",
         ])
         .with_memory_limit(2_000)
         .run()
@@ -99,7 +99,7 @@ async fn group_by_row_hash() {
     TestCase::new()
         .with_query("select count(*) from t GROUP BY response_bytes")
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed", "with top memory consumers (across reservations) as:\n  GroupedHashAggregateStream"
+            "Resources exhausted: Additional allocation failed", "with top memory consumers (across reservations) using 'greedy' pool as:\n  GroupedHashAggregateStream"
         ])
         .with_memory_limit(2_000)
         .run()
@@ -112,7 +112,7 @@ async fn group_by_hash() {
         // group by dict column
         .with_query("select count(*) from t GROUP BY service, host, pod, container")
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed", "with top memory consumers (across reservations) as:\n  GroupedHashAggregateStream"
+            "Resources exhausted: Additional allocation failed", "with top memory consumers (across reservations) using 'greedy' pool as:\n  GroupedHashAggregateStream"
         ])
         .with_memory_limit(1_000)
         .run()
@@ -126,7 +126,7 @@ async fn join_by_key_multiple_partitions() {
         .with_query("select t1.* from t t1 JOIN t t2 ON t1.service = t2.service")
         .with_expected_errors(vec![
             "Resources exhausted: Additional allocation failed",
-            "with top memory consumers (across reservations) as:\n  HashJoinInput",
+            "with top memory consumers (across reservations) using 'greedy' pool as:\n  HashJoinInput",
         ])
         .with_memory_limit(1_000)
         .with_config(config)
@@ -141,7 +141,7 @@ async fn join_by_key_single_partition() {
         .with_query("select t1.* from t t1 JOIN t t2 ON t1.service = t2.service")
         .with_expected_errors(vec![
             "Resources exhausted: Additional allocation failed",
-            "with top memory consumers (across reservations) as:\n  HashJoinInput",
+            "with top memory consumers (across reservations) using 'greedy' pool as:\n  HashJoinInput",
         ])
         .with_memory_limit(1_000)
         .with_config(config)
@@ -154,7 +154,7 @@ async fn join_by_expression() {
     TestCase::new()
         .with_query("select t1.* from t t1 JOIN t t2 ON t1.service != t2.service")
         .with_expected_errors(vec![
-           "Resources exhausted: Additional allocation failed", "with top memory consumers (across reservations) as:\n  NestedLoopJoinLoad[0]",
+           "Resources exhausted: Additional allocation failed", "with top memory consumers (across reservations) using 'greedy' pool as:\n  NestedLoopJoinLoad[0]",
         ])
         .with_memory_limit(1_000)
         .run()
@@ -167,7 +167,7 @@ async fn cross_join() {
         .with_query("select t1.*, t2.* from t t1 CROSS JOIN t t2")
         .with_expected_errors(vec![
             "Resources exhausted: Additional allocation failed",
-            "with top memory consumers (across reservations) as:\n  CrossJoinExec",
+            "with top memory consumers (across reservations) using 'greedy' pool as:\n  CrossJoinExec",
         ])
         .with_memory_limit(1_000)
         .run()
@@ -223,7 +223,7 @@ async fn symmetric_hash_join() {
             "select t1.* from t t1 JOIN t t2 ON t1.pod = t2.pod AND t1.time = t2.time",
         )
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed", "with top memory consumers (across reservations) as:\n  SymmetricHashJoinStream",
+            "Resources exhausted: Additional allocation failed", "with top memory consumers (across reservations) using 'greedy' pool as:\n  SymmetricHashJoinStream",
         ])
         .with_memory_limit(1_000)
         .with_scenario(Scenario::AccessLogStreaming)
@@ -241,7 +241,7 @@ async fn sort_preserving_merge() {
     // so only a merge is needed
         .with_query("select * from t ORDER BY a ASC NULLS LAST, b ASC NULLS LAST LIMIT 10")
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed", "with top memory consumers (across reservations) as:\n  SortPreservingMergeExec",
+            "Resources exhausted: Additional allocation failed", "with top memory consumers (across reservations) using 'greedy' pool as:\n  SortPreservingMergeExec",
         ])
         // provide insufficient memory to merge
         .with_memory_limit(partition_size / 2)
@@ -321,7 +321,7 @@ async fn sort_spill_reservation() {
     test.clone()
         .with_expected_errors(vec![
             "Resources exhausted: Additional allocation failed",
-            "with top memory consumers (across reservations) as:",
+            "with top memory consumers (across reservations) using 'greedy' pool as:",
             "B for ExternalSorterMerge",
         ])
         .with_config(config)
@@ -352,7 +352,7 @@ async fn oom_recursive_cte() {
         )
         .with_expected_errors(vec![
             "Resources exhausted: Additional allocation failed",
-            "with top memory consumers (across reservations) as:\n  RecursiveQuery",
+            "with top memory consumers (across reservations) using 'greedy' pool as:\n  RecursiveQuery",
         ])
         .with_memory_limit(2_000)
         .run()
@@ -404,7 +404,7 @@ async fn oom_with_tracked_consumer_pool() {
         .with_expected_errors(vec![
             "Failed to allocate additional",
             "for ParquetSink(ArrowColumnWriter)",
-            "Additional allocation failed", "with top memory consumers (across reservations) as:\n  ParquetSink(ArrowColumnWriter)"
+            "Additional allocation failed", "with top memory consumers (across reservations) using 'greedy' pool as:\n  ParquetSink(ArrowColumnWriter)"
         ])
         .with_memory_pool(Arc::new(
             TrackConsumersPool::new(

@@ -228,11 +228,11 @@ fn test_cli_top_memory_consumers<'a>(
         "Consumer(can spill: bool) consumed XB, peak XB",
     );
     settings.add_filter(
-        r"Error: Failed to allocate additional .*? for .*? with .*? already allocated for this reservation - .*? remain available for the total pool",
+        r"Error: Failed to allocate additional .*? for .*? with .*? already allocated for this reservation - .*? remain available for the total '.*?' pool",
         "Error: Failed to allocate ",
     );
     settings.add_filter(
-        r"Resources exhausted: Failed to allocate additional .*? for .*? with .*? already allocated for this reservation - .*? remain available for the total pool",
+        r"Resources exhausted: Failed to allocate additional .*? for .*? with .*? already allocated for this reservation - .*? remain available for the total '.*?' pool",
         "Resources exhausted: Failed to allocate",
     );
 

@@ -178,6 +178,9 @@ pub use pool::*;
 /// * [`TrackConsumersPool`]: Wraps another [`MemoryPool`] and tracks consumers,
 ///   providing better error messages on the largest memory users.
 pub trait MemoryPool: Send + Sync + std::fmt::Debug {
+    /// Return pool name
+    fn name(&self) -> &str;
+
     /// Registers a new [`MemoryConsumer`]
     ///
     /// Note: Subsequent calls to [`Self::grow`] must be made to reserve memory
