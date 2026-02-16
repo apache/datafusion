@@ -510,13 +510,14 @@ pub(crate) fn from_substrait_precision(
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use super::make_renamed_schema;
+    use super::{NameTracker, make_renamed_schema};
     use crate::extensions::Extensions;
     use crate::logical_plan::consumer::DefaultSubstraitConsumer;
     use datafusion::arrow::datatypes::{DataType, Field};
     use datafusion::common::DFSchema;
     use datafusion::error::Result;
     use datafusion::execution::SessionState;
+    use datafusion::logical_expr::{Expr, col};
     use datafusion::prelude::SessionContext;
     use datafusion::sql::TableReference;
     use std::collections::HashMap;
@@ -680,6 +681,125 @@ pub(crate) mod tests {
                 false,
             ))
         );
+        Ok(())
+    }
+
+    #[test]
+    fn name_tracker_unique_names_pass_through() -> Result<()> {
+        let mut tracker = NameTracker::new();
+
+        // First expression should pass through unchanged
+        let expr1 = col("a");
+        let result1 = tracker.get_uniquely_named_expr(expr1.clone())?;
+        assert_eq!(result1, col("a"));
+
+        // Different name should also pass through unchanged
+        let expr2 = col("b");
+        let result2 = tracker.get_uniquely_named_expr(expr2)?;
+        assert_eq!(result2, col("b"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn name_tracker_duplicate_schema_name_gets_alias() -> Result<()> {
+        let mut tracker = NameTracker::new();
+
+        // First expression with name "a"
+        let expr1 = col("a");
+        let result1 = tracker.get_uniquely_named_expr(expr1)?;
+        assert_eq!(result1, col("a"));
+
+        // Second expression with same name "a" should get aliased
+        let expr2 = col("a");
+        let result2 = tracker.get_uniquely_named_expr(expr2)?;
+        assert_eq!(result2, col("a").alias("a__temp__0"));
+
+        // Third expression with same name "a" should get a different alias
+        let expr3 = col("a");
+        let result3 = tracker.get_uniquely_named_expr(expr3)?;
+        assert_eq!(result3, col("a").alias("a__temp__1"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn name_tracker_qualified_then_unqualified_conflicts() -> Result<()> {
+        let mut tracker = NameTracker::new();
+
+        // First: qualified column "table.a"
+        let qualified_col =
+            Expr::Column(datafusion::common::Column::new(Some("table"), "a"));
+        let result1 = tracker.get_uniquely_named_expr(qualified_col)?;
+        assert_eq!(
+            result1,
+            Expr::Column(datafusion::common::Column::new(Some("table"), "a"))
+        );
+
+        // Second: unqualified column "a" - should conflict (ambiguous reference)
+        let unqualified_col = col("a");
+        let result2 = tracker.get_uniquely_named_expr(unqualified_col)?;
+        // Should be aliased to avoid ambiguous reference
+        assert_eq!(result2, col("a").alias("a__temp__0"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn name_tracker_unqualified_then_qualified_conflicts() -> Result<()> {
+        let mut tracker = NameTracker::new();
+
+        // First: unqualified column "a"
+        let unqualified_col = col("a");
+        let result1 = tracker.get_uniquely_named_expr(unqualified_col)?;
+        assert_eq!(result1, col("a"));
+
+        // Second: qualified column "table.a" - should conflict (ambiguous reference)
+        let qualified_col =
+            Expr::Column(datafusion::common::Column::new(Some("table"), "a"));
+        let result2 = tracker.get_uniquely_named_expr(qualified_col)?;
+        // Should be aliased to avoid ambiguous reference
+        assert_eq!(
+            result2,
+            Expr::Column(datafusion::common::Column::new(Some("table"), "a"))
+                .alias("table.a__temp__0")
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn name_tracker_different_qualifiers_no_conflict() -> Result<()> {
+        let mut tracker = NameTracker::new();
+
+        // First: qualified column "table1.a"
+        let col1 = Expr::Column(datafusion::common::Column::new(Some("table1"), "a"));
+        let result1 = tracker.get_uniquely_named_expr(col1.clone())?;
+        assert_eq!(result1, col1);
+
+        // Second: qualified column "table2.a" - different qualifier, different schema_name
+        // so should NOT conflict
+        let col2 = Expr::Column(datafusion::common::Column::new(Some("table2"), "a"));
+        let result2 = tracker.get_uniquely_named_expr(col2.clone())?;
+        assert_eq!(result2, col2);
+
+        Ok(())
+    }
+
+    #[test]
+    fn name_tracker_aliased_expressions() -> Result<()> {
+        let mut tracker = NameTracker::new();
+
+        // First: col("x").alias("result")
+        let expr1 = col("x").alias("result");
+        let result1 = tracker.get_uniquely_named_expr(expr1.clone())?;
+        assert_eq!(result1, col("x").alias("result"));
+
+        // Second: col("y").alias("result") - same alias name, should conflict
+        let expr2 = col("y").alias("result");
+        let result2 = tracker.get_uniquely_named_expr(expr2)?;
+        assert_eq!(result2, col("y").alias("result").alias("result__temp__0"));
+
         Ok(())
     }
 }
