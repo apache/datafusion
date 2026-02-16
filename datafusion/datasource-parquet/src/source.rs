@@ -356,6 +356,7 @@ impl ParquetSource {
                 opts.filter_correlation_threshold,
                 opts.filter_statistics_collection_min_rows,
                 opts.filter_statistics_collection_fraction,
+                opts.filter_statistics_collection_max_rows,
             ),
         ));
         self.table_parquet_options = table_parquet_options;
@@ -513,6 +514,7 @@ impl ParquetSource {
                 opts.filter_correlation_threshold,
                 opts.filter_statistics_collection_min_rows,
                 opts.filter_statistics_collection_fraction,
+                opts.filter_statistics_collection_max_rows,
             ),
         ));
         self

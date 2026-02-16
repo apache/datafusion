@@ -807,6 +807,8 @@ config_namespace! {
         /// collection, `pushdown_filters` and `reorder_filters` resume
         /// their normal roles — gating which filters are promoted and how
         /// they are ordered, respectively.
+        /// If `pushdown_filters` is disabled, this option has no effect since all filters
+        /// run post-scan regardless of the collection phase.
         pub filter_statistics_collection_min_rows: u64, default = 10_000
 
         /// (reading) Fraction of total dataset rows to use for the statistics
@@ -815,14 +817,29 @@ config_namespace! {
         /// 0.0 = disabled, use filter_statistics_collection_min_rows only.
         /// 0.05 (default) = collect stats on at least 5% of the dataset.
         /// Must be in [0.0, 1.0].
-        ///
-        /// **Interaction with `pushdown_filters`:**
-        /// Like `filter_statistics_collection_min_rows`, this extends the
-        /// collection phase during which filters run post-scan. It ensures
-        /// the collection window is proportional to the dataset size,
+        /// 
+        /// This option ensures the collection window is proportional to the dataset size,
         /// which matters for very large tables where a fixed row count
         /// would be an insignificant sample.
+        ///
+        /// **Interaction with `pushdown_filters`:**
+        /// If `pushdown_filters` is disabled, this option has no effect since all filters
+        /// run post-scan regardless of the collection phase.
         pub filter_statistics_collection_fraction: f64, default = 0.05
+
+        /// (reading) Maximum rows for the statistics collection phase,
+        /// regardless of dataset size. The effective collection threshold
+        /// becomes min(max_rows, max(min_rows, fraction * total_rows)).
+        /// 0 = no cap (current behavior). Default: 1_000_000.
+        /// 
+        /// This caps the collection window so that very large datasets
+        /// do not spend an excessive number of rows in post-scan mode.
+        /// It also bounds the re-evaluation interval for cached decisions.
+        ///
+        /// **Interaction with `pushdown_filters`:**
+        /// If `pushdown_filters` is disabled, this option has no effect since all filters
+        /// run post-scan regardless of the collection phase.
+        pub filter_statistics_collection_max_rows: u64, default = 1_000_000
 
         // The following options affect writing to parquet files
         // and map to parquet::file::properties::WriterProperties

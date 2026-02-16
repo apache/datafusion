@@ -213,6 +213,7 @@ impl ParquetOptions {
             filter_correlation_threshold: _,      // not used for writer props
             filter_statistics_collection_min_rows: _, // not used for writer props
             filter_statistics_collection_fraction: _, // not used for writer props
+            filter_statistics_collection_max_rows: _, // not used for writer props
         } = self;
 
         let mut builder = WriterProperties::builder()
