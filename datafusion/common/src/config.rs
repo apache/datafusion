@@ -1142,6 +1142,12 @@ config_namespace! {
         ///
         /// Default: true
         pub enable_sort_pushdown: bool, default = true
+
+        /// When set to true, the optimizer will extract leaf expressions
+        /// (such as `get_field`) from filter/sort/join nodes into projections
+        /// closer to the leaf table scans, and push those projections down
+        /// towards the leaf nodes.
+        pub enable_leaf_expression_pushdown: bool, default = true
     }
 }
 

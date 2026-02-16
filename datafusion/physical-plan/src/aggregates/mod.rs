@@ -1406,10 +1406,6 @@ impl ExecutionPlan for AggregateExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
-    }
-
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         let child_statistics = self.input().partition_statistics(partition)?;
         self.statistics_inner(&child_statistics)
@@ -2488,10 +2484,6 @@ mod tests {
             };
 
             Ok(Box::pin(stream))
-        }
-
-        fn statistics(&self) -> Result<Statistics> {
-            self.partition_statistics(None)
         }
 
         fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
