@@ -36,8 +36,8 @@ use datafusion::datasource::listing::{
 };
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
-    FileGroup, FileOutputMode, FileScanConfigBuilder, FileSinkConfig, ParquetSource,
-    wrap_partition_type_in_dict, wrap_partition_value_in_dict,
+    ArrowSource, FileGroup, FileOutputMode, FileScanConfigBuilder, FileSinkConfig,
+    ParquetSource, wrap_partition_type_in_dict, wrap_partition_value_in_dict,
 };
 use datafusion::datasource::sink::DataSinkExec;
 use datafusion::datasource::source::DataSourceExec;
@@ -923,6 +923,30 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
                 column_statistics: Statistics::unknown_column(&Arc::new(Schema::new(
                     vec![Field::new("col", DataType::Utf8, false)],
                 ))),
+            })
+            .build();
+
+    roundtrip_test(DataSourceExec::from_data_source(scan_config))
+}
+
+#[test]
+fn roundtrip_arrow_scan() -> Result<()> {
+    let file_schema =
+        Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
+
+    let table_schema = TableSchema::new(file_schema.clone(), vec![]);
+    let file_source = Arc::new(ArrowSource::new_file_source(table_schema));
+
+    let scan_config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
+                "/path/to/file.arrow".to_string(),
+                1024,
+            )])])
+            .with_statistics(Statistics {
+                num_rows: Precision::Inexact(100),
+                total_byte_size: Precision::Inexact(1024),
+                column_statistics: Statistics::unknown_column(&file_schema),
             })
             .build();
 
@@ -2564,6 +2588,25 @@ fn custom_proto_converter_intercepts() -> Result<()> {
     assert_eq!(*proto_converter.num_physical_plans.read().unwrap(), 2);
 
     Ok(())
+}
+
+#[test]
+fn roundtrip_call_null_scalar_struct_dict() -> Result<()> {
+    let data_type = DataType::Struct(Fields::from(vec![Field::new(
+        "item",
+        DataType::Dictionary(Box::new(DataType::UInt32), Box::new(DataType::Utf8)),
+        true,
+    )]));
+
+    let schema = Arc::new(Schema::new(vec![Field::new("a", data_type.clone(), true)]));
+    let scan = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+    let scalar = lit(ScalarValue::try_from(data_type)?);
+    let filter = Arc::new(FilterExec::try_new(
+        Arc::new(BinaryExpr::new(scalar, Operator::Eq, col("a", &schema)?)),
+        scan,
+    )?);
+
+    roundtrip_test(filter)
 }
 
 /// Test that expression deduplication works during deserialization.

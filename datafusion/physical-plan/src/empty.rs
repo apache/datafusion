@@ -21,7 +21,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::memory::MemoryStream;
-use crate::{DisplayAs, PlanProperties, SendableRecordBatchStream, Statistics, common};
+use crate::{DisplayAs, PlanProperties, SendableRecordBatchStream, Statistics};
 use crate::{
     DisplayFormatType, ExecutionPlan, Partitioning,
     execution_plan::{Boundedness, EmissionType},
@@ -29,7 +29,8 @@ use crate::{
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{Result, assert_or_internal_err};
+use datafusion_common::stats::Precision;
+use datafusion_common::{ColumnStatistics, Result, ScalarValue, assert_or_internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
 
@@ -155,10 +156,6 @@ impl ExecutionPlan for EmptyExec {
         )?))
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
-    }
-
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         if let Some(partition) = partition {
             assert_or_internal_err!(
@@ -169,20 +166,31 @@ impl ExecutionPlan for EmptyExec {
             );
         }
 
-        let batch = self
-            .data()
-            .expect("Create empty RecordBatch should not fail");
-        Ok(common::compute_record_batch_statistics(
-            &[batch],
-            &self.schema,
-            None,
-        ))
+        // Build explicit stats: exact zero rows and bytes, with explicit known column stats
+        let mut stats = Statistics::default()
+            .with_num_rows(Precision::Exact(0))
+            .with_total_byte_size(Precision::Exact(0));
+
+        // Add explicit column stats for each field in schema
+        for _ in self.schema.fields() {
+            stats = stats.add_column_statistics(ColumnStatistics {
+                null_count: Precision::Exact(0),
+                distinct_count: Precision::Exact(0),
+                min_value: Precision::<ScalarValue>::Absent,
+                max_value: Precision::<ScalarValue>::Absent,
+                sum_value: Precision::<ScalarValue>::Absent,
+                byte_size: Precision::Exact(0),
+            });
+        }
+
+        Ok(stats)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::common;
     use crate::test;
     use crate::with_new_children_if_necessary;
 

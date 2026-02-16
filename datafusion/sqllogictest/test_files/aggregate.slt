@@ -571,6 +571,16 @@ SELECT covar(c2, c12) FROM aggregate_test_100
 ----
 -0.079969012479
 
+query R
+SELECT covar_pop(arrow_cast(c2, 'Float16'), arrow_cast(c12, 'Float16')) FROM aggregate_test_100
+----
+-0.079163311005
+
+query R
+SELECT covar(arrow_cast(c2, 'Float16'), arrow_cast(c12, 'Float16')) FROM aggregate_test_100
+----
+-0.079962940409
+
 # single_row_query_covar_1
 query R
 select covar_samp(sq.column1, sq.column2) from (values (1.1, 2.2)) as sq
@@ -1310,6 +1320,24 @@ DROP TABLE median_window_test;
 
 query RT
 select approx_median(arrow_cast(col_f32, 'Float16')), arrow_typeof(approx_median(arrow_cast(col_f32, 'Float16'))) from median_table;
+----
+2.75 Float16
+
+# This shouldn't be NaN, see:
+# https://github.com/apache/datafusion/issues/18945
+query RT
+select
+  percentile_cont(0.5) within group (order by arrow_cast(col_f32, 'Float16')),
+  arrow_typeof(percentile_cont(0.5) within group (order by arrow_cast(col_f32, 'Float16')))
+from median_table;
+----
+2.75 Float16
+
+query RT
+select
+  approx_percentile_cont(0.5) within group (order by arrow_cast(col_f32, 'Float16')),
+  arrow_typeof(approx_percentile_cont(0.5) within group (order by arrow_cast(col_f32, 'Float16')))
+from median_table;
 ----
 2.75 Float16
 
@@ -6719,7 +6747,12 @@ from aggregate_test_100;
 ----
 0.051534002628 0.48427355347 100 0.001929150558 0.479274948239 0.508972509913 6.707779292571 9.234223721582 0.345678715695
 
-
+query R
+select
+    regr_slope(arrow_cast(c12, 'Float16'), arrow_cast(c11, 'Float16'))
+from aggregate_test_100;
+----
+0.051477733249
 
 # regr_*() functions ignore NULLs
 query RRIRRRRRR
@@ -7952,8 +7985,9 @@ logical_plan
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----TableScan: t projection=[]
 physical_plan
-01)ProjectionExec: expr=[2 as count(Int64(1)), 2 as count()]
-02)--PlaceholderRowExec
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(Int64(1)), count(Int64(1))@0 as count()]
+02)--ProjectionExec: expr=[2 as count(Int64(1))]
+03)----PlaceholderRowExec
 
 query II
 select count(1), count(*) from t;
@@ -7968,8 +8002,9 @@ logical_plan
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----TableScan: t projection=[]
 physical_plan
-01)ProjectionExec: expr=[2 as count(Int64(1)), 2 as count(*)]
-02)--PlaceholderRowExec
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(Int64(1)), count(Int64(1))@0 as count(*)]
+02)--ProjectionExec: expr=[2 as count(Int64(1))]
+03)----PlaceholderRowExec
 
 query II
 select count(), count(*) from t;
@@ -7984,8 +8019,9 @@ logical_plan
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----TableScan: t projection=[]
 physical_plan
-01)ProjectionExec: expr=[2 as count(), 2 as count(*)]
-02)--PlaceholderRowExec
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(), count(Int64(1))@0 as count(*)]
+02)--ProjectionExec: expr=[2 as count(Int64(1))]
+03)----PlaceholderRowExec
 
 query TT
 explain select count(1) * count(2) from t;

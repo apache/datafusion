@@ -765,11 +765,11 @@ select nanvl(null, 64);
 ----
 NULL
 
-# nanvl scalar nulls #1
+# nanvl scalar nulls #1 - x is not NaN, so return x even if y is NULL
 query R rowsort
 select nanvl(2, null);
 ----
-NULL
+2
 
 # nanvl scalar nulls #2
 query R rowsort
@@ -1310,6 +1310,14 @@ select a << b, c << d, e << f from signed_integers;
 -196608 -978 -24576
 33554432 123 10485760
 NULL NULL NULL
+
+## bitwise operations should reject non-integer types
+
+query error DataFusion error: Error during planning: Cannot infer common type for bitwise operation Float32 & Float32
+select arrow_cast(1, 'Float32') & arrow_cast(2, 'Float32');
+
+query error DataFusion error: Error during planning: Cannot infer common type for bitwise operation Date32 & Date32
+select arrow_cast(1, 'Date32') & arrow_cast(2, 'Date32');
 
 statement ok
 drop table unsigned_integers;

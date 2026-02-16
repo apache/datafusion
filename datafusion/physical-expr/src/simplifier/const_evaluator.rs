@@ -40,17 +40,22 @@ use crate::expressions::{Column, Literal};
 /// - `(1 + 2) * 3` -> `9` (with bottom-up traversal)
 /// - `'hello' || ' world'` -> `'hello world'`
 pub fn simplify_const_expr(
-    expr: &Arc<dyn PhysicalExpr>,
+    expr: Arc<dyn PhysicalExpr>,
 ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
-    if !can_evaluate_as_constant(expr) {
-        return Ok(Transformed::no(Arc::clone(expr)));
+    simplify_const_expr_with_dummy(expr, &create_dummy_batch()?)
+}
+
+pub(crate) fn simplify_const_expr_with_dummy(
+    expr: Arc<dyn PhysicalExpr>,
+    batch: &RecordBatch,
+) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
+    // If expr is already a const literal or can't be evaluated into one.
+    if expr.as_any().is::<Literal>() || (!can_evaluate_as_constant(&expr)) {
+        return Ok(Transformed::no(expr));
     }
 
-    // Create a 1-row dummy batch for evaluation
-    let batch = create_dummy_batch()?;
-
     // Evaluate the expression
-    match expr.evaluate(&batch) {
+    match expr.evaluate(batch) {
         Ok(ColumnarValue::Scalar(scalar)) => {
             Ok(Transformed::yes(Arc::new(Literal::new(scalar))))
         }
@@ -61,13 +66,13 @@ pub fn simplify_const_expr(
         }
         Ok(_) => {
             // Unexpected result - keep original expression
-            Ok(Transformed::no(Arc::clone(expr)))
+            Ok(Transformed::no(expr))
         }
         Err(_) => {
             // On error, keep original expression
             // The expression might succeed at runtime due to short-circuit evaluation
             // or other runtime conditions
-            Ok(Transformed::no(Arc::clone(expr)))
+            Ok(Transformed::no(expr))
         }
     }
 }
@@ -95,7 +100,7 @@ fn can_evaluate_as_constant(expr: &Arc<dyn PhysicalExpr>) -> bool {
 /// that only contain literals, the batch content is irrelevant.
 ///
 /// This is the same approach used in the logical expression `ConstEvaluator`.
-fn create_dummy_batch() -> Result<RecordBatch> {
+pub(crate) fn create_dummy_batch() -> Result<RecordBatch> {
     // RecordBatch requires at least one column
     let dummy_schema = Arc::new(Schema::new(vec![Field::new("_", DataType::Null, true)]));
     let col = new_null_array(&DataType::Null, 1);

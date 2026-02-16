@@ -1205,13 +1205,6 @@ fn is_compare_op(op: Operator) -> bool {
     )
 }
 
-fn is_string_type(data_type: &DataType) -> bool {
-    matches!(
-        data_type,
-        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
-    )
-}
-
 // The pruning logic is based on the comparing the min/max bounds.
 // Must make sure the two type has order.
 // For example, casts from string to numbers is not correct.
@@ -1233,7 +1226,7 @@ fn verify_support_type_for_prune(from_type: &DataType, to_type: &DataType) -> Re
     // If both types are strings or both are not strings (number, timestamp, etc)
     // then we can compare them.
     // PruningPredicate does not support casting of strings to numbers and such.
-    if is_string_type(from_type) == is_string_type(to_type) {
+    if from_type.is_string() == to_type.is_string() {
         Ok(())
     } else {
         plan_err!(
@@ -4681,7 +4674,7 @@ mod tests {
             true,
             // s1 ["AB", "A\u{10ffff}\u{10ffff}\u{10ffff}"]  ==> some rows could pass (must keep)
             true,
-            // s1 ["A\u{10ffff}\u{10ffff}", "A\u{10ffff}\u{10ffff}"]  ==> no row match. (min, max) maybe truncate 
+            // s1 ["A\u{10ffff}\u{10ffff}", "A\u{10ffff}\u{10ffff}"]  ==> no row match. (min, max) maybe truncate
             // original (min, max) maybe ("A\u{10ffff}\u{10ffff}\u{10ffff}", "A\u{10ffff}\u{10ffff}\u{10ffff}\u{10ffff}")
             true,
         ];

@@ -1079,7 +1079,7 @@ pub mod table_reference {
 pub struct PhysicalPlanNode {
     #[prost(
         oneof = "physical_plan_node::PhysicalPlanType",
-        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36"
+        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38"
     )]
     pub physical_plan_type: ::core::option::Option<physical_plan_node::PhysicalPlanType>,
 }
@@ -1159,6 +1159,10 @@ pub mod physical_plan_node {
         MemoryScan(super::MemoryScanExecNode),
         #[prost(message, tag = "36")]
         AsyncFunc(::prost::alloc::boxed::Box<super::AsyncFuncExecNode>),
+        #[prost(message, tag = "37")]
+        Buffer(::prost::alloc::boxed::Box<super::BufferExecNode>),
+        #[prost(message, tag = "38")]
+        ArrowScan(super::ArrowScanExecNode),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1667,6 +1671,11 @@ pub struct AvroScanExecNode {
     pub base_conf: ::core::option::Option<FileScanExecConf>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ArrowScanExecNode {
+    #[prost(message, optional, tag = "1")]
+    pub base_conf: ::core::option::Option<FileScanExecConf>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct MemoryScanExecNode {
     #[prost(bytes = "vec", repeated, tag = "1")]
     pub partitions: ::prost::alloc::vec::Vec<::prost::alloc::vec::Vec<u8>>,
@@ -2154,6 +2163,13 @@ pub struct AsyncFuncExecNode {
     pub async_exprs: ::prost::alloc::vec::Vec<PhysicalExprNode>,
     #[prost(string, repeated, tag = "3")]
     pub async_expr_names: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct BufferExecNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(uint64, tag = "2")]
+    pub capacity: u64,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
