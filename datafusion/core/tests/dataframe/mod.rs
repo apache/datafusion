@@ -6853,3 +6853,255 @@ async fn test_duplicate_state_fields_for_dfschema_construct() -> Result<()> {
 
     Ok(())
 }
+
+struct FixtureDataGen {
+    _tmp_dir: TempDir,
+    out_dir: String,
+    ctx: SessionContext,
+}
+
+impl FixtureDataGen {
+    fn register_local_table(
+        out_dir: impl AsRef<Path>,
+        ctx: &SessionContext,
+    ) -> Result<()> {
+        // Create an in memory table with schema C1 and C2, both strings
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Utf8, false),
+            Field::new("c2", DataType::Utf8, false),
+        ]));
+
+        let record_batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec!["abc", "def"])),
+                Arc::new(StringArray::from(vec!["123", "456"])),
+            ],
+        )?;
+
+        let mem_table = Arc::new(MemTable::try_new(schema, vec![vec![record_batch]])?);
+
+        // Register the table in the context
+        ctx.register_table("test", mem_table)?;
+
+        let local = Arc::new(LocalFileSystem::new_with_prefix(&out_dir)?);
+        let local_url = Url::parse("file://local").unwrap();
+        ctx.register_object_store(&local_url, local);
+
+        Ok(())
+    }
+
+    // initializes basic data and writes it using via executing physical plan
+    //
+    // Available columns: c1, c2
+    async fn prepare_execution_plan_writes(config: SessionConfig) -> Result<Self> {
+        let tmp_dir = TempDir::new()?;
+
+        let ctx = SessionContext::new_with_config(config);
+
+        Self::register_local_table(&tmp_dir, &ctx)?;
+
+        let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out/";
+        let out_dir_url = format!("file://{out_dir}");
+
+        let df = ctx.sql("SELECT c1, c2 FROM test").await?;
+        let plan = df.create_physical_plan().await?;
+
+        ctx.write_parquet(plan.clone(), &out_dir_url, None).await?;
+        ctx.write_csv(plan.clone(), &out_dir_url).await?;
+        ctx.write_json(plan.clone(), &out_dir_url).await?;
+
+        Ok(Self {
+            _tmp_dir: tmp_dir,
+            out_dir,
+            ctx,
+        })
+    }
+
+    // initializes basic data and writes it using `write_opts`
+    //
+    // Available columns: c1, c2
+    async fn prepare_direct_df_writes(
+        config: SessionConfig,
+        write_opts: DataFrameWriteOptions,
+    ) -> Result<Self> {
+        let tmp_dir = TempDir::new()?;
+
+        let ctx = SessionContext::new_with_config(config);
+
+        Self::register_local_table(&tmp_dir, &ctx)?;
+
+        let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out/";
+        let out_dir_url = format!("file://{out_dir}");
+
+        let df = ctx.sql("SELECT c1, c2 FROM test").await?;
+
+        df.clone()
+            .write_parquet(&out_dir_url, write_opts.clone(), None)
+            .await?;
+        df.clone()
+            .write_csv(&out_dir_url, write_opts.clone(), None)
+            .await?;
+        df.write_json(&out_dir_url, write_opts.clone(), None)
+            .await?;
+
+        Ok(Self {
+            _tmp_dir: tmp_dir,
+            out_dir,
+            ctx,
+        })
+    }
+}
+
+#[tokio::test]
+async fn write_partitioned_results_with_prefix() -> Result<()> {
+    let mut config = SessionConfig::new();
+    config.options_mut().execution.partitioned_file_prefix_name = "prefix-".to_owned();
+
+    let df_write_options =
+        DataFrameWriteOptions::new().with_partition_by(vec![String::from("c2")]);
+    let FixtureDataGen {
+        _tmp_dir,
+        out_dir,
+        ctx,
+    } = FixtureDataGen::prepare_direct_df_writes(config, df_write_options).await?;
+
+    let partitioned_file = format!("{out_dir}/c2=123/prefix-*");
+    let filter_df = ctx
+        .read_parquet(&partitioned_file, ParquetReadOptions::default())
+        .await?;
+
+    // Check that the c2 column is gone and that c1 is abc.
+    let results_parquet = filter_df.collect().await?;
+    let results_parquet_display = batches_to_string(&results_parquet);
+    assert_snapshot!(
+       results_parquet_display.as_str(),
+        @r###"
+    +-----+
+    | c1  |
+    +-----+
+    | abc |
+    +-----+
+    "###
+    );
+
+    let results_csv = ctx
+        .read_csv(&partitioned_file, Default::default())
+        .await?
+        .collect()
+        .await?;
+    assert_eq!(
+        results_parquet_display.as_str(),
+        batches_to_string(&results_csv)
+    );
+
+    let results_json = ctx
+        .read_json(&partitioned_file, Default::default())
+        .await?
+        .collect()
+        .await?;
+    assert_eq!(results_parquet_display, batches_to_string(&results_json));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn write_physical_plan_results_with_prefix() -> Result<()> {
+    let mut config = SessionConfig::new();
+    config.options_mut().execution.partitioned_file_prefix_name = "prefix-".to_owned();
+
+    let FixtureDataGen {
+        _tmp_dir,
+        out_dir,
+        ctx,
+    } = FixtureDataGen::prepare_execution_plan_writes(config).await?;
+
+    let partitioned_file = format!("{out_dir}/prefix-*");
+
+    let df = ctx
+        .read_parquet(&partitioned_file, Default::default())
+        .await?;
+    let results_parquet = df.collect().await?;
+    let results_parquet_display = batches_to_string(&results_parquet);
+    assert_snapshot!(
+       results_parquet_display.as_str(),
+        @r###"
+    +-----+-----+
+    | c1  | c2  |
+    +-----+-----+
+    | abc | 123 |
+    | def | 456 |
+    +-----+-----+
+    "###
+    );
+
+    let results_csv = ctx
+        .read_csv(&partitioned_file, Default::default())
+        .await?
+        .collect()
+        .await?;
+    assert_eq!(
+        results_parquet_display.as_str(),
+        batches_to_string(&results_csv)
+    );
+
+    let results_json = ctx
+        .read_json(&partitioned_file, Default::default())
+        .await?
+        .collect()
+        .await?;
+    assert_eq!(results_parquet_display, batches_to_string(&results_json));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn write_parts_parquet_results_with_prefix() -> Result<()> {
+    let mut config = SessionConfig::new();
+    config.options_mut().execution.partitioned_file_prefix_name = "prefix-".to_owned();
+
+    let df_write_options = DataFrameWriteOptions::new();
+    let FixtureDataGen {
+        _tmp_dir,
+        out_dir,
+        ctx,
+    } = FixtureDataGen::prepare_direct_df_writes(config, df_write_options).await?;
+
+    let partitioned_file = format!("{out_dir}/prefix-*");
+
+    let df = ctx
+        .read_parquet(&partitioned_file, Default::default())
+        .await?;
+    let results_parquet = df.collect().await?;
+    let results_parquet_display = batches_to_string(&results_parquet);
+    assert_snapshot!(
+       results_parquet_display.as_str(),
+        @r###"
+    +-----+-----+
+    | c1  | c2  |
+    +-----+-----+
+    | abc | 123 |
+    | def | 456 |
+    +-----+-----+
+    "###
+    );
+
+    let results_csv = ctx
+        .read_csv(&partitioned_file, Default::default())
+        .await?
+        .collect()
+        .await?;
+    assert_eq!(
+        results_parquet_display.as_str(),
+        batches_to_string(&results_csv)
+    );
+
+    let results_json = ctx
+        .read_json(&partitioned_file, Default::default())
+        .await?
+        .collect()
+        .await?;
+    assert_eq!(results_parquet_display, batches_to_string(&results_json));
+
+    Ok(())
+}
