@@ -443,7 +443,7 @@ impl NameTracker {
         let mut counter = 0;
         let candidate_name = loop {
             let candidate_name = format!("{schema_name}__temp__{counter}");
-            // .alias always produces a unqualified name so check for conflicts accordingly.
+            // .alias always produces an unqualified name so check for conflicts accordingly.
             if !self.would_conflict_inner((None, &candidate_name), &candidate_name) {
                 break candidate_name;
             }
