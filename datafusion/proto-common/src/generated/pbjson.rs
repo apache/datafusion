@@ -5740,6 +5740,9 @@ impl serde::Serialize for ParquetOptions {
         if self.filter_statistics_collection_fraction_opt.is_some() {
             len += 1;
         }
+        if self.filter_statistics_collection_max_rows_opt.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion_common.ParquetOptions", len)?;
         if self.enable_page_index {
             struct_ser.serialize_field("enablePageIndex", &self.enable_page_index)?;
@@ -5935,6 +5938,15 @@ impl serde::Serialize for ParquetOptions {
                 }
             }
         }
+        if let Some(v) = self.filter_statistics_collection_max_rows_opt.as_ref() {
+            match v {
+                parquet_options::FilterStatisticsCollectionMaxRowsOpt::FilterStatisticsCollectionMaxRows(v) => {
+                    #[allow(clippy::needless_borrow)]
+                    #[allow(clippy::needless_borrows_for_generic_args)]
+                    struct_ser.serialize_field("filterStatisticsCollectionMaxRows", ToString::to_string(&v).as_str())?;
+                }
+            }
+        }
         struct_ser.end()
     }
 }
@@ -6014,6 +6026,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             "filterStatisticsCollectionMinRows",
             "filter_statistics_collection_fraction",
             "filterStatisticsCollectionFraction",
+            "filter_statistics_collection_max_rows",
+            "filterStatisticsCollectionMaxRows",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -6054,6 +6068,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             FilterCorrelationThreshold,
             FilterStatisticsCollectionMinRows,
             FilterStatisticsCollectionFraction,
+            FilterStatisticsCollectionMaxRows,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -6111,6 +6126,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             "filterCorrelationThreshold" | "filter_correlation_threshold" => Ok(GeneratedField::FilterCorrelationThreshold),
                             "filterStatisticsCollectionMinRows" | "filter_statistics_collection_min_rows" => Ok(GeneratedField::FilterStatisticsCollectionMinRows),
                             "filterStatisticsCollectionFraction" | "filter_statistics_collection_fraction" => Ok(GeneratedField::FilterStatisticsCollectionFraction),
+                            "filterStatisticsCollectionMaxRows" | "filter_statistics_collection_max_rows" => Ok(GeneratedField::FilterStatisticsCollectionMaxRows),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -6166,6 +6182,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                 let mut filter_correlation_threshold_opt__ = None;
                 let mut filter_statistics_collection_min_rows_opt__ = None;
                 let mut filter_statistics_collection_fraction_opt__ = None;
+                let mut filter_statistics_collection_max_rows_opt__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::EnablePageIndex => {
@@ -6398,6 +6415,12 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             }
                             filter_statistics_collection_fraction_opt__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| parquet_options::FilterStatisticsCollectionFractionOpt::FilterStatisticsCollectionFraction(x.0));
                         }
+                        GeneratedField::FilterStatisticsCollectionMaxRows => {
+                            if filter_statistics_collection_max_rows_opt__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("filterStatisticsCollectionMaxRows"));
+                            }
+                            filter_statistics_collection_max_rows_opt__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| parquet_options::FilterStatisticsCollectionMaxRowsOpt::FilterStatisticsCollectionMaxRows(x.0));
+                        }
                     }
                 }
                 Ok(ParquetOptions {
@@ -6437,6 +6460,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     filter_correlation_threshold_opt: filter_correlation_threshold_opt__,
                     filter_statistics_collection_min_rows_opt: filter_statistics_collection_min_rows_opt__,
                     filter_statistics_collection_fraction_opt: filter_statistics_collection_fraction_opt__,
+                    filter_statistics_collection_max_rows_opt: filter_statistics_collection_max_rows_opt__,
                 })
             }
         }

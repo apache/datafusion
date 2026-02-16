@@ -619,6 +619,10 @@ message ParquetOptions {
   oneof filter_statistics_collection_fraction_opt {
     double filter_statistics_collection_fraction = 38;
   }
+
+  oneof filter_statistics_collection_max_rows_opt {
+    uint64 filter_statistics_collection_max_rows = 39;
+  }
 }
 
 enum JoinSide {

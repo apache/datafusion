@@ -908,6 +908,7 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             filter_correlation_threshold_opt: Some(protobuf::parquet_options::FilterCorrelationThresholdOpt::FilterCorrelationThreshold(value.filter_correlation_threshold)),
             filter_statistics_collection_min_rows_opt: Some(protobuf::parquet_options::FilterStatisticsCollectionMinRowsOpt::FilterStatisticsCollectionMinRows(value.filter_statistics_collection_min_rows)),
             filter_statistics_collection_fraction_opt: Some(protobuf::parquet_options::FilterStatisticsCollectionFractionOpt::FilterStatisticsCollectionFraction(value.filter_statistics_collection_fraction)),
+            filter_statistics_collection_max_rows_opt: Some(protobuf::parquet_options::FilterStatisticsCollectionMaxRowsOpt::FilterStatisticsCollectionMaxRows(value.filter_statistics_collection_max_rows)),
         })
     }
 }

@@ -1102,6 +1102,9 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             filter_statistics_collection_fraction: value.filter_statistics_collection_fraction_opt.map(|opt| match opt {
                 protobuf::parquet_options::FilterStatisticsCollectionFractionOpt::FilterStatisticsCollectionFraction(v) => v,
             }).unwrap_or(0.0),
+            filter_statistics_collection_max_rows: value.filter_statistics_collection_max_rows_opt.map(|opt| match opt {
+                protobuf::parquet_options::FilterStatisticsCollectionMaxRowsOpt::FilterStatisticsCollectionMaxRows(v) => v,
+            }).unwrap_or(1_000_000),
         })
     }
 }
