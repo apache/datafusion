@@ -411,7 +411,7 @@ async fn test_fn_approx_median() -> Result<()> {
 
 #[tokio::test]
 async fn test_fn_approx_percentile_cont() -> Result<()> {
-    let expr = approx_percentile_cont(col("b").sort(true, false), lit(0.5), None);
+    let expr = approx_percentile_cont(col("b"), lit(0.5), None, true);
 
     let df = create_test_table().await?;
     let batches = df.aggregate(vec![], vec![expr]).unwrap().collect().await?;
@@ -426,7 +426,7 @@ async fn test_fn_approx_percentile_cont() -> Result<()> {
     +---------------------------------------------------------------------------+
     ");
 
-    let expr = approx_percentile_cont(col("b").sort(false, false), lit(0.1), None);
+    let expr = approx_percentile_cont(col("b"), lit(0.1), None, false);
 
     let df = create_test_table().await?;
     let batches = df.aggregate(vec![], vec![expr]).unwrap().collect().await?;
@@ -447,7 +447,7 @@ async fn test_fn_approx_percentile_cont() -> Result<()> {
         None::<&str>,
         "arg_2".to_string(),
     ));
-    let expr = approx_percentile_cont(col("b").sort(true, false), alias_expr, None);
+    let expr = approx_percentile_cont(col("b"), alias_expr, None, true);
     let df = create_test_table().await?;
     let batches = df.aggregate(vec![], vec![expr]).unwrap().collect().await?;
 
@@ -467,7 +467,7 @@ async fn test_fn_approx_percentile_cont() -> Result<()> {
         None::<&str>,
         "arg_2".to_string(),
     ));
-    let expr = approx_percentile_cont(col("b").sort(false, false), alias_expr, None);
+    let expr = approx_percentile_cont(col("b"), alias_expr, None, false);
     let df = create_test_table().await?;
     let batches = df.aggregate(vec![], vec![expr]).unwrap().collect().await?;
 
@@ -483,7 +483,7 @@ async fn test_fn_approx_percentile_cont() -> Result<()> {
     );
 
     // with number of centroids set
-    let expr = approx_percentile_cont(col("b").sort(true, false), lit(0.5), Some(lit(2)));
+    let expr = approx_percentile_cont(col("b"), lit(0.5), Some(lit(2)), true);
 
     let df = create_test_table().await?;
     let batches = df.aggregate(vec![], vec![expr]).unwrap().collect().await?;
@@ -498,8 +498,7 @@ async fn test_fn_approx_percentile_cont() -> Result<()> {
     +------------------------------------------------------------------------------------+
     ");
 
-    let expr =
-        approx_percentile_cont(col("b").sort(false, false), lit(0.1), Some(lit(2)));
+    let expr = approx_percentile_cont(col("b"), lit(0.1), Some(lit(2)), false);
 
     let df = create_test_table().await?;
     let batches = df.aggregate(vec![], vec![expr]).unwrap().collect().await?;
