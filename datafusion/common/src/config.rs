@@ -758,9 +758,21 @@ config_namespace! {
         /// 0.0 = all filters pushed as row filters (no adaptive logic).
         /// Default: 104857600.0 (100 MB/s) — empirically tuned across
         /// TPC-H, TPC-DS, and ClickBench benchmarks on an m4 MacBook Pro.
-        /// The optimal value for this setting likely depeonds on the relative
+        /// The optimal value for this setting likely depends on the relative
         /// cost of CPU vs. IO in your environment, and to some extent the shape
         /// of your query.
+        ///
+        /// **Interaction with `pushdown_filters` and `reorder_filters`:**
+        /// This option only takes effect when `pushdown_filters = true`.
+        /// When pushdown is disabled, all filters run post-scan and this
+        /// threshold is ignored. During the statistics collection phase
+        /// (see `filter_statistics_collection_min_rows`), all filters
+        /// temporarily run post-scan to gather baseline metrics; once
+        /// collection completes, filters exceeding this throughput threshold
+        /// are promoted to row filters while the rest remain post-scan.
+        /// When `reorder_filters = true`, promoted filters are further
+        /// sorted by measured effectiveness (most selective first), falling
+        /// back to the default I/O-cost heuristic for filters without data.
         pub filter_pushdown_min_bytes_per_sec: f64, default = 104_857_600.0
 
         /// (reading) Correlation ratio threshold for grouping filters.
@@ -771,6 +783,14 @@ config_namespace! {
         /// Higher values = less grouping = more late materialization, more overhead.
         /// Lower values = more grouping = less overhead, less late materialization.
         /// Set to f64::MAX to disable grouping entirely.
+        ///
+        /// **Interaction with `pushdown_filters` and `reorder_filters`:**
+        /// Grouping only applies when `pushdown_filters = true` and the
+        /// statistics collection phase has completed. Correlated filters
+        /// are merged into a single compound `ArrowPredicate` so they
+        /// decode shared columns only once. When `reorder_filters = true`,
+        /// the compound predicates are ordered among the other row-filter
+        /// predicates by measured effectiveness.
         pub filter_correlation_threshold: f64, default = 1.5
 
         /// (reading) Minimum rows of post-scan evaluation before statistics-based
@@ -779,6 +799,14 @@ config_namespace! {
         /// Used for BOTH individual filter effectiveness decisions AND correlation-
         /// based grouping. Larger values = more accurate estimates, longer collection.
         /// Set to 0 to disable the collection phase entirely.
+        ///
+        /// **Interaction with `pushdown_filters` and `reorder_filters`:**
+        /// During the collection phase, `pushdown_filters` is effectively
+        /// overridden: all filters run post-scan regardless of its value so
+        /// that unbiased selectivity statistics can be gathered. After
+        /// collection, `pushdown_filters` and `reorder_filters` resume
+        /// their normal roles — gating which filters are promoted and how
+        /// they are ordered, respectively.
         pub filter_statistics_collection_min_rows: u64, default = 10_000
 
         /// (reading) Fraction of total dataset rows to use for the statistics
@@ -787,6 +815,13 @@ config_namespace! {
         /// 0.0 = disabled, use filter_statistics_collection_min_rows only.
         /// 0.05 (default) = collect stats on at least 5% of the dataset.
         /// Must be in [0.0, 1.0].
+        ///
+        /// **Interaction with `pushdown_filters`:**
+        /// Like `filter_statistics_collection_min_rows`, this extends the
+        /// collection phase during which filters run post-scan. It ensures
+        /// the collection window is proportional to the dataset size,
+        /// which matters for very large tables where a fixed row count
+        /// would be an insignificant sample.
         pub filter_statistics_collection_fraction: f64, default = 0.05
 
         // The following options affect writing to parquet files
