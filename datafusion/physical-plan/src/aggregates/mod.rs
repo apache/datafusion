@@ -45,6 +45,7 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::FieldRef;
 use datafusion_common::stats::Precision;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     Constraint, Constraints, Result, ScalarValue, assert_eq_or_internal_err, not_impl_err,
 };
@@ -1371,28 +1372,33 @@ impl ExecutionPlan for AggregateExec {
         vec![&self.input]
     }
 
-    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        let mut exprs = Vec::new();
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Apply to group by expressions
+        for expr in self.group_by.input_exprs() {
+            f(expr.as_ref())?;
+        }
 
-        // Add group by expressions
-        exprs.extend(self.group_by.input_exprs());
-
-        // Add aggregate expressions
+        // Apply to aggregate expressions
         for aggr in self.aggr_expr.iter() {
-            exprs.extend(aggr.expressions());
+            for expr in aggr.expressions() {
+                f(expr.as_ref())?;
+            }
         }
 
-        // Add filter expressions (FILTER WHERE clauses)
+        // Apply to filter expressions (FILTER WHERE clauses)
         for filter in self.filter_expr.iter().flatten() {
-            exprs.push(Arc::clone(filter));
+            f(filter.as_ref())?;
         }
 
-        // Add dynamic filter expression if present
+        // Apply to dynamic filter expression if present
         if let Some(dyn_filter) = &self.dynamic_filter {
-            exprs.push(Arc::clone(&dyn_filter.filter) as Arc<dyn PhysicalExpr>);
+            f(dyn_filter.filter.as_ref())?;
         }
 
-        exprs
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn with_new_children(
@@ -2484,6 +2490,13 @@ mod tests {
 
         fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
             vec![]
+        }
+
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
         }
 
         fn with_new_children(

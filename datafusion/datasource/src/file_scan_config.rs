@@ -27,6 +27,7 @@ use crate::{
 use arrow::datatypes::FieldRef;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     Constraints, Result, ScalarValue, Statistics, internal_datafusion_err, internal_err,
 };
@@ -924,10 +925,12 @@ impl DataSource for FileScanConfig {
         Some(Arc::new(new_config))
     }
 
-    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        // Return all expressions from the file source (filter, projections, etc.)
-        // This may contain dynamic filters for consumer discovery
-        self.file_source.expressions()
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Delegate to the file source
+        self.file_source.apply_expressions(f)
     }
 }
 
@@ -1589,6 +1592,13 @@ mod tests {
             Ok(SortOrderPushdownResult::Inexact {
                 inner: Arc::new(self.clone()) as Arc<dyn FileSource>,
             })
+        }
+
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
         }
     }
 

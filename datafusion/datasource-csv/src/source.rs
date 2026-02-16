@@ -35,6 +35,7 @@ use datafusion_datasource::{
 
 use arrow::csv;
 use datafusion_common::config::CsvOptions;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_common_runtime::JoinSet;
 use datafusion_datasource::file::FileSource;
@@ -313,6 +314,19 @@ impl FileSource for CsvSource {
             }
             DisplayFormatType::TreeRender => Ok(()),
         }
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(
+            &dyn datafusion_physical_plan::PhysicalExpr,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Visit projection expressions
+        for proj_expr in &self.projection.source {
+            f(proj_expr.expr.as_ref())?;
+        }
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 

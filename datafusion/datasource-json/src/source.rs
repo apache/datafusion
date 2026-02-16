@@ -27,6 +27,7 @@ use crate::file_format::JsonDecoder;
 use crate::utils::{ChannelReader, JsonArrayToNdjsonReader};
 
 use datafusion_common::error::{DataFusionError, Result};
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common_runtime::{JoinSet, SpawnedTask};
 use datafusion_datasource::decoder::{DecoderDeserializer, deserialize_stream};
 use datafusion_datasource::file_compression_type::FileCompressionType;
@@ -235,6 +236,19 @@ impl FileSource for JsonSource {
 
     fn file_type(&self) -> &str {
         "json"
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(
+            &dyn datafusion_physical_plan::PhysicalExpr,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Visit projection expressions
+        for proj_expr in &self.projection.source {
+            f(proj_expr.expr.as_ref())?;
+        }
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 

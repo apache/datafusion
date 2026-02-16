@@ -68,6 +68,7 @@ use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
 use arrow_schema::DataType;
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
     JoinSide, JoinType, NullEquality, Result, assert_or_internal_err, internal_err,
@@ -1134,26 +1135,27 @@ impl ExecutionPlan for HashJoinExec {
         vec![&self.left, &self.right]
     }
 
-    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        let mut exprs = vec![];
-
-        // Add join key expressions from both sides
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Apply to join key expressions from both sides
         for (left, right) in &self.on {
-            exprs.push(Arc::clone(left));
-            exprs.push(Arc::clone(right));
+            f(left.as_ref())?;
+            f(right.as_ref())?;
         }
 
-        // Add join filter expressions if present
+        // Apply to join filter expression if present
         if let Some(filter) = &self.filter {
-            exprs.push(Arc::clone(filter.expression()));
+            f(filter.expression().as_ref())?;
         }
 
-        // Add dynamic filter expression if present
+        // Apply to dynamic filter expression if present
         if let Some(df) = &self.dynamic_filter {
-            exprs.push(Arc::clone(&df.filter) as Arc<dyn PhysicalExpr>);
+            f(df.filter.as_ref())?;
         }
 
-        exprs
+        Ok(TreeNodeRecursion::Continue)
     }
 
     /// Creates a new HashJoinExec with different children while preserving configuration.

@@ -27,7 +27,9 @@ use std::sync::Arc;
 use crate::PhysicalOptimizerRule;
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
 use datafusion_common::{Result, Statistics};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::Distribution;
@@ -295,6 +297,35 @@ impl ExecutionPlan for OutputRequirementExec {
 
     fn fetch(&self) -> Option<usize> {
         self.fetch
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(
+            &dyn datafusion_physical_expr_common::physical_expr::PhysicalExpr,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Visit expressions in order_requirement
+        if let Some(order_reqs) = &self.order_requirement {
+            let lexes = match order_reqs {
+                OrderingRequirements::Hard(alternatives) => alternatives,
+                OrderingRequirements::Soft(alternatives) => alternatives,
+            };
+            for lex in lexes {
+                for sort_expr in lex {
+                    f(sort_expr.expr.as_ref())?;
+                }
+            }
+        }
+
+        // Visit expressions in dist_requirement if it's HashPartitioned
+        if let Distribution::HashPartitioned(exprs) = &self.dist_requirement {
+            for expr in exprs {
+                f(expr.as_ref())?;
+            }
+        }
+
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 

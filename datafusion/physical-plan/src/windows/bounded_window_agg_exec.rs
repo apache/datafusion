@@ -48,6 +48,7 @@ use arrow::{
 };
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::stats::Precision;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::{
     evaluate_partition_ranges, get_at_indices, get_row_at_idx,
 };
@@ -312,12 +313,16 @@ impl ExecutionPlan for BoundedWindowAggExec {
         vec![&self.input]
     }
 
-    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        // Collect expressions from all window functions
-        self.window_expr
-            .iter()
-            .flat_map(|window_expr| window_expr.expressions())
-            .collect()
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        for window_expr in &self.window_expr {
+            for expr in window_expr.expressions() {
+                f(expr.as_ref())?;
+            }
+        }
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {

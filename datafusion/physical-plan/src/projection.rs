@@ -307,13 +307,14 @@ impl ExecutionPlan for ProjectionExec {
         vec![&self.input]
     }
 
-    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        self.projector
-            .projection()
-            .as_ref()
-            .iter()
-            .map(|proj_expr| Arc::clone(&proj_expr.expr))
-            .collect()
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        for proj_expr in self.projector.projection().as_ref().iter() {
+            f(proj_expr.expr.as_ref())?;
+        }
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn with_new_children(

@@ -28,6 +28,7 @@ use crate::file_stream::FileOpener;
 #[expect(deprecated)]
 use crate::schema_adapter::SchemaAdapterFactory;
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, not_impl_err};
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr};
@@ -320,32 +321,24 @@ pub trait FileSource: Send + Sync {
         None
     }
 
-    /// Returns all physical expressions used by this file source.
+    /// Apply a function to all physical expressions used by this file source.
     ///
     /// This includes:
     /// - Filter predicates (which may contain dynamic filters)
     /// - Projection expressions
     ///
-    /// The default implementation returns filter and projection expressions.
-    /// Implementations can override this to include additional expressions.
-    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        let mut exprs = Vec::new();
-
-        // Add filter expression if present
-        if let Some(filter) = self.filter() {
-            exprs.push(filter);
-        }
-
-        // Add projection expressions if present
-        if let Some(projection) = self.projection() {
-            exprs.extend(
-                projection
-                    .as_ref()
-                    .iter()
-                    .map(|proj_expr| Arc::clone(&proj_expr.expr)),
-            );
-        }
-
-        exprs
-    }
+    /// The function `f` is called once for each expression. The function should
+    /// return `TreeNodeRecursion::Continue` to continue visiting other expressions,
+    /// or `TreeNodeRecursion::Stop` to stop visiting expressions early.
+    ///
+    /// Implementations must explicitly visit all expressions. There is no default
+    /// implementation to ensure that all FileSource implementations handle this correctly.
+    ///
+    /// See [`ExecutionPlan::apply_expressions`] for more details and examples.
+    ///
+    /// [`ExecutionPlan::apply_expressions`]: datafusion_physical_plan::ExecutionPlan::apply_expressions
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion>;
 }

@@ -3869,23 +3869,24 @@ async fn test_filter_with_projection_pushdown() {
     assert_batches_eq!(expected, &result);
 }
 
-/// Test that ExecutionPlan::expressions() can discover dynamic filters across the plan tree
+/// Test that ExecutionPlan::apply_expressions() can discover dynamic filters across the plan tree
 #[tokio::test]
 async fn test_discover_dynamic_filters_via_expressions_api() {
     use datafusion_common::JoinType;
+    use datafusion_common::tree_node::TreeNodeRecursion;
     use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
     use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 
     fn count_dynamic_filters(plan: &Arc<dyn ExecutionPlan>) -> usize {
         let mut count = 0;
 
-        // Check expressions from this node
-        let exprs = plan.expressions();
-        for expr in exprs.iter() {
+        // Check expressions from this node using apply_expressions
+        let _ = plan.apply_expressions(&mut |expr| {
             if let Some(_df) = expr.as_any().downcast_ref::<DynamicFilterPhysicalExpr>() {
                 count += 1;
             }
-        }
+            Ok(TreeNodeRecursion::Continue)
+        });
 
         // Recursively visit children
         for child in plan.children() {

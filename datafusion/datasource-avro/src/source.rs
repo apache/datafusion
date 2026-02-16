@@ -23,6 +23,7 @@ use std::sync::Arc;
 use crate::avro_to_arrow::Reader as AvroReader;
 
 use datafusion_common::error::Result;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_datasource::TableSchema;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
@@ -138,6 +139,19 @@ impl FileSource for AvroSource {
         _config: &FileScanConfig,
     ) -> Result<Option<FileScanConfig>> {
         Ok(None)
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(
+            &dyn datafusion_physical_plan::PhysicalExpr,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Visit projection expressions
+        for proj_expr in &self.projection.source {
+            f(proj_expr.expr.as_ref())?;
+        }
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 
