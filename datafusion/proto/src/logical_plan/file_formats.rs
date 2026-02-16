@@ -430,6 +430,7 @@ mod parquet {
                 filter_correlation_threshold_opt: Some(parquet_options::FilterCorrelationThresholdOpt::FilterCorrelationThreshold(global_options.global.filter_correlation_threshold)),
                 filter_statistics_collection_min_rows_opt: Some(parquet_options::FilterStatisticsCollectionMinRowsOpt::FilterStatisticsCollectionMinRows(global_options.global.filter_statistics_collection_min_rows)),
                 filter_statistics_collection_fraction_opt: Some(parquet_options::FilterStatisticsCollectionFractionOpt::FilterStatisticsCollectionFraction(global_options.global.filter_statistics_collection_fraction)),
+                filter_statistics_collection_max_rows_opt: Some(parquet_options::FilterStatisticsCollectionMaxRowsOpt::FilterStatisticsCollectionMaxRows(global_options.global.filter_statistics_collection_max_rows)),
             }),
             column_specific_options: column_specific_options.into_iter().map(|(column_name, options)| {
                 ParquetColumnSpecificOptions {
@@ -541,6 +542,9 @@ mod parquet {
             filter_statistics_collection_fraction: proto.filter_statistics_collection_fraction_opt.as_ref().map(|opt| match opt {
                 parquet_options::FilterStatisticsCollectionFractionOpt::FilterStatisticsCollectionFraction(v) => *v,
             }).unwrap_or(0.0),
+            filter_statistics_collection_max_rows: proto.filter_statistics_collection_max_rows_opt.as_ref().map(|opt| match opt {
+                parquet_options::FilterStatisticsCollectionMaxRowsOpt::FilterStatisticsCollectionMaxRows(v) => *v,
+            }).unwrap_or(1_000_000),
         }
         }
     }
