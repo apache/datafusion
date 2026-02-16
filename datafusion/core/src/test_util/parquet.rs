@@ -70,6 +70,8 @@ impl ParquetScanOptions {
         config.execution.parquet.pushdown_filters = self.pushdown_filters;
         config.execution.parquet.reorder_filters = self.reorder_filters;
         config.execution.parquet.enable_page_index = self.enable_page_index;
+        // Disable adaptive filter selection for tests that expect deterministic pushdown
+        config.execution.parquet.filter_pushdown_min_bytes_per_sec = 0.0;
         config.into()
     }
 }

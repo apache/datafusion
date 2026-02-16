@@ -633,6 +633,7 @@ async fn predicate_cache_default() -> datafusion_common::Result<()> {
 async fn predicate_cache_pushdown_default() -> datafusion_common::Result<()> {
     let mut config = SessionConfig::new();
     config.options_mut().execution.parquet.pushdown_filters = true;
+    config.options_mut().execution.parquet.filter_pushdown_min_bytes_per_sec = 0.0;
     let ctx = SessionContext::new_with_config(config);
     // The cache is on by default, and used when filter pushdown is enabled
     PredicateCacheTest {
@@ -647,6 +648,7 @@ async fn predicate_cache_pushdown_default() -> datafusion_common::Result<()> {
 async fn predicate_cache_stats_issue_19561() -> datafusion_common::Result<()> {
     let mut config = SessionConfig::new();
     config.options_mut().execution.parquet.pushdown_filters = true;
+    config.options_mut().execution.parquet.filter_pushdown_min_bytes_per_sec = 0.0;
     // force to get multiple batches to trigger repeated metric compound bug
     config.options_mut().execution.batch_size = 1;
     let ctx = SessionContext::new_with_config(config);
@@ -664,6 +666,7 @@ async fn predicate_cache_pushdown_default_selections_only()
 -> datafusion_common::Result<()> {
     let mut config = SessionConfig::new();
     config.options_mut().execution.parquet.pushdown_filters = true;
+    config.options_mut().execution.parquet.filter_pushdown_min_bytes_per_sec = 0.0;
     // forcing filter selections minimizes the number of rows read from the cache
     config
         .options_mut()
