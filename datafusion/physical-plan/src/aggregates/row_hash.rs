@@ -51,7 +51,7 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{GroupsAccumulatorAdapter, PhysicalSortExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
-use crate::sorts::IncrementingSortIterator;
+use crate::sorts::IncrementalSortIterator;
 use datafusion_common::instant::Instant;
 use datafusion_common::utils::memory::get_record_batch_memory_size;
 use futures::ready;
@@ -1188,7 +1188,7 @@ impl GroupedHashAggregateStream {
                     )
                 })?;
 
-                let sorted_iter = IncrementingSortIterator::new(
+                let sorted_iter = IncrementalSortIterator::new(
                     emit,
                     self.spill_state.spill_expr.clone(),
                     self.batch_size,

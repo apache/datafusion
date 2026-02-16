@@ -281,7 +281,21 @@ impl<T: CursorArray> PartitionedStream for FieldCursorStream<T> {
     }
 }
 
-pub(crate) struct IncrementingSortIterator {
+/// A lazy, memory-efficient sort iterator used as a fallback during aggregate
+/// spill when there is not enough memory for an eager sort (which requires ~2x
+/// peak memory to hold both the unsorted and sorted copies simultaneously).
+///
+/// On the first call to `next()`, a sorted index array (`UInt32Array`) is
+/// computed via `lexsort_to_indices`. Subsequent calls yield chunks of
+/// `batch_size` rows by `take`-ing from the original batch using slices of
+/// this index array. Each `take` copies data for the chunk (not zero-copy),
+/// but only one chunk is live at a time since the caller consumes it before
+/// requesting the next. Once all rows have been yielded, the original batch
+/// and index array are dropped to free memory.
+///
+/// The caller must reserve `sizeof(batch) + sizeof(one chunk)` for this iterator,
+/// and free the reservation once the iterator is depleted.
+pub(crate) struct IncrementalSortIterator {
     batch: RecordBatch,
     expressions: LexOrdering,
     batch_size: usize,
@@ -289,7 +303,7 @@ pub(crate) struct IncrementingSortIterator {
     cursor: usize,
 }
 
-impl IncrementingSortIterator {
+impl IncrementalSortIterator {
     pub(crate) fn new(
         batch: RecordBatch,
         expressions: LexOrdering,
@@ -305,7 +319,7 @@ impl IncrementingSortIterator {
     }
 }
 
-impl Iterator for IncrementingSortIterator {
+impl Iterator for IncrementalSortIterator {
     type Item = Result<RecordBatch>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -367,4 +381,4 @@ impl Iterator for IncrementingSortIterator {
     }
 }
 
-impl FusedIterator for IncrementingSortIterator {}
+impl FusedIterator for IncrementalSortIterator {}
