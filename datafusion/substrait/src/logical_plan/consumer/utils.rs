@@ -384,16 +384,18 @@ impl NameTracker {
     /// 1. validate_unique_names (duplicate schema_name)
     /// 2. DFSchema::check_names (ambiguous reference)
     fn would_conflict(&self, expr: &Expr) -> bool {
-        self.would_conflict_inner(expr.qualified_name(), expr.schema_name().to_string())
+        let (qualifier, name) = expr.qualified_name();
+        let schema_name = expr.schema_name().to_string();
+        self.would_conflict_inner((qualifier, &name), &schema_name)
     }
 
     fn would_conflict_inner(
         &self,
-        qualified_name: (Option<TableReference>, String),
-        schema_name: String,
+        qualified_name: (Option<TableReference>, &str),
+        schema_name: &str,
     ) -> bool {
         // Check for duplicate schema_name (would fail validate_unique_names)
-        if self.seen_schema_names.contains(&schema_name) {
+        if self.seen_schema_names.contains(schema_name) {
             return true;
         }
 
@@ -403,11 +405,11 @@ impl NameTracker {
         match qualifier {
             Some(_) => {
                 // Adding a qualified name - conflicts if unqualified version exists
-                self.unqualified_names.contains(&name)
+                self.unqualified_names.contains(name)
             }
             None => {
                 // Adding an unqualified name - conflicts if qualified version exists
-                self.qualified_names.contains(&name)
+                self.qualified_names.contains(name)
             }
         }
     }
@@ -442,10 +444,7 @@ impl NameTracker {
         let candidate_name = loop {
             let candidate_name = format!("{schema_name}__temp__{counter}");
             // .alias always produces a unqualified name so check for conflicts accordingly.
-            if !self.would_conflict_inner(
-                (None, candidate_name.clone()),
-                candidate_name.clone(),
-            ) {
+            if !self.would_conflict_inner((None, &candidate_name), &candidate_name) {
                 break candidate_name;
             }
             counter += 1;
