@@ -1029,6 +1029,32 @@ ORDER BY x + 1 DESC;
 2 150
 1 60
 
+# Test 3.12: Aggregate ORDER BY non-column expression (unsatisfied) keeps SortExec
+# (though note in theory DataFusion could figure out that data sorted by x will also be sorted by x+1)
+query TT
+EXPLAIN SELECT x, SUM(v)
+FROM agg_expr_parquet
+GROUP BY x
+ORDER BY 2 * x ASC;
+----
+logical_plan
+01)Sort: Int64(2) * CAST(agg_expr_parquet.x AS Int64) ASC NULLS LAST
+02)--Aggregate: groupBy=[[agg_expr_parquet.x]], aggr=[[sum(CAST(agg_expr_parquet.v AS Int64))]]
+03)----TableScan: agg_expr_parquet projection=[x, v]
+physical_plan
+01)SortExec: expr=[2 * CAST(x@0 AS Int64) ASC NULLS LAST], preserve_partitioning=[false]
+02)--AggregateExec: mode=Single, gby=[x@0 as x], aggr=[sum(agg_expr_parquet.v)], ordering_mode=Sorted
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/agg_expr_sorted.parquet]]}, projection=[x, v], output_ordering=[x@0 ASC NULLS LAST], file_type=parquet
+
+query II
+SELECT x, SUM(v)
+FROM agg_expr_parquet
+GROUP BY x
+ORDER BY 2 * x ASC;
+----
+1 60
+2 150
+
 # Test 4: Reversed filesystem order with inferred ordering
 # Create 3 parquet files with non-overlapping id ranges, named so filesystem
 # order is OPPOSITE to data order. Each file is internally sorted by id ASC.
