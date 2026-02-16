@@ -15,10 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#[macro_use]
-extern crate criterion;
-
-use criterion::{BenchmarkId, Criterion};
+use criterion::{
+    criterion_group, criterion_main, {BenchmarkId, Criterion},
+};
 use datafusion_expr::lit;
 use datafusion_functions_nested::expr_fn::{
     array_has, array_has_all, array_has_any, make_array,

@@ -470,7 +470,9 @@ fn bitwise_coercion(left_type: &DataType, right_type: &DataType) -> Option<DataT
         return None;
     }
 
-    if left_type == right_type {
+    let is_integer_dictionary =
+        matches!(left_type, Dictionary(_, value_type) if value_type.is_integer());
+    if left_type == right_type && (left_type.is_integer() || is_integer_dictionary) {
         return Some(left_type.clone());
     }
 

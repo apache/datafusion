@@ -43,6 +43,7 @@ use crate::eliminate_join::EliminateJoin;
 use crate::eliminate_limit::EliminateLimit;
 use crate::eliminate_outer_join::EliminateOuterJoin;
 use crate::extract_equijoin_predicate::ExtractEquijoinPredicate;
+use crate::extract_leaf_expressions::{ExtractLeafExpressions, PushDownLeafProjections};
 use crate::filter_null_join_keys::FilterNullJoinKeys;
 use crate::optimize_projections::OptimizeProjections;
 use crate::optimize_unions::OptimizeUnions;
@@ -262,6 +263,8 @@ impl Optimizer {
             Arc::new(EliminateGroupByConstant::new()),
             Arc::new(RewriteAggregateWithConstant::new()),
             Arc::new(CommonSubexprEliminate::new()),
+            Arc::new(ExtractLeafExpressions::new()),
+            Arc::new(PushDownLeafProjections::new()),
             Arc::new(OptimizeProjections::new()),
         ];
 
