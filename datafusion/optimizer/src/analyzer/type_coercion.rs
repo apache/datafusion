@@ -49,9 +49,9 @@ use datafusion_expr::type_coercion::other::{
 };
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
-    Cast, Expr, ExprSchemable, Join, Limit, LogicalPlan, Operator, Projection, TryCast,
-    Union, WindowFrame, WindowFrameBound, WindowFrameUnits, is_false, is_not_false,
-    is_not_true, is_not_unknown, is_true, is_unknown, lit, not,
+    Cast, Expr, ExprSchemable, Join, Limit, LogicalPlan, Operator, Projection, Union,
+    WindowFrame, WindowFrameBound, WindowFrameUnits, is_false, is_not_false, is_not_true,
+    is_not_unknown, is_true, is_unknown, lit, not,
 };
 
 /// Performs type coercion by determining the schema
@@ -744,47 +744,18 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 });
                 Ok(Transformed::yes(new_expr))
             }
-            // IS NULL / IS NOT NULL / SIMILAR TO / CAST / TRY_CAST validate
-            // their inner expressions during type coercion (previously they were in
-            // the catch-all branch and skipped validation, which caused panics at
-            // runtime for invalid inner expressions like zero-argument function calls).
-            // Detail: <https://github.com/apache/datafusion/issues/20201>
-            //
-            // TODO: reject the invalid cases at planning.
-            Expr::IsNotNull(ref inner_expr) | Expr::IsNull(ref inner_expr) => {
-                let _check_type = inner_expr.get_type(self.schema)?;
-                Ok(Transformed::no(expr))
-            }
-            Expr::SimilarTo(Like {
-                expr: ref lhs,
-                ref pattern,
-                ..
-            }) => {
-                let _check_type =
-                    (lhs.get_type(self.schema)?, pattern.get_type(self.schema)?);
-                Ok(Transformed::no(expr))
-            }
-            Expr::Cast(Cast {
-                expr: ref from_expr,
-                ..
-            }) => {
-                let _check_type = from_expr.get_type(self.schema)?;
-                Ok(Transformed::no(expr))
-            }
-            Expr::TryCast(TryCast {
-                expr: ref from_expr,
-                ..
-            }) => {
-                let _check_type = from_expr.get_type(self.schema)?;
-                Ok(Transformed::no(expr))
-            }
             // TODO: remove the next line after `Expr::Wildcard` is removed
             #[expect(deprecated)]
             Expr::Alias(_)
             | Expr::Column(_)
             | Expr::ScalarVariable(_, _)
             | Expr::Literal(_, _)
+            | Expr::SimilarTo(_)
+            | Expr::IsNotNull(_)
+            | Expr::IsNull(_)
             | Expr::Negative(_)
+            | Expr::Cast(_)
+            | Expr::TryCast(_)
             | Expr::Wildcard { .. }
             | Expr::GroupingSet(_)
             | Expr::Placeholder(_)
@@ -983,10 +954,6 @@ fn coerce_arguments_for_signature<F: UDFCoercionExt>(
     schema: &DFSchema,
     func: &F,
 ) -> Result<Vec<Expr>> {
-    if expressions.is_empty() {
-        return Ok(expressions);
-    }
-
     let current_fields = expressions
         .iter()
         .map(|e| e.to_field(schema).map(|(_, f)| f))
@@ -1288,7 +1255,7 @@ mod test {
 
     use crate::analyzer::Analyzer;
     use crate::analyzer::type_coercion::{
-        TypeCoercion, TypeCoercionRewriter, analyze_internal, coerce_case_expression,
+        TypeCoercion, TypeCoercionRewriter, coerce_case_expression,
     };
     use crate::assert_analyzed_plan_with_config_eq_snapshot;
     use datafusion_common::config::ConfigOptions;
@@ -1298,10 +1265,10 @@ mod test {
     use datafusion_expr::logical_plan::{EmptyRelation, Projection, Sort};
     use datafusion_expr::test::function_stub::avg_udaf;
     use datafusion_expr::{
-        AccumulatorFactoryFunction, AggregateUDF, BinaryExpr, Case, Cast, ColumnarValue,
-        Expr, ExprSchemable, Filter, LogicalPlan, Operator, ScalarFunctionArgs,
-        ScalarUDF, ScalarUDFImpl, Signature, SimpleAggregateUDF, Subquery, TryCast,
-        Union, Volatility, cast, col, create_udaf, is_true, lit,
+        AccumulatorFactoryFunction, AggregateUDF, BinaryExpr, Case, ColumnarValue, Expr,
+        ExprSchemable, Filter, LogicalPlan, Operator, ScalarFunctionArgs, ScalarUDF,
+        ScalarUDFImpl, Signature, SimpleAggregateUDF, Subquery, Union, Volatility, cast,
+        col, create_udaf, is_true, lit,
     };
     use datafusion_functions_aggregate::average::AvgAccumulator;
     use datafusion_sql::TableReference;
@@ -2770,66 +2737,5 @@ mod test {
           EmptyRelation: rows=0
         "
         )
-    }
-
-    fn zero_arg_scalar_func() -> Expr {
-        let fun = ScalarUDF::new_from_impl(TestScalarUDF {
-            signature: Signature::uniform(1, vec![DataType::Float32], Volatility::Stable),
-        });
-        Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(fun), vec![]))
-    }
-
-    #[test]
-    fn test_is_null_rejects_invalid_inner_expr() -> Result<()> {
-        let schema = DFSchema::empty();
-        let empty = empty_with_type(DataType::Int32);
-
-        let expr = Expr::IsNull(Box::new(zero_arg_scalar_func()));
-        let plan = LogicalPlan::Filter(Filter::try_new(expr.clone(), empty.clone())?);
-        assert!(analyze_internal(&schema, plan).is_err());
-
-        let expr = Expr::IsNotNull(Box::new(zero_arg_scalar_func()));
-        let plan = LogicalPlan::Filter(Filter::try_new(expr.clone(), empty.clone())?);
-        assert!(analyze_internal(&schema, plan).is_err());
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_similar_to_rejects_invalid_inner_expr() -> Result<()> {
-        let schema = DFSchema::empty();
-        let empty = empty_with_type(Utf8);
-        let expr = Expr::SimilarTo(Like::new(
-            false,
-            Box::new(zero_arg_scalar_func()),
-            Box::new(lit("abc%")),
-            None,
-            false,
-        ));
-        let plan = LogicalPlan::Filter(Filter::try_new(expr, empty)?);
-        assert!(analyze_internal(&schema, plan).is_err());
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_cast_rejects_invalid_inner_expr() -> Result<()> {
-        let schema = DFSchema::empty();
-        let empty = empty_with_type(DataType::Int32);
-
-        let expr = Expr::Cast(Cast::new(Box::new(zero_arg_scalar_func()), Utf8));
-        let wrapped_expr = Expr::eq(expr.clone(), expr);
-        let plan = LogicalPlan::Filter(Filter::try_new(wrapped_expr, empty.clone())?);
-        assert!(analyze_internal(&schema, plan).is_err());
-
-        let expr = Expr::TryCast(TryCast::new(
-            Box::new(zero_arg_scalar_func()),
-            DataType::Int32,
-        ));
-        let wrapped_expr = Expr::eq(expr.clone(), expr);
-        let plan = LogicalPlan::Filter(Filter::try_new(wrapped_expr, empty.clone())?);
-        assert!(analyze_internal(&schema, plan).is_err());
-
-        Ok(())
     }
 }
