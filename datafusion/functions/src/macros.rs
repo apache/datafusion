@@ -394,40 +394,40 @@ macro_rules! make_math_binary_udf {
                     &self,
                     args: ScalarFunctionArgs,
                 ) -> Result<ColumnarValue> {
-                    let return_type = args.return_type().clone();
-                    let [y, x] = take_function_args(self.name(), args.args)?;
+                    let ScalarFunctionArgs {
+                        args, return_field, ..
+                    } = args;
+                    let return_type = return_field.data_type();
+                    let [y, x] = take_function_args(self.name(), args)?;
 
                     match (y, x) {
                         (
                             ColumnarValue::Scalar(y_scalar),
                             ColumnarValue::Scalar(x_scalar),
-                        ) => {
-                            if y_scalar.is_null() || x_scalar.is_null() {
-                                return ColumnarValue::Scalar(ScalarValue::Null)
-                                    .cast_to(&return_type, None);
+                        ) => match (&y_scalar, &x_scalar) {
+                            (y, x) if y.is_null() || x.is_null() => {
+                                ColumnarValue::Scalar(ScalarValue::Null)
+                                    .cast_to(return_type, None)
                             }
-
-                            match (&y_scalar, &x_scalar) {
-                                (
-                                    ScalarValue::Float64(Some(yv)),
-                                    ScalarValue::Float64(Some(xv)),
-                                ) => Ok(ColumnarValue::Scalar(ScalarValue::Float64(
-                                    Some(f64::$BINARY_FUNC(*yv, *xv)),
-                                ))),
-                                (
-                                    ScalarValue::Float32(Some(yv)),
-                                    ScalarValue::Float32(Some(xv)),
-                                ) => Ok(ColumnarValue::Scalar(ScalarValue::Float32(
-                                    Some(f32::$BINARY_FUNC(*yv, *xv)),
-                                ))),
-                                _ => internal_err!(
-                                    "Unexpected scalar types for function {}: {:?}, {:?}",
-                                    self.name(),
-                                    y_scalar.data_type(),
-                                    x_scalar.data_type()
-                                ),
-                            }
-                        }
+                            (
+                                ScalarValue::Float64(Some(yv)),
+                                ScalarValue::Float64(Some(xv)),
+                            ) => Ok(ColumnarValue::Scalar(ScalarValue::Float64(Some(
+                                f64::$BINARY_FUNC(*yv, *xv),
+                            )))),
+                            (
+                                ScalarValue::Float32(Some(yv)),
+                                ScalarValue::Float32(Some(xv)),
+                            ) => Ok(ColumnarValue::Scalar(ScalarValue::Float32(Some(
+                                f32::$BINARY_FUNC(*yv, *xv),
+                            )))),
+                            _ => internal_err!(
+                                "Unexpected scalar types for function {}: {:?}, {:?}",
+                                self.name(),
+                                y_scalar.data_type(),
+                                x_scalar.data_type()
+                            ),
+                        },
                         (y, x) => {
                             let args = ColumnarValue::values_to_arrays(&[y, x])?;
                             let arr: ArrayRef = match args[0].data_type() {
