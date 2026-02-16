@@ -82,6 +82,7 @@ hex = { workspace = true, optional = true }
 itertools = { workspace = true }
 log = { workspace = true }
 md-5 = { version = "^0.10.0", optional = true }
+memchr = { workspace = true }
 num-traits = { workspace = true }
 rand = { workspace = true }
 regex = { workspace = true, optional = true }
@@ -130,6 +131,11 @@ required-features = ["string_expressions"]
 [[bench]]
 harness = false
 name = "gcd"
+required-features = ["math_expressions"]
+
+[[bench]]
+harness = false
+name = "nanvl"
 required-features = ["math_expressions"]
 
 [[bench]]

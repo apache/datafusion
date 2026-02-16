@@ -1142,6 +1142,12 @@ config_namespace! {
         ///
         /// Default: true
         pub enable_sort_pushdown: bool, default = true
+
+        /// When set to true, the optimizer will extract leaf expressions
+        /// (such as `get_field`) from filter/sort/join nodes into projections
+        /// closer to the leaf table scans, and push those projections down
+        /// towards the leaf nodes.
+        pub enable_leaf_expression_pushdown: bool, default = true
     }
 }
 
@@ -3065,6 +3071,22 @@ config_namespace! {
         /// If not specified, the default level for the compression algorithm is used.
         pub compression_level: Option<u32>, default = None
         pub schema_infer_max_rec: Option<usize>, default = None
+       /// The JSON format to use when reading files.
+       ///
+       /// When `true` (default), expects newline-delimited JSON (NDJSON):
+       /// ```text
+       /// {"key1": 1, "key2": "val"}
+       /// {"key1": 2, "key2": "vals"}
+       /// ```
+       ///
+       /// When `false`, expects JSON array format:
+       /// ```text
+       /// [
+       ///   {"key1": 1, "key2": "val"},
+       ///   {"key1": 2, "key2": "vals"}
+       /// ]
+       /// ```
+       pub newline_delimited: bool, default = true
     }
 }
 

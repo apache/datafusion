@@ -27,7 +27,7 @@ use crate::execution_plan::{Boundedness, EmissionType, SchedulingType};
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
-    RecordBatchStream, SendableRecordBatchStream, Statistics,
+    RecordBatchStream, SendableRecordBatchStream,
 };
 
 use arrow::array::RecordBatch;
@@ -350,10 +350,6 @@ impl ExecutionPlan for LazyMemoryExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        Ok(Statistics::new_unknown(&self.schema))
     }
 
     fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {

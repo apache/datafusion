@@ -25,7 +25,16 @@ use std::path::Path;
 
 use datafusion::error::{DataFusionError, Result};
 
-use crate::utils::example_metadata::{parse_main_rs_docs, render::ABBREVIATIONS};
+use crate::utils::example_metadata::parse_main_rs_docs;
+
+/// Well-known abbreviations used to preserve correct capitalization
+/// when generating human-readable documentation titles.
+const ABBREVIATIONS: &[(&str, &str)] = &[
+    ("dataframe", "DataFrame"),
+    ("io", "IO"),
+    ("sql", "SQL"),
+    ("udf", "UDF"),
+];
 
 /// A group of related examples (e.g. `builtin_functions`, `udf`).
 ///

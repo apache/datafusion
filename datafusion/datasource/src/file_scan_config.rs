@@ -736,7 +736,7 @@ impl DataSource for FileScanConfig {
         let schema = self.file_source.table_schema().table_schema();
         let mut eq_properties = EquivalenceProperties::new_with_orderings(
             Arc::clone(schema),
-            self.output_ordering.clone(),
+            self.validated_output_ordering(),
         )
         .with_constraints(self.constraints.clone());
 
@@ -842,37 +842,27 @@ impl DataSource for FileScanConfig {
         config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn DataSource>>> {
         // Remap filter Column indices to match the table schema (file + partition columns).
-        // This is necessary because filters may have been created against a different schema
-        // (e.g., after projection pushdown) and need to be remapped to the table schema
-        // before being passed to the file source and ultimately serialized.
-        // For example, the filter being pushed down is `c1_c2 > 5` and it was created
-        // against the output schema of the this `DataSource` which has projection `c1 + c2 as c1_c2`.
-        // Thus we need to rewrite the filter back to `c1 + c2 > 5` before passing it to the file source.
+        // This is necessary because filters refer to the output schema of this `DataSource`
+        // (e.g., after projection pushdown has been applied) and need to be remapped to the table schema
+        // before being passed to the file source
+        //
+        // For example, consider a filter `c1_c2 > 5` being pushed down. If the
+        // `DataSource` has a projection `c1 + c2 as c1_c2`, the filter must be rewritten
+        // to refer to the table schema `c1 + c2 > 5`
         let table_schema = self.file_source.table_schema().table_schema();
-        // If there's a projection with aliases, first map the filters back through
-        // the projection expressions before remapping to the table schema.
         let filters_to_remap = if let Some(projection) = self.file_source.projection() {
-            use datafusion_physical_plan::projection::update_expr;
             filters
                 .into_iter()
-                .map(|filter| {
-                    update_expr(&filter, projection.as_ref(), true)?.ok_or_else(|| {
-                        internal_datafusion_err!(
-                            "Failed to map filter expression through projection: {}",
-                            filter
-                        )
-                    })
-                })
+                .map(|filter| projection.unproject_expr(&filter))
                 .collect::<Result<Vec<_>>>()?
         } else {
             filters
         };
         // Now remap column indices to match the table schema.
-        let remapped_filters: Result<Vec<_>> = filters_to_remap
+        let remapped_filters = filters_to_remap
             .into_iter()
-            .map(|filter| reassign_expr_columns(filter, table_schema.as_ref()))
-            .collect();
-        let remapped_filters = remapped_filters?;
+            .map(|filter| reassign_expr_columns(filter, table_schema))
+            .collect::<Result<Vec<_>>>()?;
 
         let result = self
             .file_source
@@ -936,6 +926,40 @@ impl DataSource for FileScanConfig {
 }
 
 impl FileScanConfig {
+    /// Returns only the output orderings that are validated against actual
+    /// file group statistics.
+    ///
+    /// For example, individual files may be ordered by `col1 ASC`,
+    /// but if we have files with these min/max statistics in a single partition / file group:
+    ///
+    /// - file1: min(col1) = 10, max(col1) = 20
+    /// - file2: min(col1) = 5, max(col1) = 15
+    ///
+    /// Because reading file1 followed by file2 would produce out-of-order output (there is overlap
+    /// in the ranges), we cannot retain `col1 ASC` as a valid output ordering.
+    ///
+    /// Similarly this would not be a valid order (non-overlapping ranges but not ordered):
+    ///
+    /// - file1: min(col1) = 20, max(col1) = 30
+    /// - file2: min(col1) = 10, max(col1) = 15
+    ///
+    /// On the other hand if we had:
+    ///
+    /// - file1: min(col1) = 5, max(col1) = 15
+    /// - file2: min(col1) = 16, max(col1) = 25
+    ///
+    /// Then we know that reading file1 followed by file2 will produce ordered output,
+    /// so `col1 ASC` would be retained.
+    ///
+    /// Note that we are checking for ordering *within* *each* file group / partition,
+    /// files in different partitions are read independently and do not affect each other's ordering.
+    /// Merging of the multiple partition streams into a single ordered stream is handled
+    /// upstream e.g. by `SortPreservingMergeExec`.
+    fn validated_output_ordering(&self) -> Vec<LexOrdering> {
+        let schema = self.file_source.table_schema().table_schema();
+        validate_orderings(&self.output_ordering, schema, &self.file_groups, None)
+    }
+
     /// Get the file schema (schema of the files without partition columns)
     pub fn file_schema(&self) -> &SchemaRef {
         self.file_source.table_schema().file_schema()
@@ -1310,6 +1334,51 @@ fn ordered_column_indices_from_projection(
         .collect::<Option<Vec<usize>>>()
 }
 
+/// Check whether a given ordering is valid for all file groups by verifying
+/// that files within each group are sorted according to their min/max statistics.
+///
+/// For single-file (or empty) groups, the ordering is trivially valid.
+/// For multi-file groups, we check that the min/max statistics for the sort
+/// columns are in order and non-overlapping (or touching at boundaries).
+///
+/// `projection` maps projected column indices back to table-schema indices
+/// when validating after projection; pass `None` when validating at
+/// table-schema level.
+fn is_ordering_valid_for_file_groups(
+    file_groups: &[FileGroup],
+    ordering: &LexOrdering,
+    schema: &SchemaRef,
+    projection: Option<&[usize]>,
+) -> bool {
+    file_groups.iter().all(|group| {
+        if group.len() <= 1 {
+            return true; // single-file groups are trivially sorted
+        }
+        match MinMaxStatistics::new_from_files(ordering, schema, projection, group.iter())
+        {
+            Ok(stats) => stats.is_sorted(),
+            Err(_) => false, // can't prove sorted → reject
+        }
+    })
+}
+
+/// Filters orderings to retain only those valid for all file groups,
+/// verified via min/max statistics.
+fn validate_orderings(
+    orderings: &[LexOrdering],
+    schema: &SchemaRef,
+    file_groups: &[FileGroup],
+    projection: Option<&[usize]>,
+) -> Vec<LexOrdering> {
+    orderings
+        .iter()
+        .filter(|ordering| {
+            is_ordering_valid_for_file_groups(file_groups, ordering, schema, projection)
+        })
+        .cloned()
+        .collect()
+}
+
 /// The various listing tables does not attempt to read all files
 /// concurrently, instead they will read files in sequence within a
 /// partition.  This is an important property as it allows plans to
@@ -1376,52 +1445,47 @@ fn get_projected_output_ordering(
     let projected_orderings =
         project_orderings(&base_config.output_ordering, projected_schema);
 
-    let mut all_orderings = vec![];
-    for new_ordering in projected_orderings {
-        // Check if any file groups are not sorted
-        if base_config.file_groups.iter().any(|group| {
-            if group.len() <= 1 {
-                // File groups with <= 1 files are always sorted
-                return false;
-            }
+    let indices = base_config
+        .file_source
+        .projection()
+        .as_ref()
+        .map(|p| ordered_column_indices_from_projection(p));
 
-            let Some(indices) = base_config
-                .file_source
-                .projection()
-                .as_ref()
-                .map(|p| ordered_column_indices_from_projection(p))
-            else {
-                // Can't determine if ordered without a simple projection
-                return true;
-            };
-
-            let statistics = match MinMaxStatistics::new_from_files(
-                &new_ordering,
+    match indices {
+        Some(Some(indices)) => {
+            // Simple column projection — validate with statistics
+            validate_orderings(
+                &projected_orderings,
                 projected_schema,
-                indices.as_deref(),
-                group.iter(),
-            ) {
-                Ok(statistics) => statistics,
-                Err(e) => {
-                    log::trace!("Error fetching statistics for file group: {e}");
-                    // we can't prove that it's ordered, so we have to reject it
-                    return true;
-                }
-            };
-
-            !statistics.is_sorted()
-        }) {
-            debug!(
-                "Skipping specified output ordering {:?}. \
-                Some file groups couldn't be determined to be sorted: {:?}",
-                base_config.output_ordering[0], base_config.file_groups
-            );
-            continue;
+                &base_config.file_groups,
+                Some(indices.as_slice()),
+            )
         }
-
-        all_orderings.push(new_ordering);
+        None => {
+            // No projection — validate with statistics (no remapping needed)
+            validate_orderings(
+                &projected_orderings,
+                projected_schema,
+                &base_config.file_groups,
+                None,
+            )
+        }
+        Some(None) => {
+            // Complex projection (expressions, not simple columns) — can't
+            // determine column indices for statistics. Still valid if all
+            // file groups have at most one file.
+            if base_config.file_groups.iter().all(|g| g.len() <= 1) {
+                projected_orderings
+            } else {
+                debug!(
+                    "Skipping specified output orderings. \
+                     Some file groups couldn't be determined to be sorted: {:?}",
+                    base_config.file_groups
+                );
+                vec![]
+            }
+        }
     }
-    all_orderings
 }
 
 /// Convert type to a type suitable for use as a `ListingTable`
