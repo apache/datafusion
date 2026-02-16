@@ -323,22 +323,24 @@ pub struct SelectivityTracker {
 
 impl Default for SelectivityTracker {
     fn default() -> Self {
-        Self::new(f64::INFINITY)
+        Self::new()
     }
 }
 
 impl SelectivityTracker {
-    /// Create a new tracker with the given min bytes/sec threshold.
+    /// Create a new tracker with default settings (feature disabled).
     ///
-    /// # Arguments
-    /// * `min_bytes_per_sec` - Minimum bytes/sec throughput to promote a filter.
-    ///   `f64::INFINITY` = feature disabled (no filters promoted).
-    ///   `0.0` = all filters pushed as row filters.
-    pub fn new(min_bytes_per_sec: f64) -> Self {
+    /// Use builder methods to configure:
+    /// - [`Self::with_min_bytes_per_sec`] - Set the throughput threshold
+    /// - [`Self::with_correlation_threshold`] - Set the correlation grouping threshold
+    /// - [`Self::with_min_rows_for_collection`] - Set the collection phase minimum rows
+    /// - [`Self::with_collection_fraction`] - Set the fraction-based collection threshold
+    /// - [`Self::with_max_rows_for_collection`] - Cap the collection phase
+    pub fn new() -> Self {
         Self {
             stats: HashMap::new(),
             correlations: HashMap::new(),
-            min_bytes_per_sec,
+            min_bytes_per_sec: f64::INFINITY,
             correlation_threshold: 1.5,
             min_rows_for_collection: 10_000,
             collection_fraction: 0.0,
@@ -350,27 +352,50 @@ impl SelectivityTracker {
         }
     }
 
-    /// Create a new tracker with all configurable parameters.
-    pub fn new_with_config(
-        min_bytes_per_sec: f64,
-        correlation_threshold: f64,
-        min_rows_for_collection: u64,
-        collection_fraction: f64,
-        max_rows_for_collection: u64,
-    ) -> Self {
-        Self {
-            stats: HashMap::new(),
-            correlations: HashMap::new(),
-            min_bytes_per_sec,
-            correlation_threshold,
-            min_rows_for_collection,
-            collection_fraction,
-            max_rows_for_collection,
-            resolved_min_rows: None,
-            total_file_bytes: 0.0,
-            total_file_rows: 0,
-            cached_decision: None,
-        }
+    /// Set the minimum bytes/sec throughput to promote a filter to row filter.
+    ///
+    /// - `f64::INFINITY` (default) = feature disabled (no filters promoted)
+    /// - `0.0` = all filters pushed as row filters (skip adaptive logic)
+    /// - Any positive value = only filters exceeding this throughput are promoted
+    pub fn with_min_bytes_per_sec(mut self, min_bytes_per_sec: f64) -> Self {
+        self.min_bytes_per_sec = min_bytes_per_sec;
+        self
+    }
+
+    /// Set the correlation ratio threshold for grouping filters.
+    ///
+    /// Pairs with `correlation_ratio > threshold` are grouped into compound predicates.
+    /// Default: 1.5
+    pub fn with_correlation_threshold(mut self, correlation_threshold: f64) -> Self {
+        self.correlation_threshold = correlation_threshold;
+        self
+    }
+
+    /// Set the minimum rows that must be observed before collection phase ends.
+    ///
+    /// During collection, all filters go to post-scan for accurate measurement.
+    /// Default: 10_000. Set to 0 to disable the collection phase.
+    pub fn with_min_rows_for_collection(mut self, min_rows: u64) -> Self {
+        self.min_rows_for_collection = min_rows;
+        self
+    }
+
+    /// Set the fraction of total dataset rows for collection phase.
+    ///
+    /// When > 0 and dataset size is known, effective threshold =
+    /// `max(min_rows_for_collection, (fraction * total_rows) as u64)`.
+    /// Default: 0.0 (disabled)
+    pub fn with_collection_fraction(mut self, fraction: f64) -> Self {
+        self.collection_fraction = fraction;
+        self
+    }
+
+    /// Set the maximum rows for collection phase.
+    ///
+    /// Default: 0 (no cap)
+    pub fn with_max_rows_for_collection(mut self, max_rows: u64) -> Self {
+        self.max_rows_for_collection = max_rows;
+        self
     }
 
     /// Get the min bytes/sec threshold.
@@ -1001,7 +1026,7 @@ mod tests {
     #[test]
     fn test_tracker_partition_unknown_filters() {
         // With bytes/sec metric, unknown filters go to post-scan to collect stats
-        let tracker = SelectivityTracker::new(100_000_000.0);
+        let tracker = SelectivityTracker::new().with_min_bytes_per_sec(100_000_000.0);
 
         let filter1 = make_filter("a", 5);
         let filter2 = make_filter("a", 10);
@@ -1019,7 +1044,7 @@ mod tests {
     #[test]
     fn test_tracker_partition_threshold_zero_pushes_all() {
         // 0.0 threshold = push all filters as row filters
-        let tracker = SelectivityTracker::new(0.0);
+        let tracker = SelectivityTracker::new().with_min_bytes_per_sec(0.0);
 
         let filter1 = make_filter("a", 5);
         let filter2 = make_filter("a", 10);
@@ -1035,7 +1060,7 @@ mod tests {
 
     #[test]
     fn test_tracker_partition_promotes_high_throughput_filter() {
-        let mut tracker = SelectivityTracker::new(100.0); // 100 bytes/sec threshold
+        let mut tracker = SelectivityTracker::new().with_min_bytes_per_sec(100.0); // 100 bytes/sec threshold
 
         let filter1 = make_filter("a", 5);
         let filter2 = make_filter("a", 10);
@@ -1069,7 +1094,7 @@ mod tests {
 
     #[test]
     fn test_tracker_partition_no_bytes_per_row() {
-        let mut tracker = SelectivityTracker::new(100.0);
+        let mut tracker = SelectivityTracker::new().with_min_bytes_per_sec(100.0);
         let filter = make_filter("a", 5);
         tracker.update(&filter, 20, 100, 1_000_000_000);
 
@@ -1085,7 +1110,7 @@ mod tests {
 
     #[test]
     fn test_tracker_partition_infinity_disables_promotion() {
-        let mut tracker = SelectivityTracker::new(f64::INFINITY);
+        let mut tracker = SelectivityTracker::new();
         let filter = make_filter("a", 5);
         // Very high throughput but threshold is infinity
         tracker.update(&filter, 0, 100, 1); // 100 rows pruned, 1 ns
@@ -1102,7 +1127,7 @@ mod tests {
 
     #[test]
     fn test_tracker_partition_at_threshold_boundary() {
-        let mut tracker = SelectivityTracker::new(800.0);
+        let mut tracker = SelectivityTracker::new().with_min_bytes_per_sec(800.0);
         let filter = make_filter("a", 5);
         // Exactly 800 bytes/sec: 80 pruned * 10 bpr = 800 bytes / 1 sec
         tracker.update(&filter, 20, 100, 1_000_000_000);
@@ -1144,7 +1169,9 @@ mod tests {
 
     #[test]
     fn test_correlation_stats_update() {
-        let mut tracker = SelectivityTracker::new_with_config(0.0, 1.5, 100, 0.0, 0);
+        let mut tracker = SelectivityTracker::new()
+            .with_min_bytes_per_sec(0.0)
+            .with_min_rows_for_collection(100);
 
         let filter_a = make_filter("a", 5);
         let filter_b = make_filter("a", 10);
@@ -1170,7 +1197,9 @@ mod tests {
 
     #[test]
     fn test_correlation_ratio_independent() {
-        let mut tracker = SelectivityTracker::new_with_config(0.0, 1.5, 100, 0.0, 0);
+        let mut tracker = SelectivityTracker::new()
+            .with_min_bytes_per_sec(0.0)
+            .with_min_rows_for_collection(100);
 
         let filter_a = make_filter("a", 5);
         let filter_b = make_filter("a", 10);
@@ -1186,7 +1215,9 @@ mod tests {
 
     #[test]
     fn test_correlation_ratio_insufficient_data() {
-        let mut tracker = SelectivityTracker::new_with_config(0.0, 1.5, 1000, 0.0, 0);
+        let mut tracker = SelectivityTracker::new()
+            .with_min_bytes_per_sec(0.0)
+            .with_min_rows_for_collection(1000);
 
         let filter_a = make_filter("a", 5);
         let filter_b = make_filter("a", 10);
@@ -1201,7 +1232,9 @@ mod tests {
 
     #[test]
     fn test_in_collection_phase() {
-        let mut tracker = SelectivityTracker::new_with_config(100.0, 1.5, 1000, 0.0, 0);
+        let mut tracker = SelectivityTracker::new()
+            .with_min_bytes_per_sec(100.0)
+            .with_min_rows_for_collection(1000);
 
         // No stats yet - in collection phase
         assert!(tracker.in_collection_phase());
@@ -1220,7 +1253,9 @@ mod tests {
 
     #[test]
     fn test_in_collection_phase_disabled() {
-        let tracker = SelectivityTracker::new_with_config(100.0, 1.5, 0, 0.0, 0);
+        let tracker = SelectivityTracker::new()
+            .with_min_bytes_per_sec(100.0)
+            .with_min_rows_for_collection(0);
 
         // min_rows = 0 means collection is disabled
         assert!(!tracker.in_collection_phase());
@@ -1228,7 +1263,9 @@ mod tests {
 
     #[test]
     fn test_partition_filters_grouped_collection_phase() {
-        let mut tracker = SelectivityTracker::new_with_config(100.0, 1.5, 10_000, 0.0, 0);
+        let mut tracker = SelectivityTracker::new()
+            .with_min_bytes_per_sec(100.0)
+            .with_min_rows_for_collection(10_000);
 
         let filter_a = make_filter("a", 5);
         let filter_b = make_filter("a", 10);
@@ -1243,7 +1280,9 @@ mod tests {
 
     #[test]
     fn test_partition_filters_grouped_all_independent() {
-        let mut tracker = SelectivityTracker::new_with_config(0.0, 1.5, 100, 0.0, 0);
+        let mut tracker = SelectivityTracker::new()
+            .with_min_bytes_per_sec(0.0)
+            .with_min_rows_for_collection(100);
 
         let filter_a = make_filter("a", 5);
         let filter_b = make_filter("a", 10);
@@ -1268,7 +1307,9 @@ mod tests {
 
     #[test]
     fn test_partition_filters_grouped_correlated() {
-        let mut tracker = SelectivityTracker::new_with_config(0.0, 1.5, 100, 0.0, 0);
+        let mut tracker = SelectivityTracker::new()
+            .with_min_bytes_per_sec(0.0)
+            .with_min_rows_for_collection(100);
 
         let filter_a = make_filter("a", 5);
         let filter_b = make_filter("a", 10);
@@ -1291,7 +1332,9 @@ mod tests {
 
     #[test]
     fn test_partition_filters_grouped_mixed() {
-        let mut tracker = SelectivityTracker::new_with_config(0.0, 1.5, 100, 0.0, 0);
+        let mut tracker = SelectivityTracker::new()
+            .with_min_bytes_per_sec(0.0)
+            .with_min_rows_for_collection(100);
 
         let filter_a = make_filter("a", 5);
         let filter_b = make_filter("a", 10);
@@ -1341,7 +1384,9 @@ mod tests {
 
     #[test]
     fn test_partition_filters_grouped_single_filter() {
-        let mut tracker = SelectivityTracker::new_with_config(0.0, 1.5, 100, 0.0, 0);
+        let mut tracker = SelectivityTracker::new()
+            .with_min_bytes_per_sec(0.0)
+            .with_min_rows_for_collection(100);
 
         let filter_a = make_filter("a", 5);
         tracker.update(&filter_a, 10, 100, 0);
@@ -1357,7 +1402,9 @@ mod tests {
     #[test]
     fn test_partition_filters_grouped_with_low_throughput() {
         // Use a bytes/sec threshold: 100 bytes/sec
-        let mut tracker = SelectivityTracker::new_with_config(100.0, 1.5, 100, 0.0, 0);
+        let mut tracker = SelectivityTracker::new()
+            .with_min_bytes_per_sec(100.0)
+            .with_min_rows_for_collection(100);
 
         let filter_a = make_filter("a", 5);
         let filter_b = make_filter("a", 10);
@@ -1384,7 +1431,10 @@ mod tests {
 
     #[test]
     fn test_notify_dataset_rows_resolves_fraction() {
-        let mut tracker = SelectivityTracker::new_with_config(0.0, 1.5, 100, 0.05, 0);
+        let mut tracker = SelectivityTracker::new()
+            .with_min_bytes_per_sec(0.0)
+            .with_min_rows_for_collection(100)
+            .with_collection_fraction(0.05);
         // Before notify, effective_min_rows = min_rows_for_collection
         assert_eq!(tracker.effective_min_rows(), 100);
 
@@ -1395,7 +1445,10 @@ mod tests {
 
     #[test]
     fn test_notify_dataset_rows_floor_behavior() {
-        let mut tracker = SelectivityTracker::new_with_config(0.0, 1.5, 1000, 0.05, 0);
+        let mut tracker = SelectivityTracker::new()
+            .with_min_bytes_per_sec(0.0)
+            .with_min_rows_for_collection(1000)
+            .with_collection_fraction(0.05);
         // 5% of 10_000 = 500, but min_rows = 1000 is larger
         tracker.notify_dataset_rows(10_000);
         assert_eq!(tracker.effective_min_rows(), 1000);
@@ -1403,7 +1456,9 @@ mod tests {
 
     #[test]
     fn test_notify_dataset_rows_fraction_disabled() {
-        let mut tracker = SelectivityTracker::new_with_config(0.0, 1.5, 100, 0.0, 0);
+        let mut tracker = SelectivityTracker::new()
+            .with_min_bytes_per_sec(0.0)
+            .with_min_rows_for_collection(100);
         tracker.notify_dataset_rows(1_000_000);
         // fraction = 0.0, so resolved_min_rows stays None
         assert_eq!(tracker.effective_min_rows(), 100);
@@ -1413,7 +1468,10 @@ mod tests {
     fn test_collection_phase_with_fraction() {
         let filter = make_filter("a", 5);
 
-        let mut tracker = SelectivityTracker::new_with_config(0.0, 1.5, 100, 0.05, 0);
+        let mut tracker = SelectivityTracker::new()
+            .with_min_bytes_per_sec(0.0)
+            .with_min_rows_for_collection(100)
+            .with_collection_fraction(0.05);
         // 5% of 100_000 = 5000
         tracker.notify_dataset_rows(100_000);
         assert_eq!(tracker.effective_min_rows(), 5000);
@@ -1430,8 +1488,11 @@ mod tests {
     #[test]
     fn test_max_rows_caps_effective_min_rows() {
         // fraction 5% of 1_000_000 = 50_000, but max_rows = 500 caps it
-        let mut tracker =
-            SelectivityTracker::new_with_config(0.0, 1.5, 100, 0.05, 500);
+        let mut tracker = SelectivityTracker::new()
+            .with_min_bytes_per_sec(0.0)
+            .with_min_rows_for_collection(100)
+            .with_collection_fraction(0.05)
+            .with_max_rows_for_collection(500);
         tracker.notify_dataset_rows(1_000_000);
         assert_eq!(tracker.effective_min_rows(), 500);
     }
@@ -1439,8 +1500,10 @@ mod tests {
     #[test]
     fn test_max_rows_zero_means_no_cap() {
         // fraction 5% of 1_000_000 = 50_000, max_rows = 0 means no cap
-        let mut tracker =
-            SelectivityTracker::new_with_config(0.0, 1.5, 100, 0.05, 0);
+        let mut tracker = SelectivityTracker::new()
+            .with_min_bytes_per_sec(0.0)
+            .with_min_rows_for_collection(100)
+            .with_collection_fraction(0.05);
         tracker.notify_dataset_rows(1_000_000);
         assert_eq!(tracker.effective_min_rows(), 50_000);
     }
@@ -1448,8 +1511,10 @@ mod tests {
     #[test]
     fn test_max_rows_no_effect_when_base_smaller() {
         // min_rows = 100, no fraction, max_rows = 500 — base (100) < cap (500)
-        let tracker =
-            SelectivityTracker::new_with_config(0.0, 1.5, 100, 0.0, 500);
+        let tracker = SelectivityTracker::new()
+            .with_min_bytes_per_sec(0.0)
+            .with_min_rows_for_collection(100)
+            .with_max_rows_for_collection(500);
         assert_eq!(tracker.effective_min_rows(), 100);
     }
 
@@ -1458,7 +1523,9 @@ mod tests {
     #[test]
     fn test_optional_filter_dropped_when_ineffective() {
         // Threshold 100 bytes/sec
-        let mut tracker = SelectivityTracker::new_with_config(100.0, 1.5, 100, 0.0, 0);
+        let mut tracker = SelectivityTracker::new()
+            .with_min_bytes_per_sec(100.0)
+            .with_min_rows_for_collection(100);
 
         let mandatory_filter = make_filter("a", 5);
         let inner_optional = make_filter("c", 1);
@@ -1498,7 +1565,9 @@ mod tests {
     #[test]
     fn test_optional_filter_promoted_when_effective() {
         // Threshold 100 bytes/sec
-        let mut tracker = SelectivityTracker::new_with_config(100.0, 1.5, 100, 0.0, 0);
+        let mut tracker = SelectivityTracker::new()
+            .with_min_bytes_per_sec(100.0)
+            .with_min_rows_for_collection(100);
 
         let inner_optional = make_filter("a", 5);
         let optional_filter: Arc<dyn PhysicalExpr> =
@@ -1520,7 +1589,9 @@ mod tests {
     #[test]
     fn test_mandatory_filter_demoted_not_dropped() {
         // Threshold 100 bytes/sec
-        let mut tracker = SelectivityTracker::new_with_config(100.0, 1.5, 100, 0.0, 0);
+        let mut tracker = SelectivityTracker::new()
+            .with_min_bytes_per_sec(100.0)
+            .with_min_rows_for_collection(100);
 
         let mandatory_filter = make_filter("a", 5);
 
@@ -1540,7 +1611,9 @@ mod tests {
     #[test]
     fn test_mixed_optional_mandatory_scenario() {
         // Threshold 100 bytes/sec
-        let mut tracker = SelectivityTracker::new_with_config(100.0, 1.5, 100, 0.0, 0);
+        let mut tracker = SelectivityTracker::new()
+            .with_min_bytes_per_sec(100.0)
+            .with_min_rows_for_collection(100);
 
         let mandatory_effective = make_filter("a", 5);
         let mandatory_ineffective = make_filter("a", 10);
@@ -1589,13 +1662,13 @@ mod tests {
 
     #[test]
     fn test_avg_bytes_per_row_empty() {
-        let tracker = SelectivityTracker::new(100.0);
+        let tracker = SelectivityTracker::new().with_min_bytes_per_sec(100.0);
         assert!(tracker.avg_bytes_per_row().is_none());
     }
 
     #[test]
     fn test_avg_bytes_per_row_single_file() {
-        let mut tracker = SelectivityTracker::new(100.0);
+        let mut tracker = SelectivityTracker::new().with_min_bytes_per_sec(100.0);
         // 10 bytes/row, 1000 rows
         tracker.update_bytes_per_row(10.0, 1000);
         let avg = tracker.avg_bytes_per_row().unwrap();
@@ -1604,7 +1677,7 @@ mod tests {
 
     #[test]
     fn test_avg_bytes_per_row_multiple_files() {
-        let mut tracker = SelectivityTracker::new(100.0);
+        let mut tracker = SelectivityTracker::new().with_min_bytes_per_sec(100.0);
         // File 1: 10 bytes/row, 1000 rows → 10_000 total bytes
         tracker.update_bytes_per_row(10.0, 1000);
         // File 2: 20 bytes/row, 3000 rows → 60_000 total bytes
@@ -1617,7 +1690,9 @@ mod tests {
     #[test]
     fn test_partition_filters_grouped_uses_avg_bytes_per_row() {
         // Verify that partition_filters_grouped uses the internal avg_bytes_per_row
-        let mut tracker = SelectivityTracker::new_with_config(100.0, 1.5, 100, 0.0, 0);
+        let mut tracker = SelectivityTracker::new()
+            .with_min_bytes_per_sec(100.0)
+            .with_min_rows_for_collection(100);
 
         let filter = make_filter("a", 5);
 
@@ -1638,7 +1713,9 @@ mod tests {
     #[test]
     fn test_cached_decision_reuse_and_reevaluation() {
         // min_rows_for_collection = 100, so effective_min_rows() = 100
-        let mut tracker = SelectivityTracker::new_with_config(100.0, 1.5, 100, 0.0, 0);
+        let mut tracker = SelectivityTracker::new()
+            .with_min_bytes_per_sec(100.0)
+            .with_min_rows_for_collection(100);
 
         let filter_a = make_filter("a", 5);
         let filter_b = make_filter("a", 10);
@@ -1698,7 +1775,9 @@ mod tests {
     #[test]
     fn test_partition_filters_grouped_compound_demotion() {
         // Threshold 100 bytes/sec
-        let mut tracker = SelectivityTracker::new_with_config(100.0, 1.5, 100, 0.0, 0);
+        let mut tracker = SelectivityTracker::new()
+            .with_min_bytes_per_sec(100.0)
+            .with_min_rows_for_collection(100);
 
         let filter_a = make_filter("a", 5);
         let filter_b = make_filter("a", 10);

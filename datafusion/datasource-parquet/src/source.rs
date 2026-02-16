@@ -338,7 +338,8 @@ impl ParquetSource {
         min_bytes_per_sec: f64,
     ) -> Self {
         self.selectivity_tracker = Arc::new(parking_lot::RwLock::new(
-            crate::selectivity::SelectivityTracker::new(min_bytes_per_sec),
+            crate::selectivity::SelectivityTracker::new()
+                .with_min_bytes_per_sec(min_bytes_per_sec),
         ));
         self
     }
@@ -351,13 +352,12 @@ impl ParquetSource {
         // Update the selectivity tracker from the config
         let opts = &table_parquet_options.global;
         self.selectivity_tracker = Arc::new(parking_lot::RwLock::new(
-            crate::selectivity::SelectivityTracker::new_with_config(
-                opts.filter_pushdown_min_bytes_per_sec,
-                opts.filter_correlation_threshold,
-                opts.filter_statistics_collection_min_rows,
-                opts.filter_statistics_collection_fraction,
-                opts.filter_statistics_collection_max_rows,
-            ),
+            crate::selectivity::SelectivityTracker::new()
+                .with_min_bytes_per_sec(opts.filter_pushdown_min_bytes_per_sec)
+                .with_correlation_threshold(opts.filter_correlation_threshold)
+                .with_min_rows_for_collection(opts.filter_statistics_collection_min_rows)
+                .with_collection_fraction(opts.filter_statistics_collection_fraction)
+                .with_max_rows_for_collection(opts.filter_statistics_collection_max_rows),
         ));
         self.table_parquet_options = table_parquet_options;
         self
@@ -509,13 +509,12 @@ impl ParquetSource {
             .filter_pushdown_min_bytes_per_sec = min_bytes_per_sec;
         let opts = &self.table_parquet_options.global;
         self.selectivity_tracker = Arc::new(parking_lot::RwLock::new(
-            crate::selectivity::SelectivityTracker::new_with_config(
-                min_bytes_per_sec,
-                opts.filter_correlation_threshold,
-                opts.filter_statistics_collection_min_rows,
-                opts.filter_statistics_collection_fraction,
-                opts.filter_statistics_collection_max_rows,
-            ),
+            crate::selectivity::SelectivityTracker::new()
+                .with_min_bytes_per_sec(min_bytes_per_sec)
+                .with_correlation_threshold(opts.filter_correlation_threshold)
+                .with_min_rows_for_collection(opts.filter_statistics_collection_min_rows)
+                .with_collection_fraction(opts.filter_statistics_collection_fraction)
+                .with_max_rows_for_collection(opts.filter_statistics_collection_max_rows),
         ));
         self
     }

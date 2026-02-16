@@ -809,7 +809,7 @@ config_namespace! {
         /// they are ordered, respectively.
         /// If `pushdown_filters` is disabled, this option has no effect since all filters
         /// run post-scan regardless of the collection phase.
-        pub filter_statistics_collection_min_rows: u64, default = 10_000
+        pub filter_statistics_collection_min_rows: u64, default = 50_000
 
         /// (reading) Fraction of total dataset rows to use for the statistics
         /// collection phase. When > 0 and the dataset row count is known, the
@@ -817,7 +817,7 @@ config_namespace! {
         /// 0.0 = disabled, use filter_statistics_collection_min_rows only.
         /// 0.05 (default) = collect stats on at least 5% of the dataset.
         /// Must be in [0.0, 1.0].
-        /// 
+        ///
         /// This option ensures the collection window is proportional to the dataset size,
         /// which matters for very large tables where a fixed row count
         /// would be an insignificant sample.
@@ -830,8 +830,8 @@ config_namespace! {
         /// (reading) Maximum rows for the statistics collection phase,
         /// regardless of dataset size. The effective collection threshold
         /// becomes min(max_rows, max(min_rows, fraction * total_rows)).
-        /// 0 = no cap (current behavior). Default: 1_000_000.
-        /// 
+        /// 0 = no cap. Default: 750_000.
+        ///
         /// This caps the collection window so that very large datasets
         /// do not spend an excessive number of rows in post-scan mode.
         /// It also bounds the re-evaluation interval for cached decisions.
@@ -839,7 +839,7 @@ config_namespace! {
         /// **Interaction with `pushdown_filters`:**
         /// If `pushdown_filters` is disabled, this option has no effect since all filters
         /// run post-scan regardless of the collection phase.
-        pub filter_statistics_collection_max_rows: u64, default = 1_000_000
+        pub filter_statistics_collection_max_rows: u64, default = 750_000
 
         // The following options affect writing to parquet files
         // and map to parquet::file::properties::WriterProperties

@@ -469,6 +469,8 @@ mod tests {
             filter_correlation_threshold: defaults.filter_correlation_threshold,
             filter_statistics_collection_fraction: defaults
                 .filter_statistics_collection_fraction,
+            filter_statistics_collection_max_rows: defaults
+                .filter_statistics_collection_max_rows,
             filter_statistics_collection_min_rows: defaults
                 .filter_statistics_collection_min_rows,
         }
@@ -591,6 +593,8 @@ mod tests {
                     .filter_correlation_threshold,
                 filter_statistics_collection_fraction: global_options_defaults
                     .filter_statistics_collection_fraction,
+                filter_statistics_collection_max_rows: global_options_defaults
+                    .filter_statistics_collection_max_rows,
                 filter_statistics_collection_min_rows: global_options_defaults
                     .filter_statistics_collection_min_rows,
             },

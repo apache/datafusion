@@ -1544,7 +1544,9 @@ mod test {
                 // (skipping adaptive logic), and min_rows_for_collection=0 to
                 // disable the collection phase.
                 selectivity_tracker: Arc::new(parking_lot::RwLock::new(
-                    SelectivityTracker::new_with_config(0.0, 1.5, 0, 0.0, 0),
+                    SelectivityTracker::new()
+                        .with_min_bytes_per_sec(0.0)
+                        .with_min_rows_for_collection(0),
                 )),
             }
         }
