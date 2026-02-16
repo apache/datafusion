@@ -2085,7 +2085,7 @@ SELECT join_t1.t1_id, join_t2.t2_id
 FROM (select t1_id from join_t1 where join_t1.t1_id > 22) as join_t1
 RIGHT JOIN (select t2_id from join_t2 where join_t2.t2_id > 11) as join_t2
         ON join_t1.t1_id < join_t2.t2_id
-ORDER BY 1, 2        
+ORDER BY 1, 2
 ----
 33 44
 33 55
@@ -3954,7 +3954,7 @@ query TT
 explain select t1_id, t1_name, i from join_t1 t1 cross join lateral (select * from unnest(generate_series(1, t1_int))) as series(i);
 ----
 logical_plan
-01)Cross Join: 
+01)Cross Join:
 02)--SubqueryAlias: t1
 03)----TableScan: join_t1 projection=[t1_id, t1_name]
 04)--SubqueryAlias: series
@@ -4161,10 +4161,9 @@ logical_plan
 03)----TableScan: t0 projection=[c1, c2]
 04)----TableScan: t1 projection=[c1, c2, c3]
 physical_plan
-01)GlobalLimitExec: skip=0, fetch=2
-02)--HashJoinExec: mode=CollectLeft, join_type=Full, on=[(c1@0, c1@0)]
-03)----DataSourceExec: partitions=1, partition_sizes=[2]
-04)----DataSourceExec: partitions=1, partition_sizes=[2]
+01)HashJoinExec: mode=CollectLeft, join_type=Full, on=[(c1@0, c1@0)], fetch=2
+02)--DataSourceExec: partitions=1, partition_sizes=[2]
+03)--DataSourceExec: partitions=1, partition_sizes=[2]
 
 ## Test join.on.is_empty() && join.filter.is_some() -> single filter now a PWMJ
 query TT
@@ -4191,10 +4190,9 @@ logical_plan
 03)----TableScan: t0 projection=[c1, c2]
 04)----TableScan: t1 projection=[c1, c2, c3]
 physical_plan
-01)GlobalLimitExec: skip=0, fetch=2
-02)--HashJoinExec: mode=CollectLeft, join_type=Full, on=[(c1@0, c1@0)], filter=c2@0 >= c2@1
-03)----DataSourceExec: partitions=1, partition_sizes=[2]
-04)----DataSourceExec: partitions=1, partition_sizes=[2]
+01)HashJoinExec: mode=CollectLeft, join_type=Full, on=[(c1@0, c1@0)], filter=c2@0 >= c2@1, fetch=2
+02)--DataSourceExec: partitions=1, partition_sizes=[2]
+03)--DataSourceExec: partitions=1, partition_sizes=[2]
 
 ## Add more test cases for join limit pushdown
 statement ok
@@ -4245,6 +4243,7 @@ select * from t1 LEFT JOIN t2 ON t1.a = t2.b LIMIT 2;
 1 1
 
 # can only push down to t1 (preserved side)
+# limit pushdown supported for left join - both to join and probe side
 query TT
 explain select * from t1 LEFT JOIN t2 ON t1.a = t2.b LIMIT 2;
 ----
@@ -4255,10 +4254,9 @@ logical_plan
 04)------TableScan: t1 projection=[a], fetch=2
 05)----TableScan: t2 projection=[b]
 physical_plan
-01)GlobalLimitExec: skip=0, fetch=2
-02)--HashJoinExec: mode=CollectLeft, join_type=Left, on=[(a@0, b@0)]
-03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/joins/t1.csv]]}, projection=[a], limit=2, file_type=csv, has_header=true
-04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/joins/t2.csv]]}, projection=[b], file_type=csv, has_header=true
+01)HashJoinExec: mode=CollectLeft, join_type=Left, on=[(a@0, b@0)], fetch=2
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/joins/t1.csv]]}, projection=[a], limit=2, file_type=csv, has_header=true
+03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/joins/t2.csv]]}, projection=[b], file_type=csv, has_header=true
 
 ######
 ## RIGHT JOIN w/ LIMIT
@@ -4289,10 +4287,9 @@ logical_plan
 04)----Limit: skip=0, fetch=2
 05)------TableScan: t2 projection=[b], fetch=2
 physical_plan
-01)GlobalLimitExec: skip=0, fetch=2
-02)--HashJoinExec: mode=CollectLeft, join_type=Right, on=[(a@0, b@0)]
-03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/joins/t1.csv]]}, projection=[a], file_type=csv, has_header=true
-04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/joins/t2.csv]]}, projection=[b], limit=2, file_type=csv, has_header=true
+01)HashJoinExec: mode=CollectLeft, join_type=Right, on=[(a@0, b@0)], fetch=2
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/joins/t1.csv]]}, projection=[a], file_type=csv, has_header=true
+03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/joins/t2.csv]]}, projection=[b], limit=2, file_type=csv, has_header=true
 
 ######
 ## FULL JOIN w/ LIMIT
@@ -4316,7 +4313,7 @@ select * from t1 FULL JOIN t2 ON t1.a = t2.b LIMIT 2;
 4 4
 
 
-# can't push limit for full outer join
+# full outer join supports fetch pushdown
 query TT
 explain select * from t1 FULL JOIN t2 ON t1.a = t2.b LIMIT 2;
 ----
@@ -4326,10 +4323,9 @@ logical_plan
 03)----TableScan: t1 projection=[a]
 04)----TableScan: t2 projection=[b]
 physical_plan
-01)GlobalLimitExec: skip=0, fetch=2
-02)--HashJoinExec: mode=CollectLeft, join_type=Full, on=[(a@0, b@0)]
-03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/joins/t1.csv]]}, projection=[a], file_type=csv, has_header=true
-04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/joins/t2.csv]]}, projection=[b], file_type=csv, has_header=true
+01)HashJoinExec: mode=CollectLeft, join_type=Full, on=[(a@0, b@0)], fetch=2
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/joins/t1.csv]]}, projection=[a], file_type=csv, has_header=true
+03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/joins/t2.csv]]}, projection=[b], file_type=csv, has_header=true
 
 statement ok
 drop table t1;
@@ -4367,10 +4363,9 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[count(Int64(1))@0 as count(*)]
 02)--AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1))]
-03)----ProjectionExec: expr=[]
-04)------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(binary_col@0, binary_col@0)]
-05)--------DataSourceExec: partitions=1, partition_sizes=[1]
-06)--------DataSourceExec: partitions=1, partition_sizes=[1]
+03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(binary_col@0, binary_col@0)], projection=[]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Test hash join sort push down
 # Issue: https://github.com/apache/datafusion/issues/13559
@@ -4532,7 +4527,7 @@ query TT
 explain SELECT * FROM person a NATURAL JOIN lineitem b;
 ----
 logical_plan
-01)Cross Join: 
+01)Cross Join:
 02)--SubqueryAlias: a
 03)----TableScan: person projection=[id, age, state]
 04)--SubqueryAlias: b
@@ -4578,7 +4573,7 @@ query TT
 explain SELECT j1_string, j2_string FROM j1, LATERAL (SELECT * FROM j2 WHERE j1_id < j2_id) AS j2;
 ----
 logical_plan
-01)Cross Join: 
+01)Cross Join:
 02)--TableScan: j1 projection=[j1_string]
 03)--SubqueryAlias: j2
 04)----Projection: j2.j2_string
@@ -4591,7 +4586,7 @@ query TT
 explain SELECT * FROM j1 JOIN (j2 JOIN j3 ON(j2_id = j3_id - 2)) ON(j1_id = j2_id), LATERAL (SELECT * FROM j3 WHERE j3_string = j2_string) as j4
 ----
 logical_plan
-01)Cross Join: 
+01)Cross Join:
 02)--Inner Join: CAST(j2.j2_id AS Int64) = CAST(j3.j3_id AS Int64) - Int64(2)
 03)----Inner Join: j1.j1_id = j2.j2_id
 04)------TableScan: j1 projection=[j1_string, j1_id]
@@ -4607,11 +4602,11 @@ query TT
 explain SELECT * FROM j1, LATERAL (SELECT * FROM j1, LATERAL (SELECT * FROM j2 WHERE j1_id = j2_id) as j2) as j2;
 ----
 logical_plan
-01)Cross Join: 
+01)Cross Join:
 02)--TableScan: j1 projection=[j1_string, j1_id]
 03)--SubqueryAlias: j2
 04)----Subquery:
-05)------Cross Join: 
+05)------Cross Join:
 06)--------TableScan: j1 projection=[j1_string, j1_id]
 07)--------SubqueryAlias: j2
 08)----------Subquery:
@@ -4623,7 +4618,7 @@ query TT
 explain SELECT j1_string, j2_string FROM j1 LEFT JOIN LATERAL (SELECT * FROM j2 WHERE j1_id < j2_id) AS j2 ON(true);
 ----
 logical_plan
-01)Left Join: 
+01)Left Join:
 02)--TableScan: j1 projection=[j1_string]
 03)--SubqueryAlias: j2
 04)----Projection: j2.j2_string
@@ -4636,9 +4631,9 @@ query TT
 explain SELECT * FROM j1, (j2 LEFT JOIN LATERAL (SELECT * FROM j3 WHERE j1_id + j2_id = j3_id) AS j3 ON(true));
 ----
 logical_plan
-01)Cross Join: 
+01)Cross Join:
 02)--TableScan: j1 projection=[j1_string, j1_id]
-03)--Left Join: 
+03)--Left Join:
 04)----TableScan: j2 projection=[j2_string, j2_id]
 05)----SubqueryAlias: j3
 06)------Subquery:
@@ -4650,7 +4645,7 @@ query TT
 explain SELECT * FROM j1, LATERAL (SELECT 1) AS j2;
 ----
 logical_plan
-01)Cross Join: 
+01)Cross Join:
 02)--TableScan: j1 projection=[j1_string, j1_id]
 03)--SubqueryAlias: j2
 04)----Projection: Int64(1)
@@ -4992,7 +4987,7 @@ FULL JOIN t2 ON k1 = k2
 
 # LEFT MARK JOIN
 query TT
-EXPLAIN 
+EXPLAIN
 SELECT *
 FROM t2
 WHERE k2 > 0
@@ -5067,14 +5062,14 @@ CREATE OR REPLACE TABLE t1(b INT, c INT, d INT);
 
 statement ok
 INSERT INTO t1 VALUES
-  (10, 5, 3),   
-  ( 1, 7, 8),  
-  ( 2, 9, 7),   
-  ( 3, 8,10),   
-  ( 5, 6, 6),   
-  ( 0, 4, 9),   
-  ( 4, 8, 7),   
-  (100,6, 5);  
+  (10, 5, 3),
+  ( 1, 7, 8),
+  ( 2, 9, 7),
+  ( 3, 8,10),
+  ( 5, 6, 6),
+  ( 0, 4, 9),
+  ( 4, 8, 7),
+  (100,6, 5);
 
 query I rowsort
 SELECT c
@@ -5268,3 +5263,30 @@ DROP TABLE issue_19067_left;
 
 statement count 0
 DROP TABLE issue_19067_right;
+
+# Test that empty projections pushed into joins produce correct row counts at runtime.
+# When count(1) is used over a RIGHT/FULL JOIN, the optimizer embeds an empty projection
+# (projection=[]) into the HashJoinExec. This validates that the runtime batch construction
+# handles zero-column output correctly, preserving the correct number of rows.
+
+statement ok
+CREATE TABLE empty_proj_left AS VALUES (1, 'a'), (2, 'b'), (3, 'c');
+
+statement ok
+CREATE TABLE empty_proj_right AS VALUES (1, 'x'), (2, 'y'), (4, 'z');
+
+query I
+SELECT count(1) FROM empty_proj_left RIGHT JOIN empty_proj_right ON empty_proj_left.column1 = empty_proj_right.column1;
+----
+3
+
+query I
+SELECT count(1) FROM empty_proj_left FULL JOIN empty_proj_right ON empty_proj_left.column1 = empty_proj_right.column1;
+----
+4
+
+statement count 0
+DROP TABLE empty_proj_left;
+
+statement count 0
+DROP TABLE empty_proj_right;
