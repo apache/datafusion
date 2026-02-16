@@ -23,6 +23,7 @@ use datafusion::common::{
 };
 use datafusion::logical_expr::expr::Sort;
 use datafusion::logical_expr::{Cast, Expr, ExprSchemable};
+use datafusion::sql::TableReference;
 use std::collections::HashSet;
 use std::sync::Arc;
 use substrait::proto::SortField;
@@ -383,8 +384,14 @@ impl NameTracker {
     /// 1. validate_unique_names (duplicate schema_name)
     /// 2. DFSchema::check_names (ambiguous reference)
     fn would_conflict(&self, expr: &Expr) -> bool {
-        let schema_name = expr.schema_name().to_string();
+        self.would_conflict_inner(expr.qualified_name(), expr.schema_name().to_string())
+    }
 
+    fn would_conflict_inner(
+        &self,
+        qualified_name: (Option<TableReference>, String),
+        schema_name: String,
+    ) -> bool {
         // Check for duplicate schema_name (would fail validate_unique_names)
         if self.seen_schema_names.contains(&schema_name) {
             return true;
@@ -392,7 +399,7 @@ impl NameTracker {
 
         // Check for ambiguous reference (would fail DFSchema::check_names)
         // This happens when a qualified field and unqualified field have the same name
-        let (qualifier, name) = expr.qualified_name();
+        let (qualifier, name) = qualified_name;
         match qualifier {
             Some(_) => {
                 // Adding a qualified name - conflicts if unqualified version exists
@@ -432,15 +439,20 @@ impl NameTracker {
         // Name collision - need to generate a unique alias
         let schema_name = expr.schema_name().to_string();
         let mut counter = 0;
-        loop {
+        let candidate_name = loop {
             let candidate_name = format!("{schema_name}__temp__{counter}");
-            let candidate_expr = expr.clone().alias(candidate_name.clone());
-            if !self.would_conflict(&candidate_expr) {
-                self.insert(&candidate_expr);
-                return Ok(candidate_expr);
+            // .alias always produces a unqualified name so check for conflicts accordingly.
+            if !self.would_conflict_inner(
+                (None, candidate_name.clone()),
+                candidate_name.clone(),
+            ) {
+                break candidate_name;
             }
             counter += 1;
-        }
+        };
+        let candidate_expr = expr.alias(&candidate_name);
+        self.insert(&candidate_expr);
+        Ok(candidate_expr)
     }
 }
 
