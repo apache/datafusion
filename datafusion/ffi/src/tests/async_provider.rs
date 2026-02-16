@@ -228,7 +228,7 @@ impl ExecutionPlan for AsyncTestExecutionPlan {
         ) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         // Visit expressions in the output ordering from equivalence properties
-        for ordering in self.properties.output_ordering() {
+        if let Some(ordering) = self.properties.output_ordering() {
             for sort_expr in ordering {
                 f(sort_expr.expr.as_ref())?;
             }
