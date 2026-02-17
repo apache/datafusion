@@ -41,7 +41,7 @@ use datafusion_physical_plan::ExecutionPlan;
 use datafusion_session::Session;
 
 use async_trait::async_trait;
-use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
+use object_store::{GetResultPayload, ObjectMeta, ObjectStore, ObjectStoreExt};
 
 #[derive(Default)]
 /// Factory struct used to create [`AvroFormat`]

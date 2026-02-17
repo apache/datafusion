@@ -60,7 +60,9 @@ use bytes::{Buf, Bytes};
 use datafusion_datasource::source::DataSourceExec;
 use futures::stream::BoxStream;
 use futures::{Stream, StreamExt, TryStreamExt, pin_mut};
-use object_store::{ObjectMeta, ObjectStore, delimited::newline_delimited_stream};
+use object_store::{
+    ObjectMeta, ObjectStore, ObjectStoreExt, delimited::newline_delimited_stream,
+};
 use regex::Regex;
 
 #[derive(Default)]

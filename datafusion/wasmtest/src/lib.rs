@@ -99,7 +99,7 @@ mod test {
     use datafusion_physical_plan::collect;
     use datafusion_sql::parser::DFParser;
     use futures::{StreamExt, TryStreamExt, stream};
-    use object_store::{ObjectStore, PutPayload, memory::InMemory, path::Path};
+    use object_store::{ObjectStoreExt, PutPayload, memory::InMemory, path::Path};
     use url::Url;
     use wasm_bindgen_test::wasm_bindgen_test;
 

@@ -49,7 +49,7 @@ use datafusion_physical_plan::{
     collect, displayable, ExecutionPlan, Partitioning,
 };
 
-use object_store::ObjectStore;
+use object_store::ObjectStoreExt;
 use object_store::memory::InMemory;
 use rstest::rstest;
 use url::Url;

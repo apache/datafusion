@@ -509,9 +509,9 @@ mod tests {
     use bytes::Bytes;
     use datafusion_datasource::FileRange;
     use futures::TryStreamExt;
-    use object_store::PutPayload;
     use object_store::memory::InMemory;
     use object_store::path::Path;
+    use object_store::{ObjectStoreExt, PutPayload};
 
     /// Helper to create a test schema
     fn test_schema() -> SchemaRef {

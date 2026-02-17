@@ -222,7 +222,7 @@ impl ParquetOptions {
                     .and_then(|s| parse_statistics_string(s).ok())
                     .unwrap_or(DEFAULT_STATISTICS_ENABLED),
             )
-            .set_max_row_group_size(*max_row_group_size)
+            .set_max_row_group_row_count(Some(*max_row_group_size))
             .set_created_by(created_by.clone())
             .set_column_index_truncate_length(*column_index_truncate_length)
             .set_statistics_truncate_length(*statistics_truncate_length)
@@ -393,7 +393,7 @@ mod tests {
     use parquet::basic::Compression;
     use parquet::file::properties::{
         BloomFilterProperties, DEFAULT_BLOOM_FILTER_FPP, DEFAULT_BLOOM_FILTER_NDV,
-        EnabledStatistics,
+        DEFAULT_MAX_ROW_GROUP_ROW_COUNT, EnabledStatistics,
     };
     use std::collections::HashMap;
 
@@ -536,7 +536,9 @@ mod tests {
                 write_batch_size: props.write_batch_size(),
                 writer_version: props.writer_version().into(),
                 dictionary_page_size_limit: props.dictionary_page_size_limit(),
-                max_row_group_size: props.max_row_group_size(),
+                max_row_group_size: props
+                    .max_row_group_row_count()
+                    .unwrap_or(DEFAULT_MAX_ROW_GROUP_ROW_COUNT),
                 created_by: props.created_by().to_string(),
                 column_index_truncate_length: props.column_index_truncate_length(),
                 statistics_truncate_length: props.statistics_truncate_length(),
