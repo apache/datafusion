@@ -19,7 +19,7 @@
 # for the same function).
 
 
-## Begin tests fo rdate_part with columns and timestamp's with timezones
+## Begin tests for date_part with columns and timestamp's with timezones
 
 # Source data table has
 # timestamps with millisecond (very common timestamp precision) and nanosecond (maximum precision) timestamps
@@ -1194,3 +1194,563 @@ query I
 SELECT EXTRACT('isodow' FROM to_timestamp('2020-09-08T12:00:00+00:00'))
 ----
 1
+
+## Preimage tests
+
+statement ok
+create table t1(c DATE) as VALUES (NULL), ('1990-01-01'), ('2024-01-01'), ('2030-01-01');
+
+# Simple optimizations, col on LHS
+
+query D
+select c from t1 where extract(year from c) = 2024;
+----
+2024-01-01
+
+query D
+select c from t1 where extract(year from c) <> 2024;
+----
+1990-01-01
+2030-01-01 
+
+query D
+select c from t1 where extract(year from c) > 2024;
+----
+2030-01-01
+
+query D
+select c from t1 where extract(year from c) < 2024;
+----
+1990-01-01
+
+query D
+select c from t1 where extract(year from c) >= 2024;
+----
+2024-01-01
+2030-01-01
+
+query D
+select c from t1 where extract(year from c) <= 2024;
+----
+1990-01-01
+2024-01-01
+
+query D
+select c from t1 where extract(year from c) is not distinct from 2024
+----
+2024-01-01
+
+query D
+select c from t1 where extract(year from c) is distinct from 2024
+----
+NULL
+1990-01-01
+2030-01-01
+
+# IN list optimization
+query D
+select c from t1 where extract(year from c) in (1990, 2024);
+----
+1990-01-01
+2024-01-01
+
+# NOT IN list optimization (NULL does not satisfy NOT IN)
+query D
+select c from t1 where extract(year from c) not in (1990, 2024);
+----
+2030-01-01
+
+# Check that date_part is not in the explain statements
+
+query TT
+explain select c from t1 where extract (year from c) = 2024
+----
+logical_plan
+01)Filter: t1.c >= Date32("2024-01-01") AND t1.c < Date32("2025-01-01")
+02)--TableScan: t1 projection=[c]
+physical_plan
+01)FilterExec: c@0 >= 2024-01-01 AND c@0 < 2025-01-01
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+explain select c from t1 where extract (year from c) <> 2024
+----
+logical_plan
+01)Filter: t1.c < Date32("2024-01-01") OR t1.c >= Date32("2025-01-01")
+02)--TableScan: t1 projection=[c]
+physical_plan
+01)FilterExec: c@0 < 2024-01-01 OR c@0 >= 2025-01-01
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+explain select c from t1 where extract (year from c) > 2024
+----
+logical_plan
+01)Filter: t1.c >= Date32("2025-01-01")
+02)--TableScan: t1 projection=[c]
+physical_plan
+01)FilterExec: c@0 >= 2025-01-01
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+explain select c from t1 where extract (year from c) < 2024
+----
+logical_plan
+01)Filter: t1.c < Date32("2024-01-01")
+02)--TableScan: t1 projection=[c]
+physical_plan
+01)FilterExec: c@0 < 2024-01-01
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+explain select c from t1 where extract (year from c) >= 2024
+----
+logical_plan
+01)Filter: t1.c >= Date32("2024-01-01")
+02)--TableScan: t1 projection=[c]
+physical_plan
+01)FilterExec: c@0 >= 2024-01-01
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+explain select c from t1 where extract (year from c) <= 2024
+----
+logical_plan
+01)Filter: t1.c < Date32("2025-01-01")
+02)--TableScan: t1 projection=[c]
+physical_plan
+01)FilterExec: c@0 < 2025-01-01
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+explain select c from t1 where extract (year from c) is not distinct from 2024
+----
+logical_plan
+01)Filter: t1.c IS NOT NULL AND t1.c >= Date32("2024-01-01") AND t1.c < Date32("2025-01-01")
+02)--TableScan: t1 projection=[c]
+physical_plan
+01)FilterExec: c@0 IS NOT NULL AND c@0 >= 2024-01-01 AND c@0 < 2025-01-01
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+explain select c from t1 where extract (year from c) is distinct from 2024
+----
+logical_plan
+01)Filter: t1.c < Date32("2024-01-01") OR t1.c >= Date32("2025-01-01") OR t1.c IS NULL
+02)--TableScan: t1 projection=[c]
+physical_plan
+01)FilterExec: c@0 < 2024-01-01 OR c@0 >= 2025-01-01 OR c@0 IS NULL
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+explain select c from t1 where extract (year from c) in (1990, 2024)
+----
+logical_plan
+01)Filter: t1.c >= Date32("1990-01-01") AND t1.c < Date32("1991-01-01") OR t1.c >= Date32("2024-01-01") AND t1.c < Date32("2025-01-01")
+02)--TableScan: t1 projection=[c]
+physical_plan
+01)FilterExec: c@0 >= 1990-01-01 AND c@0 < 1991-01-01 OR c@0 >= 2024-01-01 AND c@0 < 2025-01-01
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Simple optimizations, column on RHS
+
+query D
+select c from t1 where 2024 = extract(year from c);
+----
+2024-01-01
+
+query D
+select c from t1 where 2024 <> extract(year from c);
+----
+1990-01-01
+2030-01-01
+
+query D
+select c from t1 where 2024 < extract(year from c);
+----
+2030-01-01
+
+query D
+select c from t1 where 2024 > extract(year from c);
+----
+1990-01-01
+
+query D
+select c from t1 where 2024 <= extract(year from c);
+----
+2024-01-01
+2030-01-01
+
+query D
+select c from t1 where 2024 >= extract(year from c);
+----
+1990-01-01
+2024-01-01
+
+query D
+select c from t1 where 2024 is not distinct from extract(year from c);
+----
+2024-01-01
+
+query D
+select c from t1 where 2024 is distinct from extract(year from c);
+----
+NULL
+1990-01-01
+2030-01-01
+
+# Check explain statements for optimizations for other interval types
+
+query TT
+explain select c from t1 where extract (quarter from c) = 2024
+----
+logical_plan
+01)Filter: date_part(Utf8("QUARTER"), t1.c) = Int32(2024)
+02)--TableScan: t1 projection=[c]
+physical_plan
+01)FilterExec: date_part(QUARTER, c@0) = 2024
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+explain select c from t1 where extract (month from c) = 2024
+----
+logical_plan
+01)Filter: date_part(Utf8("MONTH"), t1.c) = Int32(2024)
+02)--TableScan: t1 projection=[c]
+physical_plan
+01)FilterExec: date_part(MONTH, c@0) = 2024
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+explain select c from t1 where extract (week from c) = 2024
+----
+logical_plan
+01)Filter: date_part(Utf8("WEEK"), t1.c) = Int32(2024)
+02)--TableScan: t1 projection=[c]
+physical_plan
+01)FilterExec: date_part(WEEK, c@0) = 2024
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+explain select c from t1 where extract (day from c) = 2024
+----
+logical_plan
+01)Filter: date_part(Utf8("DAY"), t1.c) = Int32(2024)
+02)--TableScan: t1 projection=[c]
+physical_plan
+01)FilterExec: date_part(DAY, c@0) = 2024
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+explain select c from t1 where extract (hour from c) = 2024
+----
+logical_plan
+01)Filter: date_part(Utf8("HOUR"), t1.c) = Int32(2024)
+02)--TableScan: t1 projection=[c]
+physical_plan
+01)FilterExec: date_part(HOUR, c@0) = 2024
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+explain select c from t1 where extract (minute from c) = 2024
+----
+logical_plan
+01)Filter: date_part(Utf8("MINUTE"), t1.c) = Int32(2024)
+02)--TableScan: t1 projection=[c]
+physical_plan
+01)FilterExec: date_part(MINUTE, c@0) = 2024
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+explain select c from t1 where extract (second from c) = 2024
+----
+logical_plan
+01)Filter: date_part(Utf8("SECOND"), t1.c) = Int32(2024)
+02)--TableScan: t1 projection=[c]
+physical_plan
+01)FilterExec: date_part(SECOND, c@0) = 2024
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+explain select c from t1 where extract (millisecond from c) = 2024
+----
+logical_plan
+01)Filter: date_part(Utf8("MILLISECOND"), t1.c) = Int32(2024)
+02)--TableScan: t1 projection=[c]
+physical_plan
+01)FilterExec: date_part(MILLISECOND, c@0) = 2024
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+explain select c from t1 where extract (microsecond from c) = 2024
+----
+logical_plan
+01)Filter: date_part(Utf8("MICROSECOND"), t1.c) = Int32(2024)
+02)--TableScan: t1 projection=[c]
+physical_plan
+01)FilterExec: date_part(MICROSECOND, c@0) = 2024
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+explain select c from t1 where extract (nanosecond from c) = 2024
+----
+logical_plan
+01)Filter: date_part(Utf8("NANOSECOND"), t1.c) = Int32(2024)
+02)--TableScan: t1 projection=[c]
+physical_plan
+01)FilterExec: date_part(NANOSECOND, c@0) = 2024
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+explain select c from t1 where extract (dow from c) = 2024
+----
+logical_plan
+01)Filter: date_part(Utf8("DOW"), t1.c) = Int32(2024)
+02)--TableScan: t1 projection=[c]
+physical_plan
+01)FilterExec: date_part(DOW, c@0) = 2024
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+explain select c from t1 where extract (doy from c) = 2024
+----
+logical_plan
+01)Filter: date_part(Utf8("DOY"), t1.c) = Int32(2024)
+02)--TableScan: t1 projection=[c]
+physical_plan
+01)FilterExec: date_part(DOY, c@0) = 2024
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+explain select c from t1 where extract (epoch from c) = 2024
+----
+logical_plan
+01)Filter: date_part(Utf8("EPOCH"), t1.c) = Float64(2024)
+02)--TableScan: t1 projection=[c]
+physical_plan
+01)FilterExec: date_part(EPOCH, c@0) = 2024
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+explain select c from t1 where extract (isodow from c) = 2024
+----
+logical_plan
+01)Filter: date_part(Utf8("ISODOW"), t1.c) = Int32(2024)
+02)--TableScan: t1 projection=[c]
+physical_plan
+01)FilterExec: date_part(ISODOW, c@0) = 2024
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Simple optimize different datatypes
+
+statement ok
+create table t2(
+    c1_date32 DATE,
+    c2_ts_sec timestamp,
+    c3_ts_mili timestamp,
+    c4_ts_micro timestamp,
+    c5_ts_nano timestamp
+) as VALUES
+    (NULL,
+     NULL,
+     NULL,
+     NULL,
+     NULL),
+    ('1990-05-20',
+     '1990-05-20T00:00:10'::timestamp,
+     '1990-05-20T00:00:10.987'::timestamp,
+     '1990-05-20T00:00:10.987654'::timestamp,
+     '1990-05-20T00:00:10.987654321'::timestamp),
+    ('2024-01-01',
+     '2024-01-01T00:00:00'::timestamp,
+     '2024-01-01T00:00:00.123'::timestamp,
+     '2024-01-01T00:00:00.123456'::timestamp,
+     '2024-01-01T00:00:00.123456789'::timestamp),
+    ('2030-12-31',
+     '2030-12-31T23:59:59'::timestamp,
+     '2030-12-31T23:59:59.001'::timestamp,
+     '2030-12-31T23:59:59.001234'::timestamp,
+     '2030-12-31T23:59:59.001234567'::timestamp)
+;
+
+query D
+select c1_date32 from t2 where extract(year from c1_date32) = 2024;
+----
+2024-01-01
+
+query D
+select c1_date32 from t2 where extract(year from c1_date32) <> 2024;
+----
+1990-05-20
+2030-12-31 
+
+query P
+select c2_ts_sec from t2 where extract(year from c2_ts_sec) > 2024;
+----
+2030-12-31T23:59:59
+
+query P
+select c3_ts_mili from t2 where extract(year from c3_ts_mili) < 2024;
+----
+1990-05-20T00:00:10.987
+
+query P
+select c4_ts_micro from t2 where extract(year from c4_ts_micro) >= 2024;
+----
+2024-01-01T00:00:00.123456
+2030-12-31T23:59:59.001234
+
+query P
+select c5_ts_nano from t2 where extract(year from c5_ts_nano) <= 2024;
+----
+1990-05-20T00:00:10.987654321
+2024-01-01T00:00:00.123456789
+
+query D
+select c1_date32 from t2 where extract(year from c1_date32) is not distinct from 2024
+----
+2024-01-01
+
+query D
+select c1_date32 from t2 where extract(year from c1_date32) is distinct from 2024
+----
+NULL
+1990-05-20
+2030-12-31
+
+# Check that date_part is not in the explain statements for other datatypes
+
+query TT
+explain select c1_date32 from t2 where extract (year from c1_date32) = 2024
+----
+logical_plan
+01)Filter: t2.c1_date32 >= Date32("2024-01-01") AND t2.c1_date32 < Date32("2025-01-01")
+02)--TableScan: t2 projection=[c1_date32]
+physical_plan
+01)FilterExec: c1_date32@0 >= 2024-01-01 AND c1_date32@0 < 2025-01-01
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+explain select c1_date32 from t2 where extract (year from c1_date32) <> 2024
+----
+logical_plan
+01)Filter: t2.c1_date32 < Date32("2024-01-01") OR t2.c1_date32 >= Date32("2025-01-01")
+02)--TableScan: t2 projection=[c1_date32]
+physical_plan
+01)FilterExec: c1_date32@0 < 2024-01-01 OR c1_date32@0 >= 2025-01-01
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+explain select c2_ts_sec from t2 where extract (year from c2_ts_sec) > 2024
+----
+logical_plan
+01)Filter: t2.c2_ts_sec >= TimestampNanosecond(1735689600000000000, None)
+02)--TableScan: t2 projection=[c2_ts_sec]
+physical_plan
+01)FilterExec: c2_ts_sec@0 >= 1735689600000000000
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+explain select c3_ts_mili from t2 where extract (year from c3_ts_mili) < 2024
+----
+logical_plan
+01)Filter: t2.c3_ts_mili < TimestampNanosecond(1704067200000000000, None)
+02)--TableScan: t2 projection=[c3_ts_mili]
+physical_plan
+01)FilterExec: c3_ts_mili@0 < 1704067200000000000
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+explain select c4_ts_micro from t2 where extract (year from c4_ts_micro) >= 2024
+----
+logical_plan
+01)Filter: t2.c4_ts_micro >= TimestampNanosecond(1704067200000000000, None)
+02)--TableScan: t2 projection=[c4_ts_micro]
+physical_plan
+01)FilterExec: c4_ts_micro@0 >= 1704067200000000000
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+explain select c5_ts_nano from t2 where extract (year from c5_ts_nano) <= 2024
+----
+logical_plan
+01)Filter: t2.c5_ts_nano < TimestampNanosecond(1735689600000000000, None)
+02)--TableScan: t2 projection=[c5_ts_nano]
+physical_plan
+01)FilterExec: c5_ts_nano@0 < 1735689600000000000
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+explain select c1_date32 from t2 where extract (year from c1_date32) is not distinct from 2024
+----
+logical_plan
+01)Filter: t2.c1_date32 IS NOT NULL AND t2.c1_date32 >= Date32("2024-01-01") AND t2.c1_date32 < Date32("2025-01-01")
+02)--TableScan: t2 projection=[c1_date32]
+physical_plan
+01)FilterExec: c1_date32@0 IS NOT NULL AND c1_date32@0 >= 2024-01-01 AND c1_date32@0 < 2025-01-01
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+explain select c1_date32 from t2 where extract (year from c1_date32) is distinct from 2024
+----
+logical_plan
+01)Filter: t2.c1_date32 < Date32("2024-01-01") OR t2.c1_date32 >= Date32("2025-01-01") OR t2.c1_date32 IS NULL
+02)--TableScan: t2 projection=[c1_date32]
+physical_plan
+01)FilterExec: c1_date32@0 < 2024-01-01 OR c1_date32@0 >= 2025-01-01 OR c1_date32@0 IS NULL
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Preimage with timestamp with America/New_York timezone
+
+statement ok
+SET datafusion.execution.time_zone = 'America/New_York';
+
+statement ok
+create table t3(
+    c1_ts_tz timestamptz
+) as VALUES
+    (NULL),
+    ('2024-01-01T04:59:59Z'::timestamptz), -- local 2023-12-31 23:59:59 -05
+    ('2024-01-01T05:00:00Z'::timestamptz), -- local 2024-01-01 00:00:00 -05
+    ('2025-01-01T04:59:59Z'::timestamptz), -- local 2024-12-31 23:59:59 -05
+    ('2025-01-01T05:00:00Z'::timestamptz)  -- local 2025-01-01 00:00:00 -05
+;
+
+query P
+select c1_ts_tz
+from t3
+where extract(year from c1_ts_tz) = 2024
+order by c1_ts_tz
+----
+2024-01-01T00:00:00-05:00
+2024-12-31T23:59:59-05:00
+
+query TT
+explain select c1_ts_tz from t3 where extract(year from c1_ts_tz) = 2024
+----
+logical_plan
+01)Filter: t3.c1_ts_tz >= TimestampNanosecond(1704085200000000000, Some("America/New_York")) AND t3.c1_ts_tz < TimestampNanosecond(1735707600000000000, Some("America/New_York"))
+02)--TableScan: t3 projection=[c1_ts_tz]
+physical_plan
+01)FilterExec: c1_ts_tz@0 >= 1704085200000000000 AND c1_ts_tz@0 < 1735707600000000000
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+RESET datafusion.execution.time_zone;
+
+# Test non-Int32 rhs argument
+
+query D
+select c from t1 where extract(year from c) = cast(2024 as bigint);
+----
+2024-01-01
+
+query TT
+explain select c from t1 where extract (year from c) = cast(2024 as bigint)
+----
+logical_plan
+01)Filter: t1.c >= Date32("2024-01-01") AND t1.c < Date32("2025-01-01")
+02)--TableScan: t1 projection=[c]
+physical_plan
+01)FilterExec: c@0 >= 2024-01-01 AND c@0 < 2025-01-01
+02)--DataSourceExec: partitions=1, partition_sizes=[1]

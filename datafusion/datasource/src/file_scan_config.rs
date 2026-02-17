@@ -55,10 +55,21 @@ use datafusion_physical_plan::{
 use log::{debug, warn};
 use std::{any::Any, fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::Arc};
 
-/// The base configurations for a [`DataSourceExec`], the a physical plan for
-/// any given file format.
+/// [`FileScanConfig`] represents scanning data from a group of files
 ///
-/// Use [`DataSourceExec::from_data_source`] to create a [`DataSourceExec`] from a ``FileScanConfig`.
+/// `FileScanConfig` is used to create a [`DataSourceExec`], the physical plan
+/// for scanning files with a particular file format.
+///
+/// The [`FileSource`] (e.g. `ParquetSource`, `CsvSource`, etc.) is responsible
+/// for creating the actual execution plan to read the files based on a
+/// `FileScanConfig`. Fields in a `FileScanConfig` such as Statistics represent
+/// information about the files **before** any projection or filtering is
+/// applied in the file source.
+///
+/// Use [`FileScanConfigBuilder`] to construct a `FileScanConfig`.
+///
+/// Use [`DataSourceExec::from_data_source`] to create a [`DataSourceExec`] from
+/// a `FileScanConfig`.
 ///
 /// # Example
 /// ```
@@ -157,7 +168,13 @@ pub struct FileScanConfig {
     /// correct results (e.g., for `ORDER BY ... LIMIT` queries). When `false`,
     /// DataFusion may reorder file processing for optimization without affecting correctness.
     pub preserve_order: bool,
-    /// All equivalent lexicographical orderings that describe the schema.
+    /// All equivalent lexicographical output orderings of this file scan, in terms of
+    /// [`FileSource::table_schema`]. See [`FileScanConfigBuilder::with_output_ordering`] for more
+    /// details.
+    ///
+    /// [`Self::eq_properties`] uses this information along with projection
+    /// and filtering information to compute the effective
+    /// [`EquivalenceProperties`]
     pub output_ordering: Vec<LexOrdering>,
     /// File compression type
     pub file_compression_type: FileCompressionType,
@@ -169,8 +186,11 @@ pub struct FileScanConfig {
     /// Expression adapter used to adapt filters and projections that are pushed down into the scan
     /// from the logical schema to the physical schema of the file.
     pub expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
-    /// Unprojected statistics for the table (file schema + partition columns).
-    /// These are projected on-demand via `projected_stats()`.
+    /// Statistics for the entire table (file schema + partition columns).
+    /// See [`FileScanConfigBuilder::with_statistics`] for more details.
+    ///
+    /// The effective statistics are computed on-demand via
+    /// [`ProjectionExprs::project_statistics`].
     ///
     /// Note that this field is pub(crate) because accessing it directly from outside
     /// would be incorrect if there are filters being applied, thus this should be accessed
@@ -283,17 +303,20 @@ impl FileScanConfigBuilder {
         }
     }
 
-    /// Set the maximum number of records to read from this plan. If `None`,
-    /// all records after filtering are returned.
+    /// Set the maximum number of records to read from this plan.
+    ///
+    /// If `None`, all records after filtering are returned.
     pub fn with_limit(mut self, limit: Option<usize>) -> Self {
         self.limit = limit;
         self
     }
 
     /// Set whether the limit should be order-sensitive.
+    ///
     /// When `true`, files must be read in the exact order specified to produce
     /// correct results (e.g., for `ORDER BY ... LIMIT` queries). When `false`,
-    /// DataFusion may reorder file processing for optimization without affecting correctness.
+    /// DataFusion may reorder file processing for optimization without
+    /// affecting correctness.
     pub fn with_preserve_order(mut self, order_sensitive: bool) -> Self {
         self.preserve_order = order_sensitive;
         self
@@ -301,13 +324,14 @@ impl FileScanConfigBuilder {
 
     /// Set the file source for scanning files.
     ///
-    /// This method allows you to change the file source implementation (e.g. ParquetSource, CsvSource, etc.)
-    /// after the builder has been created.
+    /// This method allows you to change the file source implementation (e.g.
+    /// ParquetSource, CsvSource, etc.) after the builder has been created.
     pub fn with_source(mut self, file_source: Arc<dyn FileSource>) -> Self {
         self.file_source = file_source;
         self
     }
 
+    /// Return the table schema
     pub fn table_schema(&self) -> &SchemaRef {
         self.file_source.table_schema().table_schema()
     }
@@ -332,7 +356,12 @@ impl FileScanConfigBuilder {
 
     /// Set the columns on which to project the data using column indices.
     ///
-    /// Indexes that are higher than the number of columns of `file_schema` refer to `table_partition_cols`.
+    /// This method attempts to push down the projection to the underlying file
+    /// source if supported. If the file source does not support projection
+    /// pushdown, an error is returned.
+    ///
+    /// Indexes that are higher than the number of columns of `file_schema`
+    /// refer to `table_partition_cols`.
     pub fn with_projection_indices(
         mut self,
         indices: Option<Vec<usize>>,
@@ -371,8 +400,18 @@ impl FileScanConfigBuilder {
         self
     }
 
-    /// Set the estimated overall statistics of the files, taking `filters` into account.
-    /// Defaults to [`Statistics::new_unknown`].
+    /// Set the statistics of the files, including partition
+    /// columns. Defaults to [`Statistics::new_unknown`].
+    ///
+    /// These statistics are for the entire table (file schema + partition
+    /// columns) before any projection or filtering is applied. Projections are
+    /// applied when statistics are retrieved, and if a filter is present,
+    /// [`FileScanConfig::statistics`] will mark the statistics as inexact
+    /// (counts are not adjusted).
+    ///
+    /// Projections and filters may be applied by the file source, either by
+    /// [`Self::with_projection_indices`] or a preexisting
+    /// [`FileSource::projection`] or [`FileSource::filter`].
     pub fn with_statistics(mut self, statistics: Statistics) -> Self {
         self.statistics = Some(statistics);
         self
@@ -408,6 +447,13 @@ impl FileScanConfigBuilder {
     }
 
     /// Set the output ordering of the files
+    ///
+    /// The expressions are in terms of the entire table schema (file schema +
+    /// partition columns), before any projection or filtering from the file
+    /// scan is applied.
+    ///
+    /// This is used for optimization purposes, e.g. to determine if a file scan
+    /// can satisfy an `ORDER BY` without an additional sort.
     pub fn with_output_ordering(mut self, output_ordering: Vec<LexOrdering>) -> Self {
         self.output_ordering = output_ordering;
         self
@@ -683,11 +729,14 @@ impl DataSource for FileScanConfig {
         Partitioning::UnknownPartitioning(self.file_groups.len())
     }
 
+    /// Computes the effective equivalence properties of this file scan, taking
+    /// into account the file schema, any projections or filters applied by the
+    /// file source, and the output ordering.
     fn eq_properties(&self) -> EquivalenceProperties {
         let schema = self.file_source.table_schema().table_schema();
         let mut eq_properties = EquivalenceProperties::new_with_orderings(
             Arc::clone(schema),
-            self.output_ordering.clone(),
+            self.validated_output_ordering(),
         )
         .with_constraints(self.constraints.clone());
 
@@ -793,37 +842,27 @@ impl DataSource for FileScanConfig {
         config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn DataSource>>> {
         // Remap filter Column indices to match the table schema (file + partition columns).
-        // This is necessary because filters may have been created against a different schema
-        // (e.g., after projection pushdown) and need to be remapped to the table schema
-        // before being passed to the file source and ultimately serialized.
-        // For example, the filter being pushed down is `c1_c2 > 5` and it was created
-        // against the output schema of the this `DataSource` which has projection `c1 + c2 as c1_c2`.
-        // Thus we need to rewrite the filter back to `c1 + c2 > 5` before passing it to the file source.
+        // This is necessary because filters refer to the output schema of this `DataSource`
+        // (e.g., after projection pushdown has been applied) and need to be remapped to the table schema
+        // before being passed to the file source
+        //
+        // For example, consider a filter `c1_c2 > 5` being pushed down. If the
+        // `DataSource` has a projection `c1 + c2 as c1_c2`, the filter must be rewritten
+        // to refer to the table schema `c1 + c2 > 5`
         let table_schema = self.file_source.table_schema().table_schema();
-        // If there's a projection with aliases, first map the filters back through
-        // the projection expressions before remapping to the table schema.
         let filters_to_remap = if let Some(projection) = self.file_source.projection() {
-            use datafusion_physical_plan::projection::update_expr;
             filters
                 .into_iter()
-                .map(|filter| {
-                    update_expr(&filter, projection.as_ref(), true)?.ok_or_else(|| {
-                        internal_datafusion_err!(
-                            "Failed to map filter expression through projection: {}",
-                            filter
-                        )
-                    })
-                })
+                .map(|filter| projection.unproject_expr(&filter))
                 .collect::<Result<Vec<_>>>()?
         } else {
             filters
         };
         // Now remap column indices to match the table schema.
-        let remapped_filters: Result<Vec<_>> = filters_to_remap
+        let remapped_filters = filters_to_remap
             .into_iter()
-            .map(|filter| reassign_expr_columns(filter, table_schema.as_ref()))
-            .collect();
-        let remapped_filters = remapped_filters?;
+            .map(|filter| reassign_expr_columns(filter, table_schema))
+            .collect::<Result<Vec<_>>>()?;
 
         let result = self
             .file_source
@@ -851,20 +890,20 @@ impl DataSource for FileScanConfig {
         &self,
         order: &[PhysicalSortExpr],
     ) -> Result<SortOrderPushdownResult<Arc<dyn DataSource>>> {
-        // Delegate to FileSource to check if reverse scanning can satisfy the request.
+        // Delegate to FileSource to see if it can optimize for the requested ordering.
         let pushdown_result = self
             .file_source
-            .try_reverse_output(order, &self.eq_properties())?;
+            .try_pushdown_sort(order, &self.eq_properties())?;
 
         match pushdown_result {
             SortOrderPushdownResult::Exact { inner } => {
                 Ok(SortOrderPushdownResult::Exact {
-                    inner: self.rebuild_with_source(inner, true)?,
+                    inner: self.rebuild_with_source(inner, true, order)?,
                 })
             }
             SortOrderPushdownResult::Inexact { inner } => {
                 Ok(SortOrderPushdownResult::Inexact {
-                    inner: self.rebuild_with_source(inner, false)?,
+                    inner: self.rebuild_with_source(inner, false, order)?,
                 })
             }
             SortOrderPushdownResult::Unsupported => {
@@ -887,6 +926,40 @@ impl DataSource for FileScanConfig {
 }
 
 impl FileScanConfig {
+    /// Returns only the output orderings that are validated against actual
+    /// file group statistics.
+    ///
+    /// For example, individual files may be ordered by `col1 ASC`,
+    /// but if we have files with these min/max statistics in a single partition / file group:
+    ///
+    /// - file1: min(col1) = 10, max(col1) = 20
+    /// - file2: min(col1) = 5, max(col1) = 15
+    ///
+    /// Because reading file1 followed by file2 would produce out-of-order output (there is overlap
+    /// in the ranges), we cannot retain `col1 ASC` as a valid output ordering.
+    ///
+    /// Similarly this would not be a valid order (non-overlapping ranges but not ordered):
+    ///
+    /// - file1: min(col1) = 20, max(col1) = 30
+    /// - file2: min(col1) = 10, max(col1) = 15
+    ///
+    /// On the other hand if we had:
+    ///
+    /// - file1: min(col1) = 5, max(col1) = 15
+    /// - file2: min(col1) = 16, max(col1) = 25
+    ///
+    /// Then we know that reading file1 followed by file2 will produce ordered output,
+    /// so `col1 ASC` would be retained.
+    ///
+    /// Note that we are checking for ordering *within* *each* file group / partition,
+    /// files in different partitions are read independently and do not affect each other's ordering.
+    /// Merging of the multiple partition streams into a single ordered stream is handled
+    /// upstream e.g. by `SortPreservingMergeExec`.
+    fn validated_output_ordering(&self) -> Vec<LexOrdering> {
+        let schema = self.file_source.table_schema().table_schema();
+        validate_orderings(&self.output_ordering, schema, &self.file_groups, None)
+    }
+
     /// Get the file schema (schema of the files without partition columns)
     pub fn file_schema(&self) -> &SchemaRef {
         self.file_source.table_schema().file_schema()
@@ -1157,19 +1230,44 @@ impl FileScanConfig {
         &self,
         new_file_source: Arc<dyn FileSource>,
         is_exact: bool,
+        order: &[PhysicalSortExpr],
     ) -> Result<Arc<dyn DataSource>> {
         let mut new_config = self.clone();
 
-        // Reverse file groups (FileScanConfig's responsibility)
-        new_config.file_groups = new_config
-            .file_groups
-            .into_iter()
-            .map(|group| {
-                let mut files = group.into_inner();
-                files.reverse();
-                files.into()
-            })
-            .collect();
+        // Reverse file order (within each group) if the caller is requesting a reversal of this
+        // scan's declared output ordering.
+        //
+        // Historically this function always reversed `file_groups` because it was only reached
+        // via `FileSource::try_reverse_output` (where a reversal was the only supported
+        // optimization).
+        //
+        // Now that `FileSource::try_pushdown_sort` is generic, we must not assume reversal: other
+        // optimizations may become possible (e.g. already-sorted data, statistics-based file
+        // reordering). Therefore we only reverse files when it is known to help satisfy the
+        // requested ordering.
+        let reverse_file_groups = if self.output_ordering.is_empty() {
+            false
+        } else if let Some(requested) = LexOrdering::new(order.iter().cloned()) {
+            let projected_schema = self.projected_schema()?;
+            let orderings = project_orderings(&self.output_ordering, &projected_schema);
+            orderings
+                .iter()
+                .any(|ordering| ordering.is_reverse(&requested))
+        } else {
+            false
+        };
+
+        if reverse_file_groups {
+            new_config.file_groups = new_config
+                .file_groups
+                .into_iter()
+                .map(|group| {
+                    let mut files = group.into_inner();
+                    files.reverse();
+                    files.into()
+                })
+                .collect();
+        }
 
         new_config.file_source = new_file_source;
 
@@ -1234,6 +1332,51 @@ fn ordered_column_indices_from_projection(
             Some(index)
         })
         .collect::<Option<Vec<usize>>>()
+}
+
+/// Check whether a given ordering is valid for all file groups by verifying
+/// that files within each group are sorted according to their min/max statistics.
+///
+/// For single-file (or empty) groups, the ordering is trivially valid.
+/// For multi-file groups, we check that the min/max statistics for the sort
+/// columns are in order and non-overlapping (or touching at boundaries).
+///
+/// `projection` maps projected column indices back to table-schema indices
+/// when validating after projection; pass `None` when validating at
+/// table-schema level.
+fn is_ordering_valid_for_file_groups(
+    file_groups: &[FileGroup],
+    ordering: &LexOrdering,
+    schema: &SchemaRef,
+    projection: Option<&[usize]>,
+) -> bool {
+    file_groups.iter().all(|group| {
+        if group.len() <= 1 {
+            return true; // single-file groups are trivially sorted
+        }
+        match MinMaxStatistics::new_from_files(ordering, schema, projection, group.iter())
+        {
+            Ok(stats) => stats.is_sorted(),
+            Err(_) => false, // can't prove sorted → reject
+        }
+    })
+}
+
+/// Filters orderings to retain only those valid for all file groups,
+/// verified via min/max statistics.
+fn validate_orderings(
+    orderings: &[LexOrdering],
+    schema: &SchemaRef,
+    file_groups: &[FileGroup],
+    projection: Option<&[usize]>,
+) -> Vec<LexOrdering> {
+    orderings
+        .iter()
+        .filter(|ordering| {
+            is_ordering_valid_for_file_groups(file_groups, ordering, schema, projection)
+        })
+        .cloned()
+        .collect()
 }
 
 /// The various listing tables does not attempt to read all files
@@ -1302,52 +1445,47 @@ fn get_projected_output_ordering(
     let projected_orderings =
         project_orderings(&base_config.output_ordering, projected_schema);
 
-    let mut all_orderings = vec![];
-    for new_ordering in projected_orderings {
-        // Check if any file groups are not sorted
-        if base_config.file_groups.iter().any(|group| {
-            if group.len() <= 1 {
-                // File groups with <= 1 files are always sorted
-                return false;
-            }
+    let indices = base_config
+        .file_source
+        .projection()
+        .as_ref()
+        .map(|p| ordered_column_indices_from_projection(p));
 
-            let Some(indices) = base_config
-                .file_source
-                .projection()
-                .as_ref()
-                .map(|p| ordered_column_indices_from_projection(p))
-            else {
-                // Can't determine if ordered without a simple projection
-                return true;
-            };
-
-            let statistics = match MinMaxStatistics::new_from_files(
-                &new_ordering,
+    match indices {
+        Some(Some(indices)) => {
+            // Simple column projection — validate with statistics
+            validate_orderings(
+                &projected_orderings,
                 projected_schema,
-                indices.as_deref(),
-                group.iter(),
-            ) {
-                Ok(statistics) => statistics,
-                Err(e) => {
-                    log::trace!("Error fetching statistics for file group: {e}");
-                    // we can't prove that it's ordered, so we have to reject it
-                    return true;
-                }
-            };
-
-            !statistics.is_sorted()
-        }) {
-            debug!(
-                "Skipping specified output ordering {:?}. \
-                Some file groups couldn't be determined to be sorted: {:?}",
-                base_config.output_ordering[0], base_config.file_groups
-            );
-            continue;
+                &base_config.file_groups,
+                Some(indices.as_slice()),
+            )
         }
-
-        all_orderings.push(new_ordering);
+        None => {
+            // No projection — validate with statistics (no remapping needed)
+            validate_orderings(
+                &projected_orderings,
+                projected_schema,
+                &base_config.file_groups,
+                None,
+            )
+        }
+        Some(None) => {
+            // Complex projection (expressions, not simple columns) — can't
+            // determine column indices for statistics. Still valid if all
+            // file groups have at most one file.
+            if base_config.file_groups.iter().all(|g| g.len() <= 1) {
+                projected_orderings
+            } else {
+                debug!(
+                    "Skipping specified output orderings. \
+                     Some file groups couldn't be determined to be sorted: {:?}",
+                    base_config.file_groups
+                );
+                vec![]
+            }
+        }
     }
-    all_orderings
 }
 
 /// Convert type to a type suitable for use as a `ListingTable`
@@ -1391,6 +1529,62 @@ mod tests {
     use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
     use datafusion_physical_expr::projection::ProjectionExpr;
     use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+
+    #[derive(Clone)]
+    struct InexactSortPushdownSource {
+        metrics: ExecutionPlanMetricsSet,
+        table_schema: TableSchema,
+    }
+
+    impl InexactSortPushdownSource {
+        fn new(table_schema: TableSchema) -> Self {
+            Self {
+                metrics: ExecutionPlanMetricsSet::new(),
+                table_schema,
+            }
+        }
+    }
+
+    impl FileSource for InexactSortPushdownSource {
+        fn create_file_opener(
+            &self,
+            _object_store: Arc<dyn object_store::ObjectStore>,
+            _base_config: &FileScanConfig,
+            _partition: usize,
+        ) -> Result<Arc<dyn crate::file_stream::FileOpener>> {
+            unimplemented!()
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn table_schema(&self) -> &TableSchema {
+            &self.table_schema
+        }
+
+        fn with_batch_size(&self, _batch_size: usize) -> Arc<dyn FileSource> {
+            Arc::new(self.clone())
+        }
+
+        fn metrics(&self) -> &ExecutionPlanMetricsSet {
+            &self.metrics
+        }
+
+        fn file_type(&self) -> &str {
+            "mock"
+        }
+
+        fn try_pushdown_sort(
+            &self,
+            _order: &[PhysicalSortExpr],
+            _eq_properties: &EquivalenceProperties,
+        ) -> Result<SortOrderPushdownResult<Arc<dyn FileSource>>> {
+            Ok(SortOrderPushdownResult::Inexact {
+                inner: Arc::new(self.clone()) as Arc<dyn FileSource>,
+            })
+        }
+    }
 
     #[test]
     fn physical_plan_config_no_projection_tab_cols_as_field() {
@@ -2336,5 +2530,57 @@ mod tests {
             }
             _ => panic!("Expected Hash partitioning"),
         }
+    }
+
+    #[test]
+    fn try_pushdown_sort_reverses_file_groups_only_when_requested_is_reverse()
+    -> Result<()> {
+        let file_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+
+        let table_schema = TableSchema::new(Arc::clone(&file_schema), vec![]);
+        let file_source = Arc::new(InexactSortPushdownSource::new(table_schema));
+
+        let file_groups = vec![FileGroup::new(vec![
+            PartitionedFile::new("file1", 1),
+            PartitionedFile::new("file2", 1),
+        ])];
+
+        let sort_expr_asc = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
+        let config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+                .with_file_groups(file_groups)
+                .with_output_ordering(vec![
+                    LexOrdering::new(vec![sort_expr_asc.clone()]).unwrap(),
+                ])
+                .build();
+
+        let requested_asc = vec![sort_expr_asc.clone()];
+        let result = config.try_pushdown_sort(&requested_asc)?;
+        let SortOrderPushdownResult::Inexact { inner } = result else {
+            panic!("Expected Inexact result");
+        };
+        let pushed_config = inner
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .expect("Expected FileScanConfig");
+        let pushed_files = pushed_config.file_groups[0].files();
+        assert_eq!(pushed_files[0].object_meta.location.as_ref(), "file1");
+        assert_eq!(pushed_files[1].object_meta.location.as_ref(), "file2");
+
+        let requested_desc = vec![sort_expr_asc.reverse()];
+        let result = config.try_pushdown_sort(&requested_desc)?;
+        let SortOrderPushdownResult::Inexact { inner } = result else {
+            panic!("Expected Inexact result");
+        };
+        let pushed_config = inner
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .expect("Expected FileScanConfig");
+        let pushed_files = pushed_config.file_groups[0].files();
+        assert_eq!(pushed_files[0].object_meta.location.as_ref(), "file2");
+        assert_eq!(pushed_files[1].object_meta.location.as_ref(), "file1");
+
+        Ok(())
     }
 }

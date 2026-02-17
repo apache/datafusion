@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashSet;
 use std::fmt;
 use std::mem::size_of;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -24,7 +25,7 @@ use std::{any::Any, vec};
 use crate::ExecutionPlanProperties;
 use crate::execution_plan::{EmissionType, boundedness_from_children};
 use crate::filter_pushdown::{
-    ChildPushdownResult, FilterDescription, FilterPushdownPhase,
+    ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
 };
 use crate::joins::Map;
@@ -80,7 +81,8 @@ use datafusion_functions_aggregate_common::min_max::{MaxAccumulator, MinAccumula
 use datafusion_physical_expr::equivalence::{
     ProjectionMapping, join_equivalence_properties,
 };
-use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
+use datafusion_physical_expr::expressions::{Column, DynamicFilterPhysicalExpr, lit};
+use datafusion_physical_expr::projection::{ProjectionRef, combine_projections};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 
 use ahash::RandomState;
@@ -243,6 +245,187 @@ impl JoinLeftData {
     /// if caller is the last running thread
     pub(super) fn report_probe_completed(&self) -> bool {
         self.probe_threads_counter.fetch_sub(1, Ordering::Relaxed) == 1
+    }
+}
+
+/// Helps to build [`HashJoinExec`].
+pub struct HashJoinExecBuilder {
+    left: Arc<dyn ExecutionPlan>,
+    right: Arc<dyn ExecutionPlan>,
+    on: Vec<(PhysicalExprRef, PhysicalExprRef)>,
+    join_type: JoinType,
+    filter: Option<JoinFilter>,
+    projection: Option<ProjectionRef>,
+    partition_mode: PartitionMode,
+    null_equality: NullEquality,
+    null_aware: bool,
+    /// Maximum number of rows to return
+    ///
+    /// If the operator produces `< fetch` rows, it returns all available rows.
+    /// If it produces `>= fetch` rows, it returns exactly `fetch` rows and stops early.
+    fetch: Option<usize>,
+}
+
+impl HashJoinExecBuilder {
+    /// Make a new [`HashJoinExecBuilder`].
+    pub fn new(
+        left: Arc<dyn ExecutionPlan>,
+        right: Arc<dyn ExecutionPlan>,
+        on: Vec<(PhysicalExprRef, PhysicalExprRef)>,
+        join_type: JoinType,
+    ) -> Self {
+        Self {
+            left,
+            right,
+            on,
+            filter: None,
+            projection: None,
+            partition_mode: PartitionMode::Auto,
+            join_type,
+            null_equality: NullEquality::NullEqualsNothing,
+            null_aware: false,
+            fetch: None,
+        }
+    }
+
+    /// Set projection from the vector.
+    pub fn with_projection(self, projection: Option<Vec<usize>>) -> Self {
+        self.with_projection_ref(projection.map(Into::into))
+    }
+
+    /// Set projection from the shared reference.
+    pub fn with_projection_ref(mut self, projection: Option<ProjectionRef>) -> Self {
+        self.projection = projection;
+        self
+    }
+
+    /// Set optional filter.
+    pub fn with_filter(mut self, filter: Option<JoinFilter>) -> Self {
+        self.filter = filter;
+        self
+    }
+
+    /// Set partition mode.
+    pub fn with_partition_mode(mut self, mode: PartitionMode) -> Self {
+        self.partition_mode = mode;
+        self
+    }
+
+    /// Set null equality property.
+    pub fn with_null_equality(mut self, null_equality: NullEquality) -> Self {
+        self.null_equality = null_equality;
+        self
+    }
+
+    /// Set null aware property.
+    pub fn with_null_aware(mut self, null_aware: bool) -> Self {
+        self.null_aware = null_aware;
+        self
+    }
+
+    /// Set fetch limit.
+    pub fn with_fetch(mut self, fetch: Option<usize>) -> Self {
+        self.fetch = fetch;
+        self
+    }
+
+    /// Build resulting execution plan.
+    pub fn build(self) -> Result<HashJoinExec> {
+        let Self {
+            left,
+            right,
+            on,
+            join_type,
+            filter,
+            projection,
+            partition_mode,
+            null_equality,
+            null_aware,
+            fetch,
+        } = self;
+
+        let left_schema = left.schema();
+        let right_schema = right.schema();
+        if on.is_empty() {
+            return plan_err!("On constraints in HashJoinExec should be non-empty");
+        }
+
+        check_join_is_valid(&left_schema, &right_schema, &on)?;
+
+        // Validate null_aware flag
+        if null_aware {
+            if !matches!(join_type, JoinType::LeftAnti) {
+                return plan_err!(
+                    "null_aware can only be true for LeftAnti joins, got {join_type}"
+                );
+            }
+            if on.len() != 1 {
+                return plan_err!(
+                    "null_aware anti join only supports single column join key, got {} columns",
+                    on.len()
+                );
+            }
+        }
+
+        let (join_schema, column_indices) =
+            build_join_schema(&left_schema, &right_schema, &join_type);
+
+        let random_state = HASH_JOIN_SEED;
+
+        let join_schema = Arc::new(join_schema);
+
+        //  check if the projection is valid
+        can_project(&join_schema, projection.as_deref())?;
+
+        let cache = HashJoinExec::compute_properties(
+            &left,
+            &right,
+            &join_schema,
+            join_type,
+            &on,
+            partition_mode,
+            projection.as_deref(),
+        )?;
+
+        // Initialize both dynamic filter and bounds accumulator to None
+        // They will be set later if dynamic filtering is enabled
+
+        Ok(HashJoinExec {
+            left,
+            right,
+            on,
+            filter,
+            join_type,
+            join_schema,
+            left_fut: Default::default(),
+            random_state,
+            mode: partition_mode,
+            metrics: ExecutionPlanMetricsSet::new(),
+            projection,
+            column_indices,
+            null_equality,
+            null_aware,
+            cache,
+            dynamic_filter: None,
+            fetch,
+        })
+    }
+}
+
+impl From<&HashJoinExec> for HashJoinExecBuilder {
+    fn from(exec: &HashJoinExec) -> Self {
+        Self {
+            left: Arc::clone(exec.left()),
+            right: Arc::clone(exec.right()),
+            on: exec.on.clone(),
+            join_type: exec.join_type,
+            filter: exec.filter.clone(),
+            projection: exec.projection.clone(),
+            partition_mode: exec.mode,
+            null_equality: exec.null_equality,
+            null_aware: exec.null_aware,
+            fetch: exec.fetch,
+        }
     }
 }
 
@@ -466,7 +649,7 @@ pub struct HashJoinExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// The projection indices of the columns in the output schema of join
-    pub projection: Option<Vec<usize>>,
+    pub projection: Option<ProjectionRef>,
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,
     /// The equality null-handling behavior of the join algorithm.
@@ -479,6 +662,8 @@ pub struct HashJoinExec {
     /// Set when dynamic filter pushdown is detected in handle_child_pushdown_result.
     /// HashJoinExec also needs to keep a shared bounds accumulator for coordinating updates.
     dynamic_filter: Option<HashJoinExecDynamicFilter>,
+    /// Maximum number of rows to return
+    fetch: Option<usize>,
 }
 
 #[derive(Clone)]
@@ -535,70 +720,13 @@ impl HashJoinExec {
         null_equality: NullEquality,
         null_aware: bool,
     ) -> Result<Self> {
-        let left_schema = left.schema();
-        let right_schema = right.schema();
-        if on.is_empty() {
-            return plan_err!("On constraints in HashJoinExec should be non-empty");
-        }
-
-        check_join_is_valid(&left_schema, &right_schema, &on)?;
-
-        // Validate null_aware flag
-        if null_aware {
-            if !matches!(join_type, JoinType::LeftAnti) {
-                return plan_err!(
-                    "null_aware can only be true for LeftAnti joins, got {join_type}"
-                );
-            }
-            if on.len() != 1 {
-                return plan_err!(
-                    "null_aware anti join only supports single column join key, got {} columns",
-                    on.len()
-                );
-            }
-        }
-
-        let (join_schema, column_indices) =
-            build_join_schema(&left_schema, &right_schema, join_type);
-
-        let random_state = HASH_JOIN_SEED;
-
-        let join_schema = Arc::new(join_schema);
-
-        //  check if the projection is valid
-        can_project(&join_schema, projection.as_ref())?;
-
-        let cache = Self::compute_properties(
-            &left,
-            &right,
-            &join_schema,
-            *join_type,
-            &on,
-            partition_mode,
-            projection.as_ref(),
-        )?;
-
-        // Initialize both dynamic filter and bounds accumulator to None
-        // They will be set later if dynamic filtering is enabled
-
-        Ok(HashJoinExec {
-            left,
-            right,
-            on,
-            filter,
-            join_type: *join_type,
-            join_schema,
-            left_fut: Default::default(),
-            random_state,
-            mode: partition_mode,
-            metrics: ExecutionPlanMetricsSet::new(),
-            projection,
-            column_indices,
-            null_equality,
-            null_aware,
-            cache,
-            dynamic_filter: None,
-        })
+        HashJoinExecBuilder::new(left, right, on, *join_type)
+            .with_filter(filter)
+            .with_projection(projection)
+            .with_partition_mode(partition_mode)
+            .with_null_equality(null_equality)
+            .with_null_aware(null_aware)
+            .build()
     }
 
     fn create_dynamic_filter(on: &JoinOn) -> Arc<DynamicFilterPhysicalExpr> {
@@ -607,6 +735,28 @@ impl HashJoinExec {
         let right_keys: Vec<_> = on.iter().map(|(_, r)| Arc::clone(r)).collect();
         // Initialize with a placeholder expression (true) that will be updated when the hash table is built
         Arc::new(DynamicFilterPhysicalExpr::new(right_keys, lit(true)))
+    }
+
+    fn allow_join_dynamic_filter_pushdown(&self, config: &ConfigOptions) -> bool {
+        if self.join_type != JoinType::Inner
+            || !config.optimizer.enable_join_dynamic_filter_pushdown
+        {
+            return false;
+        }
+
+        // `preserve_file_partitions` can report Hash partitioning for Hive-style
+        // file groups, but those partitions are not actually hash-distributed.
+        // Partitioned dynamic filters rely on hash routing, so disable them in
+        // this mode to avoid incorrect results. Follow-up work: enable dynamic
+        // filtering for preserve_file_partitioned scans (issue #20195).
+        // https://github.com/apache/datafusion/issues/20195
+        if config.optimizer.preserve_file_partitions > 0
+            && self.mode == PartitionMode::Partitioned
+        {
+            return false;
+        }
+
+        true
     }
 
     /// left (build) side which gets hashed
@@ -687,26 +837,14 @@ impl HashJoinExec {
 
     /// Return new instance of [HashJoinExec] with the given projection.
     pub fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
+        let projection = projection.map(Into::into);
         //  check if the projection is valid
-        can_project(&self.schema(), projection.as_ref())?;
-        let projection = match projection {
-            Some(projection) => match &self.projection {
-                Some(p) => Some(projection.iter().map(|i| p[*i]).collect()),
-                None => Some(projection),
-            },
-            None => None,
-        };
-        Self::try_new(
-            Arc::clone(&self.left),
-            Arc::clone(&self.right),
-            self.on.clone(),
-            self.filter.clone(),
-            &self.join_type,
-            projection,
-            self.mode,
-            self.null_equality,
-            self.null_aware,
-        )
+        can_project(&self.schema(), projection.as_deref())?;
+        let projection =
+            combine_projections(projection.as_ref(), self.projection.as_ref())?;
+        HashJoinExecBuilder::from(self)
+            .with_projection_ref(projection)
+            .build()
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
@@ -717,7 +855,7 @@ impl HashJoinExec {
         join_type: JoinType,
         on: JoinOnRef,
         mode: PartitionMode,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
     ) -> Result<PlanProperties> {
         // Calculate equivalence properties:
         let mut eq_properties = join_equivalence_properties(
@@ -769,7 +907,7 @@ impl HashJoinExec {
         if let Some(projection) = projection {
             // construct a map from the input expressions to the output expression of the Projection
             let projection_mapping = ProjectionMapping::from_indices(projection, schema)?;
-            let out_schema = project_schema(schema, Some(projection))?;
+            let out_schema = project_schema(schema, Some(&projection))?;
             output_partitioning =
                 output_partitioning.project(&projection_mapping, &eq_properties);
             eq_properties = eq_properties.project(&projection_mapping, out_schema);
@@ -812,25 +950,27 @@ impl HashJoinExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let left = self.left();
         let right = self.right();
-        let new_join = HashJoinExec::try_new(
+        let new_join = HashJoinExecBuilder::new(
             Arc::clone(right),
             Arc::clone(left),
             self.on()
                 .iter()
                 .map(|(l, r)| (Arc::clone(r), Arc::clone(l)))
                 .collect(),
-            self.filter().map(JoinFilter::swap),
-            &self.join_type().swap(),
-            swap_join_projection(
-                left.schema().fields().len(),
-                right.schema().fields().len(),
-                self.projection.as_ref(),
-                self.join_type(),
-            ),
-            partition_mode,
-            self.null_equality(),
-            self.null_aware,
-        )?;
+            self.join_type().swap(),
+        )
+        .with_filter(self.filter().map(JoinFilter::swap))
+        .with_projection(swap_join_projection(
+            left.schema().fields().len(),
+            right.schema().fields().len(),
+            self.projection.as_deref(),
+            self.join_type(),
+        ))
+        .with_partition_mode(partition_mode)
+        .with_null_equality(self.null_equality())
+        .with_null_aware(self.null_aware)
+        .with_fetch(self.fetch)
+        .build()?;
         // In case of anti / semi joins or if there is embedded projection in HashJoinExec, output column order is preserved, no need to add projection again
         if matches!(
             self.join_type(),
@@ -881,6 +1021,9 @@ impl DisplayAs for HashJoinExec {
                     } else {
                         ""
                     };
+                let display_fetch = self
+                    .fetch
+                    .map_or_else(String::new, |f| format!(", fetch={f}"));
                 let on = self
                     .on
                     .iter()
@@ -889,13 +1032,14 @@ impl DisplayAs for HashJoinExec {
                     .join(", ");
                 write!(
                     f,
-                    "HashJoinExec: mode={:?}, join_type={:?}, on=[{}]{}{}{}",
+                    "HashJoinExec: mode={:?}, join_type={:?}, on=[{}]{}{}{}{}",
                     self.mode,
                     self.join_type,
                     on,
                     display_filter,
                     display_projections,
                     display_null_equality,
+                    display_fetch,
                 )
             }
             DisplayFormatType::TreeRender => {
@@ -920,6 +1064,10 @@ impl DisplayAs for HashJoinExec {
 
                 if let Some(filter) = self.filter.as_ref() {
                     writeln!(f, "filter={filter}")?;
+                }
+
+                if let Some(fetch) = self.fetch {
+                    writeln!(f, "fetch={fetch}")?;
                 }
 
                 Ok(())
@@ -1020,10 +1168,11 @@ impl ExecutionPlan for HashJoinExec {
                 self.join_type,
                 &self.on,
                 self.mode,
-                self.projection.as_ref(),
+                self.projection.as_deref(),
             )?,
             // Keep the dynamic filter, bounds accumulator will be reset
             dynamic_filter: self.dynamic_filter.clone(),
+            fetch: self.fetch,
         }))
     }
 
@@ -1047,6 +1196,7 @@ impl ExecutionPlan for HashJoinExec {
             cache: self.cache.clone(),
             // Reset dynamic filter and bounds accumulator to initial state
             dynamic_filter: None,
+            fetch: self.fetch,
         }))
     }
 
@@ -1081,11 +1231,8 @@ impl ExecutionPlan for HashJoinExec {
         // - A dynamic filter exists
         // - At least one consumer is holding a reference to it, this avoids expensive filter
         //   computation when disabled or when no consumer will use it.
-        let enable_dynamic_filter_pushdown = context
-            .session_config()
-            .options()
-            .optimizer
-            .enable_join_dynamic_filter_pushdown
+        let enable_dynamic_filter_pushdown = self
+            .allow_join_dynamic_filter_pushdown(context.session_config().options())
             && self
                 .dynamic_filter
                 .as_ref()
@@ -1181,7 +1328,7 @@ impl ExecutionPlan for HashJoinExec {
         let right_stream = self.right.execute(partition, context)?;
 
         // update column indices to reflect the projection
-        let column_indices_after_projection = match &self.projection {
+        let column_indices_after_projection = match self.projection.as_ref() {
             Some(projection) => projection
                 .iter()
                 .map(|i| self.column_indices[*i].clone())
@@ -1214,15 +1361,12 @@ impl ExecutionPlan for HashJoinExec {
             build_accumulator,
             self.mode,
             self.null_aware,
+            self.fetch,
         )))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
@@ -1240,7 +1384,9 @@ impl ExecutionPlan for HashJoinExec {
             &self.join_schema,
         )?;
         // Project statistics if there is a projection
-        Ok(stats.project(self.projection.as_ref()))
+        let stats = stats.project(self.projection.as_ref());
+        // Apply fetch limit to statistics
+        stats.with_fetch(self.fetch, 0, 1)
     }
 
     /// Tries to push `projection` down through `hash_join`. If possible, performs the
@@ -1269,18 +1415,22 @@ impl ExecutionPlan for HashJoinExec {
             &schema,
             self.filter(),
         )? {
-            Ok(Some(Arc::new(HashJoinExec::try_new(
-                Arc::new(projected_left_child),
-                Arc::new(projected_right_child),
-                join_on,
-                join_filter,
-                self.join_type(),
+            Ok(Some(Arc::new(
+                HashJoinExecBuilder::new(
+                    Arc::new(projected_left_child),
+                    Arc::new(projected_right_child),
+                    join_on,
+                    *self.join_type(),
+                )
+                .with_filter(join_filter)
                 // Returned early if projection is not None
-                None,
-                *self.partition_mode(),
-                self.null_equality,
-                self.null_aware,
-            )?)))
+                .with_projection(None)
+                .with_partition_mode(*self.partition_mode())
+                .with_null_equality(self.null_equality)
+                .with_null_aware(self.null_aware)
+                .with_fetch(self.fetch)
+                .build()?,
+            )))
         } else {
             try_embed_projection(projection, self)
         }
@@ -1292,30 +1442,111 @@ impl ExecutionPlan for HashJoinExec {
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         config: &ConfigOptions,
     ) -> Result<FilterDescription> {
-        // Other types of joins can support *some* filters, but restrictions are complex and error prone.
-        // For now we don't support them.
-        // See the logical optimizer rules for more details: datafusion/optimizer/src/push_down_filter.rs
-        // See https://github.com/apache/datafusion/issues/16973 for tracking.
-        if self.join_type != JoinType::Inner {
-            return Ok(FilterDescription::all_unsupported(
-                &parent_filters,
-                &self.children(),
-            ));
+        // This is the physical-plan equivalent of `push_down_all_join` in
+        // `datafusion/optimizer/src/push_down_filter.rs`. That function uses `lr_is_preserved`
+        // to decide which parent predicates can be pushed past a logical join to its children,
+        // then checks column references to route each predicate to the correct side.
+        //
+        // We apply the same two-level logic here:
+        // 1. `lr_is_preserved` gates whether a side is eligible at all.
+        // 2. For each filter, we check that all column references belong to the
+        //    target child (using `column_indices` to map output column positions
+        //    to join sides). This is critical for correctness: name-based matching
+        //    alone (as done by `ChildFilterDescription::from_child`) can incorrectly
+        //    push filters when different join sides have columns with the same name
+        //    (e.g. nested mark joins both producing "mark" columns).
+        let (left_preserved, right_preserved) = lr_is_preserved(self.join_type);
+
+        // Build the set of allowed column indices for each side
+        let column_indices: Vec<ColumnIndex> = match self.projection.as_ref() {
+            Some(projection) => projection
+                .iter()
+                .map(|i| self.column_indices[*i].clone())
+                .collect(),
+            None => self.column_indices.clone(),
+        };
+
+        let (mut left_allowed, mut right_allowed) = (HashSet::new(), HashSet::new());
+        column_indices
+            .iter()
+            .enumerate()
+            .for_each(|(output_idx, ci)| {
+                match ci.side {
+                    JoinSide::Left => left_allowed.insert(output_idx),
+                    JoinSide::Right => right_allowed.insert(output_idx),
+                    // Mark columns - don't allow pushdown to either side
+                    JoinSide::None => false,
+                };
+            });
+
+        // For semi/anti joins, the non-preserved side's columns are not in the
+        // output, but filters on join key columns can still be pushed there.
+        // We find output columns that are join keys on the preserved side and
+        // add their output indices to the non-preserved side's allowed set.
+        // The name-based remap in FilterRemapper will then match them to the
+        // corresponding column in the non-preserved child's schema.
+        match self.join_type {
+            JoinType::LeftSemi | JoinType::LeftAnti => {
+                let left_key_indices: HashSet<usize> = self
+                    .on
+                    .iter()
+                    .filter_map(|(left_key, _)| {
+                        left_key
+                            .as_any()
+                            .downcast_ref::<Column>()
+                            .map(|c| c.index())
+                    })
+                    .collect();
+                for (output_idx, ci) in column_indices.iter().enumerate() {
+                    if ci.side == JoinSide::Left && left_key_indices.contains(&ci.index) {
+                        right_allowed.insert(output_idx);
+                    }
+                }
+            }
+            JoinType::RightSemi | JoinType::RightAnti => {
+                let right_key_indices: HashSet<usize> = self
+                    .on
+                    .iter()
+                    .filter_map(|(_, right_key)| {
+                        right_key
+                            .as_any()
+                            .downcast_ref::<Column>()
+                            .map(|c| c.index())
+                    })
+                    .collect();
+                for (output_idx, ci) in column_indices.iter().enumerate() {
+                    if ci.side == JoinSide::Right && right_key_indices.contains(&ci.index)
+                    {
+                        left_allowed.insert(output_idx);
+                    }
+                }
+            }
+            _ => {}
         }
 
-        // Get basic filter descriptions for both children
-        let left_child = crate::filter_pushdown::ChildFilterDescription::from_child(
-            &parent_filters,
-            self.left(),
-        )?;
-        let mut right_child = crate::filter_pushdown::ChildFilterDescription::from_child(
-            &parent_filters,
-            self.right(),
-        )?;
+        let left_child = if left_preserved {
+            ChildFilterDescription::from_child_with_allowed_indices(
+                &parent_filters,
+                left_allowed,
+                self.left(),
+            )?
+        } else {
+            ChildFilterDescription::all_unsupported(&parent_filters)
+        };
+
+        let mut right_child = if right_preserved {
+            ChildFilterDescription::from_child_with_allowed_indices(
+                &parent_filters,
+                right_allowed,
+                self.right(),
+            )?
+        } else {
+            ChildFilterDescription::all_unsupported(&parent_filters)
+        };
 
         // Add dynamic filters in Post phase if enabled
         if matches!(phase, FilterPushdownPhase::Post)
-            && config.optimizer.enable_join_dynamic_filter_pushdown
+            && self.allow_join_dynamic_filter_pushdown(config)
         {
             // Add actual dynamic filter to right side (probe side)
             let dynamic_filter = Self::create_dynamic_filter(&self.on);
@@ -1333,19 +1564,6 @@ impl ExecutionPlan for HashJoinExec {
         child_pushdown_result: ChildPushdownResult,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
-        // Note: this check shouldn't be necessary because we already marked all parent filters as unsupported for
-        // non-inner joins in `gather_filters_for_pushdown`.
-        // However it's a cheap check and serves to inform future devs touching this function that they need to be really
-        // careful pushing down filters through non-inner joins.
-        if self.join_type != JoinType::Inner {
-            // Other types of joins can support *some* filters, but restrictions are complex and error prone.
-            // For now we don't support them.
-            // See the logical optimizer rules for more details: datafusion/optimizer/src/push_down_filter.rs
-            return Ok(FilterPushdownPropagation::all_unsupported(
-                child_pushdown_result,
-            ));
-        }
-
         let mut result = FilterPushdownPropagation::if_any(child_pushdown_result.clone());
         assert_eq!(child_pushdown_result.self_filters.len(), 2); // Should always be 2, we have 2 children
         let right_child_self_filters = &child_pushdown_result.self_filters[1]; // We only push down filters to the right child
@@ -1378,11 +1596,52 @@ impl ExecutionPlan for HashJoinExec {
                         filter: dynamic_filter,
                         build_accumulator: OnceLock::new(),
                     }),
+                    fetch: self.fetch,
                 });
                 result = result.with_updated_node(new_node as Arc<dyn ExecutionPlan>);
             }
         }
         Ok(result)
+    }
+
+    fn supports_limit_pushdown(&self) -> bool {
+        // Hash join execution plan does not support pushing limit down through to children
+        // because the children don't know about the join condition and can't
+        // determine how many rows to produce
+        false
+    }
+
+    fn fetch(&self) -> Option<usize> {
+        self.fetch
+    }
+
+    fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
+        HashJoinExecBuilder::from(self)
+            .with_fetch(limit)
+            .build()
+            .ok()
+            .map(|exec| Arc::new(exec) as _)
+    }
+}
+
+/// Determines which sides of a join are "preserved" for filter pushdown.
+///
+/// A preserved side means filters on that side's columns can be safely pushed
+/// below the join. This mirrors the logic in the logical optimizer's
+/// `lr_is_preserved` in `datafusion/optimizer/src/push_down_filter.rs`.
+fn lr_is_preserved(join_type: JoinType) -> (bool, bool) {
+    match join_type {
+        JoinType::Inner => (true, true),
+        JoinType::Left => (true, false),
+        JoinType::Right => (false, true),
+        JoinType::Full => (false, false),
+        // Filters in semi/anti joins are either on the preserved side, or on join keys,
+        // as all output columns come from the preserved side. Join key filters can be
+        // safely pushed down into the other side.
+        JoinType::LeftSemi | JoinType::LeftAnti => (true, true),
+        JoinType::RightSemi | JoinType::RightAnti => (true, true),
+        JoinType::LeftMark => (true, false),
+        JoinType::RightMark => (false, true),
     }
 }
 
@@ -5599,5 +5858,19 @@ mod tests {
                 .to_string()
                 .contains("null_aware anti join only supports single column join key")
         );
+    }
+
+    #[test]
+    fn test_lr_is_preserved() {
+        assert_eq!(lr_is_preserved(JoinType::Inner), (true, true));
+        assert_eq!(lr_is_preserved(JoinType::Left), (true, false));
+        assert_eq!(lr_is_preserved(JoinType::Right), (false, true));
+        assert_eq!(lr_is_preserved(JoinType::Full), (false, false));
+        assert_eq!(lr_is_preserved(JoinType::LeftSemi), (true, true));
+        assert_eq!(lr_is_preserved(JoinType::LeftAnti), (true, true));
+        assert_eq!(lr_is_preserved(JoinType::LeftMark), (true, false));
+        assert_eq!(lr_is_preserved(JoinType::RightSemi), (true, true));
+        assert_eq!(lr_is_preserved(JoinType::RightAnti), (true, true));
+        assert_eq!(lr_is_preserved(JoinType::RightMark), (false, true));
     }
 }

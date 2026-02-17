@@ -3256,6 +3256,99 @@ drop table array_repeat_table;
 statement ok
 drop table large_array_repeat_table;
 
+# array_repeat: arrays with NULL counts
+statement ok
+create table array_repeat_null_count_table
+as values
+(1, 2),
+(2, null),
+(3, 1),
+(4, -1),
+(null, null);
+
+query I?
+select column1, array_repeat(column1, column2) from array_repeat_null_count_table;
+----
+1 [1, 1]
+2 NULL
+3 [3]
+4 []
+NULL NULL
+
+statement ok
+drop table array_repeat_null_count_table
+
+# array_repeat: nested arrays with NULL counts
+statement ok
+create table array_repeat_nested_null_count_table
+as values
+([[1, 2], [3, 4]], 2),
+([[5, 6], [7, 8]], null),
+([[null, null], [9, 10]], 1),
+(null, 3),
+([[11, 12]], -1);
+
+query ??
+select column1, array_repeat(column1, column2) from array_repeat_nested_null_count_table;
+----
+[[1, 2], [3, 4]] [[[1, 2], [3, 4]], [[1, 2], [3, 4]]]
+[[5, 6], [7, 8]] NULL
+[[NULL, NULL], [9, 10]] [[[NULL, NULL], [9, 10]]]
+NULL [NULL, NULL, NULL]
+[[11, 12]] []
+
+statement ok
+drop table array_repeat_nested_null_count_table
+
+# array_repeat edge cases: empty arrays
+query ???
+select array_repeat([], 3), array_repeat([], 0), array_repeat([], null);
+----
+[[], [], []] [] NULL
+
+query ??
+select array_repeat(null::int, 0), array_repeat(null::int, null);
+----
+[] NULL
+
+# array_repeat LargeList with NULL count
+statement ok
+create table array_repeat_large_list_null_table
+as values
+(arrow_cast([1, 2, 3], 'LargeList(Int64)'), 2),
+(arrow_cast([4, 5], 'LargeList(Int64)'), null),
+(arrow_cast(null, 'LargeList(Int64)'), 3);
+
+query ??
+select column1, array_repeat(column1, column2) from array_repeat_large_list_null_table;
+----
+[1, 2, 3] [[1, 2, 3], [1, 2, 3]]
+[4, 5] NULL
+NULL [NULL, NULL, NULL]
+
+statement ok
+drop table array_repeat_large_list_null_table
+
+# array_repeat edge cases: LargeList nested with NULL count
+statement ok
+create table array_repeat_large_nested_null_table
+as values
+(arrow_cast([[1, 2], [3, 4]], 'LargeList(List(Int64))'), 2),
+(arrow_cast([[5, 6], [7, 8]], 'LargeList(List(Int64))'), null),
+(arrow_cast([[null, null]], 'LargeList(List(Int64))'), 1),
+(null, 3);
+
+query ??
+select column1, array_repeat(column1, column2) from array_repeat_large_nested_null_table;
+----
+[[1, 2], [3, 4]] [[[1, 2], [3, 4]], [[1, 2], [3, 4]]]
+[[5, 6], [7, 8]] NULL
+[[NULL, NULL]] [[[NULL, NULL]]]
+NULL [NULL, NULL, NULL]
+
+statement ok
+drop table array_repeat_large_nested_null_table
+
 ## array_concat (aliases: `array_cat`, `list_concat`, `list_cat`)
 
 # test with empty array
@@ -6513,10 +6606,9 @@ physical_plan
 02)--AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
-05)--------ProjectionExec: expr=[]
-06)----------FilterExec: substr(md5(CAST(value@0 AS Utf8View)), 1, 32) IN (SET) ([7f4b18de3cfeb9b4ac78c381ee2ad278, a, b, c])
-07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-08)--------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192]
+05)--------FilterExec: substr(md5(CAST(value@0 AS Utf8View)), 1, 32) IN (SET) ([7f4b18de3cfeb9b4ac78c381ee2ad278, a, b, c]), projection=[]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192]
 
 query I
 with test AS (SELECT substr(md5(i::text)::text, 1, 32) as needle FROM generate_series(1, 100000) t(i))
@@ -6541,10 +6633,9 @@ physical_plan
 02)--AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
-05)--------ProjectionExec: expr=[]
-06)----------FilterExec: substr(md5(CAST(value@0 AS Utf8View)), 1, 32) IN (SET) ([7f4b18de3cfeb9b4ac78c381ee2ad278, a, b, c])
-07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-08)--------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192]
+05)--------FilterExec: substr(md5(CAST(value@0 AS Utf8View)), 1, 32) IN (SET) ([7f4b18de3cfeb9b4ac78c381ee2ad278, a, b, c]), projection=[]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192]
 
 query I
 with test AS (SELECT substr(md5(i::text)::text, 1, 32) as needle FROM generate_series(1, 100000) t(i))
@@ -6569,10 +6660,9 @@ physical_plan
 02)--AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
-05)--------ProjectionExec: expr=[]
-06)----------FilterExec: substr(md5(CAST(value@0 AS Utf8View)), 1, 32) IN (SET) ([7f4b18de3cfeb9b4ac78c381ee2ad278, a, b, c])
-07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-08)--------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192]
+05)--------FilterExec: substr(md5(CAST(value@0 AS Utf8View)), 1, 32) IN (SET) ([7f4b18de3cfeb9b4ac78c381ee2ad278, a, b, c]), projection=[]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192]
 
 query I
 with test AS (SELECT substr(md5(i::text)::text, 1, 32) as needle FROM generate_series(1, 100000) t(i))
@@ -6597,10 +6687,9 @@ physical_plan
 02)--AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
-05)--------ProjectionExec: expr=[]
-06)----------FilterExec: substr(md5(CAST(value@0 AS Utf8View)), 1, 32) IN (SET) ([7f4b18de3cfeb9b4ac78c381ee2ad278, a, b, c])
-07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-08)--------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192]
+05)--------FilterExec: substr(md5(CAST(value@0 AS Utf8View)), 1, 32) IN (SET) ([7f4b18de3cfeb9b4ac78c381ee2ad278, a, b, c]), projection=[]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192]
 
 query I
 with test AS (SELECT substr(md5(i::text)::text, 1, 32) as needle FROM generate_series(1, 100000) t(i))
@@ -6625,10 +6714,9 @@ physical_plan
 02)--AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
-05)--------ProjectionExec: expr=[]
-06)----------FilterExec: substr(md5(CAST(value@0 AS Utf8View)), 1, 32) IN (SET) ([7f4b18de3cfeb9b4ac78c381ee2ad278, a, b, c])
-07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-08)--------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192]
+05)--------FilterExec: substr(md5(CAST(value@0 AS Utf8View)), 1, 32) IN (SET) ([7f4b18de3cfeb9b4ac78c381ee2ad278, a, b, c]), projection=[]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192]
 
 query I
 with test AS (SELECT substr(md5(i::text)::text, 1, 32) as needle FROM generate_series(1, 100000) t(i))
@@ -6655,10 +6743,9 @@ physical_plan
 02)--AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
-05)--------ProjectionExec: expr=[]
-06)----------FilterExec: substr(md5(CAST(value@0 AS Utf8View)), 1, 32) IS NOT NULL OR NULL
-07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-08)--------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192]
+05)--------FilterExec: substr(md5(CAST(value@0 AS Utf8View)), 1, 32) IS NOT NULL OR NULL, projection=[]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192]
 
 # any operator
 query ?
@@ -6812,7 +6899,7 @@ select array_intersect(column1, column2),
        array_intersect(column5, column6)
 from array_intersect_table_1D_Boolean;
 ----
-[] [false, true] [false]
+[] [true, false] [false]
 [false] [true] [true]
 
 query ???
@@ -6821,7 +6908,7 @@ select array_intersect(column1, column2),
        array_intersect(column5, column6)
 from large_array_intersect_table_1D_Boolean;
 ----
-[] [false, true] [false]
+[] [true, false] [false]
 [false] [true] [true]
 
 query ???
@@ -6830,8 +6917,8 @@ select array_intersect(column1, column2),
        array_intersect(column5, column6)
 from array_intersect_table_1D_UTF8;
 ----
-[bc] [arrow, rust] []
-[] [arrow, datafusion, rust] [arrow, rust]
+[bc] [rust, arrow] []
+[] [datafusion, rust, arrow] [rust, arrow]
 
 query ???
 select array_intersect(column1, column2),
@@ -6839,8 +6926,8 @@ select array_intersect(column1, column2),
        array_intersect(column5, column6)
 from large_array_intersect_table_1D_UTF8;
 ----
-[bc] [arrow, rust] []
-[] [arrow, datafusion, rust] [arrow, rust]
+[bc] [rust, arrow] []
+[] [datafusion, rust, arrow] [rust, arrow]
 
 query ?
 select array_intersect(column1, column2)

@@ -1,0 +1,308 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+## Floor Preimage Tests
+##
+## Tests for floor function preimage optimization:
+## floor(col) = N transforms to col >= N AND col < N + 1
+##
+## Uses representative types only (Float64, Int32, Decimal128).
+## Unit tests cover all type variants.
+##########
+
+# Setup: Single table with representative types
+statement ok
+CREATE TABLE test_data (
+    id INT,
+    float_val DOUBLE,
+    int_val INT,
+    decimal_val DECIMAL(10,2)
+) AS VALUES
+    (1, 5.3,   100, 100.00),
+    (2, 5.7,   101, 100.50),
+    (3, 6.0,   102, 101.00),
+    (4, 6.5,   -5,  101.99),
+    (5, 7.0,   0,   102.00),
+    (6, NULL,  NULL, NULL);
+
+##########
+## Data Correctness Tests
+##########
+
+# Float64: floor(x) = 5 matches values in [5.0, 6.0)
+query I rowsort
+SELECT id FROM test_data WHERE floor(float_val) = arrow_cast(5, 'Float64');
+----
+1
+2
+
+# Int32: floor(x) = 100 matches values in [100, 101)
+query I rowsort
+SELECT id FROM test_data WHERE floor(int_val) = 100;
+----
+1
+
+# Decimal128: floor(x) = 100 matches values in [100.00, 101.00)
+query I rowsort
+SELECT id FROM test_data WHERE floor(decimal_val) = arrow_cast(100, 'Decimal128(10,2)');
+----
+1
+2
+
+# Negative value: floor(x) = -5 matches values in [-5, -4)
+query I rowsort
+SELECT id FROM test_data WHERE floor(int_val) = -5;
+----
+4
+
+# Zero value: floor(x) = 0 matches values in [0, 1)
+query I rowsort
+SELECT id FROM test_data WHERE floor(int_val) = 0;
+----
+5
+
+# Column on RHS (same result as LHS)
+query I rowsort
+SELECT id FROM test_data WHERE arrow_cast(5, 'Float64') = floor(float_val);
+----
+1
+2
+
+# IS NOT DISTINCT FROM (excludes NULLs)
+query I rowsort
+SELECT id FROM test_data WHERE floor(float_val) IS NOT DISTINCT FROM arrow_cast(5, 'Float64');
+----
+1
+2
+
+# IS DISTINCT FROM (includes NULLs)
+query I rowsort
+SELECT id FROM test_data WHERE floor(float_val) IS DISTINCT FROM arrow_cast(5, 'Float64');
+----
+3
+4
+5
+6
+
+# Non-integer literal (empty result - floor returns integers)
+query I rowsort
+SELECT id FROM test_data WHERE floor(float_val) = arrow_cast(5.5, 'Float64');
+----
+
+# IN list: floor(x) IN (5, 7) matches [5.0, 6.0) and [7.0, 8.0)
+query I rowsort
+SELECT id FROM test_data WHERE floor(float_val) IN (arrow_cast(5, 'Float64'), arrow_cast(7, 'Float64'));
+----
+1
+2
+5
+
+# NOT IN list: floor(x) NOT IN (5, 7) excludes matching ranges and NULLs
+query I rowsort
+SELECT id FROM test_data WHERE floor(float_val) NOT IN (arrow_cast(5, 'Float64'), arrow_cast(7, 'Float64'));
+----
+3
+4
+
+##########
+## EXPLAIN Tests - Plan Optimization
+##########
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+# 1. Basic: Float64 - floor(col) = N transforms to col >= N AND col < N+1
+query TT
+EXPLAIN SELECT * FROM test_data WHERE floor(float_val) = arrow_cast(5, 'Float64');
+----
+logical_plan
+01)Filter: test_data.float_val >= Float64(5) AND test_data.float_val < Float64(6)
+02)--TableScan: test_data projection=[id, float_val, int_val, decimal_val]
+
+# 2. Basic: Int32 - transformed (coerced to Float64)
+query TT
+EXPLAIN SELECT * FROM test_data WHERE floor(int_val) = 100;
+----
+logical_plan
+01)Projection: test_data.id, test_data.float_val, test_data.int_val, test_data.decimal_val
+02)--Filter: __common_expr_3 >= Float64(100) AND __common_expr_3 < Float64(101)
+03)----Projection: CAST(test_data.int_val AS Float64) AS __common_expr_3, test_data.id, test_data.float_val, test_data.int_val, test_data.decimal_val
+04)------TableScan: test_data projection=[id, float_val, int_val, decimal_val]
+
+# 3. Basic: Decimal128 - same transformation
+query TT
+EXPLAIN SELECT * FROM test_data WHERE floor(decimal_val) = arrow_cast(100, 'Decimal128(10,2)');
+----
+logical_plan
+01)Filter: test_data.decimal_val >= Decimal128(Some(10000),10,2) AND test_data.decimal_val < Decimal128(Some(10100),10,2)
+02)--TableScan: test_data projection=[id, float_val, int_val, decimal_val]
+
+# 4. Column on RHS - same transformation
+query TT
+EXPLAIN SELECT * FROM test_data WHERE arrow_cast(5, 'Float64') = floor(float_val);
+----
+logical_plan
+01)Filter: test_data.float_val >= Float64(5) AND test_data.float_val < Float64(6)
+02)--TableScan: test_data projection=[id, float_val, int_val, decimal_val]
+
+# 5. IS NOT DISTINCT FROM - adds IS NOT NULL
+query TT
+EXPLAIN SELECT * FROM test_data WHERE floor(float_val) IS NOT DISTINCT FROM arrow_cast(5, 'Float64');
+----
+logical_plan
+01)Filter: test_data.float_val IS NOT NULL AND test_data.float_val >= Float64(5) AND test_data.float_val < Float64(6)
+02)--TableScan: test_data projection=[id, float_val, int_val, decimal_val]
+
+# 6. IS DISTINCT FROM - includes NULL check
+query TT
+EXPLAIN SELECT * FROM test_data WHERE floor(float_val) IS DISTINCT FROM arrow_cast(5, 'Float64');
+----
+logical_plan
+01)Filter: test_data.float_val < Float64(5) OR test_data.float_val >= Float64(6) OR test_data.float_val IS NULL
+02)--TableScan: test_data projection=[id, float_val, int_val, decimal_val]
+
+# 7. Non-optimizable: non-integer literal (original predicate preserved)
+query TT
+EXPLAIN SELECT * FROM test_data WHERE floor(float_val) = arrow_cast(5.5, 'Float64');
+----
+logical_plan
+01)Filter: floor(test_data.float_val) = Float64(5.5)
+02)--TableScan: test_data projection=[id, float_val, int_val, decimal_val]
+
+# 8. Non-optimizable: extreme float literal (2^53) where n+1 loses precision, so preimage returns None
+query TT
+EXPLAIN SELECT * FROM test_data WHERE floor(float_val) = 9007199254740992;
+----
+logical_plan
+01)Filter: floor(test_data.float_val) = Float64(9007199254740992)
+02)--TableScan: test_data projection=[id, float_val, int_val, decimal_val]
+
+# 9. IN list: each list item is rewritten with preimage and OR-ed together
+query TT
+EXPLAIN SELECT * FROM test_data WHERE floor(float_val) IN (arrow_cast(5, 'Float64'), arrow_cast(7, 'Float64'));
+----
+logical_plan
+01)Filter: test_data.float_val >= Float64(5) AND test_data.float_val < Float64(6) OR test_data.float_val >= Float64(7) AND test_data.float_val < Float64(8)
+02)--TableScan: test_data projection=[id, float_val, int_val, decimal_val]
+
+# Data correctness: floor(col) = 2^53 returns no rows (no value in test_data has floor exactly 2^53)
+query I rowsort
+SELECT id FROM test_data WHERE floor(float_val) = 9007199254740992;
+----
+
+##########
+## Other Comparison Operators
+##
+## The preimage framework automatically handles all comparison operators:
+##   floor(x) <> N  ->  x < N OR x >= N+1
+##   floor(x) > N   ->  x >= N+1
+##   floor(x) < N   ->  x < N
+##   floor(x) >= N  ->  x >= N
+##   floor(x) <= N  ->  x < N+1
+##########
+
+# Data correctness tests for other operators
+
+# Not equals: floor(x) <> 5 matches values outside [5.0, 6.0)
+query I rowsort
+SELECT id FROM test_data WHERE floor(float_val) <> arrow_cast(5, 'Float64');
+----
+3
+4
+5
+
+# Greater than: floor(x) > 5 matches values in [6.0, inf)
+query I rowsort
+SELECT id FROM test_data WHERE floor(float_val) > arrow_cast(5, 'Float64');
+----
+3
+4
+5
+
+# Less than: floor(x) < 6 matches values in (-inf, 6.0)
+query I rowsort
+SELECT id FROM test_data WHERE floor(float_val) < arrow_cast(6, 'Float64');
+----
+1
+2
+
+# Greater than or equal: floor(x) >= 5 matches values in [5.0, inf)
+query I rowsort
+SELECT id FROM test_data WHERE floor(float_val) >= arrow_cast(5, 'Float64');
+----
+1
+2
+3
+4
+5
+
+# Less than or equal: floor(x) <= 5 matches values in (-inf, 6.0)
+query I rowsort
+SELECT id FROM test_data WHERE floor(float_val) <= arrow_cast(5, 'Float64');
+----
+1
+2
+
+# EXPLAIN tests showing optimized transformations
+
+# Not equals: floor(x) <> 5 -> x < 5 OR x >= 6
+query TT
+EXPLAIN SELECT * FROM test_data WHERE floor(float_val) <> arrow_cast(5, 'Float64');
+----
+logical_plan
+01)Filter: test_data.float_val < Float64(5) OR test_data.float_val >= Float64(6)
+02)--TableScan: test_data projection=[id, float_val, int_val, decimal_val]
+
+# Greater than: floor(x) > 5 -> x >= 6
+query TT
+EXPLAIN SELECT * FROM test_data WHERE floor(float_val) > arrow_cast(5, 'Float64');
+----
+logical_plan
+01)Filter: test_data.float_val >= Float64(6)
+02)--TableScan: test_data projection=[id, float_val, int_val, decimal_val]
+
+# Less than: floor(x) < 6 -> x < 6
+query TT
+EXPLAIN SELECT * FROM test_data WHERE floor(float_val) < arrow_cast(6, 'Float64');
+----
+logical_plan
+01)Filter: test_data.float_val < Float64(6)
+02)--TableScan: test_data projection=[id, float_val, int_val, decimal_val]
+
+# Greater than or equal: floor(x) >= 5 -> x >= 5
+query TT
+EXPLAIN SELECT * FROM test_data WHERE floor(float_val) >= arrow_cast(5, 'Float64');
+----
+logical_plan
+01)Filter: test_data.float_val >= Float64(5)
+02)--TableScan: test_data projection=[id, float_val, int_val, decimal_val]
+
+# Less than or equal: floor(x) <= 5 -> x < 6
+query TT
+EXPLAIN SELECT * FROM test_data WHERE floor(float_val) <= arrow_cast(5, 'Float64');
+----
+logical_plan
+01)Filter: test_data.float_val < Float64(6)
+02)--TableScan: test_data projection=[id, float_val, int_val, decimal_val]
+
+##########
+## Cleanup
+##########
+
+statement ok
+DROP TABLE test_data;

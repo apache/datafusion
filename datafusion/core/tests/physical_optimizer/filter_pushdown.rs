@@ -401,7 +401,8 @@ async fn test_static_filter_pushdown_through_hash_join() {
     "
     );
 
-    // Test left join - filters should NOT be pushed down
+    // Test left join: filter on preserved (build) side is pushed down,
+    // filter on non-preserved (probe) side is NOT pushed down.
     let join = Arc::new(
         HashJoinExec::try_new(
             TestScanBuilder::new(Arc::clone(&build_side_schema))
@@ -425,25 +426,30 @@ async fn test_static_filter_pushdown_through_hash_join() {
     );
 
     let join_schema = join.schema();
-    let filter = col_lit_predicate("a", "aa", &join_schema);
-    let plan =
-        Arc::new(FilterExec::try_new(filter, join).unwrap()) as Arc<dyn ExecutionPlan>;
+    // Filter on build side column (preserved): should be pushed down
+    let left_filter = col_lit_predicate("a", "aa", &join_schema);
+    // Filter on probe side column (not preserved): should NOT be pushed down
+    let right_filter = col_lit_predicate("e", "ba", &join_schema);
+    let filter =
+        Arc::new(FilterExec::try_new(left_filter, Arc::clone(&join) as _).unwrap());
+    let plan = Arc::new(FilterExec::try_new(right_filter, filter).unwrap())
+        as Arc<dyn ExecutionPlan>;
 
-    // Test that filters are NOT pushed down for left join
     insta::assert_snapshot!(
         OptimizationTest::new(plan, FilterPushdown::new(), true),
         @r"
     OptimizationTest:
       input:
-        - FilterExec: a@0 = aa
-        -   HashJoinExec: mode=Partitioned, join_type=Left, on=[(a@0, d@0)]
-        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
-        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, e, f], file_type=test, pushdown_supported=true
+        - FilterExec: e@4 = ba
+        -   FilterExec: a@0 = aa
+        -     HashJoinExec: mode=Partitioned, join_type=Left, on=[(a@0, d@0)]
+        -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+        -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, e, f], file_type=test, pushdown_supported=true
       output:
         Ok:
-          - FilterExec: a@0 = aa
+          - FilterExec: e@4 = ba
           -   HashJoinExec: mode=Partitioned, join_type=Left, on=[(a@0, d@0)]
-          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = aa
           -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, e, f], file_type=test, pushdown_supported=true
     "
     );
@@ -1722,6 +1728,218 @@ async fn test_hashjoin_parent_filter_pushdown() {
     );
 }
 
+#[test]
+fn test_hashjoin_parent_filter_pushdown_same_column_names() {
+    use datafusion_common::JoinType;
+    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
+
+    let build_side_schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("build_val", DataType::Utf8, false),
+    ]));
+    let build_scan = TestScanBuilder::new(Arc::clone(&build_side_schema))
+        .with_support(true)
+        .build();
+
+    let probe_side_schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("probe_val", DataType::Utf8, false),
+    ]));
+    let probe_scan = TestScanBuilder::new(Arc::clone(&probe_side_schema))
+        .with_support(true)
+        .build();
+
+    let on = vec![(
+        col("id", &build_side_schema).unwrap(),
+        col("id", &probe_side_schema).unwrap(),
+    )];
+    let join = Arc::new(
+        HashJoinExec::try_new(
+            build_scan,
+            probe_scan,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            datafusion_common::NullEquality::NullEqualsNothing,
+            false,
+        )
+        .unwrap(),
+    );
+
+    let join_schema = join.schema();
+
+    let build_id_filter = col_lit_predicate("id", "aa", &join_schema);
+    let probe_val_filter = col_lit_predicate("probe_val", "x", &join_schema);
+
+    let filter =
+        Arc::new(FilterExec::try_new(build_id_filter, Arc::clone(&join) as _).unwrap());
+    let plan = Arc::new(FilterExec::try_new(probe_val_filter, filter).unwrap())
+        as Arc<dyn ExecutionPlan>;
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(Arc::clone(&plan), FilterPushdown::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: probe_val@3 = x
+        -   FilterExec: id@0 = aa
+        -     HashJoinExec: mode=Partitioned, join_type=Inner, on=[(id@0, id@0)]
+        -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[id, build_val], file_type=test, pushdown_supported=true
+        -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[id, probe_val], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - HashJoinExec: mode=Partitioned, join_type=Inner, on=[(id@0, id@0)]
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[id, build_val], file_type=test, pushdown_supported=true, predicate=id@0 = aa
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[id, probe_val], file_type=test, pushdown_supported=true, predicate=probe_val@1 = x
+    "
+    );
+}
+
+#[test]
+fn test_hashjoin_parent_filter_pushdown_mark_join() {
+    use datafusion_common::JoinType;
+    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
+
+    let left_schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("val", DataType::Utf8, false),
+    ]));
+    let left_scan = TestScanBuilder::new(Arc::clone(&left_schema))
+        .with_support(true)
+        .build();
+
+    let right_schema =
+        Arc::new(Schema::new(vec![Field::new("id", DataType::Utf8, false)]));
+    let right_scan = TestScanBuilder::new(Arc::clone(&right_schema))
+        .with_support(true)
+        .build();
+
+    let on = vec![(
+        col("id", &left_schema).unwrap(),
+        col("id", &right_schema).unwrap(),
+    )];
+    let join = Arc::new(
+        HashJoinExec::try_new(
+            left_scan,
+            right_scan,
+            on,
+            None,
+            &JoinType::LeftMark,
+            None,
+            PartitionMode::Partitioned,
+            datafusion_common::NullEquality::NullEqualsNothing,
+            false,
+        )
+        .unwrap(),
+    );
+
+    let join_schema = join.schema();
+
+    let left_filter = col_lit_predicate("val", "x", &join_schema);
+    let mark_filter = col_lit_predicate("mark", true, &join_schema);
+
+    let filter =
+        Arc::new(FilterExec::try_new(left_filter, Arc::clone(&join) as _).unwrap());
+    let plan = Arc::new(FilterExec::try_new(mark_filter, filter).unwrap())
+        as Arc<dyn ExecutionPlan>;
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(Arc::clone(&plan), FilterPushdown::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: mark@2 = true
+        -   FilterExec: val@1 = x
+        -     HashJoinExec: mode=Partitioned, join_type=LeftMark, on=[(id@0, id@0)]
+        -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[id, val], file_type=test, pushdown_supported=true
+        -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[id], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - FilterExec: mark@2 = true
+          -   HashJoinExec: mode=Partitioned, join_type=LeftMark, on=[(id@0, id@0)]
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[id, val], file_type=test, pushdown_supported=true, predicate=val@1 = x
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[id], file_type=test, pushdown_supported=true
+    "
+    );
+}
+
+/// Test that filters on join key columns are pushed to both sides of semi/anti joins.
+/// For LeftSemi/LeftAnti, the output only contains left columns, but filters on
+/// join key columns can also be pushed to the right (non-preserved) side because
+/// the equijoin condition guarantees the key values match.
+#[test]
+fn test_hashjoin_parent_filter_pushdown_semi_anti_join() {
+    use datafusion_common::JoinType;
+    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
+
+    let left_schema = Arc::new(Schema::new(vec![
+        Field::new("k", DataType::Utf8, false),
+        Field::new("v", DataType::Utf8, false),
+    ]));
+    let left_scan = TestScanBuilder::new(Arc::clone(&left_schema))
+        .with_support(true)
+        .build();
+
+    let right_schema = Arc::new(Schema::new(vec![
+        Field::new("k", DataType::Utf8, false),
+        Field::new("w", DataType::Utf8, false),
+    ]));
+    let right_scan = TestScanBuilder::new(Arc::clone(&right_schema))
+        .with_support(true)
+        .build();
+
+    let on = vec![(
+        col("k", &left_schema).unwrap(),
+        col("k", &right_schema).unwrap(),
+    )];
+
+    let join = Arc::new(
+        HashJoinExec::try_new(
+            left_scan,
+            right_scan,
+            on,
+            None,
+            &JoinType::LeftSemi,
+            None,
+            PartitionMode::Partitioned,
+            datafusion_common::NullEquality::NullEqualsNothing,
+            false,
+        )
+        .unwrap(),
+    );
+
+    let join_schema = join.schema();
+    // Filter on join key column: k = 'x' — should be pushed to BOTH sides
+    let key_filter = col_lit_predicate("k", "x", &join_schema);
+    // Filter on non-key column: v = 'y' — should only be pushed to the left side
+    let val_filter = col_lit_predicate("v", "y", &join_schema);
+
+    let filter =
+        Arc::new(FilterExec::try_new(key_filter, Arc::clone(&join) as _).unwrap());
+    let plan = Arc::new(FilterExec::try_new(val_filter, filter).unwrap())
+        as Arc<dyn ExecutionPlan>;
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(Arc::clone(&plan), FilterPushdown::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: v@1 = y
+        -   FilterExec: k@0 = x
+        -     HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(k@0, k@0)]
+        -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[k, v], file_type=test, pushdown_supported=true
+        -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[k, w], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(k@0, k@0)]
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[k, v], file_type=test, pushdown_supported=true, predicate=k@0 = x AND v@1 = y
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[k, w], file_type=test, pushdown_supported=true, predicate=k@0 = x
+    "
+    );
+}
+
 /// Integration test for dynamic filter pushdown with TopK.
 /// We use an integration test because there are complex interactions in the optimizer rules
 /// that the unit tests applying a single optimizer rule do not cover.
@@ -1804,6 +2022,67 @@ fn test_filter_pushdown_through_union() {
           - UnionExec
           -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
           -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
+    "
+    );
+}
+
+#[test]
+fn test_filter_pushdown_through_union_mixed_support() {
+    // Test case where one child supports filter pushdown and one doesn't
+    let scan1 = TestScanBuilder::new(schema()).with_support(true).build();
+    let scan2 = TestScanBuilder::new(schema()).with_support(false).build();
+
+    let union = UnionExec::try_new(vec![scan1, scan2]).unwrap();
+
+    let predicate = col_lit_predicate("a", "foo", &schema());
+    let plan = Arc::new(FilterExec::try_new(predicate, union).unwrap());
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: a@0 = foo
+        -   UnionExec
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+      output:
+        Ok:
+          - UnionExec
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
+          -   FilterExec: a@0 = foo
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+    "
+    );
+}
+
+#[test]
+fn test_filter_pushdown_through_union_does_not_support() {
+    // Test case where one child supports filter pushdown and one doesn't
+    let scan1 = TestScanBuilder::new(schema()).with_support(false).build();
+    let scan2 = TestScanBuilder::new(schema()).with_support(false).build();
+
+    let union = UnionExec::try_new(vec![scan1, scan2]).unwrap();
+
+    let predicate = col_lit_predicate("a", "foo", &schema());
+    let plan = Arc::new(FilterExec::try_new(predicate, union).unwrap());
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
+        @"
+    OptimizationTest:
+      input:
+        - FilterExec: a@0 = foo
+        -   UnionExec
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+      output:
+        Ok:
+          - UnionExec
+          -   FilterExec: a@0 = foo
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+          -   FilterExec: a@0 = foo
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
     "
     );
 }
@@ -3719,4 +3998,91 @@ async fn test_hashjoin_dynamic_filter_pushdown_is_used() {
             "is_used() should return {expected_is_used} when probe side support is {probe_supports_pushdown}"
         );
     }
+}
+
+/// Regression test for https://github.com/apache/datafusion/issues/20109
+#[tokio::test]
+async fn test_filter_with_projection_pushdown() {
+    use arrow::array::{Int64Array, RecordBatch, StringArray};
+    use datafusion_physical_plan::collect;
+    use datafusion_physical_plan::filter::FilterExecBuilder;
+
+    // Create schema: [time, event, size]
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("time", DataType::Int64, false),
+        Field::new("event", DataType::Utf8, false),
+        Field::new("size", DataType::Int64, false),
+    ]));
+
+    // Create sample data
+    let timestamps = vec![100i64, 200, 300, 400, 500];
+    let events = vec!["Ingestion", "Ingestion", "Query", "Ingestion", "Query"];
+    let sizes = vec![10i64, 20, 30, 40, 50];
+
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int64Array::from(timestamps)),
+            Arc::new(StringArray::from(events)),
+            Arc::new(Int64Array::from(sizes)),
+        ],
+    )
+    .unwrap();
+
+    // Create data source
+    let memory_exec = datafusion_datasource::memory::MemorySourceConfig::try_new_exec(
+        &[vec![batch]],
+        schema.clone(),
+        None,
+    )
+    .unwrap();
+
+    // First FilterExec: time < 350 with projection=[event@1, size@2]
+    let time_col = col("time", &memory_exec.schema()).unwrap();
+    let time_filter = Arc::new(BinaryExpr::new(
+        time_col,
+        Operator::Lt,
+        Arc::new(Literal::new(ScalarValue::Int64(Some(350)))),
+    ));
+    let filter1 = Arc::new(
+        FilterExecBuilder::new(time_filter, memory_exec)
+            .apply_projection(Some(vec![1, 2]))
+            .unwrap()
+            .build()
+            .unwrap(),
+    );
+
+    // Second FilterExec: event = 'Ingestion' with projection=[size@1]
+    let event_col = col("event", &filter1.schema()).unwrap();
+    let event_filter = Arc::new(BinaryExpr::new(
+        event_col,
+        Operator::Eq,
+        Arc::new(Literal::new(ScalarValue::Utf8(Some(
+            "Ingestion".to_string(),
+        )))),
+    ));
+    let filter2 = Arc::new(
+        FilterExecBuilder::new(event_filter, filter1)
+            .apply_projection(Some(vec![1]))
+            .unwrap()
+            .build()
+            .unwrap(),
+    );
+
+    // Apply filter pushdown optimization
+    let config = ConfigOptions::default();
+    let optimized_plan = FilterPushdown::new()
+        .optimize(Arc::clone(&filter2) as Arc<dyn ExecutionPlan>, &config)
+        .unwrap();
+
+    // Execute the optimized plan - this should not error
+    let ctx = SessionContext::new();
+    let result = collect(optimized_plan, ctx.task_ctx()).await.unwrap();
+
+    // Verify results: should return rows where time < 350 AND event = 'Ingestion'
+    // That's rows with time=100,200 (both have event='Ingestion'), so sizes 10,20
+    let expected = [
+        "+------+", "| size |", "+------+", "| 10   |", "| 20   |", "+------+",
+    ];
+    assert_batches_eq!(expected, &result);
 }
