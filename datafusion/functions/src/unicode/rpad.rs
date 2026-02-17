@@ -245,9 +245,10 @@ where
                                     builder.append_value(&string[..length]);
                                 } else {
                                     builder.write_str(string)?;
-                                    builder.append_value(
-                                        " ".repeat(length - str_len).as_str(),
-                                    );
+                                    for _ in 0..(length - str_len) {
+                                        builder.write_char(' ')?;
+                                    }
+                                    builder.append_value("");
                                 }
                             } else {
                                 // Reuse buffer by clearing and refilling
@@ -259,9 +260,10 @@ where
                                         .append_value(graphemes_buf[..length].concat());
                                 } else {
                                     builder.write_str(string)?;
-                                    builder.append_value(
-                                        &" ".repeat(length - graphemes_buf.len()),
-                                    );
+                                    for _ in 0..(length - graphemes_buf.len()) {
+                                        builder.write_char(' ')?;
+                                    }
+                                    builder.append_value("");
                                 }
                             }
                         }

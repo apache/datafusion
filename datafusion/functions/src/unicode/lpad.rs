@@ -298,8 +298,11 @@ where
                     if length < str_len {
                         builder.append_value(&string[..length]);
                     } else {
-                        builder.write_str(" ".repeat(length - str_len).as_str())?;
-                        builder.append_value(string);
+                        for _ in 0..(length - str_len) {
+                            builder.write_char(' ')?;
+                        }
+                        builder.write_str(string)?;
+                        builder.append_value("");
                     }
                 } else {
                     // Reuse buffer by clearing and refilling
@@ -309,10 +312,11 @@ where
                     if length < graphemes_buf.len() {
                         builder.append_value(graphemes_buf[..length].concat());
                     } else {
-                        builder.write_str(
-                            " ".repeat(length - graphemes_buf.len()).as_str(),
-                        )?;
-                        builder.append_value(string);
+                        for _ in 0..(length - graphemes_buf.len()) {
+                            builder.write_char(' ')?;
+                        }
+                        builder.write_str(string)?;
+                        builder.append_value("");
                     }
                 }
             } else {
