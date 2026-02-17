@@ -301,8 +301,7 @@ where
                         for _ in 0..(length - str_len) {
                             builder.write_char(' ')?;
                         }
-                        builder.write_str(string)?;
-                        builder.append_value("");
+                        builder.append_value(string);
                     }
                 } else {
                     // Reuse buffer by clearing and refilling
@@ -315,8 +314,7 @@ where
                         for _ in 0..(length - graphemes_buf.len()) {
                             builder.write_char(' ')?;
                         }
-                        builder.write_str(string)?;
-                        builder.append_value("");
+                        builder.append_value(string);
                     }
                 }
             } else {
