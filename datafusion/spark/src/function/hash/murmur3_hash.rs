@@ -226,50 +226,32 @@ fn hash_column_murmur3(
     // Handle Dictionary types separately (turbofish syntax not supported in macros)
     if let DataType::Dictionary(key_type, _) = col.data_type() {
         return match key_type.as_ref() {
-            DataType::Int8 => {
-                hash_column_dictionary::<arrow::datatypes::Int8Type>(
-                    col, hashes, first_col,
-                )
-            }
-            DataType::Int16 => {
-                hash_column_dictionary::<arrow::datatypes::Int16Type>(
-                    col, hashes, first_col,
-                )
-            }
-            DataType::Int32 => {
-                hash_column_dictionary::<arrow::datatypes::Int32Type>(
-                    col, hashes, first_col,
-                )
-            }
-            DataType::Int64 => {
-                hash_column_dictionary::<arrow::datatypes::Int64Type>(
-                    col, hashes, first_col,
-                )
-            }
-            DataType::UInt8 => {
-                hash_column_dictionary::<arrow::datatypes::UInt8Type>(
-                    col, hashes, first_col,
-                )
-            }
-            DataType::UInt16 => {
-                hash_column_dictionary::<arrow::datatypes::UInt16Type>(
-                    col, hashes, first_col,
-                )
-            }
-            DataType::UInt32 => {
-                hash_column_dictionary::<arrow::datatypes::UInt32Type>(
-                    col, hashes, first_col,
-                )
-            }
-            DataType::UInt64 => {
-                hash_column_dictionary::<arrow::datatypes::UInt64Type>(
-                    col, hashes, first_col,
-                )
-            }
+            DataType::Int8 => hash_column_dictionary::<arrow::datatypes::Int8Type>(
+                col, hashes, first_col,
+            ),
+            DataType::Int16 => hash_column_dictionary::<arrow::datatypes::Int16Type>(
+                col, hashes, first_col,
+            ),
+            DataType::Int32 => hash_column_dictionary::<arrow::datatypes::Int32Type>(
+                col, hashes, first_col,
+            ),
+            DataType::Int64 => hash_column_dictionary::<arrow::datatypes::Int64Type>(
+                col, hashes, first_col,
+            ),
+            DataType::UInt8 => hash_column_dictionary::<arrow::datatypes::UInt8Type>(
+                col, hashes, first_col,
+            ),
+            DataType::UInt16 => hash_column_dictionary::<arrow::datatypes::UInt16Type>(
+                col, hashes, first_col,
+            ),
+            DataType::UInt32 => hash_column_dictionary::<arrow::datatypes::UInt32Type>(
+                col, hashes, first_col,
+            ),
+            DataType::UInt64 => hash_column_dictionary::<arrow::datatypes::UInt64Type>(
+                col, hashes, first_col,
+            ),
             dt => {
-                internal_err!(
-                    "Unsupported dictionary key type for murmur3_hash: {dt}"
-                )
+                internal_err!("Unsupported dictionary key type for murmur3_hash: {dt}")
             }
         };
     }

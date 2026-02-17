@@ -35,14 +35,11 @@
 macro_rules! create_hashes_internal {
     ($col:ident, $hashes:ident, $hash_fn:path, $create_hashes_fn:path, $func_name:expr) => {{
         use arrow::array::{
-            Array, ArrayRef, AsArray,
-            BinaryArray, BooleanArray, Date32Array, Date64Array,
-            Decimal128Array, FixedSizeBinaryArray,
-            Float32Array, Float64Array,
-            Int8Array, Int16Array, Int32Array, Int64Array,
-            LargeBinaryArray, LargeStringArray, StringArray,
-            TimestampMicrosecondArray, TimestampMillisecondArray,
-            TimestampNanosecondArray, TimestampSecondArray,
+            Array, ArrayRef, AsArray, BinaryArray, BooleanArray, Date32Array,
+            Date64Array, Decimal128Array, FixedSizeBinaryArray, Float32Array,
+            Float64Array, Int8Array, Int16Array, Int32Array, Int64Array,
+            LargeBinaryArray, LargeStringArray, StringArray, TimestampMicrosecondArray,
+            TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
         };
         use arrow::datatypes::TimeUnit;
 
@@ -56,7 +53,8 @@ macro_rules! create_hashes_internal {
                 } else {
                     for (i, hash) in $hashes.iter_mut().enumerate() {
                         if !array.is_null(i) {
-                            *hash = $hash_fn(i32::from(array.value(i)).to_le_bytes(), *hash);
+                            *hash =
+                                $hash_fn(i32::from(array.value(i)).to_le_bytes(), *hash);
                         }
                     }
                 }
@@ -204,7 +202,10 @@ macro_rules! create_hashes_internal {
                 }
             }
             DataType::Timestamp(TimeUnit::Second, _) => {
-                let array = $col.as_any().downcast_ref::<TimestampSecondArray>().unwrap();
+                let array = $col
+                    .as_any()
+                    .downcast_ref::<TimestampSecondArray>()
+                    .unwrap();
                 let values = array.values();
                 if array.null_count() == 0 {
                     for (hash, val) in $hashes.iter_mut().zip(values.iter()) {
@@ -219,7 +220,10 @@ macro_rules! create_hashes_internal {
                 }
             }
             DataType::Timestamp(TimeUnit::Millisecond, _) => {
-                let array = $col.as_any().downcast_ref::<TimestampMillisecondArray>().unwrap();
+                let array = $col
+                    .as_any()
+                    .downcast_ref::<TimestampMillisecondArray>()
+                    .unwrap();
                 let values = array.values();
                 if array.null_count() == 0 {
                     for (hash, val) in $hashes.iter_mut().zip(values.iter()) {
@@ -234,7 +238,10 @@ macro_rules! create_hashes_internal {
                 }
             }
             DataType::Timestamp(TimeUnit::Microsecond, _) => {
-                let array = $col.as_any().downcast_ref::<TimestampMicrosecondArray>().unwrap();
+                let array = $col
+                    .as_any()
+                    .downcast_ref::<TimestampMicrosecondArray>()
+                    .unwrap();
                 let values = array.values();
                 if array.null_count() == 0 {
                     for (hash, val) in $hashes.iter_mut().zip(values.iter()) {
@@ -249,7 +256,10 @@ macro_rules! create_hashes_internal {
                 }
             }
             DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-                let array = $col.as_any().downcast_ref::<TimestampNanosecondArray>().unwrap();
+                let array = $col
+                    .as_any()
+                    .downcast_ref::<TimestampNanosecondArray>()
+                    .unwrap();
                 let values = array.values();
                 if array.null_count() == 0 {
                     for (hash, val) in $hashes.iter_mut().zip(values.iter()) {
@@ -348,7 +358,10 @@ macro_rules! create_hashes_internal {
                 }
             }
             DataType::FixedSizeBinary(_) => {
-                let array = $col.as_any().downcast_ref::<FixedSizeBinaryArray>().unwrap();
+                let array = $col
+                    .as_any()
+                    .downcast_ref::<FixedSizeBinaryArray>()
+                    .unwrap();
                 if array.null_count() == 0 {
                     for (i, hash) in $hashes.iter_mut().enumerate() {
                         *hash = $hash_fn(array.value(i), *hash);
@@ -481,8 +494,7 @@ macro_rules! create_hashes_internal {
                                 .as_any()
                                 .downcast_ref::<arrow::array::StructArray>()
                                 .unwrap();
-                            let columns: Vec<ArrayRef> =
-                                struct_array.columns().to_vec();
+                            let columns: Vec<ArrayRef> = struct_array.columns().to_vec();
                             let mut entry_hashes = vec![*hash; num_entries];
                             $create_hashes_fn(&columns, &mut entry_hashes)?;
                             for eh in &entry_hashes {
@@ -493,10 +505,7 @@ macro_rules! create_hashes_internal {
                 }
             }
             dt => {
-                return internal_err!(
-                    "Unsupported data type for {}: {dt}",
-                    $func_name
-                );
+                return internal_err!("Unsupported data type for {}: {dt}", $func_name);
             }
         }
     }};
