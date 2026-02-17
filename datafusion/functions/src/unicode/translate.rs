@@ -333,7 +333,8 @@ where
                     }
                     // ascii_buf contains only ASCII bytes, so it is valid
                     // UTF-8.
-                    return String::from_utf8(ascii_buf.clone()).unwrap();
+                    // SAFETY: all bytes are ASCII, hence valid UTF-8.
+                    return unsafe { std::str::from_utf8_unchecked(&ascii_buf).to_owned() };
                 }
 
                 // Slow path: grapheme-based translation
