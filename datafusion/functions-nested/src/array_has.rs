@@ -546,11 +546,8 @@ fn array_has_any_with_scalar_string(
 
     if scalar_strings.len() > SCALAR_SMALL_THRESHOLD {
         // Large scalar: build HashSet for O(1) lookups
-        let scalar_set: HashSet<&str> = scalar_strings
-            .iter()
-            .copied()
-            .flatten()
-            .collect();
+        let scalar_set: HashSet<&str> =
+            scalar_strings.iter().copied().flatten().collect();
 
         for i in 0..col_list.len() {
             if col_nulls.is_some_and(|v| !v.is_valid(i)) {
