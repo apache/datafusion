@@ -27,9 +27,9 @@ use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::DataType;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_physical_expr::projection::ProjectionExprs;
-use datafusion_physical_expr::utils::reassign_expr_columns;
+use datafusion_physical_expr::utils::{collect_columns, reassign_expr_columns};
 use datafusion_physical_expr_adapter::replace_columns_with_literals;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -46,6 +46,7 @@ use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::{
     PhysicalExpr, is_dynamic_physical_expr,
 };
+use datafusion_physical_plan::filter::batch_filter;
 use datafusion_physical_plan::metrics::{
     Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder, PruningMetrics,
 };
@@ -460,26 +461,57 @@ impl FileOpener for ParquetOpener {
             // ---------------------------------------------------------------------
 
             // Filter pushdown: evaluate predicates during scan
-            if let Some(predicate) = pushdown_filters.then_some(predicate).flatten() {
-                let row_filter = row_filter::build_row_filter(
-                    &predicate,
-                    &physical_file_schema,
-                    builder.metadata(),
-                    reorder_predicates,
-                    &file_metrics,
-                );
+            //
+            // When all predicate columns are already in the output projection,
+            // skip the RowFilter (late materialization) path and instead apply
+            // the predicate as a batch-level filter after decoding. This avoids
+            // the substantial CPU overhead of CachedArrayReader, ReadPlanBuilder,
+            // and try_next_batch when there are no non-projected columns to skip.
+            let batch_filter_predicate = if let Some(predicate) =
+                pushdown_filters.then_some(predicate).flatten()
+            {
+                let predicate_col_indices: HashSet<usize> =
+                    collect_columns(&predicate)
+                        .iter()
+                        .map(|c| c.index())
+                        .collect();
+                let projection_col_indices: HashSet<usize> =
+                    projection.column_indices().into_iter().collect();
 
-                match row_filter {
-                    Ok(Some(filter)) => {
-                        builder = builder.with_row_filter(filter);
-                    }
-                    Ok(None) => {}
-                    Err(e) => {
-                        debug!(
-                            "Ignoring error building row filter for '{predicate:?}': {e}"
-                        );
-                    }
-                };
+                let skip_row_filter = !predicate_col_indices.is_empty()
+                    && predicate_col_indices.is_subset(&projection_col_indices);
+
+                if skip_row_filter {
+                    debug!(
+                        "Skipping RowFilter pushdown: all predicate columns {:?} \
+                         are in the output projection {:?}; will apply as batch filter",
+                        predicate_col_indices, projection_col_indices,
+                    );
+                    Some(predicate)
+                } else {
+                    let row_filter = row_filter::build_row_filter(
+                        &predicate,
+                        &physical_file_schema,
+                        builder.metadata(),
+                        reorder_predicates,
+                        &file_metrics,
+                    );
+
+                    match row_filter {
+                        Ok(Some(filter)) => {
+                            builder = builder.with_row_filter(filter);
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            debug!(
+                                "Ignoring error building row filter for '{predicate:?}': {e}"
+                            );
+                        }
+                    };
+                    None
+                }
+            } else {
+                None
             };
             if force_filter_selections {
                 builder =
@@ -627,6 +659,12 @@ impl FileOpener for ParquetOpener {
             let projection = projection
                 .try_map_exprs(|expr| reassign_expr_columns(expr, &stream_schema))?;
 
+            // Also remap the batch filter predicate to the stream schema
+            let batch_filter_predicate = batch_filter_predicate
+                .map(|pred| reassign_expr_columns(pred, &stream_schema))
+                .transpose()?;
+            let has_batch_filter = batch_filter_predicate.is_some();
+
             let projector = projection.make_projector(&stream_schema)?;
 
             let stream = stream.map_err(DataFusionError::from).map(move |b| {
@@ -636,6 +674,10 @@ impl FileOpener for ParquetOpener {
                         &predicate_cache_inner_records,
                         &predicate_cache_records,
                     );
+                    // Apply batch-level filter when RowFilter pushdown was skipped
+                    if let Some(ref filter_pred) = batch_filter_predicate {
+                        b = batch_filter(&b, filter_pred)?;
+                    }
                     b = projector.project_batch(&b)?;
                     if replace_schema {
                         // Ensure the output batch has the expected schema.
@@ -664,13 +706,34 @@ impl FileOpener for ParquetOpener {
             // ----------------------------------------------------------------------
             // Step: wrap the stream so a dynamic filter can stop the file scan early
             // ----------------------------------------------------------------------
+            //
+            // When batch-level filtering is active (RowFilter pushdown was
+            // skipped), also filter out empty batches that result from the
+            // predicate removing all rows in a decoded batch.
             if let Some(file_pruner) = file_pruner {
-                Ok(EarlyStoppingStream::new(
-                    stream,
-                    file_pruner,
-                    files_ranges_pruned_statistics,
-                )
-                .boxed())
+                if has_batch_filter {
+                    Ok(EarlyStoppingStream::new(
+                        stream
+                            .try_filter(|batch| {
+                                std::future::ready(batch.num_rows() > 0)
+                            })
+                            .boxed(),
+                        file_pruner,
+                        files_ranges_pruned_statistics,
+                    )
+                    .boxed())
+                } else {
+                    Ok(EarlyStoppingStream::new(
+                        stream,
+                        file_pruner,
+                        files_ranges_pruned_statistics,
+                    )
+                    .boxed())
+                }
+            } else if has_batch_filter {
+                Ok(stream
+                    .try_filter(|batch| std::future::ready(batch.num_rows() > 0))
+                    .boxed())
             } else {
                 Ok(stream.boxed())
             }
