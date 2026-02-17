@@ -484,16 +484,16 @@ mod tests {
 
         assert_eq!(
             hashes[0],
-            spark_compatible_murmur3_hash(&[0x01, 0x02, 0x03, 0x04], 42)
+            spark_compatible_murmur3_hash([0x01, 0x02, 0x03, 0x04], 42)
         );
         assert_eq!(
             hashes[1],
-            spark_compatible_murmur3_hash(&[0x05, 0x06, 0x07, 0x08], 42)
+            spark_compatible_murmur3_hash([0x05, 0x06, 0x07, 0x08], 42)
         );
         assert_eq!(hashes[2], DEFAULT_SEED as u32);
         assert_eq!(
             hashes[3],
-            spark_compatible_murmur3_hash(&[0x00, 0x00, 0x00, 0x00], 42)
+            spark_compatible_murmur3_hash([0x00, 0x00, 0x00, 0x00], 42)
         );
     }
 
