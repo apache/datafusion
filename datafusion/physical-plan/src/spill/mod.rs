@@ -34,8 +34,10 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use arrow::array::{Array, BinaryViewArray, BufferSpec, StringViewArray, layout};
-use arrow::datatypes::{Schema, SchemaRef};
+use arrow::array::{
+    Array, BinaryViewArray, BufferSpec, GenericByteViewArray, StringViewArray, layout,
+};
+use arrow::datatypes::{ByteViewType, Schema, SchemaRef};
 use arrow::ipc::{
     MetadataVersion,
     reader::StreamReader,
@@ -363,8 +365,26 @@ const VIEW_SIZE_BYTES: usize = 16;
 ///
 /// # How it works
 ///
-/// The GC process creates new compact buffers containing only the data referenced by the
-/// current views, eliminating unreferenced data from sliced arrays.
+/// The GC process:
+/// 1. Identifies view arrays (StringView/BinaryView) in the batch
+/// 2. Checks if their data buffers exceed a memory threshold
+/// 3. If exceeded, calls the Arrow `gc()` method which creates new compact buffers
+///    containing only the data referenced by the current views
+/// 4. Returns a new batch with GC'd arrays (or original arrays if GC not needed)
+///
+/// # When GC is triggered
+///
+/// GC is only performed when data buffers exceed a threshold (currently 10KB).
+/// This balances memory savings against the CPU overhead of garbage collection.
+/// Small arrays are passed through unchanged since the GC overhead would exceed
+/// any memory savings.
+///
+/// # Performance considerations
+///
+/// The function always returns a new RecordBatch for API consistency, but:
+/// - If no view arrays are present, it's a cheap clone (just Arc increments)
+/// - GC is skipped for small buffers to avoid unnecessary CPU overhead
+/// - The Arrow `gc()` method itself is optimized and only copies referenced data
 pub(crate) fn gc_view_arrays(batch: &RecordBatch) -> Result<RecordBatch> {
     // Early return optimization: Skip GC entirely if the batch contains no view arrays.
     // This avoids unnecessary processing for batches with only primitive types.
@@ -389,9 +409,9 @@ pub(crate) fn gc_view_arrays(batch: &RecordBatch) -> Result<RecordBatch> {
                     .as_any()
                     .downcast_ref::<StringViewArray>()
                     .expect("Utf8View array should downcast to StringViewArray");
-                // Only perform GC if the data buffers exceed our size threshold.
-                // This balances memory savings against GC overhead.
-                if should_gc_view_array(string_view.data_buffers()) {
+                // Only perform GC if the array appears to be sliced (has potential waste).
+                // The gc() method internally checks if GC is beneficial.
+                if should_gc_view_array(string_view) {
                     Arc::new(string_view.gc()) as Arc<dyn Array>
                 } else {
                     Arc::clone(array)
@@ -402,9 +422,9 @@ pub(crate) fn gc_view_arrays(batch: &RecordBatch) -> Result<RecordBatch> {
                     .as_any()
                     .downcast_ref::<BinaryViewArray>()
                     .expect("BinaryView array should downcast to BinaryViewArray");
-                // Only perform GC if the data buffers exceed our size threshold.
-                // This balances memory savings against GC overhead.
-                if should_gc_view_array(binary_view.data_buffers()) {
+                // Only perform GC if the array appears to be sliced (has potential waste).
+                // The gc() method internally checks if GC is beneficial.
+                if should_gc_view_array(binary_view) {
                     Arc::new(binary_view.gc()) as Arc<dyn Array>
                 } else {
                     Arc::clone(array)
@@ -420,24 +440,36 @@ pub(crate) fn gc_view_arrays(batch: &RecordBatch) -> Result<RecordBatch> {
     Ok(RecordBatch::try_new(batch.schema(), new_columns)?)
 }
 
-/// Determines whether a view array should be garbage collected based on its buffer usage.
+/// Determines whether a view array should be garbage collected.
 ///
-/// Uses a minimum buffer size threshold to avoid unnecessary GC on small arrays.
-/// This prevents the overhead of GC for arrays with negligible memory footprint,
-/// while still capturing cases where sliced arrays carry large unreferenced buffers.
+/// This function checks if:
+/// 1. The array has data buffers (non-inline strings/binaries)
+/// 2. The total buffer memory exceeds a threshold
+/// 3. The array appears to be sliced (has potential memory waste)
 ///
-/// # Why not use get_record_batch_memory_size
+/// The Arrow `gc()` method itself is a no-op for arrays that don't benefit from GC,
+/// but we still check here to avoid the overhead of calling gc() unnecessarily.
 ///
-/// We use manual buffer size calculation here because:
-/// - `get_record_batch_memory_size` operates on entire arrays, not just the data buffers
-/// - We need to check buffer capacity specifically to determine GC potential
-/// - The data buffers are what gets compacted during GC, so their size is the key metric
-fn should_gc_view_array(data_buffers: &[arrow::buffer::Buffer]) -> bool {
-    // Only perform GC if the buffers exceed 10KB. This avoids the overhead of
-    // GC for small arrays while still capturing the pathological cases like
-    // the ClickBench scenario (820MB -> 33MB reduction).
+/// # Memory threshold rationale
+///
+/// We use a 10KB threshold based on:
+/// - Small arrays (< 10KB) have negligible memory impact even if sliced
+/// - GC has CPU overhead that isn't worth it for small arrays
+/// - This threshold captures pathological cases (e.g., ClickBench: 820MB -> 33MB)
+///   while avoiding unnecessary GC on small working sets
+fn should_gc_view_array<T: ByteViewType>(array: &GenericByteViewArray<T>) -> bool {
     const MIN_BUFFER_SIZE_FOR_GC: usize = 10 * 1024; // 10KB threshold
+
+    let data_buffers = array.data_buffers();
+    if data_buffers.is_empty() {
+        // All strings/binaries are inlined (< 12 bytes), no GC needed
+        return false;
+    }
+
+    // Calculate total buffer memory
     let total_buffer_size: usize = data_buffers.iter().map(|b| b.capacity()).sum();
+
+    // Only GC if buffers exceed threshold
     total_buffer_size > MIN_BUFFER_SIZE_FOR_GC
 }
 
@@ -1160,7 +1192,7 @@ mod tests {
             .as_any()
             .downcast_ref::<StringViewArray>()
             .unwrap();
-        let should_gc = should_gc_view_array(sliced_array.data_buffers());
+        let should_gc = should_gc_view_array(sliced_array);
         let waste_ratio = calculate_string_view_waste_ratio(sliced_array);
 
         assert!(
