@@ -327,6 +327,14 @@ impl DynamicFilterPhysicalExpr {
         Arc::strong_count(self) > 1 || Arc::strong_count(&self.inner) > 1
     }
 
+    /// Returns a unique identifier for the inner shared state.
+    ///
+    /// Useful for checking if two [Arc<PhysicalExpr>] with the same
+    /// underlying [DynamicFilterPhysicalExpr] are the same.
+    pub fn inner_id(&self) -> u64 {
+        Arc::as_ptr(&self.inner) as *const () as u64
+    }
+
     fn render(
         &self,
         f: &mut std::fmt::Formatter<'_>,

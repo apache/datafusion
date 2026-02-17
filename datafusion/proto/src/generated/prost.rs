@@ -1292,9 +1292,15 @@ pub struct PhysicalExprNode {
     /// across serde roundtrips.
     #[prost(uint64, optional, tag = "30")]
     pub expr_id: ::core::option::Option<u64>,
+    /// For DynamicFilterPhysicalExpr, this identifies the shared inner state.
+    /// Multiple expressions may have different expr_id values (different outer Arc wrappers)
+    /// but the same dynamic_filter_inner_id (shared inner state).
+    /// Used to reconstruct shared inner state during deserialization.
+    #[prost(uint64, optional, tag = "31")]
+    pub dynamic_filter_inner_id: ::core::option::Option<u64>,
     #[prost(
         oneof = "physical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21, 22"
     )]
     pub expr_type: ::core::option::Option<physical_expr_node::ExprType>,
 }
@@ -1347,7 +1353,18 @@ pub mod physical_expr_node {
         UnknownColumn(super::UnknownColumn),
         #[prost(message, tag = "21")]
         HashExpr(super::PhysicalHashExprNode),
+        #[prost(message, tag = "22")]
+        DynamicFilter(::prost::alloc::boxed::Box<super::PhysicalDynamicFilterNode>),
     }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalDynamicFilterNode {
+    #[prost(message, repeated, tag = "1")]
+    pub children: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub initial_expr: ::core::option::Option<
+        ::prost::alloc::boxed::Box<PhysicalExprNode>,
+    >,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalScalarUdfNode {

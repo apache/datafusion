@@ -860,6 +860,12 @@ message PhysicalExprNode {
   // across serde roundtrips.
   optional uint64 expr_id = 30;
 
+  // For DynamicFilterPhysicalExpr, this identifies the shared inner state.
+  // Multiple expressions may have different expr_id values (different outer Arc wrappers)
+  // but the same dynamic_filter_inner_id (shared inner state).
+  // Used to reconstruct shared inner state during deserialization.
+  optional uint64 dynamic_filter_inner_id = 31;
+
   oneof ExprType {
     // column references
     PhysicalColumn column = 1;
@@ -897,7 +903,14 @@ message PhysicalExprNode {
     UnknownColumn unknown_column = 20;
 
     PhysicalHashExprNode hash_expr = 21;
+
+    PhysicalDynamicFilterNode dynamic_filter = 22;
   }
+}
+
+message PhysicalDynamicFilterNode {
+  repeated PhysicalExprNode children = 1;
+  PhysicalExprNode initial_expr = 2;
 }
 
 message PhysicalScalarUdfNode {

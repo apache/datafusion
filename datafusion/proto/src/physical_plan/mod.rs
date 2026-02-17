@@ -52,6 +52,7 @@ use datafusion_functions_table::generate_series::{
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::async_scalar_function::AsyncFuncExpr;
+use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
 use datafusion_physical_expr::{LexOrdering, LexRequirement, PhysicalExprRef};
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, LimitOptions, PhysicalGroupBy,
@@ -3064,6 +3065,7 @@ impl protobuf::PhysicalPlanNode {
                 });
                 Ok(protobuf::PhysicalExprNode {
                     expr_id: None,
+                    dynamic_filter_inner_id: None,
                     expr_type: Some(ExprType::Sort(sort_expr)),
                 })
             })
@@ -3150,6 +3152,7 @@ impl protobuf::PhysicalPlanNode {
                 });
                 Ok(protobuf::PhysicalExprNode {
                     expr_id: None,
+                    dynamic_filter_inner_id: None,
                     expr_type: Some(ExprType::Sort(sort_expr)),
                 })
             })
@@ -3818,6 +3821,18 @@ impl DeduplicatingSerializer {
             session_id: rand::random(),
         }
     }
+
+    fn hash(&self, ptr: u64) -> u64 {
+        // Hash session_id, pointer address, and process ID together to create expr_id.
+        // - session_id: random per serializer, prevents collisions when merging serializations
+        // - ptr: unique address per Arc within a process
+        // - pid: prevents collisions if serializer is shared across processes
+        let mut hasher = DefaultHasher::new();
+        self.session_id.hash(&mut hasher);
+        ptr.hash(&mut hasher);
+        std::process::id().hash(&mut hasher);
+        hasher.finish()
+    }
 }
 
 impl PhysicalProtoConverterExtension for DeduplicatingSerializer {
@@ -3864,16 +3879,14 @@ impl PhysicalProtoConverterExtension for DeduplicatingSerializer {
         codec: &dyn PhysicalExtensionCodec,
     ) -> Result<protobuf::PhysicalExprNode> {
         let mut proto = serialize_physical_expr_with_converter(expr, codec, self)?;
-
-        // Hash session_id, pointer address, and process ID together to create expr_id.
-        // - session_id: random per serializer, prevents collisions when merging serializations
-        // - ptr: unique address per Arc within a process
-        // - pid: prevents collisions if serializer is shared across processes
-        let mut hasher = DefaultHasher::new();
-        self.session_id.hash(&mut hasher);
-        (Arc::as_ptr(expr) as *const () as u64).hash(&mut hasher);
-        std::process::id().hash(&mut hasher);
-        proto.expr_id = Some(hasher.finish());
+        // Special case for dynamic filters. Two expressions may live in separate Arcs but
+        // point to the same inner dynamic filter state. This inner state must be deduplicated.
+        if let Some(dynamic_filter) =
+            expr.as_any().downcast_ref::<DynamicFilterPhysicalExpr>()
+        {
+            proto.dynamic_filter_inner_id = Some(self.hash(dynamic_filter.inner_id()))
+        }
+        proto.expr_id = Some(self.hash(Arc::as_ptr(expr) as *const () as u64));
 
         Ok(proto)
     }
@@ -3885,6 +3898,10 @@ impl PhysicalProtoConverterExtension for DeduplicatingSerializer {
 struct DeduplicatingDeserializer {
     /// Cache mapping expr_id to deserialized expressions.
     cache: RefCell<HashMap<u64, Arc<dyn PhysicalExpr>>>,
+    /// Cache mapping dynamic_filter_inner_id to the first deserialized DynamicFilterPhysicalExpr.
+    /// This ensures that multiple dynamic filters with the same dynamic_filter_inner_id
+    /// can share the same inner state after deserialization.
+    dynamic_filter_cache: RefCell<HashMap<u64, Arc<dyn PhysicalExpr>>>,
 }
 
 impl PhysicalProtoConverterExtension for DeduplicatingDeserializer {
@@ -3918,12 +3935,52 @@ impl PhysicalProtoConverterExtension for DeduplicatingDeserializer {
     where
         Self: Sized,
     {
+        // First check the regular cache by expr_id (same outer Arc)
         if let Some(expr_id) = proto.expr_id {
-            // Check cache first
             if let Some(cached) = self.cache.borrow().get(&expr_id) {
                 return Ok(Arc::clone(cached));
             }
-            // Deserialize and cache
+        }
+
+        // Check if we need to share inner state with a cached dynamic filter
+        if let Some(dynamic_filter_id) = proto.dynamic_filter_inner_id {
+            if let Some(cached_filter) =
+                self.dynamic_filter_cache.borrow().get(&dynamic_filter_id)
+            {
+                // We have a cached filter with the same dynamic_filter_inner_id
+                // Deserialize to get the new children, then create a new Arc with shared inner state
+                let expr = parse_physical_expr_with_converter(
+                    proto,
+                    ctx,
+                    input_schema,
+                    codec,
+                    self,
+                )?;
+
+                // Get the children from the newly deserialized expression
+                if let Some(new_df) =
+                    expr.as_any().downcast_ref::<DynamicFilterPhysicalExpr>()
+                {
+                    let new_children: Vec<Arc<dyn PhysicalExpr>> =
+                        new_df.children().into_iter().cloned().collect();
+                    // Create a new Arc with the cached filter's inner state but new children
+                    let expr_with_shared_inner =
+                        Arc::clone(cached_filter).with_new_children(new_children)?;
+
+                    // Cache by expr_id if present
+                    if let Some(expr_id) = proto.expr_id {
+                        self.cache
+                            .borrow_mut()
+                            .insert(expr_id, Arc::clone(&expr_with_shared_inner));
+                    }
+
+                    return Ok(expr_with_shared_inner);
+                }
+            }
+        }
+
+        // Normal deserialization path
+        let expr = if let Some(expr_id) = proto.expr_id {
             let expr = parse_physical_expr_with_converter(
                 proto,
                 ctx,
@@ -3932,10 +3989,24 @@ impl PhysicalProtoConverterExtension for DeduplicatingDeserializer {
                 self,
             )?;
             self.cache.borrow_mut().insert(expr_id, Arc::clone(&expr));
-            Ok(expr)
+            expr
         } else {
-            parse_physical_expr_with_converter(proto, ctx, input_schema, codec, self)
-        }
+            parse_physical_expr_with_converter(proto, ctx, input_schema, codec, self)?
+        };
+
+        // If this is a dynamic filter, cache it by dynamic_filter_inner_id
+        if let Some(dynamic_filter_id) = proto.dynamic_filter_inner_id {
+            if expr
+                .as_any()
+                .downcast_ref::<DynamicFilterPhysicalExpr>()
+                .is_some()
+            {
+                self.dynamic_filter_cache
+                    .borrow_mut()
+                    .insert(dynamic_filter_id, Arc::clone(&expr));
+            }
+        };
+        Ok(expr)
     }
 
     fn physical_expr_to_proto(
