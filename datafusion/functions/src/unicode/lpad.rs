@@ -566,6 +566,12 @@ mod tests {
             Ok(Some("he"))
         );
         test_lpad!(
+            Some("hi".into()),
+            ScalarValue::Int64(Some(6i64)),
+            Some("xy".into()),
+            Ok(Some("xyxyhi"))
+        );
+        test_lpad!(
             Some("josé".into()),
             ScalarValue::Int64(Some(10i64)),
             Some("xy".into()),

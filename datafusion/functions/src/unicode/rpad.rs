@@ -506,6 +506,18 @@ mod tests {
             Utf8,
             StringArray
         );
+         test_function!(
+            RPadFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::from("hi")),
+                ColumnarValue::Scalar(ScalarValue::from(6i64)),
+                ColumnarValue::Scalar(ScalarValue::from("xy")),
+            ],
+            Ok(Some("hixyxy")),
+            &str,
+            Utf8,
+            StringArray
+        );
         test_function!(
             RPadFunc::new(),
             vec![
