@@ -20,6 +20,10 @@
 //! This module implements Spark's decimal division semantics, which require
 //! special handling for precision and scale that differs from standard SQL.
 //!
+//! **Note:** These UDFs are intended for use at the physical plan level only.
+//! They do not handle type coercion to Decimal128 — callers must ensure
+//! inputs are already Decimal128.
+//!
 //! # Scale Expansion
 //!
 //! For Decimal(p1, s1) / Decimal(p2, s2) = Decimal(p3, s3):
@@ -28,7 +32,8 @@
 
 use arrow::array::{Array, ArrayRef, AsArray, Decimal128Array};
 use arrow::datatypes::{DECIMAL128_MAX_PRECISION, DataType, Decimal128Type};
-use datafusion_common::{Result, assert_eq_or_internal_err};
+use datafusion_common::utils::take_function_args;
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
     Volatility,
@@ -47,41 +52,20 @@ fn get_precision_scale(data_type: &DataType) -> (u8, i8) {
 
 /// Internal implementation for both regular and integral decimal division.
 ///
+/// # Type Parameters
+/// * `IS_INTEGRAL_DIV` - If true, performs integer division (truncates result)
+///
 /// # Arguments
-/// * `args` - Two ColumnarValue arguments (dividend and divisor)
+/// * `left` - The dividend array (must be Decimal128)
+/// * `right` - The divisor array (must be Decimal128)
 /// * `result_precision` - The precision of the result type
 /// * `result_scale` - The scale of the result type
-/// * `is_integral_div` - If true, performs integer division (truncates result)
-fn spark_decimal_div_internal(
-    args: &[ColumnarValue],
+fn spark_decimal_div_internal<const IS_INTEGRAL_DIV: bool>(
+    left: &ArrayRef,
+    right: &ArrayRef,
     result_precision: u8,
     result_scale: i8,
-    is_integral_div: bool,
 ) -> Result<ColumnarValue> {
-    assert_eq_or_internal_err!(
-        args.len(),
-        2,
-        "decimal division expects exactly two arguments"
-    );
-
-    let left = &args[0];
-    let right = &args[1];
-
-    let (left, right): (ArrayRef, ArrayRef) = match (left, right) {
-        (ColumnarValue::Array(l), ColumnarValue::Array(r)) => {
-            (Arc::clone(l), Arc::clone(r))
-        }
-        (ColumnarValue::Scalar(l), ColumnarValue::Array(r)) => {
-            (l.to_array_of_size(r.len())?, Arc::clone(r))
-        }
-        (ColumnarValue::Array(l), ColumnarValue::Scalar(r)) => {
-            (Arc::clone(l), r.to_array_of_size(l.len())?)
-        }
-        (ColumnarValue::Scalar(l), ColumnarValue::Scalar(r)) => {
-            (l.to_array()?, r.to_array()?)
-        }
-    };
-
     let left = left.as_primitive::<Decimal128Type>();
     let right = right.as_primitive::<Decimal128Type>();
     let (p1, s1) = get_precision_scale(left.data_type());
@@ -89,8 +73,9 @@ fn spark_decimal_div_internal(
 
     // Calculate the scale expansion needed
     // To get Decimal(p3, s3) from p1/p2, we need to widen s1 to s2 + s3 + 1
-    let l_exp = ((s2 + result_scale + 1) as u32).saturating_sub(s1 as u32);
-    let r_exp = (s1 as u32).saturating_sub((s2 + result_scale + 1) as u32);
+    let scale_sum = s2 as i32 + result_scale as i32 + 1;
+    let l_exp = (scale_sum - s1 as i32).max(0) as u32;
+    let r_exp = (s1 as i32 - scale_sum).max(0) as u32;
 
     let result: Decimal128Array = if p1 as u32 + l_exp > DECIMAL128_MAX_PRECISION as u32
         || p2 as u32 + r_exp > DECIMAL128_MAX_PRECISION as u32
@@ -107,14 +92,20 @@ fn spark_decimal_div_internal(
             let r = BigInt::from(r) * &r_mul;
             // Legacy mode: divide by zero returns 0
             let div = if r.eq(&zero) { zero.clone() } else { &l / &r };
-            let res = if is_integral_div {
+            let res = if IS_INTEGRAL_DIV {
                 div
             } else if div.is_negative() {
                 div - &five
             } else {
                 div + &five
             } / &ten;
-            Ok(res.to_i128().unwrap_or(i128::MAX))
+            Ok(res.to_i128().unwrap_or_else(|| {
+                if res.is_negative() {
+                    i128::MIN
+                } else {
+                    i128::MAX
+                }
+            }))
         })?
     } else {
         // Standard i128 calculation when precision is within bounds
@@ -122,11 +113,23 @@ fn spark_decimal_div_internal(
         let r_mul = 10_i128.pow(r_exp);
 
         arrow::compute::kernels::arity::try_binary(left, right, |l, r| {
-            let l = l * l_mul;
-            let r = r * r_mul;
+            let l = l.checked_mul(l_mul).unwrap_or_else(|| {
+                if l.is_negative() {
+                    i128::MIN
+                } else {
+                    i128::MAX
+                }
+            });
+            let r = r.checked_mul(r_mul).unwrap_or_else(|| {
+                if r.is_negative() {
+                    i128::MIN
+                } else {
+                    i128::MAX
+                }
+            });
             // Legacy mode: divide by zero returns 0
             let div = if r == 0 { 0 } else { l / r };
-            let res = if is_integral_div {
+            let res = if IS_INTEGRAL_DIV {
                 div
             } else if div.is_negative() {
                 div - 5
@@ -150,7 +153,9 @@ pub fn spark_decimal_div(
     result_precision: u8,
     result_scale: i8,
 ) -> Result<ColumnarValue> {
-    spark_decimal_div_internal(args, result_precision, result_scale, false)
+    let arrays = ColumnarValue::values_to_arrays(args)?;
+    let [left, right] = take_function_args("spark_decimal_div", arrays)?;
+    spark_decimal_div_internal::<false>(&left, &right, result_precision, result_scale)
 }
 
 /// Spark-compatible integral decimal division function.
@@ -161,50 +166,58 @@ pub fn spark_decimal_integral_div(
     result_precision: u8,
     result_scale: i8,
 ) -> Result<ColumnarValue> {
-    spark_decimal_div_internal(args, result_precision, result_scale, true)
+    let arrays = ColumnarValue::values_to_arrays(args)?;
+    let [left, right] = take_function_args("spark_decimal_integral_div", arrays)?;
+    spark_decimal_div_internal::<true>(&left, &right, result_precision, result_scale)
 }
 
 /// SparkDecimalDiv implements the Spark-compatible decimal division function.
 ///
 /// This UDF takes the result precision and scale as part of its configuration,
 /// since Spark determines these at query planning time.
-#[derive(Debug)]
+///
+/// **Note:** This UDF is intended for use at the physical plan level only.
+/// It does not handle type coercion — inputs must already be Decimal128.
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkDecimalDiv {
     signature: Signature,
     result_precision: u8,
     result_scale: i8,
 }
 
-impl PartialEq for SparkDecimalDiv {
-    fn eq(&self, other: &Self) -> bool {
-        self.result_precision == other.result_precision
-            && self.result_scale == other.result_scale
-    }
-}
-
-impl Eq for SparkDecimalDiv {}
-
-impl std::hash::Hash for SparkDecimalDiv {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.result_precision.hash(state);
-        self.result_scale.hash(state);
-    }
-}
-
 impl Default for SparkDecimalDiv {
     fn default() -> Self {
-        Self::new(38, 18)
+        Self::new(38, 18).expect("default precision/scale should be valid")
     }
 }
 
 impl SparkDecimalDiv {
     /// Create a new SparkDecimalDiv with the specified result precision and scale.
-    pub fn new(result_precision: u8, result_scale: i8) -> Self {
-        Self {
-            signature: Signature::new(TypeSignature::Any(2), Volatility::Immutable),
+    ///
+    /// Returns an error if `result_precision` exceeds `DECIMAL128_MAX_PRECISION` or
+    /// `result_scale.unsigned_abs()` exceeds `result_precision`.
+    pub fn new(result_precision: u8, result_scale: i8) -> Result<Self> {
+        if result_precision > DECIMAL128_MAX_PRECISION {
+            return internal_err!(
+                "result_precision ({result_precision}) exceeds DECIMAL128_MAX_PRECISION ({DECIMAL128_MAX_PRECISION})"
+            );
+        }
+        if result_scale.unsigned_abs() > result_precision {
+            return internal_err!(
+                "result_scale ({result_scale}) exceeds result_precision ({result_precision})"
+            );
+        }
+        Ok(Self {
+            signature: Signature::new(
+                TypeSignature::Exact(vec![
+                    DataType::Decimal128(DECIMAL128_MAX_PRECISION, 0),
+                    DataType::Decimal128(DECIMAL128_MAX_PRECISION, 0),
+                ]),
+                Volatility::Immutable,
+            ),
             result_precision,
             result_scale,
-        }
+        })
     }
 }
 
@@ -236,43 +249,49 @@ impl ScalarUDFImpl for SparkDecimalDiv {
 /// SparkDecimalIntegralDiv implements Spark-compatible integral decimal division.
 ///
 /// Returns the integer quotient of division (truncates toward zero).
-#[derive(Debug)]
+///
+/// **Note:** This UDF is intended for use at the physical plan level only.
+/// It does not handle type coercion — inputs must already be Decimal128.
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkDecimalIntegralDiv {
     signature: Signature,
     result_precision: u8,
     result_scale: i8,
 }
 
-impl PartialEq for SparkDecimalIntegralDiv {
-    fn eq(&self, other: &Self) -> bool {
-        self.result_precision == other.result_precision
-            && self.result_scale == other.result_scale
-    }
-}
-
-impl Eq for SparkDecimalIntegralDiv {}
-
-impl std::hash::Hash for SparkDecimalIntegralDiv {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.result_precision.hash(state);
-        self.result_scale.hash(state);
-    }
-}
-
 impl Default for SparkDecimalIntegralDiv {
     fn default() -> Self {
-        Self::new(38, 0)
+        Self::new(38, 0).expect("default precision/scale should be valid")
     }
 }
 
 impl SparkDecimalIntegralDiv {
     /// Create a new SparkDecimalIntegralDiv with the specified result precision and scale.
-    pub fn new(result_precision: u8, result_scale: i8) -> Self {
-        Self {
-            signature: Signature::new(TypeSignature::Any(2), Volatility::Immutable),
+    ///
+    /// Returns an error if `result_precision` exceeds `DECIMAL128_MAX_PRECISION` or
+    /// `result_scale.unsigned_abs()` exceeds `result_precision`.
+    pub fn new(result_precision: u8, result_scale: i8) -> Result<Self> {
+        if result_precision > DECIMAL128_MAX_PRECISION {
+            return internal_err!(
+                "result_precision ({result_precision}) exceeds DECIMAL128_MAX_PRECISION ({DECIMAL128_MAX_PRECISION})"
+            );
+        }
+        if result_scale.unsigned_abs() > result_precision {
+            return internal_err!(
+                "result_scale ({result_scale}) exceeds result_precision ({result_precision})"
+            );
+        }
+        Ok(Self {
+            signature: Signature::new(
+                TypeSignature::Exact(vec![
+                    DataType::Decimal128(DECIMAL128_MAX_PRECISION, 0),
+                    DataType::Decimal128(DECIMAL128_MAX_PRECISION, 0),
+                ]),
+                Volatility::Immutable,
+            ),
             result_precision,
             result_scale,
-        }
+        })
     }
 }
 
@@ -430,5 +449,80 @@ mod tests {
         } else {
             panic!("Expected array result");
         }
+    }
+
+    #[test]
+    fn test_new_rejects_precision_exceeding_max() {
+        let result = SparkDecimalDiv::new(DECIMAL128_MAX_PRECISION + 1, 0);
+        assert!(result.is_err());
+
+        let result = SparkDecimalIntegralDiv::new(DECIMAL128_MAX_PRECISION + 1, 0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_new_rejects_scale_exceeding_precision() {
+        // Positive scale exceeding precision
+        let result = SparkDecimalDiv::new(10, 11);
+        assert!(result.is_err());
+
+        // Negative scale exceeding precision
+        let result = SparkDecimalDiv::new(10, -11);
+        assert!(result.is_err());
+
+        let result = SparkDecimalIntegralDiv::new(10, 11);
+        assert!(result.is_err());
+
+        let result = SparkDecimalIntegralDiv::new(10, -11);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_new_accepts_valid_precision_scale() {
+        assert!(SparkDecimalDiv::new(38, 18).is_ok());
+        assert!(SparkDecimalDiv::new(10, 0).is_ok());
+        assert!(SparkDecimalDiv::new(10, -10).is_ok());
+        assert!(SparkDecimalIntegralDiv::new(38, 0).is_ok());
+    }
+
+    #[test]
+    fn test_negative_scale_division() {
+        // Use negative result_scale: result represents multiples of 10
+        // Decimal(10,2) values: 12345.67 (1234567) / 100.00 (10000)
+        // With result_scale=-1, result is in units of 10, so 123 means 1230
+        let left = create_decimal_array(vec![Some(1234567)], 10, 2);
+        let right = create_decimal_array(vec![Some(10000)], 10, 2);
+
+        let left_cv = ColumnarValue::Array(left);
+        let right_cv = ColumnarValue::Array(right);
+
+        // This exercises the negative scale_sum path
+        let result = spark_decimal_div(&[left_cv, right_cv], 10, -1).unwrap();
+
+        if let ColumnarValue::Array(arr) = result {
+            let decimal_arr = arr.as_primitive::<Decimal128Type>();
+            // With scale=-1, the value represents multiples of 10
+            // 12345.67 / 100.00 = 123.4567, rounded to tens = 120 -> stored as 12
+            assert_eq!(decimal_arr.value(0), 12);
+        } else {
+            panic!("Expected array result");
+        }
+    }
+
+    #[test]
+    fn test_i128_multiplication_overflow_saturates() {
+        // Use max i128 value with scale expansion that would cause overflow
+        // Decimal(38,0) with value near i128::MAX, result_scale forces l_exp > 0
+        let large_val = i128::MAX / 10; // large but fits in Decimal(38,0)
+        let left = create_decimal_array(vec![Some(large_val)], 38, 0);
+        let right = create_decimal_array(vec![Some(1)], 38, 0);
+
+        let left_cv = ColumnarValue::Array(left);
+        let right_cv = ColumnarValue::Array(right);
+
+        // result_scale=6 forces l_exp = 0 + 6 + 1 - 0 = 7, so l * 10^7 overflows
+        // This should not panic — it should saturate via checked_mul
+        let result = spark_decimal_div(&[left_cv, right_cv], 38, 6);
+        assert!(result.is_ok());
     }
 }
