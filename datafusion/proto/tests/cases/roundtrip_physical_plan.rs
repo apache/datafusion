@@ -121,6 +121,7 @@ use datafusion_proto::physical_plan::{
     PhysicalProtoConverterExtension,
 };
 use datafusion_proto::protobuf;
+use datafusion_proto::protobuf::physical_plan_node::PhysicalPlanType;
 use datafusion_proto::protobuf::{PhysicalExprNode, PhysicalPlanNode};
 use prost::Message;
 
@@ -128,6 +129,11 @@ use crate::cases::{
     CustomUDWF, CustomUDWFNode, MyAggregateUDF, MyAggregateUdfNode, MyRegexUdf,
     MyRegexUdfNode,
 };
+
+use datafusion_physical_expr::expressions::{
+    DynamicFilterPhysicalExpr, DynamicFilterSnapshot,
+};
+use datafusion_physical_expr::utils::reassign_expr_columns;
 
 /// Perform a serde roundtrip and assert that the string representation of the before and after plans
 /// are identical. Note that this often isn't sufficient to guarantee that no information is
@@ -2751,6 +2757,7 @@ fn test_backward_compatibility_no_expr_id() -> Result<()> {
     // Manually create a proto without expr_id set
     let proto = PhysicalExprNode {
         expr_id: None, // Simulating old proto without this field
+        dynamic_filter_inner_id: None,
         expr_type: Some(
             datafusion_proto::protobuf::physical_expr_node::ExprType::Column(
                 datafusion_proto::protobuf::PhysicalColumn {
@@ -2944,6 +2951,284 @@ fn test_deduplication_within_expr_deserialization() -> Result<()> {
     assert!(
         !Arc::ptr_eq(binary1.right(), binary2.right()),
         "Expected expressions from different deserializations to be different Arcs"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_dynamic_filters_different_filter_same_inner_state() {
+    let filter_expr_1 = Arc::new(DynamicFilterPhysicalExpr::new(
+        vec![Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>],
+        lit(true),
+    )) as Arc<dyn PhysicalExpr>;
+
+    // Column "a" is now at index 1, which creates a new filter.
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("b", DataType::Int64, false),
+        Field::new("a", DataType::Int64, false),
+    ]));
+    let filter_expr_2 =
+        reassign_expr_columns(Arc::clone(&filter_expr_1), &schema).unwrap();
+
+    // Meta-assertion: ensure this test is testing the case where the inner state is the same but
+    // the exprs are different
+    let (outer_equal, inner_equal) =
+        dynamic_filter_outer_inner_equal(&filter_expr_1, &filter_expr_2);
+    assert!(!outer_equal);
+    assert!(inner_equal);
+    test_deduplication_of_dynamic_filter_expression(filter_expr_1, filter_expr_2, schema)
+        .unwrap();
+}
+
+#[test]
+fn test_dynamic_filters_same_filter() {
+    let filter_expr_1 = Arc::new(DynamicFilterPhysicalExpr::new(
+        vec![Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>],
+        lit(true),
+    )) as Arc<dyn PhysicalExpr>;
+
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+
+    let filter_expr_2 = Arc::clone(&filter_expr_1);
+
+    // Ensure this test is testing the case where the inner state is the same and the exprs are the same
+    let (outer_equal, inner_equal) =
+        dynamic_filter_outer_inner_equal(&filter_expr_1, &filter_expr_2);
+    assert!(outer_equal);
+    assert!(inner_equal);
+    test_deduplication_of_dynamic_filter_expression(filter_expr_1, filter_expr_2, schema)
+        .unwrap();
+}
+
+#[test]
+fn test_dynamic_filters_different_filter() {
+    let filter_expr_1 = Arc::new(DynamicFilterPhysicalExpr::new(
+        vec![Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>],
+        lit(true),
+    )) as Arc<dyn PhysicalExpr>;
+
+    let filter_expr_2 = Arc::new(DynamicFilterPhysicalExpr::new(
+        vec![Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>],
+        lit(true),
+    )) as Arc<dyn PhysicalExpr>;
+
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+
+    // Ensure this test is testing the case where the inner state is the different and the outer exprs are different
+    let (outer_equal, inner_equal) =
+        dynamic_filter_outer_inner_equal(&filter_expr_1, &filter_expr_2);
+    assert!(!outer_equal);
+    assert!(!inner_equal);
+    test_deduplication_of_dynamic_filter_expression(filter_expr_1, filter_expr_2, schema)
+        .unwrap();
+}
+
+#[test]
+fn test_dynamic_filter_roundtrip() -> Result<()> {
+    // Create a dynamic filter with base children
+    let filter_expr = Arc::new(DynamicFilterPhysicalExpr::new(
+        vec![Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>],
+        lit(true),
+    )) as Arc<dyn PhysicalExpr>;
+
+    // Add remapped columns by reassigning to a schema where "a" is at index 1
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("b", DataType::Int64, false),
+        Field::new("a", DataType::Int64, false),
+    ]));
+    let filter_expr = reassign_expr_columns(filter_expr, &schema).unwrap();
+
+    // Update its internal state
+    let df = filter_expr
+        .as_any()
+        .downcast_ref::<DynamicFilterPhysicalExpr>()
+        .unwrap();
+    df.update(lit(42))?;
+    df.update(lit(100))?;
+    df.mark_complete();
+
+    // Serialize
+    let codec = DefaultPhysicalExtensionCodec {};
+    let converter = DeduplicatingProtoConverter {};
+    let proto = converter.physical_expr_to_proto(&filter_expr, &codec)?;
+
+    // Deserialize
+    let ctx = SessionContext::new();
+    let deserialized_filter = converter.proto_to_physical_expr(
+        &proto,
+        ctx.task_ctx().as_ref(),
+        &schema,
+        &codec,
+    )?;
+
+    let deserialized_df = deserialized_filter
+        .as_any()
+        .downcast_ref::<DynamicFilterPhysicalExpr>()
+        .expect("Should be DynamicFilterPhysicalExpr");
+
+    assert_eq!(
+        DynamicFilterSnapshot::from(df).to_string(),
+        DynamicFilterSnapshot::from(deserialized_df).to_string(),
+        "Snapshots should be equal"
+    );
+
+    Ok(())
+}
+
+/// Returns (outer_equal, inner_equal)
+///
+/// outer_equal is true if the two arcs point to the same data.
+/// inner_equal is true if the two dynamic filters have the same inner arc.
+fn dynamic_filter_outer_inner_equal(
+    filter_expr_1: &Arc<dyn PhysicalExpr>,
+    filter_expr_2: &Arc<dyn PhysicalExpr>,
+) -> (bool, bool) {
+    (
+        std::ptr::addr_eq(Arc::as_ptr(filter_expr_1), Arc::as_ptr(filter_expr_2)),
+        filter_expr_1
+            .as_any()
+            .downcast_ref::<DynamicFilterPhysicalExpr>()
+            .unwrap()
+            .inner_id()
+            == filter_expr_2
+                .as_any()
+                .downcast_ref::<DynamicFilterPhysicalExpr>()
+                .unwrap()
+                .inner_id(),
+    )
+}
+
+fn test_deduplication_of_dynamic_filter_expression(
+    filter_expr_1: Arc<dyn PhysicalExpr>,
+    filter_expr_2: Arc<dyn PhysicalExpr>,
+    schema: Arc<Schema>,
+) -> Result<()> {
+    let (outer_equal, inner_equal) =
+        dynamic_filter_outer_inner_equal(&filter_expr_1, &filter_expr_2);
+
+    // Create execution plan: FilterExec(filter2) -> FilterExec(filter1) -> EmptyExec
+    let empty_exec = Arc::new(EmptyExec::new(schema)) as Arc<dyn ExecutionPlan>;
+    let filter_exec1 =
+        Arc::new(FilterExec::try_new(Arc::clone(&filter_expr_1), empty_exec)?)
+            as Arc<dyn ExecutionPlan>;
+    let filter_exec2 = Arc::new(FilterExec::try_new(
+        Arc::clone(&filter_expr_2),
+        filter_exec1,
+    )?) as Arc<dyn ExecutionPlan>;
+
+    // Serialize the plan
+    let codec = DefaultPhysicalExtensionCodec {};
+    let converter = DeduplicatingProtoConverter {};
+    let proto = converter.execution_plan_to_proto(&filter_exec2, &codec)?;
+
+    let outer_filter = match &proto.physical_plan_type {
+        Some(PhysicalPlanType::Filter(outer_filter)) => outer_filter,
+        _ => panic!("Expected PhysicalPlanType::Filter"),
+    };
+
+    let inner_filter = match &outer_filter.input {
+        Some(inner_input) => match &inner_input.physical_plan_type {
+            Some(PhysicalPlanType::Filter(inner_filter)) => inner_filter,
+            _ => panic!("Expected PhysicalPlanType::Filter"),
+        },
+        _ => panic!("Expected inner input"),
+    };
+
+    let filter1_proto = inner_filter
+        .expr
+        .as_ref()
+        .expect("Should have filter expression");
+
+    let filter2_proto = outer_filter
+        .expr
+        .as_ref()
+        .expect("Should have filter expression");
+
+    // Both should have dynamic_filter_inner_id set
+    let filter1_dynamic_id = filter1_proto
+        .dynamic_filter_inner_id
+        .expect("Filter1 should have dynamic_filter_inner_id");
+    let filter2_dynamic_id = filter2_proto
+        .dynamic_filter_inner_id
+        .expect("Filter2 should have dynamic_filter_inner_id");
+
+    assert_eq!(
+        inner_equal,
+        filter1_dynamic_id == filter2_dynamic_id,
+        "Dynamic filters sharing the same inner state should have the same dynamic_filter_inner_id"
+    );
+
+    let filter1_expr_id = filter1_proto.expr_id.expect("Should have expr_id");
+    let filter2_expr_id = filter2_proto.expr_id.expect("Should have expr_id");
+    assert_eq!(
+        outer_equal,
+        filter1_expr_id == filter2_expr_id,
+        "Different filters have different expr ids"
+    );
+
+    // Test deserialization - verify that filters with same dynamic_filter_inner_id share state
+    let ctx = SessionContext::new();
+    let deserialized_plan =
+        converter.proto_to_execution_plan(ctx.task_ctx().as_ref(), &codec, &proto)?;
+
+    // Extract the two filter expressions from the deserialized plan
+    let outer_filter = deserialized_plan
+        .as_any()
+        .downcast_ref::<FilterExec>()
+        .expect("Should be FilterExec");
+    let filter2_deserialized = outer_filter.predicate();
+
+    let inner_filter = outer_filter.children()[0]
+        .as_any()
+        .downcast_ref::<FilterExec>()
+        .expect("Inner should be FilterExec");
+    let filter1_deserialized = inner_filter.predicate();
+
+    // The Arcs should be different (different outer wrappers)
+    assert_eq!(
+        outer_equal,
+        Arc::ptr_eq(filter1_deserialized, filter2_deserialized),
+        "Deserialized filters should be different Arcs"
+    );
+
+    // Check if they're DynamicFilterPhysicalExpr (they might be snapshotted to Literal)
+    let (df1, df2) = match (
+        filter1_deserialized
+            .as_any()
+            .downcast_ref::<DynamicFilterPhysicalExpr>(),
+        filter2_deserialized
+            .as_any()
+            .downcast_ref::<DynamicFilterPhysicalExpr>(),
+    ) {
+        (Some(df1), Some(df2)) => (df1, df2),
+        _ => panic!("Should be DynamicFilterPhysicalExpr"),
+    };
+
+    // But they should have the same inner_id (shared inner state)
+    assert_eq!(
+        inner_equal,
+        df1.inner_id() == df2.inner_id(),
+        "Deserialized filters should share inner state"
+    );
+
+    // Ensure the children and remapped children are equal after the roundtrip
+    let filter_1_before_roundtrip = filter_expr_1
+        .as_any()
+        .downcast_ref::<DynamicFilterPhysicalExpr>()
+        .unwrap();
+    let filter_2_before_roundtrip = filter_expr_2
+        .as_any()
+        .downcast_ref::<DynamicFilterPhysicalExpr>()
+        .unwrap();
+
+    assert_eq!(
+        DynamicFilterSnapshot::from(filter_1_before_roundtrip).to_string(),
+        DynamicFilterSnapshot::from(df1).to_string()
+    );
+    assert_eq!(
+        DynamicFilterSnapshot::from(filter_2_before_roundtrip).to_string(),
+        DynamicFilterSnapshot::from(df2).to_string()
     );
 
     Ok(())
