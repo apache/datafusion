@@ -31,7 +31,7 @@ use datafusion_expr::{
 };
 use datafusion_macros::user_doc;
 
-/// Returns the longest string  with leading characters removed. If the characters are not specified, spaces are removed.
+/// Returns the longest string with leading characters removed. If the characters are not specified, spaces are removed.
 /// ltrim('zzzytest', 'xyz') = 'test'
 fn ltrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let use_string_view = args[0].data_type() == &DataType::Utf8View;
