@@ -706,36 +706,27 @@ impl FileOpener for ParquetOpener {
             // ----------------------------------------------------------------------
             // Step: wrap the stream so a dynamic filter can stop the file scan early
             // ----------------------------------------------------------------------
-            //
+
             // When batch-level filtering is active (RowFilter pushdown was
-            // skipped), also filter out empty batches that result from the
-            // predicate removing all rows in a decoded batch.
-            if let Some(file_pruner) = file_pruner {
-                if has_batch_filter {
-                    Ok(EarlyStoppingStream::new(
-                        stream
-                            .try_filter(|batch| {
-                                std::future::ready(batch.num_rows() > 0)
-                            })
-                            .boxed(),
-                        file_pruner,
-                        files_ranges_pruned_statistics,
-                    )
-                    .boxed())
-                } else {
-                    Ok(EarlyStoppingStream::new(
-                        stream,
-                        file_pruner,
-                        files_ranges_pruned_statistics,
-                    )
-                    .boxed())
-                }
-            } else if has_batch_filter {
-                Ok(stream
+            // skipped), filter out empty batches that result from the predicate
+            // removing all rows in a decoded batch.
+            let stream = if has_batch_filter {
+                stream
                     .try_filter(|batch| std::future::ready(batch.num_rows() > 0))
-                    .boxed())
+                    .boxed()
             } else {
-                Ok(stream.boxed())
+                stream.boxed()
+            };
+
+            if let Some(file_pruner) = file_pruner {
+                Ok(EarlyStoppingStream::new(
+                    stream,
+                    file_pruner,
+                    files_ranges_pruned_statistics,
+                )
+                .boxed())
+            } else {
+                Ok(stream)
             }
         }))
     }
@@ -2065,6 +2056,108 @@ mod test {
             reverse_values,
             vec![7, 5, 1],
             "Reverse scan with non-contiguous row groups should correctly map RowSelection"
+        );
+    }
+
+    /// When all predicate columns are already in the output projection and
+    /// pushdown_filters is enabled, the opener should skip the RowFilter
+    /// (late materialization) path and apply filtering as a post-decode
+    /// batch filter instead.  This avoids the overhead of
+    /// CachedArrayReader / ReadPlanBuilder / try_next_batch when late
+    /// materialization provides no I/O benefit.
+    #[tokio::test]
+    async fn test_skip_row_filter_when_filter_cols_subset_of_projection() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        // 4 rows: a=[1,2,2,4], b=[10,20,30,40]
+        let batch = record_batch!(
+            ("a", Int32, vec![Some(1), Some(2), Some(2), Some(4)]),
+            ("b", Int32, vec![Some(10), Some(20), Some(30), Some(40)])
+        )
+        .unwrap();
+        let data_size =
+            write_parquet(Arc::clone(&store), "test.parquet", batch.clone()).await;
+        let schema = batch.schema();
+        let file = PartitionedFile::new(
+            "test.parquet".to_string(),
+            u64::try_from(data_size).unwrap(),
+        );
+
+        // Case 1: filter_cols ⊆ projection_cols → batch filter path
+        // Filter: a = 2, Projection: [a, b]
+        // predicate_col_indices = {0}, projection_col_indices = {0, 1} → subset
+        let expr = col("a").eq(lit(2));
+        let predicate = logical2physical(&expr, &schema);
+        let opener = ParquetOpenerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_projection_indices(&[0, 1])
+            .with_predicate(predicate)
+            .with_pushdown_filters(true)
+            .with_reorder_filters(true)
+            .build();
+        let stream = opener.open(file.clone()).unwrap().await.unwrap();
+        let (num_batches, num_rows) = count_batches_and_rows(stream).await;
+        assert_eq!(num_rows, 2, "batch filter should return 2 matching rows");
+        assert_eq!(num_batches, 1);
+
+        // Case 2: filter_cols ⊄ projection_cols → RowFilter path
+        // Filter: b = 20, Projection: [a] (only column a)
+        // predicate_col_indices = {1}, projection_col_indices = {0} → NOT subset
+        let expr = col("b").eq(lit(20));
+        let predicate = logical2physical(&expr, &schema);
+        let opener = ParquetOpenerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_projection_indices(&[0])
+            .with_predicate(predicate)
+            .with_pushdown_filters(true)
+            .with_reorder_filters(true)
+            .build();
+        let stream = opener.open(file.clone()).unwrap().await.unwrap();
+        let values = collect_int32_values(stream).await;
+        assert_eq!(
+            values,
+            vec![2],
+            "RowFilter should return correct filtered values"
+        );
+
+        // Case 3: filter_cols ⊆ projection_cols, no matches → 0 rows
+        // Filter: a = 99, Projection: [a]
+        // predicate_col_indices = {0}, projection_col_indices = {0} → subset
+        let expr = col("a").eq(lit(99));
+        let predicate = logical2physical(&expr, &schema);
+        let opener = ParquetOpenerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_projection_indices(&[0])
+            .with_predicate(predicate)
+            .with_pushdown_filters(true)
+            .with_reorder_filters(true)
+            .build();
+        let stream = opener.open(file.clone()).unwrap().await.unwrap();
+        let (num_batches, num_rows) = count_batches_and_rows(stream).await;
+        assert_eq!(num_rows, 0, "no rows should match");
+        assert_eq!(num_batches, 0, "empty batches should be filtered out");
+
+        // Case 4: verify correct values in batch filter path
+        // Filter: a = 2, Projection: [a]
+        let expr = col("a").eq(lit(2));
+        let predicate = logical2physical(&expr, &schema);
+        let opener = ParquetOpenerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_projection_indices(&[0])
+            .with_predicate(predicate)
+            .with_pushdown_filters(true)
+            .with_reorder_filters(true)
+            .build();
+        let stream = opener.open(file).unwrap().await.unwrap();
+        let values = collect_int32_values(stream).await;
+        assert_eq!(
+            values,
+            vec![2, 2],
+            "batch filter should return correct values"
         );
     }
 }
