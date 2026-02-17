@@ -306,7 +306,10 @@ where
                                         for _ in 0..full_reps {
                                             builder.write_str(fill)?;
                                         }
-                                        builder.append_value(&fill[..remainder]);
+                                        if remainder > 0 {
+                                            builder.write_str(&fill[..remainder])?;
+                                        }
+                                        builder.append_value("");
                                     }
                                 } else {
                                     // Reuse buffer by clearing and refilling
@@ -508,7 +511,7 @@ mod tests {
             Utf8,
             StringArray
         );
-         test_function!(
+        test_function!(
             RPadFunc::new(),
             vec![
                 ColumnarValue::Scalar(ScalarValue::from("hi")),
