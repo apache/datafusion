@@ -719,7 +719,7 @@ pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subq
 /// Determine whether the given data type `dt` supports the negation operator.
 ///
 /// Negation is supported for numeric, interval, timestamp types, and null.
-pub fn is_negatable(dt: &DataType) -> bool {
+fn is_negatable(dt: &DataType) -> bool {
     dt.is_numeric() || is_interval(dt) || is_timestamp(dt) || dt.is_null()
 }
 
