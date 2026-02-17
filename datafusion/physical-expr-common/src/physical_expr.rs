@@ -18,7 +18,7 @@
 use std::any::Any;
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
-use std::hash::{Hash, Hasher};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 use crate::utils::scatter;
@@ -438,6 +438,50 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     fn placement(&self) -> ExpressionPlacement {
         ExpressionPlacement::KeepInPlace
     }
+
+    /// Returns a composite identifier for a [`PhysicalExpr`]. Note that if the expression
+    /// is dropped, then the returned id is no longer valid.
+    fn expr_id(self: Arc<Self>, salt: &[u64]) -> Option<PhysicalExprId> {
+        Some(PhysicalExprId::new(expr_id_from_arc(&self, salt), None))
+    }
+}
+
+/// A composite identifier for [`PhysicalExpr`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PhysicalExprId {
+    exact: u64,
+    shallow: Option<u64>,
+}
+
+impl PhysicalExprId {
+    /// Create a new [`PhysicalExprId`]. Both ids must be globally unique within
+    /// a process.
+    pub fn new(exact: u64, shallow: Option<u64>) -> Self {
+        Self { exact, shallow }
+    }
+
+    /// Returns the identifier for the full expression tree, including children.
+    pub fn exact(&self) -> u64 {
+        self.exact
+    }
+
+    /// Returns the identifier for just the expression root, ignoring children.
+    pub fn shallow(&self) -> Option<u64> {
+        self.shallow
+    }
+}
+
+/// Computes a unique identifier for a type contained within an [`Arc`]. It hashes
+/// the [`Arc`] pointer to create a process-local identifier that remains valid
+/// only while that allocation is still alive.
+pub fn expr_id_from_arc<T: ?Sized>(expr: &Arc<T>, salt: &[u64]) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    let ptr = Arc::as_ptr(expr) as *const () as u64;
+    ptr.hash(&mut hasher);
+    for &salt in salt {
+        salt.hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 #[deprecated(

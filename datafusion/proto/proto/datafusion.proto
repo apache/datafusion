@@ -870,18 +870,18 @@ message PhysicalExtensionNode {
   repeated PhysicalPlanNode inputs = 2;
 }
 
-// physical expressions
 message PhysicalExprNode {
   // Was date_time_interval_expr
   reserved 17;
 
-  // Unique identifier for this expression to do deduplication during deserialization.
-  // When serializing, this is set to a unique identifier for each combination of
-  // expression, process and serialization run.
-  // When deserializing, if this ID has been seen before, the cached Arc is returned
-  // instead of creating a new one, enabling reconstruction of referential integrity
-  // across serde roundtrips.
+  // Unique identifiers for this expression used during deserialization to restore
+  // referential integrity across serde roundtrips.
+  // 
+  // expr_id: if two exprs have the same expr_id, they are identical (including children)
+  // shallow_expr_id: if two exprs have the same shallow_expr_id, they are identical but may 
+  //   have different children
   optional uint64 expr_id = 30;
+  optional uint64 shallow_expr_id = 31;
 
   oneof ExprType {
     // column references
@@ -920,7 +920,17 @@ message PhysicalExprNode {
     UnknownColumn unknown_column = 20;
 
     PhysicalHashExprNode hash_expr = 21;
+
+    PhysicalDynamicFilterNode dynamic_filter = 22;
   }
+}
+
+message PhysicalDynamicFilterNode {
+  repeated PhysicalExprNode children = 1;
+  repeated PhysicalExprNode remapped_children = 2;
+  uint64 generation = 3;
+  PhysicalExprNode inner_expr = 4;
+  bool is_complete = 5;
 }
 
 message PhysicalScalarUdfNode {

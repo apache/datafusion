@@ -26,7 +26,9 @@ use datafusion_common::{
     tree_node::{Transformed, TransformedResult, TreeNode},
 };
 use datafusion_expr::ColumnarValue;
-use datafusion_physical_expr_common::physical_expr::DynHash;
+use datafusion_physical_expr_common::physical_expr::{
+    DynHash, PhysicalExprId, expr_id_from_arc,
+};
 
 /// State of a dynamic filter, tracking both updates and completion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,6 +88,118 @@ struct Inner {
     /// This is redundant with the watch channel state, but allows us to return immediately
     /// from `wait_complete()` without subscribing if already complete.
     is_complete: bool,
+}
+
+/// An atomic snapshot of a [`DynamicFilterPhysicalExpr`] used to reconstruct the expression during
+/// serialization / deserialization.
+pub struct DynamicFilterSnapshot {
+    children: Vec<Arc<dyn PhysicalExpr>>,
+    remapped_children: Option<Vec<Arc<dyn PhysicalExpr>>>,
+    // Inner state.
+    generation: u64,
+    inner_expr: Arc<dyn PhysicalExpr>,
+    is_complete: bool,
+}
+
+impl DynamicFilterSnapshot {
+    pub fn new(
+        children: Vec<Arc<dyn PhysicalExpr>>,
+        remapped_children: Option<Vec<Arc<dyn PhysicalExpr>>>,
+        generation: u64,
+        inner_expr: Arc<dyn PhysicalExpr>,
+        is_complete: bool,
+    ) -> Self {
+        Self {
+            children,
+            remapped_children,
+            generation,
+            inner_expr,
+            is_complete,
+        }
+    }
+
+    pub fn children(&self) -> &[Arc<dyn PhysicalExpr>] {
+        &self.children
+    }
+
+    pub fn remapped_children(&self) -> Option<&[Arc<dyn PhysicalExpr>]> {
+        self.remapped_children.as_deref()
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub fn inner_expr(&self) -> &Arc<dyn PhysicalExpr> {
+        &self.inner_expr
+    }
+
+    pub fn is_complete(&self) -> bool {
+        self.is_complete
+    }
+}
+
+impl Display for DynamicFilterSnapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "DynamicFilterSnapshot {{ children: {:?}, remapped_children: {:?}, generation: {}, inner_expr: {:?}, is_complete: {} }}",
+            self.children,
+            self.remapped_children,
+            self.generation,
+            self.inner_expr,
+            self.is_complete
+        )
+    }
+}
+
+impl From<DynamicFilterSnapshot> for DynamicFilterPhysicalExpr {
+    fn from(snapshot: DynamicFilterSnapshot) -> Self {
+        let DynamicFilterSnapshot {
+            children,
+            remapped_children,
+            generation,
+            inner_expr,
+            is_complete,
+        } = snapshot;
+
+        let state = if is_complete {
+            FilterState::Complete { generation }
+        } else {
+            FilterState::InProgress { generation }
+        };
+        let (state_watch, _) = watch::channel(state);
+
+        Self {
+            children,
+            remapped_children,
+            inner: Arc::new(RwLock::new(Inner {
+                generation,
+                expr: inner_expr,
+                is_complete,
+            })),
+            state_watch,
+            data_type: Arc::new(RwLock::new(None)),
+            nullable: Arc::new(RwLock::new(None)),
+        }
+    }
+}
+
+impl From<&DynamicFilterPhysicalExpr> for DynamicFilterSnapshot {
+    fn from(expr: &DynamicFilterPhysicalExpr) -> Self {
+        // Snapshot everything in the mutex atomically.
+        let (generation, inner_expr, is_complete) = {
+            let inner = expr.inner.read();
+            (inner.generation, Arc::clone(&inner.expr), inner.is_complete)
+        };
+        DynamicFilterSnapshot {
+            children: expr.children.clone(),
+            remapped_children: expr.remapped_children.clone(),
+            generation,
+            inner_expr,
+            is_complete,
+        }
+    }
 }
 
 impl Inner {
@@ -443,6 +557,15 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
     fn snapshot_generation(&self) -> u64 {
         // Return the current generation of the expression.
         self.inner.read().generation
+    }
+
+    fn expr_id(self: Arc<Self>, salt: &[u64]) -> Option<PhysicalExprId> {
+        Some(PhysicalExprId::new(
+            // Capture the outer arc, which contains children and the expr.
+            expr_id_from_arc(&self, salt),
+            // Capture the inner arc, which contains the expr only.
+            Some(expr_id_from_arc(&self.inner, salt)),
+        ))
     }
 }
 
@@ -859,6 +982,113 @@ mod test {
         assert_eq!(
             hash1, hash3,
             "Hash should be stable after update (identity-based)"
+        );
+    }
+
+    #[test]
+    fn test_current_snapshot_roundtrip() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let col_a = col("a", &schema).unwrap();
+
+        // Create a dynamic filter with children
+        let expr = Arc::new(BinaryExpr::new(
+            Arc::clone(&col_a),
+            datafusion_expr::Operator::Gt,
+            lit(10) as Arc<dyn PhysicalExpr>,
+        ));
+        let filter = DynamicFilterPhysicalExpr::new(
+            vec![Arc::clone(&col_a)],
+            expr as Arc<dyn PhysicalExpr>,
+        );
+
+        // Update expression and mark complete
+        filter
+            .update(lit(42) as Arc<dyn PhysicalExpr>)
+            .expect("Update should succeed");
+        filter.mark_complete();
+
+        // Change the children of the expr.
+        let reassigned_schema = Arc::new(Schema::new(vec![
+            Field::new("b", DataType::Int32, false),
+            Field::new("a", DataType::Int32, false),
+        ]));
+        let reassigned = reassign_expr_columns(
+            Arc::new(filter) as Arc<dyn PhysicalExpr>,
+            &reassigned_schema,
+        )
+        .expect("reassign_expr_columns should succeed");
+        let reassigned = reassigned
+            .as_any()
+            .downcast_ref::<DynamicFilterPhysicalExpr>()
+            .expect("Expected dynamic filter after reassignment");
+
+        // Take a snapshot and reconstruct
+        let snapshot = DynamicFilterSnapshot::from(reassigned);
+        let reconstructed = DynamicFilterPhysicalExpr::from(snapshot);
+
+        // Assert snapshots are equal.
+        assert_eq!(
+            DynamicFilterSnapshot::from(reassigned).to_string(),
+            DynamicFilterSnapshot::from(&reconstructed).to_string(),
+        );
+    }
+
+    #[tokio::test]
+    async fn test_expr_id() {
+        let source_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let col_a = col("a", &source_schema).unwrap();
+
+        // Create a source filter
+        let source = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::clone(&col_a)],
+            lit(true) as Arc<dyn PhysicalExpr>,
+        ));
+        let source_clone = Arc::clone(&source);
+
+        // Create a derived filter by reassigning the source filter to a different schema.
+        let derived_schema = Arc::new(Schema::new(vec![
+            Field::new("x", DataType::Int32, false),
+            Field::new("a", DataType::Int32, false),
+        ]));
+        let derived = reassign_expr_columns(
+            Arc::clone(&source) as Arc<dyn PhysicalExpr>,
+            &derived_schema,
+        )
+        .expect("reassign_expr_columns should succeed");
+
+        let derived_expr_id = Arc::clone(&derived)
+            .expr_id(&[])
+            .expect("combined filter should have an expr_id");
+        let source_expr_id = Arc::clone(&source)
+            .expr_id(&[])
+            .expect("source filter should have an expr_id");
+        let source_clone_expr_id = Arc::clone(&source_clone)
+            .expr_id(&[])
+            .expect("source clone should have an expr_id");
+
+        assert_eq!(
+            source_clone_expr_id.exact(),
+            source_expr_id.exact(),
+            "cloned filter should have the same exact id because the children are the same",
+        );
+
+        assert_eq!(
+            source_clone_expr_id.shallow(),
+            source_expr_id.shallow(),
+            "cloned filter should have the same shallow id because the exprs are the same",
+        );
+
+        assert_ne!(
+            derived_expr_id.exact(),
+            source_expr_id.exact(),
+            "filters should have different exact ids because the children are different",
+        );
+
+        assert_eq!(
+            derived_expr_id.shallow(),
+            source_expr_id.shallow(),
+            "filters should have the same shallow id because the exprs are the same",
         );
     }
 }

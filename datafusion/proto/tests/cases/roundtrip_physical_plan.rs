@@ -128,6 +128,11 @@ use crate::cases::{
     CustomUDWF, CustomUDWFNode, MyAggregateUDF, MyAggregateUdfNode, MyRegexUdf,
     MyRegexUdfNode,
 };
+use datafusion_physical_expr::expressions::{
+    DynamicFilterPhysicalExpr, DynamicFilterSnapshot,
+};
+use datafusion_physical_expr::utils::reassign_expr_columns;
+use datafusion_physical_expr_common::physical_expr::PhysicalExprId;
 
 /// Perform a serde roundtrip and assert that the string representation of the before and after plans
 /// are identical. Note that this often isn't sufficient to guarantee that no information is
@@ -2824,6 +2829,7 @@ fn test_backward_compatibility_no_expr_id() -> Result<()> {
     // Manually create a proto without expr_id set
     let proto = PhysicalExprNode {
         expr_id: None, // Simulating old proto without this field
+        shallow_expr_id: None,
         expr_type: Some(
             datafusion_proto::protobuf::physical_expr_node::ExprType::Column(
                 datafusion_proto::protobuf::PhysicalColumn {
@@ -3015,6 +3021,287 @@ fn test_deduplication_within_expr_deserialization() -> Result<()> {
     Ok(())
 }
 
+/// Create a [`DynamicFilterPhysicalExpr`] with child column expression "a" @ index 0.
+fn make_dynamic_filter() -> Arc<dyn PhysicalExpr> {
+    Arc::new(DynamicFilterPhysicalExpr::new(
+        vec![Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>],
+        lit(true),
+    )) as Arc<dyn PhysicalExpr>
+}
+
+/// Update a [`DynamicFilterPhysicalExpr`]'s children to support child schema "b" @ 0, "a" @ 1.
+fn make_reassigned_dynamic_filter(
+    filter: Arc<dyn PhysicalExpr>,
+) -> Result<(Arc<Schema>, Arc<dyn PhysicalExpr>)> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("b", DataType::Int64, false),
+        Field::new("a", DataType::Int64, false),
+    ]));
+    let reassigned = reassign_expr_columns(filter, &schema)?;
+    Ok((schema, reassigned))
+}
+
+/// Extract a [`PhysicalExprId`] from a [`PhysicalExpr`] proto.
+fn proto_expr_id(expr: &PhysicalExprNode) -> PhysicalExprId {
+    let expr_id = expr.expr_id.expect("physical expr should have expr_id");
+    PhysicalExprId::new(expr_id, expr.shallow_expr_id)
+}
+
+/// Roundtrip a single physical expression shaped like so:
+///
+/// ```text
+///             BinaryExpr(AND)
+///             /             \
+///     filter_expr_1     filter_expr_2
+/// ```
+///
+/// Returns filter_expr_1 and filter_expr_2 after deserialization.
+fn roundtrip_dynamic_filter_expr_pair(
+    filter_expr_1: Arc<dyn PhysicalExpr>,
+    filter_expr_2: Arc<dyn PhysicalExpr>,
+    schema: Arc<Schema>,
+) -> Result<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)> {
+    let pair_expr = Arc::new(BinaryExpr::new(
+        Arc::clone(&filter_expr_1),
+        Operator::And,
+        Arc::clone(&filter_expr_2),
+    )) as Arc<dyn PhysicalExpr>;
+
+    let codec = DefaultPhysicalExtensionCodec {};
+    let converter = DeduplicatingProtoConverter {};
+    let proto = converter.physical_expr_to_proto(&pair_expr, &codec)?;
+    let ctx = SessionContext::new();
+    let deserialized_expr = converter.proto_to_physical_expr(
+        &proto,
+        ctx.task_ctx().as_ref(),
+        &schema,
+        &codec,
+    )?;
+
+    let binary = deserialized_expr
+        .downcast_ref::<BinaryExpr>()
+        .expect("Expected BinaryExpr");
+
+    Ok((Arc::clone(binary.left()), Arc::clone(binary.right())))
+}
+
+/// Roundtrip an execution plan shaped like so:
+///
+/// ```text
+/// FilterExec(dynamic_filter_1 on a@0)
+///   ProjectionExec(a := Column("a", source_index))
+///     DataSourceExec
+///       ParquetSource(predicate = dynamic_filter_2)
+/// ```
+///
+/// `dynamic_filter_1` and `dynamic_filter_2` are the same dynamic filter, except with
+/// different children.
+///
+/// Returns
+/// - `dynamic_filter_1` before serialization
+/// - `dynamic_filter_2` before serialization
+/// - `dynamic_filter_1` after serialization
+/// - `dynamic_filter_2` after serialization
+fn roundtrip_dynamic_filter_plan_pair() -> Result<(
+    Arc<dyn PhysicalExpr>,
+    Arc<dyn PhysicalExpr>,
+    Arc<dyn PhysicalExpr>,
+    Arc<dyn PhysicalExpr>,
+)> {
+    let filter_expr_1 = make_dynamic_filter();
+    let (data_source_schema, filter_expr_2) =
+        make_reassigned_dynamic_filter(Arc::clone(&filter_expr_1))?;
+    let left_before = Arc::clone(&filter_expr_1);
+    let right_before = Arc::clone(&filter_expr_2);
+    let file_source = Arc::new(
+        ParquetSource::new(Arc::clone(&data_source_schema))
+            .with_predicate(Arc::clone(&filter_expr_2)),
+    );
+    let scan_config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
+                "/path/to/file.parquet".to_string(),
+                1024,
+            )])])
+            .build();
+    let data_source_exec =
+        DataSourceExec::from_data_source(scan_config) as Arc<dyn ExecutionPlan>;
+
+    let projection_exec = Arc::new(ProjectionExec::try_new(
+        vec![ProjectionExpr {
+            expr: Arc::new(Column::new("a", 1)) as Arc<dyn PhysicalExpr>,
+            alias: "a".to_string(),
+        }],
+        data_source_exec,
+    )?) as Arc<dyn ExecutionPlan>;
+    let filter_exec = Arc::new(FilterExec::try_new(
+        Arc::clone(&filter_expr_1),
+        projection_exec,
+    )?) as Arc<dyn ExecutionPlan>;
+
+    let codec = DefaultPhysicalExtensionCodec {};
+    let converter = DeduplicatingProtoConverter {};
+    let proto = converter.execution_plan_to_proto(&filter_exec, &codec)?;
+
+    let ctx = SessionContext::new();
+    let deserialized_plan =
+        converter.proto_to_execution_plan(ctx.task_ctx().as_ref(), &codec, &proto)?;
+
+    let outer_filter = deserialized_plan
+        .downcast_ref::<FilterExec>()
+        .expect("Expected outer FilterExec");
+    let left_filter = Arc::clone(outer_filter.predicate());
+    let projection = outer_filter.children()[0]
+        .downcast_ref::<ProjectionExec>()
+        .expect("Expected ProjectionExec");
+    let data_source = projection
+        .input()
+        .downcast_ref::<DataSourceExec>()
+        .expect("Expected DataSourceExec");
+    let scan_config = data_source
+        .data_source()
+        .downcast_ref::<FileScanConfig>()
+        .expect("Expected FileScanConfig");
+    let right_filter = scan_config
+        .file_source()
+        .filter()
+        .expect("Expected pushed-down predicate");
+
+    Ok((left_before, right_before, left_filter, right_filter))
+}
+
+/// Takes two [`DynamicFilterPhysicalExpr`] and asserts that updates to one are visible
+/// via the other. This helps assert that referential integrity is maintained after
+/// deserializing.
+fn assert_dynamic_filter_update_is_visible(
+    left_filter: &Arc<dyn PhysicalExpr>,
+    right_filter: &Arc<dyn PhysicalExpr>,
+) -> Result<()> {
+    let left_filter = left_filter
+        .downcast_ref::<DynamicFilterPhysicalExpr>()
+        .expect("Expected dynamic filter");
+    let right_filter = right_filter
+        .downcast_ref::<DynamicFilterPhysicalExpr>()
+        .expect("Expected dynamic filter");
+
+    // Sanity check that the filters have the same generation.
+    let original_generation = left_filter.snapshot_generation();
+    assert_eq!(original_generation, right_filter.snapshot_generation(),);
+
+    left_filter.update(lit(123_i64))?;
+
+    // Assert that both generations updated.
+    assert_eq!(original_generation + 1, right_filter.snapshot_generation(),);
+    assert_eq!(
+        left_filter.snapshot_generation(),
+        right_filter.snapshot_generation(),
+    );
+
+    // Ensure both filters have the updated expr.
+    let expected_current = r#"Literal { value: Int64(123), field: Field { name: "lit", data_type: Int64 } }"#;
+    assert_eq!(expected_current, format!("{:?}", left_filter.current()?),);
+    assert_eq!(expected_current, format!("{:?}", right_filter.current()?),);
+
+    Ok(())
+}
+
+fn assert_dynamic_filter_snapshot_matches(
+    expected: &Arc<dyn PhysicalExpr>,
+    actual: &Arc<dyn PhysicalExpr>,
+) {
+    let expected = expected
+        .downcast_ref::<DynamicFilterPhysicalExpr>()
+        .expect("Expected dynamic filter");
+    let actual = actual
+        .downcast_ref::<DynamicFilterPhysicalExpr>()
+        .expect("Expected dynamic filter");
+
+    assert_eq!(
+        DynamicFilterSnapshot::from(expected).to_string(),
+        DynamicFilterSnapshot::from(actual).to_string(),
+    );
+}
+
+// Two clones of a dynamic filter expression should be deduped to the exact same expression.
+#[test]
+fn test_dynamic_filter_roundtrip_dedupe() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+    let filter_expr_1 = make_dynamic_filter();
+    let filter_expr_2 = Arc::clone(&filter_expr_1);
+
+    let (filter_expr_1_after_roundtrip, filter_expr_2_after_roundtrip) =
+        roundtrip_dynamic_filter_expr_pair(
+            Arc::clone(&filter_expr_1),
+            Arc::clone(&filter_expr_2),
+            schema,
+        )?;
+
+    // Assert the filters are not modified during roundtrip.
+    assert_dynamic_filter_snapshot_matches(
+        &filter_expr_1,
+        &filter_expr_1_after_roundtrip,
+    );
+    assert_dynamic_filter_snapshot_matches(
+        &filter_expr_2,
+        &filter_expr_2_after_roundtrip,
+    );
+    assert_dynamic_filter_snapshot_matches(
+        &filter_expr_1_after_roundtrip,
+        &filter_expr_2_after_roundtrip,
+    );
+
+    // Assert referential integrity.
+    assert_dynamic_filter_update_is_visible(
+        &filter_expr_1_after_roundtrip,
+        &filter_expr_2_after_roundtrip,
+    )?;
+
+    Ok(())
+}
+
+/// Rountrip test for an execution plan where there are multiple instances of a dynamic filter
+/// with different children.
+#[test]
+fn test_dynamic_filter_plan_roundtrip_dedupe_shallow_expr_id() -> Result<()> {
+    let (
+        filter_expr_1,
+        filter_expr_2,
+        filter_expr_1_after_roundtrip,
+        filter_expr_2_after_roundtrip,
+    ) = roundtrip_dynamic_filter_plan_pair()?;
+
+    // Assert the filters are not modified during roundtrip.
+    //
+    // There's a small technicality that `filter_expr_1` is rewritten to an eqivalent expression
+    // during deserialization, so we capture that here by calling
+    // `filter.with_new_children(filter.children)`.
+    let filter_expr_1_children = Arc::clone(&filter_expr_1)
+        .children()
+        .iter()
+        .map(|child| Arc::clone(child))
+        .collect::<Vec<_>>();
+    let filter_expr_1 = filter_expr_1
+        .clone()
+        .with_new_children(filter_expr_1_children)
+        .unwrap();
+    assert_dynamic_filter_snapshot_matches(
+        &filter_expr_1,
+        &filter_expr_1_after_roundtrip,
+    );
+    assert_dynamic_filter_snapshot_matches(
+        &filter_expr_2,
+        &filter_expr_2_after_roundtrip,
+    );
+
+    // Assert referential integrity.
+    assert_dynamic_filter_update_is_visible(
+        &filter_expr_1_after_roundtrip,
+        &filter_expr_2_after_roundtrip,
+    )?;
+
+    Ok(())
+}
+
 /// Test that session_id rotates between top-level serialization operations.
 /// This verifies that each top-level serialization gets a fresh session_id,
 /// which prevents cross-process collisions when serialized plans are merged.
@@ -3031,13 +3318,13 @@ fn test_session_id_rotation_between_serializations() -> Result<()> {
 
     // First serialization
     let proto1 = proto_converter.physical_expr_to_proto(&col_expr, &codec)?;
-    let expr_id1 = proto1.expr_id.expect("Expected expr_id to be set");
+    let expr_id1 = proto_expr_id(&proto1);
 
     // Second serialization with the same converter
     // The session_id should have rotated, so the expr_id should be different
     // even though we're serializing the same expression (same pointer address)
     let proto2 = proto_converter.physical_expr_to_proto(&col_expr, &codec)?;
-    let expr_id2 = proto2.expr_id.expect("Expected expr_id to be set");
+    let expr_id2 = proto_expr_id(&proto2);
 
     // The expr_ids should be different because session_id rotated
     assert_ne!(

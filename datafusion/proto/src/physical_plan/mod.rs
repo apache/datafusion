@@ -19,7 +19,6 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 use arrow::compute::SortOptions;
@@ -58,6 +57,7 @@ use datafusion_functions_table::generate_series::{
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::async_scalar_function::AsyncFuncExpr;
 use datafusion_physical_expr::{LexOrdering, LexRequirement, PhysicalExprRef};
+use datafusion_physical_expr_common::physical_expr::PhysicalExprId;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, LimitOptions, PhysicalGroupBy,
 };
@@ -3098,6 +3098,7 @@ impl protobuf::PhysicalPlanNode {
                 });
                 Ok(protobuf::PhysicalExprNode {
                     expr_id: None,
+                    shallow_expr_id: None,
                     expr_type: Some(ExprType::Sort(sort_expr)),
                 })
             })
@@ -3184,6 +3185,7 @@ impl protobuf::PhysicalPlanNode {
                 });
                 Ok(protobuf::PhysicalExprNode {
                     expr_id: None,
+                    shallow_expr_id: None,
                     expr_type: Some(ExprType::Sort(sort_expr)),
                 })
             })
@@ -3791,6 +3793,13 @@ struct DataEncoderTuple {
 }
 
 pub struct DefaultPhysicalProtoConverter;
+
+fn from_proto_expr_id(proto: &protobuf::PhysicalExprNode) -> Option<PhysicalExprId> {
+    proto
+        .expr_id
+        .map(|exact| PhysicalExprId::new(exact, proto.shallow_expr_id))
+}
+
 impl PhysicalProtoConverterExtension for DefaultPhysicalProtoConverter {
     fn proto_to_execution_plan(
         &self,
@@ -3839,10 +3848,10 @@ impl PhysicalProtoConverterExtension for DefaultPhysicalProtoConverter {
     }
 }
 
-/// Internal serializer that adds expr_id to expressions.
-/// Created fresh for each serialization operation.
+/// Internal serializer that makes distinct expr_ids for each serialization session.
 struct DeduplicatingSerializer {
-    /// Random salt combined with pointer addresses and process ID to create globally unique expr_ids.
+    /// Random salt for this serializer which gets hashed with expression ids to create
+    /// unique ids for this serialization session.
     session_id: u64,
 }
 
@@ -3898,17 +3907,10 @@ impl PhysicalProtoConverterExtension for DeduplicatingSerializer {
         codec: &dyn PhysicalExtensionCodec,
     ) -> Result<protobuf::PhysicalExprNode> {
         let mut proto = serialize_physical_expr_with_converter(expr, codec, self)?;
-
-        // Hash session_id, pointer address, and process ID together to create expr_id.
-        // - session_id: random per serializer, prevents collisions when merging serializations
-        // - ptr: unique address per Arc within a process
-        // - pid: prevents collisions if serializer is shared across processes
-        let mut hasher = DefaultHasher::new();
-        self.session_id.hash(&mut hasher);
-        (Arc::as_ptr(expr) as *const () as u64).hash(&mut hasher);
-        std::process::id().hash(&mut hasher);
-        proto.expr_id = Some(hasher.finish());
-
+        if let Some(expr_id) = Arc::clone(expr).expr_id(&[self.session_id]) {
+            proto.expr_id = Some(expr_id.exact());
+            proto.shallow_expr_id = expr_id.shallow();
+        }
         Ok(proto)
     }
 }
@@ -3917,7 +3919,7 @@ impl PhysicalProtoConverterExtension for DeduplicatingSerializer {
 /// Created fresh for each deserialization operation.
 #[derive(Default)]
 struct DeduplicatingDeserializer {
-    /// Cache mapping expr_id to deserialized expressions.
+    /// Cache mapping exact and shallow expr ids to deserialized expressions.
     cache: RefCell<HashMap<u64, Arc<dyn PhysicalExpr>>>,
 }
 
@@ -3952,24 +3954,40 @@ impl PhysicalProtoConverterExtension for DeduplicatingDeserializer {
     where
         Self: Sized,
     {
-        if let Some(expr_id) = proto.expr_id {
-            // Check cache first
-            if let Some(cached) = self.cache.borrow().get(&expr_id) {
-                return Ok(Arc::clone(cached));
-            }
-            // Deserialize and cache
-            let expr = parse_physical_expr_with_converter(
-                proto,
-                ctx,
-                input_schema,
-                codec,
-                self,
-            )?;
-            self.cache.borrow_mut().insert(expr_id, Arc::clone(&expr));
-            Ok(expr)
-        } else {
-            parse_physical_expr_with_converter(proto, ctx, input_schema, codec, self)
+        let expr_id = from_proto_expr_id(proto);
+
+        // The expressions are exactly the same, so return the cached expr.
+        if let Some(expr_id) = expr_id.as_ref()
+            && let Some(cached) = self.cache.borrow().get(&expr_id.exact())
+        {
+            return Ok(Arc::clone(cached));
         }
+
+        // Cache miss, we must deserialize the expr.
+        let mut expr =
+            parse_physical_expr_with_converter(proto, ctx, input_schema, codec, self)?;
+
+        if let Some(expr_id) = expr_id {
+            if let Some(shallow_id) = expr_id.shallow() {
+                if let Some(cached_expr) = self.cache.borrow().get(&shallow_id) {
+                    // Cache hit on shallow id. Re-use the cached expr with children from the
+                    // deserialized expr.
+                    let children = expr.children().into_iter().cloned().collect();
+                    expr = Arc::clone(cached_expr).with_new_children(children)?;
+                } else {
+                    // Cache miss on shallow id. Cache the expr.
+                    self.cache
+                        .borrow_mut()
+                        .insert(shallow_id, Arc::clone(&expr));
+                }
+            }
+
+            self.cache
+                .borrow_mut()
+                .insert(expr_id.exact(), Arc::clone(&expr));
+        }
+
+        Ok(expr)
     }
 
     fn physical_expr_to_proto(
@@ -3984,13 +4002,13 @@ impl PhysicalProtoConverterExtension for DeduplicatingDeserializer {
 /// A proto converter that adds expression deduplication during serialization
 /// and deserialization.
 ///
-/// During serialization, each expression's Arc pointer address is XORed with a
-/// random session_id to create a salted `expr_id`. This prevents cross-process
-/// collisions when serialized plans are merged.
+/// During serialization, each expression's identifier is salted with a random
+/// session_id. This prevents cross-process collisions when serialized plans are merged.
 ///
-/// During deserialization, expressions with the same `expr_id` share the same
-/// Arc, reducing memory usage for plans with duplicate expressions (e.g., large
-/// IN lists) and supporting correctly linking [`DynamicFilterPhysicalExpr`] instances.
+/// During deserialization, expressions with the same `expr_id` are reconstructed
+/// according to the id variant, reducing memory usage for plans with duplicate
+/// expressions (e.g., large IN lists) and preserving referential integrity for
+/// [`DynamicFilterPhysicalExpr`] instances.
 ///
 /// This converter is stateless - it creates internal serializers/deserializers
 /// on demand for each operation.
