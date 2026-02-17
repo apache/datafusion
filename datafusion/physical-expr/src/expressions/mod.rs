@@ -47,6 +47,7 @@ pub use column::{Column, col, with_new_schema};
 pub use datafusion_expr::utils::format_state_name;
 pub use dynamic_filters::DynamicFilterPhysicalExpr;
 pub use dynamic_filters::DynamicFilterRuntimeContext;
+pub use dynamic_filters::DynamicFilterSnapshot;
 pub use dynamic_filters::DynamicFilterUpdate;
 pub use in_list::{InListExpr, in_list};
 pub use is_not_null::{IsNotNullExpr, is_not_null};

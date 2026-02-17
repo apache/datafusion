@@ -58,6 +58,9 @@ use super::{
 use crate::logical_plan::{self};
 use crate::protobuf::physical_expr_node::ExprType;
 use crate::{convert_required, protobuf};
+use datafusion_physical_expr::expressions::{
+    DynamicFilterPhysicalExpr, DynamicFilterSnapshot,
+};
 
 impl From<&protobuf::PhysicalColumn> for Column {
     fn from(c: &protobuf::PhysicalColumn) -> Column {
@@ -494,6 +497,48 @@ pub fn parse_physical_expr_with_converter(
                 ),
                 hash_expr.description.clone(),
             ))
+        }
+        ExprType::DynamicFilter(dynamic_filter) => {
+            let children = parse_physical_exprs(
+                &dynamic_filter.children,
+                ctx,
+                input_schema,
+                codec,
+                proto_converter,
+            )?;
+
+            let remapped_children = if !dynamic_filter.remapped_children.is_empty() {
+                Some(parse_physical_exprs(
+                    &dynamic_filter.remapped_children,
+                    ctx,
+                    input_schema,
+                    codec,
+                    proto_converter,
+                )?)
+            } else {
+                None
+            };
+
+            let inner_expr = parse_required_physical_expr(
+                dynamic_filter.inner_expr.as_deref(),
+                ctx,
+                "inner_expr",
+                input_schema,
+                codec,
+                proto_converter,
+            )?;
+
+            // Recreate filter from snapshot
+            let snapshot = DynamicFilterSnapshot::new(
+                children,
+                remapped_children,
+                dynamic_filter.generation,
+                inner_expr,
+                dynamic_filter.is_complete,
+            );
+            let base_filter: Arc<dyn PhysicalExpr> =
+                Arc::new(DynamicFilterPhysicalExpr::from(snapshot));
+            base_filter
         }
         ExprType::Extension(extension) => {
             let inputs: Vec<Arc<dyn PhysicalExpr>> = extension
