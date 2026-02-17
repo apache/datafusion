@@ -856,8 +856,7 @@ fn enforce_distribution_switches_to_partition_index_without_hash_repartition()
 }
 
 #[test]
-fn enforce_distribution_disables_dynamic_filtering_for_misaligned_partitioning()
--> Result<()> {
+fn enforce_distribution_rejects_misaligned_left_repartitioned() -> Result<()> {
     let left = parquet_exec_multiple();
     let right = parquet_exec();
 
@@ -900,8 +899,7 @@ fn enforce_distribution_disables_dynamic_filtering_for_misaligned_partitioning()
 }
 
 #[test]
-fn enforce_distribution_disables_dynamic_filtering_for_misaligned_partitioning_reversed()
--> Result<()> {
+fn enforce_distribution_rejects_misaligned_right_repartitioned() -> Result<()> {
     let left = parquet_exec();
     let right = parquet_exec_multiple();
 
@@ -948,8 +946,7 @@ fn enforce_distribution_disables_dynamic_filtering_for_misaligned_partitioning_r
 // Verify that if the join inputs are direct/indirect hash repartitioned,
 // its `dynamic_filter_routing_mode` must be `DynamicFilterRoutingMode::CaseHash`
 #[test]
-fn enforce_distribution_uses_case_hash_with_hidden_hash_repartition_through_aggregate()
--> Result<()> {
+fn enforce_distribution_uses_case_hash_with_indirect_repartition() -> Result<()> {
     let left = projection_exec_with_alias(
         add_repartition(parquet_exec(), "a", 4),
         vec![("a".to_string(), "a".to_string())],

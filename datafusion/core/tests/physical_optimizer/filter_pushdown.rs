@@ -1069,9 +1069,6 @@ async fn test_hashjoin_dynamic_filter_pushdown() {
 
 #[tokio::test]
 async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
-    use datafusion_common::JoinType;
-    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
-
     // Rough sketch of the MRE we're trying to recreate:
     // COPY (select i as k from generate_series(1, 10000000) as t(i))
     // TO 'test_files/scratch/push_down_filter/t1.parquet'
@@ -1454,9 +1451,6 @@ async fn test_partitioned_hashjoin_no_repartition_dynamic_filter_pushdown() {
 
 #[tokio::test]
 async fn test_hashjoin_dynamic_filter_pushdown_collect_left() {
-    use datafusion_common::JoinType;
-    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
-
     let build_batches = vec![
         record_batch!(
             ("a", Utf8, ["aa", "ab"]),
@@ -1590,9 +1584,6 @@ async fn test_hashjoin_dynamic_filter_pushdown_collect_left() {
 
 #[tokio::test]
 async fn test_nested_hashjoin_dynamic_filter_pushdown() {
-    use datafusion_common::JoinType;
-    use datafusion_physical_plan::joins::PartitionMode;
-
     // Create test data for three tables: t1, t2, t3
     // t1: small table with limited values (will be build side of outer join)
     let t1_batches = vec![
@@ -1732,12 +1723,7 @@ async fn test_nested_hashjoin_dynamic_filter_pushdown() {
 }
 
 #[tokio::test]
-async fn test_nested_hashjoin_with_repartition_dynamic_filter_pushdown() {
-    use datafusion_common::JoinType;
-    use datafusion_physical_plan::Partitioning;
-    use datafusion_physical_plan::joins::PartitionMode;
-    use datafusion_physical_plan::repartition::RepartitionExec;
-
+async fn test_nested_hashjoin_with_repartition_dynamic_filters() {
     // Tests remap_children through repartition when nested join is build side.
     let t1_batches = vec![
         record_batch!(("a", Utf8, ["aa", "ab"]), ("x", Float64, [1.0, 2.0])).unwrap(),
