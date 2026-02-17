@@ -44,7 +44,7 @@ use datafusion_datasource::{PartitionedFile, TableSchema};
 use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::{
-    PhysicalExpr, is_dynamic_physical_expr,
+    PhysicalExpr, is_dynamic_physical_expr, snapshot_physical_expr,
 };
 use datafusion_physical_plan::metrics::{
     Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder, PruningMetrics,
@@ -421,9 +421,23 @@ impl FileOpener for ParquetOpener {
             projection = projection
                 .try_map_exprs(|p| simplifier.simplify(rewriter.rewrite(p)?))?;
 
+            // Skip parquet predicate pushdown when dynamic filters currently
+            // simplify to an always-true predicate (e.g. initial TopK/Join
+            // filter state). This avoids adding no-op row/page/row-group
+            // pushdown work (and scanning more than).
+            // We can reconsider thi
+            let skip_dynamic_pushdown = predicate.as_ref().is_some_and(|p| {
+                dynamic_filter_is_always_true(p, &physical_file_schema)
+            });
+            let pushdown_predicate = if skip_dynamic_pushdown {
+                None
+            } else {
+                predicate.as_ref()
+            };
+
             // Build predicates for this specific file
             let (pruning_predicate, page_pruning_predicate) = build_pruning_predicates(
-                predicate.as_ref(),
+                pushdown_predicate,
                 &physical_file_schema,
                 &predicate_creation_errors,
             );
@@ -460,7 +474,11 @@ impl FileOpener for ParquetOpener {
             // ---------------------------------------------------------------------
 
             // Filter pushdown: evaluate predicates during scan
-            if let Some(predicate) = pushdown_filters.then_some(predicate).flatten() {
+            if let Some(predicate) = pushdown_filters
+                .then_some(predicate)
+                .flatten()
+                .filter(|_| !skip_dynamic_pushdown)
+            {
                 let row_filter = row_filter::build_row_filter(
                     &predicate,
                     &physical_file_schema,
@@ -969,6 +987,20 @@ pub(crate) fn build_pruning_predicates(
     (pruning_predicate, Some(page_pruning_predicate))
 }
 
+fn dynamic_filter_is_always_true(
+    predicate: &Arc<dyn PhysicalExpr>,
+    file_schema: &SchemaRef,
+) -> bool {
+    if !is_dynamic_physical_expr(predicate) {
+        return false;
+    }
+
+    snapshot_physical_expr(Arc::clone(predicate))
+        .ok()
+        .and_then(|snapshot| PruningPredicate::try_new(snapshot, Arc::clone(file_schema)).ok())
+        .is_some_and(|pruning_predicate| pruning_predicate.always_true())
+}
+
 /// Returns a `ArrowReaderMetadata` with the page index loaded, loading
 /// it from the underlying `AsyncFileReader` if necessary.
 async fn load_page_index<T: AsyncFileReader>(
@@ -1016,7 +1048,10 @@ fn should_enable_page_index(
 mod test {
     use std::sync::Arc;
 
-    use super::{ConstantColumns, constant_columns_from_stats};
+    use super::{
+        ConstantColumns, constant_columns_from_stats,
+        dynamic_filter_is_always_true,
+    };
     use crate::{DefaultParquetFileReaderFactory, RowGroupAccess, opener::ParquetOpener};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use bytes::{BufMut, BytesMut};
@@ -1363,6 +1398,22 @@ mod test {
             expr.children().into_iter().map(Arc::clone).collect(),
             expr,
         ))
+    }
+
+    #[test]
+    fn test_dynamic_filter_is_always_true_detection() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+
+        let expr = make_dynamic_expr(logical2physical(&lit(true), &schema));
+        assert!(dynamic_filter_is_always_true(&expr, &schema));
+    }
+
+    #[test]
+    fn test_dynamic_filter_is_always_true_detection_non_trivial() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+
+        let expr = make_dynamic_expr(logical2physical(&col("a").eq(lit(1)), &schema));
+        assert!(!dynamic_filter_is_always_true(&expr, &schema));
     }
 
     #[tokio::test]
