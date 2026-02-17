@@ -45,9 +45,10 @@ pub fn to_substrait_plan(
 
     // Return parsed plan
     let extensions = producer.get_extensions();
+    let extension_uris = extensions.to_extension_uris();
     Ok(Box::new(Plan {
         version: Some(version::version_with_producer("datafusion")),
-        extension_uris: vec![],
+        extension_uris,
         extension_urns: vec![],
         extensions: extensions.into(),
         relations: plan_rels,

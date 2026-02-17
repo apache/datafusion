@@ -16,12 +16,17 @@
 // under the License.
 
 use crate::logical_plan::producer::{SubstraitProducer, to_substrait_type};
+// LargeList and Time32/Time64 literal encoding is not specified in Arrow's extension_types.yaml,
+// so we keep using the variation hack for these literals
+#[expect(deprecated)]
+use crate::variation_const::{
+    LARGE_CONTAINER_TYPE_VARIATION_REF, TIME_32_TYPE_VARIATION_REF, TIME_64_TYPE_VARIATION_REF,
+};
 use crate::variation_const::{
     DATE_32_TYPE_VARIATION_REF, DECIMAL_128_TYPE_VARIATION_REF,
     DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF, FLOAT_16_TYPE_NAME,
-    LARGE_CONTAINER_TYPE_VARIATION_REF, TIME_32_TYPE_VARIATION_REF,
-    TIME_64_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
-    VIEW_CONTAINER_TYPE_VARIATION_REF,
+    LARGE_BINARY_TYPE_NAME, LARGE_STRING_TYPE_NAME, U16_TYPE_NAME, U32_TYPE_NAME,
+    U64_TYPE_NAME, U8_TYPE_NAME, VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
 use datafusion::arrow::array::{Array, GenericListArray, OffsetSizeTrait};
 use datafusion::arrow::temporal_conversions::NANOSECONDS;
@@ -74,27 +79,92 @@ pub(crate) fn to_substrait_literal(
         ScalarValue::Int8(Some(n)) => {
             (LiteralType::I8(*n as i32), DEFAULT_TYPE_VARIATION_REF)
         }
-        ScalarValue::UInt8(Some(n)) => (
-            LiteralType::I8(*n as i32),
-            UNSIGNED_INTEGER_TYPE_VARIATION_REF,
-        ),
+        ScalarValue::UInt8(Some(n)) => {
+            // Arrow extension_types.yaml: unsigned integer literals use google.protobuf.UInt64Value
+            let type_anchor = producer.register_type(U8_TYPE_NAME.to_string());
+            let value = pbjson_types::UInt64Value { value: *n as u64 };
+            let encoded_value = prost::Message::encode_to_vec(&value);
+            (
+                LiteralType::UserDefined(
+                    substrait::proto::expression::literal::UserDefined {
+                        type_reference: type_anchor,
+                        type_parameters: vec![],
+                        val: Some(substrait::proto::expression::literal::user_defined::Val::Value(
+                            pbjson_types::Any {
+                                type_url: "google.protobuf.UInt64Value".to_string(),
+                                value: encoded_value.into(),
+                            },
+                        )),
+                    },
+                ),
+                DEFAULT_TYPE_VARIATION_REF,
+            )
+        }
         ScalarValue::Int16(Some(n)) => {
             (LiteralType::I16(*n as i32), DEFAULT_TYPE_VARIATION_REF)
         }
-        ScalarValue::UInt16(Some(n)) => (
-            LiteralType::I16(*n as i32),
-            UNSIGNED_INTEGER_TYPE_VARIATION_REF,
-        ),
+        ScalarValue::UInt16(Some(n)) => {
+            let type_anchor = producer.register_type(U16_TYPE_NAME.to_string());
+            let value = pbjson_types::UInt64Value { value: *n as u64 };
+            let encoded_value = prost::Message::encode_to_vec(&value);
+            (
+                LiteralType::UserDefined(
+                    substrait::proto::expression::literal::UserDefined {
+                        type_reference: type_anchor,
+                        type_parameters: vec![],
+                        val: Some(substrait::proto::expression::literal::user_defined::Val::Value(
+                            pbjson_types::Any {
+                                type_url: "google.protobuf.UInt64Value".to_string(),
+                                value: encoded_value.into(),
+                            },
+                        )),
+                    },
+                ),
+                DEFAULT_TYPE_VARIATION_REF,
+            )
+        }
         ScalarValue::Int32(Some(n)) => (LiteralType::I32(*n), DEFAULT_TYPE_VARIATION_REF),
-        ScalarValue::UInt32(Some(n)) => (
-            LiteralType::I32(*n as i32),
-            UNSIGNED_INTEGER_TYPE_VARIATION_REF,
-        ),
+        ScalarValue::UInt32(Some(n)) => {
+            let type_anchor = producer.register_type(U32_TYPE_NAME.to_string());
+            let value = pbjson_types::UInt64Value { value: *n as u64 };
+            let encoded_value = prost::Message::encode_to_vec(&value);
+            (
+                LiteralType::UserDefined(
+                    substrait::proto::expression::literal::UserDefined {
+                        type_reference: type_anchor,
+                        type_parameters: vec![],
+                        val: Some(substrait::proto::expression::literal::user_defined::Val::Value(
+                            pbjson_types::Any {
+                                type_url: "google.protobuf.UInt64Value".to_string(),
+                                value: encoded_value.into(),
+                            },
+                        )),
+                    },
+                ),
+                DEFAULT_TYPE_VARIATION_REF,
+            )
+        }
         ScalarValue::Int64(Some(n)) => (LiteralType::I64(*n), DEFAULT_TYPE_VARIATION_REF),
-        ScalarValue::UInt64(Some(n)) => (
-            LiteralType::I64(*n as i64),
-            UNSIGNED_INTEGER_TYPE_VARIATION_REF,
-        ),
+        ScalarValue::UInt64(Some(n)) => {
+            let type_anchor = producer.register_type(U64_TYPE_NAME.to_string());
+            let value = pbjson_types::UInt64Value { value: *n };
+            let encoded_value = prost::Message::encode_to_vec(&value);
+            (
+                LiteralType::UserDefined(
+                    substrait::proto::expression::literal::UserDefined {
+                        type_reference: type_anchor,
+                        type_parameters: vec![],
+                        val: Some(substrait::proto::expression::literal::user_defined::Val::Value(
+                            pbjson_types::Any {
+                                type_url: "google.protobuf.UInt64Value".to_string(),
+                                value: encoded_value.into(),
+                            },
+                        )),
+                    },
+                ),
+                DEFAULT_TYPE_VARIATION_REF,
+            )
+        }
         ScalarValue::Float16(Some(f)) => {
             // Rules for encoding fp16 Substrait literals are defined as part of Arrow here:
             //
@@ -235,10 +305,27 @@ pub(crate) fn to_substrait_literal(
             LiteralType::Binary(b.clone()),
             DEFAULT_CONTAINER_TYPE_VARIATION_REF,
         ),
-        ScalarValue::LargeBinary(Some(b)) => (
-            LiteralType::Binary(b.clone()),
-            LARGE_CONTAINER_TYPE_VARIATION_REF,
-        ),
+        ScalarValue::LargeBinary(Some(b)) => {
+            // Arrow extension_types.yaml: large_binary literals use google.protobuf.BytesValue
+            let type_anchor = producer.register_type(LARGE_BINARY_TYPE_NAME.to_string());
+            let value = pbjson_types::BytesValue { value: b.clone().into() };
+            let encoded_value = prost::Message::encode_to_vec(&value);
+            (
+                LiteralType::UserDefined(
+                    substrait::proto::expression::literal::UserDefined {
+                        type_reference: type_anchor,
+                        type_parameters: vec![],
+                        val: Some(substrait::proto::expression::literal::user_defined::Val::Value(
+                            pbjson_types::Any {
+                                type_url: "google.protobuf.BytesValue".to_string(),
+                                value: encoded_value.into(),
+                            },
+                        )),
+                    },
+                ),
+                DEFAULT_TYPE_VARIATION_REF,
+            )
+        }
         ScalarValue::BinaryView(Some(b)) => (
             LiteralType::Binary(b.clone()),
             VIEW_CONTAINER_TYPE_VARIATION_REF,
@@ -251,10 +338,27 @@ pub(crate) fn to_substrait_literal(
             LiteralType::String(s.clone()),
             DEFAULT_CONTAINER_TYPE_VARIATION_REF,
         ),
-        ScalarValue::LargeUtf8(Some(s)) => (
-            LiteralType::String(s.clone()),
-            LARGE_CONTAINER_TYPE_VARIATION_REF,
-        ),
+        ScalarValue::LargeUtf8(Some(s)) => {
+            // Arrow extension_types.yaml: large_string literals use google.protobuf.StringValue
+            let type_anchor = producer.register_type(LARGE_STRING_TYPE_NAME.to_string());
+            let value = pbjson_types::StringValue { value: s.clone() };
+            let encoded_value = prost::Message::encode_to_vec(&value);
+            (
+                LiteralType::UserDefined(
+                    substrait::proto::expression::literal::UserDefined {
+                        type_reference: type_anchor,
+                        type_parameters: vec![],
+                        val: Some(substrait::proto::expression::literal::user_defined::Val::Value(
+                            pbjson_types::Any {
+                                type_url: "google.protobuf.StringValue".to_string(),
+                                value: encoded_value.into(),
+                            },
+                        )),
+                    },
+                ),
+                DEFAULT_TYPE_VARIATION_REF,
+            )
+        }
         ScalarValue::Utf8View(Some(s)) => (
             LiteralType::String(s.clone()),
             VIEW_CONTAINER_TYPE_VARIATION_REF,
@@ -268,11 +372,12 @@ pub(crate) fn to_substrait_literal(
             DECIMAL_128_TYPE_VARIATION_REF,
         ),
         ScalarValue::List(l) => (
-            convert_array_to_literal_list(producer, l)?,
+            convert_array_to_literal_list(producer, l, DEFAULT_CONTAINER_TYPE_VARIATION_REF)?,
             DEFAULT_CONTAINER_TYPE_VARIATION_REF,
         ),
+        #[expect(deprecated)]
         ScalarValue::LargeList(l) => (
-            convert_array_to_literal_list(producer, l)?,
+            convert_array_to_literal_list(producer, l, LARGE_CONTAINER_TYPE_VARIATION_REF)?,
             LARGE_CONTAINER_TYPE_VARIATION_REF,
         ),
         ScalarValue::Map(m) => {
@@ -376,6 +481,7 @@ pub(crate) fn to_substrait_literal(
 fn convert_array_to_literal_list<T: OffsetSizeTrait>(
     producer: &mut impl SubstraitProducer,
     array: &GenericListArray<T>,
+    type_variation_reference: u32,
 ) -> datafusion::common::Result<LiteralType> {
     assert_eq!(array.len(), 1);
     let nested_array = array.value(0);
@@ -390,13 +496,15 @@ fn convert_array_to_literal_list<T: OffsetSizeTrait>(
         .collect::<datafusion::common::Result<Vec<_>>>()?;
 
     if values.is_empty() {
-        let lt =
-            match to_substrait_type(producer, array.data_type(), array.is_nullable())? {
-                substrait::proto::Type {
-                    kind: Some(r#type::Kind::List(lt)),
-                } => lt.as_ref().to_owned(),
-                _ => unreachable!(),
-            };
+        // For empty lists, construct the List type directly with the inner element type
+        // This works for both List and LargeList - the variation reference distinguishes them
+        let inner_field = array.value_type();
+        let inner_type = to_substrait_type(producer, &inner_field, true)?;
+        let lt = r#type::List {
+            r#type: Some(Box::new(inner_type)),
+            type_variation_reference,
+            nullability: r#type::Nullability::Nullable as i32,
+        };
         Ok(LiteralType::EmptyList(lt))
     } else {
         Ok(LiteralType::List(List { values }))
@@ -406,8 +514,9 @@ fn convert_array_to_literal_list<T: OffsetSizeTrait>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::logical_plan::consumer::from_substrait_literal_without_names;
-    use crate::logical_plan::consumer::tests::test_consumer;
+    use crate::logical_plan::consumer::{
+        DefaultSubstraitConsumer, from_substrait_literal_without_names,
+    };
     use crate::logical_plan::producer::DefaultSubstraitProducer;
     use datafusion::arrow::array::{Int64Builder, MapBuilder, StringBuilder};
     use datafusion::arrow::datatypes::{
@@ -553,8 +662,14 @@ mod tests {
         let state = SessionContext::default().state();
         let mut producer = DefaultSubstraitProducer::new(&state);
         let substrait_literal = to_substrait_literal(&mut producer, &scalar)?;
+
+        // Get the extensions from the producer so the consumer can look up
+        // any registered user-defined types (like unsigned integers)
+        let extensions = producer.get_extensions();
+        let consumer = DefaultSubstraitConsumer::new(&extensions, &state);
+
         let roundtrip_scalar =
-            from_substrait_literal_without_names(&test_consumer(), &substrait_literal)?;
+            from_substrait_literal_without_names(&consumer, &substrait_literal)?;
         assert_eq!(scalar, roundtrip_scalar);
         Ok(())
     }

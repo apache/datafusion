@@ -18,7 +18,10 @@
 use crate::logical_plan::consumer::SubstraitConsumer;
 use crate::logical_plan::consumer::types::from_substrait_type;
 use crate::logical_plan::consumer::utils::{DEFAULT_TIMEZONE, next_struct_field_name};
-use crate::variation_const::FLOAT_16_TYPE_NAME;
+use crate::variation_const::{
+    FLOAT_16_TYPE_NAME, LARGE_BINARY_TYPE_NAME, LARGE_STRING_TYPE_NAME, U16_TYPE_NAME,
+    U32_TYPE_NAME, U64_TYPE_NAME, U8_TYPE_NAME,
+};
 #[expect(deprecated)]
 use crate::variation_const::{
     DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
@@ -474,7 +477,7 @@ pub(crate) fn from_substrait_literal(
                     )))
                 };
 
-            if let Some(name) = consumer
+            if let Some((name, _uri_anchor)) = consumer
                 .get_extensions()
                 .types
                 .get(&user_defined.type_reference)
@@ -514,6 +517,67 @@ pub(crate) fn from_substrait_literal(
                     #[expect(deprecated)]
                     INTERVAL_MONTH_DAY_NANO_TYPE_NAME => {
                         interval_month_day_nano(user_defined)?
+                    }
+                    // Unsigned integer literals use google.protobuf.UInt64Value
+                    U8_TYPE_NAME => {
+                        let value = decode_uint64_literal(user_defined, "u8")?;
+                        return Ok(ScalarValue::UInt8(Some(value as u8)));
+                    }
+                    U16_TYPE_NAME => {
+                        let value = decode_uint64_literal(user_defined, "u16")?;
+                        return Ok(ScalarValue::UInt16(Some(value as u16)));
+                    }
+                    U32_TYPE_NAME => {
+                        let value = decode_uint64_literal(user_defined, "u32")?;
+                        return Ok(ScalarValue::UInt32(Some(value as u32)));
+                    }
+                    U64_TYPE_NAME => {
+                        let value = decode_uint64_literal(user_defined, "u64")?;
+                        return Ok(ScalarValue::UInt64(Some(value)));
+                    }
+                    // Large string literals use google.protobuf.StringValue
+                    LARGE_STRING_TYPE_NAME => {
+                        let Some(value) = user_defined.val.as_ref() else {
+                            return substrait_err!("large_string value is empty");
+                        };
+                        let Val::Value(value_any) = value else {
+                            return substrait_err!("large_string value is not a value type literal");
+                        };
+                        if value_any.type_url != "google.protobuf.StringValue" {
+                            return substrait_err!(
+                                "large_string value is not a google.protobuf.StringValue"
+                            );
+                        }
+                        let decoded_value =
+                            pbjson_types::StringValue::decode(value_any.value.clone())
+                                .map_err(|err| {
+                                    substrait_datafusion_err!(
+                                        "Failed to decode large_string value: {err}"
+                                    )
+                                })?;
+                        return Ok(ScalarValue::LargeUtf8(Some(decoded_value.value)));
+                    }
+                    // Large binary literals use google.protobuf.BytesValue
+                    LARGE_BINARY_TYPE_NAME => {
+                        let Some(value) = user_defined.val.as_ref() else {
+                            return substrait_err!("large_binary value is empty");
+                        };
+                        let Val::Value(value_any) = value else {
+                            return substrait_err!("large_binary value is not a value type literal");
+                        };
+                        if value_any.type_url != "google.protobuf.BytesValue" {
+                            return substrait_err!(
+                                "large_binary value is not a google.protobuf.BytesValue"
+                            );
+                        }
+                        let decoded_value =
+                            pbjson_types::BytesValue::decode(value_any.value.clone())
+                                .map_err(|err| {
+                                    substrait_datafusion_err!(
+                                        "Failed to decode large_binary value: {err}"
+                                    )
+                                })?;
+                        return Ok(ScalarValue::LargeBinary(Some(decoded_value.value.into())));
                     }
                     _ => {
                         return not_impl_err!(
@@ -578,6 +642,26 @@ pub(crate) fn from_substrait_literal(
     };
 
     Ok(scalar_value)
+}
+
+/// Helper function to decode unsigned integer literals from google.protobuf.UInt64Value
+fn decode_uint64_literal(
+    user_defined: &proto::expression::literal::UserDefined,
+    type_name: &str,
+) -> datafusion::common::Result<u64> {
+    let Some(value) = user_defined.val.as_ref() else {
+        return substrait_err!("{type_name} value is empty");
+    };
+    let Val::Value(value_any) = value else {
+        return substrait_err!("{type_name} value is not a value type literal");
+    };
+    if value_any.type_url != "google.protobuf.UInt64Value" {
+        return substrait_err!("{type_name} value is not a google.protobuf.UInt64Value");
+    }
+    let decoded_value = pbjson_types::UInt64Value::decode(value_any.value.clone()).map_err(
+        |err| substrait_datafusion_err!("Failed to decode {type_name} value: {err}"),
+    )?;
+    Ok(decoded_value.value)
 }
 
 #[cfg(test)]
