@@ -302,7 +302,7 @@ fn build_ascii_translate_table(from: &str, to: &str) -> Option<[u8; 128]> {
 
 /// Optimized translate for constant `from` and `to` arguments: uses a pre-built
 /// translation map instead of rebuilding it for every row.  When an ASCII byte
-/// lookup table is provided, ASCII input rows the lookup table; non-ASCII
+/// lookup table is provided, ASCII input rows use the lookup table; non-ASCII
 /// inputs fallback to using the map.
 fn translate_with_map<'a, T: OffsetSizeTrait, V>(
     string_array: V,
