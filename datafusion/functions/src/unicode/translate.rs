@@ -330,10 +330,10 @@ where
                             ascii_buf.push(mapped);
                         }
                     }
-                    // ascii_buf contains only ASCII bytes, so it is valid
-                    // UTF-8.
                     // SAFETY: all bytes are ASCII, hence valid UTF-8.
-                    return unsafe { std::str::from_utf8_unchecked(&ascii_buf).to_owned() };
+                    return unsafe {
+                        std::str::from_utf8_unchecked(&ascii_buf).to_owned()
+                    };
                 }
 
                 // Slow path: grapheme-based translation
