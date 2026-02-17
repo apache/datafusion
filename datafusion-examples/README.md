@@ -88,19 +88,19 @@ cargo run --example dataframe -- dataframe
 
 #### Category: Single Process
 
-| Subcommand           | File Path                                                                                 | Description                                            |
-| -------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| catalog              | [`data_io/catalog.rs`](examples/data_io/catalog.rs)                                       | Register tables into a custom catalog                  |
-| in_memory_object_store | [`data_io/in_memory_object_store.rs`](examples/data_io/in_memory_object_store.rs)       | Read CSV/JSON/Parquet from an in-memory object store   |
-| json_shredding       | [`data_io/json_shredding.rs`](examples/data_io/json_shredding.rs)                         | Implement filter rewriting for JSON shredding          |
-| parquet_adv_idx      | [`data_io/parquet_advanced_index.rs`](examples/data_io/parquet_advanced_index.rs)         | Create a secondary index across multiple parquet files |
-| parquet_emb_idx      | [`data_io/parquet_embedded_index.rs`](examples/data_io/parquet_embedded_index.rs)         | Store a custom index inside Parquet files              |
-| parquet_enc          | [`data_io/parquet_encrypted.rs`](examples/data_io/parquet_encrypted.rs)                   | Read & write encrypted Parquet files                   |
-| parquet_enc_with_kms | [`data_io/parquet_encrypted_with_kms.rs`](examples/data_io/parquet_encrypted_with_kms.rs) | Encrypted Parquet I/O using a KMS-backed factory       |
-| parquet_exec_visitor | [`data_io/parquet_exec_visitor.rs`](examples/data_io/parquet_exec_visitor.rs)             | Extract statistics by visiting an ExecutionPlan        |
-| parquet_idx          | [`data_io/parquet_index.rs`](examples/data_io/parquet_index.rs)                           | Create a secondary index                               |
-| query_http_csv       | [`data_io/query_http_csv.rs`](examples/data_io/query_http_csv.rs)                         | Query CSV files via HTTP                               |
-| remote_catalog       | [`data_io/remote_catalog.rs`](examples/data_io/remote_catalog.rs)                         | Interact with a remote catalog                         |
+| Subcommand             | File Path                                                                                 | Description                                            |
+| ---------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| catalog                | [`data_io/catalog.rs`](examples/data_io/catalog.rs)                                       | Register tables into a custom catalog                  |
+| in_memory_object_store | [`data_io/in_memory_object_store.rs`](examples/data_io/in_memory_object_store.rs)         | Read CSV/JSON/Parquet from an in-memory object store   |
+| json_shredding         | [`data_io/json_shredding.rs`](examples/data_io/json_shredding.rs)                         | Implement filter rewriting for JSON shredding          |
+| parquet_adv_idx        | [`data_io/parquet_advanced_index.rs`](examples/data_io/parquet_advanced_index.rs)         | Create a secondary index across multiple parquet files |
+| parquet_emb_idx        | [`data_io/parquet_embedded_index.rs`](examples/data_io/parquet_embedded_index.rs)         | Store a custom index inside Parquet files              |
+| parquet_enc            | [`data_io/parquet_encrypted.rs`](examples/data_io/parquet_encrypted.rs)                   | Read & write encrypted Parquet files                   |
+| parquet_enc_with_kms   | [`data_io/parquet_encrypted_with_kms.rs`](examples/data_io/parquet_encrypted_with_kms.rs) | Encrypted Parquet I/O using a KMS-backed factory       |
+| parquet_exec_visitor   | [`data_io/parquet_exec_visitor.rs`](examples/data_io/parquet_exec_visitor.rs)             | Extract statistics by visiting an ExecutionPlan        |
+| parquet_idx            | [`data_io/parquet_index.rs`](examples/data_io/parquet_index.rs)                           | Create a secondary index                               |
+| query_http_csv         | [`data_io/query_http_csv.rs`](examples/data_io/query_http_csv.rs)                         | Query CSV files via HTTP                               |
+| remote_catalog         | [`data_io/remote_catalog.rs`](examples/data_io/remote_catalog.rs)                         | Interact with a remote catalog                         |
 
 ## DataFrame Examples
 
