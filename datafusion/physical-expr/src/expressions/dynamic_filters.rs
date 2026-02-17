@@ -27,6 +27,7 @@ use datafusion_common::{
 };
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::physical_expr::DynHash;
+use rand::random;
 
 /// State of a dynamic filter, tracking both updates and completion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,7 +56,6 @@ impl FilterState {
 /// For more background, please also see the [Dynamic Filters: Passing Information Between Operators During Execution for 25x Faster Queries blog]
 ///
 /// [Dynamic Filters: Passing Information Between Operators During Execution for 25x Faster Queries blog]: https://datafusion.apache.org/blog/2025/09/10/dynamic-filters
-#[derive(Debug)]
 pub struct DynamicFilterPhysicalExpr {
     /// The original children of this PhysicalExpr, if any.
     /// This is necessary because the dynamic filter may be initialized with a placeholder (e.g. `lit(true)`)
@@ -65,6 +65,10 @@ pub struct DynamicFilterPhysicalExpr {
     /// If any of the children were remapped / modified (e.g. to adjust for projections) we need to keep track of the new children
     /// so that when we update `current()` in subsequent iterations we can re-apply the replacements.
     remapped_children: Option<Vec<Arc<dyn PhysicalExpr>>>,
+    /// Unique identifier for this dynamic filter.
+    ///
+    /// Derived filters (ex. via `with_new_children`) should inherit the expression id of the source filter.
+    expression_id: u64,
     /// The source of dynamic filters.
     inner: Arc<RwLock<Inner>>,
     /// Broadcasts filter state (updates and completion) to all waiters.
@@ -76,16 +80,40 @@ pub struct DynamicFilterPhysicalExpr {
     nullable: Arc<RwLock<Option<bool>>>,
 }
 
-#[derive(Debug)]
-struct Inner {
+/// Atomic internal state of a [`DynamicFilterPhysicalExpr`].
+///
+/// **Warning:** exposed publicly solely so that proto (de)serialization in
+/// `datafusion-proto` can read and rebuild this state. Do not treat this type
+/// or its layout as a stable API.
+#[derive(Debug, Clone)]
+pub struct Inner {
     /// A counter that gets incremented every time the expression is updated so that we can track changes cheaply.
     /// This is used for [`PhysicalExpr::snapshot_generation`] to have a cheap check for changes.
-    generation: u64,
-    expr: Arc<dyn PhysicalExpr>,
+    pub generation: u64,
+    pub expr: Arc<dyn PhysicalExpr>,
     /// Flag for quick synchronous check if filter is complete.
     /// This is redundant with the watch channel state, but allows us to return immediately
     /// from `wait_complete()` without subscribing if already complete.
-    is_complete: bool,
+    pub is_complete: bool,
+}
+
+// TODO: Include expression_id in debug output.
+//
+// See https://github.com/apache/datafusion/issues/20418. Currently, plan nodes
+// like `HashJoinExec`, `AggregateExec`,  `SortExec` do not serialize their
+// dynamic filter. This causes round trips to fail on the `expression_id`
+// because it is regenerated on deserialization.
+impl std::fmt::Debug for DynamicFilterPhysicalExpr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DynamicFilterPhysicalExpr")
+            .field("children", &self.children)
+            .field("remapped_children", &self.remapped_children)
+            .field("inner", &self.inner)
+            .field("state_watch", &self.state_watch)
+            .field("data_type", &self.data_type)
+            .field("nullable", &self.nullable)
+            .finish()
+    }
 }
 
 impl Inner {
@@ -173,6 +201,7 @@ impl DynamicFilterPhysicalExpr {
         Self {
             children,
             remapped_children: None, // Initially no remapped children
+            expression_id: Self::new_expression_id(),
             inner: Arc::new(RwLock::new(Inner::new(inner))),
             state_watch,
             data_type: Arc::new(RwLock::new(None)),
@@ -346,6 +375,75 @@ impl DynamicFilterPhysicalExpr {
 
         write!(f, " ]")
     }
+
+    /// Generate a new expression id for this filter.
+    fn new_expression_id() -> u64 {
+        random::<u64>()
+    }
+
+    /// Return the filter's original children (before any remapping).
+    ///
+    /// **Warning:** intended only for `datafusion-proto` (de)serialization.
+    /// Not a stable API.
+    pub fn original_children(&self) -> &[Arc<dyn PhysicalExpr>] {
+        &self.children
+    }
+
+    /// Return the filter's remapped children, if any have been set via
+    /// [`PhysicalExpr::with_new_children`].
+    ///
+    /// **Warning:** intended only for `datafusion-proto` (de)serialization.
+    /// Not a stable API.
+    pub fn remapped_children(&self) -> Option<&[Arc<dyn PhysicalExpr>]> {
+        self.remapped_children.as_deref()
+    }
+
+    /// Rebuild a `DynamicFilterPhysicalExpr` from its stored parts. Used by
+    /// proto deserialization to preserve `expression_id` across a roundtrip
+    /// rather than minting a fresh one.
+    ///
+    /// **Warning:** intended only for `datafusion-proto` (de)serialization.
+    /// Not a stable API.
+    pub fn from_parts(
+        expression_id: u64,
+        children: Vec<Arc<dyn PhysicalExpr>>,
+        remapped_children: Option<Vec<Arc<dyn PhysicalExpr>>>,
+        inner: Inner,
+    ) -> Self {
+        let state = if inner.is_complete {
+            FilterState::Complete {
+                generation: inner.generation,
+            }
+        } else {
+            FilterState::InProgress {
+                generation: inner.generation,
+            }
+        };
+        let (state_watch, _) = watch::channel(state);
+
+        Self {
+            children,
+            remapped_children,
+            expression_id,
+            inner: Arc::new(RwLock::new(inner)),
+            state_watch,
+            data_type: Arc::new(RwLock::new(None)),
+            nullable: Arc::new(RwLock::new(None)),
+        }
+    }
+
+    /// Return a clone of the atomically-captured `Inner` state.
+    ///
+    /// **Warning:** intended only for `datafusion-proto` (de)serialization.
+    /// Not a stable API.
+    pub fn inner(&self) -> Inner {
+        let guard = self.inner.read();
+        Inner {
+            generation: guard.generation,
+            expr: Arc::clone(&guard.expr),
+            is_complete: guard.is_complete,
+        }
+    }
 }
 
 impl PhysicalExpr for DynamicFilterPhysicalExpr {
@@ -364,6 +462,9 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
         Ok(Arc::new(Self {
             children: self.children.clone(),
             remapped_children: Some(children),
+            // Note that we ensure the derived expression linked to `self`
+            // via the unique identifier.
+            expression_id: self.expression_id,
             inner: Arc::clone(&self.inner),
             state_watch: self.state_watch.clone(),
             data_type: Arc::clone(&self.data_type),
@@ -443,6 +544,10 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
     fn snapshot_generation(&self) -> u64 {
         // Return the current generation of the expression.
         self.inner.read().generation
+    }
+
+    fn expression_id(&self) -> Option<u64> {
+        Some(self.expression_id)
     }
 }
 
@@ -859,6 +964,114 @@ mod test {
         assert_eq!(
             hash1, hash3,
             "Hash should be stable after update (identity-based)"
+        );
+    }
+
+    /// Verifies that `from_parts` rebuilds a `DynamicFilterPhysicalExpr`
+    /// whose observable state (original children, remapped children,
+    /// expression id, inner generation/expr/is_complete) matches the source
+    /// filter.
+    #[test]
+    fn test_from_parts_preserves_state() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let col_a = col("a", &schema).unwrap();
+
+        // Create a dynamic filter with children
+        let expr = Arc::new(BinaryExpr::new(
+            Arc::clone(&col_a),
+            datafusion_expr::Operator::Gt,
+            lit(10) as Arc<dyn PhysicalExpr>,
+        ));
+        let filter = DynamicFilterPhysicalExpr::new(
+            vec![Arc::clone(&col_a)],
+            expr as Arc<dyn PhysicalExpr>,
+        );
+
+        // Add remapped children.
+        let reassigned_schema = Arc::new(Schema::new(vec![
+            Field::new("b", DataType::Int32, false),
+            Field::new("a", DataType::Int32, false),
+        ]));
+        let reassigned = reassign_expr_columns(
+            Arc::new(filter) as Arc<dyn PhysicalExpr>,
+            &reassigned_schema,
+        )
+        .expect("reassign_expr_columns should succeed");
+        let reassigned = reassigned
+            .downcast_ref::<DynamicFilterPhysicalExpr>()
+            .expect("Expected dynamic filter after reassignment");
+
+        reassigned
+            .update(lit(42) as Arc<dyn PhysicalExpr>)
+            .expect("Update should succeed");
+        reassigned.mark_complete();
+
+        // Capture the parts and reconstruct.
+        let reconstructed = DynamicFilterPhysicalExpr::from_parts(
+            reassigned.expression_id,
+            reassigned.original_children().to_vec(),
+            reassigned.remapped_children().map(|r| r.to_vec()),
+            reassigned.inner(),
+        );
+
+        assert_eq!(
+            reassigned.original_children(),
+            reconstructed.original_children(),
+        );
+        assert_eq!(
+            reassigned.remapped_children(),
+            reconstructed.remapped_children(),
+        );
+        assert_eq!(reassigned.expression_id(), reconstructed.expression_id());
+        let r = reassigned.inner();
+        let c = reconstructed.inner();
+        assert_eq!(r.generation, c.generation);
+        assert_eq!(r.is_complete, c.is_complete);
+        assert_eq!(format!("{:?}", r.expr), format!("{:?}", c.expr));
+    }
+
+    #[tokio::test]
+    async fn test_expression_id() {
+        let source_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let col_a = col("a", &source_schema).unwrap();
+
+        // Create a source filter
+        let source = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::clone(&col_a)],
+            lit(true) as Arc<dyn PhysicalExpr>,
+        ));
+        let source_clone = Arc::clone(&source);
+
+        // Create a derived filter by reassigning the source filter to a different schema.
+        let derived_schema = Arc::new(Schema::new(vec![
+            Field::new("x", DataType::Int32, false),
+            Field::new("a", DataType::Int32, false),
+        ]));
+        let derived = reassign_expr_columns(
+            Arc::clone(&source) as Arc<dyn PhysicalExpr>,
+            &derived_schema,
+        )
+        .expect("reassign_expr_columns should succeed");
+
+        let derived_expression_id = derived
+            .expression_id()
+            .expect("derived filter should have an expression id");
+        let source_expression_id = source
+            .expression_id()
+            .expect("source filter should have an expression id");
+        let source_clone_expression_id = source_clone
+            .expression_id()
+            .expect("source clone should have an expression id");
+
+        assert_eq!(
+            source_clone_expression_id, source_expression_id,
+            "cloned filter should preserve its expression id",
+        );
+
+        assert_eq!(
+            derived_expression_id, source_expression_id,
+            "derived filters should carry forward the source expression id",
         );
     }
 }

@@ -55,6 +55,7 @@ indexmap = { workspace = true }
 itertools = { workspace = true, features = ["use_std"] }
 parking_lot = { workspace = true }
 petgraph = "0.8.3"
+rand = { workspace = true }
 recursive = { workspace = true, optional = true }
 tokio = { workspace = true }
 half = { workspace = true }
@@ -64,7 +65,6 @@ arrow = { workspace = true, features = ["test_utils"] }
 criterion = { workspace = true }
 datafusion-functions = { workspace = true }
 insta = { workspace = true }
-rand = { workspace = true }
 rstest = { workspace = true }
 
 [[bench]]
