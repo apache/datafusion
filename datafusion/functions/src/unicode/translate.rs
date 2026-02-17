@@ -313,7 +313,6 @@ fn translate_with_map<'a, T: OffsetSizeTrait, V>(
 where
     V: ArrayAccessor<Item = &'a str>,
 {
-    let mut string_graphemes: Vec<&str> = Vec::new();
     let mut result_graphemes: Vec<&str> = Vec::new();
     let mut ascii_buf: Vec<u8> = Vec::new();
 
@@ -338,18 +337,16 @@ where
                 }
 
                 // Slow path: grapheme-based translation
-                string_graphemes.clear();
                 result_graphemes.clear();
 
-                string_graphemes.extend(s.graphemes(true));
-                for c in &string_graphemes {
-                    match from_map.get(*c) {
+                for c in s.graphemes(true) {
+                    match from_map.get(c) {
                         Some(n) => {
                             if let Some(replacement) = to_graphemes.get(*n) {
                                 result_graphemes.push(*replacement);
                             }
                         }
-                        None => result_graphemes.push(*c),
+                        None => result_graphemes.push(c),
                     }
                 }
 
