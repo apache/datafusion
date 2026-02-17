@@ -194,6 +194,8 @@ impl SpillPoolWriter {
             // Append the batch
             if let Some(ref mut writer) = file_shared.writer {
                 writer.append_batch(batch)?;
+                // make sure we flush the writer for readers
+                writer.flush()?;
                 file_shared.batches_written += 1;
                 file_shared.estimated_size += batch_size;
             }
@@ -535,7 +537,11 @@ impl Stream for SpillFile {
         // Step 2: Lazy-create reader stream if needed
         if self.reader.is_none() && should_read {
             if let Some(file) = file {
-                match self.spill_manager.read_spill_as_stream(file, None) {
+                // we want this unbuffered because files are actively being written to
+                match self
+                    .spill_manager
+                    .read_spill_as_stream_unbuffered(file, None)
+                {
                     Ok(stream) => {
                         self.reader = Some(SpillFileReader {
                             stream,
@@ -879,8 +885,8 @@ mod tests {
         );
         assert_eq!(
             metrics.spilled_bytes.value(),
-            0,
-            "Spilled bytes should be 0 before file finalization"
+            320,
+            "Spilled bytes should reflect data written (header + 1 batch)"
         );
         assert_eq!(
             metrics.spilled_rows.value(),
@@ -1300,11 +1306,11 @@ mod tests {
             writer.push_batch(&batch)?;
         }
 
-        // Check metrics before drop - spilled_bytes should be 0 since file isn't finalized yet
+        // Check metrics before drop - spilled_bytes already reflects written data
         let spilled_bytes_before = metrics.spilled_bytes.value();
         assert_eq!(
-            spilled_bytes_before, 0,
-            "Spilled bytes should be 0 before writer is dropped"
+            spilled_bytes_before, 1088,
+            "Spilled bytes should reflect data written (header + 5 batches)"
         );
 
         // Explicitly drop the writer - this should finalize the current file

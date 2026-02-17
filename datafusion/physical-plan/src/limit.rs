@@ -35,6 +35,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, assert_eq_or_internal_err, internal_err};
 use datafusion_execution::TaskContext;
 
+use datafusion_physical_expr::LexOrdering;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -51,6 +52,9 @@ pub struct GlobalLimitExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     cache: PlanProperties,
+    /// Does the limit have to preserve the order of its input, and if so what is it?
+    /// Some optimizations may reorder the input if no particular sort is required
+    required_ordering: Option<LexOrdering>,
 }
 
 impl GlobalLimitExec {
@@ -63,6 +67,7 @@ impl GlobalLimitExec {
             fetch,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
+            required_ordering: None,
         }
     }
 
@@ -90,6 +95,16 @@ impl GlobalLimitExec {
             // Limit operations are always bounded since they output a finite number of rows
             Boundedness::Bounded,
         )
+    }
+
+    /// Get the required ordering from limit
+    pub fn required_ordering(&self) -> &Option<LexOrdering> {
+        &self.required_ordering
+    }
+
+    /// Set the required ordering for limit
+    pub fn set_required_ordering(&mut self, required_ordering: Option<LexOrdering>) {
+        self.required_ordering = required_ordering;
     }
 }
 
@@ -194,10 +209,6 @@ impl ExecutionPlan for GlobalLimitExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
-    }
-
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         self.input
             .partition_statistics(partition)?
@@ -223,6 +234,9 @@ pub struct LocalLimitExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     cache: PlanProperties,
+    /// If the child plan is a sort node, after the sort node is removed during
+    /// physical optimization, we should add the required ordering to the limit node
+    required_ordering: Option<LexOrdering>,
 }
 
 impl LocalLimitExec {
@@ -234,6 +248,7 @@ impl LocalLimitExec {
             fetch,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
+            required_ordering: None,
         }
     }
 
@@ -256,6 +271,16 @@ impl LocalLimitExec {
             // Limit operations are always bounded since they output a finite number of rows
             Boundedness::Bounded,
         )
+    }
+
+    /// Get the required ordering from limit
+    pub fn required_ordering(&self) -> &Option<LexOrdering> {
+        &self.required_ordering
+    }
+
+    /// Set the required ordering for limit
+    pub fn set_required_ordering(&mut self, required_ordering: Option<LexOrdering>) {
+        self.required_ordering = required_ordering;
     }
 }
 
@@ -338,10 +363,6 @@ impl ExecutionPlan for LocalLimitExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {

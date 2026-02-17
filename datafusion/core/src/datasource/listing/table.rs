@@ -110,6 +110,7 @@ mod tests {
     #[cfg(feature = "parquet")]
     use crate::datasource::file_format::parquet::ParquetFormat;
     use crate::datasource::listing::table::ListingTableConfigExt;
+    use crate::execution::options::JsonReadOptions;
     use crate::prelude::*;
     use crate::{
         datasource::{
@@ -347,7 +348,7 @@ mod tests {
             let table =
                 ListingTable::try_new(config.clone()).expect("Creating the table");
             let ordering_result =
-                table.try_create_output_ordering(state.execution_props());
+                table.try_create_output_ordering(state.execution_props(), &[]);
 
             match (expected_result, ordering_result) {
                 (Ok(expected), Ok(result)) => {
@@ -808,7 +809,7 @@ mod tests {
                     .register_json(
                         "t",
                         tmp_dir.path().to_str().unwrap(),
-                        NdJsonReadOptions::default()
+                        JsonReadOptions::default()
                             .schema(schema.as_ref())
                             .file_compression_type(file_compression_type),
                     )

@@ -29,14 +29,15 @@ use std::mem::size_of_val;
 
 use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 use datafusion::common::tree_node::Transformed;
-use datafusion::common::{DFSchema, DFSchemaRef, not_impl_err, plan_err};
+use datafusion::common::{DFSchema, DFSchemaRef, Spans, not_impl_err, plan_err};
 use datafusion::error::Result;
 use datafusion::execution::registry::SerializerRegistry;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::session_state::SessionStateBuilder;
+use datafusion::logical_expr::expr::{SetComparison, SetQuantifier};
 use datafusion::logical_expr::{
-    EmptyRelation, Extension, InvariantLevel, LogicalPlan, PartitionEvaluator,
-    Repartition, UserDefinedLogicalNode, Values, Volatility,
+    EmptyRelation, Extension, InvariantLevel, LogicalPlan, Operator, PartitionEvaluator,
+    Repartition, Subquery, UserDefinedLogicalNode, Values, Volatility,
 };
 use datafusion::optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLINE_INLIST;
 use datafusion::prelude::*;
@@ -686,6 +687,29 @@ async fn roundtrip_exists_filter() -> Result<()> {
         TableScan: data2 projection=[a, e]
     "
             );
+    Ok(())
+}
+
+// assemble logical plan manually to ensure SetComparison expr is present (not rewrite away)
+#[tokio::test]
+async fn roundtrip_set_comparison_any_substrait() -> Result<()> {
+    let ctx = create_context().await?;
+    let plan = build_set_comparison_plan(&ctx, SetQuantifier::Any, Operator::Gt).await?;
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    let roundtrip_plan = from_substrait_plan(&ctx.state(), &proto).await?;
+    assert_set_comparison_predicate(&roundtrip_plan, Operator::Gt, SetQuantifier::Any);
+    Ok(())
+}
+
+// assemble logical plan manually to ensure SetComparison expr is present (not rewrite away)
+#[tokio::test]
+async fn roundtrip_set_comparison_all_substrait() -> Result<()> {
+    let ctx = create_context().await?;
+    let plan =
+        build_set_comparison_plan(&ctx, SetQuantifier::All, Operator::NotEq).await?;
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    let roundtrip_plan = from_substrait_plan(&ctx.state(), &proto).await?;
+    assert_set_comparison_predicate(&roundtrip_plan, Operator::NotEq, SetQuantifier::All);
     Ok(())
 }
 
@@ -1353,7 +1377,7 @@ async fn roundtrip_literal_named_struct() -> Result<()> {
     assert_snapshot!(
     plan,
     @r#"
-    Projection: Struct({int_field:1,boolean_field:true,string_field:}) AS named_struct(Utf8("int_field"),Int64(1),Utf8("boolean_field"),Boolean(true),Utf8("string_field"),NULL)
+    Projection: CAST(Struct({c0:1,c1:true,c2:}) AS Struct("int_field": Int64, "boolean_field": Boolean, "string_field": Utf8View)) AS named_struct(Utf8("int_field"),Int64(1),Utf8("boolean_field"),Boolean(true),Utf8("string_field"),NULL)
       TableScan: data projection=[]
     "#
             );
@@ -1373,10 +1397,10 @@ async fn roundtrip_literal_renamed_struct() -> Result<()> {
 
     assert_snapshot!(
     plan,
-    @r"
-    Projection: Struct({int_field:1}) AS Struct({c0:1})
+    @r#"
+    Projection: CAST(Struct({c0:1}) AS Struct("int_field": Int32))
       TableScan: data projection=[]
-    "
+    "#
             );
     Ok(())
 }
@@ -1863,6 +1887,56 @@ async fn assert_substrait_sql(substrait_plan: Plan, sql: &str) -> Result<()> {
     assert_eq!(planstr, expectedstr);
 
     Ok(())
+}
+
+async fn build_set_comparison_plan(
+    ctx: &SessionContext,
+    quantifier: SetQuantifier,
+    op: Operator,
+) -> Result<LogicalPlan> {
+    let base_scan = ctx.table("data").await?.into_unoptimized_plan();
+    let subquery_scan = ctx.table("data2").await?.into_unoptimized_plan();
+    let subquery_plan = LogicalPlanBuilder::from(subquery_scan)
+        .project(vec![col("data2.a")])?
+        .build()?;
+    let predicate = Expr::SetComparison(SetComparison::new(
+        Box::new(col("data.a")),
+        Subquery {
+            subquery: Arc::new(subquery_plan),
+            outer_ref_columns: vec![],
+            spans: Spans::new(),
+        },
+        op,
+        quantifier,
+    ));
+
+    LogicalPlanBuilder::from(base_scan)
+        .filter(predicate)?
+        .project(vec![col("data.a")])?
+        .build()
+}
+
+fn assert_set_comparison_predicate(
+    plan: &LogicalPlan,
+    expected_op: Operator,
+    expected_quantifier: SetQuantifier,
+) {
+    let predicate = match plan {
+        LogicalPlan::Projection(p) => match p.input.as_ref() {
+            LogicalPlan::Filter(filter) => &filter.predicate,
+            other => panic!("expected Filter inside Projection, got {other:?}"),
+        },
+        LogicalPlan::Filter(filter) => &filter.predicate,
+        other => panic!("expected Filter plan, got {other:?}"),
+    };
+
+    match predicate {
+        Expr::SetComparison(set_comparison) => {
+            assert_eq!(set_comparison.op, expected_op);
+            assert_eq!(set_comparison.quantifier, expected_quantifier);
+        }
+        other => panic!("expected SetComparison predicate, got {other:?}"),
+    }
 }
 
 async fn roundtrip_fill_na(sql: &str) -> Result<()> {

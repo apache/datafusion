@@ -45,7 +45,6 @@ use datafusion_physical_expr_common::sort_expr::{
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
 use datafusion_physical_optimizer::projection_pushdown::ProjectionPushdown;
-use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::coop::CooperativeExec;
 use datafusion_physical_plan::filter::FilterExec;
@@ -1285,6 +1284,7 @@ fn test_hash_join_after_projection() -> Result<()> {
         None,
         PartitionMode::Auto,
         NullEquality::NullEqualsNothing,
+        false,
     )?);
     let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![
@@ -1681,61 +1681,6 @@ fn test_partition_col_projection_pushdown_expr() -> Result<()> {
 }
 
 #[test]
-fn test_coalesce_batches_after_projection() -> Result<()> {
-    let csv = create_simple_csv_exec();
-    let filter = Arc::new(FilterExec::try_new(
-        Arc::new(BinaryExpr::new(
-            Arc::new(Column::new("c", 2)),
-            Operator::Gt,
-            Arc::new(Literal::new(ScalarValue::Int32(Some(0)))),
-        )),
-        csv,
-    )?);
-    let coalesce_batches: Arc<dyn ExecutionPlan> =
-        Arc::new(CoalesceBatchesExec::new(filter, 8192));
-    let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
-        vec![
-            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a"),
-            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b"),
-        ],
-        coalesce_batches,
-    )?);
-
-    let initial = displayable(projection.as_ref()).indent(true).to_string();
-    let actual = initial.trim();
-
-    assert_snapshot!(
-        actual,
-        @r"
-    ProjectionExec: expr=[a@0 as a, b@1 as b]
-      CoalesceBatchesExec: target_batch_size=8192
-        FilterExec: c@2 > 0
-          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
-    "
-    );
-
-    let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
-
-    let after_optimize_string = displayable(after_optimize.as_ref())
-        .indent(true)
-        .to_string();
-    let actual = after_optimize_string.trim();
-
-    // Projection should be pushed down through CoalesceBatchesExec
-    assert_snapshot!(
-        actual,
-        @r"
-    CoalesceBatchesExec: target_batch_size=8192
-      FilterExec: c@2 > 0, projection=[a@0, b@1]
-        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
-    "
-    );
-
-    Ok(())
-}
-
-#[test]
 fn test_cooperative_exec_after_projection() -> Result<()> {
     let csv = create_simple_csv_exec();
     let cooperative: Arc<dyn ExecutionPlan> = Arc::new(CooperativeExec::new(csv));
@@ -1773,6 +1718,50 @@ fn test_cooperative_exec_after_projection() -> Result<()> {
         @r"
     CooperativeExec
       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b], file_type=csv, has_header=false
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_hash_join_empty_projection_embeds() -> Result<()> {
+    let left_csv = create_simple_csv_exec();
+    let right_csv = create_simple_csv_exec();
+
+    let join = Arc::new(HashJoinExec::try_new(
+        left_csv,
+        right_csv,
+        vec![(Arc::new(Column::new("a", 0)), Arc::new(Column::new("a", 0)))],
+        None,
+        &JoinType::Right,
+        None,
+        PartitionMode::CollectLeft,
+        NullEquality::NullEqualsNothing,
+        false,
+    )?);
+
+    // Empty projection: no columns needed from the join output
+    let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+        vec![] as Vec<ProjectionExpr>,
+        join,
+    )?);
+
+    let after_optimize =
+        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+    let after_optimize_string = displayable(after_optimize.as_ref())
+        .indent(true)
+        .to_string();
+    let actual = after_optimize_string.trim();
+
+    // The empty projection should be embedded into the HashJoinExec,
+    // resulting in projection=[] on the join and no ProjectionExec wrapper.
+    assert_snapshot!(
+        actual,
+        @r"
+    HashJoinExec: mode=CollectLeft, join_type=Right, on=[(a@0, a@0)], projection=[]
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
     "
     );
 

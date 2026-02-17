@@ -42,7 +42,7 @@ use datafusion_common::{
     assert_batches_sorted_eq, assert_contains, exec_datafusion_err, exec_err,
     not_impl_err, plan_err,
 };
-use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
     Accumulator, ColumnarValue, CreateFunction, CreateFunctionBody, LogicalPlanBuilder,
     OperateFunctionArg, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
@@ -699,7 +699,7 @@ impl ScalarUDFImpl for CastToI64UDF {
     fn simplify(
         &self,
         mut args: Vec<Expr>,
-        info: &dyn SimplifyInfo,
+        info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         // DataFusion should have ensured the function is called with just a
         // single argument
@@ -975,7 +975,7 @@ impl ScalarUDFImpl for ScalarFunctionWrapper {
     fn simplify(
         &self,
         args: Vec<Expr>,
-        _info: &dyn SimplifyInfo,
+        _info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         let replacement = Self::replacement(&self.expr, &args, &self.defaults)?;
 
@@ -1306,19 +1306,14 @@ async fn create_scalar_function_from_sql_statement_default_arguments() -> Result
         "Error during planning: Non-default arguments cannot follow default arguments.";
     assert!(expected.starts_with(&err.strip_backtrace()));
 
-    // FIXME: The `DEFAULT` syntax does not work with positional params
-    let bad_expression_sql = r#"
+    let expression_sql = r#"
     CREATE FUNCTION bad_expression_fun(DOUBLE, DOUBLE DEFAULT 2.0)
         RETURNS DOUBLE
         RETURN $1 + $2
     "#;
-    let err = ctx
-        .sql(bad_expression_sql)
-        .await
-        .expect_err("sqlparser error");
-    let expected =
-        "SQL error: ParserError(\"Expected: ), found: 2.0 at Line: 2, Column: 63\")";
-    assert!(expected.starts_with(&err.strip_backtrace()));
+    let result = ctx.sql(expression_sql).await;
+
+    assert!(result.is_ok());
     Ok(())
 }
 

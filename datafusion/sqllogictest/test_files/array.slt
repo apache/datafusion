@@ -504,6 +504,17 @@ FROM array_intersect_table_1D_UTF8
 ;
 
 statement ok
+CREATE TABLE array_intersect_table_1D_NULL
+AS VALUES
+  ([1, 2, 2, 3], [2, 3, 4]),
+  ([2, 3, 3], [3]),
+  ([3], [3, 3, 4]),
+  (null, [3, 4]),
+  ([1, 2], null),
+  (null, null)
+;
+
+statement ok
 CREATE TABLE array_intersect_table_2D
 AS VALUES
   (make_array([1,2]), make_array([1,3]), make_array([1,2,3], [4,5], [6,7]), make_array([4,5], [6,7])),
@@ -2566,6 +2577,31 @@ NULL NULL
 NULL NULL
 NULL NULL
 
+# maintains inner nullability
+query ?T
+select array_sort(column1), arrow_typeof(array_sort(column1))
+from values
+  (arrow_cast([], 'List(non-null Int32)')),
+  (arrow_cast(NULL, 'List(non-null Int32)')),
+  (arrow_cast([1, 3, 5, -5], 'List(non-null Int32)'))
+;
+----
+[] List(non-null Int32)
+NULL List(non-null Int32)
+[-5, 1, 3, 5] List(non-null Int32)
+
+query ?T
+select column1, arrow_typeof(column1)
+from values (array_sort(arrow_cast([1, 3, 5, -5], 'LargeList(non-null Int32)')));
+----
+[-5, 1, 3, 5] LargeList(non-null Int32)
+
+query ?T
+select column1, arrow_typeof(column1)
+from values (array_sort(arrow_cast([1, 3, 5, -5], 'FixedSizeList(4 x non-null Int32)')));
+----
+[-5, 1, 3, 5] List(non-null Int32)
+
 query ?
 select array_sort([struct('foo', 3), struct('foo', 1), struct('bar', 1)])
 ----
@@ -3219,6 +3255,99 @@ drop table array_repeat_table;
 
 statement ok
 drop table large_array_repeat_table;
+
+# array_repeat: arrays with NULL counts
+statement ok
+create table array_repeat_null_count_table
+as values
+(1, 2),
+(2, null),
+(3, 1),
+(4, -1),
+(null, null);
+
+query I?
+select column1, array_repeat(column1, column2) from array_repeat_null_count_table;
+----
+1 [1, 1]
+2 NULL
+3 [3]
+4 []
+NULL NULL
+
+statement ok
+drop table array_repeat_null_count_table
+
+# array_repeat: nested arrays with NULL counts
+statement ok
+create table array_repeat_nested_null_count_table
+as values
+([[1, 2], [3, 4]], 2),
+([[5, 6], [7, 8]], null),
+([[null, null], [9, 10]], 1),
+(null, 3),
+([[11, 12]], -1);
+
+query ??
+select column1, array_repeat(column1, column2) from array_repeat_nested_null_count_table;
+----
+[[1, 2], [3, 4]] [[[1, 2], [3, 4]], [[1, 2], [3, 4]]]
+[[5, 6], [7, 8]] NULL
+[[NULL, NULL], [9, 10]] [[[NULL, NULL], [9, 10]]]
+NULL [NULL, NULL, NULL]
+[[11, 12]] []
+
+statement ok
+drop table array_repeat_nested_null_count_table
+
+# array_repeat edge cases: empty arrays
+query ???
+select array_repeat([], 3), array_repeat([], 0), array_repeat([], null);
+----
+[[], [], []] [] NULL
+
+query ??
+select array_repeat(null::int, 0), array_repeat(null::int, null);
+----
+[] NULL
+
+# array_repeat LargeList with NULL count
+statement ok
+create table array_repeat_large_list_null_table
+as values
+(arrow_cast([1, 2, 3], 'LargeList(Int64)'), 2),
+(arrow_cast([4, 5], 'LargeList(Int64)'), null),
+(arrow_cast(null, 'LargeList(Int64)'), 3);
+
+query ??
+select column1, array_repeat(column1, column2) from array_repeat_large_list_null_table;
+----
+[1, 2, 3] [[1, 2, 3], [1, 2, 3]]
+[4, 5] NULL
+NULL [NULL, NULL, NULL]
+
+statement ok
+drop table array_repeat_large_list_null_table
+
+# array_repeat edge cases: LargeList nested with NULL count
+statement ok
+create table array_repeat_large_nested_null_table
+as values
+(arrow_cast([[1, 2], [3, 4]], 'LargeList(List(Int64))'), 2),
+(arrow_cast([[5, 6], [7, 8]], 'LargeList(List(Int64))'), null),
+(arrow_cast([[null, null]], 'LargeList(List(Int64))'), 1),
+(null, 3);
+
+query ??
+select column1, array_repeat(column1, column2) from array_repeat_large_nested_null_table;
+----
+[[1, 2], [3, 4]] [[[1, 2], [3, 4]], [[1, 2], [3, 4]]]
+[[5, 6], [7, 8]] NULL
+[[NULL, NULL]] [[[NULL, NULL]]]
+NULL [NULL, NULL, NULL]
+
+statement ok
+drop table array_repeat_large_nested_null_table
 
 ## array_concat (aliases: `array_cat`, `list_concat`, `list_cat`)
 
@@ -4736,10 +4865,11 @@ select array_union(arrow_cast([], 'LargeList(Int64)'), arrow_cast([], 'LargeList
 []
 
 # array_union scalar function #7
-query ?
-select array_union([[null]], []);
-----
-[[]]
+# re-enable when https://github.com/apache/arrow-rs/issues/9227 is fixed
+# query ?
+# select array_union([[null]], []);
+# ----
+# [[]]
 
 query error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'array_union' function:
 select array_union(arrow_cast([[null]], 'LargeList(List(Int64))'), arrow_cast([], 'LargeList(Int64)'));
@@ -4759,12 +4889,12 @@ select array_union(arrow_cast([[null]], 'LargeList(List(Int64))'), arrow_cast([[
 query ?
 select array_union(null, []);
 ----
-[]
+NULL
 
 query ?
 select array_union(null, arrow_cast([], 'LargeList(Int64)'));
 ----
-[]
+NULL
 
 # array_union scalar function #10
 query ?
@@ -4776,23 +4906,23 @@ NULL
 query ?
 select array_union([1, 1, 2, 2, 3, 3], null);
 ----
-[1, 2, 3]
+NULL
 
 query ?
 select array_union(arrow_cast([1, 1, 2, 2, 3, 3], 'LargeList(Int64)'), null);
 ----
-[1, 2, 3]
+NULL
 
 # array_union scalar function #12
 query ?
 select array_union(null, [1, 1, 2, 2, 3, 3]);
 ----
-[1, 2, 3]
+NULL
 
 query ?
 select array_union(null, arrow_cast([1, 1, 2, 2, 3, 3], 'LargeList(Int64)'));
 ----
-[1, 2, 3]
+NULL
 
 # array_union scalar function #13
 query ?
@@ -4816,6 +4946,46 @@ select array_union(arrow_cast(['hello'], 'LargeList(Utf8)'), arrow_cast(['hello'
 ----
 [hello, datafusion]
 
+query ?
+select array_union(column1, column2)
+from array_intersect_table_1D_NULL;
+----
+[1, 2, 3, 4]
+[2, 3]
+[3, 4]
+NULL
+NULL
+NULL
+
+query ?
+select array_union(arrow_cast(null, 'List(Int64)'), [1, 2]);
+----
+NULL
+
+query ?
+select array_union([1, 2], arrow_cast(null, 'List(Int64)'));
+----
+NULL
+
+query ?
+select array_intersect(arrow_cast(null, 'List(Int64)'), [1, 2]);
+----
+NULL
+
+query ?
+select array_intersect([1, 2], arrow_cast(null, 'List(Int64)'));
+----
+NULL
+
+query ?
+select array_except(arrow_cast(null, 'List(Int64)'), [1, 2]);
+----
+NULL
+
+query ?
+select array_except([1, 2], arrow_cast(null, 'List(Int64)'));
+----
+NULL
 
 # list_to_string scalar function #4 (function alias `array_to_string`)
 query TTT
@@ -6436,10 +6606,9 @@ physical_plan
 02)--AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
-05)--------ProjectionExec: expr=[]
-06)----------FilterExec: substr(md5(CAST(value@0 AS Utf8View)), 1, 32) IN (SET) ([7f4b18de3cfeb9b4ac78c381ee2ad278, a, b, c])
-07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-08)--------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192]
+05)--------FilterExec: substr(md5(CAST(value@0 AS Utf8View)), 1, 32) IN (SET) ([7f4b18de3cfeb9b4ac78c381ee2ad278, a, b, c]), projection=[]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192]
 
 query I
 with test AS (SELECT substr(md5(i::text)::text, 1, 32) as needle FROM generate_series(1, 100000) t(i))
@@ -6464,10 +6633,9 @@ physical_plan
 02)--AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
-05)--------ProjectionExec: expr=[]
-06)----------FilterExec: substr(md5(CAST(value@0 AS Utf8View)), 1, 32) IN (SET) ([7f4b18de3cfeb9b4ac78c381ee2ad278, a, b, c])
-07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-08)--------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192]
+05)--------FilterExec: substr(md5(CAST(value@0 AS Utf8View)), 1, 32) IN (SET) ([7f4b18de3cfeb9b4ac78c381ee2ad278, a, b, c]), projection=[]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192]
 
 query I
 with test AS (SELECT substr(md5(i::text)::text, 1, 32) as needle FROM generate_series(1, 100000) t(i))
@@ -6492,10 +6660,9 @@ physical_plan
 02)--AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
-05)--------ProjectionExec: expr=[]
-06)----------FilterExec: substr(md5(CAST(value@0 AS Utf8View)), 1, 32) IN (SET) ([7f4b18de3cfeb9b4ac78c381ee2ad278, a, b, c])
-07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-08)--------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192]
+05)--------FilterExec: substr(md5(CAST(value@0 AS Utf8View)), 1, 32) IN (SET) ([7f4b18de3cfeb9b4ac78c381ee2ad278, a, b, c]), projection=[]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192]
 
 query I
 with test AS (SELECT substr(md5(i::text)::text, 1, 32) as needle FROM generate_series(1, 100000) t(i))
@@ -6520,10 +6687,9 @@ physical_plan
 02)--AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
-05)--------ProjectionExec: expr=[]
-06)----------FilterExec: substr(md5(CAST(value@0 AS Utf8View)), 1, 32) IN (SET) ([7f4b18de3cfeb9b4ac78c381ee2ad278, a, b, c])
-07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-08)--------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192]
+05)--------FilterExec: substr(md5(CAST(value@0 AS Utf8View)), 1, 32) IN (SET) ([7f4b18de3cfeb9b4ac78c381ee2ad278, a, b, c]), projection=[]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192]
 
 query I
 with test AS (SELECT substr(md5(i::text)::text, 1, 32) as needle FROM generate_series(1, 100000) t(i))
@@ -6548,10 +6714,9 @@ physical_plan
 02)--AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
-05)--------ProjectionExec: expr=[]
-06)----------FilterExec: substr(md5(CAST(value@0 AS Utf8View)), 1, 32) IN (SET) ([7f4b18de3cfeb9b4ac78c381ee2ad278, a, b, c])
-07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-08)--------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192]
+05)--------FilterExec: substr(md5(CAST(value@0 AS Utf8View)), 1, 32) IN (SET) ([7f4b18de3cfeb9b4ac78c381ee2ad278, a, b, c]), projection=[]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192]
 
 query I
 with test AS (SELECT substr(md5(i::text)::text, 1, 32) as needle FROM generate_series(1, 100000) t(i))
@@ -6578,10 +6743,9 @@ physical_plan
 02)--AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
-05)--------ProjectionExec: expr=[]
-06)----------FilterExec: substr(md5(CAST(value@0 AS Utf8View)), 1, 32) IS NOT NULL OR NULL
-07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-08)--------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192]
+05)--------FilterExec: substr(md5(CAST(value@0 AS Utf8View)), 1, 32) IS NOT NULL OR NULL, projection=[]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192]
 
 # any operator
 query ?
@@ -6735,7 +6899,7 @@ select array_intersect(column1, column2),
        array_intersect(column5, column6)
 from array_intersect_table_1D_Boolean;
 ----
-[] [false, true] [false]
+[] [true, false] [false]
 [false] [true] [true]
 
 query ???
@@ -6744,7 +6908,7 @@ select array_intersect(column1, column2),
        array_intersect(column5, column6)
 from large_array_intersect_table_1D_Boolean;
 ----
-[] [false, true] [false]
+[] [true, false] [false]
 [false] [true] [true]
 
 query ???
@@ -6753,8 +6917,8 @@ select array_intersect(column1, column2),
        array_intersect(column5, column6)
 from array_intersect_table_1D_UTF8;
 ----
-[bc] [arrow, rust] []
-[] [arrow, datafusion, rust] [arrow, rust]
+[bc] [rust, arrow] []
+[] [datafusion, rust, arrow] [rust, arrow]
 
 query ???
 select array_intersect(column1, column2),
@@ -6762,8 +6926,19 @@ select array_intersect(column1, column2),
        array_intersect(column5, column6)
 from large_array_intersect_table_1D_UTF8;
 ----
-[bc] [arrow, rust] []
-[] [arrow, datafusion, rust] [arrow, rust]
+[bc] [rust, arrow] []
+[] [datafusion, rust, arrow] [rust, arrow]
+
+query ?
+select array_intersect(column1, column2)
+from array_intersect_table_1D_NULL;
+----
+[2, 3]
+[3]
+[3]
+NULL
+NULL
+NULL
 
 query ??
 select array_intersect(column1, column2),
@@ -6856,27 +7031,27 @@ select array_intersect(arrow_cast([], 'LargeList(Int64)'), arrow_cast([], 'Large
 query ?
 select array_intersect([1, 1, 2, 2, 3, 3], null);
 ----
-[]
+NULL
 
 query ?
 select array_intersect(arrow_cast([1, 1, 2, 2, 3, 3], 'LargeList(Int64)'), null);
 ----
-[]
+NULL
 
 query ?
 select array_intersect(null, [1, 1, 2, 2, 3, 3]);
 ----
-[]
+NULL
 
 query ?
 select array_intersect(null, arrow_cast([1, 1, 2, 2, 3, 3], 'LargeList(Int64)'));
 ----
-[]
+NULL
 
 query ?
 select array_intersect([], null);
 ----
-[]
+NULL
 
 query ?
 select array_intersect([[1,2,3]], [[]]);
@@ -6891,17 +7066,17 @@ select array_intersect([[null]], [[]]);
 query ?
 select array_intersect(arrow_cast([], 'LargeList(Int64)'), null);
 ----
-[]
+NULL
 
 query ?
 select array_intersect(null, []);
 ----
-[]
+NULL
 
 query ?
 select array_intersect(null, arrow_cast([], 'LargeList(Int64)'));
 ----
-[]
+NULL
 
 query ?
 select array_intersect(null, null);
@@ -7157,12 +7332,12 @@ select generate_series('2021-01-01'::timestamp, '2021-01-01T15:00:00'::timestamp
 
 # Other timestamp types are coerced to nanosecond
 query ?
-select generate_series(arrow_cast('2021-01-01'::timestamp, 'Timestamp(Second, None)'), '2021-01-01T15:00:00'::timestamp, INTERVAL '1' HOUR);
+select generate_series(arrow_cast('2021-01-01'::timestamp, 'Timestamp(s)'), '2021-01-01T15:00:00'::timestamp, INTERVAL '1' HOUR);
 ----
 [2021-01-01T00:00:00, 2021-01-01T01:00:00, 2021-01-01T02:00:00, 2021-01-01T03:00:00, 2021-01-01T04:00:00, 2021-01-01T05:00:00, 2021-01-01T06:00:00, 2021-01-01T07:00:00, 2021-01-01T08:00:00, 2021-01-01T09:00:00, 2021-01-01T10:00:00, 2021-01-01T11:00:00, 2021-01-01T12:00:00, 2021-01-01T13:00:00, 2021-01-01T14:00:00, 2021-01-01T15:00:00]
 
 query ?
-select generate_series('2021-01-01'::timestamp, arrow_cast('2021-01-01T15:00:00'::timestamp, 'Timestamp(Microsecond, None)'), INTERVAL '1' HOUR);
+select generate_series('2021-01-01'::timestamp, arrow_cast('2021-01-01T15:00:00'::timestamp, 'Timestamp(µs)'), INTERVAL '1' HOUR);
 ----
 [2021-01-01T00:00:00, 2021-01-01T01:00:00, 2021-01-01T02:00:00, 2021-01-01T03:00:00, 2021-01-01T04:00:00, 2021-01-01T05:00:00, 2021-01-01T06:00:00, 2021-01-01T07:00:00, 2021-01-01T08:00:00, 2021-01-01T09:00:00, 2021-01-01T10:00:00, 2021-01-01T11:00:00, 2021-01-01T12:00:00, 2021-01-01T13:00:00, 2021-01-01T14:00:00, 2021-01-01T15:00:00]
 
@@ -7444,7 +7619,7 @@ select array_except(column1, column2) from array_except_table;
 [2]
 []
 NULL
-[1, 2]
+NULL
 NULL
 
 statement ok
@@ -7465,7 +7640,7 @@ select array_except(column1, column2) from array_except_nested_list_table;
 ----
 [[1, 2]]
 [[3]]
-[[1, 2], [3]]
+NULL
 NULL
 []
 
@@ -7504,7 +7679,7 @@ select array_except(column1, column2) from array_except_table_ut8;
 ----
 [b, c]
 [a, bc]
-[a, bc, def]
+NULL
 NULL
 
 statement ok
@@ -7526,7 +7701,7 @@ select array_except(column1, column2) from array_except_table_bool;
 [true]
 [true]
 [false]
-[true, false]
+NULL
 NULL
 
 statement ok
@@ -7535,7 +7710,7 @@ drop table array_except_table_bool;
 query ?
 select array_except([], null);
 ----
-[]
+NULL
 
 query ?
 select array_except([], []);

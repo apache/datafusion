@@ -26,14 +26,30 @@
 //!
 //! Each subcommand runs a corresponding example:
 //! - `all` — run all examples included in this module
-//! - `adv_udaf` — user defined aggregate function example
-//! - `adv_udf` — user defined scalar function example
-//! - `adv_udwf` — user defined window function example
-//! - `async_udf` — asynchronous user defined function example
-//! - `udaf` — simple user defined aggregate function example
-//! - `udf` — simple user defined scalar function example
-//! - `udtf` — simple user defined table function example
-//! - `udwf` — simple user defined window function example
+//!
+//! - `adv_udaf`
+//!   (file: advanced_udaf.rs, desc: Advanced User Defined Aggregate Function (UDAF))
+//!
+//! - `adv_udf`
+//!   (file: advanced_udf.rs, desc: Advanced User Defined Scalar Function (UDF))
+//!
+//! - `adv_udwf`
+//!   (file: advanced_udwf.rs, desc: Advanced User Defined Window Function (UDWF))
+//!
+//! - `async_udf`
+//!   (file: async_udf.rs, desc: Asynchronous User Defined Scalar Function)
+//!
+//! - `udaf`
+//!   (file: simple_udaf.rs, desc: Simple UDAF example)
+//!
+//! - `udf`
+//!   (file: simple_udf.rs, desc: Simple UDF example)
+//!
+//! - `udtf`
+//!   (file: simple_udtf.rs, desc: Simple UDTF example)
+//!
+//! - `udwf`
+//!   (file: simple_udwf.rs, desc: Simple UDWF example)
 
 mod advanced_udaf;
 mod advanced_udf;

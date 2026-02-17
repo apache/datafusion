@@ -131,6 +131,9 @@ pub struct TopK {
     pub(crate) finished: bool,
 }
 
+/// For more background, please also see the [Dynamic Filters: Passing Information Between Operators During Execution for 25x Faster Queries blog]
+///
+/// [Dynamic Filters: Passing Information Between Operators During Execution for 25x Faster Queries blog]: https://datafusion.apache.org/blog/2025/09/10/dynamic-filters
 #[derive(Debug, Clone)]
 pub struct TopKDynamicFilters {
     /// The current *global* threshold for the dynamic filter.

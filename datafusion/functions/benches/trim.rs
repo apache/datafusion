@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-extern crate criterion;
-
 use arrow::array::{ArrayRef, LargeStringArray, StringArray, StringViewArray};
 use arrow::datatypes::{DataType, Field};
 use criterion::{
@@ -143,7 +141,7 @@ fn create_args(
     ]
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn run_with_string_type<M: Measurement>(
     group: &mut BenchmarkGroup<'_, M>,
     trim_func: &ScalarUDF,
@@ -189,7 +187,7 @@ fn run_with_string_type<M: Measurement>(
     );
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn run_trim_benchmark(
     c: &mut Criterion,
     group_name: &str,

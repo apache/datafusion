@@ -26,7 +26,7 @@ use datafusion_common::{
 use datafusion_common::{exec_datafusion_err, utils::take_function_args};
 use std::any::Any;
 
-use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs,
     ScalarUDFImpl, Signature, TypeSignatureClass, Volatility,
@@ -160,7 +160,7 @@ impl ScalarUDFImpl for ArrowCastFunc {
     fn simplify(
         &self,
         mut args: Vec<Expr>,
-        info: &dyn SimplifyInfo,
+        info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         // convert this into a real cast
         let target_type = data_type_from_args(&args)?;
