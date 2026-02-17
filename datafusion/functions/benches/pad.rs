@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-extern crate criterion;
-
 use arrow::array::{ArrowPrimitiveType, OffsetSizeTrait, PrimitiveArray};
 use arrow::datatypes::{DataType, Field, Int64Type};
 use arrow::util::bench_util::{

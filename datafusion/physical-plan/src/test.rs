@@ -146,7 +146,7 @@ impl ExecutionPlan for TestMemoryExec {
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        unimplemented!()
+        Ok(self)
     }
 
     fn repartitioned(
@@ -167,10 +167,6 @@ impl ExecutionPlan for TestMemoryExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         unimplemented!()
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        self.statistics_inner()
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {

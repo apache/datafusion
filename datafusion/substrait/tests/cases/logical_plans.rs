@@ -20,6 +20,9 @@
 #[cfg(test)]
 mod tests {
     use crate::utils::test::{add_plan_schemas_to_ctx, read_json};
+    use datafusion::common::test_util::format_batches;
+    use std::collections::HashSet;
+
     use datafusion::common::Result;
     use datafusion::dataframe::DataFrame;
     use datafusion::prelude::SessionContext;
@@ -226,6 +229,51 @@ mod tests {
 
         // Trigger execution to ensure plan validity
         DataFrame::new(ctx.state(), plan).show().await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn duplicate_name_in_union() -> Result<()> {
+        let proto_plan =
+            read_json("tests/testdata/test_plans/duplicate_name_in_union.substrait.json");
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
+
+        assert_snapshot!(
+        plan,
+        @r"
+        Projection: foo AS col1, bar AS col2
+          Union
+            Projection: foo, bar
+              Values: (Int64(100), Int64(200))
+            Projection: x, foo
+              Values: (Int32(300), Int64(400))
+        "
+                );
+
+        // Trigger execution to ensure plan validity
+        let results = DataFrame::new(ctx.state(), plan).collect().await?;
+
+        assert_snapshot!(
+            format_batches(&results)?,
+            @r"
+        +------+------+
+        | col1 | col2 |
+        +------+------+
+        | 100  | 200  |
+        | 300  | 400  |
+        +------+------+
+        ",
+        );
+
+        // also verify that the output schema has unique field names
+        let schema = results[0].schema();
+        for batch in &results {
+            assert_eq!(schema, batch.schema());
+        }
+        let field_names: HashSet<_> = schema.fields().iter().map(|f| f.name()).collect();
+        assert_eq!(field_names.len(), schema.fields().len());
 
         Ok(())
     }

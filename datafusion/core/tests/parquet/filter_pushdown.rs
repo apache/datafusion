@@ -220,7 +220,6 @@ async fn single_file() {
 }
 
 #[tokio::test]
-#[allow(dead_code)]
 async fn single_file_small_data_pages() {
     let batches = read_parquet_test_data(
         "tests/data/filter_pushdown/single_file_small_pages.gz.parquet",
@@ -639,6 +638,22 @@ async fn predicate_cache_pushdown_default() -> datafusion_common::Result<()> {
     PredicateCacheTest {
         expected_inner_records: 8,
         expected_records: 7, // reads more than necessary from the cache as then another bitmap is applied
+    }
+    .run(&ctx)
+    .await
+}
+
+#[tokio::test]
+async fn predicate_cache_stats_issue_19561() -> datafusion_common::Result<()> {
+    let mut config = SessionConfig::new();
+    config.options_mut().execution.parquet.pushdown_filters = true;
+    // force to get multiple batches to trigger repeated metric compound bug
+    config.options_mut().execution.batch_size = 1;
+    let ctx = SessionContext::new_with_config(config);
+    // The cache is on by default, and used when filter pushdown is enabled
+    PredicateCacheTest {
+        expected_inner_records: 8,
+        expected_records: 4,
     }
     .run(&ctx)
     .await

@@ -15,10 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! A custom binary heap implementation for performant top K aggregation
+//! A custom binary heap implementation for performant top K aggregation.
+//!
+//! the `new_heap` //! factory function selects an appropriate heap implementation
+//! based on the Arrow data type.
+//!
+//! Supported value types include Arrow primitives (integers, floats, decimals, intervals)
+//! and UTF-8 strings (`Utf8`, `LargeUtf8`, `Utf8View`) using lexicographic ordering.
 
 use arrow::array::{ArrayRef, ArrowPrimitiveType, PrimitiveArray, downcast_primitive};
+use arrow::array::{LargeStringBuilder, StringBuilder, StringViewBuilder};
 use arrow::array::{
+    StringArray,
     cast::AsArray,
     types::{IntervalDayTime, IntervalMonthDayNano},
 };
@@ -153,6 +161,164 @@ where
         let arr = PrimitiveArray::<VAL>::new(ScalarBuffer::from(vals), nulls)
             .with_data_type(self.data_type.clone());
         (Arc::new(arr), map_idxs)
+    }
+}
+
+/// An implementation of `ArrowHeap` that deals with string values.
+///
+/// Supports all three UTF-8 string types: `Utf8`, `LargeUtf8`, and `Utf8View`.
+/// String values are compared lexicographically using the compare-first pattern:
+/// borrowed strings are compared before allocation, and only allocated when the
+/// heap confirms they improve the top-K set.
+///
+pub struct StringHeap {
+    batch: ArrayRef,
+    heap: TopKHeap<Option<String>>,
+    desc: bool,
+    data_type: DataType,
+}
+
+impl StringHeap {
+    pub fn new(limit: usize, desc: bool, data_type: DataType) -> Self {
+        let batch: ArrayRef = Arc::new(StringArray::from(Vec::<&str>::new()));
+        Self {
+            batch,
+            heap: TopKHeap::new(limit, desc),
+            desc,
+            data_type,
+        }
+    }
+
+    /// Extracts a string value from the current batch at the given row index.
+    ///
+    /// Panics if the row index is out of bounds or if the data type is not one of
+    /// the supported UTF-8 string types.
+    ///
+    /// Note: Null values should not appear in the input; the aggregation layer
+    /// ensures nulls are filtered before reaching this code.
+    fn value(&self, row_idx: usize) -> &str {
+        extract_string_value(&self.batch, &self.data_type, row_idx)
+    }
+}
+
+/// Helper to extract a string value from an ArrayRef at a given index.
+///
+/// Supports `Utf8`, `LargeUtf8`, and `Utf8View` data types.
+///
+/// # Panics
+/// Panics if the index is out of bounds or if the data type is unsupported.
+fn extract_string_value<'a>(
+    batch: &'a ArrayRef,
+    data_type: &DataType,
+    idx: usize,
+) -> &'a str {
+    match data_type {
+        DataType::Utf8 => batch.as_string::<i32>().value(idx),
+        DataType::LargeUtf8 => batch.as_string::<i64>().value(idx),
+        DataType::Utf8View => batch.as_string_view().value(idx),
+        _ => unreachable!("Unsupported string type: {:?}", data_type),
+    }
+}
+
+impl ArrowHeap for StringHeap {
+    fn set_batch(&mut self, vals: ArrayRef) {
+        self.batch = vals;
+    }
+
+    fn is_worse(&self, row_idx: usize) -> bool {
+        if !self.heap.is_full() {
+            return false;
+        }
+        // Compare borrowed `&str` against the worst heap value first to avoid
+        // allocating a `String` unless this row would actually replace an
+        // existing heap entry.
+        let new_val = self.value(row_idx);
+        let worst_val = self.heap.worst_val().expect("Missing root");
+        match worst_val {
+            None => false,
+            Some(worst_str) => {
+                (!self.desc && new_val > worst_str.as_str())
+                    || (self.desc && new_val < worst_str.as_str())
+            }
+        }
+    }
+
+    fn worst_map_idx(&self) -> usize {
+        self.heap.worst_map_idx()
+    }
+
+    fn insert(&mut self, row_idx: usize, map_idx: usize, map: &mut Vec<(usize, usize)>) {
+        // When appending (heap not full) we must allocate to own the string
+        // because it will be stored in the heap. For replacements we avoid
+        // allocation until `replace_if_better` confirms a replacement is
+        // necessary.
+        let new_str = self.value(row_idx).to_string();
+        let new_val = Some(new_str);
+        self.heap.append_or_replace(new_val, map_idx, map);
+    }
+
+    fn replace_if_better(
+        &mut self,
+        heap_idx: usize,
+        row_idx: usize,
+        map: &mut Vec<(usize, usize)>,
+    ) {
+        let new_str = self.value(row_idx);
+        let existing = self.heap.heap[heap_idx]
+            .as_ref()
+            .expect("Missing heap item");
+
+        // Compare borrowed reference first—no allocation yet.
+        // We compare the borrowed `&str` with the stored `Option<String>` and
+        // only allocate (`to_string()`) when a replacement is required.
+        match &existing.val {
+            None => {
+                // Existing is null; new value always wins
+                let new_val = Some(new_str.to_string());
+                self.heap.replace_if_better(heap_idx, new_val, map);
+            }
+            Some(existing_str) => {
+                // Compare borrowed strings first
+                if (!self.desc && new_str < existing_str.as_str())
+                    || (self.desc && new_str > existing_str.as_str())
+                {
+                    let new_val = Some(new_str.to_string());
+                    self.heap.replace_if_better(heap_idx, new_val, map);
+                }
+                // Else: no improvement, no allocation
+            }
+        }
+    }
+
+    fn drain(&mut self) -> (ArrayRef, Vec<usize>) {
+        let (vals, map_idxs) = self.heap.drain();
+        // Use Arrow builders to safely construct arrays from the owned
+        // `Option<String>` values. Builders avoid needing to maintain
+        // references to temporary storage.
+
+        // Macro to eliminate duplication across string builder types.
+        // All three builders share the same interface for append_value,
+        // append_null, and finish, differing only in their concrete types.
+        macro_rules! build_string_array {
+            ($builder_type:ty) => {{
+                let mut builder = <$builder_type>::new();
+                for val in vals {
+                    match val {
+                        Some(s) => builder.append_value(&s),
+                        None => builder.append_null(),
+                    }
+                }
+                Arc::new(builder.finish())
+            }};
+        }
+
+        let arr: ArrayRef = match self.data_type {
+            DataType::Utf8 => build_string_array!(StringBuilder),
+            DataType::LargeUtf8 => build_string_array!(LargeStringBuilder),
+            DataType::Utf8View => build_string_array!(StringViewBuilder),
+            _ => unreachable!("Unsupported string type: {:?}", self.data_type),
+        };
+        (arr, map_idxs)
     }
 }
 
@@ -438,11 +604,31 @@ compare_integer!(u8, u16, u32, u64);
 compare_integer!(IntervalDayTime, IntervalMonthDayNano);
 compare_float!(f16, f32, f64);
 
+/// Returns true if the given data type can be stored in a top-K aggregation heap.
+///
+/// Supported types include Arrow primitives (integers, floats, decimals, intervals)
+/// and UTF-8 strings (`Utf8`, `LargeUtf8`, `Utf8View`). This is used internally by
+/// `PriorityMap::supports()` to validate aggregate value type compatibility.
+pub fn is_supported_heap_type(vt: &DataType) -> bool {
+    vt.is_primitive()
+        || matches!(
+            vt,
+            DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8
+        )
+}
+
 pub fn new_heap(
     limit: usize,
     desc: bool,
     vt: DataType,
 ) -> Result<Box<dyn ArrowHeap + Send>> {
+    if matches!(
+        vt,
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+    ) {
+        return Ok(Box::new(StringHeap::new(limit, desc, vt)));
+    }
+
     macro_rules! downcast_helper {
         ($vt:ty, $d:ident) => {
             return Ok(Box::new(PrimitiveHeap::<$vt>::new(limit, desc, vt)))
@@ -454,7 +640,9 @@ pub fn new_heap(
         _ => {}
     }
 
-    Err(exec_datafusion_err!("Can't group type: {vt:?}"))
+    Err(exec_datafusion_err!(
+        "Unsupported TopK aggregate value type: {vt:?}"
+    ))
 }
 
 #[cfg(test)]

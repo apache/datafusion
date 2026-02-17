@@ -41,7 +41,6 @@ mod test {
     use datafusion_physical_plan::aggregates::{
         AggregateExec, AggregateMode, PhysicalGroupBy,
     };
-    use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
     use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use datafusion_physical_plan::common::compute_record_batch_statistics;
     use datafusion_physical_plan::empty::EmptyExec;
@@ -714,43 +713,6 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_statistic_by_partition_of_coalesce_batches() -> Result<()> {
-        let scan = create_scan_exec_with_statistics(None, Some(2)).await;
-        let coalesce_batches: Arc<dyn ExecutionPlan> =
-            Arc::new(CoalesceBatchesExec::new(scan, 2));
-        // Partition 1: ids [3,4], dates [2025-03-01, 2025-03-02]
-        let expected_statistic_partition_1 = create_partition_statistics(
-            2,
-            16,
-            3,
-            4,
-            Some((DATE_2025_03_01, DATE_2025_03_02)),
-        );
-        // Partition 2: ids [1,2], dates [2025-03-03, 2025-03-04]
-        let expected_statistic_partition_2 = create_partition_statistics(
-            2,
-            16,
-            1,
-            2,
-            Some((DATE_2025_03_03, DATE_2025_03_04)),
-        );
-        let statistics = (0..coalesce_batches.output_partitioning().partition_count())
-            .map(|idx| coalesce_batches.partition_statistics(Some(idx)))
-            .collect::<Result<Vec<_>>>()?;
-        assert_eq!(statistics.len(), 2);
-        assert_eq!(statistics[0], expected_statistic_partition_1);
-        assert_eq!(statistics[1], expected_statistic_partition_2);
-
-        // Check the statistics_by_partition with real results
-        let expected_stats = vec![
-            ExpectedStatistics::NonEmpty(3, 4, 2),
-            ExpectedStatistics::NonEmpty(1, 2, 2),
-        ];
-        validate_statistics_with_data(coalesce_batches, expected_stats, 0).await?;
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn test_statistic_by_partition_of_coalesce_partitions() -> Result<()> {
         let scan = create_scan_exec_with_statistics(None, Some(2)).await;
         let coalesce_partitions: Arc<dyn ExecutionPlan> =
@@ -864,7 +826,7 @@ mod test {
         let plan_string = get_plan_string(&aggregate_exec_partial).swap_remove(0);
         assert_snapshot!(
             plan_string,
-            @"AggregateExec: mode=Partial, gby=[id@0 as id, 1 + id@0 as expr], aggr=[COUNT(c)], ordering_mode=Sorted"
+            @"AggregateExec: mode=Partial, gby=[id@0 as id, 1 + id@0 as expr], aggr=[COUNT(c)]"
         );
 
         let p0_statistics = aggregate_exec_partial.partition_statistics(Some(0))?;
@@ -1329,6 +1291,66 @@ mod test {
             ExpectedStatistics::NonEmpty(1, 2, 2),
         ];
         validate_statistics_with_data(window_agg, expected_stats, 0).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_statistics_by_partition_of_empty_exec() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, true),
+        ]));
+
+        // Try to test with single partition
+        let empty_single = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+
+        let stats = empty_single.partition_statistics(Some(0))?;
+        assert_eq!(stats.num_rows, Precision::Exact(0));
+        assert_eq!(stats.total_byte_size, Precision::Exact(0));
+        assert_eq!(stats.column_statistics.len(), 2);
+
+        for col_stat in &stats.column_statistics {
+            assert_eq!(col_stat.null_count, Precision::Exact(0));
+            assert_eq!(col_stat.distinct_count, Precision::Exact(0));
+            assert_eq!(col_stat.byte_size, Precision::Exact(0));
+            assert_eq!(col_stat.min_value, Precision::<ScalarValue>::Absent);
+            assert_eq!(col_stat.max_value, Precision::<ScalarValue>::Absent);
+            assert_eq!(col_stat.sum_value, Precision::<ScalarValue>::Absent);
+            assert_eq!(col_stat.byte_size, Precision::Exact(0));
+        }
+
+        let overall_stats = empty_single.partition_statistics(None)?;
+        assert_eq!(stats, overall_stats);
+
+        validate_statistics_with_data(empty_single, vec![ExpectedStatistics::Empty], 0)
+            .await?;
+
+        // Test with multiple partitions
+        let empty_multi: Arc<dyn ExecutionPlan> =
+            Arc::new(EmptyExec::new(Arc::clone(&schema)).with_partitions(3));
+
+        let statistics = (0..empty_multi.output_partitioning().partition_count())
+            .map(|idx| empty_multi.partition_statistics(Some(idx)))
+            .collect::<Result<Vec<_>>>()?;
+
+        assert_eq!(statistics.len(), 3);
+
+        for stat in &statistics {
+            assert_eq!(stat.num_rows, Precision::Exact(0));
+            assert_eq!(stat.total_byte_size, Precision::Exact(0));
+        }
+
+        validate_statistics_with_data(
+            empty_multi,
+            vec![
+                ExpectedStatistics::Empty,
+                ExpectedStatistics::Empty,
+                ExpectedStatistics::Empty,
+            ],
+            0,
+        )
+        .await?;
 
         Ok(())
     }

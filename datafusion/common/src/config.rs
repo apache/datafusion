@@ -23,6 +23,7 @@ use arrow_ipc::CompressionType;
 use crate::encryption::{FileDecryptionProperties, FileEncryptionProperties};
 use crate::error::_config_err;
 use crate::format::{ExplainAnalyzeLevel, ExplainFormat};
+use crate::parquet_config::DFParquetWriterVersion;
 use crate::parsers::CompressionTypeVariant;
 use crate::utils::get_available_parallelism;
 use crate::{DataFusionError, Result};
@@ -468,6 +469,25 @@ config_namespace! {
         /// metadata memory consumption
         pub batch_size: usize, default = 8192
 
+        /// A perfect hash join (see `HashJoinExec` for more details) will be considered
+        /// if the range of keys (max - min) on the build side is < this threshold.
+        /// This provides a fast path for joins with very small key ranges,
+        /// bypassing the density check.
+        ///
+        /// Currently only supports cases where build_side.num_rows() < u32::MAX.
+        /// Support for build_side.num_rows() >= u32::MAX will be added in the future.
+        pub perfect_hash_join_small_build_threshold: usize, default = 1024
+
+        /// The minimum required density of join keys on the build side to consider a
+        /// perfect hash join (see `HashJoinExec` for more details). Density is calculated as:
+        /// `(number of rows) / (max_key - min_key + 1)`.
+        /// A perfect hash join may be used if the actual key density > this
+        /// value.
+        ///
+        /// Currently only supports cases where build_side.num_rows() < u32::MAX.
+        /// Support for build_side.num_rows() >= u32::MAX will be added in the future.
+        pub perfect_hash_join_min_key_density: f64, default = 0.15
+
         /// When set to true, record batches will be examined between each operator and
         /// small batches will be coalesced into larger batches. This is helpful when there
         /// are highly selective filters or joins that could produce tiny output batches. The
@@ -737,12 +757,12 @@ config_namespace! {
         /// (writing) Sets best effort maximum size of data page in bytes
         pub data_pagesize_limit: usize, default = 1024 * 1024
 
-        /// (writing) Sets write_batch_size in bytes
+        /// (writing) Sets write_batch_size in rows
         pub write_batch_size: usize, default = 1024
 
         /// (writing) Sets parquet writer version
         /// valid values are "1.0" and "2.0"
-        pub writer_version: String, default = "1.0".to_string()
+        pub writer_version: DFParquetWriterVersion, default = DFParquetWriterVersion::default()
 
         /// (writing) Skip encoding the embedded arrow metadata in the KV_meta
         ///
@@ -752,7 +772,7 @@ config_namespace! {
 
         /// (writing) Sets default parquet compression codec.
         /// Valid values are: uncompressed, snappy, gzip(level),
-        /// lzo, brotli(level), lz4, zstd(level), and lz4_raw.
+        /// brotli(level), lz4, zstd(level), and lz4_raw.
         /// These values are not case sensitive. If NULL, uses
         /// default parquet writer setting
         ///
@@ -1122,6 +1142,12 @@ config_namespace! {
         ///
         /// Default: true
         pub enable_sort_pushdown: bool, default = true
+
+        /// When set to true, the optimizer will extract leaf expressions
+        /// (such as `get_field`) from filter/sort/join nodes into projections
+        /// closer to the leaf table scans, and push those projections down
+        /// towards the leaf nodes.
+        pub enable_leaf_expression_pushdown: bool, default = true
     }
 }
 
@@ -2228,7 +2254,7 @@ impl TableOptions {
 /// Options that control how Parquet files are read, including global options
 /// that apply to all columns and optional column-specific overrides
 ///
-/// Closely tied to [`ParquetWriterOptions`](crate::file_options::parquet_writer::ParquetWriterOptions).
+/// Closely tied to `ParquetWriterOptions` (see `crate::file_options::parquet_writer::ParquetWriterOptions` when the "parquet" feature is enabled).
 /// Properties not included in [`TableParquetOptions`] may not be configurable at the external API
 /// (e.g. sorting_columns).
 #[derive(Clone, Default, Debug, PartialEq)]
@@ -2479,7 +2505,7 @@ config_namespace_with_hashmap! {
 
         /// Sets default parquet compression codec for the column path.
         /// Valid values are: uncompressed, snappy, gzip(level),
-        /// lzo, brotli(level), lz4, zstd(level), and lz4_raw.
+        /// brotli(level), lz4, zstd(level), and lz4_raw.
         /// These values are not case-sensitive. If NULL, uses
         /// default parquet options
         pub compression: Option<String>, transform = str::to_lowercase, default = None
@@ -3045,6 +3071,22 @@ config_namespace! {
         /// If not specified, the default level for the compression algorithm is used.
         pub compression_level: Option<u32>, default = None
         pub schema_infer_max_rec: Option<usize>, default = None
+       /// The JSON format to use when reading files.
+       ///
+       /// When `true` (default), expects newline-delimited JSON (NDJSON):
+       /// ```text
+       /// {"key1": 1, "key2": "val"}
+       /// {"key1": 2, "key2": "vals"}
+       /// ```
+       ///
+       /// When `false`, expects JSON array format:
+       /// ```text
+       /// [
+       ///   {"key1": 1, "key2": "val"},
+       ///   {"key1": 2, "key2": "vals"}
+       /// ]
+       /// ```
+       pub newline_delimited: bool, default = true
     }
 }
 
@@ -3454,5 +3496,38 @@ mod tests {
         table_config.set("format.metadata::key_dupe", "B").unwrap();
         let parsed_metadata = table_config.parquet.key_value_metadata;
         assert_eq!(parsed_metadata.get("key_dupe"), Some(&Some("B".into())));
+    }
+    #[cfg(feature = "parquet")]
+    #[test]
+    fn test_parquet_writer_version_validation() {
+        use crate::{config::ConfigOptions, parquet_config::DFParquetWriterVersion};
+
+        let mut config = ConfigOptions::default();
+
+        // Valid values should work
+        config
+            .set("datafusion.execution.parquet.writer_version", "1.0")
+            .unwrap();
+        assert_eq!(
+            config.execution.parquet.writer_version,
+            DFParquetWriterVersion::V1_0
+        );
+
+        config
+            .set("datafusion.execution.parquet.writer_version", "2.0")
+            .unwrap();
+        assert_eq!(
+            config.execution.parquet.writer_version,
+            DFParquetWriterVersion::V2_0
+        );
+
+        // Invalid value should error immediately at SET time
+        let err = config
+            .set("datafusion.execution.parquet.writer_version", "3.0")
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid or Unsupported Configuration: Invalid parquet writer version: 3.0. Expected one of: 1.0, 2.0"
+        );
     }
 }

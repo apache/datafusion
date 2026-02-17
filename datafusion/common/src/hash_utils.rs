@@ -23,12 +23,14 @@ use arrow::array::*;
 use arrow::datatypes::*;
 #[cfg(not(feature = "force_hash_collisions"))]
 use arrow::{downcast_dictionary_array, downcast_primitive_array};
+use itertools::Itertools;
 
 #[cfg(not(feature = "force_hash_collisions"))]
 use crate::cast::{
     as_binary_view_array, as_boolean_array, as_fixed_size_list_array,
-    as_generic_binary_array, as_large_list_array, as_list_array, as_map_array,
-    as_string_array, as_string_view_array, as_struct_array, as_union_array,
+    as_generic_binary_array, as_large_list_array, as_large_list_view_array,
+    as_list_array, as_list_view_array, as_map_array, as_string_array,
+    as_string_view_array, as_struct_array, as_union_array,
 };
 use crate::error::Result;
 use crate::error::{_internal_datafusion_err, _internal_err};
@@ -390,24 +392,56 @@ fn hash_generic_byte_view_array<T: ByteViewType>(
     }
 }
 
-/// Helper function to update hash for a dictionary key if the value is valid
-#[cfg(not(feature = "force_hash_collisions"))]
-#[inline]
-fn update_hash_for_dict_key(
-    hash: &mut u64,
-    dict_hashes: &[u64],
-    dict_values: &dyn Array,
-    idx: usize,
-    multi_col: bool,
-) {
-    if dict_values.is_valid(idx) {
-        if multi_col {
-            *hash = combine_hashes(dict_hashes[idx], *hash);
-        } else {
-            *hash = dict_hashes[idx];
+/// Hash dictionary array with compile-time specialization for null handling.
+///
+/// Uses const generics to eliminate runtim branching in the hot loop:
+/// - `HAS_NULL_KEYS`: Whether to check for null dictionary keys
+/// - `HAS_NULL_VALUES`: Whether to check for null dictionary values
+/// - `MULTI_COL`: Whether to combine with existing hash (true) or initialize (false)
+#[inline(never)]
+fn hash_dictionary_inner<
+    K: ArrowDictionaryKeyType,
+    const HAS_NULL_KEYS: bool,
+    const HAS_NULL_VALUES: bool,
+    const MULTI_COL: bool,
+>(
+    array: &DictionaryArray<K>,
+    random_state: &RandomState,
+    hashes_buffer: &mut [u64],
+) -> Result<()> {
+    // Hash each dictionary value once, and then use that computed
+    // hash for each key value to avoid a potentially expensive
+    // redundant hashing for large dictionary elements (e.g. strings)
+    let dict_values = array.values();
+    let mut dict_hashes = vec![0; dict_values.len()];
+    create_hashes([dict_values], random_state, &mut dict_hashes)?;
+
+    if HAS_NULL_KEYS {
+        for (hash, key) in hashes_buffer.iter_mut().zip(array.keys().iter()) {
+            if let Some(key) = key {
+                let idx = key.as_usize();
+                if !HAS_NULL_VALUES || dict_values.is_valid(idx) {
+                    if MULTI_COL {
+                        *hash = combine_hashes(dict_hashes[idx], *hash);
+                    } else {
+                        *hash = dict_hashes[idx];
+                    }
+                }
+            }
+        }
+    } else {
+        for (hash, key) in hashes_buffer.iter_mut().zip(array.keys().values()) {
+            let idx = key.as_usize();
+            if !HAS_NULL_VALUES || dict_values.is_valid(idx) {
+                if MULTI_COL {
+                    *hash = combine_hashes(dict_hashes[idx], *hash);
+                } else {
+                    *hash = dict_hashes[idx];
+                }
+            }
         }
     }
-    // no update for invalid dictionary value
+    Ok(())
 }
 
 /// Hash the values in a dictionary array
@@ -418,27 +452,53 @@ fn hash_dictionary<K: ArrowDictionaryKeyType>(
     hashes_buffer: &mut [u64],
     multi_col: bool,
 ) -> Result<()> {
-    // Hash each dictionary value once, and then use that computed
-    // hash for each key value to avoid a potentially expensive
-    // redundant hashing for large dictionary elements (e.g. strings)
-    let dict_values = array.values();
-    let mut dict_hashes = vec![0; dict_values.len()];
-    create_hashes([dict_values], random_state, &mut dict_hashes)?;
+    let has_null_keys = array.keys().null_count() != 0;
+    let has_null_values = array.values().null_count() != 0;
 
-    // combine hash for each index in values
-    for (hash, key) in hashes_buffer.iter_mut().zip(array.keys().iter()) {
-        if let Some(key) = key {
-            let idx = key.as_usize();
-            update_hash_for_dict_key(
-                hash,
-                &dict_hashes,
-                dict_values.as_ref(),
-                idx,
-                multi_col,
-            );
-        } // no update for Null key
+    // Dispatcher based on null presence and multi-column mode
+    // Should reduce branching within hot loops
+    match (has_null_keys, has_null_values, multi_col) {
+        (false, false, false) => hash_dictionary_inner::<K, false, false, false>(
+            array,
+            random_state,
+            hashes_buffer,
+        ),
+        (false, false, true) => hash_dictionary_inner::<K, false, false, true>(
+            array,
+            random_state,
+            hashes_buffer,
+        ),
+        (false, true, false) => hash_dictionary_inner::<K, false, true, false>(
+            array,
+            random_state,
+            hashes_buffer,
+        ),
+        (false, true, true) => hash_dictionary_inner::<K, false, true, true>(
+            array,
+            random_state,
+            hashes_buffer,
+        ),
+        (true, false, false) => hash_dictionary_inner::<K, true, false, false>(
+            array,
+            random_state,
+            hashes_buffer,
+        ),
+        (true, false, true) => hash_dictionary_inner::<K, true, false, true>(
+            array,
+            random_state,
+            hashes_buffer,
+        ),
+        (true, true, false) => hash_dictionary_inner::<K, true, true, false>(
+            array,
+            random_state,
+            hashes_buffer,
+        ),
+        (true, true, true) => hash_dictionary_inner::<K, true, true, true>(
+            array,
+            random_state,
+            hashes_buffer,
+        ),
     }
-    Ok(())
 }
 
 #[cfg(not(feature = "force_hash_collisions"))]
@@ -450,19 +510,21 @@ fn hash_struct_array(
     let nulls = array.nulls();
     let row_len = array.len();
 
-    let valid_row_indices: Vec<usize> = if let Some(nulls) = nulls {
-        nulls.valid_indices().collect()
-    } else {
-        (0..row_len).collect()
-    };
-
     // Create hashes for each row that combines the hashes over all the column at that row.
     let mut values_hashes = vec![0u64; row_len];
     create_hashes(array.columns(), random_state, &mut values_hashes)?;
 
-    for i in valid_row_indices {
-        let hash = &mut hashes_buffer[i];
-        *hash = combine_hashes(*hash, values_hashes[i]);
+    // Separate paths to avoid allocating Vec when there are no nulls
+    if let Some(nulls) = nulls {
+        for i in nulls.valid_indices() {
+            let hash = &mut hashes_buffer[i];
+            *hash = combine_hashes(*hash, values_hashes[i]);
+        }
+    } else {
+        for i in 0..row_len {
+            let hash = &mut hashes_buffer[i];
+            *hash = combine_hashes(*hash, values_hashes[i]);
+        }
     }
 
     Ok(())
@@ -513,24 +575,80 @@ fn hash_list_array<OffsetSize>(
 where
     OffsetSize: OffsetSizeTrait,
 {
-    let values = array.values();
-    let offsets = array.value_offsets();
-    let nulls = array.nulls();
-    let mut values_hashes = vec![0u64; values.len()];
-    create_hashes([values], random_state, &mut values_hashes)?;
-    if let Some(nulls) = nulls {
-        for (i, (start, stop)) in offsets.iter().zip(offsets.iter().skip(1)).enumerate() {
-            if nulls.is_valid(i) {
+    // In case values is sliced, hash only the bytes used by the offsets of this ListArray
+    let first_offset = array.value_offsets().first().cloned().unwrap_or_default();
+    let last_offset = array.value_offsets().last().cloned().unwrap_or_default();
+    let value_bytes_len = (last_offset - first_offset).as_usize();
+    let mut values_hashes = vec![0u64; value_bytes_len];
+    create_hashes(
+        [array
+            .values()
+            .slice(first_offset.as_usize(), value_bytes_len)],
+        random_state,
+        &mut values_hashes,
+    )?;
+
+    if array.null_count() > 0 {
+        for (i, (start, stop)) in array.value_offsets().iter().tuple_windows().enumerate()
+        {
+            if array.is_valid(i) {
                 let hash = &mut hashes_buffer[i];
-                for values_hash in &values_hashes[start.as_usize()..stop.as_usize()] {
+                for values_hash in &values_hashes[(*start - first_offset).as_usize()
+                    ..(*stop - first_offset).as_usize()]
+                {
                     *hash = combine_hashes(*hash, *values_hash);
                 }
             }
         }
     } else {
-        for (i, (start, stop)) in offsets.iter().zip(offsets.iter().skip(1)).enumerate() {
+        for ((start, stop), hash) in array
+            .value_offsets()
+            .iter()
+            .tuple_windows()
+            .zip(hashes_buffer.iter_mut())
+        {
+            for values_hash in &values_hashes
+                [(*start - first_offset).as_usize()..(*stop - first_offset).as_usize()]
+            {
+                *hash = combine_hashes(*hash, *values_hash);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "force_hash_collisions"))]
+fn hash_list_view_array<OffsetSize>(
+    array: &GenericListViewArray<OffsetSize>,
+    random_state: &RandomState,
+    hashes_buffer: &mut [u64],
+) -> Result<()>
+where
+    OffsetSize: OffsetSizeTrait,
+{
+    let values = array.values();
+    let offsets = array.value_offsets();
+    let sizes = array.value_sizes();
+    let nulls = array.nulls();
+    let mut values_hashes = vec![0u64; values.len()];
+    create_hashes([values], random_state, &mut values_hashes)?;
+    if let Some(nulls) = nulls {
+        for (i, (offset, size)) in offsets.iter().zip(sizes.iter()).enumerate() {
+            if nulls.is_valid(i) {
+                let hash = &mut hashes_buffer[i];
+                let start = offset.as_usize();
+                let end = start + size.as_usize();
+                for values_hash in &values_hashes[start..end] {
+                    *hash = combine_hashes(*hash, *values_hash);
+                }
+            }
+        }
+    } else {
+        for (i, (offset, size)) in offsets.iter().zip(sizes.iter()).enumerate() {
             let hash = &mut hashes_buffer[i];
-            for values_hash in &values_hashes[start.as_usize()..stop.as_usize()] {
+            let start = offset.as_usize();
+            let end = start + size.as_usize();
+            for values_hash in &values_hashes[start..end] {
                 *hash = combine_hashes(*hash, *values_hash);
             }
         }
@@ -605,12 +723,17 @@ fn hash_fixed_list_array(
     Ok(())
 }
 
+/// Inner hash function for RunArray
+#[inline(never)]
 #[cfg(not(feature = "force_hash_collisions"))]
-fn hash_run_array<R: RunEndIndexType>(
+fn hash_run_array_inner<
+    R: RunEndIndexType,
+    const HAS_NULL_VALUES: bool,
+    const REHASH: bool,
+>(
     array: &RunArray<R>,
     random_state: &RandomState,
     hashes_buffer: &mut [u64],
-    rehash: bool,
 ) -> Result<()> {
     // We find the relevant runs that cover potentially sliced arrays, so we can only hash those
     // values. Then we find the runs that refer to the original runs and ensure that we apply
@@ -648,31 +771,54 @@ fn hash_run_array<R: RunEndIndexType>(
         .iter()
         .enumerate()
     {
-        let is_null_value = sliced_values.is_null(adjusted_physical_index);
         let absolute_run_end = absolute_run_end.as_usize();
-
         let end_in_slice = (absolute_run_end - array_offset).min(array_len);
 
-        if rehash {
-            if !is_null_value {
-                let value_hash = values_hashes[adjusted_physical_index];
-                for hash in hashes_buffer
-                    .iter_mut()
-                    .take(end_in_slice)
-                    .skip(start_in_slice)
-                {
-                    *hash = combine_hashes(value_hash, *hash);
-                }
+        if HAS_NULL_VALUES && sliced_values.is_null(adjusted_physical_index) {
+            start_in_slice = end_in_slice;
+            continue;
+        }
+
+        let value_hash = values_hashes[adjusted_physical_index];
+        let run_slice = &mut hashes_buffer[start_in_slice..end_in_slice];
+
+        if REHASH {
+            for hash in run_slice.iter_mut() {
+                *hash = combine_hashes(value_hash, *hash);
             }
         } else {
-            let value_hash = values_hashes[adjusted_physical_index];
-            hashes_buffer[start_in_slice..end_in_slice].fill(value_hash);
+            run_slice.fill(value_hash);
         }
 
         start_in_slice = end_in_slice;
     }
 
     Ok(())
+}
+
+#[cfg(not(feature = "force_hash_collisions"))]
+fn hash_run_array<R: RunEndIndexType>(
+    array: &RunArray<R>,
+    random_state: &RandomState,
+    hashes_buffer: &mut [u64],
+    rehash: bool,
+) -> Result<()> {
+    let has_null_values = array.values().null_count() != 0;
+
+    match (has_null_values, rehash) {
+        (false, false) => {
+            hash_run_array_inner::<R, false, false>(array, random_state, hashes_buffer)
+        }
+        (false, true) => {
+            hash_run_array_inner::<R, false, true>(array, random_state, hashes_buffer)
+        }
+        (true, false) => {
+            hash_run_array_inner::<R, true, false>(array, random_state, hashes_buffer)
+        }
+        (true, true) => {
+            hash_run_array_inner::<R, true, true>(array, random_state, hashes_buffer)
+        }
+    }
 }
 
 /// Internal helper function that hashes a single array and either initializes or combines
@@ -713,6 +859,14 @@ fn hash_single_array(
         DataType::LargeList(_) => {
             let array = as_large_list_array(array)?;
             hash_list_array(array, random_state, hashes_buffer)?;
+        }
+        DataType::ListView(_) => {
+            let array = as_list_view_array(array)?;
+            hash_list_view_array(array, random_state, hashes_buffer)?;
+        }
+        DataType::LargeListView(_) => {
+            let array = as_large_list_view_array(array)?;
+            hash_list_view_array(array, random_state, hashes_buffer)?;
         }
         DataType::Map(_, _) => {
             let array = as_map_array(array)?;
@@ -1126,6 +1280,130 @@ mod tests {
         assert_eq!(hashes[1], hashes[4]);
         assert_eq!(hashes[2], hashes[3]);
         assert_eq!(hashes[1], hashes[6]); // null vs empty list
+    }
+
+    #[test]
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn create_hashes_for_sliced_list_arrays() {
+        let data = vec![
+            Some(vec![Some(0), Some(1), Some(2)]),
+            None,
+            // Slice from here
+            Some(vec![Some(3), None, Some(5)]),
+            Some(vec![Some(3), None, Some(5)]),
+            None,
+            // To here
+            Some(vec![Some(0), Some(1), Some(2)]),
+            Some(vec![]),
+        ];
+        let list_array =
+            Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(data)) as ArrayRef;
+        let list_array = list_array.slice(2, 3);
+        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let mut hashes = vec![0; list_array.len()];
+        create_hashes(&[list_array], &random_state, &mut hashes).unwrap();
+        assert_eq!(hashes[0], hashes[1]);
+        assert_ne!(hashes[1], hashes[2]);
+    }
+
+    #[test]
+    // Tests actual values of hashes, which are different if forcing collisions
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn create_hashes_for_list_view_arrays() {
+        use arrow::buffer::{NullBuffer, ScalarBuffer};
+
+        // Create values array: [0, 1, 2, 3, null, 5]
+        let values = Arc::new(Int32Array::from(vec![
+            Some(0),
+            Some(1),
+            Some(2),
+            Some(3),
+            None,
+            Some(5),
+        ])) as ArrayRef;
+        let field = Arc::new(Field::new("item", DataType::Int32, true));
+
+        // Create ListView with the following logical structure:
+        // Row 0: [0, 1, 2]        (offset=0, size=3)
+        // Row 1: null             (null bit set)
+        // Row 2: [3, null, 5]     (offset=3, size=3)
+        // Row 3: [3, null, 5]     (offset=3, size=3) - same as row 2
+        // Row 4: null             (null bit set)
+        // Row 5: [0, 1, 2]        (offset=0, size=3) - same as row 0
+        // Row 6: []               (offset=0, size=0) - empty list
+        let offsets = ScalarBuffer::from(vec![0i32, 0, 3, 3, 0, 0, 0]);
+        let sizes = ScalarBuffer::from(vec![3i32, 0, 3, 3, 0, 3, 0]);
+        let nulls = Some(NullBuffer::from(vec![
+            true, false, true, true, false, true, true,
+        ]));
+
+        let list_view_array =
+            Arc::new(ListViewArray::new(field, offsets, sizes, values, nulls))
+                as ArrayRef;
+
+        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let mut hashes = vec![0; list_view_array.len()];
+        create_hashes(&[list_view_array], &random_state, &mut hashes).unwrap();
+
+        assert_eq!(hashes[0], hashes[5]); // same content [0, 1, 2]
+        assert_eq!(hashes[1], hashes[4]); // both null
+        assert_eq!(hashes[2], hashes[3]); // same content [3, null, 5]
+        assert_eq!(hashes[1], hashes[6]); // null vs empty list
+
+        // Negative tests: different content should produce different hashes
+        assert_ne!(hashes[0], hashes[2]); // [0, 1, 2] vs [3, null, 5]
+        assert_ne!(hashes[0], hashes[6]); // [0, 1, 2] vs []
+        assert_ne!(hashes[2], hashes[6]); // [3, null, 5] vs []
+    }
+
+    #[test]
+    // Tests actual values of hashes, which are different if forcing collisions
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn create_hashes_for_large_list_view_arrays() {
+        use arrow::buffer::{NullBuffer, ScalarBuffer};
+
+        // Create values array: [0, 1, 2, 3, null, 5]
+        let values = Arc::new(Int32Array::from(vec![
+            Some(0),
+            Some(1),
+            Some(2),
+            Some(3),
+            None,
+            Some(5),
+        ])) as ArrayRef;
+        let field = Arc::new(Field::new("item", DataType::Int32, true));
+
+        // Create LargeListView with the following logical structure:
+        // Row 0: [0, 1, 2]        (offset=0, size=3)
+        // Row 1: null             (null bit set)
+        // Row 2: [3, null, 5]     (offset=3, size=3)
+        // Row 3: [3, null, 5]     (offset=3, size=3) - same as row 2
+        // Row 4: null             (null bit set)
+        // Row 5: [0, 1, 2]        (offset=0, size=3) - same as row 0
+        // Row 6: []               (offset=0, size=0) - empty list
+        let offsets = ScalarBuffer::from(vec![0i64, 0, 3, 3, 0, 0, 0]);
+        let sizes = ScalarBuffer::from(vec![3i64, 0, 3, 3, 0, 3, 0]);
+        let nulls = Some(NullBuffer::from(vec![
+            true, false, true, true, false, true, true,
+        ]));
+
+        let large_list_view_array = Arc::new(LargeListViewArray::new(
+            field, offsets, sizes, values, nulls,
+        )) as ArrayRef;
+
+        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let mut hashes = vec![0; large_list_view_array.len()];
+        create_hashes(&[large_list_view_array], &random_state, &mut hashes).unwrap();
+
+        assert_eq!(hashes[0], hashes[5]); // same content [0, 1, 2]
+        assert_eq!(hashes[1], hashes[4]); // both null
+        assert_eq!(hashes[2], hashes[3]); // same content [3, null, 5]
+        assert_eq!(hashes[1], hashes[6]); // null vs empty list
+
+        // Negative tests: different content should produce different hashes
+        assert_ne!(hashes[0], hashes[2]); // [0, 1, 2] vs [3, null, 5]
+        assert_ne!(hashes[0], hashes[6]); // [0, 1, 2] vs []
+        assert_ne!(hashes[2], hashes[6]); // [3, null, 5] vs []
     }
 
     #[test]

@@ -25,8 +25,9 @@ use arrow::array::{
     BinaryViewArray, Decimal32Array, Decimal64Array, DurationMicrosecondArray,
     DurationMillisecondArray, DurationNanosecondArray, DurationSecondArray, Float16Array,
     Int8Array, Int16Array, LargeBinaryArray, LargeListViewArray, LargeStringArray,
-    ListViewArray, StringViewArray, UInt16Array,
+    ListViewArray, RunArray, StringViewArray, UInt16Array,
 };
+use arrow::datatypes::RunEndIndexType;
 use arrow::{
     array::{
         Array, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array,
@@ -333,4 +334,9 @@ pub fn as_list_view_array(array: &dyn Array) -> Result<&ListViewArray> {
 // Downcast Array to LargeListViewArray
 pub fn as_large_list_view_array(array: &dyn Array) -> Result<&LargeListViewArray> {
     Ok(downcast_value!(array, LargeListViewArray))
+}
+
+// Downcast Array to RunArray
+pub fn as_run_array<T: RunEndIndexType>(array: &dyn Array) -> Result<&RunArray<T>> {
+    Ok(downcast_value!(array, RunArray, T))
 }
