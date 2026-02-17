@@ -19,6 +19,7 @@ pub mod crc32;
 pub mod murmur3_hash;
 pub mod sha1;
 pub mod sha2;
+pub(crate) mod utils;
 pub mod xxhash64;
 
 use datafusion_expr::ScalarUDF;

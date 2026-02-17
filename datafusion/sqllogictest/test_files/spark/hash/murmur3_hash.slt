@@ -61,6 +61,38 @@ SELECT murmur3_hash('abc');
 ----
 1322437556
 
+# Boundary values
+query I
+SELECT murmur3_hash(arrow_cast(2147483647, 'Int32'));
+----
+133916647
+
+query I
+SELECT murmur3_hash(arrow_cast(-2147483648, 'Int32'));
+----
+723455942
+
+query I
+SELECT murmur3_hash(arrow_cast(9223372036854775807, 'Int64'));
+----
+-1604625029
+
+query I
+SELECT murmur3_hash(arrow_cast(-9223372036854775808, 'Int64'));
+----
+-853646085
+
+# Emoji and CJK strings
+query I
+SELECT murmur3_hash('😁');
+----
+885025535
+
+query I
+SELECT murmur3_hash('天地');
+----
+-1899966402
+
 # NULL handling - nulls don't change the hash (keeps seed value 42)
 query I
 SELECT murmur3_hash(NULL);
@@ -110,6 +142,17 @@ SELECT murmur3_hash(-0.0);
 ----
 -1670924195
 
+# Float edge cases
+query I
+SELECT murmur3_hash(-1.0);
+----
+332927831
+
+query I
+SELECT murmur3_hash(arrow_cast(1.0E20, 'Float64'));
+----
+1801804228
+
 # Boolean tests
 query I
 SELECT murmur3_hash(true);
@@ -132,6 +175,18 @@ query I
 SELECT murmur3_hash(arrow_cast('2023-01-15', 'Date32'));
 ----
 1059174970
+
+# Struct hashing
+query I
+SELECT murmur3_hash(named_struct('a', 1, 'b', 2));
+----
+-1181176833
+
+# Array/List hashing
+query I
+SELECT murmur3_hash(arrow_cast(make_array(1, 2, 3), 'List(Int32)'));
+----
+-1823081949
 
 # Test with table data
 statement ok
