@@ -191,8 +191,8 @@ fn invoke_translate(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
         DataType::LargeUtf8 => {
             let string_array = args[0].as_string::<i64>();
-            let from_array = args[1].as_string::<i64>();
-            let to_array = args[2].as_string::<i64>();
+            let from_array = args[1].as_string::<i32>();
+            let to_array = args[2].as_string::<i32>();
             translate::<i64, _, _>(string_array, from_array, to_array)
         }
         other => {
