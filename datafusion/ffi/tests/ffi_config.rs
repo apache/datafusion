@@ -20,13 +20,15 @@
 #[cfg(feature = "integration-tests")]
 mod tests {
     use datafusion::error::{DataFusionError, Result};
-    use datafusion_common::config::{ConfigExtension, ConfigOptions};
+    use datafusion_common::ScalarValue;
+    use datafusion_common::config::{ConfigOptions, TableOptions};
+    use datafusion_execution::config::SessionConfig;
     use datafusion_ffi::config::extension_options::FFI_ExtensionOptions;
     use datafusion_ffi::tests::config::ExternalConfig;
     use datafusion_ffi::tests::utils::get_module;
 
     #[test]
-    fn test_ffi_extension_options() -> Result<()> {
+    fn test_ffi_config_options_extension() -> Result<()> {
         let module = get_module()?;
 
         let extension_options =
@@ -36,8 +38,6 @@ mod tests {
                     "External test library failed to implement create_extension_options"
                         .to_string(),
                 ))?();
-
-        println!("{:?} {}", extension_options, FFI_ExtensionOptions::PREFIX);
 
         let mut config = ConfigOptions::new();
         config.extensions.insert(extension_options);
@@ -65,6 +65,98 @@ mod tests {
         assert_eq!(returned_config, ExternalConfig::default());
 
         config.set("external_config.is_enabled", "false")?;
+        let returned_config = extract_config(&config);
+        assert!(!returned_config.is_enabled);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ffi_table_options_extension() -> Result<()> {
+        let module = get_module()?;
+
+        let extension_options =
+            module
+                .create_extension_options()
+                .ok_or(DataFusionError::NotImplemented(
+                    "External test library failed to implement create_extension_options"
+                        .to_string(),
+                ))?();
+
+        let mut table_options = TableOptions::new();
+        table_options.extensions.insert(extension_options);
+
+        fn extract_options(options: &TableOptions) -> ExternalConfig {
+            // For our use case of this test, we do not need to check
+            // using .get::<ExternalConfig>() but it is left here as an
+            // example to users of this crate.
+            options
+                .extensions
+                .get::<ExternalConfig>()
+                .map(|v| v.to_owned())
+                .or_else(|| {
+                    options
+                        .extensions
+                        .get::<FFI_ExtensionOptions>()
+                        .and_then(|ext| ext.to_extension().ok())
+                })
+                .expect("Should be able to get ExternalConfig")
+        }
+
+        // Verify default values are as expected
+        let returned_options = extract_options(&table_options);
+
+        assert_eq!(returned_options, ExternalConfig::default());
+
+        table_options.set("external_config.is_enabled", "false")?;
+        let returned_config = extract_options(&table_options);
+        assert!(!returned_config.is_enabled);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ffi_session_config_options_extension() -> Result<()> {
+        let module = get_module()?;
+
+        let extension_options =
+            module
+                .create_extension_options()
+                .ok_or(DataFusionError::NotImplemented(
+                    "External test library failed to implement create_extension_options"
+                        .to_string(),
+                ))?();
+
+        let mut config = SessionConfig::new().with_option_extension(extension_options);
+
+        fn extract_config(config: &SessionConfig) -> ExternalConfig {
+            // For our use case of this test, we do not need to check
+            // using .get::<ExternalConfig>() but it is left here as an
+            // example to users of this crate.
+
+            config
+                .options()
+                .extensions
+                .get::<ExternalConfig>()
+                .map(|v| v.to_owned())
+                .or_else(|| {
+                    config
+                        .options()
+                        .extensions
+                        .get::<FFI_ExtensionOptions>()
+                        .and_then(|ext| ext.to_extension().ok())
+                })
+                .expect("Should be able to get ExternalConfig")
+        }
+
+        // Verify default values are as expected
+        let returned_config = extract_config(&config);
+        assert_eq!(returned_config, ExternalConfig::default());
+
+        config = config.set(
+            "external_config.is_enabled",
+            &ScalarValue::Boolean(Some(false)),
+        );
         let returned_config = extract_config(&config);
         assert!(!returned_config.is_enabled);
 
