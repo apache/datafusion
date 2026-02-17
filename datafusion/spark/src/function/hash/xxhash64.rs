@@ -78,15 +78,7 @@ impl ScalarUDFImpl for SparkXxhash64 {
             return exec_err!("xxhash64 requires at least one argument");
         }
 
-        // Determine number of rows from the first array argument
-        let num_rows = args
-            .args
-            .iter()
-            .find_map(|arg| match arg {
-                ColumnarValue::Array(array) => Some(array.len()),
-                ColumnarValue::Scalar(_) => None,
-            })
-            .unwrap_or(1);
+        let num_rows = args.number_rows;
 
         // Initialize hashes with seed
         let mut hashes: Vec<u64> = vec![DEFAULT_SEED as u64; num_rows];

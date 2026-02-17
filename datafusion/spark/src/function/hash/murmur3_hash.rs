@@ -15,6 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+// This is a Spark-compatible MurmurHash3 implementation.
+// The algorithm is based on Austin Appleby's original MurmurHash3:
+//   https://github.com/aappleby/smhasher/blob/0ff96f7835817a27d0487325b6c16033e2992eb5/src/MurmurHash3.cpp
+// Spark's implementation is derived from Guava's Murmur3_32HashFunction:
+//   https://github.com/google/guava/blob/master/guava/src/com/google/common/hash/Murmur3_32HashFunction.java
+
 use std::any::Any;
 use std::sync::Arc;
 
@@ -83,30 +89,12 @@ impl ScalarUDFImpl for SparkMurmur3Hash {
             return exec_err!("murmur3_hash requires at least one argument");
         }
 
-        // Determine number of rows from the first array argument
-        let num_rows = args
-            .args
-            .iter()
-            .find_map(|arg| match arg {
-                ColumnarValue::Array(array) => Some(array.len()),
-                ColumnarValue::Scalar(_) => None,
-            })
-            .unwrap_or(1);
+        let num_rows = args.number_rows;
 
         // Initialize hashes with seed
         let mut hashes: Vec<u32> = vec![DEFAULT_SEED as u32; num_rows];
 
-        // Convert all arguments to arrays
-        let arrays: Vec<ArrayRef> = args
-            .args
-            .iter()
-            .map(|arg| match arg {
-                ColumnarValue::Array(array) => Arc::clone(array),
-                ColumnarValue::Scalar(scalar) => scalar
-                    .to_array_of_size(num_rows)
-                    .expect("Failed to convert scalar to array"),
-            })
-            .collect();
+        let arrays = ColumnarValue::values_to_arrays(&args.args)?;
 
         // Hash each column
         for (i, col) in arrays.iter().enumerate() {
@@ -162,10 +150,7 @@ pub fn spark_compatible_murmur3_hash<T: AsRef<[u8]>>(data: T, seed: u32) -> u32 
             let mut h1 = seed as i32;
             for i in (0..data.len()).step_by(4) {
                 let ints = data.as_ptr().add(i) as *const i32;
-                let mut half_word = ints.read_unaligned();
-                if cfg!(target_endian = "big") {
-                    half_word = half_word.reverse_bits();
-                }
+                let half_word = ints.read_unaligned();
                 h1 = mix_h1(h1, mix_k1(half_word));
             }
             h1
