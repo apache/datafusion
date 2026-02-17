@@ -275,7 +275,10 @@ fn run_space_trim_benchmark(
     group.sampling_mode(SamplingMode::Flat);
     group.sample_size(10);
 
-    let total_len = pad_len + remaining_len;
+    let total_len = match trim_type {
+        TrimType::Btrim => 2 * pad_len + remaining_len,
+        _ => pad_len + remaining_len,
+    };
 
     for string_type in string_types {
         let args =
