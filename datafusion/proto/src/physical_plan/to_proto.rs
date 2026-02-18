@@ -330,15 +330,15 @@ pub fn serialize_physical_expr_with_converter(
         })
     } else if let Some(df) = expr.downcast_ref::<DynamicFilterPhysicalExpr>() {
         // Capture all state atomically
-        let (base_children, remapped, generation, inner_expr_val, is_complete) =
-            df.current_snapshot()?;
+        let snapshot = df.current_snapshot();
 
-        let children = base_children
+        let children = snapshot
+            .children()
             .iter()
             .map(|child| proto_converter.physical_expr_to_proto(child, codec))
             .collect::<Result<Vec<_>>>()?;
 
-        let remapped_children = if let Some(remapped) = remapped {
+        let remapped_children = if let Some(remapped) = snapshot.remapped_children() {
             remapped
                 .iter()
                 .map(|child| proto_converter.physical_expr_to_proto(child, codec))
@@ -347,8 +347,9 @@ pub fn serialize_physical_expr_with_converter(
             vec![]
         };
 
-        let inner_expr =
-            Box::new(proto_converter.physical_expr_to_proto(&inner_expr_val, codec)?);
+        let inner_expr = Box::new(
+            proto_converter.physical_expr_to_proto(snapshot.inner_expr(), codec)?,
+        );
 
         Ok(protobuf::PhysicalExprNode {
             expr_id: None,
@@ -357,9 +358,9 @@ pub fn serialize_physical_expr_with_converter(
                 Box::new(protobuf::PhysicalDynamicFilterNode {
                     children,
                     remapped_children,
-                    generation,
+                    generation: snapshot.generation(),
                     inner_expr: Some(inner_expr),
-                    is_complete,
+                    is_complete: snapshot.is_complete(),
                 }),
             )),
         })

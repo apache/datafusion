@@ -58,7 +58,9 @@ use super::{
 use crate::logical_plan::{self};
 use crate::protobuf::physical_expr_node::ExprType;
 use crate::{convert_required, protobuf};
-use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
+use datafusion_physical_expr::expressions::{
+    DynamicFilterPhysicalExpr, DynamicFilterSnapshot,
+};
 
 impl From<&protobuf::PhysicalColumn> for Column {
     fn from(c: &protobuf::PhysicalColumn) -> Column {
@@ -528,13 +530,14 @@ pub fn parse_physical_expr_with_converter(
 
             // Recreate filter from snapshot
             let base_filter = Arc::new(DynamicFilterPhysicalExpr::new_from_snapshot(
-                children,
-                remapped_children,
-                dynamic_filter.generation,
-                inner_expr,
-                dynamic_filter.is_complete,
+                DynamicFilterSnapshot::new(
+                    children,
+                    remapped_children,
+                    dynamic_filter.generation,
+                    inner_expr,
+                    dynamic_filter.is_complete,
+                ),
             ));
-
             base_filter as Arc<dyn PhysicalExpr>
         }
         ExprType::Extension(extension) => {

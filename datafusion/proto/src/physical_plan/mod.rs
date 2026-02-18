@@ -3969,7 +3969,7 @@ impl PhysicalProtoConverterExtension for DeduplicatingDeserializer {
                         "dynamic_filter_id present in proto, but the expression was not a DynamicFilterPhysicalExpr"
                     );
                 };
-                expr = Arc::new(dynamic_filter_expr.new_from_source(cached_df))
+                expr = Arc::new(dynamic_filter_expr.new_from_source(cached_df)?)
                     as Arc<dyn PhysicalExpr>;
             } else {
                 // Cache it

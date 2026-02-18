@@ -3065,40 +3065,13 @@ fn test_dynamic_filter_roundtrip() -> Result<()> {
         .downcast_ref::<DynamicFilterPhysicalExpr>()
         .expect("Should be DynamicFilterPhysicalExpr");
 
-    assert_dynamic_filter_fields_equal(df, deserialized_df);
+    assert_eq!(
+        df.current_snapshot().to_string(),
+        deserialized_df.current_snapshot().to_string(),
+        "Snapshots should be equal"
+    );
 
     Ok(())
-}
-
-/// Asserts that dynamic filters have the same fields without asserting any pointer values.
-/// Useful for testing filter equality after roundtrip.
-fn assert_dynamic_filter_fields_equal(
-    df1: &DynamicFilterPhysicalExpr,
-    df2: &DynamicFilterPhysicalExpr,
-) {
-    let (children1, remapped1, gen1, expr1, complete1) = df1.current_snapshot().unwrap();
-    let (children2, remapped2, gen2, expr2, complete2) = df2.current_snapshot().unwrap();
-
-    assert_eq!(gen1, gen2, "Generation should be preserved");
-    assert_eq!(
-        complete1, complete2,
-        "Completion status should be preserved"
-    );
-    assert_eq!(
-        format!("{:?}", expr1),
-        format!("{:?}", expr2),
-        "Inner expression should be preserved"
-    );
-    assert_eq!(
-        format!("{:?}", children1),
-        format!("{:?}", children2),
-        "Base children should be preserved"
-    );
-    assert_eq!(
-        format!("{:?}", remapped1),
-        format!("{:?}", remapped2),
-        "Remapped children should be preserved"
-    );
 }
 
 /// Returns (outer_equal, inner_equal)
@@ -3246,8 +3219,15 @@ fn test_deduplication_of_dynamic_filter_expression(
         .as_any()
         .downcast_ref::<DynamicFilterPhysicalExpr>()
         .unwrap();
-    assert_dynamic_filter_fields_equal(filter_1_before_roundtrip, df1);
-    assert_dynamic_filter_fields_equal(filter_2_before_roundtrip, df2);
+
+    assert_eq!(
+        filter_1_before_roundtrip.current_snapshot().to_string(),
+        df1.current_snapshot().to_string()
+    );
+    assert_eq!(
+        filter_2_before_roundtrip.current_snapshot().to_string(),
+        df2.current_snapshot().to_string()
+    );
 
     Ok(())
 }

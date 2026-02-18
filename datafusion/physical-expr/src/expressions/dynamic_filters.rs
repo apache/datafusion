@@ -22,7 +22,7 @@ use tokio::sync::watch;
 use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{
-    Result,
+    Result, internal_err,
     tree_node::{Transformed, TransformedResult, TreeNode},
 };
 use datafusion_expr::ColumnarValue;
@@ -88,6 +88,69 @@ struct Inner {
     is_complete: bool,
 }
 
+/// An atomic snapshot of a [`DynamicFilterPhysicalExpr`] used to reconstruct the expression during
+/// serialization / deserialization.
+pub struct DynamicFilterSnapshot {
+    children: Vec<Arc<dyn PhysicalExpr>>,
+    remapped_children: Option<Vec<Arc<dyn PhysicalExpr>>>,
+    // Inner state.
+    generation: u64,
+    inner_expr: Arc<dyn PhysicalExpr>,
+    is_complete: bool,
+}
+
+impl DynamicFilterSnapshot {
+    pub fn new(
+        children: Vec<Arc<dyn PhysicalExpr>>,
+        remapped_children: Option<Vec<Arc<dyn PhysicalExpr>>>,
+        generation: u64,
+        inner_expr: Arc<dyn PhysicalExpr>,
+        is_complete: bool,
+    ) -> Self {
+        Self {
+            children,
+            remapped_children,
+            generation,
+            inner_expr,
+            is_complete,
+        }
+    }
+
+    pub fn children(&self) -> &[Arc<dyn PhysicalExpr>] {
+        &self.children
+    }
+
+    pub fn remapped_children(&self) -> Option<&[Arc<dyn PhysicalExpr>]> {
+        self.remapped_children.as_deref()
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub fn inner_expr(&self) -> &Arc<dyn PhysicalExpr> {
+        &self.inner_expr
+    }
+
+    pub fn is_complete(&self) -> bool {
+        self.is_complete
+    }
+}
+
+impl Display for DynamicFilterSnapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "DynamicFilterSnapshot {{ children: {:?}, remapped_children: {:?}, generation: {}, inner_expr: {:?}, is_complete: {} }}",
+            self.children,
+            self.remapped_children,
+            self.generation,
+            self.inner_expr,
+            self.is_complete
+        )
+    }
+}
+
 impl Inner {
     fn new(expr: Arc<dyn PhysicalExpr>) -> Self {
         Self {
@@ -96,18 +159,6 @@ impl Inner {
             generation: 1,
             expr,
             is_complete: false,
-        }
-    }
-
-    fn new_from_state(
-        generation: u64,
-        expr: Arc<dyn PhysicalExpr>,
-        is_complete: bool,
-    ) -> Self {
-        Self {
-            generation,
-            expr,
-            is_complete,
         }
     }
 
@@ -194,15 +245,17 @@ impl DynamicFilterPhysicalExpr {
 
     /// Reconstructs a [`DynamicFilterPhysicalExpr`] from a snapshot.
     ///
-    /// This is used during deserialization to recreate filters with their serialized state.
+    /// This is a low-level API intended for use by the proto deserialization layer.
     #[doc(hidden)]
-    pub fn new_from_snapshot(
-        children: Vec<Arc<dyn PhysicalExpr>>,
-        remapped_children: Option<Vec<Arc<dyn PhysicalExpr>>>,
-        generation: u64,
-        inner_expr: Arc<dyn PhysicalExpr>,
-        is_complete: bool,
-    ) -> Self {
+    pub fn new_from_snapshot(snapshot: DynamicFilterSnapshot) -> Self {
+        let DynamicFilterSnapshot {
+            children,
+            remapped_children,
+            generation,
+            inner_expr,
+            is_complete,
+        } = snapshot;
+
         let state = if is_complete {
             FilterState::Complete { generation }
         } else {
@@ -213,39 +266,59 @@ impl DynamicFilterPhysicalExpr {
         Self {
             children,
             remapped_children,
-            inner: Arc::new(RwLock::new(Inner::new_from_state(
+            inner: Arc::new(RwLock::new(Inner {
                 generation,
-                inner_expr,
+                expr: inner_expr,
                 is_complete,
-            ))),
+            })),
             state_watch,
             data_type: Arc::new(RwLock::new(None)),
             nullable: Arc::new(RwLock::new(None)),
         }
     }
 
-    /// Create a new [`DynamicFilterPhysicalExpr`] sharing inner state from a source filter.
+    /// Atomically captures all state needed for serialization into a [`DynamicFilterSnapshot`].
     ///
-    /// This is an internal API used during deserialization to reconstruct filters that share
-    /// the same inner state but have different outer wrappers (e.g., after column remapping).
-    ///
-    /// # Arguments
-    /// * `children` - The base children for this filter
-    /// * `remapped_children` - Optional remapped children (if different from base)
-    /// * `source` - The source filter to share inner state with
-    ///
-    /// # Warning
     /// This is a low-level API intended for use by the proto deserialization layer.
-    /// Most users should use [`Self::new`] instead.
-    pub fn new_from_source(&self, source: &DynamicFilterPhysicalExpr) -> Self {
-        Self {
+    #[doc(hidden)]
+    pub fn current_snapshot(&self) -> DynamicFilterSnapshot {
+        let (generation, inner_expr, is_complete) = {
+            let inner = self.inner.read();
+            (inner.generation, Arc::clone(&inner.expr), inner.is_complete)
+        };
+        DynamicFilterSnapshot {
+            children: self.children.clone(),
+            remapped_children: self.remapped_children.clone(),
+            generation,
+            inner_expr,
+            is_complete,
+        }
+    }
+
+    /// Create a new [`DynamicFilterPhysicalExpr`] from [`self`], except, it overwrites the
+    /// internal state the source filter.
+    ///
+    /// This is a low-level API intended for use by the proto deserialization layer.
+    ///
+    /// Safety: The dynamic filter should not be in use when calling this method, otherwise there
+    /// may be undefined behavior. This method may do the following or worse:
+    /// - transition the state to [`FilterState::Complete`] without notifying the watch
+    /// - cause a generation number to be emitted which is out of order
+    pub fn new_from_source(&self, source: &DynamicFilterPhysicalExpr) -> Result<Self> {
+        // Best effort check that no one is subscribed.
+        if self.state_watch.receiver_count() > 0 {
+            return internal_err!(
+                "Cannot replace the inner state of a DynamicFilterPhysicalExpr that has subscribers"
+            );
+        };
+        Ok(Self {
             children: self.children.clone(),
             remapped_children: self.remapped_children.clone(),
             inner: Arc::clone(&source.inner),
             state_watch: self.state_watch.clone(),
             data_type: Arc::clone(&self.data_type),
             nullable: Arc::clone(&self.nullable),
-        }
+        })
     }
 
     fn remap_children(
@@ -289,33 +362,6 @@ impl DynamicFilterPhysicalExpr {
     pub fn current(&self) -> Result<Arc<dyn PhysicalExpr>> {
         let expr = Arc::clone(self.inner.read().expr());
         self.remap_children(expr)
-    }
-
-    /// Captures all state needed for serialization atomically.
-    ///
-    /// Returns (children, remapped_children, generation, inner_expr, is_complete).
-    #[doc(hidden)]
-    #[expect(clippy::type_complexity)]
-    pub fn current_snapshot(
-        &self,
-    ) -> Result<(
-        Vec<Arc<dyn PhysicalExpr>>,
-        Option<Vec<Arc<dyn PhysicalExpr>>>,
-        u64,
-        Arc<dyn PhysicalExpr>,
-        bool,
-    )> {
-        let (generation, expr, is_complete) = {
-            let inner = self.inner.read();
-            (inner.generation, Arc::clone(&inner.expr), inner.is_complete)
-        };
-        Ok((
-            self.children.clone(),
-            self.remapped_children.clone(),
-            generation,
-            self.remap_children(expr)?,
-            is_complete,
-        ))
     }
 
     /// Update the current expression and notify all waiters.
