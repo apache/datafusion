@@ -1116,6 +1116,10 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
                 internal_err!("Not supported")
             }
         }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
     }
 
     let exec_plan = DataSourceExec::from_data_source(scan_config);
@@ -1276,6 +1280,10 @@ impl PhysicalExtensionCodec for UDFExtensionCodec {
             })?;
         }
         Ok(())
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 

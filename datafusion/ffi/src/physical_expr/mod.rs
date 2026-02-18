@@ -448,6 +448,10 @@ impl Drop for FFI_PhysicalExpr {
 impl From<Arc<dyn PhysicalExpr>> for FFI_PhysicalExpr {
     /// Creates a new [`FFI_PhysicalExpr`].
     fn from(expr: Arc<dyn PhysicalExpr>) -> Self {
+        if let Some(expr) = expr.as_any().downcast_ref::<ForeignPhysicalExpr>() {
+            return expr.expr.clone();
+        }
+
         let private_data = Box::new(PhysicalExprPrivateData { expr });
 
         Self {

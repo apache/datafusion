@@ -308,6 +308,10 @@ impl PhysicalExtensionCodec for AdapterPreservingCodec {
             "try_encode not used - adapter wrapping happens in serialize_physical_plan"
         )
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 impl PhysicalProtoConverterExtension for AdapterPreservingCodec {
