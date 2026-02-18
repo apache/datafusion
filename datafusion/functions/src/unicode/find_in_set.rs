@@ -140,9 +140,9 @@ impl ScalarUDFImpl for FindInSetFunc {
             ) => {
                 match str_list_literal {
                     // find_in_set(column_a, null) = null
-                    None => Ok(ColumnarValue::Scalar(
-                        ScalarValue::try_new_null(return_field.data_type())?,
-                    )),
+                    None => Ok(ColumnarValue::Scalar(ScalarValue::try_new_null(
+                        return_field.data_type(),
+                    )?)),
                     Some(str_list_literal) => {
                         let str_list = str_list_literal.split(',').collect::<Vec<&str>>();
                         let result = match str_array.data_type() {
@@ -189,9 +189,9 @@ impl ScalarUDFImpl for FindInSetFunc {
             ) => {
                 match string_literal {
                     // find_in_set(null, column_b) = null
-                    None => Ok(ColumnarValue::Scalar(
-                        ScalarValue::try_new_null(return_field.data_type())?,
-                    )),
+                    None => Ok(ColumnarValue::Scalar(ScalarValue::try_new_null(
+                        return_field.data_type(),
+                    )?)),
                     Some(string) => {
                         let result = match str_list_array.data_type() {
                             DataType::Utf8 => {

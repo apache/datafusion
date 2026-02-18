@@ -15,9 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{
-    ArrayRef, AsArray, BinaryArrayType, Int32Array, StringArray,
-};
+use arrow::array::{ArrayRef, AsArray, BinaryArrayType, Int32Array, StringArray};
 use arrow::datatypes::{DataType, Int32Type};
 use datafusion_common::types::{
     NativeType, logical_binary, logical_int32, logical_string,
