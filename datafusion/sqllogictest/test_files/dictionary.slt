@@ -426,7 +426,8 @@ physical_plan
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 
-# Now query using an integer which must be coerced into a dictionary string
+# Now query using an integer - numeric type is preferred for comparison coercion,
+# so the dictionary string column is cast to Int64
 query TT
 SELECT * from test where column2 = 1;
 ----
@@ -436,10 +437,10 @@ query TT
 explain SELECT * from test where column2 = 1;
 ----
 logical_plan
-01)Filter: test.column2 = Dictionary(Int32, Utf8("1"))
+01)Filter: CAST(test.column2 AS Int64) = Int64(1)
 02)--TableScan: test projection=[column1, column2]
 physical_plan
-01)FilterExec: column2@1 = 1
+01)FilterExec: CAST(column2@1 AS Int64) = 1
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Window Functions

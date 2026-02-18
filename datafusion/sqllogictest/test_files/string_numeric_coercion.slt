@@ -1,0 +1,196 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+## Tests for string-numeric comparison coercion
+## Verifies that when comparing a numeric column to a string literal,
+## the comparison is performed numerically (not lexicographically).
+## See: https://github.com/apache/datafusion/issues/15161
+##########
+
+# Setup test data
+statement ok
+CREATE TABLE t_int AS VALUES (1), (5), (325), (499), (1000);
+
+statement ok
+CREATE TABLE t_float AS VALUES (1.5), (5.0), (325.7), (499.9), (1000.1);
+
+# -------------------------------------------------
+# Integer column with comparison operators vs string literals.
+# Ensure that the comparison is done with numeric semantics,
+# not lexicographically.
+# -------------------------------------------------
+
+query I rowsort
+SELECT * FROM t_int WHERE column1 < '5';
+----
+1
+
+query I rowsort
+SELECT * FROM t_int WHERE column1 > '5';
+----
+1000
+325
+499
+
+query I rowsort
+SELECT * FROM t_int WHERE column1 <= '5';
+----
+1
+5
+
+query I rowsort
+SELECT * FROM t_int WHERE column1 >= '5';
+----
+1000
+325
+499
+5
+
+query I rowsort
+SELECT * FROM t_int WHERE column1 = '5';
+----
+5
+
+query I rowsort
+SELECT * FROM t_int WHERE column1 != '5';
+----
+1
+1000
+325
+499
+
+query I rowsort
+SELECT * FROM t_int WHERE column1 < '10';
+----
+1
+5
+
+query I rowsort
+SELECT * FROM t_int WHERE column1 <= '100';
+----
+1
+5
+
+query I rowsort
+SELECT * FROM t_int WHERE column1 > '100';
+----
+1000
+325
+499
+
+# -------------------------------------------------
+# Float column with comparison operators vs string literals
+# -------------------------------------------------
+
+query R rowsort
+SELECT * FROM t_float WHERE column1 < '5';
+----
+1.5
+
+query R rowsort
+SELECT * FROM t_float WHERE column1 > '5';
+----
+1000.1
+325.7
+499.9
+
+query R rowsort
+SELECT * FROM t_float WHERE column1 = '5';
+----
+5
+
+query R rowsort
+SELECT * FROM t_float WHERE column1 = '5.0';
+----
+5
+
+# -------------------------------------------------
+# Error on strings that cannot be cast to the numeric column type
+# -------------------------------------------------
+
+# Non-numeric string
+statement error Arrow error: Cast error: Cannot cast string 'hello' to value of Int64 type
+SELECT * FROM t_int WHERE column1 < 'hello';
+
+# Decimal string against integer column
+statement error Arrow error: Cast error: Cannot cast string '99.99' to value of Int64 type
+SELECT * FROM t_int WHERE column1 = '99.99';
+
+# Empty string
+statement error Arrow error: Cast error: Cannot cast string '' to value of Int64 type
+SELECT * FROM t_int WHERE column1 = '';
+
+# Overflow
+statement error Arrow error: Cast error: Cannot cast string '99999999999999999999' to value of Int64 type
+SELECT * FROM t_int WHERE column1 = '99999999999999999999';
+
+# -------------------------------------------------
+# UNION still uses string coercion (type unification context)
+# -------------------------------------------------
+
+statement ok
+CREATE TABLE t_str AS VALUES ('one'), ('two'), ('three');
+
+query T rowsort
+SELECT column1 FROM t_int UNION ALL SELECT column1 FROM t_str;
+----
+1
+1000
+325
+499
+5
+one
+three
+two
+
+# Verify the UNION coerces to Utf8 (not numeric)
+query TT
+EXPLAIN SELECT column1 FROM t_int UNION ALL SELECT column1 FROM t_str;
+----
+logical_plan
+01)Union
+02)--Projection: CAST(t_int.column1 AS Utf8) AS column1
+03)----TableScan: t_int projection=[column1]
+04)--TableScan: t_str projection=[column1]
+physical_plan
+01)UnionExec
+02)--ProjectionExec: expr=[CAST(column1@0 AS Utf8) as column1]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# -------------------------------------------------
+# BETWEEN uses comparison coercion (numeric preferred)
+# -------------------------------------------------
+
+query I rowsort
+SELECT * FROM t_int WHERE column1 BETWEEN '5' AND '100';
+----
+5
+
+# -------------------------------------------------
+# Cleanup
+# -------------------------------------------------
+
+statement ok
+DROP TABLE t_int;
+
+statement ok
+DROP TABLE t_float;
+
+statement ok
+DROP TABLE t_str;

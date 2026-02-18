@@ -41,38 +41,16 @@ NULL R NULL 🔥
 
 # --------------------------------------
 # test type coercion (compare to int)
-# queries should not error
+# With numeric-preferring coercion, comparing a string column
+# containing non-numeric values to an integer now errors because
+# the string values are cast to the numeric type.
 # --------------------------------------
 
-query BB
+statement error Arrow error: Cast error: Cannot cast string 'Andrew' to value of Int64 type
 select ascii_1 = 1 as col1, 1 = ascii_1 as col2 from test_basic_operator;
-----
-false false
-false false
-false false
-false false
-false false
-false false
-false false
-false false
-false false
-NULL NULL
-NULL NULL
 
-query BB
+statement error Arrow error: Cast error: Cannot cast string 'Andrew' to value of Int64 type
 select ascii_1 <> 1 as col1, 1 <> ascii_1 as col2 from test_basic_operator;
-----
-true true
-true true
-true true
-true true
-true true
-true true
-true true
-true true
-true true
-NULL NULL
-NULL NULL
 
 # Coercion to date/time
 query BBB
