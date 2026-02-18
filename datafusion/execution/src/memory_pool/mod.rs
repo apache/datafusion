@@ -388,7 +388,7 @@ impl MemoryReservation {
                 |prev| prev.checked_sub(capacity),
             )
             .unwrap_or_else(|prev| {
-                panic!("capacity {capacity} exceeds reservation size {prev}")
+                panic!("Cannot free the capacity {capacity} out of allocated size {prev}")
             });
         self.registration.pool.shrink(self, capacity);
     }
