@@ -92,7 +92,7 @@ use self::from_proto::parse_protobuf_partitioning;
 use self::to_proto::serialize_partitioning;
 use crate::common::{byte_to_string, str_to_byte};
 use crate::physical_plan::from_proto::{
-    parse_physical_expr_with_converter, parse_physical_exprs, parse_physical_sort_expr,
+    parse_physical_expr_with_converter, parse_physical_sort_expr,
     parse_physical_sort_exprs, parse_physical_window_expr,
     parse_protobuf_file_scan_config, parse_record_batches, parse_table_schema_from_proto,
 };
@@ -3936,10 +3936,10 @@ impl PhysicalProtoConverterExtension for DeduplicatingDeserializer {
         Self: Sized,
     {
         // The entire expr is cached, so re-use it.
-        if let Some(expr_id) = proto.expr_id {
-            if let Some(cached) = self.cache.borrow().get(&expr_id) {
-                return Ok(Arc::clone(cached));
-            }
+        if let Some(expr_id) = proto.expr_id
+            && let Some(cached) = self.cache.borrow().get(&expr_id)
+        {
+            return Ok(Arc::clone(cached));
         }
 
         // Cache miss, we must deserialize the expr.
@@ -3972,7 +3972,7 @@ impl PhysicalProtoConverterExtension for DeduplicatingDeserializer {
                 expr = Arc::new(dynamic_filter_expr.new_from_source(cached_df))
                     as Arc<dyn PhysicalExpr>;
             } else {
-                // Cache it 
+                // Cache it
                 self.dynamic_filter_cache
                     .borrow_mut()
                     .insert(dynamic_filter_id, Arc::clone(&expr));

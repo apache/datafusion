@@ -347,7 +347,8 @@ pub fn serialize_physical_expr_with_converter(
             vec![]
         };
 
-        let inner_expr = Box::new(proto_converter.physical_expr_to_proto(&inner_expr_val, codec)?);
+        let inner_expr =
+            Box::new(proto_converter.physical_expr_to_proto(&inner_expr_val, codec)?);
 
         Ok(protobuf::PhysicalExprNode {
             expr_id: None,

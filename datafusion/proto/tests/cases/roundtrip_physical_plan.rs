@@ -3053,8 +3053,12 @@ fn test_dynamic_filter_roundtrip() -> Result<()> {
 
     // Deserialize
     let ctx = SessionContext::new();
-    let deserialized_filter =
-        converter.proto_to_physical_expr(&proto, ctx.task_ctx().as_ref(), &schema, &codec)?;
+    let deserialized_filter = converter.proto_to_physical_expr(
+        &proto,
+        ctx.task_ctx().as_ref(),
+        &schema,
+        &codec,
+    )?;
 
     let deserialized_df = deserialized_filter
         .as_any()
@@ -3076,7 +3080,10 @@ fn assert_dynamic_filter_fields_equal(
     let (children2, remapped2, gen2, expr2, complete2) = df2.current_snapshot().unwrap();
 
     assert_eq!(gen1, gen2, "Generation should be preserved");
-    assert_eq!(complete1, complete2, "Completion status should be preserved");
+    assert_eq!(
+        complete1, complete2,
+        "Completion status should be preserved"
+    );
     assert_eq!(
         format!("{:?}", expr1),
         format!("{:?}", expr2),
@@ -3124,13 +3131,16 @@ fn test_deduplication_of_dynamic_filter_expression(
 ) -> Result<()> {
     let (outer_equal, inner_equal) =
         dynamic_filter_outer_inner_equal(&filter_expr_1, &filter_expr_2);
-    
+
     // Create execution plan: FilterExec(filter2) -> FilterExec(filter1) -> EmptyExec
     let empty_exec = Arc::new(EmptyExec::new(schema)) as Arc<dyn ExecutionPlan>;
-    let filter_exec1 = Arc::new(FilterExec::try_new(Arc::clone(&filter_expr_1), empty_exec)?)
-        as Arc<dyn ExecutionPlan>;
-    let filter_exec2 = Arc::new(FilterExec::try_new(Arc::clone(&filter_expr_2), filter_exec1)?)
-        as Arc<dyn ExecutionPlan>;
+    let filter_exec1 =
+        Arc::new(FilterExec::try_new(Arc::clone(&filter_expr_1), empty_exec)?)
+            as Arc<dyn ExecutionPlan>;
+    let filter_exec2 = Arc::new(FilterExec::try_new(
+        Arc::clone(&filter_expr_2),
+        filter_exec1,
+    )?) as Arc<dyn ExecutionPlan>;
 
     // Serialize the plan
     let codec = DefaultPhysicalExtensionCodec {};
@@ -3228,8 +3238,14 @@ fn test_deduplication_of_dynamic_filter_expression(
     );
 
     // Ensure the children and remapped children are equal after the roundtrip
-    let filter_1_before_roundtrip = filter_expr_1.as_any().downcast_ref::<DynamicFilterPhysicalExpr>().unwrap();
-    let filter_2_before_roundtrip = filter_expr_2.as_any().downcast_ref::<DynamicFilterPhysicalExpr>().unwrap();
+    let filter_1_before_roundtrip = filter_expr_1
+        .as_any()
+        .downcast_ref::<DynamicFilterPhysicalExpr>()
+        .unwrap();
+    let filter_2_before_roundtrip = filter_expr_2
+        .as_any()
+        .downcast_ref::<DynamicFilterPhysicalExpr>()
+        .unwrap();
     assert_dynamic_filter_fields_equal(filter_1_before_roundtrip, df1);
     assert_dynamic_filter_fields_equal(filter_2_before_roundtrip, df2);
 

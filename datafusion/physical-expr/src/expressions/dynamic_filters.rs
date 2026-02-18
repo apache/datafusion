@@ -237,10 +237,7 @@ impl DynamicFilterPhysicalExpr {
     /// # Warning
     /// This is a low-level API intended for use by the proto deserialization layer.
     /// Most users should use [`Self::new`] instead.
-    pub fn new_from_source(
-        &self,
-        source: &DynamicFilterPhysicalExpr,
-    ) -> Self {
+    pub fn new_from_source(&self, source: &DynamicFilterPhysicalExpr) -> Self {
         Self {
             children: self.children.clone(),
             remapped_children: self.remapped_children.clone(),
@@ -251,14 +248,19 @@ impl DynamicFilterPhysicalExpr {
         }
     }
 
-    fn remap_children(&self, expr: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
+    fn remap_children(
+        &self,
+        expr: Arc<dyn PhysicalExpr>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
         if let Some(remapped_children) = &self.remapped_children {
             // Remap the children to the new children
             // of the expression.
             expr.transform_up(|child| {
                 // Check if this is any of our original children
-                if let Some(pos) =
-                    self.children.iter().position(|c| c.as_ref() == child.as_ref())
+                if let Some(pos) = self
+                    .children
+                    .iter()
+                    .position(|c| c.as_ref() == child.as_ref())
                 {
                     // If so, remap it to the current children
                     // of the expression.
@@ -293,7 +295,7 @@ impl DynamicFilterPhysicalExpr {
     ///
     /// Returns (children, remapped_children, generation, inner_expr, is_complete).
     #[doc(hidden)]
-    #[allow(clippy::type_complexity)]
+    #[expect(clippy::type_complexity)]
     pub fn current_snapshot(
         &self,
     ) -> Result<(
@@ -419,8 +421,8 @@ impl DynamicFilterPhysicalExpr {
 
     /// Returns a unique identifier for the inner shared state.
     ///
-    /// Useful for checking if two [Arc<PhysicalExpr>] with the same
-    /// underlying [DynamicFilterPhysicalExpr] are the same.
+    /// Useful for checking if two [`Arc<PhysicalExpr>`] with the same
+    /// underlying [`DynamicFilterPhysicalExpr`] are the same.
     pub fn inner_id(&self) -> u64 {
         Arc::as_ptr(&self.inner) as *const () as u64
     }
