@@ -1167,7 +1167,15 @@ mod test {
         let table_scan_1 = test_table_scan_with_name("test1").unwrap();
         let table_scan_2 = test_table_scan_with_name("test2").unwrap();
         let join = LogicalPlanBuilder::from(table_scan_1)
-            .join(table_scan_2, JoinType::Inner, (vec![Column::from_qualified_name("a")], vec![Column::from_qualified_name("a")]), None)
+            .join(
+                table_scan_2,
+                JoinType::Inner,
+                (
+                    vec![Column::from_qualified_name("a")],
+                    vec![Column::from_qualified_name("a")],
+                ),
+                None,
+            )
             .unwrap()
             .build()
             .unwrap();

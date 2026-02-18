@@ -1501,7 +1501,11 @@ impl LogicalPlanBuilder {
 
     /// Unnest the given column.
     pub fn unnest_column(self, column: impl Into<String>) -> Result<Self> {
-        unnest(Arc::unwrap_or_clone(self.plan), vec![Column::from_qualified_name(column)]).map(Self::new)
+        unnest(
+            Arc::unwrap_or_clone(self.plan),
+            vec![Column::from_qualified_name(column)],
+        )
+        .map(Self::new)
     }
 
     /// Unnest the given column given [`UnnestOptions`]
@@ -2683,7 +2687,10 @@ mod tests {
         // Simultaneously unnesting a list (with different depth) and a struct column
         let plan = nested_table_scan("test_table")?
             .unnest_columns_with_options(
-                vec![Column::from_qualified_name("stringss"), Column::from_qualified_name("struct_singular")],
+                vec![
+                    Column::from_qualified_name("stringss"),
+                    Column::from_qualified_name("struct_singular"),
+                ],
                 UnnestOptions::default()
                     .with_recursions(RecursionUnnestOption {
                         input_column: Column::from_qualified_name("stringss"),

@@ -514,7 +514,10 @@ impl DataFrame {
         columns: &[&str],
         options: UnnestOptions,
     ) -> Result<DataFrame> {
-        let columns = columns.iter().map(|c| Column::from_qualified_name(*c)).collect();
+        let columns = columns
+            .iter()
+            .map(|c| Column::from_qualified_name(*c))
+            .collect();
         let plan = LogicalPlanBuilder::from(self.plan)
             .unnest_columns_with_options(columns, options)?
             .build()?;
@@ -1258,8 +1261,14 @@ impl DataFrame {
                 right.plan,
                 join_type,
                 (
-                    left_cols.iter().map(|c| Column::from_qualified_name(*c)).collect(),
-                    right_cols.iter().map(|c| Column::from_qualified_name(*c)).collect(),
+                    left_cols
+                        .iter()
+                        .map(|c| Column::from_qualified_name(*c))
+                        .collect(),
+                    right_cols
+                        .iter()
+                        .map(|c| Column::from_qualified_name(*c))
+                        .collect(),
                 ),
                 filter,
             )?

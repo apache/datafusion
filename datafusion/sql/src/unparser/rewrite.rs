@@ -208,13 +208,17 @@ pub(super) fn rewrite_plan_for_sort_on_non_projected_fields(
             }
             Expr::Column(_) => {
                 map.insert(
-                    Expr::Column(Column::from_qualified_name(inner_p.schema.field(i).name())),
+                    Expr::Column(Column::from_qualified_name(
+                        inner_p.schema.field(i).name(),
+                    )),
                     f.clone(),
                 );
                 f.clone()
             }
             _ => {
-                let a = Expr::Column(Column::from_qualified_name(inner_p.schema.field(i).name()));
+                let a = Expr::Column(Column::from_qualified_name(
+                    inner_p.schema.field(i).name(),
+                ));
                 map.insert(a.clone(), f.clone());
                 a
             }

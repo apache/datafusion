@@ -205,7 +205,8 @@ fn grouping_function_on_id(
         }
     };
 
-    let grouping_id_column = Expr::Column(Column::from_qualified_name(Aggregate::INTERNAL_GROUPING_ID));
+    let grouping_id_column =
+        Expr::Column(Column::from_qualified_name(Aggregate::INTERNAL_GROUPING_ID));
     // The grouping call is exactly our internal grouping id
     if args.len() == group_by_expr_count
         && args
