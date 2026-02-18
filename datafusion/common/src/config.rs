@@ -799,13 +799,13 @@ config_namespace! {
         /// which filters are promoted.
         /// If `pushdown_filters` is disabled, this option has no effect since all filters
         /// run post-scan regardless of the collection phase.
-        pub filter_statistics_collection_min_rows: u64, default = 50_000
+        pub filter_statistics_collection_min_rows: u64, default = 5_000
 
         /// (reading) Fraction of total dataset rows to use for the statistics
         /// collection phase. When > 0 and the dataset row count is known, the
         /// effective collection threshold is max(min_rows, fraction * total_rows).
         /// 0.0 = disabled, use filter_statistics_collection_min_rows only.
-        /// 0.05 (default) = collect stats on at least 5% of the dataset.
+        /// 0.01 (default) = collect stats on at least 1% of the dataset.
         /// Must be in [0.0, 1.0].
         ///
         /// This option ensures the collection window is proportional to the dataset size,
@@ -815,12 +815,12 @@ config_namespace! {
         /// **Interaction with `pushdown_filters`:**
         /// If `pushdown_filters` is disabled, this option has no effect since all filters
         /// run post-scan regardless of the collection phase.
-        pub filter_statistics_collection_fraction: f64, default = 0.05
+        pub filter_statistics_collection_fraction: f64, default = 0.01
 
         /// (reading) Maximum rows for the statistics collection phase,
         /// regardless of dataset size. The effective collection threshold
         /// becomes min(max_rows, max(min_rows, fraction * total_rows)).
-        /// 0 = no cap. Default: 750_000.
+        /// 0 = no cap. Default: 75_000.
         ///
         /// This caps the collection window so that very large datasets
         /// do not spend an excessive number of rows in post-scan mode.
@@ -829,7 +829,7 @@ config_namespace! {
         /// **Interaction with `pushdown_filters`:**
         /// If `pushdown_filters` is disabled, this option has no effect since all filters
         /// run post-scan regardless of the collection phase.
-        pub filter_statistics_collection_max_rows: u64, default = 750_000
+        pub filter_statistics_collection_max_rows: u64, default = 75_000
 
         // The following options affect writing to parquet files
         // and map to parquet::file::properties::WriterProperties

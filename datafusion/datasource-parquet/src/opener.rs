@@ -508,9 +508,6 @@ impl FileOpener for ParquetOpener {
 
             // Filter pushdown: evaluate predicates during scan
             // First, partition filters based on selectivity tracking
-            // filter_metrics from row filter building (used by SelectivityUpdatingStream)
-            let mut filter_metrics: Vec<row_filter::FilterMetrics> = vec![];
-
             if force_filter_selections {
                 builder =
                     builder.with_row_selection_policy(RowSelectionPolicy::Selectors);
@@ -632,7 +629,8 @@ impl FileOpener for ParquetOpener {
             // Partition filters under a brief write lock (needed for decision caching).
             // Pass adapted conjuncts directly — no split_conjunction needed.
             let PartitionedFilters {
-                row_filters,
+                collecting,
+                promoted,
                 mut post_scan,
             } = {
                 let mut tracker = selectivity_tracker.write();
@@ -651,21 +649,20 @@ impl FileOpener for ParquetOpener {
                 }
             };
 
-            // Build row filter from promoted filters.
-            if !row_filters.is_empty() {
+            // Build row filter from collecting + promoted filters.
+            if !collecting.is_empty() || !promoted.is_empty() {
                 let row_filter_result = row_filter::build_row_filter(
-                    row_filters,
+                    collecting,
+                    promoted,
                     &physical_file_schema,
                     builder.metadata(),
                     &file_metrics,
+                    &selectivity_tracker,
                 );
 
                 match row_filter_result {
                     Ok(Some(result)) => {
-                        if !result.filter_metrics.is_empty() {
-                            builder = builder.with_row_filter(result.row_filter);
-                        }
-                        filter_metrics = result.filter_metrics;
+                        builder = builder.with_row_filter(result.row_filter);
                         // Unbuildable filters must be applied as post-scan
                         // to preserve correctness.
                         post_scan.extend(result.unbuildable_filters);
@@ -677,9 +674,7 @@ impl FileOpener for ParquetOpener {
                 };
             }
 
-            // Split post_scan into IDs and exprs for downstream use
-            let post_scan_ids: Vec<crate::selectivity::FilterId> =
-                post_scan.iter().map(|(id, _)| *id).collect();
+            // Extract exprs for downstream use (IDs no longer needed for post-scan)
             let post_scan_exprs: Vec<Arc<dyn PhysicalExpr>> =
                 post_scan.into_iter().map(|(_, e)| e).collect();
 
@@ -739,8 +734,6 @@ impl FileOpener for ParquetOpener {
 
             let projector = projection.make_projector(&stream_schema)?;
 
-            // Clone for use in the stream mapping closure
-            let post_scan_tracker = Arc::clone(&selectivity_tracker);
             let has_post_scan_filters = !rebased_post_scan.is_empty();
             let coalesce_schema = Arc::clone(&output_schema);
 
@@ -757,12 +750,7 @@ impl FileOpener for ParquetOpener {
                     // all columns needed by both filters and projections.
                     let b = if !rebased_post_scan.is_empty() {
                         let start = datafusion_common::instant::Instant::now();
-                        let filtered = apply_post_scan_filters(
-                            b,
-                            &post_scan_ids,
-                            &rebased_post_scan,
-                            &post_scan_tracker,
-                        )?;
+                        let filtered = apply_post_scan_filters(b, &rebased_post_scan)?;
                         filter_apply_time.add_elapsed(start);
                         filtered
                     } else {
@@ -805,19 +793,6 @@ impl FileOpener for ParquetOpener {
                 stream.boxed()
             };
 
-            // Wrap with SelectivityUpdatingStream to feed row filter stats
-            // (including per-filter timing) back into the tracker for demotion.
-            let stream = if !filter_metrics.is_empty() {
-                SelectivityUpdatingStream::new(
-                    stream,
-                    filter_metrics,
-                    Arc::clone(&selectivity_tracker),
-                )
-                .boxed()
-            } else {
-                stream
-            };
-
             if let Some(file_pruner) = file_pruner {
                 Ok(EarlyStoppingStream::new(
                     stream,
@@ -837,129 +812,34 @@ impl FileOpener for ParquetOpener {
 /// Operates in two modes depending on the tracker state:
 ///
 /// 1. **Collecting** — at least one filter is still in `FilterState::Collecting`.
-///    Each filter is evaluated individually with per-filter timing, and pairwise
-///    joint pass counts are recorded for correlation detection (capped at the 10
-///    most selective collecting filters to bound O(n²) work).
-/// 2. **Fast path** — all filters are past collection. A single bulk AND is
-///    performed with no per-filter tracking overhead.
 ///
-/// Uses stable [`FilterId`](crate::selectivity::FilterId)s for stats collection.
+/// Apply post-scan filters to a record batch.
+///
+/// All collecting filters now run as row-filter predicates (via
+/// `CollectingArrowPredicate`), so post-scan only contains demoted
+/// filters that are past collection. No per-filter timing or
+/// correlation tracking is needed here.
 fn apply_post_scan_filters(
     batch: RecordBatch,
-    filter_ids: &[crate::selectivity::FilterId],
     filter_exprs: &[Arc<dyn PhysicalExpr>],
-    selectivity_tracker: &parking_lot::RwLock<SelectivityTracker>,
 ) -> Result<RecordBatch> {
     use arrow::array::as_boolean_array;
-    use arrow::compute::{and, filter_record_batch};
+    use arrow::compute::filter_record_batch;
 
-    if filter_exprs.is_empty() {
+    if filter_exprs.is_empty() || batch.num_rows() == 0 {
         return Ok(batch);
     }
 
-    let input_rows = batch.num_rows() as u64;
-    if input_rows == 0 {
-        return Ok(batch);
-    }
+    let bool_arrays: Vec<arrow::array::BooleanArray> = filter_exprs
+        .iter()
+        .map(|expr| {
+            let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+            Ok(as_boolean_array(result.as_ref()).clone())
+        })
+        .collect::<Result<_>>()?;
 
-    // Check which filters need collection (per-filter granularity)
-    let needs_collection: Vec<bool> = {
-        let tracker = selectivity_tracker.read();
-        filter_ids
-            .iter()
-            .map(|&id| tracker.needs_collection(id))
-            .collect()
-    };
-    let any_collecting = needs_collection.iter().any(|&c| c);
-
-    let combined_mask = if any_collecting {
-        // Evaluate each filter individually with timing for those still collecting
-        let mut per_filter_stats: Vec<Option<(u64, u64)>> =
-            vec![None; filter_exprs.len()];
-        let mut bool_arrays = Vec::with_capacity(filter_exprs.len());
-        for (idx, expr) in filter_exprs.iter().enumerate() {
-            if needs_collection[idx] {
-                let start = datafusion_common::instant::Instant::now();
-                let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
-                let nanos = start.elapsed().as_nanos() as u64;
-                let bool_arr = as_boolean_array(result.as_ref()).clone();
-                let matched = bool_arr.true_count() as u64;
-                per_filter_stats[idx] = Some((matched, nanos));
-                bool_arrays.push(bool_arr);
-            } else {
-                let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
-                let bool_arr = as_boolean_array(result.as_ref()).clone();
-                bool_arrays.push(bool_arr);
-            }
-        }
-
-        // Compute pairwise joint pass counts for collecting filters
-        let n = filter_exprs.len();
-        let mut pairwise_stats: Vec<(usize, usize, u64)> = Vec::new();
-        if n >= 2 {
-            // Determine which filter indices to include in pairwise computation.
-            // When n > 10, pick the 10 most selective (lowest pass rate) collecting filters.
-            let collecting_indices: Vec<usize> =
-                (0..n).filter(|&i| needs_collection[i]).collect();
-            let pairwise_indices: Vec<usize> = if collecting_indices.len() <= 10 {
-                collecting_indices
-            } else {
-                let mut candidates: Vec<(usize, u64)> = collecting_indices
-                    .into_iter()
-                    .map(|i| (i, bool_arrays[i].true_count() as u64))
-                    .collect();
-                candidates.sort_by_key(|&(_, count)| count);
-                candidates.truncate(10);
-                candidates.into_iter().map(|(i, _)| i).collect()
-            };
-
-            for (pi, &i) in pairwise_indices.iter().enumerate() {
-                for &j in &pairwise_indices[pi + 1..] {
-                    let both = and(&bool_arrays[i], &bool_arrays[j])?;
-                    pairwise_stats.push((i, j, both.true_count() as u64));
-                }
-            }
-        }
-
-        // Update tracker with stable FilterIds
-        {
-            let batch_bytes = batch.get_array_memory_size() as u64;
-            let mut tracker = selectivity_tracker.write();
-            for (idx, stats) in per_filter_stats.into_iter().enumerate() {
-                if let Some((matched, nanos)) = stats {
-                    tracker.update(
-                        filter_ids[idx],
-                        matched,
-                        input_rows,
-                        nanos,
-                        batch_bytes,
-                    );
-                }
-            }
-            for (i, j, both_passed) in pairwise_stats {
-                tracker.update_correlation(
-                    filter_ids[i],
-                    filter_ids[j],
-                    both_passed,
-                    input_rows,
-                );
-            }
-        }
-
-        and_boolean_arrays(bool_arrays)
-    } else {
-        // All filters past collection — evaluate together without tracking
-        let bool_arrays: Vec<arrow::array::BooleanArray> = filter_exprs
-            .iter()
-            .map(|expr| {
-                let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
-                Ok(as_boolean_array(result.as_ref()).clone())
-            })
-            .collect::<Result<_>>()?;
-        and_boolean_arrays(bool_arrays)
-    };
-
-    Ok(filter_record_batch(&batch, &combined_mask)?)
+    let combined = and_boolean_arrays(bool_arrays);
+    Ok(filter_record_batch(&batch, &combined)?)
 }
 
 /// Combine multiple boolean arrays with AND, returning a single boolean array.
@@ -1055,127 +935,6 @@ fn constant_value_from_stats(
     }
 
     None
-}
-
-/// Wraps an inner stream to feed row filter metrics (matched/pruned/timing)
-/// into the [`SelectivityTracker`] after each batch.
-///
-/// This enables the demotion half of the adaptive cycle: if a promoted row
-/// filter is not pulling its weight (because another row filter already prunes
-/// most rows), its incremental bytes/sec drops and it gets demoted back to
-/// post-scan.
-/// Per-filter snapshot of cumulative counters, used to compute deltas.
-struct LastReported {
-    matched: u64,
-    total: u64,
-    nanos: u64,
-    bytes: u64,
-}
-
-/// Closes the adaptive feedback loop for promoted row filters.
-///
-/// Wraps the inner record batch stream and, on each poll, reads cumulative
-/// [`FilterMetrics`](crate::row_filter::FilterMetrics) deltas (matched rows,
-/// total rows, eval nanos, bytes) for each promoted filter and feeds them
-/// into the shared [`SelectivityTracker`]. This allows the tracker to
-/// re-evaluate previously promoted filters and demote them if their
-/// effectiveness drops.
-struct SelectivityUpdatingStream<S> {
-    inner: S,
-    done: bool,
-    filter_metrics: Vec<row_filter::FilterMetrics>,
-    last_reported: Vec<LastReported>,
-    selectivity_tracker: Arc<parking_lot::RwLock<SelectivityTracker>>,
-}
-
-impl<S> SelectivityUpdatingStream<S> {
-    fn new(
-        inner: S,
-        filter_metrics: Vec<row_filter::FilterMetrics>,
-        selectivity_tracker: Arc<parking_lot::RwLock<SelectivityTracker>>,
-    ) -> Self {
-        let n = filter_metrics.len();
-        let last_reported = (0..n)
-            .map(|_| LastReported {
-                matched: 0,
-                total: 0,
-                nanos: 0,
-                bytes: 0,
-            })
-            .collect();
-        Self {
-            inner,
-            done: false,
-            filter_metrics,
-            last_reported,
-            selectivity_tracker,
-        }
-    }
-
-    fn update_selectivity(&mut self) {
-        let mut tracker = self.selectivity_tracker.write();
-        for (i, metrics) in self.filter_metrics.iter().enumerate() {
-            let current_matched = metrics.get_rows_matched() as u64;
-            let current_total = metrics.get_rows_total() as u64;
-            let current_nanos = metrics.get_eval_nanos() as u64;
-            let current_bytes = metrics.get_bytes_evaluated() as u64;
-
-            let last = &self.last_reported[i];
-            let delta_matched = current_matched - last.matched;
-            let delta_total = current_total - last.total;
-            let delta_nanos = current_nanos - last.nanos;
-            let delta_bytes = current_bytes - last.bytes;
-
-            if delta_total > 0 {
-                tracker.update(
-                    metrics.filter_id,
-                    delta_matched,
-                    delta_total,
-                    delta_nanos,
-                    delta_bytes,
-                );
-                self.last_reported[i] = LastReported {
-                    matched: current_matched,
-                    total: current_total,
-                    nanos: current_nanos,
-                    bytes: current_bytes,
-                };
-            }
-        }
-    }
-}
-
-impl<S> Stream for SelectivityUpdatingStream<S>
-where
-    S: Stream<Item = Result<RecordBatch>> + Unpin,
-{
-    type Item = Result<RecordBatch>;
-
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        if self.done {
-            return Poll::Ready(None);
-        }
-        match ready!(self.inner.poll_next_unpin(cx)) {
-            None => {
-                // Stream complete — flush final deltas
-                self.update_selectivity();
-                self.done = true;
-                Poll::Ready(None)
-            }
-            Some(Ok(batch)) => {
-                // Update selectivity after each successful batch
-                self.update_selectivity();
-                Poll::Ready(Some(Ok(batch)))
-            }
-            Some(Err(e)) => {
-                // Don't update selectivity on error — metrics may be partial/corrupt
-                Poll::Ready(Some(Err(e)))
-            }
-        }
-    }
 }
 
 /// Wraps an inner stream and coalesces small batches (produced by post-scan

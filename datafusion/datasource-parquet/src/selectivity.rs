@@ -87,9 +87,11 @@ pub(crate) enum FilterState {
 /// from each correlated group is promoted; the rest are demoted to post-scan.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct PartitionedFilters {
-    /// Filters to push down as row filters (one ArrowPredicate each).
-    pub(crate) row_filters: Vec<(FilterId, Arc<dyn PhysicalExpr>)>,
-    /// Filters to apply post-scan (ineffective or still collecting stats).
+    /// Filters still collecting stats — will become a CollectingArrowPredicate
+    pub(crate) collecting: Vec<(FilterId, Arc<dyn PhysicalExpr>)>,
+    /// Filters promoted past collection — individual chained ArrowPredicates
+    pub(crate) promoted: Vec<(FilterId, Arc<dyn PhysicalExpr>)>,
+    /// Filters demoted to post-scan (fast path only)
     pub(crate) post_scan: Vec<(FilterId, Arc<dyn PhysicalExpr>)>,
 }
 
@@ -278,7 +280,7 @@ impl PairKey {
 /// 2. **Decision** — once `effective_min_rows` rows are observed the filter
 ///    is promoted, demoted, or dropped.
 /// 3. **Replay** — promoted filters are pushed into the Parquet reader;
-///    `SelectivityUpdatingStream` feeds row-filter metrics back here.
+///    per-batch stats are written directly to the tracker from `evaluate()`.
 /// 4. **Re-evaluation** — every `effective_min_rows` additional rows the
 ///    decision is revisited; a promoted filter may be demoted if its
 ///    effectiveness has dropped.
@@ -297,7 +299,7 @@ impl PairKey {
 /// predicate construction time, avoiding `ExprKey` mismatch when expressions
 /// are rebased or simplified per-file.
 #[derive(Debug)]
-pub(crate) struct SelectivityTracker {
+pub struct SelectivityTracker {
     /// Per-filter effectiveness statistics, keyed by FilterId
     stats: HashMap<FilterId, SelectivityStats>,
     /// Per-filter lifecycle state
@@ -330,7 +332,7 @@ impl Default for SelectivityTracker {
 
 impl SelectivityTracker {
     /// Create a new tracker with default settings (feature disabled).
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             stats: HashMap::new(),
             filter_states: HashMap::new(),
@@ -433,12 +435,9 @@ impl SelectivityTracker {
         }
     }
 
-    /// Returns true if we need to collect stats for a given filter.
-    pub(crate) fn needs_collection(&self, id: FilterId) -> bool {
-        matches!(
-            self.filter_states.get(&id),
-            None | Some(FilterState::Collecting)
-        )
+    /// Returns the number of times `partition_filters` has been called.
+    pub(crate) fn partition_call_count(&self) -> u64 {
+        self.partition_call_count
     }
 
     /// Check and update the snapshot generation for a filter.
@@ -526,7 +525,8 @@ impl SelectivityTracker {
                 filters.len()
             );
             return PartitionedFilters {
-                row_filters: Vec::new(),
+                collecting: Vec::new(),
+                promoted: Vec::new(),
                 post_scan: filters,
             };
         }
@@ -537,13 +537,14 @@ impl SelectivityTracker {
             self.note_generation(id, generation);
         }
 
-        // Separate effective vs ineffective filters.
-        let mut effective: Vec<(FilterId, Arc<dyn PhysicalExpr>)> = Vec::new();
+        // Separate into collecting, promoted, and post_scan.
+        let mut collecting: Vec<(FilterId, Arc<dyn PhysicalExpr>)> = Vec::new();
+        let mut promoted: Vec<(FilterId, Arc<dyn PhysicalExpr>)> = Vec::new();
         let mut post_scan: Vec<(FilterId, Arc<dyn PhysicalExpr>)> = Vec::new();
 
         match strategy {
             PromotionStrategy::AllPromoted => {
-                effective = filters;
+                promoted = filters;
             }
             PromotionStrategy::Threshold(threshold) => {
                 let min_rows = self.effective_min_rows();
@@ -579,7 +580,7 @@ impl SelectivityTracker {
                                     self.stats.remove(&id);
                                 }
                                 self.filter_states.insert(id, FilterState::Promoted);
-                                effective.push((id, expr));
+                                promoted.push((id, expr));
                             }
                             _ => {
                                 self.demote_or_drop(id, &expr, &mut post_scan);
@@ -589,7 +590,7 @@ impl SelectivityTracker {
                         // Not enough rows yet
                         if state == Some(FilterState::Promoted) {
                             // Grace period: keep promoted
-                            effective.push((id, expr));
+                            promoted.push((id, expr));
                         } else {
                             // Early promotion via confidence interval:
                             // If the lower bound of the CI on mean effectiveness
@@ -606,14 +607,14 @@ impl SelectivityTracker {
                                 );
                                 self.stats.remove(&id);
                                 self.filter_states.insert(id, FilterState::Promoted);
-                                effective.push((id, expr));
+                                promoted.push((id, expr));
                             } else {
-                                // Collecting or new: mark as Collecting, send to post-scan
+                                // Collecting or new: mark as Collecting, send to collecting row filter
                                 if state.is_none() {
                                     self.filter_states
                                         .insert(id, FilterState::Collecting);
                                 }
-                                post_scan.push((id, expr));
+                                collecting.push((id, expr));
                             }
                         }
                     }
@@ -622,14 +623,13 @@ impl SelectivityTracker {
             PromotionStrategy::Disabled => unreachable!(),
         }
 
-        // Deduplicate correlated filters: for each correlated group with >1 filter,
-        // keep only the most effective, demote the rest to post-scan.
-        let groups = self.group_by_correlation_id(&effective);
+        // Deduplicate correlated filters among promoted only (collecting need unbiased measurement).
+        let groups = self.group_by_correlation_id(&promoted);
 
-        let mut row_filters: Vec<(FilterId, Arc<dyn PhysicalExpr>)> = Vec::new();
+        let mut deduped_promoted: Vec<(FilterId, Arc<dyn PhysicalExpr>)> = Vec::new();
         for indices in groups {
             if indices.len() == 1 {
-                row_filters.push(effective[indices[0]].clone());
+                deduped_promoted.push(promoted[indices[0]].clone());
             } else {
                 // Find the most effective filter in the group
                 let best_idx = indices
@@ -637,9 +637,9 @@ impl SelectivityTracker {
                     .copied()
                     .max_by(|&a, &b| {
                         let eff_a =
-                            self.get_effectiveness_by_id(effective[a].0).unwrap_or(0.0);
+                            self.get_effectiveness_by_id(promoted[a].0).unwrap_or(0.0);
                         let eff_b =
-                            self.get_effectiveness_by_id(effective[b].0).unwrap_or(0.0);
+                            self.get_effectiveness_by_id(promoted[b].0).unwrap_or(0.0);
                         eff_a
                             .partial_cmp(&eff_b)
                             .unwrap_or(std::cmp::Ordering::Equal)
@@ -648,16 +648,16 @@ impl SelectivityTracker {
                 // Promote the best, demote the rest
                 for &i in &indices {
                     if i == best_idx {
-                        row_filters.push(effective[i].clone());
+                        deduped_promoted.push(promoted[i].clone());
                     } else {
-                        let (id, ref expr) = effective[i];
+                        let (id, ref expr) = promoted[i];
                         if expr
                             .as_any()
                             .downcast_ref::<OptionalFilterPhysicalExpr>()
                             .is_none()
                         {
                             self.filter_states.insert(id, FilterState::Demoted);
-                            post_scan.push(effective[i].clone());
+                            post_scan.push(promoted[i].clone());
                         } else {
                             self.stats.remove(&id);
                             self.filter_states.insert(id, FilterState::Dropped);
@@ -666,9 +666,11 @@ impl SelectivityTracker {
                 }
             }
         }
+        let promoted = deduped_promoted;
 
-        // Sort row_filters by effectiveness descending
-        row_filters.sort_by(|a, b| {
+        // Sort promoted by effectiveness descending
+        let mut promoted = promoted;
+        promoted.sort_by(|a, b| {
             let eff_a = self.get_effectiveness_by_id(a.0).unwrap_or(0.0);
             let eff_b = self.get_effectiveness_by_id(b.0).unwrap_or(0.0);
             eff_b
@@ -689,7 +691,14 @@ impl SelectivityTracker {
                 "Filter partition #{}: strategy={:?}, threshold={}, collection_min_rows={}",
                 self.partition_call_count, strategy, threshold_str, min_rows,
             );
-            for &(id, ref expr) in &row_filters {
+            for &(id, ref expr) in &collecting {
+                let rows_so_far = self.stats.get(&id).map_or(0, |s| s.rows_total());
+                let remaining = min_rows.saturating_sub(rows_so_far);
+                debug!(
+                    "  Filter id={id}: {expr} [COLLECTING as row-filter (need {remaining} more rows)]"
+                );
+            }
+            for &(id, ref expr) in &promoted {
                 let detail = match self.stats.get(&id) {
                     Some(s) if s.rows_total() >= min_rows => {
                         let eff = s.effectiveness();
@@ -774,8 +783,9 @@ impl SelectivityTracker {
                 }
             }
             debug!(
-                "Summary: {} promoted, {} post-scan, {} dropped",
-                row_filters.len(),
+                "Summary: {} collecting, {} promoted, {} post-scan, {} dropped",
+                collecting.len(),
+                promoted.len(),
                 post_scan.len(),
                 self.filter_states
                     .values()
@@ -785,7 +795,8 @@ impl SelectivityTracker {
         }
 
         PartitionedFilters {
-            row_filters,
+            collecting,
+            promoted,
             post_scan,
         }
     }
@@ -803,20 +814,6 @@ impl SelectivityTracker {
             .entry(id)
             .or_default()
             .update(matched, total, eval_nanos, batch_bytes);
-    }
-
-    /// Update pairwise correlation statistics for two filters by ID.
-    pub(crate) fn update_correlation(
-        &mut self,
-        a: FilterId,
-        b: FilterId,
-        both_passed: u64,
-        total: u64,
-    ) {
-        let pair_key = PairKey::new(a, b);
-        let stats = self.correlations.entry(pair_key).or_default();
-        stats.rows_both_passed += both_passed;
-        stats.rows_total += total;
     }
 
     /// Compute the correlation ratio for two filters by ID.
@@ -929,6 +926,30 @@ mod tests {
         ])
     }
 
+    impl SelectivityTracker {
+        /// Test helper: directly insert correlation stats for a pair of filters.
+        fn update_correlation(
+            &mut self,
+            a: FilterId,
+            b: FilterId,
+            both_passed: u64,
+            total: u64,
+        ) {
+            let pair_key = PairKey::new(a, b);
+            let entry = self.correlations.entry(pair_key).or_default();
+            entry.rows_both_passed += both_passed;
+            entry.rows_total += total;
+        }
+
+        /// Test helper: check if a filter is in collecting state (or not yet decided).
+        fn needs_collection(&self, id: FilterId) -> bool {
+            matches!(
+                self.filter_states.get(&id),
+                None | Some(FilterState::Collecting)
+            )
+        }
+    }
+
     fn make_filter(col_name: &str, value: i32) -> Arc<dyn PhysicalExpr> {
         let schema = test_schema();
         Arc::new(BinaryExpr::new(
@@ -1028,7 +1049,7 @@ mod tests {
             let result = tracker
                 .partition_filters(vec![(0, filter1.clone()), (1, filter2.clone())]);
 
-            assert_eq!(result.row_filters.len(), 2);
+            assert_eq!(result.promoted.len(), 2);
             assert_eq!(result.post_scan.len(), 0);
         }
 
@@ -1055,11 +1076,11 @@ mod tests {
                 (2, optional_filter.clone()),
             ]);
 
-            assert_eq!(result.row_filters.len(), 2);
+            assert_eq!(result.promoted.len(), 2);
             assert_eq!(result.post_scan.len(), 1);
             assert_eq!(result.post_scan[0].0, 1);
             // Verify optional filter was promoted
-            assert!(result.row_filters.iter().any(|(id, _)| *id == 2));
+            assert!(result.promoted.iter().any(|(id, _)| *id == 2));
         }
 
         #[test]
@@ -1070,7 +1091,7 @@ mod tests {
 
             let result = tracker.partition_filters(vec![(0, filter.clone())]);
 
-            assert!(result.row_filters.is_empty());
+            assert!(result.promoted.is_empty());
             assert_eq!(result.post_scan.len(), 1);
         }
 
@@ -1090,7 +1111,7 @@ mod tests {
             let result = tracker
                 .partition_filters(vec![(0, filter_a.clone()), (1, filter_b.clone())]);
 
-            assert_eq!(result.row_filters.len(), 1);
+            assert_eq!(result.promoted.len(), 1);
             assert_eq!(result.post_scan.len(), 1);
         }
 
@@ -1128,7 +1149,7 @@ mod tests {
             ]);
 
             // One filter promoted per correlated pair, the other demoted
-            assert_eq!(result.row_filters.len(), 2);
+            assert_eq!(result.promoted.len(), 2);
             assert_eq!(result.post_scan.len(), 2);
         }
 
@@ -1152,7 +1173,7 @@ mod tests {
 
             assert_eq!(result.post_scan.len(), 1);
             assert_eq!(result.post_scan[0].0, 0); // mandatory demoted
-            assert!(result.row_filters.is_empty());
+            assert!(result.promoted.is_empty());
         }
     }
 
@@ -1171,8 +1192,9 @@ mod tests {
             let result = tracker
                 .partition_filters(vec![(0, filter_a.clone()), (1, filter_b.clone())]);
 
-            assert!(result.row_filters.is_empty());
-            assert_eq!(result.post_scan.len(), 2);
+            assert!(result.promoted.is_empty());
+            assert_eq!(result.collecting.len(), 2);
+            assert!(result.post_scan.is_empty());
         }
 
         #[test]
@@ -1220,17 +1242,17 @@ mod tests {
 
             let result = tracker
                 .partition_filters(vec![(0, filter_a.clone()), (1, filter_b.clone())]);
-            assert_eq!(result.row_filters.len(), 1, "filter0 should be promoted");
-            assert_eq!(result.row_filters[0].0, 0);
-            assert_eq!(result.post_scan.len(), 1, "filter1 still collecting");
-            assert_eq!(result.post_scan[0].0, 1);
+            assert_eq!(result.promoted.len(), 1, "filter0 should be promoted");
+            assert_eq!(result.promoted[0].0, 0);
+            assert_eq!(result.collecting.len(), 1, "filter1 still collecting");
+            assert_eq!(result.collecting[0].0, 1);
 
             // Now feed filter1 enough high-throughput data to promote
             tracker.update(1, 5, 50, 500_000_000, 5_000);
             let result = tracker
                 .partition_filters(vec![(0, filter_a.clone()), (1, filter_b.clone())]);
             assert_eq!(
-                result.row_filters.len(),
+                result.promoted.len(),
                 2,
                 "both filters should now be promoted"
             );
@@ -1257,11 +1279,11 @@ mod tests {
             // Only 300 rows seen, far below min_rows=10000, but CI should trigger early promotion
             let result = tracker.partition_filters(vec![(0, filter.clone())]);
             assert_eq!(
-                result.row_filters.len(),
+                result.promoted.len(),
                 1,
                 "filter should be early-promoted via CI before reaching min_rows"
             );
-            assert_eq!(result.row_filters[0].0, 0);
+            assert_eq!(result.promoted[0].0, 0);
         }
 
         #[test]
@@ -1281,7 +1303,7 @@ mod tests {
             // High variance → CI lower bound should be below threshold
             let result = tracker.partition_filters(vec![(0, filter.clone())]);
             assert!(
-                result.row_filters.is_empty(),
+                result.promoted.is_empty(),
                 "high-variance filter should NOT be early-promoted"
             );
         }
@@ -1299,7 +1321,7 @@ mod tests {
 
             let result = tracker.partition_filters(vec![(0, filter.clone())]);
             assert!(
-                result.row_filters.is_empty(),
+                result.promoted.is_empty(),
                 "single sample should not trigger early promotion"
             );
         }
@@ -1317,7 +1339,7 @@ mod tests {
             }
 
             let result = tracker.partition_filters(vec![(0, filter.clone())]);
-            assert_eq!(result.row_filters.len(), 1);
+            assert_eq!(result.promoted.len(), 1);
             // Stats should be cleared on promotion
             assert!(!tracker.stats.contains_key(&0));
         }
@@ -1357,7 +1379,7 @@ mod tests {
 
             // Promote the filter — stats should be cleared
             let result = tracker.partition_filters(vec![(0, filter_a.clone())]);
-            assert_eq!(result.row_filters.len(), 1);
+            assert_eq!(result.promoted.len(), 1);
 
             assert!(
                 !tracker.stats.contains_key(&0),
@@ -1379,15 +1401,15 @@ mod tests {
 
             let result = tracker
                 .partition_filters(vec![(0, filter_a.clone()), (1, filter_b.clone())]);
-            assert_eq!(result.row_filters.len(), 1);
-            assert_eq!(result.row_filters[0].0, 0, "filter 0 should be promoted");
+            assert_eq!(result.promoted.len(), 1);
+            assert_eq!(result.promoted[0].0, 0, "filter 0 should be promoted");
 
             // Step 2: Re-partition — filter 0 has no stats (cleared on promotion)
             // but should stay promoted due to the grace period.
             let result = tracker
                 .partition_filters(vec![(0, filter_a.clone()), (1, filter_b.clone())]);
             assert!(
-                result.row_filters.iter().any(|(id, _)| *id == 0),
+                result.promoted.iter().any(|(id, _)| *id == 0),
                 "filter 0 should remain in row_filters during grace period"
             );
 
@@ -1399,7 +1421,7 @@ mod tests {
             let result = tracker
                 .partition_filters(vec![(0, filter_a.clone()), (1, filter_b.clone())]);
             assert!(
-                !result.row_filters.iter().any(|(id, _)| *id == 0),
+                !result.promoted.iter().any(|(id, _)| *id == 0),
                 "filter 0 should be demoted after accumulating enough low-effectiveness data"
             );
         }
@@ -1417,7 +1439,7 @@ mod tests {
             tracker.update(0, 100, 100, 1_000_000_000, 1000);
 
             let result = tracker.partition_filters(vec![(0, filter_a.clone())]);
-            assert!(result.row_filters.is_empty());
+            assert!(result.promoted.is_empty());
             assert_eq!(result.post_scan.len(), 1);
             assert_eq!(
                 *tracker.filter_states.get(&0).unwrap(),
@@ -1429,7 +1451,7 @@ mod tests {
 
             let result = tracker.partition_filters(vec![(0, filter_a.clone())]);
             assert!(
-                result.row_filters.is_empty(),
+                result.promoted.is_empty(),
                 "demoted filter should stay demoted even with new good stats"
             );
             assert_eq!(result.post_scan.len(), 1);
@@ -1474,7 +1496,7 @@ mod tests {
             // Union-find: A↔B and B↔C → all three in one group.
             // Only the best (by effectiveness) is promoted; the other two are demoted.
             assert_eq!(
-                result.row_filters.len(),
+                result.promoted.len(),
                 1,
                 "transitive correlation should group all three, promoting only the best"
             );

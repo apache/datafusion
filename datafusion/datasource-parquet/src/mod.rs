@@ -29,7 +29,7 @@ mod page_filter;
 mod reader;
 mod row_filter;
 mod row_group_filter;
-mod selectivity;
+pub mod selectivity;
 mod sort;
 pub mod source;
 mod supported_predicates;
@@ -40,7 +40,6 @@ pub use file_format::*;
 pub use metrics::ParquetFileMetrics;
 pub use page_filter::PagePruningAccessPlanFilter;
 pub use reader::*; // Expose so downstream crates can use it
-pub use row_filter::FilterMetrics;
 pub use row_filter::RowFilterWithMetrics;
 pub use row_filter::build_row_filter;
 pub use row_filter::can_expr_be_pushed_down_with_schemas;
