@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{Array, StringArray, as_largestring_array};
+use arrow::array::Array;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -25,7 +25,7 @@ use crate::string::concat;
 use crate::string::concat::simplify_concat;
 use crate::string::concat_ws;
 use crate::strings::{ColumnarValueRef, StringArrayBuilder};
-use datafusion_common::cast::{as_string_array, as_string_view_array};
+use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
 use datafusion_common::{Result, ScalarValue, exec_err, internal_err, plan_err};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
@@ -162,9 +162,7 @@ impl ScalarUDFImpl for ConcatWsFunc {
                     ColumnarValueRef::Scalar(s.as_bytes())
                 }
                 Some(None) => {
-                    return Ok(ColumnarValue::Array(Arc::new(StringArray::new_null(
-                        len,
-                    ))));
+                    return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)));
                 }
                 None => {
                     return internal_err!("Expected string separator, got {scalar:?}");
@@ -181,7 +179,7 @@ impl ScalarUDFImpl for ConcatWsFunc {
                     }
                 }
                 DataType::LargeUtf8 => {
-                    let string_array = as_largestring_array(array);
+                    let string_array = as_large_string_array(array)?;
                     data_size += string_array.values().len() * (args.len() - 2);
                     if array.is_nullable() {
                         ColumnarValueRef::NullableLargeStringArray(string_array)
@@ -232,7 +230,7 @@ impl ScalarUDFImpl for ConcatWsFunc {
                             columns.push(column);
                         }
                         DataType::LargeUtf8 => {
-                            let string_array = as_largestring_array(array);
+                            let string_array = as_large_string_array(array)?;
 
                             data_size += string_array.values().len();
                             let column = if array.is_nullable() {
