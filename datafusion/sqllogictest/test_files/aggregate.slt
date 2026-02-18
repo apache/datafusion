@@ -129,6 +129,14 @@ CREATE TABLE group_median_table_nullable (
 # Error tests
 #######
 
+statement error ORDER BY must be specified using WITHIN GROUP
+select quantile_cont(col0, 0.75 order by col0)
+from values (1, 3), (2, 2), (3, 1) t(col0, col1);
+
+statement error ORDER BY must be specified using WITHIN GROUP
+select quantile_cont(0.75 order by col0)
+from values (1, 3), (2, 2), (3, 1) t(col0, col1);
+
 statement error DataFusion error: Error during planning: WITHIN GROUP is only supported for ordered-set aggregate functions
 SELECT SUM(c2) WITHIN GROUP (ORDER BY c2) FROM aggregate_test_100
 

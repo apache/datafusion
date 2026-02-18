@@ -542,6 +542,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 // accept a WITHIN GROUP clause.
                 let supports_within_group = fm.supports_within_group_clause();
 
+                if supports_within_group && !order_by.is_empty() {
+                    return plan_err!(
+                        "ORDER BY must be specified using WITHIN GROUP for ordered-set aggregate functions"
+                    );
+                }
+
                 if !within_group.is_empty() && !supports_within_group {
                     return plan_err!(
                         "WITHIN GROUP is only supported for ordered-set aggregate functions"
