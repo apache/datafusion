@@ -799,12 +799,12 @@ impl ListingTable {
     ) -> datafusion_common::Result<(Arc<Statistics>, Option<LexOrdering>)> {
         use datafusion_execution::cache::cache_manager::CachedFileMetadata;
 
-        let path = &part_file.object_meta.location;
+        let path = TableScopedPath { table: part_file.table_reference.clone(), path : part_file.object_meta.location.clone()};
         let meta = &part_file.object_meta;
 
         // Check cache first - if we have valid cached statistics and ordering
         if let Some(cache) = &self.collected_statistics
-            && let Some(cached) = cache.get(path)
+            && let Some(cached) = cache.get(&path)
             && cached.is_valid_for(meta)
         {
             // Return cached statistics and ordering
@@ -823,7 +823,7 @@ impl ListingTable {
         // Store in cache
         if let Some(cache) = &self.collected_statistics {
             cache.put(
-                path,
+                &path,
                 CachedFileMetadata::new(
                     meta.clone(),
                     Arc::clone(&statistics),

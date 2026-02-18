@@ -1431,8 +1431,10 @@ impl SessionContext {
             schema.deregister_table(&table)?;
             if table_type == TableType::Base
                 && let Some(lfc) = self.runtime_env().cache_manager.get_list_files_cache()
+                && let Some(fsc) = self.runtime_env().cache_manager.get_file_statistic_cache()
             {
-                lfc.drop_table_entries(&Some(table_ref))?;
+                lfc.drop_table_entries(&Some(table_ref.clone()))?;
+                fsc.drop_table_entries(&Some(table_ref.clone()))?;
             }
             return Ok(true);
         }

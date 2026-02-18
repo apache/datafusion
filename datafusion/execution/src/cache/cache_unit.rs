@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::cache::CacheAccessor;
+use crate::cache::{CacheAccessor, TableScopedPath};
 use crate::cache::cache_manager::{
     CachedFileMetadata, FileStatisticsCache, FileStatisticsCacheEntry,
 };
@@ -26,6 +26,7 @@ use std::sync::Mutex;
 pub use crate::cache::DefaultFilesMetadataCache;
 use crate::cache::lru_queue::LruQueue;
 use datafusion_common::heap_size::DFHeapSize;
+use datafusion_common::TableReference;
 
 /// Default implementation of [`FileStatisticsCache`]
 ///
@@ -65,7 +66,7 @@ impl DefaultFileStatisticsCache {
 }
 
 struct DefaultFileStatisticsCacheState {
-    lru_queue: LruQueue<Path, CachedFileMetadata>,
+    lru_queue: LruQueue<TableScopedPath, CachedFileMetadata>,
     memory_limit: usize,
     memory_used: usize,
 }
@@ -90,16 +91,16 @@ impl DefaultFileStatisticsCacheState {
             memory_used: 0,
         }
     }
-    fn get(&mut self, key: &Path) -> Option<CachedFileMetadata> {
+    fn get(&mut self, key: &TableScopedPath) -> Option<CachedFileMetadata> {
         self.lru_queue.get(key).cloned()
     }
 
     fn put(
         &mut self,
-        key: &Path,
+        key: &TableScopedPath,
         value: CachedFileMetadata,
     ) -> Option<CachedFileMetadata> {
-        let key_size = key.as_ref().heap_size();
+        let key_size = key.path.as_ref().heap_size();
         let entry_size = value.heap_size();
 
         if entry_size + key_size > self.memory_limit {
@@ -114,7 +115,7 @@ impl DefaultFileStatisticsCacheState {
         if let Some(old_entry) = &old_value {
             self.memory_used -= old_entry.heap_size();
         } else {
-            self.memory_used += key.as_ref().heap_size();
+            self.memory_used += key.path.as_ref().heap_size();
         }
 
         self.evict_entries();
@@ -122,9 +123,9 @@ impl DefaultFileStatisticsCacheState {
         old_value
     }
 
-    fn remove(&mut self, k: &Path) -> Option<CachedFileMetadata> {
+    fn remove(&mut self, k: &TableScopedPath) -> Option<CachedFileMetadata> {
         if let Some(old_entry) = self.lru_queue.remove(k) {
-            self.memory_used -= k.as_ref().heap_size();
+            self.memory_used -= k.path.as_ref().heap_size();
             self.memory_used -= old_entry.heap_size();
             Some(old_entry)
         } else {
@@ -132,7 +133,7 @@ impl DefaultFileStatisticsCacheState {
         }
     }
 
-    fn contains_key(&self, k: &Path) -> bool {
+    fn contains_key(&self, k: &TableScopedPath) -> bool {
         self.lru_queue.contains_key(k)
     }
 
@@ -148,7 +149,7 @@ impl DefaultFileStatisticsCacheState {
     fn evict_entries(&mut self) {
         while self.memory_used > self.memory_limit {
             if let Some(removed) = self.lru_queue.pop() {
-                self.memory_used -= removed.0.as_ref().heap_size();
+                self.memory_used -= removed.0.path.as_ref().heap_size();
                 self.memory_used -= removed.1.heap_size();
             } else {
                 // cache is empty while memory_used > memory_limit, cannot happen
@@ -168,23 +169,23 @@ impl DefaultFileStatisticsCacheState {
         }
     }
 }
-impl CacheAccessor<Path, CachedFileMetadata> for DefaultFileStatisticsCache {
-    fn get(&self, key: &Path) -> Option<CachedFileMetadata> {
+impl CacheAccessor<TableScopedPath, CachedFileMetadata> for DefaultFileStatisticsCache {
+    fn get(&self, key: &TableScopedPath) -> Option<CachedFileMetadata> {
         let mut state = self.state.lock().unwrap();
         state.get(key)
     }
 
-    fn put(&self, key: &Path, value: CachedFileMetadata) -> Option<CachedFileMetadata> {
+    fn put(&self, key: &TableScopedPath, value: CachedFileMetadata) -> Option<CachedFileMetadata> {
         let mut state = self.state.lock().unwrap();
         state.put(key, value)
     }
 
-    fn remove(&self, key: &Path) -> Option<CachedFileMetadata> {
+    fn remove(&self, key: &TableScopedPath) -> Option<CachedFileMetadata> {
         let mut state = self.state.lock().unwrap();
         state.remove(key)
     }
 
-    fn contains_key(&self, k: &Path) -> bool {
+    fn contains_key(&self, k: &TableScopedPath) -> bool {
         let state = self.state.lock().unwrap();
         state.contains_key(k)
     }
@@ -222,7 +223,7 @@ impl FileStatisticsCache for DefaultFileStatisticsCache {
             let path = entry.0.clone();
             let cached = entry.1.clone();
             entries.insert(
-                path,
+                path.path,
                 FileStatisticsCacheEntry {
                     object_meta: cached.meta.clone(),
                     num_rows: cached.statistics.num_rows,
@@ -235,6 +236,20 @@ impl FileStatisticsCache for DefaultFileStatisticsCache {
         }
 
         entries
+    }
+
+    fn drop_table_entries(&self, table_ref: &Option<TableReference>) -> datafusion_common::Result<()> {
+        let mut state = self.state.lock().unwrap();
+        let mut table_paths = vec![];
+        for (path, _) in state.lru_queue.list_entries() {
+            if path.table == *table_ref {
+                table_paths.push(path.clone());
+            }
+        }
+        for path in table_paths {
+            state.remove(&path);
+        }
+        Ok(())
     }
 }
 
@@ -279,8 +294,13 @@ mod tests {
             false,
         )]);
 
+        let path = TableScopedPath{
+            path: meta.location.clone(),
+            table: None,
+        };
+
         // Cache miss
-        assert!(cache.get(&meta.location).is_none());
+        assert!(cache.get(&path).is_none());
 
         // Put a value
         let cached_value = CachedFileMetadata::new(
@@ -288,17 +308,24 @@ mod tests {
             Arc::new(Statistics::new_unknown(&schema)),
             None,
         );
-        cache.put(&meta.location, cached_value);
+        cache.put(&path, cached_value);
 
         // Cache hit
-        let result = cache.get(&meta.location);
+        let result = cache.get(&path);
         assert!(result.is_some());
         let cached = result.unwrap();
         assert!(cached.is_valid_for(&meta));
 
+
         // File size changed - validation should fail
         let meta2 = create_test_meta("test", 2048);
-        let cached = cache.get(&meta2.location).unwrap();
+
+        let path_2 = TableScopedPath{
+            path: meta2.location.clone(),
+            table: None,
+        };
+
+        let cached = cache.get(&path_2).unwrap();
         assert!(!cached.is_valid_for(&meta2));
 
         // Update with new value
@@ -307,12 +334,18 @@ mod tests {
             Arc::new(Statistics::new_unknown(&schema)),
             None,
         );
-        cache.put(&meta2.location, cached_value2);
+        cache.put(&path_2, cached_value2);
 
         // Test list_entries
         let entries = cache.list_entries();
         assert_eq!(entries.len(), 1);
-        let entry = entries.get(&Path::from("test")).unwrap();
+
+        let path_3 = TableScopedPath{
+            path: Path::from("test"),
+            table: None,
+        };
+
+        let entry = entries.get(&path_3.path).unwrap();
         assert_eq!(entry.object_meta.size, 2048); // Should be updated value
     }
 
@@ -379,31 +412,37 @@ mod tests {
             Arc::new(Statistics::new_unknown(&schema)),
             None, // No ordering yet
         );
-        cache.put(&meta.location, cached_value);
 
-        let result = cache.get(&meta.location).unwrap();
+        let path = TableScopedPath {
+            path: meta.location.clone(),
+            table: None,
+        };
+
+        cache.put(&path, cached_value);
+
+        let result = cache.get(&path).unwrap();
         assert!(result.ordering.is_none());
 
         // Update to add ordering
-        let mut cached = cache.get(&meta.location).unwrap();
+        let mut cached = cache.get(&path).unwrap();
         if cached.is_valid_for(&meta) && cached.ordering.is_none() {
             cached.ordering = Some(ordering());
         }
-        cache.put(&meta.location, cached);
+        cache.put(&path, cached);
 
-        let result2 = cache.get(&meta.location).unwrap();
+        let result2 = cache.get(&path).unwrap();
         assert!(result2.ordering.is_some());
 
         // Verify list_entries shows has_ordering = true
         let entries = cache.list_entries();
         assert_eq!(entries.len(), 1);
-        assert!(entries.get(&meta.location).unwrap().has_ordering);
+        assert!(entries.get(&path.path).unwrap().has_ordering);
     }
 
     #[test]
     fn test_cache_invalidation_on_file_modification() {
         let cache = DefaultFileStatisticsCache::default();
-        let path = Path::from("test.parquet");
+        let path = TableScopedPath { table: None, path : Path::from("test.parquet"), };
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
 
         let meta_v1 = create_test_meta("test.parquet", 100);
@@ -439,12 +478,12 @@ mod tests {
     #[test]
     fn test_ordering_cache_invalidation_on_file_modification() {
         let cache = DefaultFileStatisticsCache::default();
-        let path = Path::from("test.parquet");
+        let path = TableScopedPath { path: Path::from("test.parquet"), table: None };
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
 
         // Cache with original metadata and ordering
         let meta_v1 = ObjectMeta {
-            location: path.clone(),
+            location: path.path.clone(),
             last_modified: DateTime::parse_from_rfc3339("2022-09-27T22:36:00+02:00")
                 .unwrap()
                 .into(),
@@ -467,7 +506,7 @@ mod tests {
 
         // File modified (size changed)
         let meta_v2 = ObjectMeta {
-            location: path.clone(),
+            location: path.path.clone(),
             last_modified: DateTime::parse_from_rfc3339("2022-09-28T10:00:00+02:00")
                 .unwrap()
                 .into(),
@@ -510,14 +549,20 @@ mod tests {
             Arc::new(Statistics::new_unknown(&schema)),
             None,
         );
-        cache.put(&meta1.location, cached_value);
+
+        let path_1 = TableScopedPath { path: meta1.location.clone(), table: None };
+
+        cache.put(&path_1, cached_value);
         let meta2 = create_test_meta("test2.parquet", 200);
         let cached_value = CachedFileMetadata::new(
             meta2.clone(),
             Arc::new(Statistics::new_unknown(&schema)),
             Some(ordering()),
         );
-        cache.put(&meta2.location, cached_value);
+
+        let path_2 = TableScopedPath { path: meta2.location.clone(), table: None };
+
+        cache.put(&path_2, cached_value);
 
         let entries = cache.list_entries();
         assert_eq!(
@@ -562,33 +607,37 @@ mod tests {
 
         // create a cache with a limit which fits exactly 2 entries
         let cache = DefaultFileStatisticsCache::new(limit_for_2_entries);
-
-        cache.put(&meta_1.location, value_1.clone());
-        cache.put(&meta_2.location, value_2.clone());
+        let path_1 = TableScopedPath { path: meta_1.location.clone(), table: None };
+        let path_2 = TableScopedPath { path: meta_2.location.clone(), table: None };
+        cache.put(&path_1, value_1.clone());
+        cache.put(&path_2, value_2.clone());
 
         assert_eq!(cache.len(), 2);
         assert_eq!(cache.memory_used(), limit_for_2_entries);
 
-        let result_1 = cache.get(&meta_1.location);
-        let result_2 = cache.get(&meta_2.location);
+        let result_1 = cache.get(&path_1);
+        let result_2 = cache.get(&path_2);
         assert_eq!(result_1.unwrap(), value_1);
         assert_eq!(result_2.unwrap(), value_2);
 
+        let path_3 = TableScopedPath { path: meta_3.location.clone(), table: None };
+
+
         // adding the third entry evicts the first entry
-        cache.put(&meta_3.location, value_3.clone());
+        cache.put(&path_3, value_3.clone());
         assert_eq!(cache.len(), 2);
         assert_eq!(cache.memory_used(), limit_for_2_entries);
 
-        let result_1 = cache.get(&meta_1.location);
+        let result_1 = cache.get(&path_1);
         assert!(result_1.is_none());
 
-        let result_2 = cache.get(&meta_2.location);
-        let result_3 = cache.get(&meta_3.location);
+        let result_2 = cache.get(&path_2);
+        let result_3 = cache.get(&path_3);
 
         assert_eq!(result_2.unwrap(), value_2);
         assert_eq!(result_3.unwrap(), value_3);
 
-        cache.remove(&meta_2.location);
+        cache.remove(&path_2);
         assert_eq!(cache.len(), 1);
         assert_eq!(
             cache.memory_used(),
@@ -609,7 +658,9 @@ mod tests {
         // create a cache with a size less than the entry
         let cache = DefaultFileStatisticsCache::new(limit_less_than_the_entry);
 
-        cache.put(&meta.location, value);
+        let path_1 = TableScopedPath { path: meta.location.clone(), table: None };
+
+        cache.put(&path_1, value);
 
         assert_eq!(cache.len(), 0);
         assert_eq!(cache.memory_used(), 0);
