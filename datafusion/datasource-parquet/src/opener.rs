@@ -41,7 +41,7 @@ use datafusion_common::{
     ColumnStatistics, DataFusionError, Result, ScalarValue, Statistics, exec_err,
 };
 use datafusion_datasource::{PartitionedFile, TableSchema};
-use datafusion_physical_expr::expressions::bind_dynamic_filters_for_partition;
+use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
 use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::{
@@ -265,7 +265,12 @@ impl FileOpener for ParquetOpener {
         // For partition-index dynamic filters this binds probe partition `i` to
         // build-side filter `i`.
         predicate = predicate
-            .map(|p| bind_dynamic_filters_for_partition(p, self.partition_index))
+            .map(|p| {
+                DynamicFilterPhysicalExpr::bind_for_partition_in_expr_tree(
+                    p,
+                    self.partition_index,
+                )
+            })
             .transpose()?;
 
         let reorder_predicates = self.reorder_filters;

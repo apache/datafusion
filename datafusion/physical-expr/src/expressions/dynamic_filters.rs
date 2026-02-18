@@ -58,8 +58,7 @@ pub enum DynamicFilterUpdate {
     /// This is used by CASE-hash / collect-left routing where a single filter
     /// expression represents all partitions.
     Global(Arc<dyn PhysicalExpr>),
-    /// Update per-partition expressions used by
-    /// [`DynamicFilterPhysicalExpr::current_for_partition`].
+    /// Update per-partition expressions used for partition-local lookup.
     ///
     /// Index `i` corresponds to partition `i`. Missing or out-of-range entries
     /// are treated as `true` (fail-open) by `current_for_partition`.
@@ -356,6 +355,34 @@ impl DynamicFilterPhysicalExpr {
         !self.inner.read().partitioned_exprs.is_empty()
     }
 
+    /// Bind partition-aware dynamic filters in an expression tree to a specific partition.
+    ///
+    /// This replaces any [`DynamicFilterPhysicalExpr`] with per-partition data by a
+    /// partition-bound dynamic filter wrapper that routes to `partition`.
+    /// Dynamic filters without per-partition data are left unchanged.
+    ///
+    /// Note: this only binds filters that already have per-partition payload at
+    /// bind time. Current hash join execution waits for build-side filter updates
+    /// before probe-side scanning, so this ordering is expected to hold.
+    pub fn bind_for_partition_in_expr_tree(
+        expr: Arc<dyn PhysicalExpr>,
+        partition: usize,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        expr.transform_up(|e| {
+            if let Some(dynamic) = e.as_any().downcast_ref::<DynamicFilterPhysicalExpr>()
+                && dynamic.has_partitioned_filters()
+            {
+                let bound = Arc::new(PartitionBoundDynamicFilterPhysicalExpr {
+                    source: dynamic.clone(),
+                    partition,
+                }) as Arc<dyn PhysicalExpr>;
+                return Ok(Transformed::yes(bound));
+            }
+            Ok(Transformed::no(e))
+        })
+        .data()
+    }
+
     /// Wait asynchronously for any update to this filter.
     ///
     /// This method will return when [`Self::update`] is called and the generation increases.
@@ -641,34 +668,6 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
         // Return the current generation of the expression.
         self.inner.read().generation
     }
-}
-
-/// Bind partition-aware dynamic filters in an expression tree to a specific partition.
-///
-/// This replaces any [`DynamicFilterPhysicalExpr`] with per-partition data by a
-/// [`PartitionBoundDynamicFilterPhysicalExpr`] that routes to `partition`.
-/// Dynamic filters without per-partition data are left unchanged.
-///
-/// Note: this only binds filters that already have per-partition payload at
-/// bind time. Current hash join execution waits for build-side filter updates
-/// before probe-side scanning, so this will hold.
-pub fn bind_dynamic_filters_for_partition(
-    expr: Arc<dyn PhysicalExpr>,
-    partition: usize,
-) -> Result<Arc<dyn PhysicalExpr>> {
-    expr.transform_up(|e| {
-        if let Some(dynamic) = e.as_any().downcast_ref::<DynamicFilterPhysicalExpr>()
-            && dynamic.has_partitioned_filters()
-        {
-            let bound = Arc::new(PartitionBoundDynamicFilterPhysicalExpr {
-                source: dynamic.clone(),
-                partition,
-            }) as Arc<dyn PhysicalExpr>;
-            return Ok(Transformed::yes(bound));
-        }
-        Ok(Transformed::no(e))
-    })
-    .data()
 }
 
 #[cfg(test)]
@@ -1199,7 +1198,11 @@ mod test {
             lit(true) as Arc<dyn PhysicalExpr>,
         )) as Arc<dyn PhysicalExpr>;
 
-        let bound = bind_dynamic_filters_for_partition(Arc::clone(&wrapper), 1).unwrap();
+        let bound = DynamicFilterPhysicalExpr::bind_for_partition_in_expr_tree(
+            Arc::clone(&wrapper),
+            1,
+        )
+        .unwrap();
 
         assert!(
             format!("{bound}").contains("<="),
@@ -1214,7 +1217,7 @@ mod test {
             lit(42) as Arc<dyn PhysicalExpr>,
         ));
 
-        let bound = bind_dynamic_filters_for_partition(
+        let bound = DynamicFilterPhysicalExpr::bind_for_partition_in_expr_tree(
             Arc::clone(&dynamic_filter) as Arc<dyn PhysicalExpr>,
             0,
         )
@@ -1250,7 +1253,7 @@ mod test {
             .update(DynamicFilterUpdate::Partitioned(vec![Some(initial_expr)]))
             .unwrap();
 
-        let bound = bind_dynamic_filters_for_partition(
+        let bound = DynamicFilterPhysicalExpr::bind_for_partition_in_expr_tree(
             Arc::clone(&dynamic_filter) as Arc<dyn PhysicalExpr>,
             0,
         )
