@@ -38,8 +38,9 @@ use datafusion_common::config::TableParquetOptions;
 use datafusion_datasource::TableSchema;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_expr::conjunction;
 use datafusion_physical_expr::projection::ProjectionExprs;
-use datafusion_physical_expr::{EquivalenceProperties, conjunction};
 use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
@@ -276,8 +277,10 @@ pub struct ParquetSource {
     /// In particular, this is the schema of the table without partition columns,
     /// *not* the physical schema of the file.
     pub(crate) table_schema: TableSchema,
-    /// Optional predicate for row filtering during parquet scan
-    pub(crate) predicate: Option<Arc<dyn PhysicalExpr>>,
+    /// Optional predicate conjuncts for row filtering during parquet scan.
+    /// Each conjunct is tagged with a stable FilterId for selectivity tracking.
+    pub(crate) predicate_conjuncts:
+        Option<Vec<(crate::selectivity::FilterId, Arc<dyn PhysicalExpr>)>>,
     /// Optional user defined parquet file reader factory
     pub(crate) parquet_file_reader_factory: Option<Arc<dyn ParquetFileReaderFactory>>,
     /// Batch size configuration
@@ -316,7 +319,7 @@ impl ParquetSource {
             table_schema,
             table_parquet_options: TableParquetOptions::default(),
             metrics: ExecutionPlanMetricsSet::new(),
-            predicate: None,
+            predicate_conjuncts: None,
             parquet_file_reader_factory: None,
             batch_size: None,
             metadata_size_hint: None,
@@ -327,21 +330,6 @@ impl ParquetSource {
                 crate::selectivity::SelectivityTracker::default(),
             )),
         }
-    }
-
-    /// Set the min bytes/sec threshold for adaptive filter pushdown.
-    ///
-    /// - `f64::INFINITY` (default) = no filters promoted (feature disabled)
-    /// - `0.0` = all filters pushed as row filters (no adaptive logic)
-    pub fn with_filter_pushdown_min_bytes_per_sec(
-        mut self,
-        min_bytes_per_sec: f64,
-    ) -> Self {
-        self.selectivity_tracker = Arc::new(parking_lot::RwLock::new(
-            crate::selectivity::SelectivityTracker::new()
-                .with_min_bytes_per_sec(min_bytes_per_sec),
-        ));
-        self
     }
 
     /// Set the `TableParquetOptions` for this ParquetSource.
@@ -374,11 +362,23 @@ impl ParquetSource {
         self
     }
 
-    /// Set predicate information
+    /// Set predicate information.
+    ///
+    /// The predicate is split into conjuncts and each is assigned a stable
+    /// `FilterId` (its index in the conjunct list). These IDs are used for
+    /// selectivity tracking across files, avoiding ExprKey mismatch issues
+    /// when expressions are rebased or simplified per-file.
     #[expect(clippy::needless_pass_by_value)]
     pub fn with_predicate(&self, predicate: Arc<dyn PhysicalExpr>) -> Self {
+        use datafusion_physical_expr::split_conjunction;
         let mut conf = self.clone();
-        conf.predicate = Some(Arc::clone(&predicate));
+        let conjuncts: Vec<(crate::selectivity::FilterId, Arc<dyn PhysicalExpr>)> =
+            split_conjunction(&predicate)
+                .into_iter()
+                .enumerate()
+                .map(|(id, expr)| (id, Arc::clone(expr)))
+                .collect();
+        conf.predicate_conjuncts = Some(conjuncts);
         conf
     }
 
@@ -399,8 +399,15 @@ impl ParquetSource {
 
     /// Optional predicate.
     #[deprecated(since = "50.2.0", note = "use `filter` instead")]
-    pub fn predicate(&self) -> Option<&Arc<dyn PhysicalExpr>> {
-        self.predicate.as_ref()
+    pub fn predicate(&self) -> Option<Arc<dyn PhysicalExpr>> {
+        self.combined_predicate()
+    }
+
+    /// Build a combined predicate from the conjuncts, if any.
+    fn combined_predicate(&self) -> Option<Arc<dyn PhysicalExpr>> {
+        self.predicate_conjuncts
+            .as_ref()
+            .map(|conjuncts| conjunction(conjuncts.iter().map(|(_, e)| Arc::clone(e))))
     }
 
     /// return the optional file reader factory
@@ -429,22 +436,6 @@ impl ParquetSource {
     /// Return the value described in [`Self::with_pushdown_filters`]
     pub(crate) fn pushdown_filters(&self) -> bool {
         self.table_parquet_options.global.pushdown_filters
-    }
-
-    /// If true, the `RowFilter` made by `pushdown_filters` may try to
-    /// minimize the cost of filter evaluation by reordering the
-    /// predicate [`Expr`]s. If false, the predicates are applied in
-    /// the same order as specified in the query. Defaults to false.
-    ///
-    /// [`Expr`]: datafusion_expr::Expr
-    pub fn with_reorder_filters(mut self, reorder_filters: bool) -> Self {
-        self.table_parquet_options.global.reorder_filters = reorder_filters;
-        self
-    }
-
-    /// Return the value described in [`Self::with_reorder_filters`]
-    fn reorder_filters(&self) -> bool {
-        self.table_parquet_options.global.reorder_filters
     }
 
     /// Return the value of [`datafusion_common::config::ParquetOptions::force_filter_selections`]
@@ -491,39 +482,6 @@ impl ParquetSource {
     /// `pushdown_filters`
     pub fn max_predicate_cache_size(&self) -> Option<usize> {
         self.table_parquet_options.global.max_predicate_cache_size
-    }
-
-    /// Set the minimum bytes/sec throughput for adaptive filter pushdown.
-    ///
-    /// When `pushdown_filters` is enabled, filters are evaluated post-scan to
-    /// collect timing stats. Filters achieving at least this bytes/sec throughput
-    /// are promoted to row filters.
-    /// - `f64::INFINITY` (default) = no filters promoted (feature disabled)
-    /// - `0.0` = all filters pushed as row filters (no adaptive logic)
-    pub fn with_filter_pushdown_min_bytes_per_sec_opt(
-        mut self,
-        min_bytes_per_sec: f64,
-    ) -> Self {
-        self.table_parquet_options
-            .global
-            .filter_pushdown_min_bytes_per_sec = min_bytes_per_sec;
-        let opts = &self.table_parquet_options.global;
-        self.selectivity_tracker = Arc::new(parking_lot::RwLock::new(
-            crate::selectivity::SelectivityTracker::new()
-                .with_min_bytes_per_sec(min_bytes_per_sec)
-                .with_correlation_threshold(opts.filter_correlation_threshold)
-                .with_min_rows_for_collection(opts.filter_statistics_collection_min_rows)
-                .with_collection_fraction(opts.filter_statistics_collection_fraction)
-                .with_max_rows_for_collection(opts.filter_statistics_collection_max_rows),
-        ));
-        self
-    }
-
-    /// Return the filter pushdown min bytes/sec threshold.
-    pub fn filter_pushdown_min_bytes_per_sec(&self) -> f64 {
-        self.table_parquet_options
-            .global
-            .filter_pushdown_min_bytes_per_sec
     }
 
     #[cfg(feature = "parquet_encryption")]
@@ -615,13 +573,12 @@ impl FileSource for ParquetSource {
                 .expect("Batch size must set before creating ParquetOpener"),
             limit: base_config.limit,
             preserve_order: base_config.preserve_order,
-            predicate: self.predicate.clone(),
+            predicate_conjuncts: self.predicate_conjuncts.clone(),
             table_schema: self.table_schema.clone(),
             metadata_size_hint: self.metadata_size_hint,
             metrics: self.metrics().clone(),
             parquet_file_reader_factory,
             pushdown_filters: self.pushdown_filters(),
-            reorder_filters: self.reorder_filters(),
             force_filter_selections: self.force_filter_selections(),
             enable_page_index: self.enable_page_index(),
             enable_bloom_filter: self.bloom_filter_on_read(),
@@ -639,6 +596,9 @@ impl FileSource for ParquetSource {
 
         // Notify the selectivity tracker of the total dataset row count
         // so fraction-based collection thresholds can be resolved.
+        // This only needs to happen once, but we don't have access to FileScanConfig
+        // until this point -> we do it in the opener and make `notify_dataset_rows`
+        // idempotent so it doesn't matter if multiple openers call it.
         if let Some(&total_rows) = base_config.statistics().num_rows.get_value() {
             self.selectivity_tracker
                 .write()
@@ -657,7 +617,7 @@ impl FileSource for ParquetSource {
     }
 
     fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
-        self.predicate.clone()
+        self.combined_predicate()
     }
 
     fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
@@ -710,7 +670,7 @@ impl FileSource for ParquetSource {
                 // the actual predicates are built in reference to the physical schema of
                 // each file, which we do not have at this point and hence cannot use.
                 // Instead we use the logical schema of the file (the table schema without partition columns).
-                if let Some(predicate) = &self.predicate {
+                if let Some(predicate) = &self.combined_predicate() {
                     let predicate_creation_errors = Count::new();
                     if let (Some(pruning_predicate), _) = build_pruning_predicates(
                         Some(predicate),
@@ -787,13 +747,16 @@ impl FileSource for ParquetSource {
                 PushedDown::No => None,
             })
             .collect_vec();
-        let predicate = match source.predicate {
-            Some(predicate) => {
-                conjunction(std::iter::once(predicate).chain(allowed_filters))
-            }
-            None => conjunction(allowed_filters),
-        };
-        source.predicate = Some(predicate);
+        // Merge existing conjuncts with new allowed filters
+        let mut all_conjuncts: Vec<Arc<dyn PhysicalExpr>> = source
+            .predicate_conjuncts
+            .as_ref()
+            .map(|c| c.iter().map(|(_, e)| Arc::clone(e)).collect())
+            .unwrap_or_default();
+        all_conjuncts.extend(allowed_filters);
+        // Re-assign FilterIds by index
+        source.predicate_conjuncts =
+            Some(all_conjuncts.into_iter().enumerate().collect());
         source = source.with_pushdown_filters(pushdown_filters);
         let source = Arc::new(source);
         // If pushdown_filters is false we tell our parents that they still have to handle the filters,
@@ -907,8 +870,9 @@ mod tests {
 
         let parquet_source =
             ParquetSource::new(Arc::new(Schema::empty())).with_predicate(predicate);
-        // same value. but filter() call Arc::clone internally
-        assert_eq!(parquet_source.predicate(), parquet_source.filter().as_ref());
+        // Both should return equivalent predicates
+        assert!(parquet_source.predicate().is_some());
+        assert!(parquet_source.filter().is_some());
     }
 
     #[test]

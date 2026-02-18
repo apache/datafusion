@@ -789,9 +789,7 @@ pub struct ParquetOptions {
     /// default = false
     #[prost(bool, tag = "5")]
     pub pushdown_filters: bool,
-    /// default = false
-    #[prost(bool, tag = "6")]
-    pub reorder_filters: bool,
+
     /// default = false
     #[prost(bool, tag = "34")]
     pub force_filter_selections: bool,

@@ -39,7 +39,7 @@
 //! 2. They filter many (contiguous) rows, reducing the amount of decoding
 //!    required for subsequent filters and projected columns
 //!
-//! If requested, this code will reorder the filters based on heuristics try and
+//! This code will reorder the filters based on heuristics to try and
 //! reduce the evaluation cost.
 //!
 //! The basic algorithm for constructing the `RowFilter` is as follows
@@ -54,7 +54,7 @@
 //!    evaluate the expression are sorted.
 //! 5. Re-order the predicate by total size (from step 3).
 //! 6. Partition the predicates according to whether they are sorted (from step 4)
-//! 7. "Compile" each predicate `Expr` to a `DatafusionArrowPredicate`.
+//! 7. "Compile" each predicate `Expr` to a `DatafusionArrowPredicateWithMetrics`.
 //! 8. Build the `RowFilter` with the sorted predicates followed by
 //!    the unsorted predicates. Within each partition, predicates are
 //!    still be sorted by size.
@@ -64,7 +64,6 @@
 //! columns and other nested projections that are not explicitly supported will
 //! continue to be evaluated after the batches are materialized.
 
-use std::cmp::Ordering;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -80,33 +79,33 @@ use parquet::schema::types::SchemaDescriptor;
 use datafusion_common::Result;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
+use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::reassign_expr_columns;
-use datafusion_physical_expr::{PhysicalExpr, split_conjunction};
 
 use datafusion_physical_plan::metrics;
 
 use super::ParquetFileMetrics;
-use super::selectivity::SelectivityTracker;
 use super::supported_predicates::supports_list_predicates;
 
-/// Metrics for a single filter predicate, paired with the original expression.
+/// Metrics for a single filter predicate, paired with a stable FilterId.
 ///
 /// These metrics are tracked during row filter evaluation and can be used
 /// to update selectivity statistics after processing completes.
 #[derive(Debug, Clone)]
 pub struct FilterMetrics {
-    /// The filter expression for this predicate.
-    /// For standalone filters this is the original expression.
-    /// For compound predicates (correlated filters), this is the conjunction.
-    /// Stats are fed back into the selectivity tracker keyed on this expression.
-    pub expr: Arc<dyn PhysicalExpr>,
+    /// Stable filter identifier for selectivity tracking.
+    /// For compound predicates (correlated filters grouped together),
+    /// this uses the ID of the first filter in the group.
+    pub filter_id: crate::selectivity::FilterId,
     /// Counter for rows that matched (passed) this filter
     rows_matched: metrics::Count,
     /// Counter for rows that were pruned (filtered out) by this filter
     rows_pruned: metrics::Count,
     /// Cumulative evaluation time for this filter
     eval_time: metrics::Time,
+    /// Cumulative bytes evaluated by this filter
+    bytes_evaluated: metrics::Count,
 }
 
 impl FilterMetrics {
@@ -129,6 +128,11 @@ impl FilterMetrics {
     pub fn get_eval_nanos(&self) -> usize {
         self.eval_time.value()
     }
+
+    /// Get the cumulative bytes evaluated by this filter
+    pub fn get_bytes_evaluated(&self) -> usize {
+        self.bytes_evaluated.value()
+    }
 }
 
 /// Result of building a row filter, containing both the filter and per-expression metrics.
@@ -140,7 +144,7 @@ pub struct RowFilterWithMetrics {
     pub filter_metrics: Vec<FilterMetrics>,
     /// Filter expressions that could not be built into row filters and must be
     /// applied as post-scan filters to preserve correctness.
-    pub unbuildable_filters: Vec<Arc<dyn PhysicalExpr>>,
+    pub unbuildable_filters: Vec<(crate::selectivity::FilterId, Arc<dyn PhysicalExpr>)>,
 }
 
 /// A "compiled" predicate passed to `ParquetRecordBatchStream` to perform
@@ -148,85 +152,6 @@ pub struct RowFilterWithMetrics {
 ///
 /// See the module level documentation for more information.
 ///
-/// Implements the `ArrowPredicate` trait used by the parquet decoder
-///
-/// An expression can be evaluated as a `DatafusionArrowPredicate` if it:
-/// * Does not reference any projected columns
-/// * References either primitive columns or list columns used by
-///   supported predicates (such as `array_has_all` or NULL checks). Struct
-///   columns are still evaluated after decoding.
-#[derive(Debug)]
-pub(crate) struct DatafusionArrowPredicate {
-    /// the filter expression
-    physical_expr: Arc<dyn PhysicalExpr>,
-    /// Path to the leaf columns in the parquet schema required to evaluate the
-    /// expression
-    projection_mask: ProjectionMask,
-    /// how many rows were filtered out by this predicate
-    rows_pruned: metrics::Count,
-    /// how many rows passed this predicate
-    rows_matched: metrics::Count,
-    /// how long was spent evaluating this predicate
-    time: metrics::Time,
-}
-
-impl DatafusionArrowPredicate {
-    /// Create a new `DatafusionArrowPredicate` from a `FilterCandidate`
-    pub fn try_new(
-        candidate: FilterCandidate,
-        metadata: &ParquetMetaData,
-        rows_pruned: metrics::Count,
-        rows_matched: metrics::Count,
-        time: metrics::Time,
-    ) -> Result<Self> {
-        let physical_expr =
-            reassign_expr_columns(candidate.expr, &candidate.filter_schema)?;
-
-        Ok(Self {
-            physical_expr,
-            // Use leaf indices: when nested columns are involved, we must specify
-            // leaf (primitive) column indices in the Parquet schema so the decoder
-            // can properly project and filter nested structures.
-            projection_mask: ProjectionMask::leaves(
-                metadata.file_metadata().schema_descr(),
-                candidate.projection.leaf_indices.iter().copied(),
-            ),
-            rows_pruned,
-            rows_matched,
-            time,
-        })
-    }
-}
-
-impl ArrowPredicate for DatafusionArrowPredicate {
-    fn projection(&self) -> &ProjectionMask {
-        &self.projection_mask
-    }
-
-    fn evaluate(&mut self, batch: RecordBatch) -> ArrowResult<BooleanArray> {
-        // scoped timer updates on drop
-        let mut timer = self.time.timer();
-
-        self.physical_expr
-            .evaluate(&batch)
-            .and_then(|v| v.into_array(batch.num_rows()))
-            .and_then(|array| {
-                let bool_arr = as_boolean_array(&array)?.clone();
-                let num_matched = bool_arr.true_count();
-                let num_pruned = bool_arr.len() - num_matched;
-                self.rows_pruned.add(num_pruned);
-                self.rows_matched.add(num_matched);
-                timer.stop();
-                Ok(bool_arr)
-            })
-            .map_err(|e| {
-                ArrowError::ComputeError(format!(
-                    "Error evaluating filter predicate: {e:?}"
-                ))
-            })
-    }
-}
-
 /// A candidate expression for creating a `RowFilter`.
 ///
 /// Each candidate contains the expression as well as data to estimate the cost
@@ -237,11 +162,11 @@ pub(crate) struct FilterCandidate {
     expr: Arc<dyn PhysicalExpr>,
     /// Estimate for the total number of bytes that will need to be processed
     /// to evaluate this filter. This is used to estimate the cost of evaluating
-    /// the filter and to order the filters when `reorder_predicates` is true.
+    /// the filter and to order filters by cost.
     /// This is generated by summing the compressed size of all columns that the filter references.
-    required_bytes: usize,
+    _required_bytes: usize,
     /// Can this filter use an index (e.g. a page index) to prune rows?
-    can_use_index: bool,
+    _can_use_index: bool,
     /// Column indices into the parquet file schema required to evaluate this filter.
     projection: LeafProjection,
     /// The Arrow schema containing only the columns required by this filter,
@@ -309,8 +234,8 @@ impl FilterCandidateBuilder {
 
         Ok(Some(FilterCandidate {
             expr: self.expr,
-            required_bytes,
-            can_use_index,
+            _required_bytes: required_bytes,
+            _can_use_index: can_use_index,
             projection: LeafProjection { leaf_indices },
             filter_schema: projected_schema,
         }))
@@ -618,11 +543,10 @@ fn columns_sorted(_columns: &[usize], _metadata: &ParquetMetaData) -> Result<boo
 /// * `file_schema` - The Arrow schema of the parquet file (the result of converting
 ///   the parquet schema to Arrow, potentially with type coercions applied)
 /// * `metadata` - Parquet file metadata used for cost estimation
-/// * `reorder_predicates` - If true, reorder predicates to minimize I/O
 /// * `file_metrics` - Metrics for tracking filter performance
-/// * `selectivity_tracker` - Tracker containing effectiveness data for filter reordering.
-///   Filters with known effectiveness are sorted by effectiveness descending (more selective first).
-///   Filters with unknown effectiveness fall back to the existing heuristics.
+/// * `selectivity_tracker` - Tracker containing effectiveness scores for filter reordering.
+///   Filters with known effectiveness (opaque ordering metric, higher = run first) are sorted
+///   by effectiveness descending. Filters with unknown effectiveness fall back to heuristics.
 ///
 /// # Returns
 /// * `Ok(Some(row_filter))` if the expression can be used as a RowFilter
@@ -636,181 +560,63 @@ fn columns_sorted(_columns: &[usize], _metadata: &ParquetMetaData) -> Result<boo
 /// cannot be evaluated for some reason, the returned `RowFilter` will contain
 /// only `a = 1` and `c = 3`.
 pub fn build_row_filter(
-    expr: &Arc<dyn PhysicalExpr>,
+    filters: Vec<(crate::selectivity::FilterId, Arc<dyn PhysicalExpr>)>,
     file_schema: &SchemaRef,
     metadata: &ParquetMetaData,
-    reorder_predicates: bool,
     file_metrics: &ParquetFileMetrics,
-    selectivity_tracker: &SelectivityTracker,
-) -> Result<Option<RowFilter>> {
-    let rows_pruned = &file_metrics.pushdown_rows_pruned;
-    let rows_matched = &file_metrics.pushdown_rows_matched;
-    let time = &file_metrics.row_pushdown_eval_time;
-
-    // Split into conjuncts:
-    // `a = 1 AND b = 2 AND c = 3` -> [`a = 1`, `b = 2`, `c = 3`]
-    let predicates = split_conjunction(expr);
-
-    // Determine which conjuncts can be evaluated as ArrowPredicates, if any
-    let mut candidates: Vec<FilterCandidate> = predicates
-        .into_iter()
-        .map(|expr| {
-            FilterCandidateBuilder::new(Arc::clone(expr), Arc::clone(file_schema))
-                .build(metadata)
-        })
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .flatten()
-        .collect();
-
-    // no candidates
-    if candidates.is_empty() {
-        return Ok(None);
-    }
-
-    if reorder_predicates {
-        candidates.sort_unstable_by(|c1, c2| {
-            let eff1 = selectivity_tracker.get_effectiveness(&c1.expr);
-            let eff2 = selectivity_tracker.get_effectiveness(&c2.expr);
-
-            match (eff1, eff2) {
-                // Both have known effectiveness: sort by effectiveness descending
-                // (higher effectiveness = more selective = should come first)
-                (Some(e1), Some(e2)) => e2.partial_cmp(&e1).unwrap_or(Ordering::Equal),
-                // Known effectiveness comes before unknown
-                (Some(_), None) => Ordering::Less,
-                (None, Some(_)) => Ordering::Greater,
-                // Both unknown: fall back to existing heuristics
-                (None, None) => match c1.can_use_index.cmp(&c2.can_use_index) {
-                    Ordering::Equal => c1.required_bytes.cmp(&c2.required_bytes),
-                    ord => ord,
-                },
-            }
-        });
-    }
-
-    // To avoid double-counting metrics when multiple predicates are used:
-    // - All predicates should count rows_pruned (cumulative pruned rows)
-    // - Only the last predicate should count rows_matched (final result)
-    // This ensures: rows_matched + rows_pruned = total rows processed
-    let total_candidates = candidates.len();
-
-    candidates
-        .into_iter()
-        .enumerate()
-        .map(|(idx, candidate)| {
-            let is_last = idx == total_candidates - 1;
-
-            // All predicates share the pruned counter (cumulative)
-            let predicate_rows_pruned = rows_pruned.clone();
-
-            // Only the last predicate tracks matched rows (final result)
-            let predicate_rows_matched = if is_last {
-                rows_matched.clone()
-            } else {
-                metrics::Count::new()
-            };
-
-            DatafusionArrowPredicate::try_new(
-                candidate,
-                metadata,
-                predicate_rows_pruned,
-                predicate_rows_matched,
-                time.clone(),
-            )
-            .map(|pred| Box::new(pred) as _)
-        })
-        .collect::<Result<Vec<_>, _>>()
-        .map(|filters| Some(RowFilter::new(filters)))
-}
-
-/// Build a [`RowFilter`] from the given predicate expression, returning per-expression metrics.
-///
-/// This is similar to [`build_row_filter`] but additionally returns [`FilterMetrics`] for each
-/// filter expression. The metrics can be read after stream processing completes to update
-/// selectivity statistics.
-///
-/// # Arguments
-/// * `expr` - The filter predicate, already adapted to reference columns in `file_schema`
-/// * `file_schema` - The Arrow schema of the parquet file
-/// * `metadata` - Parquet file metadata used for cost estimation
-/// * `reorder_predicates` - If true, reorder predicates to minimize I/O
-/// * `file_metrics` - Metrics for tracking filter performance
-/// * `selectivity_tracker` - Tracker containing effectiveness data for filter reordering
-///
-/// # Returns
-/// * `Ok(Some(result))` containing the row filter and per-expression metrics
-/// * `Ok(None)` if no expressions can be used as a RowFilter
-/// * `Err(e)` if an error occurs while building the filter
-pub fn build_row_filter_with_metrics(
-    predicates: Vec<Arc<dyn PhysicalExpr>>,
-    file_schema: &SchemaRef,
-    metadata: &ParquetMetaData,
-    reorder_predicates: bool,
-    file_metrics: &ParquetFileMetrics,
-    selectivity_tracker: &SelectivityTracker,
 ) -> Result<Option<RowFilterWithMetrics>> {
     let rows_pruned = &file_metrics.pushdown_rows_pruned;
     let rows_matched = &file_metrics.pushdown_rows_matched;
     let time = &file_metrics.row_pushdown_eval_time;
 
-    // Determine which conjuncts can be evaluated as ArrowPredicates, if any
-    // We need to preserve the original expressions before building candidates
-    let mut candidates_with_exprs: Vec<(Arc<dyn PhysicalExpr>, FilterCandidate)> =
-        predicates
-            .into_iter()
-            .filter_map(|expr| {
-                let original_expr = Arc::clone(&expr);
-                FilterCandidateBuilder::new(expr, Arc::clone(file_schema))
-                    .build(metadata)
-                    .ok()
-                    .flatten()
-                    .map(|candidate| (original_expr, candidate))
-            })
-            .collect();
+    let mut candidates: Vec<(crate::selectivity::FilterId, FilterCandidate)> = Vec::new();
+    let mut unbuildable_filters: Vec<(
+        crate::selectivity::FilterId,
+        Arc<dyn PhysicalExpr>,
+    )> = Vec::new();
 
-    // no candidates (non-grouped path has no unbuildable tracking)
-    if candidates_with_exprs.is_empty() {
-        return Ok(None);
-    }
-
-    if reorder_predicates {
-        candidates_with_exprs.sort_unstable_by(|(_, c1), (_, c2)| {
-            let eff1 = selectivity_tracker.get_effectiveness(&c1.expr);
-            let eff2 = selectivity_tracker.get_effectiveness(&c2.expr);
-
-            match (eff1, eff2) {
-                // Both have known effectiveness: sort by effectiveness descending
-                // (higher effectiveness = more selective = should come first)
-                (Some(e1), Some(e2)) => e2.partial_cmp(&e1).unwrap_or(Ordering::Equal),
-                // Either unknown: fall back to existing heuristics
-                _ => match c1.can_use_index.cmp(&c2.can_use_index) {
-                    Ordering::Equal => c1.required_bytes.cmp(&c2.required_bytes),
-                    ord => ord,
-                },
+    for (id, expr) in filters {
+        match FilterCandidateBuilder::new(Arc::clone(&expr), Arc::clone(file_schema))
+            .build(metadata)
+        {
+            Ok(Some(candidate)) => {
+                candidates.push((id, candidate));
             }
-        });
+            _ => {
+                unbuildable_filters.push((id, expr));
+            }
+        }
     }
 
-    let total_candidates = candidates_with_exprs.len();
-    let mut filter_metrics = Vec::with_capacity(total_candidates);
+    if candidates.is_empty() {
+        if unbuildable_filters.is_empty() {
+            return Ok(None);
+        }
+        return Ok(Some(RowFilterWithMetrics {
+            row_filter: RowFilter::new(vec![]),
+            filter_metrics: vec![],
+            unbuildable_filters,
+        }));
+    }
+
+    let total_candidates = candidates.len();
+    let mut filter_metrics = Vec::new();
     let mut arrow_predicates = Vec::with_capacity(total_candidates);
 
-    for (idx, (original_expr, candidate)) in candidates_with_exprs.into_iter().enumerate()
-    {
+    for (idx, (filter_id, candidate)) in candidates.into_iter().enumerate() {
         let is_last = idx == total_candidates - 1;
 
-        // Create per-predicate metrics for selectivity tracking
         let predicate_rows_matched = metrics::Count::new();
         let predicate_rows_pruned = metrics::Count::new();
         let local_eval_time = metrics::Time::new();
+        let predicate_bytes_evaluated = metrics::Count::new();
 
-        // Store references to the metrics for the filter
         filter_metrics.push(FilterMetrics {
-            expr: original_expr,
+            filter_id,
             rows_matched: predicate_rows_matched.clone(),
             rows_pruned: predicate_rows_pruned.clone(),
             eval_time: local_eval_time.clone(),
+            bytes_evaluated: predicate_bytes_evaluated.clone(),
         });
 
         // For global metrics tracking:
@@ -823,7 +629,6 @@ pub fn build_row_filter_with_metrics(
             metrics::Count::new()
         };
 
-        // Create a predicate that updates both per-predicate and global metrics
         let arrow_pred = DatafusionArrowPredicateWithMetrics::try_new(
             candidate,
             metadata,
@@ -833,165 +638,7 @@ pub fn build_row_filter_with_metrics(
             global_rows_matched,
             time.clone(),
             local_eval_time,
-        )?;
-
-        arrow_predicates.push(Box::new(arrow_pred) as Box<dyn ArrowPredicate>);
-    }
-
-    Ok(Some(RowFilterWithMetrics {
-        row_filter: RowFilter::new(arrow_predicates),
-        filter_metrics,
-        unbuildable_filters: vec![],
-    }))
-}
-
-/// Build a [`RowFilter`] from groups of correlated filter expressions.
-///
-/// Each group of correlated filters is combined into a single compound
-/// `ArrowPredicate` using `conjunction()`. This avoids redundant column
-/// decoding passes for correlated filters that barely prune extra rows
-/// when evaluated separately.
-///
-/// # Arguments
-/// * `filter_groups` - Groups of correlated filter expressions. Each inner Vec
-///   is combined with AND into a single ArrowPredicate.
-/// * `file_schema` - The Arrow schema of the parquet file
-/// * `metadata` - Parquet file metadata used for cost estimation
-/// * `reorder_predicates` - If true, reorder predicates to minimize I/O
-/// * `file_metrics` - Metrics for tracking filter performance
-/// * `selectivity_tracker` - Tracker containing effectiveness data for filter reordering
-///
-/// # Returns
-/// * `Ok(Some(result))` containing the row filter and per-expression metrics
-/// * `Ok(None)` if no expressions can be used as a RowFilter
-/// * `Err(e)` if an error occurs while building the filter
-pub fn build_row_filter_from_groups(
-    filter_groups: Vec<Vec<Arc<dyn PhysicalExpr>>>,
-    file_schema: &SchemaRef,
-    metadata: &ParquetMetaData,
-    reorder_predicates: bool,
-    file_metrics: &ParquetFileMetrics,
-    selectivity_tracker: &SelectivityTracker,
-) -> Result<Option<RowFilterWithMetrics>> {
-    use datafusion_physical_expr::utils::conjunction;
-
-    let rows_pruned = &file_metrics.pushdown_rows_pruned;
-    let rows_matched = &file_metrics.pushdown_rows_matched;
-    let time = &file_metrics.row_pushdown_eval_time;
-
-    // For each group, combine into a single expression and build a candidate.
-    // Track original expressions for metrics and unbuildable filters.
-    let mut candidates_with_exprs: Vec<(Arc<dyn PhysicalExpr>, FilterCandidate)> =
-        Vec::new();
-    let mut unbuildable_filters: Vec<Arc<dyn PhysicalExpr>> = Vec::new();
-
-    for group in filter_groups {
-        if group.is_empty() {
-            continue;
-        }
-
-        // Combine group into a single expression with conjunction
-        let combined_expr = conjunction(group.iter().cloned());
-
-        match FilterCandidateBuilder::new(
-            Arc::clone(&combined_expr),
-            Arc::clone(file_schema),
-        )
-        .build(metadata)
-        {
-            Ok(Some(candidate)) => {
-                candidates_with_exprs.push((combined_expr, candidate));
-            }
-            Ok(None) | Err(_) => {
-                // Compound can't push down — try each individually.
-                // Any filter that still can't be built must be returned as
-                // unbuildable so the caller can apply it as a post-scan filter.
-                for expr in group {
-                    match FilterCandidateBuilder::new(
-                        Arc::clone(&expr),
-                        Arc::clone(file_schema),
-                    )
-                    .build(metadata)
-                    {
-                        Ok(Some(candidate)) => {
-                            candidates_with_exprs.push((Arc::clone(&expr), candidate));
-                        }
-                        _ => {
-                            unbuildable_filters.push(expr);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if candidates_with_exprs.is_empty() {
-        if unbuildable_filters.is_empty() {
-            return Ok(None);
-        }
-        // No buildable candidates, but there are unbuildable filters that
-        // the caller must apply as post-scan to preserve correctness.
-        return Ok(Some(RowFilterWithMetrics {
-            row_filter: RowFilter::new(vec![]),
-            filter_metrics: vec![],
-            unbuildable_filters,
-        }));
-    }
-
-    if reorder_predicates {
-        candidates_with_exprs.sort_unstable_by(|(_, c1), (_, c2)| {
-            let eff1 = selectivity_tracker.get_effectiveness(&c1.expr);
-            let eff2 = selectivity_tracker.get_effectiveness(&c2.expr);
-
-            match (eff1, eff2) {
-                (Some(e1), Some(e2)) => e2.partial_cmp(&e1).unwrap_or(Ordering::Equal),
-                _ => match c1.can_use_index.cmp(&c2.can_use_index) {
-                    Ordering::Equal => c1.required_bytes.cmp(&c2.required_bytes),
-                    ord => ord,
-                },
-            }
-        });
-    }
-
-    let total_candidates = candidates_with_exprs.len();
-    let mut filter_metrics = Vec::new();
-    let mut arrow_predicates = Vec::with_capacity(total_candidates);
-
-    for (idx, (original_expr, candidate)) in candidates_with_exprs.into_iter().enumerate()
-    {
-        let is_last = idx == total_candidates - 1;
-
-        // Create per-predicate metrics for this group
-        let predicate_rows_matched = metrics::Count::new();
-        let predicate_rows_pruned = metrics::Count::new();
-        let local_eval_time = metrics::Time::new();
-
-        // One FilterMetrics entry per predicate, keyed on the conjunction
-        // expression (or original expression for single filters).
-        filter_metrics.push(FilterMetrics {
-            expr: original_expr,
-            rows_matched: predicate_rows_matched.clone(),
-            rows_pruned: predicate_rows_pruned.clone(),
-            eval_time: local_eval_time.clone(),
-        });
-
-        // For global metrics tracking
-        let global_rows_pruned = rows_pruned.clone();
-        let global_rows_matched = if is_last {
-            rows_matched.clone()
-        } else {
-            metrics::Count::new()
-        };
-
-        let arrow_pred = DatafusionArrowPredicateWithMetrics::try_new(
-            candidate,
-            metadata,
-            predicate_rows_pruned,
-            predicate_rows_matched,
-            global_rows_pruned,
-            global_rows_matched,
-            time.clone(),
-            local_eval_time,
+            predicate_bytes_evaluated,
         )?;
 
         arrow_predicates.push(Box::new(arrow_pred) as Box<dyn ArrowPredicate>);
@@ -1006,7 +653,7 @@ pub fn build_row_filter_from_groups(
 
 /// A variant of [`DatafusionArrowPredicate`] that tracks both per-predicate and global metrics.
 ///
-/// This is used by [`build_row_filter_with_metrics`] to enable selectivity tracking
+/// This is used by [`build_row_filter`] to enable selectivity tracking
 /// while maintaining backward compatibility with the global metrics system.
 #[derive(Debug)]
 struct DatafusionArrowPredicateWithMetrics {
@@ -1026,6 +673,8 @@ struct DatafusionArrowPredicateWithMetrics {
     time: metrics::Time,
     /// per-filter evaluation time (for selectivity tracking)
     local_time: metrics::Time,
+    /// per-filter bytes evaluated (for selectivity tracking)
+    local_bytes_evaluated: metrics::Count,
 }
 
 impl DatafusionArrowPredicateWithMetrics {
@@ -1039,6 +688,7 @@ impl DatafusionArrowPredicateWithMetrics {
         global_rows_matched: metrics::Count,
         time: metrics::Time,
         local_time: metrics::Time,
+        local_bytes_evaluated: metrics::Count,
     ) -> Result<Self> {
         let physical_expr =
             reassign_expr_columns(candidate.expr, &candidate.filter_schema)?;
@@ -1058,6 +708,7 @@ impl DatafusionArrowPredicateWithMetrics {
             global_rows_matched,
             time,
             local_time,
+            local_bytes_evaluated,
         })
     }
 }
@@ -1070,6 +721,9 @@ impl ArrowPredicate for DatafusionArrowPredicateWithMetrics {
     fn evaluate(&mut self, batch: RecordBatch) -> ArrowResult<BooleanArray> {
         let mut global_timer = self.time.timer();
         let mut local_timer = self.local_time.timer();
+
+        self.local_bytes_evaluated
+            .add(batch.get_array_memory_size());
 
         self.physical_expr
             .evaluate(&batch)
@@ -1192,12 +846,16 @@ mod test {
             .expect("building candidate")
             .expect("candidate expected");
 
-        let mut row_filter = DatafusionArrowPredicate::try_new(
+        let mut row_filter = DatafusionArrowPredicateWithMetrics::try_new(
             candidate,
             &metadata,
             Count::new(),
             Count::new(),
+            Count::new(),
+            Count::new(),
             Time::new(),
+            Time::new(),
+            Count::new(),
         )
         .expect("creating filter predicate");
 
@@ -1232,12 +890,16 @@ mod test {
             .expect("building candidate")
             .expect("candidate expected");
 
-        let mut row_filter = DatafusionArrowPredicate::try_new(
+        let mut row_filter = DatafusionArrowPredicateWithMetrics::try_new(
             candidate,
             &metadata,
             Count::new(),
             Count::new(),
+            Count::new(),
+            Count::new(),
             Time::new(),
+            Time::new(),
+            Count::new(),
         )
         .expect("creating filter predicate");
 
@@ -1381,21 +1043,13 @@ mod test {
         let metrics = ExecutionPlanMetricsSet::new();
         let file_metrics =
             ParquetFileMetrics::new(0, &format!("{func_name}.parquet"), &metrics);
-        let selectivity_tracker = SelectivityTracker::default();
-
-        let row_filter = build_row_filter(
-            &expr,
-            &file_schema,
-            &metadata,
-            false,
-            &file_metrics,
-            &selectivity_tracker,
-        )
-        .expect("building row filter")
-        .expect("row filter should exist");
+        let result =
+            build_row_filter(vec![(0, expr)], &file_schema, &metadata, &file_metrics)
+                .expect("building row filter")
+                .expect("row filter should exist");
 
         let reader = parquet_reader_builder
-            .with_row_filter(row_filter)
+            .with_row_filter(result.row_filter)
             .build()
             .expect("build reader");
 

@@ -379,7 +379,7 @@ mod parquet {
                     parquet_options::MetadataSizeHintOpt::MetadataSizeHint(size as u64)
                 }),
                 pushdown_filters: global_options.global.pushdown_filters,
-                reorder_filters: global_options.global.reorder_filters,
+
                 force_filter_selections: global_options.global.force_filter_selections,
                 data_pagesize_limit: global_options.global.data_pagesize_limit as u64,
                 write_batch_size: global_options.global.write_batch_size as u64,
@@ -480,7 +480,7 @@ mod parquet {
                 parquet_options::MetadataSizeHintOpt::MetadataSizeHint(size) => *size as usize,
             }),
             pushdown_filters: proto.pushdown_filters,
-            reorder_filters: proto.reorder_filters,
+
             force_filter_selections: proto.force_filter_selections,
             data_pagesize_limit: proto.data_pagesize_limit as usize,
             write_batch_size: proto.write_batch_size as usize,

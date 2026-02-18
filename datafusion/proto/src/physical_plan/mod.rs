@@ -848,16 +848,14 @@ impl protobuf::PhysicalPlanNode {
             // Parse table schema with partition columns
             let table_schema = parse_table_schema_from_proto(base_conf)?;
 
+            options.global.filter_pushdown_min_bytes_per_sec = ctx
+                .session_config()
+                .options()
+                .execution
+                .parquet
+                .filter_pushdown_min_bytes_per_sec;
             let mut source =
                 ParquetSource::new(table_schema).with_table_parquet_options(options);
-
-            source = source.with_filter_pushdown_min_bytes_per_sec_opt(
-                ctx.session_config()
-                    .options()
-                    .execution
-                    .parquet
-                    .filter_pushdown_min_bytes_per_sec,
-            );
 
             if let Some(predicate) = predicate {
                 source = source.with_predicate(predicate);

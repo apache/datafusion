@@ -5644,9 +5644,7 @@ impl serde::Serialize for ParquetOptions {
         if self.pushdown_filters {
             len += 1;
         }
-        if self.reorder_filters {
-            len += 1;
-        }
+
         if self.force_filter_selections {
             len += 1;
         }
@@ -5756,9 +5754,7 @@ impl serde::Serialize for ParquetOptions {
         if self.pushdown_filters {
             struct_ser.serialize_field("pushdownFilters", &self.pushdown_filters)?;
         }
-        if self.reorder_filters {
-            struct_ser.serialize_field("reorderFilters", &self.reorder_filters)?;
-        }
+
         if self.force_filter_selections {
             struct_ser.serialize_field("forceFilterSelections", &self.force_filter_selections)?;
         }
@@ -5964,8 +5960,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             "skipMetadata",
             "pushdown_filters",
             "pushdownFilters",
-            "reorder_filters",
-            "reorderFilters",
+
             "force_filter_selections",
             "forceFilterSelections",
             "data_pagesize_limit",
@@ -6036,7 +6031,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             Pruning,
             SkipMetadata,
             PushdownFilters,
-            ReorderFilters,
+
             ForceFilterSelections,
             DataPagesizeLimit,
             WriteBatchSize,
@@ -6094,7 +6089,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             "pruning" => Ok(GeneratedField::Pruning),
                             "skipMetadata" | "skip_metadata" => Ok(GeneratedField::SkipMetadata),
                             "pushdownFilters" | "pushdown_filters" => Ok(GeneratedField::PushdownFilters),
-                            "reorderFilters" | "reorder_filters" => Ok(GeneratedField::ReorderFilters),
+
                             "forceFilterSelections" | "force_filter_selections" => Ok(GeneratedField::ForceFilterSelections),
                             "dataPagesizeLimit" | "data_pagesize_limit" => Ok(GeneratedField::DataPagesizeLimit),
                             "writeBatchSize" | "write_batch_size" => Ok(GeneratedField::WriteBatchSize),
@@ -6150,7 +6145,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                 let mut pruning__ = None;
                 let mut skip_metadata__ = None;
                 let mut pushdown_filters__ = None;
-                let mut reorder_filters__ = None;
+
                 let mut force_filter_selections__ = None;
                 let mut data_pagesize_limit__ = None;
                 let mut write_batch_size__ = None;
@@ -6209,12 +6204,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             }
                             pushdown_filters__ = Some(map_.next_value()?);
                         }
-                        GeneratedField::ReorderFilters => {
-                            if reorder_filters__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("reorderFilters"));
-                            }
-                            reorder_filters__ = Some(map_.next_value()?);
-                        }
+
                         GeneratedField::ForceFilterSelections => {
                             if force_filter_selections__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("forceFilterSelections"));
@@ -6428,7 +6418,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     pruning: pruning__.unwrap_or_default(),
                     skip_metadata: skip_metadata__.unwrap_or_default(),
                     pushdown_filters: pushdown_filters__.unwrap_or_default(),
-                    reorder_filters: reorder_filters__.unwrap_or_default(),
+
                     force_filter_selections: force_filter_selections__.unwrap_or_default(),
                     data_pagesize_limit: data_pagesize_limit__.unwrap_or_default(),
                     write_batch_size: write_batch_size__.unwrap_or_default(),

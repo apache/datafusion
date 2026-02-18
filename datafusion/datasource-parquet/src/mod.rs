@@ -43,8 +43,6 @@ pub use reader::*; // Expose so downstream crates can use it
 pub use row_filter::FilterMetrics;
 pub use row_filter::RowFilterWithMetrics;
 pub use row_filter::build_row_filter;
-pub use row_filter::build_row_filter_with_metrics;
 pub use row_filter::can_expr_be_pushed_down_with_schemas;
 pub use row_group_filter::RowGroupAccessPlanFilter;
-pub use selectivity::SelectivityTracker;
 pub use writer::plan_to_parquet;

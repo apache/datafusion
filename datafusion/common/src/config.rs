@@ -709,10 +709,6 @@ config_namespace! {
         /// reduce the number of rows decoded. This optimization is sometimes called "late materialization".
         pub pushdown_filters: bool, default = false
 
-        /// (reading) If true, filter expressions evaluated during the parquet decoding operation
-        /// will be reordered heuristically to minimize the cost of evaluation. If false,
-        /// the filters are applied in the same order as written in the query
-        pub reorder_filters: bool, default = false
 
         /// (reading) Force the use of RowSelections for filter results, when
         /// pushdown_filters is enabled. If false, the reader will automatically
@@ -762,7 +758,7 @@ config_namespace! {
         /// cost of CPU vs. IO in your environment, and to some extent the shape
         /// of your query.
         ///
-        /// **Interaction with `pushdown_filters` and `reorder_filters`:**
+        /// **Interaction with `pushdown_filters`:**
         /// This option only takes effect when `pushdown_filters = true`.
         /// When pushdown is disabled, all filters run post-scan and this
         /// threshold is ignored. During the statistics collection phase
@@ -770,9 +766,6 @@ config_namespace! {
         /// temporarily run post-scan to gather baseline metrics; once
         /// collection completes, filters exceeding this throughput threshold
         /// are promoted to row filters while the rest remain post-scan.
-        /// When `reorder_filters = true`, promoted filters are further
-        /// sorted by measured effectiveness (most selective first), falling
-        /// back to the default I/O-cost heuristic for filters without data.
         pub filter_pushdown_min_bytes_per_sec: f64, default = 104_857_600.0
 
         /// (reading) Correlation ratio threshold for grouping filters.
@@ -784,13 +777,11 @@ config_namespace! {
         /// Lower values = more grouping = less overhead, less late materialization.
         /// Set to f64::MAX to disable grouping entirely.
         ///
-        /// **Interaction with `pushdown_filters` and `reorder_filters`:**
+        /// **Interaction with `pushdown_filters`:**
         /// Grouping only applies when `pushdown_filters = true` and the
         /// statistics collection phase has completed. Correlated filters
         /// are merged into a single compound `ArrowPredicate` so they
-        /// decode shared columns only once. When `reorder_filters = true`,
-        /// the compound predicates are ordered among the other row-filter
-        /// predicates by measured effectiveness.
+        /// decode shared columns only once.
         pub filter_correlation_threshold: f64, default = 1.5
 
         /// (reading) Minimum rows of post-scan evaluation before statistics-based
@@ -800,13 +791,12 @@ config_namespace! {
         /// based grouping. Larger values = more accurate estimates, longer collection.
         /// Set to 0 to disable the collection phase entirely.
         ///
-        /// **Interaction with `pushdown_filters` and `reorder_filters`:**
+        /// **Interaction with `pushdown_filters`:**
         /// During the collection phase, `pushdown_filters` is effectively
         /// overridden: all filters run post-scan regardless of its value so
         /// that unbiased selectivity statistics can be gathered. After
-        /// collection, `pushdown_filters` and `reorder_filters` resume
-        /// their normal roles — gating which filters are promoted and how
-        /// they are ordered, respectively.
+        /// collection, `pushdown_filters` resumes its normal role — gating
+        /// which filters are promoted.
         /// If `pushdown_filters` is disabled, this option has no effect since all filters
         /// run post-scan regardless of the collection phase.
         pub filter_statistics_collection_min_rows: u64, default = 50_000
