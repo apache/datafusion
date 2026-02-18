@@ -18,7 +18,7 @@
 //! [`ParquetOpener`] for opening Parquet files.
 //!
 //! Implements the adaptive filter feedback loop: filters partitioned by
-//! [`SelectivityTracker`](crate::selectivity::SelectivityTracker) are either
+//! [`SelectivityTracker`] are either
 //! pushed as row-level predicates or applied post-scan, and per-batch metrics
 //! are fed back into the tracker for future promotion/demotion decisions.
 
@@ -98,7 +98,7 @@ pub(super) struct ParquetOpener {
     /// Factory for instantiating parquet reader
     pub parquet_file_reader_factory: Arc<dyn ParquetFileReaderFactory>,
     /// Should the filters be evaluated during the parquet scan using
-    /// [`DataFusionArrowPredicate`](row_filter::DatafusionArrowPredicate)?
+    /// `DatafusionArrowPredicateWithMetrics`?
     pub pushdown_filters: bool,
     /// Should we force the reader to use RowSelections for filtering
     pub force_filter_selections: bool,
@@ -836,7 +836,7 @@ impl FileOpener for ParquetOpener {
 ///
 /// Operates in two modes depending on the tracker state:
 ///
-/// 1. **Collecting** — at least one filter is still in [`FilterState::Collecting`].
+/// 1. **Collecting** — at least one filter is still in `FilterState::Collecting`.
 ///    Each filter is evaluated individually with per-filter timing, and pairwise
 ///    joint pass counts are recorded for correlation detection (capped at the 10
 ///    most selective collecting filters to bound O(n²) work).

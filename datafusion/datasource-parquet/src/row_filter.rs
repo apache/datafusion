@@ -651,7 +651,7 @@ pub fn build_row_filter(
     }))
 }
 
-/// A variant of [`DatafusionArrowPredicate`] that tracks both per-predicate and global metrics.
+/// A variant of `DatafusionArrowPredicate` that tracks both per-predicate and global metrics.
 ///
 /// This is used by [`build_row_filter`] to enable selectivity tracking
 /// while maintaining backward compatibility with the global metrics system.

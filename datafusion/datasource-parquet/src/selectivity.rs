@@ -278,7 +278,7 @@ impl PairKey {
 /// 2. **Decision** — once `effective_min_rows` rows are observed the filter
 ///    is promoted, demoted, or dropped.
 /// 3. **Replay** — promoted filters are pushed into the Parquet reader;
-///    [`SelectivityUpdatingStream`] feeds row-filter metrics back here.
+///    `SelectivityUpdatingStream` feeds row-filter metrics back here.
 /// 4. **Re-evaluation** — every `effective_min_rows` additional rows the
 ///    decision is revisited; a promoted filter may be demoted if its
 ///    effectiveness has dropped.
