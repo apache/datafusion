@@ -295,14 +295,16 @@ impl DynamicFilterPhysicalExpr {
         }
     }
 
-    /// Create a new [`DynamicFilterPhysicalExpr`] from [`self`], except, it overwrites the
-    /// internal state the source filter.
+    /// Create a new [`DynamicFilterPhysicalExpr`] from `self`, except it overwrites the
+    /// internal state with the source filter's state.
     ///
     /// This is a low-level API intended for use by the proto deserialization layer.
     ///
-    /// Safety: The dynamic filter should not be in use when calling this method, otherwise there
+    /// # Safety
+    ///
+    /// The dynamic filter should not be in use when calling this method, otherwise there
     /// may be undefined behavior. This method may do the following or worse:
-    /// - transition the state to [`FilterState::Complete`] without notifying the watch
+    /// - transition the state to complete without notifying the watch
     /// - cause a generation number to be emitted which is out of order
     pub fn new_from_source(&self, source: &DynamicFilterPhysicalExpr) -> Result<Self> {
         // Best effort check that no one is subscribed.
@@ -633,15 +635,23 @@ mod test {
             &filter_schema_1,
         )
         .unwrap();
-        let snap = dynamic_filter_1.snapshot().unwrap().unwrap();
-        insta::assert_snapshot!(format!("{snap:?}"), @r#"BinaryExpr { left: Column { name: "a", index: 0 }, op: Eq, right: Literal { value: Int32(42), field: Field { name: "lit", data_type: Int32 } }, fail_on_overflow: false }"#);
+        let df1 = dynamic_filter_1
+            .as_any()
+            .downcast_ref::<DynamicFilterPhysicalExpr>()
+            .unwrap();
+        let current1 = df1.current().unwrap();
+        insta::assert_snapshot!(format!("{current1:?}"), @r#"BinaryExpr { left: Column { name: "a", index: 0 }, op: Eq, right: Literal { value: Int32(42), field: Field { name: "lit", data_type: Int32 } }, fail_on_overflow: false }"#);
         let dynamic_filter_2 = reassign_expr_columns(
             Arc::clone(&dynamic_filter) as Arc<dyn PhysicalExpr>,
             &filter_schema_2,
         )
         .unwrap();
-        let snap = dynamic_filter_2.snapshot().unwrap().unwrap();
-        insta::assert_snapshot!(format!("{snap:?}"), @r#"BinaryExpr { left: Column { name: "a", index: 1 }, op: Eq, right: Literal { value: Int32(42), field: Field { name: "lit", data_type: Int32 } }, fail_on_overflow: false }"#);
+        let df2 = dynamic_filter_2
+            .as_any()
+            .downcast_ref::<DynamicFilterPhysicalExpr>()
+            .unwrap();
+        let current2 = df2.current().unwrap();
+        insta::assert_snapshot!(format!("{current2:?}"), @r#"BinaryExpr { left: Column { name: "a", index: 1 }, op: Eq, right: Literal { value: Int32(42), field: Field { name: "lit", data_type: Int32 } }, fail_on_overflow: false }"#);
         // Both filters allow evaluating the same expression
         let batch_1 = RecordBatch::try_new(
             Arc::clone(&filter_schema_1),
@@ -703,23 +713,6 @@ mod test {
             .to_array_of_size(1)
             .unwrap();
         assert!(arr_1.eq(&expected));
-    }
-
-    #[test]
-    fn test_snapshot() {
-        let expr = lit(42) as Arc<dyn PhysicalExpr>;
-        let dynamic_filter = DynamicFilterPhysicalExpr::new(vec![], Arc::clone(&expr));
-
-        // Take a snapshot of the current expression
-        let snapshot = dynamic_filter.snapshot().unwrap();
-        assert_eq!(snapshot, Some(expr));
-
-        // Update the current expression
-        let new_expr = lit(100) as Arc<dyn PhysicalExpr>;
-        dynamic_filter.update(Arc::clone(&new_expr)).unwrap();
-        // Take another snapshot
-        let snapshot = dynamic_filter.snapshot().unwrap();
-        assert_eq!(snapshot, Some(new_expr));
     }
 
     #[test]
@@ -1001,6 +994,90 @@ mod test {
         assert_eq!(
             hash1, hash3,
             "Hash should be stable after update (identity-based)"
+        );
+    }
+
+    #[test]
+    fn test_current_snapshot_roundtrip() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let col_a = col("a", &schema).unwrap();
+
+        // Create a dynamic filter with children
+        let expr = Arc::new(BinaryExpr::new(
+            Arc::clone(&col_a),
+            datafusion_expr::Operator::Gt,
+            lit(10) as Arc<dyn PhysicalExpr>,
+        ));
+        let filter = DynamicFilterPhysicalExpr::new(
+            vec![Arc::clone(&col_a)],
+            expr as Arc<dyn PhysicalExpr>,
+        );
+
+        // Update expression and mark complete
+        filter
+            .update(lit(42) as Arc<dyn PhysicalExpr>)
+            .expect("Update should succeed");
+        filter.mark_complete();
+
+        // Take a snapshot and reconstruct
+        let snapshot = filter.current_snapshot();
+        let reconstructed = DynamicFilterPhysicalExpr::new_from_snapshot(snapshot);
+
+        // String representations should be equal
+        assert_eq!(
+            filter.current_snapshot().to_string(),
+            reconstructed.current_snapshot().to_string(),
+        );
+    }
+
+    #[test]
+    fn test_new_from_source() {
+        // Create a source filter
+        let source = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![],
+            lit(42) as Arc<dyn PhysicalExpr>,
+        ));
+
+        // Update and mark complete
+        source.update(lit(100) as Arc<dyn PhysicalExpr>).unwrap();
+        source.mark_complete();
+
+        // Create a target filter with different children
+        let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Int32, false)]));
+        let col_x = col("x", &schema).unwrap();
+        let target = DynamicFilterPhysicalExpr::new(
+            vec![Arc::clone(&col_x)],
+            lit(0) as Arc<dyn PhysicalExpr>,
+        );
+
+        // Create new filter from source's inner state
+        let combined = target.new_from_source(&source).unwrap();
+
+        // Verify inner state is shared (same inner_id)
+        assert_eq!(
+            combined.inner_id(),
+            source.inner_id(),
+            "new_from_source should share inner state with source"
+        );
+
+        // Verify children are from target, not source
+        let combined_snapshot = combined.current_snapshot();
+        assert_eq!(
+            combined_snapshot.children().len(),
+            1,
+            "Combined filter should have target's children"
+        );
+        assert_eq!(
+            format!("{:?}", combined_snapshot.children()[0]),
+            format!("{:?}", col_x),
+            "Combined filter should have target's children"
+        );
+
+        // Verify inner expression comes from source
+        assert_eq!(
+            format!("{:?}", combined_snapshot.inner_expr()),
+            format!("{:?}", lit(100)),
+            "Combined filter should have source's inner expression"
         );
     }
 }
