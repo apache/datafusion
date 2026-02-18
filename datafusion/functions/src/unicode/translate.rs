@@ -116,10 +116,7 @@ impl ScalarUDFImpl for TranslateFunc {
 
             let ascii_table = build_ascii_translate_table(from_str, to_str);
 
-            let string_array = match &args.args[0] {
-                ColumnarValue::Array(arr) => Arc::clone(arr),
-                ColumnarValue::Scalar(s) => s.to_array_of_size(args.number_rows)?,
-            };
+            let string_array = args.args[0].to_array_of_size(args.number_rows)?;
 
             let result = match string_array.data_type() {
                 DataType::Utf8View => {
