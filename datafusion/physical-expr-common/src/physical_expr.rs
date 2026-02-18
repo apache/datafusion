@@ -680,6 +680,11 @@ pub fn is_volatile(expr: &Arc<dyn PhysicalExpr>) -> bool {
 /// and choose to drop the filter entirely when it is not cost-effective.
 ///
 /// All [`PhysicalExpr`] methods are delegated to the wrapped inner expression.
+///
+/// Currently used by `HashJoinExec` for dynamic join filters. When the
+/// selectivity tracker drops such a filter, the join still enforces
+/// correctness independently — "dropped" simply means the filter is never
+/// applied as a scan-time optimization.
 #[derive(Debug)]
 pub struct OptionalFilterPhysicalExpr {
     inner: Arc<dyn PhysicalExpr>,

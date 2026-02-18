@@ -15,7 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`ParquetOpener`] for opening Parquet files
+//! [`ParquetOpener`] for opening Parquet files.
+//!
+//! Implements the adaptive filter feedback loop: filters partitioned by
+//! [`SelectivityTracker`](crate::selectivity::SelectivityTracker) are either
+//! pushed as row-level predicates or applied post-scan, and per-batch metrics
+//! are fed back into the tracker for future promotion/demotion decisions.
 
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::row_group_filter::RowGroupAccessPlanFilter;
@@ -829,9 +834,16 @@ impl FileOpener for ParquetOpener {
 
 /// Apply post-scan filters to a record batch.
 ///
-/// Uses stable FilterIds for per-filter stats collection. During collection,
-/// evaluates each filter individually with timing. Once collection is done,
-/// all filters are evaluated together without per-filter tracking.
+/// Operates in two modes depending on the tracker state:
+///
+/// 1. **Collecting** — at least one filter is still in [`FilterState::Collecting`].
+///    Each filter is evaluated individually with per-filter timing, and pairwise
+///    joint pass counts are recorded for correlation detection (capped at the 10
+///    most selective collecting filters to bound O(n²) work).
+/// 2. **Fast path** — all filters are past collection. A single bulk AND is
+///    performed with no per-filter tracking overhead.
+///
+/// Uses stable [`FilterId`](crate::selectivity::FilterId)s for stats collection.
 fn apply_post_scan_filters(
     batch: RecordBatch,
     filter_ids: &[crate::selectivity::FilterId],
@@ -1060,6 +1072,14 @@ struct LastReported {
     bytes: u64,
 }
 
+/// Closes the adaptive feedback loop for promoted row filters.
+///
+/// Wraps the inner record batch stream and, on each poll, reads cumulative
+/// [`FilterMetrics`](crate::row_filter::FilterMetrics) deltas (matched rows,
+/// total rows, eval nanos, bytes) for each promoted filter and feeds them
+/// into the shared [`SelectivityTracker`]. This allows the tracker to
+/// re-evaluate previously promoted filters and demote them if their
+/// effectiveness drops.
 struct SelectivityUpdatingStream<S> {
     inner: S,
     done: bool,
@@ -1160,6 +1180,10 @@ where
 
 /// Wraps an inner stream and coalesces small batches (produced by post-scan
 /// filtering) back up to `batch_size` before emitting downstream.
+///
+/// Also enforces `limit` when post-scan filters are present, because the
+/// Parquet reader's own limit is disabled in that case (post-scan filtering
+/// changes the row count after the reader has already counted).
 struct CoalescingStream {
     input: futures::stream::BoxStream<'static, Result<RecordBatch>>,
     coalescer: LimitedBatchCoalescer,
