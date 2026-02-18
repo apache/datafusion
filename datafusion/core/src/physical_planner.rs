@@ -3271,8 +3271,6 @@ mod tests {
             col("c1").eq(col("c1")),
             // u8 AND u8
             col("c3").bitand(col("c3")),
-            // utf8 = u8
-            col("c1").eq(col("c3")),
             // bool AND bool
             bool_expr.clone().and(bool_expr),
         ];
@@ -3326,8 +3324,8 @@ mod tests {
 
     #[tokio::test]
     async fn in_list_types() -> Result<()> {
-        // expression: "a in ('a', 1)"
-        let list = vec![lit("a"), lit(1i64)];
+        // expression: "a in ('a', '1')"
+        let list = vec![lit("a"), lit("1")];
         let logical_plan = test_csv_scan()
             .await?
             // filter clause needs the type coercion rule applied
@@ -3335,7 +3333,6 @@ mod tests {
             .project(vec![col("c1").in_list(list, false)])?
             .build()?;
         let execution_plan = plan(&logical_plan).await?;
-        // verify that the plan correctly adds cast from Int64(1) to Utf8, and the const will be evaluated.
 
         let expected = r#"expr: BinaryExpr { left: BinaryExpr { left: Column { name: "c1", index: 0 }, op: Eq, right: Literal { value: Utf8("a"), field: Field { name: "lit", data_type: Utf8 } }, fail_on_overflow: false }"#;
 

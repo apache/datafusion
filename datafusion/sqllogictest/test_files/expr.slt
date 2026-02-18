@@ -1066,55 +1066,37 @@ SELECT 0.3 NOT IN (0.0,0.1,0.2,NULL)
 ----
 NULL
 
-query B
+# Mixed string/integer IN lists are rejected because
+# comparison_coercion cannot unify Utf8 and Int64.
+statement error Can not find compatible types to compare
 SELECT '1' IN ('a','b',1)
-----
-true
 
-query B
+statement error Can not find compatible types to compare
 SELECT '2' IN ('a','b',1)
-----
-false
 
-query B
+statement error Can not find compatible types to compare
 SELECT '2' NOT IN ('a','b',1)
-----
-true
 
-query B
+statement error Can not find compatible types to compare
 SELECT '1' NOT IN ('a','b',1)
-----
-false
 
-query B
+statement error Can not find compatible types to compare
 SELECT NULL IN ('a','b',1)
-----
-NULL
 
-query B
+statement error Can not find compatible types to compare
 SELECT NULL NOT IN ('a','b',1)
-----
-NULL
 
-query B
+statement error Can not find compatible types to compare
 SELECT '1' IN ('a','b',NULL,1)
-----
-true
 
-query B
+statement error Can not find compatible types to compare
 SELECT '2' IN ('a','b',NULL,1)
-----
-NULL
 
-query B
+statement error Can not find compatible types to compare
 SELECT '1' NOT IN ('a','b',NULL,1)
-----
-false
 
-query B
+statement error Can not find compatible types to compare
 SELECT '2' NOT IN ('a','b',NULL,1)
-----
-NULL
 
 # ========================================================================
 # Comprehensive IN LIST tests with NULL handling

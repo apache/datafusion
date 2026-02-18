@@ -254,7 +254,7 @@ async fn query_partitioned_csv_file() {
     );
 
     assert_snapshot!(
-        test.query("select * from csv_table_partitioned WHERE a=2").await,
+        test.query("select * from csv_table_partitioned WHERE a='2'").await,
         @r"
     ------- Query Output (2 rows) -------
     +---------+-------+-------+---+----+-----+
@@ -271,7 +271,7 @@ async fn query_partitioned_csv_file() {
     );
 
     assert_snapshot!(
-        test.query("select * from csv_table_partitioned WHERE b=20").await,
+        test.query("select * from csv_table_partitioned WHERE b='20'").await,
         @r"
     ------- Query Output (2 rows) -------
     +---------+-------+-------+---+----+-----+
@@ -288,7 +288,7 @@ async fn query_partitioned_csv_file() {
     );
 
     assert_snapshot!(
-        test.query("select * from csv_table_partitioned WHERE c=200").await,
+        test.query("select * from csv_table_partitioned WHERE c='200'").await,
         @r"
     ------- Query Output (2 rows) -------
     +---------+-------+-------+---+----+-----+
@@ -305,7 +305,7 @@ async fn query_partitioned_csv_file() {
     );
 
     assert_snapshot!(
-        test.query("select * from csv_table_partitioned WHERE a=2 AND b=20").await,
+        test.query("select * from csv_table_partitioned WHERE a='2' AND b='20'").await,
         @r"
     ------- Query Output (2 rows) -------
     +---------+-------+-------+---+----+-----+
@@ -322,7 +322,7 @@ async fn query_partitioned_csv_file() {
     );
 
     assert_snapshot!(
-        test.query("select * from csv_table_partitioned WHERE a<2 AND b=10 AND c=100").await,
+        test.query("select * from csv_table_partitioned WHERE a<'2' AND b='10' AND c='100'").await,
         @r"
     ------- Query Output (2 rows) -------
     +---------+-------+-------+---+----+-----+

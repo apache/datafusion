@@ -426,14 +426,14 @@ physical_plan
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 
-# Now query using an integer which must be coerced into a dictionary string
+# Query using a string literal for dictionary string column
 query TT
-SELECT * from test where column2 = 1;
+SELECT * from test where column2 = '1';
 ----
 row1 1
 
 query TT
-explain SELECT * from test where column2 = 1;
+explain SELECT * from test where column2 = '1';
 ----
 logical_plan
 01)Filter: test.column2 = Dictionary(Int32, Utf8("1"))

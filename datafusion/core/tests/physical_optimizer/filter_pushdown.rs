@@ -100,7 +100,7 @@ fn test_pushdown_volatile_functions_not_allowed() {
     let scan = TestScanBuilder::new(schema()).with_support(true).build();
     let cfg = Arc::new(ConfigOptions::default());
     let predicate = Arc::new(BinaryExpr::new(
-        Arc::new(Column::new_with_schema("a", &schema()).unwrap()),
+        Arc::new(Column::new_with_schema("c", &schema()).unwrap()),
         Operator::Eq,
         Arc::new(
             ScalarFunctionExpr::try_new(
@@ -119,11 +119,11 @@ fn test_pushdown_volatile_functions_not_allowed() {
         @r"
     OptimizationTest:
       input:
-        - FilterExec: a@0 = random()
+        - FilterExec: c@2 = random()
         -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
       output:
         Ok:
-          - FilterExec: a@0 = random()
+          - FilterExec: c@2 = random()
           -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
     ",
     );
@@ -3095,10 +3095,12 @@ fn test_pushdown_grouping_sets_filter_on_common_column() {
 
 #[test]
 fn test_pushdown_with_empty_group_by() {
-    // Test that filters can be pushed down when GROUP BY is empty (no grouping columns)
-    // SELECT count(*) as cnt FROM table WHERE a = 'foo'
-    // There are no grouping columns, so the filter should still push down
+    // Test that filters can be pushed down through an aggregate with empty
+    // GROUP BY: SELECT count(*) FROM table WHERE a = 'foo'
     let scan = TestScanBuilder::new(schema()).with_support(true).build();
+
+    let predicate = col_lit_predicate("a", "foo", &schema());
+    let filter = Arc::new(FilterExec::try_new(predicate, scan).unwrap());
 
     let aggregate_expr = vec![
         AggregateExprBuilder::new(count_udaf(), vec![col("c", &schema()).unwrap()])
@@ -3109,33 +3111,28 @@ fn test_pushdown_with_empty_group_by() {
             .unwrap(),
     ];
 
-    // Empty GROUP BY - no grouping columns
     let group_by = PhysicalGroupBy::new_single(vec![]);
 
-    let aggregate = Arc::new(
+    let plan: Arc<dyn ExecutionPlan> = Arc::new(
         AggregateExec::try_new(
             AggregateMode::Final,
             group_by,
             aggregate_expr.clone(),
             vec![None],
-            scan,
+            filter,
             schema(),
         )
         .unwrap(),
     );
 
-    // Filter on 'a'
-    let predicate = col_lit_predicate("a", "foo", &schema());
-    let plan = Arc::new(FilterExec::try_new(predicate, aggregate).unwrap());
-
-    // The filter should be pushed down even with empty GROUP BY
+    // The filter should be pushed down to the scan
     insta::assert_snapshot!(
         OptimizationTest::new(plan, FilterPushdown::new(), true),
         @r"
     OptimizationTest:
       input:
-        - FilterExec: a@0 = foo
-        -   AggregateExec: mode=Final, gby=[], aggr=[cnt]
+        - AggregateExec: mode=Final, gby=[], aggr=[cnt]
+        -   FilterExec: a@0 = foo
         -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
       output:
         Ok:

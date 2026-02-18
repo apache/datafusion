@@ -53,7 +53,7 @@ create external table multi_part
 stored as parquet location 'test_files/scratch/listing_table_partitions/multi_part/';
 
 query TTT
-select * from multi_part where b=200; 
+select * from multi_part where b='200';
 ----
 baz 1 200
 
