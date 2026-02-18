@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use clap::Parser;
+use clap::{ColorChoice, Parser};
 use datafusion::common::instant::Instant;
 use datafusion::common::utils::get_available_parallelism;
 use datafusion::common::{DataFusionError, Result, exec_datafusion_err, exec_err};
@@ -46,6 +46,7 @@ use std::ffi::OsStr;
 use std::fs;
 use std::io::{IsTerminal, stdout};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 #[cfg(feature = "postgres")]
 mod postgres_container;
@@ -787,10 +788,11 @@ struct Options {
 
     #[clap(
         long,
-        value_name = "WHEN",
-        help = "Enable or disable coloured output: auto (default), always, never"
+        value_name = "MODE",
+        help = "Control colored output",
+        default_value_t = ColorChoice::Auto
     )]
-    color: Option<String>,
+    color: ColorChoice,
 }
 
 impl Options {
@@ -839,19 +841,27 @@ impl Options {
         if std::env::var_os("NO_COLOR").is_some() {
             return false;
         }
-        // CLI flag `--color` takes precedence over `CARGO_TERM_COLOR`
-        let color_pref: String = match &self.color {
-            None => std::env::var("CARGO_TERM_COLOR").ok(),
-            Some(s) => Some(s.clone()),
-        }
-        .unwrap_or_else(|| "auto".to_string());
-        match color_pref.as_str() {
-            "always" => true,
-            "never" => false,
-            _ => {
-                // Use colors by default for non-dumb terminals
-                stdout().is_terminal()
-                    && std::env::var("TERM").unwrap_or_default() != "dumb"
+
+        match self.color {
+            ColorChoice::Always => true,
+            ColorChoice::Never => false,
+            ColorChoice::Auto => {
+                // CARGO_TERM_COLOR takes precedence over auto-detection
+                let cargo_term_color = ColorChoice::from_str(
+                    &std::env::var("CARGO_TERM_COLOR")
+                        .unwrap_or_else(|_| "auto".to_string()),
+                )
+                .unwrap_or(ColorChoice::Auto);
+                match cargo_term_color {
+                    ColorChoice::Always => true,
+                    ColorChoice::Never => false,
+                    ColorChoice::Auto => {
+                        // Auto for both CLI argument and CARGO_TERM_COLOR,
+                        // then use colors by default for non-dumb terminals
+                        stdout().is_terminal()
+                            && std::env::var("TERM").unwrap_or_default() != "dumb"
+                    }
+                }
             }
         }
     }
