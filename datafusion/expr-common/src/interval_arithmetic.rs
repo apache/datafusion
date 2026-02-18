@@ -22,7 +22,7 @@ use std::fmt::{self, Display, Formatter};
 use std::ops::{AddAssign, SubAssign};
 
 use crate::operator::Operator;
-use crate::type_coercion::binary::{BinaryTypeCoercer, comparison_coercion_numeric};
+use crate::type_coercion::binary::{BinaryTypeCoercer, comparison_coercion};
 
 use arrow::compute::{CastOptions, cast_with_options};
 use arrow::datatypes::{
@@ -734,7 +734,7 @@ impl Interval {
             (self.lower.clone(), self.upper.clone(), rhs.clone())
         } else {
             let maybe_common_type =
-                comparison_coercion_numeric(&self.data_type(), &rhs.data_type());
+                comparison_coercion(&self.data_type(), &rhs.data_type());
             assert_or_internal_err!(
                 maybe_common_type.is_some(),
                 "Data types must be compatible for containment checks, lhs:{}, rhs:{}",
