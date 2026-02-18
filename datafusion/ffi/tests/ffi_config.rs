@@ -23,7 +23,7 @@ mod tests {
     use datafusion_common::ScalarValue;
     use datafusion_common::config::{ConfigOptions, TableOptions};
     use datafusion_execution::config::SessionConfig;
-    use datafusion_ffi::config::extension_options::FFI_ExtensionOptions;
+    use datafusion_ffi::config::ExtensionOptionsFFIProvider;
     use datafusion_ffi::tests::config::ExternalConfig;
     use datafusion_ffi::tests::utils::get_module;
 
@@ -42,30 +42,16 @@ mod tests {
         let mut config = ConfigOptions::new();
         config.extensions.insert(extension_options);
 
-        fn extract_config(config: &ConfigOptions) -> ExternalConfig {
-            // For our use case of this test, we do not need to check
-            // using .get::<ExternalConfig>() but it is left here as an
-            // example to users of this crate.
-            config
-                .extensions
-                .get::<ExternalConfig>()
-                .map(|v| v.to_owned())
-                .or_else(|| {
-                    config
-                        .extensions
-                        .get::<FFI_ExtensionOptions>()
-                        .and_then(|ext| ext.to_extension().ok())
-                })
-                .expect("Should be able to get ExternalConfig")
-        }
-
         // Verify default values are as expected
-        let returned_config = extract_config(&config);
-
+        let returned_config: ExternalConfig = config
+            .ffi_extension()
+            .expect("should have external config extension");
         assert_eq!(returned_config, ExternalConfig::default());
 
         config.set("external_config.is_enabled", "false")?;
-        let returned_config = extract_config(&config);
+        let returned_config: ExternalConfig = config
+            .ffi_extension()
+            .expect("should have external config extension");
         assert!(!returned_config.is_enabled);
 
         Ok(())
@@ -86,31 +72,18 @@ mod tests {
         let mut table_options = TableOptions::new();
         table_options.extensions.insert(extension_options);
 
-        fn extract_options(options: &TableOptions) -> ExternalConfig {
-            // For our use case of this test, we do not need to check
-            // using .get::<ExternalConfig>() but it is left here as an
-            // example to users of this crate.
-            options
-                .extensions
-                .get::<ExternalConfig>()
-                .map(|v| v.to_owned())
-                .or_else(|| {
-                    options
-                        .extensions
-                        .get::<FFI_ExtensionOptions>()
-                        .and_then(|ext| ext.to_extension().ok())
-                })
-                .expect("Should be able to get ExternalConfig")
-        }
-
         // Verify default values are as expected
-        let returned_options = extract_options(&table_options);
+        let returned_options: ExternalConfig = table_options
+            .ffi_extension()
+            .expect("should have external config extension");
 
         assert_eq!(returned_options, ExternalConfig::default());
 
         table_options.set("external_config.is_enabled", "false")?;
-        let returned_config = extract_options(&table_options);
-        assert!(!returned_config.is_enabled);
+        let returned_options: ExternalConfig = table_options
+            .ffi_extension()
+            .expect("should have external config extension");
+        assert!(!returned_options.is_enabled);
 
         Ok(())
     }
@@ -129,35 +102,21 @@ mod tests {
 
         let mut config = SessionConfig::new().with_option_extension(extension_options);
 
-        fn extract_config(config: &SessionConfig) -> ExternalConfig {
-            // For our use case of this test, we do not need to check
-            // using .get::<ExternalConfig>() but it is left here as an
-            // example to users of this crate.
-
-            config
-                .options()
-                .extensions
-                .get::<ExternalConfig>()
-                .map(|v| v.to_owned())
-                .or_else(|| {
-                    config
-                        .options()
-                        .extensions
-                        .get::<FFI_ExtensionOptions>()
-                        .and_then(|ext| ext.to_extension().ok())
-                })
-                .expect("Should be able to get ExternalConfig")
-        }
-
         // Verify default values are as expected
-        let returned_config = extract_config(&config);
+        let returned_config: ExternalConfig = config
+            .options()
+            .ffi_extension()
+            .expect("should have external config extension");
         assert_eq!(returned_config, ExternalConfig::default());
 
         config = config.set(
             "external_config.is_enabled",
             &ScalarValue::Boolean(Some(false)),
         );
-        let returned_config = extract_config(&config);
+        let returned_config: ExternalConfig = config
+            .options()
+            .ffi_extension()
+            .expect("should have external config extension");
         assert!(!returned_config.is_enabled);
 
         Ok(())

@@ -19,12 +19,18 @@ pub mod extension_options;
 
 use abi_stable::StableAbi;
 use abi_stable::std_types::{RHashMap, RString};
-use datafusion_common::config::{ConfigOptions, ExtensionOptions, TableOptions};
+use datafusion_common::config::{
+    ConfigExtension, ConfigOptions, ExtensionOptions, TableOptions,
+};
 use datafusion_common::{DataFusionError, Result};
 
 use crate::config::extension_options::FFI_ExtensionOptions;
 
-// TODO(tsaucer) add text about how extension options will require user to convert to concrete type.
+/// A stable struct for sharing [`ConfigOptions`] across FFI boundaries.
+///
+/// Accessing FFI extension options require a slightly different pattern
+/// than local extensions. The trait [`ExtensionOptionsFFIProvider`] can
+/// be used to simplify accessing FFI extensions.
 #[repr(C)]
 #[derive(Debug, Clone, StableAbi)]
 pub struct FFI_ConfigOptions {
@@ -74,7 +80,41 @@ impl TryFrom<FFI_ConfigOptions> for ConfigOptions {
     }
 }
 
-// TODO(tsaucer) add text about how extension options will require user to convert to concrete type.
+pub trait ExtensionOptionsFFIProvider {
+    fn ffi_extension<C: ConfigExtension + Clone + Default>(&self) -> Option<C>;
+}
+
+impl ExtensionOptionsFFIProvider for ConfigOptions {
+    fn ffi_extension<C: ConfigExtension + Clone + Default>(&self) -> Option<C> {
+        self.extensions
+            .get::<C>()
+            .map(|v| v.to_owned())
+            .or_else(|| {
+                self.extensions
+                    .get::<FFI_ExtensionOptions>()
+                    .and_then(|ffi_ext| ffi_ext.to_extension().ok())
+            })
+    }
+}
+
+impl ExtensionOptionsFFIProvider for TableOptions {
+    fn ffi_extension<C: ConfigExtension + Clone + Default>(&self) -> Option<C> {
+        self.extensions
+            .get::<C>()
+            .map(|v| v.to_owned())
+            .or_else(|| {
+                self.extensions
+                    .get::<FFI_ExtensionOptions>()
+                    .and_then(|ffi_ext| ffi_ext.to_extension().ok())
+            })
+    }
+}
+
+/// A stable struct for sharing [`TableOptions`] across FFI boundaries.
+///
+/// Accessing FFI extension options require a slightly different pattern
+/// than local extensions. The trait [`ExtensionOptionsFFIProvider`] can
+/// be used to simplify accessing FFI extensions.
 #[repr(C)]
 #[derive(Debug, Clone, StableAbi)]
 pub struct FFI_TableOptions {
