@@ -50,18 +50,35 @@ impl FilterState {
 /// Per-partition filter expressions indexed by partition number.
 type PartitionedFilters = Vec<Option<Arc<dyn PhysicalExpr>>>;
 
+/// Payload for dynamic filter updates.
+#[derive(Debug, Clone)]
+pub enum DynamicFilterUpdate {
+    /// Update the global expression returned by [`DynamicFilterPhysicalExpr::current`].
+    ///
+    /// This is used by CASE-hash / collect-left routing where a single filter
+    /// expression represents all partitions.
+    Global(Arc<dyn PhysicalExpr>),
+    /// Update per-partition expressions used by
+    /// [`DynamicFilterPhysicalExpr::current_for_partition`].
+    ///
+    /// Index `i` corresponds to partition `i`. Missing or out-of-range entries
+    /// are treated as `true` (fail-open) by `current_for_partition`.
+    Partitioned(PartitionedFilters),
+}
+
 /// A dynamic [`PhysicalExpr`] that can be updated by anyone with a reference to it.
 ///
 /// Any `ExecutionPlan` that uses this expression and holds a reference to it internally should probably also
 /// implement `ExecutionPlan::reset_state` to remain compatible with recursive queries and other situations where
 /// the same `ExecutionPlan` is reused with different data.
 ///
-/// This means `evaluate()` doesn't need partition context since it's already resolved during snapshotting.
+/// This means `evaluate()` doesn't need partition context since partition routing can be bound
+/// once when setting up the execution stream.
 ///
 /// For more background, please also see the [Dynamic Filters: Passing Information Between Operators During Execution for 25x Faster Queries blog]
 ///
 /// [Dynamic Filters: Passing Information Between Operators During Execution for 25x Faster Queries blog]: https://datafusion.apache.org/blog/2025/09/10/dynamic-filters
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DynamicFilterPhysicalExpr {
     /// The original children of this PhysicalExpr, if any.
     /// This is necessary because the dynamic filter may be initialized with a placeholder (e.g. `lit(true)`)
@@ -229,31 +246,51 @@ impl DynamicFilterPhysicalExpr {
         Self::remap_children(&self.children, self.remapped_children.as_ref(), expr)
     }
 
-    /// Update the current expression and notify all waiters.
-    /// Any children of this expression must be a subset of the original children
-    /// passed to the constructor.
-    /// This should be called e.g.:
-    /// - When we've computed the probe side's hash table in a HashJoinExec
-    /// - After every batch is processed if we update the TopK heap in a SortExec using a TopK approach.
-    pub fn update(&self, new_expr: Arc<dyn PhysicalExpr>) -> Result<()> {
-        // Remap the children of the new expression to match the original children
-        // We still do this again in `current()` but doing it preventively here
-        // reduces the work needed in some cases if `current()` is called multiple times
-        // and the same externally facing `PhysicalExpr` is used for both `with_new_children` and `update()`.`
-        let new_expr = Self::remap_children(
-            &self.children,
-            self.remapped_children.as_ref(),
-            new_expr,
-        )?;
+    /// Update this dynamic filter and notify all waiters.
+    ///
+    /// This is called by producers when new bounds are available, e.g.:
+    /// - after building bounds in `HashJoinExec`
+    /// - as `TopK` thresholds become more selective
+    ///
+    /// This single API handles both update modes:
+    /// - [`DynamicFilterUpdate::Global`]: updates the global expression.
+    /// - [`DynamicFilterUpdate::Partitioned`]: updates per-partition
+    ///   expressions, with one filter per partition index.
+    ///
+    /// Each update increments [`PhysicalExpr::snapshot_generation`] and
+    /// notifies waiters via `state_watch`.
+    pub fn update(&self, update: DynamicFilterUpdate) -> Result<()> {
+        let update = match update {
+            // Remap global expression children to match the original children.
+            // We still do this again in `current()` but doing it preventively here
+            // reduces the work needed in some cases if `current()` is called multiple times
+            // and the same externally facing `PhysicalExpr` is used for both
+            // `with_new_children` and `update()`.
+            DynamicFilterUpdate::Global(new_expr) => {
+                DynamicFilterUpdate::Global(Self::remap_children(
+                    &self.children,
+                    self.remapped_children.as_ref(),
+                    new_expr,
+                )?)
+            }
+            DynamicFilterUpdate::Partitioned(partition_exprs) => {
+                DynamicFilterUpdate::Partitioned(partition_exprs)
+            }
+        };
 
         // Load the current inner, increment generation, and store the new one
         let mut current = self.inner.write();
         let new_generation = current.generation + 1;
         current.generation = new_generation;
-        current.expr = new_expr;
-        drop(current); // Release the lock before broadcasting
+        match update {
+            DynamicFilterUpdate::Global(new_expr) => current.expr = new_expr,
+            DynamicFilterUpdate::Partitioned(partition_exprs) => {
+                current.partitioned_exprs = partition_exprs
+            }
+        }
+        drop(current); // Release the lock before broadcasting.
 
-        // Broadcast the new state to all waiters
+        // Broadcast the new state to all waiters.
         let _ = self.state_watch.send(FilterState::InProgress {
             generation: new_generation,
         });
@@ -274,23 +311,6 @@ impl DynamicFilterPhysicalExpr {
         let _ = self.state_watch.send(FilterState::Complete {
             generation: current_generation,
         });
-    }
-
-    /// Update the dynamic filter with per-partition filter expressions.
-    ///
-    /// This stores one filter per partition, indexed by partition number.
-    pub fn update_partitioned(&self, partition_exprs: PartitionedFilters) -> Result<()> {
-        let mut current = self.inner.write();
-        let new_generation = current.generation + 1;
-        current.generation = new_generation;
-        current.partitioned_exprs = partition_exprs;
-        drop(current);
-
-        // Broadcast the new state.
-        let _ = self.state_watch.send(FilterState::InProgress {
-            generation: new_generation,
-        });
-        Ok(())
     }
 
     /// Get the filter expression for a specific partition.
@@ -429,6 +449,98 @@ impl DynamicFilterPhysicalExpr {
     }
 }
 
+/// Runtime-bound dynamic filter expression for a specific execution partition.
+///
+/// This wrapper preserves dynamic filter generation/update tracking while binding
+/// partition-aware routing once at execution setup.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct PartitionBoundDynamicFilterPhysicalExpr {
+    source: DynamicFilterPhysicalExpr,
+    partition: usize,
+}
+
+impl Display for PartitionBoundDynamicFilterPhysicalExpr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let current = self
+            .source
+            .current_for_partition(self.partition)
+            .map_err(|_| std::fmt::Error)?;
+        write!(
+            f,
+            "DynamicFilter(partition={}) [ {current} ]",
+            self.partition
+        )
+    }
+}
+
+impl PhysicalExpr for PartitionBoundDynamicFilterPhysicalExpr {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+        self.source.children()
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        let rebound = Arc::new(self.source.clone()).with_new_children(children)?;
+        let Some(source) = rebound
+            .as_any()
+            .downcast_ref::<DynamicFilterPhysicalExpr>()
+            .cloned()
+        else {
+            return datafusion_common::internal_err!(
+                "Expected DynamicFilterPhysicalExpr from with_new_children in runtime binding"
+            );
+        };
+
+        Ok(Arc::new(Self {
+            source,
+            partition: self.partition,
+        }))
+    }
+
+    fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
+        self.source
+            .current_for_partition(self.partition)?
+            .data_type(input_schema)
+    }
+
+    fn nullable(&self, input_schema: &Schema) -> Result<bool> {
+        self.source
+            .current_for_partition(self.partition)?
+            .nullable(input_schema)
+    }
+
+    fn evaluate(
+        &self,
+        batch: &arrow::record_batch::RecordBatch,
+    ) -> Result<ColumnarValue> {
+        self.source
+            .current_for_partition(self.partition)?
+            .evaluate(batch)
+    }
+
+    fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let current = self
+            .source
+            .current_for_partition(self.partition)
+            .map_err(|_| std::fmt::Error)?;
+        current.fmt_sql(f)
+    }
+
+    fn snapshot(&self) -> Result<Option<Arc<dyn PhysicalExpr>>> {
+        Ok(Some(self.source.current_for_partition(self.partition)?))
+    }
+
+    fn snapshot_generation(&self) -> u64 {
+        self.source.inner.read().generation
+    }
+}
+
 impl PhysicalExpr for DynamicFilterPhysicalExpr {
     fn as_any(&self) -> &dyn Any {
         self
@@ -531,10 +643,16 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
     }
 }
 
-/// Snapshot a `PhysicalExpr` tree, replacing any [`DynamicFilterPhysicalExpr`] that
-/// has per-partition data with its partition-specific filter expression.
-/// If a `DynamicFilterPhysicalExpr` does not have partitioned data, it is left unchanged.
-pub fn snapshot_physical_expr_for_partition(
+/// Bind partition-aware dynamic filters in an expression tree to a specific partition.
+///
+/// This replaces any [`DynamicFilterPhysicalExpr`] with per-partition data by a
+/// [`PartitionBoundDynamicFilterPhysicalExpr`] that routes to `partition`.
+/// Dynamic filters without per-partition data are left unchanged.
+///
+/// Note: this only binds filters that already have per-partition payload at
+/// bind time. Current hash join execution waits for build-side filter updates
+/// before probe-side scanning, so this will hold.
+pub fn bind_dynamic_filters_for_partition(
     expr: Arc<dyn PhysicalExpr>,
     partition: usize,
 ) -> Result<Arc<dyn PhysicalExpr>> {
@@ -542,8 +660,11 @@ pub fn snapshot_physical_expr_for_partition(
         if let Some(dynamic) = e.as_any().downcast_ref::<DynamicFilterPhysicalExpr>()
             && dynamic.has_partitioned_filters()
         {
-            let snapshot = dynamic.current_for_partition(partition)?;
-            return Ok(Transformed::yes(snapshot));
+            let bound = Arc::new(PartitionBoundDynamicFilterPhysicalExpr {
+                source: dynamic.clone(),
+                partition,
+            }) as Arc<dyn PhysicalExpr>;
+            return Ok(Transformed::yes(bound));
         }
         Ok(Transformed::no(e))
     })
@@ -650,7 +771,9 @@ mod test {
             lit(43) as Arc<dyn PhysicalExpr>,
         ));
         dynamic_filter
-            .update(Arc::clone(&new_expr) as Arc<dyn PhysicalExpr>)
+            .update(DynamicFilterUpdate::Global(
+                Arc::clone(&new_expr) as Arc<dyn PhysicalExpr>
+            ))
             .expect("Failed to update expression");
         // Now we should be able to evaluate the new expression on both batches
         let result_1 = dynamic_filter_1.evaluate(&batch_1).unwrap();
@@ -680,7 +803,9 @@ mod test {
 
         // Update the current expression
         let new_expr = lit(100) as Arc<dyn PhysicalExpr>;
-        dynamic_filter.update(Arc::clone(&new_expr)).unwrap();
+        dynamic_filter
+            .update(DynamicFilterUpdate::Global(Arc::clone(&new_expr)))
+            .unwrap();
         // Take another snapshot
         let snapshot = dynamic_filter.snapshot().unwrap();
         assert_eq!(snapshot, Some(new_expr));
@@ -709,7 +834,9 @@ mod test {
 
         // Now change the current expression to something else.
         dynamic_filter
-            .update(lit(ScalarValue::Utf8(None)) as Arc<dyn PhysicalExpr>)
+            .update(DynamicFilterUpdate::Global(
+                lit(ScalarValue::Utf8(None)) as Arc<dyn PhysicalExpr>
+            ))
             .expect("Failed to update expression");
         // Check that we error if we call data_type, nullable or evaluate after changing the expression.
         assert!(
@@ -886,7 +1013,9 @@ mod test {
 
         // Update changes the underlying expression
         filter
-            .update(lit(false) as Arc<dyn PhysicalExpr>)
+            .update(DynamicFilterUpdate::Global(
+                lit(false) as Arc<dyn PhysicalExpr>
+            ))
             .expect("Update should succeed");
 
         // Compute hash AFTER update
@@ -952,7 +1081,9 @@ mod test {
 
         // Update the expression
         filter
-            .update(lit(false) as Arc<dyn PhysicalExpr>)
+            .update(DynamicFilterUpdate::Global(
+                lit(false) as Arc<dyn PhysicalExpr>
+            ))
             .expect("Update should succeed");
 
         // Hash should STILL be the same (identity-based)
@@ -995,7 +1126,9 @@ mod test {
             Some(Arc::clone(&partition_1_expr)),
         ];
 
-        dynamic_filter.update_partitioned(partition_exprs).unwrap();
+        dynamic_filter
+            .update(DynamicFilterUpdate::Partitioned(partition_exprs))
+            .unwrap();
 
         assert!(dynamic_filter.has_partitioned_filters());
 
@@ -1018,7 +1151,9 @@ mod test {
             None, // Empty partition
         ];
 
-        dynamic_filter.update_partitioned(partition_exprs).unwrap();
+        dynamic_filter
+            .update(DynamicFilterUpdate::Partitioned(partition_exprs))
+            .unwrap();
 
         // Partition 1 is empty, should return lit(false)
         let p1 = dynamic_filter.current_for_partition(1).unwrap();
@@ -1030,9 +1165,7 @@ mod test {
     }
 
     #[test]
-    fn test_snapshot_physical_expr_for_partition_with_data() {
-        use super::snapshot_physical_expr_for_partition;
-
+    fn test_bind_dynamic_filters_for_partition_with_data() {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
         let col_a = col("a", &schema).unwrap();
 
@@ -1052,57 +1185,99 @@ mod test {
             lit(20) as Arc<dyn PhysicalExpr>,
         )) as Arc<dyn PhysicalExpr>;
 
-        let partition_exprs = vec![
-            Some(Arc::clone(&partition_0_expr)),
-            Some(Arc::clone(&partition_1_expr)),
-        ];
-        dynamic_filter.update_partitioned(partition_exprs).unwrap();
+        dynamic_filter
+            .update(DynamicFilterUpdate::Partitioned(vec![
+                Some(Arc::clone(&partition_0_expr)),
+                Some(Arc::clone(&partition_1_expr)),
+            ]))
+            .unwrap();
 
-        // Wrap dynamic filter in a BinaryExpr
+        // Bind within a parent expression to verify recursive tree rewrite.
         let wrapper = Arc::new(BinaryExpr::new(
             Arc::clone(&dynamic_filter) as Arc<dyn PhysicalExpr>,
             datafusion_expr::Operator::And,
             lit(true) as Arc<dyn PhysicalExpr>,
         )) as Arc<dyn PhysicalExpr>;
 
-        // Snapshot for partition 0 should replace the dynamic filter with partition 0's expr
-        let snapped_0 =
-            snapshot_physical_expr_for_partition(Arc::clone(&wrapper), 0).unwrap();
-        assert!(
-            format!("{snapped_0}").contains(">="),
-            "Expected >= for partition 0, got: {snapped_0}"
-        );
+        let bound = bind_dynamic_filters_for_partition(Arc::clone(&wrapper), 1).unwrap();
 
-        // Snapshot for partition 1 should replace with partition 1's expr
-        let snapped_1 = snapshot_physical_expr_for_partition(wrapper, 1).unwrap();
         assert!(
-            format!("{snapped_1}").contains("<="),
-            "Expected <= for partition 1, got: {snapped_1}"
+            format!("{bound}").contains("<="),
+            "Expected partition 1 expression in runtime-bound dynamic filter"
         );
     }
 
     #[test]
-    fn test_snapshot_physical_expr_for_partition_without_data() {
-        use super::snapshot_physical_expr_for_partition;
-
+    fn test_bind_dynamic_filters_for_partition_without_partitioned_data() {
         let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
             vec![],
             lit(42) as Arc<dyn PhysicalExpr>,
         ));
 
-        // No partitioned data set should leave the DynamicFilterPhysicalExpr unchanged
-        let result = snapshot_physical_expr_for_partition(
+        let bound = bind_dynamic_filters_for_partition(
             Arc::clone(&dynamic_filter) as Arc<dyn PhysicalExpr>,
             0,
         )
         .unwrap();
 
         assert!(
-            result
+            bound
                 .as_any()
                 .downcast_ref::<DynamicFilterPhysicalExpr>()
                 .is_some(),
             "Without partitioned data, should leave DynamicFilterPhysicalExpr unchanged"
+        );
+    }
+
+    #[test]
+    fn test_runtime_bound_dynamic_filter_tracks_updates() {
+        use datafusion_physical_expr_common::physical_expr::snapshot_generation;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let col_a = col("a", &schema).unwrap();
+
+        let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::clone(&col_a)],
+            lit(true) as Arc<dyn PhysicalExpr>,
+        ));
+
+        let initial_expr = Arc::new(BinaryExpr::new(
+            Arc::clone(&col_a),
+            datafusion_expr::Operator::GtEq,
+            lit(10) as Arc<dyn PhysicalExpr>,
+        )) as Arc<dyn PhysicalExpr>;
+        dynamic_filter
+            .update(DynamicFilterUpdate::Partitioned(vec![Some(initial_expr)]))
+            .unwrap();
+
+        let bound = bind_dynamic_filters_for_partition(
+            Arc::clone(&dynamic_filter) as Arc<dyn PhysicalExpr>,
+            0,
+        )
+        .unwrap();
+        let generation_before = snapshot_generation(&bound);
+        assert!(
+            format!("{bound}").contains("10"),
+            "Expected initial partition-bound dynamic filter to reference literal 10"
+        );
+
+        let updated_expr = Arc::new(BinaryExpr::new(
+            Arc::clone(&col_a),
+            datafusion_expr::Operator::GtEq,
+            lit(20) as Arc<dyn PhysicalExpr>,
+        )) as Arc<dyn PhysicalExpr>;
+        dynamic_filter
+            .update(DynamicFilterUpdate::Partitioned(vec![Some(updated_expr)]))
+            .unwrap();
+
+        let generation_after = snapshot_generation(&bound);
+        assert_ne!(
+            generation_before, generation_after,
+            "Runtime-bound dynamic filter should track source generation changes"
+        );
+        assert!(
+            format!("{bound}").contains("20"),
+            "Expected runtime-bound dynamic filter to reflect updated partition expression"
         );
     }
 }

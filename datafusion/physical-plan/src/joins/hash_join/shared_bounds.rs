@@ -37,7 +37,7 @@ use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Operator;
 use datafusion_functions::core::r#struct as struct_func;
 use datafusion_physical_expr::expressions::{
-    BinaryExpr, CaseExpr, DynamicFilterPhysicalExpr, InListExpr, lit,
+    BinaryExpr, CaseExpr, DynamicFilterPhysicalExpr, DynamicFilterUpdate, InListExpr, lit,
 };
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef, ScalarFunctionExpr};
 
@@ -460,11 +460,12 @@ impl SharedBuildAccumulator {
                             partition_data,
                             &self.probe_schema,
                         )? {
-                            self.dynamic_filter.update(filter_expr)?;
+                            self.dynamic_filter
+                                .update(DynamicFilterUpdate::Global(filter_expr))?;
                         }
                     }
                 }
-                // Partitioned: CASE expression routing to per-partition filters
+                // Partitioned mode: choose routing strategy for per-partition filters.
                 AccumulatedBuildData::Partitioned { partitions } => {
                     if self.use_partition_index {
                         // Partition-index routing: both sides preserve file partitioning (no
@@ -498,7 +499,8 @@ impl SharedBuildAccumulator {
                                 })
                                 .collect::<Result<_>>()?;
 
-                        self.dynamic_filter.update_partitioned(per_partition)?;
+                        self.dynamic_filter
+                            .update(DynamicFilterUpdate::Partitioned(per_partition))?;
                     } else {
                         // Collect all partition data (should all be Some at this point)
                         let partition_data: Vec<_> =
@@ -583,7 +585,8 @@ impl SharedBuildAccumulator {
                                     as Arc<dyn PhysicalExpr>
                             };
 
-                            self.dynamic_filter.update(filter_expr)?;
+                            self.dynamic_filter
+                                .update(DynamicFilterUpdate::Global(filter_expr))?;
                         }
                     }
                 }

@@ -24,7 +24,7 @@ use datafusion_datasource::{
     file_scan_config::FileScanConfig, file_scan_config::FileScanConfigBuilder,
     file_stream::FileOpenFuture, file_stream::FileOpener, source::DataSourceExec,
 };
-use datafusion_physical_expr::expressions::snapshot_physical_expr_for_partition;
+use datafusion_physical_expr::expressions::bind_dynamic_filters_for_partition;
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
@@ -78,7 +78,7 @@ impl FileOpener for TestOpener {
         let predicate = self
             .predicate
             .clone()
-            .map(|p| snapshot_physical_expr_for_partition(p, self.partition))
+            .map(|p| bind_dynamic_filters_for_partition(p, self.partition))
             .transpose()?;
 
         let mut new_batches = Vec::new();

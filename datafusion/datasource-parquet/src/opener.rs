@@ -41,7 +41,7 @@ use datafusion_common::{
     ColumnStatistics, DataFusionError, Result, ScalarValue, Statistics, exec_err,
 };
 use datafusion_datasource::{PartitionedFile, TableSchema};
-use datafusion_physical_expr::expressions::snapshot_physical_expr_for_partition;
+use datafusion_physical_expr::expressions::bind_dynamic_filters_for_partition;
 use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::{
@@ -261,6 +261,13 @@ impl FileOpener for ParquetOpener {
                 .transpose()?;
         }
 
+        // Bind partition-local dynamic filters for this opener partition.
+        // For partition-index dynamic filters this binds probe partition `i` to
+        // build-side filter `i`.
+        predicate = predicate
+            .map(|p| bind_dynamic_filters_for_partition(p, self.partition_index))
+            .transpose()?;
+
         let reorder_predicates = self.reorder_filters;
         let pushdown_filters = self.pushdown_filters;
         let force_filter_selections = self.force_filter_selections;
@@ -281,7 +288,6 @@ impl FileOpener for ParquetOpener {
 
         let reverse_row_groups = self.reverse_row_groups;
         let preserve_order = self.preserve_order;
-        let partition_index = self.partition_index;
 
         Ok(Box::pin(async move {
             #[cfg(feature = "parquet_encryption")]
@@ -418,13 +424,6 @@ impl FileOpener for ParquetOpener {
             let simplifier = PhysicalExprSimplifier::new(&physical_file_schema);
             predicate = predicate
                 .map(|p| simplifier.simplify(rewriter.rewrite(p)?))
-                .transpose()?;
-
-            // Snapshot per-partition dynamic filters if available.
-            // When both sides of a hash join preserve their file partitioning, each partition gets
-            // its own filter.
-            predicate = predicate
-                .map(|p| snapshot_physical_expr_for_partition(p, partition_index))
                 .transpose()?;
 
             // Adapt projections to the physical file schema as well
@@ -1038,7 +1037,9 @@ mod test {
     use datafusion_expr::{col, lit};
     use datafusion_physical_expr::{
         PhysicalExpr,
-        expressions::{BinaryExpr, Column, DynamicFilterPhysicalExpr, Literal},
+        expressions::{
+            BinaryExpr, Column, DynamicFilterPhysicalExpr, DynamicFilterUpdate, Literal,
+        },
         planner::logical2physical,
         projection::ProjectionExprs,
     };
@@ -2022,7 +2023,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_partition_snapshot_in_opener() {
+    async fn test_partition_bind_in_opener() {
         let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
 
         let batch = record_batch!(("a", Int32, vec![Some(1), Some(2), Some(3)])).unwrap();
@@ -2091,7 +2092,11 @@ mod test {
         )) as Arc<dyn PhysicalExpr>;
 
         dynamic_filter
-            .update_partitioned(vec![Some(p0_filter), Some(p1_filter), Some(p2_filter)])
+            .update(DynamicFilterUpdate::Partitioned(vec![
+                Some(p0_filter),
+                Some(p1_filter),
+                Some(p2_filter),
+            ]))
             .unwrap();
 
         // Partition 0: row group [1,3] overlaps with filter [1,1], so reads all 3 rows
