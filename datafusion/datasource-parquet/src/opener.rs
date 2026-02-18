@@ -27,7 +27,9 @@ use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::DataType;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_physical_expr::projection::ProjectionExprs;
-use datafusion_physical_expr::utils::{collect_columns, reassign_expr_columns};
+use datafusion_physical_expr::utils::{
+    collect_columns, reassign_expr_columns, split_conjunction,
+};
 use datafusion_physical_expr_adapter::replace_columns_with_literals;
 use std::collections::{HashMap, HashSet};
 use std::pin::Pin;
@@ -462,11 +464,20 @@ impl FileOpener for ParquetOpener {
 
             // Filter pushdown: evaluate predicates during scan
             //
-            // When all predicate columns are already in the output projection,
-            // skip the RowFilter (late materialization) path and instead apply
-            // the predicate as a batch-level filter after decoding. This avoids
-            // the substantial CPU overhead of CachedArrayReader, ReadPlanBuilder,
-            // and try_next_batch when there are no non-projected columns to skip.
+            // When the predicate's static conjuncts (excluding dynamic
+            // filters from TopK / joins) form a single expression whose
+            // columns are all in the output projection, the RowFilter
+            // (late materialization) path provides minimal benefit: the
+            // predicate columns must be decoded for the projection anyway,
+            // and with only one static conjunct there is no incremental
+            // evaluation advantage. Apply the predicate as a batch-level
+            // filter after decoding instead, avoiding the overhead of
+            // CachedArrayReader / ReadPlanBuilder / try_next_batch.
+            //
+            // Multi-conjunct static predicates are left on the RowFilter
+            // path because the RowFilter evaluates conjuncts incrementally
+            // — a selective first conjunct can avoid decoding expensive
+            // later columns for non-matching rows.
             let batch_filter_predicate = if let Some(predicate) =
                 pushdown_filters.then_some(predicate).flatten()
             {
@@ -478,8 +489,17 @@ impl FileOpener for ParquetOpener {
                 let projection_col_indices: HashSet<usize> =
                     projection.column_indices().into_iter().collect();
 
+                // Count only static conjuncts — dynamic filters (e.g.
+                // from TopK or join pushdown) are runtime-generated and
+                // reference the same projected columns, so they don't
+                // benefit from RowFilter's incremental evaluation.
+                let static_conjunct_count = split_conjunction(&predicate)
+                    .iter()
+                    .filter(|c| !is_dynamic_physical_expr(c))
+                    .count();
                 let skip_row_filter = !predicate_col_indices.is_empty()
-                    && predicate_col_indices.is_subset(&projection_col_indices);
+                    && predicate_col_indices.is_subset(&projection_col_indices)
+                    && static_conjunct_count <= 1;
 
                 if skip_row_filter {
                     debug!(
@@ -1079,10 +1099,10 @@ mod test {
         stats::Precision,
     };
     use datafusion_datasource::{PartitionedFile, TableSchema, file_stream::FileOpener};
-    use datafusion_expr::{col, lit};
+    use datafusion_expr::{Operator, col, lit};
     use datafusion_physical_expr::{
         PhysicalExpr,
-        expressions::{Column, DynamicFilterPhysicalExpr, Literal},
+        expressions::{BinaryExpr, Column, DynamicFilterPhysicalExpr, Literal},
         planner::logical2physical,
         projection::ProjectionExprs,
     };
@@ -2083,9 +2103,10 @@ mod test {
             u64::try_from(data_size).unwrap(),
         );
 
-        // Case 1: filter_cols ⊆ projection_cols → batch filter path
+        // Case 1: single conjunct, filter_cols ⊂ projection_cols → batch filter
         // Filter: a = 2, Projection: [a, b]
-        // predicate_col_indices = {0}, projection_col_indices = {0, 1} → subset
+        // predicate_col_indices = {0} ⊆ projection_col_indices = {0, 1}
+        // Single conjunct + subset → skip RowFilter, use batch filter.
         let expr = col("a").eq(lit(2));
         let predicate = logical2physical(&expr, &schema);
         let opener = ParquetOpenerBuilder::new()
@@ -2152,12 +2173,62 @@ mod test {
             .with_pushdown_filters(true)
             .with_reorder_filters(true)
             .build();
-        let stream = opener.open(file).unwrap().await.unwrap();
+        let stream = opener.open(file.clone()).unwrap().await.unwrap();
         let values = collect_int32_values(stream).await;
         assert_eq!(
             values,
             vec![2, 2],
             "batch filter should return correct values"
         );
+
+        // Case 5: multi-conjunct predicate → RowFilter path (even when
+        // filter_cols == projection_cols). RowFilter evaluates conjuncts
+        // incrementally, so a selective first conjunct can avoid decoding
+        // expensive later columns for non-matching rows.
+        // Filter: a = 2 AND b = 20, Projection: [a, b]
+        // predicate_col_indices = {0, 1}, projection_col_indices = {0, 1}
+        // Exact match BUT multi-conjunct → keep RowFilter for incremental eval.
+        let expr = col("a").eq(lit(2)).and(col("b").eq(lit(20)));
+        let predicate = logical2physical(&expr, &schema);
+        let opener = ParquetOpenerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_projection_indices(&[0, 1])
+            .with_predicate(predicate)
+            .with_pushdown_filters(true)
+            .with_reorder_filters(true)
+            .build();
+        let stream = opener.open(file.clone()).unwrap().await.unwrap();
+        let (num_batches, num_rows) = count_batches_and_rows(stream).await;
+        assert_eq!(num_rows, 1, "multi-conjunct RowFilter should return 1 row");
+        assert_eq!(num_batches, 1);
+
+        // Case 6: single static conjunct + dynamic filter → batch filter path
+        // Simulates TopK dynamic filter: `a = 2 AND <dynamic>(a < 3)`
+        // Only 1 static conjunct, dynamic conjuncts are ignored for the
+        // single-conjunct check → still uses batch filter path.
+        let static_expr = logical2physical(&col("a").eq(lit(2)), &schema);
+        let dynamic_expr =
+            make_dynamic_expr(logical2physical(&col("a").lt(lit(3)), &schema));
+        let combined: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            static_expr,
+            Operator::And,
+            dynamic_expr,
+        ));
+        let opener = ParquetOpenerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_projection_indices(&[0, 1])
+            .with_predicate(combined)
+            .with_pushdown_filters(true)
+            .with_reorder_filters(true)
+            .build();
+        let stream = opener.open(file).unwrap().await.unwrap();
+        let (num_batches, num_rows) = count_batches_and_rows(stream).await;
+        assert_eq!(
+            num_rows, 2,
+            "single static conjunct + dynamic filter should use batch filter"
+        );
+        assert_eq!(num_batches, 1);
     }
 }
