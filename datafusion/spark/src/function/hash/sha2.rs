@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow::array::{
-    ArrayRef, AsArray, BinaryArrayType, Int32Array, StringArray, new_null_array,
+    ArrayRef, AsArray, BinaryArrayType, Int32Array, StringArray,
 };
 use arrow::datatypes::{DataType, Int32Type};
 use datafusion_common::types::{
@@ -170,10 +170,7 @@ impl ScalarUDFImpl for SparkSha2 {
             (
                 ColumnarValue::Array(_),
                 ColumnarValue::Scalar(ScalarValue::Int32(None)),
-            ) => Ok(ColumnarValue::Array(new_null_array(
-                &DataType::Utf8,
-                args.number_rows,
-            ))),
+            ) => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None))),
             _ => {
                 // Fallback to existing behavior for any array/mixed cases
                 make_scalar_function(sha2_impl, vec![])(&args.args)
