@@ -16236,15 +16236,35 @@ impl serde::Serialize for PhysicalDynamicFilterNode {
         if !self.children.is_empty() {
             len += 1;
         }
-        if self.initial_expr.is_some() {
+        if !self.remapped_children.is_empty() {
+            len += 1;
+        }
+        if self.generation != 0 {
+            len += 1;
+        }
+        if self.inner_expr.is_some() {
+            len += 1;
+        }
+        if self.is_complete {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalDynamicFilterNode", len)?;
         if !self.children.is_empty() {
             struct_ser.serialize_field("children", &self.children)?;
         }
-        if let Some(v) = self.initial_expr.as_ref() {
-            struct_ser.serialize_field("initialExpr", v)?;
+        if !self.remapped_children.is_empty() {
+            struct_ser.serialize_field("remappedChildren", &self.remapped_children)?;
+        }
+        if self.generation != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("generation", ToString::to_string(&self.generation).as_str())?;
+        }
+        if let Some(v) = self.inner_expr.as_ref() {
+            struct_ser.serialize_field("innerExpr", v)?;
+        }
+        if self.is_complete {
+            struct_ser.serialize_field("isComplete", &self.is_complete)?;
         }
         struct_ser.end()
     }
@@ -16257,14 +16277,22 @@ impl<'de> serde::Deserialize<'de> for PhysicalDynamicFilterNode {
     {
         const FIELDS: &[&str] = &[
             "children",
-            "initial_expr",
-            "initialExpr",
+            "remapped_children",
+            "remappedChildren",
+            "generation",
+            "inner_expr",
+            "innerExpr",
+            "is_complete",
+            "isComplete",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Children,
-            InitialExpr,
+            RemappedChildren,
+            Generation,
+            InnerExpr,
+            IsComplete,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -16287,7 +16315,10 @@ impl<'de> serde::Deserialize<'de> for PhysicalDynamicFilterNode {
                     {
                         match value {
                             "children" => Ok(GeneratedField::Children),
-                            "initialExpr" | "initial_expr" => Ok(GeneratedField::InitialExpr),
+                            "remappedChildren" | "remapped_children" => Ok(GeneratedField::RemappedChildren),
+                            "generation" => Ok(GeneratedField::Generation),
+                            "innerExpr" | "inner_expr" => Ok(GeneratedField::InnerExpr),
+                            "isComplete" | "is_complete" => Ok(GeneratedField::IsComplete),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -16308,7 +16339,10 @@ impl<'de> serde::Deserialize<'de> for PhysicalDynamicFilterNode {
                     V: serde::de::MapAccess<'de>,
             {
                 let mut children__ = None;
-                let mut initial_expr__ = None;
+                let mut remapped_children__ = None;
+                let mut generation__ = None;
+                let mut inner_expr__ = None;
+                let mut is_complete__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Children => {
@@ -16317,17 +16351,40 @@ impl<'de> serde::Deserialize<'de> for PhysicalDynamicFilterNode {
                             }
                             children__ = Some(map_.next_value()?);
                         }
-                        GeneratedField::InitialExpr => {
-                            if initial_expr__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("initialExpr"));
+                        GeneratedField::RemappedChildren => {
+                            if remapped_children__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("remappedChildren"));
                             }
-                            initial_expr__ = map_.next_value()?;
+                            remapped_children__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Generation => {
+                            if generation__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("generation"));
+                            }
+                            generation__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::InnerExpr => {
+                            if inner_expr__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("innerExpr"));
+                            }
+                            inner_expr__ = map_.next_value()?;
+                        }
+                        GeneratedField::IsComplete => {
+                            if is_complete__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("isComplete"));
+                            }
+                            is_complete__ = Some(map_.next_value()?);
                         }
                     }
                 }
                 Ok(PhysicalDynamicFilterNode {
                     children: children__.unwrap_or_default(),
-                    initial_expr: initial_expr__,
+                    remapped_children: remapped_children__.unwrap_or_default(),
+                    generation: generation__.unwrap_or_default(),
+                    inner_expr: inner_expr__,
+                    is_complete: is_complete__.unwrap_or_default(),
                 })
             }
         }

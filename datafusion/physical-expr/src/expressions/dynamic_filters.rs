@@ -99,6 +99,18 @@ impl Inner {
         }
     }
 
+    fn new_from_state(
+        generation: u64,
+        expr: Arc<dyn PhysicalExpr>,
+        is_complete: bool,
+    ) -> Self {
+        Self {
+            generation,
+            expr,
+            is_complete,
+        }
+    }
+
     /// Clone the inner expression.
     fn expr(&self) -> &Arc<dyn PhysicalExpr> {
         &self.expr
@@ -180,18 +192,73 @@ impl DynamicFilterPhysicalExpr {
         }
     }
 
-    fn remap_children(
-        children: &[Arc<dyn PhysicalExpr>],
-        remapped_children: Option<&Vec<Arc<dyn PhysicalExpr>>>,
-        expr: Arc<dyn PhysicalExpr>,
-    ) -> Result<Arc<dyn PhysicalExpr>> {
-        if let Some(remapped_children) = remapped_children {
+    /// Reconstructs a [`DynamicFilterPhysicalExpr`] from a snapshot.
+    ///
+    /// This is used during deserialization to recreate filters with their serialized state.
+    #[doc(hidden)]
+    pub fn new_from_snapshot(
+        children: Vec<Arc<dyn PhysicalExpr>>,
+        remapped_children: Option<Vec<Arc<dyn PhysicalExpr>>>,
+        generation: u64,
+        inner_expr: Arc<dyn PhysicalExpr>,
+        is_complete: bool,
+    ) -> Self {
+        let state = if is_complete {
+            FilterState::Complete { generation }
+        } else {
+            FilterState::InProgress { generation }
+        };
+        let (state_watch, _) = watch::channel(state);
+
+        Self {
+            children,
+            remapped_children,
+            inner: Arc::new(RwLock::new(Inner::new_from_state(
+                generation,
+                inner_expr,
+                is_complete,
+            ))),
+            state_watch,
+            data_type: Arc::new(RwLock::new(None)),
+            nullable: Arc::new(RwLock::new(None)),
+        }
+    }
+
+    /// Create a new [`DynamicFilterPhysicalExpr`] sharing inner state from a source filter.
+    ///
+    /// This is an internal API used during deserialization to reconstruct filters that share
+    /// the same inner state but have different outer wrappers (e.g., after column remapping).
+    ///
+    /// # Arguments
+    /// * `children` - The base children for this filter
+    /// * `remapped_children` - Optional remapped children (if different from base)
+    /// * `source` - The source filter to share inner state with
+    ///
+    /// # Warning
+    /// This is a low-level API intended for use by the proto deserialization layer.
+    /// Most users should use [`Self::new`] instead.
+    pub fn new_from_source(
+        &self,
+        source: &DynamicFilterPhysicalExpr,
+    ) -> Self {
+        Self {
+            children: self.children.clone(),
+            remapped_children: self.remapped_children.clone(),
+            inner: Arc::clone(&source.inner),
+            state_watch: self.state_watch.clone(),
+            data_type: Arc::clone(&self.data_type),
+            nullable: Arc::clone(&self.nullable),
+        }
+    }
+
+    fn remap_children(&self, expr: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
+        if let Some(remapped_children) = &self.remapped_children {
             // Remap the children to the new children
             // of the expression.
             expr.transform_up(|child| {
                 // Check if this is any of our original children
                 if let Some(pos) =
-                    children.iter().position(|c| c.as_ref() == child.as_ref())
+                    self.children.iter().position(|c| c.as_ref() == child.as_ref())
                 {
                     // If so, remap it to the current children
                     // of the expression.
@@ -219,7 +286,34 @@ impl DynamicFilterPhysicalExpr {
     /// remapped to match calls to [`PhysicalExpr::with_new_children`].
     pub fn current(&self) -> Result<Arc<dyn PhysicalExpr>> {
         let expr = Arc::clone(self.inner.read().expr());
-        Self::remap_children(&self.children, self.remapped_children.as_ref(), expr)
+        self.remap_children(expr)
+    }
+
+    /// Captures all state needed for serialization atomically.
+    ///
+    /// Returns (children, remapped_children, generation, inner_expr, is_complete).
+    #[doc(hidden)]
+    #[allow(clippy::type_complexity)]
+    pub fn current_snapshot(
+        &self,
+    ) -> Result<(
+        Vec<Arc<dyn PhysicalExpr>>,
+        Option<Vec<Arc<dyn PhysicalExpr>>>,
+        u64,
+        Arc<dyn PhysicalExpr>,
+        bool,
+    )> {
+        let (generation, expr, is_complete) = {
+            let inner = self.inner.read();
+            (inner.generation, Arc::clone(&inner.expr), inner.is_complete)
+        };
+        Ok((
+            self.children.clone(),
+            self.remapped_children.clone(),
+            generation,
+            self.remap_children(expr)?,
+            is_complete,
+        ))
     }
 
     /// Update the current expression and notify all waiters.
@@ -233,11 +327,7 @@ impl DynamicFilterPhysicalExpr {
         // We still do this again in `current()` but doing it preventively here
         // reduces the work needed in some cases if `current()` is called multiple times
         // and the same externally facing `PhysicalExpr` is used for both `with_new_children` and `update()`.`
-        let new_expr = Self::remap_children(
-            &self.children,
-            self.remapped_children.as_ref(),
-            new_expr,
-        )?;
+        let new_expr = self.remap_children(new_expr)?;
 
         // Load the current inner, increment generation, and store the new one
         let mut current = self.inner.write();
@@ -445,16 +535,6 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
 
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.render(f, |expr, f| expr.fmt_sql(f))
-    }
-
-    fn snapshot(&self) -> Result<Option<Arc<dyn PhysicalExpr>>> {
-        // Return the current expression as a snapshot.
-        Ok(Some(self.current()?))
-    }
-
-    fn snapshot_generation(&self) -> u64 {
-        // Return the current generation of the expression.
-        self.inner.read().generation
     }
 }
 

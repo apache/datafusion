@@ -92,7 +92,7 @@ use self::from_proto::parse_protobuf_partitioning;
 use self::to_proto::serialize_partitioning;
 use crate::common::{byte_to_string, str_to_byte};
 use crate::physical_plan::from_proto::{
-    parse_physical_expr_with_converter, parse_physical_sort_expr,
+    parse_physical_expr_with_converter, parse_physical_exprs, parse_physical_sort_expr,
     parse_physical_sort_exprs, parse_physical_window_expr,
     parse_protobuf_file_scan_config, parse_record_batches, parse_table_schema_from_proto,
 };
@@ -3935,77 +3935,55 @@ impl PhysicalProtoConverterExtension for DeduplicatingDeserializer {
     where
         Self: Sized,
     {
-        // First check the regular cache by expr_id (same outer Arc)
+        // The entire expr is cached, so re-use it.
         if let Some(expr_id) = proto.expr_id {
             if let Some(cached) = self.cache.borrow().get(&expr_id) {
                 return Ok(Arc::clone(cached));
             }
         }
 
+        // Cache miss, we must deserialize the expr.
+        let mut expr =
+            parse_physical_expr_with_converter(proto, ctx, input_schema, codec, self)?;
+
         // Check if we need to share inner state with a cached dynamic filter
         if let Some(dynamic_filter_id) = proto.dynamic_filter_inner_id {
             if let Some(cached_filter) =
                 self.dynamic_filter_cache.borrow().get(&dynamic_filter_id)
             {
-                // We have a cached filter with the same dynamic_filter_inner_id
-                // Deserialize to get the new children, then create a new Arc with shared inner state
-                let expr = parse_physical_expr_with_converter(
-                    proto,
-                    ctx,
-                    input_schema,
-                    codec,
-                    self,
-                )?;
+                // Get the base filter's structure
+                let Some(cached_df) = cached_filter
+                    .as_any()
+                    .downcast_ref::<DynamicFilterPhysicalExpr>()
+                else {
+                    return internal_err!(
+                        "dynamic filter cache returned an expression that is not a DynamicFilterPhysicalExpr"
+                    );
+                };
 
-                // Get the children from the newly deserialized expression
-                if let Some(new_df) =
+                // Get the base filter's structure
+                let Some(dynamic_filter_expr) =
                     expr.as_any().downcast_ref::<DynamicFilterPhysicalExpr>()
-                {
-                    let new_children: Vec<Arc<dyn PhysicalExpr>> =
-                        new_df.children().into_iter().cloned().collect();
-                    // Create a new Arc with the cached filter's inner state but new children
-                    let expr_with_shared_inner =
-                        Arc::clone(cached_filter).with_new_children(new_children)?;
-
-                    // Cache by expr_id if present
-                    if let Some(expr_id) = proto.expr_id {
-                        self.cache
-                            .borrow_mut()
-                            .insert(expr_id, Arc::clone(&expr_with_shared_inner));
-                    }
-
-                    return Ok(expr_with_shared_inner);
-                }
-            }
-        }
-
-        // Normal deserialization path
-        let expr = if let Some(expr_id) = proto.expr_id {
-            let expr = parse_physical_expr_with_converter(
-                proto,
-                ctx,
-                input_schema,
-                codec,
-                self,
-            )?;
-            self.cache.borrow_mut().insert(expr_id, Arc::clone(&expr));
-            expr
-        } else {
-            parse_physical_expr_with_converter(proto, ctx, input_schema, codec, self)?
-        };
-
-        // If this is a dynamic filter, cache it by dynamic_filter_inner_id
-        if let Some(dynamic_filter_id) = proto.dynamic_filter_inner_id {
-            if expr
-                .as_any()
-                .downcast_ref::<DynamicFilterPhysicalExpr>()
-                .is_some()
-            {
+                else {
+                    return internal_err!(
+                        "dynamic_filter_id present in proto, but the expression was not a DynamicFilterPhysicalExpr"
+                    );
+                };
+                expr = Arc::new(dynamic_filter_expr.new_from_source(cached_df))
+                    as Arc<dyn PhysicalExpr>;
+            } else {
+                // Cache it 
                 self.dynamic_filter_cache
                     .borrow_mut()
                     .insert(dynamic_filter_id, Arc::clone(&expr));
             }
         };
+
+        // Cache it if the cache key is available.
+        if let Some(expr_id) = proto.expr_id {
+            self.cache.borrow_mut().insert(expr_id, Arc::clone(&expr));
+        };
+
         Ok(expr)
     }
 

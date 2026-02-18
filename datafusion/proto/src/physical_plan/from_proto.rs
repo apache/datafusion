@@ -505,17 +505,37 @@ pub fn parse_physical_expr_with_converter(
                 proto_converter,
             )?;
 
-            let initial_expr = parse_required_physical_expr(
-                dynamic_filter.initial_expr.as_deref(),
+            let remapped_children = if !dynamic_filter.remapped_children.is_empty() {
+                Some(parse_physical_exprs(
+                    &dynamic_filter.remapped_children,
+                    ctx,
+                    input_schema,
+                    codec,
+                    proto_converter,
+                )?)
+            } else {
+                None
+            };
+
+            let inner_expr = parse_required_physical_expr(
+                dynamic_filter.inner_expr.as_deref(),
                 ctx,
-                "initial_expr",
+                "inner_expr",
                 input_schema,
                 codec,
                 proto_converter,
             )?;
 
-            // Constructor signature is: new(children, inner)
-            Arc::new(DynamicFilterPhysicalExpr::new(children, initial_expr))
+            // Recreate filter from snapshot
+            let base_filter = Arc::new(DynamicFilterPhysicalExpr::new_from_snapshot(
+                children,
+                remapped_children,
+                dynamic_filter.generation,
+                inner_expr,
+                dynamic_filter.is_complete,
+            ));
+
+            base_filter as Arc<dyn PhysicalExpr>
         }
         ExprType::Extension(extension) => {
             let inputs: Vec<Arc<dyn PhysicalExpr>> = extension

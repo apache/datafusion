@@ -258,29 +258,6 @@ pub fn serialize_physical_expr_with_converter(
     codec: &dyn PhysicalExtensionCodec,
     proto_converter: &dyn PhysicalProtoConverterExtension,
 ) -> Result<protobuf::PhysicalExprNode> {
-    // Check for DynamicFilterPhysicalExpr before snapshotting
-    if let Some(df) = value.as_any().downcast_ref::<DynamicFilterPhysicalExpr>() {
-        let children = df
-            .children()
-            .iter()
-            .map(|child| proto_converter.physical_expr_to_proto(child, codec))
-            .collect::<Result<Vec<_>>>()?;
-
-        let current_expr =
-            Box::new(proto_converter.physical_expr_to_proto(&df.current()?, codec)?);
-
-        return Ok(protobuf::PhysicalExprNode {
-            expr_id: None,
-            dynamic_filter_inner_id: None,
-            expr_type: Some(protobuf::physical_expr_node::ExprType::DynamicFilter(
-                Box::new(protobuf::PhysicalDynamicFilterNode {
-                    children,
-                    initial_expr: Some(current_expr),
-                }),
-            )),
-        });
-    }
-
     // Snapshot the expr in case it has dynamic predicate state so
     // it can be serialized
     let value = snapshot_physical_expr(Arc::clone(value))?;
@@ -349,6 +326,40 @@ pub fn serialize_physical_expr_with_converter(
             dynamic_filter_inner_id: None,
             expr_type: Some(protobuf::physical_expr_node::ExprType::BinaryExpr(
                 binary_expr,
+            )),
+        })
+    } else if let Some(df) = expr.downcast_ref::<DynamicFilterPhysicalExpr>() {
+        // Capture all state atomically
+        let (base_children, remapped, generation, inner_expr_val, is_complete) =
+            df.current_snapshot()?;
+
+        let children = base_children
+            .iter()
+            .map(|child| proto_converter.physical_expr_to_proto(child, codec))
+            .collect::<Result<Vec<_>>>()?;
+
+        let remapped_children = if let Some(remapped) = remapped {
+            remapped
+                .iter()
+                .map(|child| proto_converter.physical_expr_to_proto(child, codec))
+                .collect::<Result<Vec<_>>>()?
+        } else {
+            vec![]
+        };
+
+        let inner_expr = Box::new(proto_converter.physical_expr_to_proto(&inner_expr_val, codec)?);
+
+        Ok(protobuf::PhysicalExprNode {
+            expr_id: None,
+            dynamic_filter_inner_id: None,
+            expr_type: Some(protobuf::physical_expr_node::ExprType::DynamicFilter(
+                Box::new(protobuf::PhysicalDynamicFilterNode {
+                    children,
+                    remapped_children,
+                    generation,
+                    inner_expr: Some(inner_expr),
+                    is_complete,
+                }),
             )),
         })
     } else if let Some(expr) = expr.downcast_ref::<CaseExpr>() {

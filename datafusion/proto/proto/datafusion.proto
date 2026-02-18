@@ -910,7 +910,10 @@ message PhysicalExprNode {
 
 message PhysicalDynamicFilterNode {
   repeated PhysicalExprNode children = 1;
-  PhysicalExprNode initial_expr = 2;
+  repeated PhysicalExprNode remapped_children = 2;
+  uint64 generation = 3;
+  PhysicalExprNode inner_expr = 4;
+  bool is_complete = 5;
 }
 
 message PhysicalScalarUdfNode {

@@ -1361,10 +1361,14 @@ pub mod physical_expr_node {
 pub struct PhysicalDynamicFilterNode {
     #[prost(message, repeated, tag = "1")]
     pub children: ::prost::alloc::vec::Vec<PhysicalExprNode>,
-    #[prost(message, optional, boxed, tag = "2")]
-    pub initial_expr: ::core::option::Option<
-        ::prost::alloc::boxed::Box<PhysicalExprNode>,
-    >,
+    #[prost(message, repeated, tag = "2")]
+    pub remapped_children: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    #[prost(uint64, tag = "3")]
+    pub generation: u64,
+    #[prost(message, optional, boxed, tag = "4")]
+    pub inner_expr: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
+    #[prost(bool, tag = "5")]
+    pub is_complete: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalScalarUdfNode {
