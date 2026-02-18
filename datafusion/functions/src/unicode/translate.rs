@@ -49,7 +49,7 @@ use datafusion_macros::user_doc;
     argument(name = "from", description = "The characters to be replaced."),
     argument(
         name = "to",
-        description = "The characters to replace them with. Each character in **from** that is found in **str** is replaced by the character at the same index in **to**. Any characters in **from** that don't have a corresponding character in **to** are removed."
+        description = "The characters to replace them with. Each character in **from** that is found in **str** is replaced by the character at the same index in **to**. Any characters in **from** that don't have a corresponding character in **to** are removed. If a character appears more than once in **from**, the first occurrence determines the mapping."
     )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -105,13 +105,12 @@ impl ScalarUDFImpl for TranslateFunc {
             try_as_scalar_str(&args.args[1]),
             try_as_scalar_str(&args.args[2]),
         ) {
-            let from_graphemes: Vec<&str> = from_str.graphemes(true).collect();
             let to_graphemes: Vec<&str> = to_str.graphemes(true).collect();
 
             let mut from_map: HashMap<&str, usize> = HashMap::new();
-            for (index, c) in from_graphemes.iter().enumerate() {
+            for (index, c) in from_str.graphemes(true).enumerate() {
                 // Ignore characters that already exist in from_map
-                from_map.entry(*c).or_insert(index);
+                from_map.entry(c).or_insert(index);
             }
 
             let ascii_table = build_ascii_translate_table(from_str, to_str);

@@ -2078,7 +2078,7 @@ translate(str, from, to)
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **from**: The characters to be replaced.
-- **to**: The characters to replace them with. Each character in **from** that is found in **str** is replaced by the character at the same index in **to**. Any characters in **from** that don't have a corresponding character in **to** are removed.
+- **to**: The characters to replace them with. Each character in **from** that is found in **str** is replaced by the character at the same index in **to**. Any characters in **from** that don't have a corresponding character in **to** are removed. If a character appears more than once in **from**, the first occurrence determines the mapping.
 
 #### Example
 
