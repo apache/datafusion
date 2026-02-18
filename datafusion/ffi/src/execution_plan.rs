@@ -20,7 +20,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use abi_stable::StableAbi;
-use abi_stable::std_types::{RString, RVec};
+use abi_stable::std_types::{ROption, RResult, RString, RVec};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_plan::{
@@ -28,11 +29,12 @@ use datafusion_physical_plan::{
 };
 use tokio::runtime::Handle;
 
+use crate::config::FFI_ConfigOptions;
 use crate::execution::FFI_TaskContext;
 use crate::plan_properties::FFI_PlanProperties;
 use crate::record_batch_stream::FFI_RecordBatchStream;
 use crate::util::FFIResult;
-use crate::{df_result, rresult};
+use crate::{df_result, rresult, rresult_return};
 
 /// A stable struct for sharing a [`ExecutionPlan`] across FFI boundaries.
 #[repr(C)]
@@ -44,6 +46,9 @@ pub struct FFI_ExecutionPlan {
     /// Return a vector of children plans
     pub children: unsafe extern "C" fn(plan: &Self) -> RVec<FFI_ExecutionPlan>,
 
+    pub with_new_children:
+        unsafe extern "C" fn(plan: &Self, children: RVec<Self>) -> FFIResult<Self>,
+
     /// Return the plan name.
     pub name: unsafe extern "C" fn(plan: &Self) -> RString,
 
@@ -54,6 +59,12 @@ pub struct FFI_ExecutionPlan {
         partition: usize,
         context: FFI_TaskContext,
     ) -> FFIResult<FFI_RecordBatchStream>,
+
+    pub repartitioned: unsafe extern "C" fn(
+        plan: &Self,
+        target_partitions: usize,
+        config: FFI_ConfigOptions,
+    ) -> FFIResult<ROption<FFI_ExecutionPlan>>,
 
     /// Used to create a clone on the provider of the execution plan. This should
     /// only need to be called by the receiver of the plan.
@@ -85,6 +96,11 @@ impl FFI_ExecutionPlan {
         let private_data = self.private_data as *const ExecutionPlanPrivateData;
         unsafe { &(*private_data).plan }
     }
+
+    fn runtime(&self) -> Option<Handle> {
+        let private_data = self.private_data as *const ExecutionPlanPrivateData;
+        unsafe { (*private_data).runtime.clone() }
+    }
 }
 
 unsafe extern "C" fn properties_fn_wrapper(
@@ -96,19 +112,34 @@ unsafe extern "C" fn properties_fn_wrapper(
 unsafe extern "C" fn children_fn_wrapper(
     plan: &FFI_ExecutionPlan,
 ) -> RVec<FFI_ExecutionPlan> {
-    unsafe {
-        let private_data = plan.private_data as *const ExecutionPlanPrivateData;
-        let plan = &(*private_data).plan;
-        let runtime = &(*private_data).runtime;
+    let runtime = plan.runtime();
+    let plan = plan.inner();
 
-        let children: Vec<_> = plan
-            .children()
-            .into_iter()
-            .map(|child| FFI_ExecutionPlan::new(Arc::clone(child), runtime.clone()))
-            .collect();
+    let children: Vec<_> = plan
+        .children()
+        .into_iter()
+        .map(|child| FFI_ExecutionPlan::new(Arc::clone(child), runtime.clone()))
+        .collect();
 
-        children.into()
-    }
+    children.into()
+}
+
+unsafe extern "C" fn with_new_children_fn_wrapper(
+    plan: &FFI_ExecutionPlan,
+    children: RVec<FFI_ExecutionPlan>,
+) -> FFIResult<FFI_ExecutionPlan> {
+    let runtime = plan.runtime();
+    let plan = Arc::clone(plan.inner());
+    let children = rresult_return!(
+        children
+            .iter()
+            .map(<Arc<dyn ExecutionPlan>>::try_from)
+            .collect::<Result<Vec<_>>>()
+    );
+
+    let new_plan = rresult_return!(plan.with_new_children(children));
+
+    RResult::ROk(FFI_ExecutionPlan::new(new_plan, runtime))
 }
 
 unsafe extern "C" fn execute_fn_wrapper(
@@ -116,17 +147,34 @@ unsafe extern "C" fn execute_fn_wrapper(
     partition: usize,
     context: FFI_TaskContext,
 ) -> FFIResult<FFI_RecordBatchStream> {
-    unsafe {
-        let ctx = context.into();
-        let private_data = plan.private_data as *const ExecutionPlanPrivateData;
-        let plan = &(*private_data).plan;
-        let runtime = (*private_data).runtime.clone();
+    let ctx = context.into();
+    let runtime = plan.runtime();
+    let plan = plan.inner();
 
-        rresult!(
-            plan.execute(partition, ctx)
-                .map(|rbs| FFI_RecordBatchStream::new(rbs, runtime))
-        )
-    }
+    let _guard = runtime.as_ref().map(|rt| rt.enter());
+
+    rresult!(
+        plan.execute(partition, ctx)
+            .map(|rbs| FFI_RecordBatchStream::new(rbs, runtime))
+    )
+}
+
+unsafe extern "C" fn repartitioned_fn_wrapper(
+    plan: &FFI_ExecutionPlan,
+    target_partitions: usize,
+    config: FFI_ConfigOptions,
+) -> FFIResult<ROption<FFI_ExecutionPlan>> {
+    let maybe_config: Result<ConfigOptions, DataFusionError> = config.try_into();
+    let config = rresult_return!(maybe_config);
+    let runtime = plan.runtime();
+    let plan = plan.inner();
+
+    rresult!(
+        plan.repartitioned(target_partitions, &config)
+            .map(|maybe_plan| maybe_plan
+                .map(|plan| FFI_ExecutionPlan::new(plan, runtime))
+                .into())
+    )
 }
 
 unsafe extern "C" fn name_fn_wrapper(plan: &FFI_ExecutionPlan) -> RString {
@@ -144,12 +192,10 @@ unsafe extern "C" fn release_fn_wrapper(plan: &mut FFI_ExecutionPlan) {
 }
 
 unsafe extern "C" fn clone_fn_wrapper(plan: &FFI_ExecutionPlan) -> FFI_ExecutionPlan {
-    unsafe {
-        let private_data = plan.private_data as *const ExecutionPlanPrivateData;
-        let plan_data = &(*private_data);
+    let runtime = plan.runtime();
+    let plan = plan.inner();
 
-        FFI_ExecutionPlan::new(Arc::clone(&plan_data.plan), plan_data.runtime.clone())
-    }
+    FFI_ExecutionPlan::new(Arc::clone(plan), runtime)
 }
 
 impl Clone for FFI_ExecutionPlan {
@@ -161,13 +207,18 @@ impl Clone for FFI_ExecutionPlan {
 impl FFI_ExecutionPlan {
     /// This function is called on the provider's side.
     pub fn new(plan: Arc<dyn ExecutionPlan>, runtime: Option<Handle>) -> Self {
-        let private_data = Box::new(ExecutionPlanPrivateData { plan, runtime });
+        if let Some(plan) = plan.as_any().downcast_ref::<ForeignExecutionPlan>() {
+            return plan.plan.clone();
+        }
 
+        let private_data = Box::new(ExecutionPlanPrivateData { plan, runtime });
         Self {
             properties: properties_fn_wrapper,
             children: children_fn_wrapper,
+            with_new_children: with_new_children_fn_wrapper,
             name: name_fn_wrapper,
             execute: execute_fn_wrapper,
+            repartitioned: repartitioned_fn_wrapper,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             private_data: Box::into_raw(private_data) as *mut c_void,
@@ -274,12 +325,16 @@ impl ExecutionPlan for ForeignExecutionPlan {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(ForeignExecutionPlan {
-            plan: self.plan.clone(),
-            name: self.name.clone(),
-            children,
-            properties: self.properties.clone(),
-        }))
+        unsafe {
+            let children = children
+                .into_iter()
+                .map(|child| FFI_ExecutionPlan::new(child, None))
+                .collect::<RVec<_>>();
+            let new_plan =
+                df_result!((self.plan.with_new_children)(&self.plan, children))?;
+
+            (&new_plan).try_into()
+        }
     }
 
     fn execute(
@@ -292,6 +347,22 @@ impl ExecutionPlan for ForeignExecutionPlan {
             df_result!((self.plan.execute)(&self.plan, partition, context))
                 .map(|stream| Pin::new(Box::new(stream)) as SendableRecordBatchStream)
         }
+    }
+
+    fn repartitioned(
+        &self,
+        target_partitions: usize,
+        config: &ConfigOptions,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let config = config.into();
+        let maybe_plan: Option<FFI_ExecutionPlan> = df_result!(unsafe {
+            (self.plan.repartitioned)(&self.plan, target_partitions, config)
+        })?
+        .into();
+
+        maybe_plan
+            .map(|plan| <Arc<dyn ExecutionPlan>>::try_from(&plan))
+            .transpose()
     }
 }
 
