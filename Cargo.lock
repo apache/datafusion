@@ -2593,6 +2593,7 @@ dependencies = [
  "datafusion-functions-aggregate",
  "datafusion-functions-nested",
  "log",
+ "num",
  "percent-encoding",
  "rand 0.9.2",
  "sha1",
