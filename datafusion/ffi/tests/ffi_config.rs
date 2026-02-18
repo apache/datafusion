@@ -44,13 +44,13 @@ mod tests {
 
         // Verify default values are as expected
         let returned_config: ExternalConfig = config
-            .ffi_extension()
+            .local_or_ffi_extension()
             .expect("should have external config extension");
         assert_eq!(returned_config, ExternalConfig::default());
 
         config.set("external_config.is_enabled", "false")?;
         let returned_config: ExternalConfig = config
-            .ffi_extension()
+            .local_or_ffi_extension()
             .expect("should have external config extension");
         assert!(!returned_config.is_enabled);
 
@@ -74,14 +74,14 @@ mod tests {
 
         // Verify default values are as expected
         let returned_options: ExternalConfig = table_options
-            .ffi_extension()
+            .local_or_ffi_extension()
             .expect("should have external config extension");
 
         assert_eq!(returned_options, ExternalConfig::default());
 
         table_options.set("external_config.is_enabled", "false")?;
         let returned_options: ExternalConfig = table_options
-            .ffi_extension()
+            .local_or_ffi_extension()
             .expect("should have external config extension");
         assert!(!returned_options.is_enabled);
 
@@ -105,7 +105,7 @@ mod tests {
         // Verify default values are as expected
         let returned_config: ExternalConfig = config
             .options()
-            .ffi_extension()
+            .local_or_ffi_extension()
             .expect("should have external config extension");
         assert_eq!(returned_config, ExternalConfig::default());
 
@@ -115,7 +115,7 @@ mod tests {
         );
         let returned_config: ExternalConfig = config
             .options()
-            .ffi_extension()
+            .local_or_ffi_extension()
             .expect("should have external config extension");
         assert!(!returned_config.is_enabled);
 

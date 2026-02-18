@@ -81,11 +81,15 @@ impl TryFrom<FFI_ConfigOptions> for ConfigOptions {
 }
 
 pub trait ExtensionOptionsFFIProvider {
-    fn ffi_extension<C: ConfigExtension + Clone + Default>(&self) -> Option<C>;
+    /// Extract a [`ConfigExtension`]. This method should attempt to first extract
+    /// the extension from the local options when possible. Should that fail, it
+    /// should attempt to extract the FFI options and then convert them to the
+    /// desired [`ConfigExtension`].
+    fn local_or_ffi_extension<C: ConfigExtension + Clone + Default>(&self) -> Option<C>;
 }
 
 impl ExtensionOptionsFFIProvider for ConfigOptions {
-    fn ffi_extension<C: ConfigExtension + Clone + Default>(&self) -> Option<C> {
+    fn local_or_ffi_extension<C: ConfigExtension + Clone + Default>(&self) -> Option<C> {
         self.extensions
             .get::<C>()
             .map(|v| v.to_owned())
@@ -98,7 +102,7 @@ impl ExtensionOptionsFFIProvider for ConfigOptions {
 }
 
 impl ExtensionOptionsFFIProvider for TableOptions {
-    fn ffi_extension<C: ConfigExtension + Clone + Default>(&self) -> Option<C> {
+    fn local_or_ffi_extension<C: ConfigExtension + Clone + Default>(&self) -> Option<C> {
         self.extensions
             .get::<C>()
             .map(|v| v.to_owned())
