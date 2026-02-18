@@ -23,6 +23,10 @@ use std::hash::{Hash, Hasher};
 use std::{cmp::Ordering, sync::Arc, sync::atomic};
 
 mod pool;
+
+#[cfg(feature = "arrow_buffer_pool")]
+pub mod arrow;
+
 pub mod proxy {
     pub use datafusion_common::utils::proxy::{HashTableAllocExt, VecAllocExt};
 }
