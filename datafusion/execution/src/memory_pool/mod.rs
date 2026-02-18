@@ -387,7 +387,9 @@ impl MemoryReservation {
                 atomic::Ordering::Relaxed,
                 |prev| prev.checked_sub(capacity),
             )
-            .expect("capacity exceeds reservation size");
+            .unwrap_or_else(|prev| {
+                panic!("capacity {capacity} exceeds reservation size {prev}")
+            });
         self.registration.pool.shrink(self, capacity);
     }
 
@@ -403,8 +405,7 @@ impl MemoryReservation {
                 atomic::Ordering::Relaxed,
                 |prev| prev.checked_sub(capacity),
             )
-            .map_err(|_| {
-                let prev = self.size.load(atomic::Ordering::Relaxed);
+            .map_err(|prev| {
                 internal_datafusion_err!(
                     "Cannot free the capacity {capacity} out of allocated size {prev}"
                 )
