@@ -464,15 +464,20 @@ impl FileOpener for ParquetOpener {
 
             // Filter pushdown: evaluate predicates during scan
             //
-            // When the predicate's static conjuncts (excluding dynamic
-            // filters from TopK / joins) form a single expression whose
-            // columns are all in the output projection, the RowFilter
-            // (late materialization) path provides minimal benefit: the
-            // predicate columns must be decoded for the projection anyway,
-            // and with only one static conjunct there is no incremental
+            // When predicate columns exactly match the projection columns
+            // and there is at most one static conjunct (excluding dynamic
+            // filters from TopK / joins), the RowFilter (late
+            // materialization) path provides no benefit: every projected
+            // column is a predicate column, so there are no extra columns
+            // whose decode could be skipped for non-matching rows, and
+            // with a single static conjunct there is no incremental
             // evaluation advantage. Apply the predicate as a batch-level
             // filter after decoding instead, avoiding the overhead of
             // CachedArrayReader / ReadPlanBuilder / try_next_batch.
+            //
+            // When there are non-predicate projection columns (e.g.
+            // SELECT * WHERE col = X), RowFilter is valuable because it
+            // skips decoding those extra columns for non-matching rows.
             //
             // Multi-conjunct static predicates are left on the RowFilter
             // path because the RowFilter evaluates conjuncts incrementally
@@ -498,7 +503,7 @@ impl FileOpener for ParquetOpener {
                     .filter(|c| !is_dynamic_physical_expr(c))
                     .count();
                 let skip_row_filter = !predicate_col_indices.is_empty()
-                    && predicate_col_indices.is_subset(&projection_col_indices)
+                    && predicate_col_indices == projection_col_indices
                     && static_conjunct_count <= 1;
 
                 if skip_row_filter {
@@ -2103,10 +2108,29 @@ mod test {
             u64::try_from(data_size).unwrap(),
         );
 
-        // Case 1: single conjunct, filter_cols ⊂ projection_cols → batch filter
+        // Case 1: filter_cols == projection_cols → batch filter path
+        // Filter: a = 2, Projection: [a]
+        // predicate_col_indices = {0} == projection_col_indices = {0}
+        // Single conjunct + exact match → skip RowFilter, use batch filter.
+        let expr = col("a").eq(lit(2));
+        let predicate = logical2physical(&expr, &schema);
+        let opener = ParquetOpenerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_projection_indices(&[0])
+            .with_predicate(predicate)
+            .with_pushdown_filters(true)
+            .with_reorder_filters(true)
+            .build();
+        let stream = opener.open(file.clone()).unwrap().await.unwrap();
+        let (num_batches, num_rows) = count_batches_and_rows(stream).await;
+        assert_eq!(num_rows, 2, "batch filter should return 2 matching rows");
+        assert_eq!(num_batches, 1);
+
+        // Case 1b: filter_cols ⊂ projection_cols → RowFilter path
         // Filter: a = 2, Projection: [a, b]
-        // predicate_col_indices = {0} ⊆ projection_col_indices = {0, 1}
-        // Single conjunct + subset → skip RowFilter, use batch filter.
+        // predicate_col_indices = {0} ≠ projection_col_indices = {0, 1}
+        // RowFilter skips decoding non-predicate column b for non-matching rows.
         let expr = col("a").eq(lit(2));
         let predicate = logical2physical(&expr, &schema);
         let opener = ParquetOpenerBuilder::new()
@@ -2119,7 +2143,7 @@ mod test {
             .build();
         let stream = opener.open(file.clone()).unwrap().await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
-        assert_eq!(num_rows, 2, "batch filter should return 2 matching rows");
+        assert_eq!(num_rows, 2, "RowFilter should return 2 matching rows");
         assert_eq!(num_batches, 1);
 
         // Case 2: filter_cols ⊄ projection_cols → RowFilter path
@@ -2204,9 +2228,10 @@ mod test {
         assert_eq!(num_batches, 1);
 
         // Case 6: single static conjunct + dynamic filter → batch filter path
-        // Simulates TopK dynamic filter: `a = 2 AND <dynamic>(a < 3)`
-        // Only 1 static conjunct, dynamic conjuncts are ignored for the
-        // single-conjunct check → still uses batch filter path.
+        // Simulates TopK: `WHERE a = 2 ORDER BY a LIMIT N`
+        // Predicate: `a = 2 AND <dynamic>(a < 3)`, Projection: [a]
+        // predicate_col_indices = {0} == projection_col_indices = {0}
+        // Only 1 static conjunct (dynamic excluded) → batch filter path.
         let static_expr = logical2physical(&col("a").eq(lit(2)), &schema);
         let dynamic_expr =
             make_dynamic_expr(logical2physical(&col("a").lt(lit(3)), &schema));
@@ -2218,7 +2243,7 @@ mod test {
         let opener = ParquetOpenerBuilder::new()
             .with_store(Arc::clone(&store))
             .with_schema(Arc::clone(&schema))
-            .with_projection_indices(&[0, 1])
+            .with_projection_indices(&[0])
             .with_predicate(combined)
             .with_pushdown_filters(true)
             .with_reorder_filters(true)
