@@ -207,6 +207,8 @@ impl ScalarUDFImpl for ConcatFunc {
                         DataType::Utf8View => {
                             let string_array = as_string_view_array(array)?;
 
+                            // This is an estimate; in particular, it will
+                            // undercount arrays of short strings (<= 12 bytes).
                             data_size += string_array.total_buffer_bytes_used();
                             let column = if array.is_nullable() {
                                 ColumnarValueRef::NullableStringViewArray(string_array)
