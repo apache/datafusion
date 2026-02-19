@@ -297,6 +297,8 @@ impl<'a> DFParquetMetadata<'a> {
                     vec![Some(true); logical_file_schema.fields().len()];
                 let mut is_min_value_exact =
                     vec![Some(true); logical_file_schema.fields().len()];
+                let mut distinct_counts_array =
+                    vec![Precision::Absent; logical_file_schema.fields().len()];
                 logical_file_schema.fields().iter().enumerate().for_each(
                     |(idx, field)| match StatisticsConverter::try_new(
                         field.name(),
@@ -311,8 +313,9 @@ impl<'a> DFParquetMetadata<'a> {
                                 is_min_value_exact: &mut is_min_value_exact,
                                 is_max_value_exact: &mut is_max_value_exact,
                                 column_byte_sizes: &mut column_byte_sizes,
+                                distinct_counts_array: &mut distinct_counts_array,
                             };
-                            summarize_min_max_null_counts(
+                            summarize_column_statistics(
                                 file_metadata.schema_descr(),
                                 logical_file_schema,
                                 &physical_file_schema,
@@ -330,15 +333,16 @@ impl<'a> DFParquetMetadata<'a> {
                     },
                 );
 
-                get_col_stats(
-                    logical_file_schema,
-                    &null_counts_array,
-                    &mut max_accs,
-                    &mut min_accs,
-                    &mut is_max_value_exact,
-                    &mut is_min_value_exact,
-                    &column_byte_sizes,
-                )
+                let mut accumulators = StatisticsAccumulators {
+                    min_accs: &mut min_accs,
+                    max_accs: &mut max_accs,
+                    null_counts_array: &mut null_counts_array,
+                    is_min_value_exact: &mut is_min_value_exact,
+                    is_max_value_exact: &mut is_max_value_exact,
+                    column_byte_sizes: &mut column_byte_sizes,
+                    distinct_counts_array: &mut distinct_counts_array,
+                };
+                accumulators.build_column_statistics(logical_file_schema)
             } else {
                 // Record column sizes
                 logical_file_schema
@@ -411,53 +415,6 @@ fn create_max_min_accs(
     (max_values, min_values)
 }
 
-fn get_col_stats(
-    schema: &Schema,
-    null_counts: &[Precision<usize>],
-    max_values: &mut [Option<MaxAccumulator>],
-    min_values: &mut [Option<MinAccumulator>],
-    is_max_value_exact: &mut [Option<bool>],
-    is_min_value_exact: &mut [Option<bool>],
-    column_byte_sizes: &[Precision<usize>],
-) -> Vec<ColumnStatistics> {
-    (0..schema.fields().len())
-        .map(|i| {
-            let max_value = match (
-                max_values.get_mut(i).unwrap(),
-                is_max_value_exact.get(i).unwrap(),
-            ) {
-                (Some(max_value), Some(true)) => {
-                    max_value.evaluate().ok().map(Precision::Exact)
-                }
-                (Some(max_value), Some(false)) | (Some(max_value), None) => {
-                    max_value.evaluate().ok().map(Precision::Inexact)
-                }
-                (None, _) => None,
-            };
-            let min_value = match (
-                min_values.get_mut(i).unwrap(),
-                is_min_value_exact.get(i).unwrap(),
-            ) {
-                (Some(min_value), Some(true)) => {
-                    min_value.evaluate().ok().map(Precision::Exact)
-                }
-                (Some(min_value), Some(false)) | (Some(min_value), None) => {
-                    min_value.evaluate().ok().map(Precision::Inexact)
-                }
-                (None, _) => None,
-            };
-            ColumnStatistics {
-                null_count: null_counts[i],
-                max_value: max_value.unwrap_or(Precision::Absent),
-                min_value: min_value.unwrap_or(Precision::Absent),
-                sum_value: Precision::Absent,
-                distinct_count: Precision::Absent,
-                byte_size: column_byte_sizes[i],
-            }
-        })
-        .collect()
-}
-
 /// Holds the accumulator state for collecting statistics from row groups
 struct StatisticsAccumulators<'a> {
     min_accs: &'a mut [Option<MinAccumulator>],
@@ -466,9 +423,52 @@ struct StatisticsAccumulators<'a> {
     is_min_value_exact: &'a mut [Option<bool>],
     is_max_value_exact: &'a mut [Option<bool>],
     column_byte_sizes: &'a mut [Precision<usize>],
+    distinct_counts_array: &'a mut [Precision<usize>],
 }
 
-fn summarize_min_max_null_counts(
+impl StatisticsAccumulators<'_> {
+    /// Converts the accumulated statistics into a vector of `ColumnStatistics`
+    fn build_column_statistics(&mut self, schema: &Schema) -> Vec<ColumnStatistics> {
+        (0..schema.fields().len())
+            .map(|i| {
+                let max_value = match (
+                    self.max_accs.get_mut(i).unwrap(),
+                    self.is_max_value_exact.get(i).unwrap(),
+                ) {
+                    (Some(max_value), Some(true)) => {
+                        max_value.evaluate().ok().map(Precision::Exact)
+                    }
+                    (Some(max_value), Some(false)) | (Some(max_value), None) => {
+                        max_value.evaluate().ok().map(Precision::Inexact)
+                    }
+                    (None, _) => None,
+                };
+                let min_value = match (
+                    self.min_accs.get_mut(i).unwrap(),
+                    self.is_min_value_exact.get(i).unwrap(),
+                ) {
+                    (Some(min_value), Some(true)) => {
+                        min_value.evaluate().ok().map(Precision::Exact)
+                    }
+                    (Some(min_value), Some(false)) | (Some(min_value), None) => {
+                        min_value.evaluate().ok().map(Precision::Inexact)
+                    }
+                    (None, _) => None,
+                };
+                ColumnStatistics {
+                    null_count: self.null_counts_array[i],
+                    max_value: max_value.unwrap_or(Precision::Absent),
+                    min_value: min_value.unwrap_or(Precision::Absent),
+                    sum_value: Precision::Absent,
+                    distinct_count: self.distinct_counts_array[i],
+                    byte_size: self.column_byte_sizes[i],
+                }
+            })
+            .collect()
+    }
+}
+
+fn summarize_column_statistics(
     parquet_schema: &SchemaDescriptor,
     logical_file_schema: &Schema,
     physical_file_schema: &Schema,
@@ -540,6 +540,36 @@ fn summarize_min_max_null_counts(
         logical_file_schema.field(logical_schema_index).name(),
     )
     .map(|(idx, _)| idx);
+
+    // Extract distinct counts from row group column statistics
+    accumulators.distinct_counts_array[logical_schema_index] =
+        if let Some(parquet_idx) = parquet_index {
+            let distinct_counts: Vec<u64> = row_groups_metadata
+                .iter()
+                .filter_map(|rg| {
+                    rg.columns()
+                        .get(parquet_idx)
+                        .and_then(|col| col.statistics())
+                        .and_then(|stats| stats.distinct_count_opt())
+                })
+                .collect();
+
+            if distinct_counts.is_empty() {
+                Precision::Absent
+            } else if distinct_counts.len() == 1 {
+                // Single row group with distinct count - use exact value
+                Precision::Exact(distinct_counts[0] as usize)
+            } else {
+                // Multiple row groups - use max as a lower bound estimate
+                // (can't accurately merge NDV since duplicates may exist across row groups)
+                match distinct_counts.iter().max() {
+                    Some(&max_ndv) => Precision::Inexact(max_ndv as usize),
+                    None => Precision::Absent,
+                }
+            }
+        } else {
+            Precision::Absent
+        };
 
     let arrow_field = logical_file_schema.field(logical_schema_index);
     accumulators.column_byte_sizes[logical_schema_index] = compute_arrow_column_size(
@@ -803,6 +833,356 @@ mod tests {
 
             let result = has_any_exact_match(&computed_max, &row_group_maxes, &exactness);
             assert_eq!(result, Some(false));
+        }
+    }
+
+    mod ndv_tests {
+        use super::*;
+        use arrow::datatypes::Field;
+        use parquet::arrow::parquet_to_arrow_schema;
+        use parquet::basic::Type as PhysicalType;
+        use parquet::file::metadata::{ColumnChunkMetaData, RowGroupMetaData};
+        use parquet::file::reader::{FileReader, SerializedFileReader};
+        use parquet::file::statistics::Statistics as ParquetStatistics;
+        use parquet::schema::types::{SchemaDescriptor, Type as SchemaType};
+        use std::fs::File;
+        use std::path::PathBuf;
+
+        fn create_schema_descr(num_columns: usize) -> Arc<SchemaDescriptor> {
+            let fields: Vec<Arc<SchemaType>> = (0..num_columns)
+                .map(|i| {
+                    Arc::new(
+                        SchemaType::primitive_type_builder(
+                            &format!("col_{i}"),
+                            PhysicalType::INT32,
+                        )
+                        .build()
+                        .unwrap(),
+                    )
+                })
+                .collect();
+
+            let schema = SchemaType::group_type_builder("schema")
+                .with_fields(fields)
+                .build()
+                .unwrap();
+
+            Arc::new(SchemaDescriptor::new(Arc::new(schema)))
+        }
+
+        fn create_arrow_schema(num_columns: usize) -> SchemaRef {
+            let fields: Vec<Field> = (0..num_columns)
+                .map(|i| Field::new(format!("col_{i}"), DataType::Int32, true))
+                .collect();
+            Arc::new(Schema::new(fields))
+        }
+
+        fn create_row_group_with_stats(
+            schema_descr: &Arc<SchemaDescriptor>,
+            column_stats: Vec<Option<ParquetStatistics>>,
+            num_rows: i64,
+        ) -> RowGroupMetaData {
+            let columns: Vec<ColumnChunkMetaData> = column_stats
+                .into_iter()
+                .enumerate()
+                .map(|(i, stats)| {
+                    let mut builder =
+                        ColumnChunkMetaData::builder(schema_descr.column(i));
+                    if let Some(s) = stats {
+                        builder = builder.set_statistics(s);
+                    }
+                    builder.set_num_values(num_rows).build().unwrap()
+                })
+                .collect();
+
+            RowGroupMetaData::builder(schema_descr.clone())
+                .set_num_rows(num_rows)
+                .set_total_byte_size(1000)
+                .set_column_metadata(columns)
+                .build()
+                .unwrap()
+        }
+
+        fn create_parquet_metadata(
+            schema_descr: Arc<SchemaDescriptor>,
+            row_groups: Vec<RowGroupMetaData>,
+        ) -> ParquetMetaData {
+            use parquet::file::metadata::FileMetaData;
+
+            let num_rows: i64 = row_groups.iter().map(|rg| rg.num_rows()).sum();
+            let file_meta = FileMetaData::new(
+                1,            // version
+                num_rows,     // num_rows
+                None,         // created_by
+                None,         // key_value_metadata
+                schema_descr, // schema_descr
+                None,         // column_orders
+            );
+
+            ParquetMetaData::new(file_meta, row_groups)
+        }
+
+        #[test]
+        fn test_distinct_count_single_row_group_with_ndv() {
+            // Single row group with distinct count should return Exact
+            let schema_descr = create_schema_descr(1);
+            let arrow_schema = create_arrow_schema(1);
+
+            // Create statistics with distinct_count = 42
+            let stats = ParquetStatistics::int32(
+                Some(1),   // min
+                Some(100), // max
+                Some(42),  // distinct_count
+                Some(0),   // null_count
+                false,     // is_deprecated
+            );
+
+            let row_group =
+                create_row_group_with_stats(&schema_descr, vec![Some(stats)], 1000);
+            let metadata = create_parquet_metadata(schema_descr, vec![row_group]);
+
+            let result = DFParquetMetadata::statistics_from_parquet_metadata(
+                &metadata,
+                &arrow_schema,
+            )
+            .unwrap();
+
+            assert_eq!(
+                result.column_statistics[0].distinct_count,
+                Precision::Exact(42)
+            );
+        }
+
+        #[test]
+        fn test_distinct_count_multiple_row_groups_with_ndv() {
+            // Multiple row groups with distinct counts should return Inexact (sum)
+            let schema_descr = create_schema_descr(1);
+            let arrow_schema = create_arrow_schema(1);
+
+            // Row group 1: distinct_count = 10
+            let stats1 = ParquetStatistics::int32(
+                Some(1),
+                Some(50),
+                Some(10), // distinct_count
+                Some(0),
+                false,
+            );
+
+            // Row group 2: distinct_count = 20
+            let stats2 = ParquetStatistics::int32(
+                Some(51),
+                Some(100),
+                Some(20), // distinct_count
+                Some(0),
+                false,
+            );
+
+            let row_group1 =
+                create_row_group_with_stats(&schema_descr, vec![Some(stats1)], 500);
+            let row_group2 =
+                create_row_group_with_stats(&schema_descr, vec![Some(stats2)], 500);
+            let metadata =
+                create_parquet_metadata(schema_descr, vec![row_group1, row_group2]);
+
+            let result = DFParquetMetadata::statistics_from_parquet_metadata(
+                &metadata,
+                &arrow_schema,
+            )
+            .unwrap();
+
+            // Max of distinct counts (lower bound since we can't accurately merge NDV)
+            assert_eq!(
+                result.column_statistics[0].distinct_count,
+                Precision::Inexact(20)
+            );
+        }
+
+        #[test]
+        fn test_distinct_count_no_ndv_available() {
+            // No distinct count in statistics should return Absent
+            let schema_descr = create_schema_descr(1);
+            let arrow_schema = create_arrow_schema(1);
+
+            // Create statistics without distinct_count (None)
+            let stats = ParquetStatistics::int32(
+                Some(1),
+                Some(100),
+                None, // no distinct_count
+                Some(0),
+                false,
+            );
+
+            let row_group =
+                create_row_group_with_stats(&schema_descr, vec![Some(stats)], 1000);
+            let metadata = create_parquet_metadata(schema_descr, vec![row_group]);
+
+            let result = DFParquetMetadata::statistics_from_parquet_metadata(
+                &metadata,
+                &arrow_schema,
+            )
+            .unwrap();
+
+            assert_eq!(
+                result.column_statistics[0].distinct_count,
+                Precision::Absent
+            );
+        }
+
+        #[test]
+        fn test_distinct_count_partial_ndv_in_row_groups() {
+            // Some row groups have NDV, some don't - should use only those that have it
+            let schema_descr = create_schema_descr(1);
+            let arrow_schema = create_arrow_schema(1);
+
+            // Row group 1: has distinct_count = 15
+            let stats1 =
+                ParquetStatistics::int32(Some(1), Some(50), Some(15), Some(0), false);
+
+            // Row group 2: no distinct_count
+            let stats2 = ParquetStatistics::int32(
+                Some(51),
+                Some(100),
+                None, // no distinct_count
+                Some(0),
+                false,
+            );
+
+            let row_group1 =
+                create_row_group_with_stats(&schema_descr, vec![Some(stats1)], 500);
+            let row_group2 =
+                create_row_group_with_stats(&schema_descr, vec![Some(stats2)], 500);
+            let metadata =
+                create_parquet_metadata(schema_descr, vec![row_group1, row_group2]);
+
+            let result = DFParquetMetadata::statistics_from_parquet_metadata(
+                &metadata,
+                &arrow_schema,
+            )
+            .unwrap();
+
+            // Only one row group has NDV, so it's Exact(15)
+            assert_eq!(
+                result.column_statistics[0].distinct_count,
+                Precision::Exact(15)
+            );
+        }
+
+        #[test]
+        fn test_distinct_count_multiple_columns() {
+            // Test with multiple columns, each with different NDV
+            let schema_descr = create_schema_descr(3);
+            let arrow_schema = create_arrow_schema(3);
+
+            // col_0: distinct_count = 5
+            let stats0 =
+                ParquetStatistics::int32(Some(1), Some(10), Some(5), Some(0), false);
+            // col_1: no distinct_count
+            let stats1 =
+                ParquetStatistics::int32(Some(1), Some(100), None, Some(0), false);
+            // col_2: distinct_count = 100
+            let stats2 =
+                ParquetStatistics::int32(Some(1), Some(1000), Some(100), Some(0), false);
+
+            let row_group = create_row_group_with_stats(
+                &schema_descr,
+                vec![Some(stats0), Some(stats1), Some(stats2)],
+                1000,
+            );
+            let metadata = create_parquet_metadata(schema_descr, vec![row_group]);
+
+            let result = DFParquetMetadata::statistics_from_parquet_metadata(
+                &metadata,
+                &arrow_schema,
+            )
+            .unwrap();
+
+            assert_eq!(
+                result.column_statistics[0].distinct_count,
+                Precision::Exact(5)
+            );
+            assert_eq!(
+                result.column_statistics[1].distinct_count,
+                Precision::Absent
+            );
+            assert_eq!(
+                result.column_statistics[2].distinct_count,
+                Precision::Exact(100)
+            );
+        }
+
+        #[test]
+        fn test_distinct_count_no_statistics_at_all() {
+            // No statistics in row group should return Absent for all stats
+            let schema_descr = create_schema_descr(1);
+            let arrow_schema = create_arrow_schema(1);
+
+            // Create row group without any statistics
+            let row_group = create_row_group_with_stats(&schema_descr, vec![None], 1000);
+            let metadata = create_parquet_metadata(schema_descr, vec![row_group]);
+
+            let result = DFParquetMetadata::statistics_from_parquet_metadata(
+                &metadata,
+                &arrow_schema,
+            )
+            .unwrap();
+
+            assert_eq!(
+                result.column_statistics[0].distinct_count,
+                Precision::Absent
+            );
+        }
+
+        /// Integration test that reads a real Parquet file with distinct_count statistics.
+        /// The test file was created with DuckDB and has known NDV values:
+        /// - id: NULL (high cardinality, not tracked)
+        /// - category: 10 distinct values
+        /// - name: 5 distinct values
+        #[test]
+        fn test_distinct_count_from_real_parquet_file() {
+            // Path to test file created by DuckDB with distinct_count statistics
+            let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+            path.push("src/test_data/ndv_test.parquet");
+
+            let file = File::open(&path).expect("Failed to open test parquet file");
+            let reader =
+                SerializedFileReader::new(file).expect("Failed to create reader");
+            let parquet_metadata = reader.metadata();
+
+            // Derive Arrow schema from parquet file metadata
+            let arrow_schema = Arc::new(
+                parquet_to_arrow_schema(
+                    parquet_metadata.file_metadata().schema_descr(),
+                    None,
+                )
+                .expect("Failed to convert schema"),
+            );
+
+            let result = DFParquetMetadata::statistics_from_parquet_metadata(
+                parquet_metadata,
+                &arrow_schema,
+            )
+            .expect("Failed to extract statistics");
+
+            // id: no distinct_count (high cardinality)
+            assert_eq!(
+                result.column_statistics[0].distinct_count,
+                Precision::Absent,
+                "id column should have Absent distinct_count"
+            );
+
+            // category: 10 distinct values
+            assert_eq!(
+                result.column_statistics[1].distinct_count,
+                Precision::Exact(10),
+                "category column should have Exact(10) distinct_count"
+            );
+
+            // name: 5 distinct values
+            assert_eq!(
+                result.column_statistics[2].distinct_count,
+                Precision::Exact(5),
+                "name column should have Exact(5) distinct_count"
+            );
         }
     }
 }

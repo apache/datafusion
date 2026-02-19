@@ -21,6 +21,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::PhysicalExpr;
+use crate::expression_analyzer::ExpressionAnalyzerRegistry;
 use crate::expressions::{Column, Literal};
 use crate::utils::collect_columns;
 
@@ -711,9 +712,23 @@ impl ProjectionExprs {
                     }
                 }
             } else {
-                // TODO stats: estimate more statistics from expressions
-                // (expressions should compute their statistics themselves)
-                ColumnStatistics::new_unknown()
+                // Use ExpressionAnalyzer to estimate NDV for arbitrary expressions
+                // This handles:
+                // - Column references (preserves NDV)
+                // - Literals (NDV = 1)
+                // - Injective functions like UPPER(col) (preserves NDV)
+                // - Non-injective functions like FLOOR(col) (reduces NDV)
+                // - Date/time functions like MONTH(col) (bounded NDV)
+                let registry = ExpressionAnalyzerRegistry::with_builtin_analyzers();
+                let distinct_count = registry
+                    .get_distinct_count(expr, &stats)
+                    .map(Precision::Inexact)
+                    .unwrap_or(Precision::Absent);
+
+                ColumnStatistics {
+                    distinct_count,
+                    ..ColumnStatistics::new_unknown()
+                }
             };
             column_statistics.push(col_stats);
         }
@@ -2718,10 +2733,11 @@ pub(crate) mod tests {
         // Should have 2 column statistics
         assert_eq!(output_stats.column_statistics.len(), 2);
 
-        // First column (expression) should have unknown statistics
+        // First column (expression `col0 + 1`) preserves NDV from the single
+        // referenced column as a conservative upper bound (marked Inexact)
         assert_eq!(
             output_stats.column_statistics[0].distinct_count,
-            Precision::Absent
+            Precision::Inexact(5)
         );
         assert_eq!(
             output_stats.column_statistics[0].max_value,
