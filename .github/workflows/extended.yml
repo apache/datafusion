@@ -167,11 +167,19 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Run sqllogictest
+      - name: Build sqllogictest binary
         run: |
-          cargo test --features backtrace,parquet_encryption --profile release-nonlto --test sqllogictests -- --include-sqlite
+          # Cargo emits test binaries with hashed filenames under target/.../deps.
+          # We use head to pick the first matching sqllogictests artifact from the JSON stream.
+          TEST_BIN=$(cargo build --profile release-nonlto --features backtrace,parquet_encryption --package datafusion-sqllogictest --test sqllogictests --message-format=json | sed -n 's/.*"executable":"\([^"]*\)".*/\1/p' | head -n 1)
+          if [ -z "$TEST_BIN" ]; then
+            echo "Could not find sqllogictests test binary"
+            exit 1
+          fi
+          echo "TEST_BIN=$TEST_BIN" >> "$GITHUB_ENV"
+      - name: Run sqllogictest
+        working-directory: datafusion/sqllogictest
+        run: |
+          # sqllogictests expects crate-relative paths for test data.
+          "$TEST_BIN" --include-sqlite
           cargo clean
-
-
-
-
