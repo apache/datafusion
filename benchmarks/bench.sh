@@ -42,7 +42,7 @@ DATAFUSION_DIR=${DATAFUSION_DIR:-$SCRIPT_DIR/..}
 DATA_DIR=${DATA_DIR:-$SCRIPT_DIR/data}
 CARGO_COMMAND=${CARGO_COMMAND:-"cargo run --release"}
 PREFER_HASH_JOIN=${PREFER_HASH_JOIN:-true}
-UV_PROJECT=${UV_PROJECT:-$SCRIPT_DIR}
+UV_PACKAGE=${UV_PACKAGE:-datafusion-benchmarks}
 
 usage() {
     echo "
@@ -144,7 +144,7 @@ CARGO_COMMAND       command that runs the benchmark binary
 DATAFUSION_DIR      directory to use (default $DATAFUSION_DIR)
 RESULTS_NAME        folder where the benchmark files are stored
 PREFER_HASH_JOIN    Prefer hash join algorithm (default true)
-UV_PROJECT          Path to the benchmarks project for uv (default $SCRIPT_DIR)
+UV_PACKAGE          uv package name for benchmarks (default datafusion-benchmarks)
 DATAFUSION_*        Set the given datafusion configuration
 "
     exit 1
@@ -708,7 +708,7 @@ run_compile_profile() {
     local data_path="${DATA_DIR}/tpch_sf1"
 
     echo "Running compile profile benchmark..."
-    local cmd=(uv run --project "${UV_PROJECT}" python3 "${runner}" --data "${data_path}")
+    local cmd=(uv run --package "${UV_PACKAGE}" python3 "${runner}" --data "${data_path}")
     if [ ${#profiles[@]} -gt 0 ]; then
         cmd+=(--profiles "${profiles[@]}")
     fi
@@ -929,7 +929,7 @@ data_h2o() {
 
     # Generate h2o test data
     echo "Generating h2o test data in ${H2O_DIR} with size=${SIZE} and format=${DATA_FORMAT}"
-    uv run --project "${UV_PROJECT}" falsa groupby --path-prefix="${H2O_DIR}" --size "${SIZE}" --data-format "${DATA_FORMAT}"
+    uv run --package "${UV_PACKAGE}" falsa groupby --path-prefix="${H2O_DIR}" --size "${SIZE}" --data-format "${DATA_FORMAT}"
 }
 
 data_h2o_join() {
@@ -943,7 +943,7 @@ data_h2o_join() {
 
     # Generate h2o test data
     echo "Generating h2o test data in ${H2O_DIR} with size=${SIZE} and format=${DATA_FORMAT}"
-    uv run --project "${UV_PROJECT}" falsa join --path-prefix="${H2O_DIR}" --size "${SIZE}" --data-format "${DATA_FORMAT}"
+    uv run --package "${UV_PACKAGE}" falsa join --path-prefix="${H2O_DIR}" --size "${SIZE}" --data-format "${DATA_FORMAT}"
 }
 
 # Runner for h2o groupby benchmark
@@ -1145,7 +1145,7 @@ compare_benchmarks() {
             echo "--------------------"
             echo "Benchmark ${BENCH}"
             echo "--------------------"
-            uv run --project "${UV_PROJECT}" python3 "${SCRIPT_DIR}"/compare.py $OPTS "${RESULTS_FILE1}" "${RESULTS_FILE2}"
+            uv run --package "${UV_PACKAGE}" python3 "${SCRIPT_DIR}"/compare.py $OPTS "${RESULTS_FILE1}" "${RESULTS_FILE2}"
         else
             echo "Note: Skipping ${RESULTS_FILE1} as ${RESULTS_FILE2} does not exist"
         fi
@@ -1262,7 +1262,7 @@ run_clickbench_sorted() {
 
 setup_venv() {
     echo "Setting up Python environment via uv..."
-    uv sync --project "${UV_PROJECT}"
+    uv sync --package "${UV_PACKAGE}"
 }
 
 # And start the process up

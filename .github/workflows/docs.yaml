@@ -44,7 +44,7 @@ jobs:
         uses: astral-sh/setup-uv@f0ec1fc3b38f5e7cd731bb6ce540c5af426746bb  # v6.1.0
 
       - name: Install dependencies
-        run: uv sync --project docs
+        run: uv sync --package datafusion-docs
       - name: Install dependency graph tooling
         run: |
           set -x
@@ -56,7 +56,7 @@ jobs:
         run: |
           set -x
           cd docs
-          uv run --project ../docs ./build.sh
+          uv run --package datafusion-docs ./build.sh
 
       - name: Copy & push the generated HTML
         run: |

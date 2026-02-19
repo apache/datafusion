@@ -19,7 +19,7 @@
 # Script that updates the arrow dependencies in datafusion locally
 #
 # installation:
-# uv sync --project dev
+# uv sync --package datafusion-dev
 #
 # pin all arrow crates deps to a specific version:
 #
