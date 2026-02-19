@@ -131,19 +131,19 @@ impl ScalarUDFImpl for RegexpLikeFunc {
         args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
         let args = &args.args;
-
-        if args
-            .iter()
-            .all(|arg| matches!(arg, ColumnarValue::Scalar(_)))
-        {
-            return regexp_like_scalar(args);
-        }
-
         match args.as_slice() {
+            [ColumnarValue::Scalar(value), ColumnarValue::Scalar(pattern)] => {
+                regexp_like_scalar(value, pattern, None)
+            }
+            [
+                ColumnarValue::Scalar(value),
+                ColumnarValue::Scalar(pattern),
+                ColumnarValue::Scalar(flags),
+            ] => regexp_like_scalar(value, pattern, Some(flags)),
             [ColumnarValue::Array(values), ColumnarValue::Scalar(pattern)] => {
                 let pattern = scalar_string(pattern)?;
                 let array = regexp_like_array_scalar(values, pattern, None)?;
-                return Ok(ColumnarValue::Array(array));
+                Ok(ColumnarValue::Array(array))
             }
             [
                 ColumnarValue::Array(values),
@@ -152,19 +152,18 @@ impl ScalarUDFImpl for RegexpLikeFunc {
             ] => {
                 let flags = scalar_string(flags)?;
                 if flags.is_some_and(|flagz| flagz.contains('g')) {
-                    return plan_err!(
-                        "regexp_like() does not support the \"global\" option"
-                    );
+                    plan_err!("regexp_like() does not support the \"global\" option")
+                } else {
+                    let pattern = scalar_string(pattern)?;
+                    let array = regexp_like_array_scalar(values, pattern, flags)?;
+                    Ok(ColumnarValue::Array(array))
                 }
-                let pattern = scalar_string(pattern)?;
-                let array = regexp_like_array_scalar(values, pattern, flags)?;
-                return Ok(ColumnarValue::Array(array));
             }
-            _ => {}
+            _ => {
+                let args = ColumnarValue::values_to_arrays(args)?;
+                regexp_like(&args).map(ColumnarValue::Array)
+            }
         }
-
-        let args = ColumnarValue::values_to_arrays(args)?;
-        regexp_like(&args).map(ColumnarValue::Array)
     }
 
     fn simplify(
@@ -330,12 +329,9 @@ pub fn regexp_like(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 fn scalar_string(value: &ScalarValue) -> Result<Option<&str>> {
-    match value {
-        ScalarValue::Utf8(v) | ScalarValue::LargeUtf8(v) | ScalarValue::Utf8View(v) => {
-            Ok(v.as_deref())
-        }
-        ScalarValue::Null => Ok(None),
-        _ => internal_err!(
+    match value.try_as_str() {
+        Some(v) => Ok(v),
+        None => internal_err!(
             "Unsupported data type {:?} for function `regexp_like`",
             value.data_type()
         ),
@@ -377,25 +373,12 @@ fn regexp_like_array_scalar(
     Ok(Arc::new(array))
 }
 
-fn regexp_like_scalar(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    let (value, pattern, flags) = match args {
-        [ColumnarValue::Scalar(value), ColumnarValue::Scalar(pattern)] => {
-            (value, pattern, None)
-        }
-        [
-            ColumnarValue::Scalar(value),
-            ColumnarValue::Scalar(pattern),
-            ColumnarValue::Scalar(flags),
-        ] => (value, pattern, Some(flags)),
-        _ => {
-            return internal_err!("Unexpected argument types for function `regexp_like`");
-        }
-    };
-
-    let flags = match flags {
-        Some(flags) => scalar_string(flags)?,
-        None => None,
-    };
+fn regexp_like_scalar(
+    value: &ScalarValue,
+    pattern: &ScalarValue,
+    flags: Option<&ScalarValue>,
+) -> Result<ColumnarValue> {
+    let flags = flags.map(scalar_string).transpose()?.flatten();
 
     if flags.is_some_and(|flagz| flagz.contains('g')) {
         return plan_err!("regexp_like() does not support the \"global\" option");
@@ -513,8 +496,37 @@ mod tests {
 
     use arrow::array::StringArray;
     use arrow::array::{BooleanBuilder, StringViewArray};
+    use arrow::datatypes::{DataType, Field};
+    use datafusion_common::config::ConfigOptions;
+    use datafusion_common::{Result, ScalarValue};
+    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
 
-    use crate::regex::regexplike::regexp_like;
+    use crate::regex::regexplike::{RegexpLikeFunc, regexp_like};
+
+    fn invoke_regexp_like(args: Vec<ColumnarValue>) -> Result<ColumnarValue> {
+        let number_rows = args
+            .iter()
+            .find_map(|arg| match arg {
+                ColumnarValue::Array(array) => Some(array.len()),
+                _ => None,
+            })
+            .unwrap_or(1);
+        let arg_fields = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| {
+                Arc::new(Field::new(format!("arg_{idx}"), arg.data_type(), true))
+            })
+            .collect::<Vec<_>>();
+
+        RegexpLikeFunc::new().invoke_with_args(ScalarFunctionArgs {
+            args,
+            arg_fields,
+            number_rows,
+            return_field: Arc::new(Field::new("f", DataType::Boolean, true)),
+            config_options: Arc::new(ConfigOptions::default()),
+        })
+    }
 
     #[test]
     fn test_case_sensitive_regexp_like_utf8() {
@@ -610,6 +622,68 @@ mod tests {
 
         assert_eq!(
             re_err.strip_backtrace(),
+            "Error during planning: regexp_like() does not support the \"global\" option"
+        );
+    }
+
+    #[test]
+    fn test_regexp_like_scalar_invoke() {
+        let args = vec![
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some("foobarbequebaz".to_string()))),
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some("(bar)(beque)".to_string()))),
+        ];
+        let result = invoke_regexp_like(args).unwrap();
+        match result {
+            ColumnarValue::Scalar(ScalarValue::Boolean(Some(true))) => {}
+            other => panic!("Unexpected result {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_regexp_like_array_scalar_invoke() {
+        let values = Arc::new(StringArray::from(vec!["abc", "xyz"]));
+        let args = vec![
+            ColumnarValue::Array(values),
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some("^(a)".to_string()))),
+        ];
+        let result = invoke_regexp_like(args).unwrap();
+        let mut expected_builder = BooleanBuilder::new();
+        expected_builder.append_value(true);
+        expected_builder.append_value(false);
+        let expected = expected_builder.finish();
+        match result {
+            ColumnarValue::Array(array) => {
+                assert_eq!(array.as_ref(), &expected);
+            }
+            other => panic!("Unexpected result {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_regexp_like_scalar_flags_with_global() {
+        let args = vec![
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some("abc".to_string()))),
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some("^(a)".to_string()))),
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some("ig".to_string()))),
+        ];
+        let err = invoke_regexp_like(args).expect_err("global flag should be rejected");
+        assert_eq!(
+            err.strip_backtrace(),
+            "Error during planning: regexp_like() does not support the \"global\" option"
+        );
+    }
+
+    #[test]
+    fn test_regexp_like_array_scalar_flags_with_global() {
+        let values = Arc::new(StringArray::from(vec!["abc", "xyz"]));
+        let args = vec![
+            ColumnarValue::Array(values),
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some("^(a)".to_string()))),
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some("ig".to_string()))),
+        ];
+        let err = invoke_regexp_like(args).expect_err("global flag should be rejected");
+        assert_eq!(
+            err.strip_backtrace(),
             "Error during planning: regexp_like() does not support the \"global\" option"
         );
     }
