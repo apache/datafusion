@@ -430,6 +430,149 @@ mod tests {
         Ok(())
     }
 
+    /// Test that ParquetSink exposes rows_written, bytes_written, and
+    /// elapsed_compute metrics via DataSinkExec.
+    #[tokio::test]
+    async fn test_parquet_sink_metrics() -> Result<()> {
+        use arrow::array::Int32Array;
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use datafusion_execution::TaskContext;
+
+        use futures::TryStreamExt;
+
+        let ctx = SessionContext::new();
+        let tmp_dir = TempDir::new()?;
+        let output_path = tmp_dir.path().join("metrics_test.parquet");
+        let output_path_str = output_path.to_str().unwrap();
+
+        // Register a table with 100 rows
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("val", DataType::Int32, false),
+        ]));
+        let ids: Vec<i32> = (0..100).collect();
+        let vals: Vec<i32> = (100..200).collect();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(ids)),
+                Arc::new(Int32Array::from(vals)),
+            ],
+        )?;
+        ctx.register_batch("source", batch)?;
+
+        // Create the physical plan for COPY TO
+        let df = ctx
+            .sql(&format!(
+                "COPY source TO '{output_path_str}' STORED AS PARQUET"
+            ))
+            .await?;
+        let plan = df.create_physical_plan().await?;
+
+        // Execute the plan
+        let task_ctx = Arc::new(TaskContext::from(&ctx.state()));
+        let stream = plan.execute(0, task_ctx)?;
+        let _batches: Vec<_> = stream.try_collect().await?;
+
+        // Check metrics on the DataSinkExec (top-level plan)
+        let metrics = plan
+            .metrics()
+            .expect("DataSinkExec should return metrics from ParquetSink");
+        let aggregated = metrics.aggregate_by_name();
+
+        // rows_written should be 100
+        let rows_written = aggregated
+            .iter()
+            .find(|m| m.value().name() == "rows_written")
+            .expect("should have rows_written metric");
+        assert_eq!(
+            rows_written.value().as_usize(),
+            100,
+            "expected 100 rows written"
+        );
+
+        // bytes_written should be > 0
+        let bytes_written = aggregated
+            .iter()
+            .find(|m| m.value().name() == "bytes_written")
+            .expect("should have bytes_written metric");
+        assert!(
+            bytes_written.value().as_usize() > 0,
+            "expected bytes_written > 0, got {}",
+            bytes_written.value().as_usize()
+        );
+
+        // elapsed_compute should be > 0
+        let elapsed = aggregated
+            .iter()
+            .find(|m| m.value().name() == "elapsed_compute")
+            .expect("should have elapsed_compute metric");
+        assert!(
+            elapsed.value().as_usize() > 0,
+            "expected elapsed_compute > 0"
+        );
+
+        Ok(())
+    }
+
+    /// Test that ParquetSink metrics work with single_file_parallelism enabled.
+    #[tokio::test]
+    async fn test_parquet_sink_metrics_parallel() -> Result<()> {
+        use arrow::array::Int32Array;
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use datafusion_execution::TaskContext;
+
+        use futures::TryStreamExt;
+
+        let ctx = SessionContext::new();
+        ctx.sql("SET datafusion.execution.parquet.allow_single_file_parallelism = true")
+            .await?
+            .collect()
+            .await?;
+
+        let tmp_dir = TempDir::new()?;
+        let output_path = tmp_dir.path().join("metrics_parallel.parquet");
+        let output_path_str = output_path.to_str().unwrap();
+
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let ids: Vec<i32> = (0..50).collect();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(ids))],
+        )?;
+        ctx.register_batch("source2", batch)?;
+
+        let df = ctx
+            .sql(&format!(
+                "COPY source2 TO '{output_path_str}' STORED AS PARQUET"
+            ))
+            .await?;
+        let plan = df.create_physical_plan().await?;
+        let task_ctx = Arc::new(TaskContext::from(&ctx.state()));
+        let stream = plan.execute(0, task_ctx)?;
+        let _batches: Vec<_> = stream.try_collect().await?;
+
+        let metrics = plan.metrics().expect("DataSinkExec should return metrics");
+        let aggregated = metrics.aggregate_by_name();
+
+        let rows_written = aggregated
+            .iter()
+            .find(|m| m.value().name() == "rows_written")
+            .expect("should have rows_written metric");
+        assert_eq!(rows_written.value().as_usize(), 50);
+
+        let bytes_written = aggregated
+            .iter()
+            .find(|m| m.value().name() == "bytes_written")
+            .expect("should have bytes_written metric");
+        assert!(bytes_written.value().as_usize() > 0);
+
+        Ok(())
+    }
+
     /// Test FileOutputMode::Directory - explicitly request directory output
     /// even for paths WITH file extensions.
     #[tokio::test]
