@@ -2114,4 +2114,69 @@ mod tests {
         "
         )
     }
+
+    /// Test for multiple EXISTS in OR clause followed by a join
+    /// Reproduces issue #20083
+    #[test]
+    fn exists_or_exists_with_join() -> Result<()> {
+        use crate::OptimizerContext;
+
+        let table_a = test_table_scan_with_name("a")?;
+        let table_b = test_table_scan_with_name("b")?;
+
+        // Create subquery for EXISTS clause from table a
+        let subquery_a = LogicalPlanBuilder::from(test_table_scan_with_name("sq_a")?)
+            .filter(col("sq_a.a").eq(out_ref_col(DataType::UInt32, "a.a")))?
+            .project(vec![lit(1)])?
+            .build()?;
+
+        // Create subquery for EXISTS clause from table b
+        let subquery_b = LogicalPlanBuilder::from(test_table_scan_with_name("sq_b")?)
+            .filter(col("sq_b.b").eq(out_ref_col(DataType::UInt32, "a.b")))?
+            .project(vec![lit(1)])?
+            .build()?;
+
+        // Build plan: scan(a) with filter (EXISTS subquery_a OR EXISTS subquery_b), then LEFT JOIN with scan(b)
+        let plan = LogicalPlanBuilder::from(table_a)
+            .filter(
+                datafusion_expr::Expr::BinaryExpr(datafusion_expr::BinaryExpr {
+                    left: Box::new(datafusion_expr::Expr::Exists(
+                        datafusion_expr::Exists::new(
+                            datafusion_expr::Subquery {
+                                subquery: Arc::new(subquery_a),
+                                outer_ref_columns: vec![],
+                            },
+                            false,
+                        ),
+                    )),
+                    op: datafusion_expr::Operator::Or,
+                    right: Box::new(datafusion_expr::Expr::Exists(
+                        datafusion_expr::Exists::new(
+                            datafusion_expr::Subquery {
+                                subquery: Arc::new(subquery_b),
+                                outer_ref_columns: vec![],
+                            },
+                            false,
+                        ),
+                    )),
+                }),
+            )?
+            .join(
+                table_b,
+                datafusion_expr::JoinType::Left,
+                (vec!["a"], vec!["a"]),
+                None,
+            )?
+            .build()?;
+
+        // Run through the full optimizer to ensure it doesn't fail with schema mismatch
+        let optimizer = crate::Optimizer::new();
+        let config = OptimizerContext::new();
+        let optimized = optimizer.optimize(plan, &config, &crate::test::observe)?;
+
+        // If we get here without error, the fix is working
+        // The schema should be preserved correctly through optimization
+        assert!(optimized.schema().fields().len() > 0);
+        Ok(())
+    }
 }

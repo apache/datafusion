@@ -765,12 +765,26 @@ fn split_join_requirements(
         JoinType::Inner
         | JoinType::Left
         | JoinType::Right
-        | JoinType::Full
-        | JoinType::LeftMark
-        | JoinType::RightMark => {
+        | JoinType::Full => {
             // Decrease right side indices by `left_len` so that they point to valid
             // positions within the right child:
             indices.split_off(left_len)
+        }
+        // For LeftMark joins, the schema is [left columns, mark column]
+        // The mark column is at index `left_len` and is not from either child
+        JoinType::LeftMark => {
+            // Filter out the mark column (at index left_len) and route indices to left child only
+            // The right child in a LeftMark join only provides columns for the join condition
+            // and doesn't contribute to the output schema (except the synthetic mark column)
+            let (left_indices, _mark_and_beyond) = indices.split_off(left_len);
+            (left_indices, RequiredIndices::new())
+        }
+        // For RightMark joins, the schema is [right columns, mark column]
+        // The mark column is at the end and is not from either child
+        JoinType::RightMark => {
+            // Filter out the mark column (at the last index) and route indices to right child only
+            let (right_indices, _mark_and_beyond) = indices.split_off(left_len);
+            (RequiredIndices::new(), right_indices)
         }
         // All requirements can be re-routed to left child directly.
         JoinType::LeftAnti | JoinType::LeftSemi => (indices, RequiredIndices::new()),
