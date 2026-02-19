@@ -558,7 +558,7 @@ fn bench_array_has_any_scalar(c: &mut Criterion) {
     ];
 
     for &scalar_size in &scalar_sizes {
-        let scalar_arg = create_int64_scalar_list(scalar_size, 0);
+        let scalar_arg = create_int64_scalar_list(scalar_size, array_size as i64);
         let args = vec![
             ColumnarValue::Array(first_arr_i64.clone()),
             ColumnarValue::Scalar(scalar_arg),
