@@ -210,7 +210,6 @@ impl ParquetOptions {
             skip_arrow_metadata: _,
             max_predicate_cache_size: _,
             filter_pushdown_min_bytes_per_sec: _, // not used for writer props
-            filter_correlation_threshold: _,      // not used for writer props
             filter_statistics_collection_min_rows: _, // not used for writer props
             filter_statistics_collection_fraction: _, // not used for writer props
             filter_statistics_collection_max_rows: _, // not used for writer props
@@ -466,7 +465,6 @@ mod tests {
             coerce_int96: None,
             max_predicate_cache_size: defaults.max_predicate_cache_size,
             filter_pushdown_min_bytes_per_sec: defaults.filter_pushdown_min_bytes_per_sec,
-            filter_correlation_threshold: defaults.filter_correlation_threshold,
             filter_statistics_collection_fraction: defaults
                 .filter_statistics_collection_fraction,
             filter_statistics_collection_max_rows: defaults
@@ -589,8 +587,6 @@ mod tests {
                 coerce_int96: None,
                 filter_pushdown_min_bytes_per_sec: global_options_defaults
                     .filter_pushdown_min_bytes_per_sec,
-                filter_correlation_threshold: global_options_defaults
-                    .filter_correlation_threshold,
                 filter_statistics_collection_fraction: global_options_defaults
                     .filter_statistics_collection_fraction,
                 filter_statistics_collection_max_rows: global_options_defaults

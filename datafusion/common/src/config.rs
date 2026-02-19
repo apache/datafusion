@@ -768,22 +768,6 @@ config_namespace! {
         /// are promoted to row filters while the rest remain post-scan.
         pub filter_pushdown_min_bytes_per_sec: f64, default = 104_857_600.0
 
-        /// (reading) Correlation ratio threshold for grouping filters.
-        /// The ratio is P(A ∧ B) / (P(A) * P(B)):
-        ///   1.0 = independent (keep separate for late materialization benefit)
-        ///   1.5 = filters co-pass 50% more often than chance (default threshold)
-        ///   2.0 = filters co-pass twice as often as chance (conservative)
-        /// Higher values = less grouping = more late materialization, more overhead.
-        /// Lower values = more grouping = less overhead, less late materialization.
-        /// Set to f64::MAX to disable grouping entirely.
-        ///
-        /// **Interaction with `pushdown_filters`:**
-        /// Grouping only applies when `pushdown_filters = true` and the
-        /// statistics collection phase has completed. Correlated filters
-        /// are merged into a single compound `ArrowPredicate` so they
-        /// decode shared columns only once.
-        pub filter_correlation_threshold: f64, default = 1.5
-
         /// (reading) Minimum rows of post-scan evaluation before statistics-based
         /// optimization activates. During collection, all filters are evaluated
         /// as post-scan to gather accurate marginal and joint selectivity statistics.

@@ -85,8 +85,7 @@ pub(crate) enum FilterState {
 /// Produced by [`SelectivityTracker::partition_filters`], consumed by
 /// `ParquetOpener::open` to build row-level predicates and post-scan filters.
 ///
-/// Correlated filters are deduplicated: only the most effective filter
-/// from each correlated group is promoted; the rest are demoted to post-scan.
+/// Filters are partitioned based on their effectiveness threshold.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct PartitionedFilters {
     /// Filters still collecting stats — will become a CollectingArrowPredicate
@@ -95,13 +94,6 @@ pub(crate) struct PartitionedFilters {
     pub(crate) promoted: Vec<(FilterId, Arc<dyn PhysicalExpr>)>,
     /// Filters demoted to post-scan (fast path only)
     pub(crate) post_scan: Vec<(FilterId, Arc<dyn PhysicalExpr>)>,
-}
-
-/// Joint selectivity statistics for a pair of filters A and B.
-#[derive(Debug, Clone, Default)]
-struct CorrelationStats {
-    rows_both_passed: u64,
-    rows_total: u64,
 }
 
 /// Tracks selectivity statistics for a single filter expression.
@@ -217,16 +209,6 @@ impl SelectivityStats {
     }
 }
 
-/// Canonical pair key for correlation: always (min, max).
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
-struct PairKey(FilterId, FilterId);
-
-impl PairKey {
-    fn new(a: FilterId, b: FilterId) -> Self {
-        if a <= b { Self(a, b) } else { Self(b, a) }
-    }
-}
-
 /// Immutable configuration for a [`SelectivityTracker`].
 ///
 /// Use the builder methods to customise, then call [`build()`](TrackerConfig::build)
@@ -234,8 +216,6 @@ impl PairKey {
 pub struct TrackerConfig {
     /// Minimum bytes/sec throughput for promoting a filter (default: INFINITY = disabled).
     pub min_bytes_per_sec: f64,
-    /// Lift ratio above which two filters are considered correlated (default: 1.5).
-    pub correlation_threshold: f64,
     /// Floor for the collection / re-evaluation window (default: 10 000).
     pub min_rows_for_collection: u64,
     /// Fraction of total dataset rows for the collection window (default: 0.0).
@@ -248,7 +228,6 @@ impl TrackerConfig {
     pub fn new() -> Self {
         Self {
             min_bytes_per_sec: f64::INFINITY,
-            correlation_threshold: 1.5,
             min_rows_for_collection: 10_000,
             collection_fraction: 0.0,
             max_rows_for_collection: 0,
@@ -257,11 +236,6 @@ impl TrackerConfig {
 
     pub fn with_min_bytes_per_sec(mut self, v: f64) -> Self {
         self.min_bytes_per_sec = v;
-        self
-    }
-
-    pub fn with_correlation_threshold(mut self, v: f64) -> Self {
-        self.correlation_threshold = v;
         self
     }
 
@@ -393,17 +367,6 @@ impl SelectivityTracker {
         }
     }
 
-    /// Set the lift ratio above which two filters are considered correlated.
-    pub(crate) fn with_correlation_threshold(self, v: f64) -> Self {
-        Self {
-            config: TrackerConfig {
-                correlation_threshold: v,
-                ..self.config
-            },
-            ..self
-        }
-    }
-
     /// Set the floor for the collection / re-evaluation window.
     pub(crate) fn with_min_rows_for_collection(self, v: u64) -> Self {
         Self {
@@ -445,8 +408,6 @@ struct SelectivityTrackerInner {
     stats: HashMap<FilterId, SelectivityStats>,
     /// Per-filter lifecycle state
     filter_states: HashMap<FilterId, FilterState>,
-    /// Pairwise correlation statistics between filter pairs
-    correlations: HashMap<PairKey, CorrelationStats>,
     /// Snapshot generation for each filter (for detecting dynamic filter updates)
     snapshot_generations: HashMap<FilterId, u64>,
     /// Incrementing counter for partition_filters calls (for log context).
@@ -460,7 +421,6 @@ impl SelectivityTrackerInner {
         Self {
             stats: HashMap::new(),
             filter_states: HashMap::new(),
-            correlations: HashMap::new(),
             snapshot_generations: HashMap::new(),
             partition_call_count: 0,
             resolved_min_rows: None,
@@ -513,7 +473,6 @@ impl SelectivityTrackerInner {
                 );
                 self.stats.remove(&id);
                 self.snapshot_generations.insert(id, generation);
-                self.correlations.retain(|pk, _| pk.0 != id && pk.1 != id);
             }
             None => {
                 self.snapshot_generations.insert(id, generation);
@@ -561,7 +520,7 @@ impl SelectivityTrackerInner {
             .update(matched, total, eval_nanos, batch_bytes);
     }
 
-    /// Partition filters using correlation-based deduplication.
+    /// Partition filters into collecting / promoted / post-scan buckets.
     fn partition_filters(
         &mut self,
         filters: Vec<(FilterId, Arc<dyn PhysicalExpr>)>,
@@ -670,49 +629,6 @@ impl SelectivityTrackerInner {
             }
             PromotionStrategy::Disabled => unreachable!(),
         }
-
-        // Deduplicate correlated filters among promoted only
-        let groups = self.group_by_correlation_id(&promoted, config);
-
-        let mut deduped_promoted: Vec<(FilterId, Arc<dyn PhysicalExpr>)> = Vec::new();
-        for indices in groups {
-            if indices.len() == 1 {
-                deduped_promoted.push(promoted[indices[0]].clone());
-            } else {
-                let best_idx = indices
-                    .iter()
-                    .copied()
-                    .max_by(|&a, &b| {
-                        let eff_a =
-                            self.get_effectiveness_by_id(promoted[a].0).unwrap_or(0.0);
-                        let eff_b =
-                            self.get_effectiveness_by_id(promoted[b].0).unwrap_or(0.0);
-                        eff_a
-                            .partial_cmp(&eff_b)
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    })
-                    .unwrap();
-                for &i in &indices {
-                    if i == best_idx {
-                        deduped_promoted.push(promoted[i].clone());
-                    } else {
-                        let (id, ref expr) = promoted[i];
-                        if expr
-                            .as_any()
-                            .downcast_ref::<OptionalFilterPhysicalExpr>()
-                            .is_none()
-                        {
-                            self.filter_states.insert(id, FilterState::Demoted);
-                            post_scan.push(promoted[i].clone());
-                        } else {
-                            self.stats.remove(&id);
-                            self.filter_states.insert(id, FilterState::Dropped);
-                        }
-                    }
-                }
-            }
-        }
-        let promoted = deduped_promoted;
 
         // Sort promoted by effectiveness descending
         let mut promoted = promoted;
@@ -845,99 +761,6 @@ impl SelectivityTrackerInner {
         }
     }
 
-    /// Compute the correlation ratio for two filters by ID.
-    fn correlation_ratio_by_id(
-        &self,
-        a: FilterId,
-        b: FilterId,
-        config: &TrackerConfig,
-    ) -> Option<f64> {
-        let stats_a = self.stats.get(&a)?;
-        let stats_b = self.stats.get(&b)?;
-
-        let min_rows = self.effective_min_rows(config);
-        if stats_a.rows_total < min_rows || stats_b.rows_total < min_rows {
-            return None;
-        }
-
-        let pair_key = PairKey::new(a, b);
-        let pair_stats = self.correlations.get(&pair_key)?;
-
-        if pair_stats.rows_total < min_rows {
-            return None;
-        }
-
-        let p_a = stats_a.rows_matched as f64 / stats_a.rows_total as f64;
-        let p_b = stats_b.rows_matched as f64 / stats_b.rows_total as f64;
-
-        let p_a_times_p_b = p_a * p_b;
-        if p_a_times_p_b < 1e-10 {
-            return None;
-        }
-
-        let p_ab = pair_stats.rows_both_passed as f64 / pair_stats.rows_total as f64;
-
-        Some(p_ab / p_a_times_p_b)
-    }
-
-    /// Group effective filters by correlation using union-find.
-    fn group_by_correlation_id(
-        &self,
-        filters: &[(FilterId, Arc<dyn PhysicalExpr>)],
-        config: &TrackerConfig,
-    ) -> Vec<Vec<usize>> {
-        let n = filters.len();
-        if n <= 1 {
-            return (0..n).map(|i| vec![i]).collect();
-        }
-
-        let mut parent: Vec<usize> = (0..n).collect();
-        let mut rank: Vec<usize> = vec![0; n];
-
-        for i in 0..n {
-            for j in (i + 1)..n {
-                if let Some(ratio) =
-                    self.correlation_ratio_by_id(filters[i].0, filters[j].0, config)
-                    && ratio > config.correlation_threshold
-                {
-                    union(&mut parent, &mut rank, i, j);
-                }
-            }
-        }
-
-        let mut components: HashMap<usize, Vec<usize>> = HashMap::new();
-        for i in 0..n {
-            let root = find(&mut parent, i);
-            components.entry(root).or_default().push(i);
-        }
-
-        components.into_values().collect()
-    }
-}
-
-/// Union-find: find with path compression
-fn find(parent: &mut [usize], i: usize) -> usize {
-    if parent[i] != i {
-        parent[i] = find(parent, parent[i]);
-    }
-    parent[i]
-}
-
-/// Union-find: union by rank
-fn union(parent: &mut [usize], rank: &mut [usize], a: usize, b: usize) {
-    let root_a = find(parent, a);
-    let root_b = find(parent, b);
-    if root_a == root_b {
-        return;
-    }
-    match rank[root_a].cmp(&rank[root_b]) {
-        std::cmp::Ordering::Less => parent[root_a] = root_b,
-        std::cmp::Ordering::Greater => parent[root_b] = root_a,
-        std::cmp::Ordering::Equal => {
-            parent[root_b] = root_a;
-            rank[root_a] += 1;
-        }
-    }
 }
 
 #[cfg(test)]
@@ -958,20 +781,6 @@ mod tests {
     }
 
     impl SelectivityTrackerInner {
-        /// Test helper: directly insert correlation stats for a pair of filters.
-        fn update_correlation(
-            &mut self,
-            a: FilterId,
-            b: FilterId,
-            both_passed: u64,
-            total: u64,
-        ) {
-            let pair_key = PairKey::new(a, b);
-            let entry = self.correlations.entry(pair_key).or_default();
-            entry.rows_both_passed += both_passed;
-            entry.rows_total += total;
-        }
-
         /// Test helper: check if a filter is in collecting state (or not yet decided).
         fn needs_collection(&self, id: FilterId) -> bool {
             matches!(
@@ -1128,61 +937,6 @@ mod tests {
 
             assert!(result.promoted.is_empty());
             assert_eq!(result.post_scan.len(), 1);
-        }
-
-        #[test]
-        fn correlated_pair_keeps_best_demotes_other() {
-            let (config, mut inner) = make_tracker(0.0, 100);
-
-            let filter_a = make_filter("a", 5);
-            let filter_b = make_filter("a", 10);
-
-            inner.update(0, 30, 100, 0, 0);
-            inner.update(1, 40, 100, 0, 0);
-            inner.update_correlation(0, 1, 25, 100);
-
-            let result = inner.partition_filters(
-                vec![(0, filter_a.clone()), (1, filter_b.clone())],
-                &config,
-            );
-
-            assert_eq!(result.promoted.len(), 1);
-            assert_eq!(result.post_scan.len(), 1);
-        }
-
-        #[test]
-        fn two_correlated_groups_each_keep_best() {
-            let (config, mut inner) = make_tracker(0.0, 100);
-
-            let filter_a = make_filter("a", 5);
-            let filter_b = make_filter("a", 10);
-            let filter_c = make_filter("c", 1);
-            let filter_d = make_filter("d", 2);
-
-            inner.update(0, 30, 100, 0, 0);
-            inner.update(1, 40, 100, 0, 0);
-            inner.update(2, 20, 100, 0, 0);
-            inner.update(3, 35, 100, 0, 0);
-
-            inner.update_correlation(0, 1, 25, 100);
-            inner.update_correlation(2, 3, 15, 100);
-            inner.update_correlation(0, 2, 6, 100);
-            inner.update_correlation(1, 2, 8, 100);
-            inner.update_correlation(0, 3, 10, 100);
-            inner.update_correlation(1, 3, 14, 100);
-
-            let result = inner.partition_filters(
-                vec![
-                    (0, filter_a.clone()),
-                    (1, filter_b.clone()),
-                    (2, filter_c.clone()),
-                    (3, filter_d.clone()),
-                ],
-                &config,
-            );
-
-            assert_eq!(result.promoted.len(), 2);
-            assert_eq!(result.post_scan.len(), 2);
         }
 
         #[test]
@@ -1456,41 +1210,5 @@ mod tests {
             assert_eq!(result.post_scan.len(), 1);
         }
 
-        #[test]
-        fn three_filters_transitive_correlation_grouping() {
-            let (config, mut inner) = make_tracker(0.0, 100);
-
-            let filter_a = make_filter("a", 5);
-            let filter_b = make_filter("a", 10);
-            let filter_c = make_filter("c", 1);
-
-            inner.update(0, 30, 100, 1_000_000_000, 10_000);
-            inner.update(1, 50, 100, 500_000_000, 10_000);
-            inner.update(2, 40, 100, 1_000_000_000, 10_000);
-
-            inner.update_correlation(0, 1, 28, 100);
-            inner.update_correlation(1, 2, 38, 100);
-            inner.update_correlation(0, 2, 12, 100);
-
-            let result = inner.partition_filters(
-                vec![
-                    (0, filter_a.clone()),
-                    (1, filter_b.clone()),
-                    (2, filter_c.clone()),
-                ],
-                &config,
-            );
-
-            assert_eq!(
-                result.promoted.len(),
-                1,
-                "transitive correlation should group all three, promoting only the best"
-            );
-            assert_eq!(
-                result.post_scan.len(),
-                2,
-                "the other two should be demoted to post-scan"
-            );
-        }
     }
 }

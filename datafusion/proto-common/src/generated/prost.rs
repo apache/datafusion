@@ -874,10 +874,6 @@ pub struct ParquetOptions {
     pub filter_pushdown_min_bytes_per_sec_opt: ::core::option::Option<
         parquet_options::FilterPushdownMinBytesPerSecOpt,
     >,
-    #[prost(oneof = "parquet_options::FilterCorrelationThresholdOpt", tags = "36")]
-    pub filter_correlation_threshold_opt: ::core::option::Option<
-        parquet_options::FilterCorrelationThresholdOpt,
-    >,
     #[prost(
         oneof = "parquet_options::FilterStatisticsCollectionMinRowsOpt",
         tags = "37"
@@ -961,11 +957,6 @@ pub mod parquet_options {
     pub enum FilterPushdownMinBytesPerSecOpt {
         #[prost(double, tag = "35")]
         FilterPushdownMinBytesPerSec(f64),
-    }
-    #[derive(Clone, Copy, PartialEq, ::prost::Oneof)]
-    pub enum FilterCorrelationThresholdOpt {
-        #[prost(double, tag = "36")]
-        FilterCorrelationThreshold(f64),
     }
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum FilterStatisticsCollectionMinRowsOpt {

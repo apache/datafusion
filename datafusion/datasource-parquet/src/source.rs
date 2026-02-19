@@ -341,7 +341,6 @@ impl ParquetSource {
         self.selectivity_tracker = Arc::new(
             crate::selectivity::SelectivityTracker::new()
                 .with_min_bytes_per_sec(opts.filter_pushdown_min_bytes_per_sec)
-                .with_correlation_threshold(opts.filter_correlation_threshold)
                 .with_min_rows_for_collection(opts.filter_statistics_collection_min_rows)
                 .with_collection_fraction(opts.filter_statistics_collection_fraction)
                 .with_max_rows_for_collection(opts.filter_statistics_collection_max_rows),
