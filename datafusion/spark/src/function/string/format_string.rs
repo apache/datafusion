@@ -1775,6 +1775,9 @@ impl ConversionSpecifier {
                 if strip_trailing_0s {
                     number = trim_trailing_0s(&number).to_owned();
                 }
+                if self.grouping_separator {
+                    number = insert_thousands_separator(&number);
+                }
             }
             if self.alt_form && !number.contains('.') {
                 number += ".";
@@ -2035,7 +2038,7 @@ impl ConversionSpecifier {
             _ => 6,
         };
 
-        let number = match self.conversion_type {
+        let mut number = match self.conversion_type {
             ConversionType::DecFloatLower => {
                 // Format as fixed-point decimal
                 self.format_decimal_fixed(&abs_decimal, precision, strip_trailing_0s)?
@@ -2081,6 +2084,10 @@ impl ConversionSpecifier {
                 );
             }
         };
+
+        if self.grouping_separator {
+            number = insert_thousands_separator(&number);
+        }
 
         // Handle padding
         let NumericParam::Literal(width) = self.width else {
@@ -2337,6 +2344,25 @@ impl FloatBits for f64 {
     }
 }
 
+/// Inserts thousands separators (`,`) into the integer part of a numeric string.
+/// For example, `"1234567.89"` becomes `"1,234,567.89"`.
+fn insert_thousands_separator(number: &str) -> String {
+    let (int_part, frac_part) = match number.find('.') {
+        Some(pos) => (&number[..pos], &number[pos..]),
+        None => (number, ""),
+    };
+    let mut result = String::new();
+    let chars: Vec<char> = int_part.chars().collect();
+    for (i, c) in chars.iter().enumerate() {
+        if i > 0 && (chars.len() - i).is_multiple_of(3) {
+            result.push(',');
+        }
+        result.push(*c);
+    }
+    result.push_str(frac_part);
+    result
+}
+
 fn trim_trailing_0s(number: &str) -> &str {
     if number.contains('.') {
         for (i, c) in number.chars().rev().enumerate() {
@@ -2360,6 +2386,8 @@ fn trim_trailing_0s_hex(number: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::function::utils::test::test_scalar_function;
+    use arrow::array::StringArray;
     use arrow::datatypes::DataType::Utf8;
     use datafusion_common::Result;
 
@@ -2389,6 +2417,53 @@ mod tests {
             "format_string(fmt, ...) should NOT be nullable when fmt is NOT nullable"
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_insert_thousands_separator() {
+        assert_eq!(insert_thousands_separator("1234567.89"), "1,234,567.89");
+        assert_eq!(insert_thousands_separator("123.45"), "123.45");
+        assert_eq!(insert_thousands_separator("1234"), "1,234");
+        assert_eq!(insert_thousands_separator("12"), "12");
+        assert_eq!(insert_thousands_separator("0.5"), "0.5");
+        assert_eq!(
+            insert_thousands_separator("1234567890.1234"),
+            "1,234,567,890.1234"
+        );
+        assert_eq!(insert_thousands_separator("1000"), "1,000");
+        assert_eq!(insert_thousands_separator("100"), "100");
+    }
+
+    #[test]
+    fn test_grouping_separator_float() -> Result<()> {
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%,.2f".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(1234567.89))),
+            ],
+            Ok(Some("1,234,567.89")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_grouping_separator_decimal() -> Result<()> {
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%,.2f".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Decimal128(Some(123456789), 10, 2)),
+            ],
+            Ok(Some("1,234,567.89")),
+            &str,
+            Utf8,
+            StringArray
+        );
         Ok(())
     }
 }
