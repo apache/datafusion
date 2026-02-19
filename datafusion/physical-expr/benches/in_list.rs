@@ -51,7 +51,9 @@ fn random_string(rng: &mut StdRng, len: usize) -> String {
 }
 
 const IN_LIST_LENGTHS: [usize; 4] = [3, 8, 28, 100];
+const DYNAMIC_LIST_LENGTHS: [usize; 3] = [3, 8, 28];
 const NULL_PERCENTS: [f64; 2] = [0., 0.2];
+const MATCH_PERCENTS: [f64; 3] = [0.0, 0.5, 1.0];
 const STRING_LENGTHS: [usize; 3] = [3, 12, 100];
 const ARRAY_LENGTH: usize = 8192;
 
@@ -227,7 +229,6 @@ fn do_bench_dynamic(
     name: &str,
     values: ArrayRef,
     list_cols: &[ArrayRef],
-    _match_percent: f64,
 ) {
     let mut fields = vec![Field::new("a", values.data_type().clone(), true)];
     let mut columns: Vec<ArrayRef> = vec![values];
@@ -262,9 +263,9 @@ fn do_bench_dynamic(
 fn bench_dynamic_int32(c: &mut Criterion) {
     let mut rng = StdRng::seed_from_u64(42);
 
-    for list_size in [3, 8, 28] {
-        for match_percent in [0.0, 0.5, 1.0] {
-            for null_percent in [0.0, 0.2] {
+    for list_size in DYNAMIC_LIST_LENGTHS {
+        for match_percent in MATCH_PERCENTS {
+            for null_percent in NULL_PERCENTS {
                 // Generate the "needle" column
                 let values: Int32Array = (0..ARRAY_LENGTH)
                     .map(|_| {
@@ -309,7 +310,6 @@ fn bench_dynamic_int32(c: &mut Criterion) {
                     ),
                     Arc::new(values),
                     &list_cols,
-                    match_percent,
                 );
             }
         }
@@ -320,8 +320,8 @@ fn bench_dynamic_int32(c: &mut Criterion) {
 fn bench_dynamic_utf8(c: &mut Criterion) {
     let mut rng = StdRng::seed_from_u64(99);
 
-    for list_size in [3, 8, 28] {
-        for match_percent in [0.0, 0.5, 1.0] {
+    for list_size in DYNAMIC_LIST_LENGTHS {
+        for match_percent in MATCH_PERCENTS {
             // Generate the "needle" column
             let value_strings: Vec<Option<String>> = (0..ARRAY_LENGTH)
                 .map(|_| rng.random_bool(0.8).then(|| random_string(&mut rng, 12)))
@@ -355,7 +355,6 @@ fn bench_dynamic_utf8(c: &mut Criterion) {
                 ),
                 Arc::new(values),
                 &list_cols,
-                match_percent,
             );
         }
     }
