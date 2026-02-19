@@ -90,7 +90,7 @@ use crate::window_state::WindowAggState;
 /// For more background, please also see the [User defined Window Functions in DataFusion blog]
 ///
 /// [User defined Window Functions in DataFusion blog]: https://datafusion.apache.org/blog/2025/04/19/user-defined-window-functions
-pub trait PartitionEvaluator: Debug + Send {
+pub trait PartitionEvaluator: Debug + Send + std::any::Any {
     /// When the window frame has a fixed beginning (e.g UNBOUNDED
     /// PRECEDING), some functions such as FIRST_VALUE, LAST_VALUE and
     /// NTH_VALUE do not need the (unbounded) input once they have

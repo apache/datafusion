@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
 use std::ffi::c_void;
 use std::ops::Deref;
 use std::ptr::null_mut;
@@ -204,9 +205,12 @@ unsafe extern "C" fn release_fn_wrapper(accumulator: &mut FFI_Accumulator) {
 
 impl From<Box<dyn Accumulator>> for FFI_Accumulator {
     fn from(accumulator: Box<dyn Accumulator>) -> Self {
-        // if let Some(accumulator) = accumulator.into_any().downcast::<ForeignAccumulator>() {
-        //     return accumulator.accumulator;
-        // }
+        if (accumulator.as_ref() as &dyn Any).is::<ForeignAccumulator>() {
+            let accumulator = (accumulator as Box<dyn Any>)
+                .downcast::<ForeignAccumulator>()
+                .expect("already checked type");
+            return accumulator.accumulator;
+        }
 
         let supports_retract_batch = accumulator.supports_retract_batch();
         let private_data = AccumulatorPrivateData { accumulator };

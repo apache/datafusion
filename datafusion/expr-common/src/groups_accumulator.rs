@@ -108,7 +108,7 @@ impl EmitTo {
 ///
 /// [`Accumulator`]: crate::accumulator::Accumulator
 /// [Aggregating Millions of Groups Fast blog]: https://arrow.apache.org/blog/2023/08/05/datafusion_fast_grouping/
-pub trait GroupsAccumulator: Send {
+pub trait GroupsAccumulator: Send + std::any::Any {
     /// Updates the accumulator's state from its arguments, encoded as
     /// a vector of [`ArrayRef`]s.
     ///
