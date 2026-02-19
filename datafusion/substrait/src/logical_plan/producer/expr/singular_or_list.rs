@@ -15,12 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::logical_plan::producer::SubstraitProducer;
+use crate::logical_plan::producer::{SubstraitProducer, negate_if_needed};
 use datafusion::common::DFSchemaRef;
 use datafusion::logical_expr::expr::InList;
-use substrait::proto::expression::{RexType, ScalarFunction, SingularOrList};
-use substrait::proto::function_argument::ArgType;
-use substrait::proto::{Expression, FunctionArgument};
+use substrait::proto::Expression;
+use substrait::proto::expression::{RexType, SingularOrList};
 
 pub fn from_in_list(
     producer: &mut impl SubstraitProducer,
@@ -45,22 +44,5 @@ pub fn from_in_list(
         }))),
     };
 
-    if *negated {
-        let function_anchor = producer.register_function("not".to_string());
-
-        #[expect(deprecated)]
-        Ok(Expression {
-            rex_type: Some(RexType::ScalarFunction(ScalarFunction {
-                function_reference: function_anchor,
-                arguments: vec![FunctionArgument {
-                    arg_type: Some(ArgType::Value(substrait_or_list)),
-                }],
-                output_type: None,
-                args: vec![],
-                options: vec![],
-            })),
-        })
-    } else {
-        Ok(substrait_or_list)
-    }
+    Ok(negate_if_needed(producer, substrait_or_list, *negated))
 }
