@@ -41,7 +41,7 @@ use crate::{
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{Constraint, Constraints, HashMap, Result, plan_err};
+use datafusion_common::{Constraint, Constraints, HashMap, Result};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_physical_expr_common::sort_expr::options_compatible;
@@ -1263,56 +1263,36 @@ impl EquivalenceProperties {
     /// Transforms this `EquivalenceProperties` by mapping columns in the
     /// original schema to columns in the new schema by index.
     pub fn with_new_schema(mut self, schema: SchemaRef) -> Result<Self> {
-        // The new schema and the original schema is aligned when they have the
-        // same number of columns, and fields at the same index have the same
-        // type in both schemas.
-        let schemas_aligned = (self.schema.fields.len() == schema.fields.len())
-            && self
-                .schema
-                .fields
-                .iter()
-                .zip(schema.fields.iter())
-                .all(|(lhs, rhs)| lhs.data_type().eq(rhs.data_type()));
-        if !schemas_aligned {
-            // Rewriting equivalence properties in terms of new schema is not
-            // safe when schemas are not aligned:
-            return plan_err!(
-                "Schemas have to be aligned to rewrite equivalences:\n Old schema: {}\n New schema: {}",
-                self.schema,
-                schema
-            );
-        }
-
-        // Rewrite equivalence classes according to the new schema:
         let mut eq_classes = vec![];
         for mut eq_class in self.eq_group {
-            // Rewrite the expressions in the equivalence class:
-            eq_class.exprs = eq_class
-                .exprs
-                .into_iter()
-                .map(|expr| with_new_schema(expr, &schema))
-                .collect::<Result<_>>()?;
-            // Rewrite the constant value (if available and known):
-            let data_type = eq_class
-                .canonical_expr()
-                .map(|e| e.data_type(&schema))
-                .transpose()?;
-            if let (Some(data_type), Some(AcrossPartitions::Uniform(Some(value)))) =
-                (data_type, &mut eq_class.constant)
-            {
-                *value = value.cast_to(&data_type)?;
+            let mut new_exprs = vec![];
+            for expr in eq_class.exprs {
+                // Keep the expression if it still exists in the new schema
+                if let Ok(new_expr) = with_new_schema(expr, &schema) {
+                    new_exprs.push(new_expr);
+                }
             }
-            eq_classes.push(eq_class);
+
+            // Keep the class if it has more than one expression or is a constant
+            if new_exprs.len() > 1 || (new_exprs.len() == 1 && eq_class.constant.is_some()) {
+                eq_class.exprs = new_exprs.into_iter().collect();
+
+                // Update the constant value type if needed
+                if let Ok(Some(data_type)) = eq_class.canonical_expr().map(|e| e.data_type(&schema)).transpose() {
+                    if let Some(AcrossPartitions::Uniform(Some(value))) = &mut eq_class.constant {
+                        *value = value.cast_to(&data_type)?;
+                    }
+                }
+                eq_classes.push(eq_class);
+            }
         }
         self.eq_group = eq_classes.into();
 
-        // Rewrite orderings according to new schema:
+        // Update the orderings
         self.oeq_class = self.oeq_class.with_new_schema(&schema)?;
         self.oeq_cache.normal_cls = self.oeq_cache.normal_cls.with_new_schema(&schema)?;
 
-        // Update the schema:
         self.schema = schema;
-
         Ok(self)
     }
 }

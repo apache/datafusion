@@ -68,6 +68,7 @@ pub mod dml {
 pub mod planner;
 pub mod registry;
 pub mod simplify;
+pub mod sort_options;
 pub mod sort_properties {
     pub use datafusion_expr_common::sort_properties::*;
 }
@@ -128,6 +129,7 @@ pub use udaf::{
 pub use udf::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl};
 pub use udwf::{LimitEffect, ReversedUDWF, WindowUDF, WindowUDFImpl};
 pub use window_frame::{WindowFrame, WindowFrameBound, WindowFrameUnits};
+pub use sort_options::SortOptions;
 
 #[cfg(test)]
 #[ctor::ctor]
