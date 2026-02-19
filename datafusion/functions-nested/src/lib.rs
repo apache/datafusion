@@ -118,6 +118,7 @@ pub mod expr_fn {
     pub use super::set_ops::array_distinct;
     pub use super::set_ops::array_intersect;
     pub use super::set_ops::array_union;
+    pub use super::set_ops::arrays_zip;
     pub use super::sort::array_sort;
     pub use super::string::array_to_string;
     pub use super::string::string_to_array;
@@ -159,6 +160,7 @@ pub fn all_default_nested_functions() -> Vec<Arc<ScalarUDF>> {
         set_ops::array_distinct_udf(),
         set_ops::array_intersect_udf(),
         set_ops::array_union_udf(),
+        set_ops::arrays_zip_udf(),
         position::array_position_udf(),
         position::array_positions_udf(),
         remove::array_remove_udf(),
