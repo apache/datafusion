@@ -17,8 +17,8 @@
 
 //! Adaptive filter selectivity tracking for Parquet row filters.
 //!
-//! See [`SelectivityTracker`] for the main entry point, [`FilterState`] for the
-//! per-filter lifecycle, [`PartitionedFilters`] for the output consumed by
+//! See [`SelectivityTracker`] for the main entry point, `FilterState` for the
+//! per-filter lifecycle, `PartitionedFilters` for the output consumed by
 //! `ParquetOpener::open`, and [`FilterId`] for stable filter identification.
 
 use std::collections::HashMap;
