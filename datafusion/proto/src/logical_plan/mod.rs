@@ -104,7 +104,7 @@ pub trait AsLogicalPlan: Debug + Send + Sync + Clone {
         Self: Sized;
 }
 
-pub trait LogicalExtensionCodec: Debug + Send + Sync {
+pub trait LogicalExtensionCodec: Debug + Send + Sync + std::any::Any {
     fn try_decode(
         &self,
         buf: &[u8],
