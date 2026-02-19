@@ -32,7 +32,9 @@ use crate::variation_const::{
     TIMESTAMP_SECOND_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
     VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
-use crate::variation_const::{FLOAT_16_TYPE_NAME, NULL_TYPE_NAME};
+use crate::variation_const::{
+    FIXED_SIZE_LIST_TYPE_NAME, FLOAT_16_TYPE_NAME, NULL_TYPE_NAME,
+};
 use datafusion::arrow::datatypes::{
     DataType, Field, Fields, IntervalUnit, Schema, TimeUnit,
 };
@@ -257,6 +259,36 @@ pub fn from_substrait_type(
                         }
                         FLOAT_16_TYPE_NAME => Ok(DataType::Float16),
                         NULL_TYPE_NAME => Ok(DataType::Null),
+                        FIXED_SIZE_LIST_TYPE_NAME => {
+                            if u.type_parameters.len() != 2 {
+                                return substrait_err!(
+                                    "FixedSizeList requires 2 type parameters, got {}",
+                                    u.type_parameters.len()
+                                );
+                            }
+                            let inner_type = match &u.type_parameters[0].parameter {
+                                Some(r#type::parameter::Parameter::DataType(t)) => {
+                                    from_substrait_type(consumer, t, dfs_names, name_idx)?
+                                }
+                                _ => {
+                                    return substrait_err!(
+                                        "Invalid inner type for FixedSizeList"
+                                    );
+                                }
+                            };
+                            let size = match &u.type_parameters[1].parameter {
+                                Some(r#type::parameter::Parameter::Integer(i)) => {
+                                    *i as i32
+                                }
+                                _ => {
+                                    return substrait_err!(
+                                        "Invalid size for FixedSizeList"
+                                    );
+                                }
+                            };
+                            let field = Arc::new(Field::new_list_field(inner_type, true));
+                            Ok(DataType::FixedSizeList(field, size))
+                        }
                         _ => not_impl_err!(
                             "Unsupported Substrait user defined type with ref {} and variation {}",
                             u.type_reference,
