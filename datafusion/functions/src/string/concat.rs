@@ -88,19 +88,18 @@ impl ScalarUDFImpl for ConcatFunc {
         &self.signature
     }
 
+    /// Match the return type to the input types to avoid unnecessary casts. On
+    /// mixed inputs, prefer Utf8View; prefer LargeUtf8 over Utf8 to avoid
+    /// potential overflow on LargeUtf8 input.
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         use DataType::*;
-        let mut dt = &Utf8;
-        arg_types.iter().for_each(|data_type| {
-            if data_type == &Utf8View {
-                dt = data_type;
-            }
-            if data_type == &LargeUtf8 && dt != &Utf8View {
-                dt = data_type;
-            }
-        });
-
-        Ok(dt.to_owned())
+        if arg_types.contains(&Utf8View) {
+            Ok(Utf8View)
+        } else if arg_types.contains(&LargeUtf8) {
+            Ok(LargeUtf8)
+        } else {
+            Ok(Utf8)
+        }
     }
 
     /// Concatenates the text representations of all the arguments. NULL arguments are ignored.
@@ -108,17 +107,14 @@ impl ScalarUDFImpl for ConcatFunc {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
 
-        let mut return_datatype = DataType::Utf8;
-        args.iter().for_each(|col| {
-            if col.data_type() == DataType::Utf8View {
-                return_datatype = col.data_type();
-            }
-            if col.data_type() == DataType::LargeUtf8
-                && return_datatype != DataType::Utf8View
-            {
-                return_datatype = col.data_type();
-            }
-        });
+        let return_datatype = if args.iter().any(|c| c.data_type() == DataType::Utf8View)
+        {
+            DataType::Utf8View
+        } else if args.iter().any(|c| c.data_type() == DataType::LargeUtf8) {
+            DataType::LargeUtf8
+        } else {
+            DataType::Utf8
+        };
 
         let array_len = args.iter().find_map(|x| match x {
             ColumnarValue::Array(array) => Some(array.len()),
@@ -247,7 +243,7 @@ impl ScalarUDFImpl for ConcatFunc {
                     builder.append_offset();
                 }
 
-                let string_array = builder.finish();
+                let string_array = builder.finish(None);
                 Ok(ColumnarValue::Array(Arc::new(string_array)))
             }
             DataType::LargeUtf8 => {

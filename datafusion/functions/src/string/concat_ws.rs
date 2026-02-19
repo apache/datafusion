@@ -24,7 +24,9 @@ use arrow::datatypes::DataType;
 use crate::string::concat;
 use crate::string::concat::simplify_concat;
 use crate::string::concat_ws;
-use crate::strings::{ColumnarValueRef, StringArrayBuilder};
+use crate::strings::{
+    ColumnarValueRef, LargeStringArrayBuilder, StringArrayBuilder, StringViewArrayBuilder,
+};
 use datafusion_common::cast::{
     as_large_string_array, as_string_array, as_string_view_array,
 };
@@ -97,12 +99,23 @@ impl ScalarUDFImpl for ConcatWsFunc {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+    /// Match the return type to the input types to avoid unnecessary casts. On
+    /// mixed inputs, prefer Utf8View; prefer LargeUtf8 over Utf8 to avoid
+    /// potential overflow on LargeUtf8 input.
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         use DataType::*;
-        Ok(Utf8)
+        if arg_types.contains(&Utf8View) {
+            Ok(Utf8View)
+        } else if arg_types.contains(&LargeUtf8) {
+            Ok(LargeUtf8)
+        } else {
+            Ok(Utf8)
+        }
     }
 
-    /// Concatenates all but the first argument, with separators. The first argument is used as the separator string, and should not be NULL. Other NULL arguments are ignored.
+    /// Concatenates all but the first argument, with separators. The first
+    /// argument is used as the separator string, and should not be NULL. Other
+    /// NULL arguments are ignored.
     /// concat_ws(',', 'abcde', 2, NULL, 22) = 'abcde,2,22'
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
@@ -113,6 +126,15 @@ impl ScalarUDFImpl for ConcatWsFunc {
                 args.len()
             );
         }
+
+        let return_datatype = if args.iter().any(|c| c.data_type() == DataType::Utf8View)
+        {
+            DataType::Utf8View
+        } else if args.iter().any(|c| c.data_type() == DataType::LargeUtf8) {
+            DataType::LargeUtf8
+        } else {
+            DataType::Utf8
+        };
 
         let array_len = args.iter().find_map(|x| match x {
             ColumnarValue::Array(array) => Some(array.len()),
@@ -149,7 +171,15 @@ impl ScalarUDFImpl for ConcatWsFunc {
             }
             let result = values.join(sep);
 
-            return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(result))));
+            return match return_datatype {
+                DataType::Utf8View => {
+                    Ok(ColumnarValue::Scalar(ScalarValue::Utf8View(Some(result))))
+                }
+                DataType::LargeUtf8 => {
+                    Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(result))))
+                }
+                _ => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(result)))),
+            };
         }
 
         // Array
@@ -268,28 +298,71 @@ impl ScalarUDFImpl for ConcatWsFunc {
             }
         }
 
-        let mut builder = StringArrayBuilder::with_capacity(len, data_size);
-        for i in 0..len {
-            if !sep.is_valid(i) {
-                builder.append_offset();
-                continue;
-            }
-
-            let mut first = true;
-            for column in &columns {
-                if column.is_valid(i) {
-                    if !first {
-                        builder.write::<false>(&sep, i);
+        match return_datatype {
+            DataType::Utf8View => {
+                let mut builder = StringViewArrayBuilder::with_capacity(len, data_size);
+                for i in 0..len {
+                    if !sep.is_valid(i) {
+                        builder.append_offset();
+                        continue;
                     }
-                    builder.write::<false>(column, i);
-                    first = false;
+                    let mut first = true;
+                    for column in &columns {
+                        if column.is_valid(i) {
+                            if !first {
+                                builder.write::<false>(&sep, i);
+                            }
+                            builder.write::<false>(column, i);
+                            first = false;
+                        }
+                    }
+                    builder.append_offset();
                 }
+                Ok(ColumnarValue::Array(Arc::new(builder.finish(sep.nulls()))))
             }
-
-            builder.append_offset();
+            DataType::LargeUtf8 => {
+                let mut builder = LargeStringArrayBuilder::with_capacity(len, data_size);
+                for i in 0..len {
+                    if !sep.is_valid(i) {
+                        builder.append_offset();
+                        continue;
+                    }
+                    let mut first = true;
+                    for column in &columns {
+                        if column.is_valid(i) {
+                            if !first {
+                                builder.write::<false>(&sep, i);
+                            }
+                            builder.write::<false>(column, i);
+                            first = false;
+                        }
+                    }
+                    builder.append_offset();
+                }
+                Ok(ColumnarValue::Array(Arc::new(builder.finish(sep.nulls()))))
+            }
+            _ => {
+                let mut builder = StringArrayBuilder::with_capacity(len, data_size);
+                for i in 0..len {
+                    if !sep.is_valid(i) {
+                        builder.append_offset();
+                        continue;
+                    }
+                    let mut first = true;
+                    for column in &columns {
+                        if column.is_valid(i) {
+                            if !first {
+                                builder.write::<false>(&sep, i);
+                            }
+                            builder.write::<false>(column, i);
+                            first = false;
+                        }
+                    }
+                    builder.append_offset();
+                }
+                Ok(ColumnarValue::Array(Arc::new(builder.finish(sep.nulls()))))
+            }
         }
-
-        Ok(ColumnarValue::Array(Arc::new(builder.finish(sep.nulls()))))
     }
 
     /// Simply the `concat_ws` function by
@@ -314,6 +387,21 @@ impl ScalarUDFImpl for ConcatWsFunc {
 }
 
 fn simplify_concat_ws(delimiter: &Expr, args: &[Expr]) -> Result<ExprSimplifyResult> {
+    // Preserve the delimiter's string type for any new literals produced
+    // during simplification.
+    let delimiter_type = match delimiter {
+        Expr::Literal(v, _) => v.data_type(),
+        _ => DataType::Utf8,
+    };
+
+    let typed_lit = |s: String| -> Expr {
+        match delimiter_type {
+            DataType::LargeUtf8 => lit(ScalarValue::LargeUtf8(Some(s))),
+            DataType::Utf8View => lit(ScalarValue::Utf8View(Some(s))),
+            _ => lit(s),
+        }
+    };
+
     match delimiter {
         Expr::Literal(
             ScalarValue::Utf8(delimiter)
@@ -322,8 +410,8 @@ fn simplify_concat_ws(delimiter: &Expr, args: &[Expr]) -> Result<ExprSimplifyRes
             _,
         ) => {
             match delimiter {
-                // when the delimiter is an empty string,
-                // we can use `concat` to replace `concat_ws`
+                // When the delimiter is the empty string, replace `concat_ws`
+                // with `concat`
                 Some(delimiter) if delimiter.is_empty() => {
                     match simplify_concat(args.to_vec())? {
                         ExprSimplifyResult::Original(_) => {
@@ -339,7 +427,7 @@ fn simplify_concat_ws(delimiter: &Expr, args: &[Expr]) -> Result<ExprSimplifyRes
                 }
                 Some(delimiter) => {
                     let mut new_args = Vec::with_capacity(args.len());
-                    new_args.push(lit(delimiter));
+                    new_args.push(typed_lit(delimiter.to_string()));
                     let mut contiguous_scalar = None;
                     for arg in args {
                         match arg {
@@ -373,7 +461,7 @@ fn simplify_concat_ws(delimiter: &Expr, args: &[Expr]) -> Result<ExprSimplifyRes
                             // Then pushing this arg to the `new_args`.
                             arg => {
                                 if let Some(val) = contiguous_scalar {
-                                    new_args.push(lit(val));
+                                    new_args.push(typed_lit(val));
                                 }
                                 new_args.push(arg.clone());
                                 contiguous_scalar = None;
@@ -381,7 +469,7 @@ fn simplify_concat_ws(delimiter: &Expr, args: &[Expr]) -> Result<ExprSimplifyRes
                         }
                     }
                     if let Some(val) = contiguous_scalar {
-                        new_args.push(lit(val));
+                        new_args.push(typed_lit(val));
                     }
 
                     Ok(ExprSimplifyResult::Simplified(Expr::ScalarFunction(
@@ -391,7 +479,7 @@ fn simplify_concat_ws(delimiter: &Expr, args: &[Expr]) -> Result<ExprSimplifyRes
                         },
                     )))
                 }
-                // if the delimiter is null, then the value of the whole expression is null.
+                // If the delimiter is null, then the value of the whole expression is null.
                 None => Ok(ExprSimplifyResult::Simplified(Expr::Literal(
                     ScalarValue::Utf8(None),
                     None,
@@ -425,8 +513,8 @@ mod tests {
     use std::sync::Arc;
 
     use crate::string::concat_ws::ConcatWsFunc;
-    use arrow::array::{Array, ArrayRef, StringArray};
-    use arrow::datatypes::DataType::Utf8;
+    use arrow::array::{Array, ArrayRef, LargeStringArray, StringArray, StringViewArray};
+    use arrow::datatypes::DataType::{LargeUtf8, Utf8, Utf8View};
     use arrow::datatypes::Field;
     use datafusion_common::Result;
     use datafusion_common::ScalarValue;
@@ -579,7 +667,7 @@ mod tests {
         ])));
 
         let arg_fields = vec![
-            Field::new("a", Utf8, true).into(),
+            Field::new("a", Utf8View, true).into(),
             Field::new("a", Utf8, true).into(),
             Field::new("a", Utf8, true).into(),
         ];
@@ -587,13 +675,13 @@ mod tests {
             args: vec![c0, c1, c2],
             arg_fields,
             number_rows: 3,
-            return_field: Field::new("f", Utf8, true).into(),
+            return_field: Field::new("f", Utf8View, true).into(),
             config_options: Arc::new(ConfigOptions::default()),
         };
 
         let result = ConcatWsFunc::new().invoke_with_args(args)?;
         let expected =
-            Arc::new(StringArray::from(vec!["foo,x", "bar", "baz,z"])) as ArrayRef;
+            Arc::new(StringViewArray::from(vec!["foo,x", "bar", "baz,z"])) as ArrayRef;
         match &result {
             ColumnarValue::Array(array) => {
                 assert_eq!(&expected, array);
@@ -616,7 +704,7 @@ mod tests {
         ])));
 
         let arg_fields = vec![
-            Field::new("a", Utf8, true).into(),
+            Field::new("a", LargeUtf8, true).into(),
             Field::new("a", Utf8, true).into(),
             Field::new("a", Utf8, true).into(),
         ];
@@ -624,13 +712,96 @@ mod tests {
             args: vec![c0, c1, c2],
             arg_fields,
             number_rows: 3,
-            return_field: Field::new("f", Utf8, true).into(),
+            return_field: Field::new("f", LargeUtf8, true).into(),
             config_options: Arc::new(ConfigOptions::default()),
         };
 
         let result = ConcatWsFunc::new().invoke_with_args(args)?;
         let expected =
-            Arc::new(StringArray::from(vec!["foo,x", "bar", "baz,z"])) as ArrayRef;
+            Arc::new(LargeStringArray::from(vec!["foo,x", "bar", "baz,z"])) as ArrayRef;
+        match &result {
+            ColumnarValue::Array(array) => {
+                assert_eq!(&expected, array);
+            }
+            _ => panic!("Expected array result"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn concat_ws_utf8view_nullable_separator() -> Result<()> {
+        let c0 = ColumnarValue::Array(Arc::new(StringViewArray::from(vec![
+            Some(","),
+            None,
+            Some("+"),
+        ])));
+        let c1 = ColumnarValue::Array(Arc::new(StringViewArray::from(vec![
+            "foo", "bar", "baz",
+        ])));
+        let c2 = ColumnarValue::Array(Arc::new(StringViewArray::from(vec![
+            Some("x"),
+            Some("y"),
+            Some("z"),
+        ])));
+
+        let arg_fields = vec![
+            Field::new("a", Utf8View, true).into(),
+            Field::new("a", Utf8View, true).into(),
+            Field::new("a", Utf8View, true).into(),
+        ];
+        let args = ScalarFunctionArgs {
+            args: vec![c0, c1, c2],
+            arg_fields,
+            number_rows: 3,
+            return_field: Field::new("f", Utf8View, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+
+        let result = ConcatWsFunc::new().invoke_with_args(args)?;
+        let expected = Arc::new(StringViewArray::from(vec![
+            Some("foo,x"),
+            None,
+            Some("baz+z"),
+        ])) as ArrayRef;
+        match &result {
+            ColumnarValue::Array(array) => {
+                assert_eq!(&expected, array);
+            }
+            _ => panic!("Expected array result"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn concat_ws_largeutf8_arrays() -> Result<()> {
+        let c0 = ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(",".to_string())));
+        let c1 = ColumnarValue::Array(Arc::new(LargeStringArray::from(vec![
+            "foo", "bar", "baz",
+        ])));
+        let c2 = ColumnarValue::Array(Arc::new(LargeStringArray::from(vec![
+            Some("x"),
+            None,
+            Some("z"),
+        ])));
+
+        let arg_fields = vec![
+            Field::new("a", LargeUtf8, true).into(),
+            Field::new("a", LargeUtf8, true).into(),
+            Field::new("a", LargeUtf8, true).into(),
+        ];
+        let args = ScalarFunctionArgs {
+            args: vec![c0, c1, c2],
+            arg_fields,
+            number_rows: 3,
+            return_field: Field::new("f", LargeUtf8, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+
+        let result = ConcatWsFunc::new().invoke_with_args(args)?;
+        let expected =
+            Arc::new(LargeStringArray::from(vec!["foo,x", "bar", "baz,z"])) as ArrayRef;
         match &result {
             ColumnarValue::Array(array) => {
                 assert_eq!(&expected, array);
