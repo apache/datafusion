@@ -1299,6 +1299,11 @@ impl ExecutionPlan for HashJoinExec {
         // Initialize build_accumulator lazily with runtime partition counts (only if enabled)
         // Use RepartitionExec's random state (seeds: 0,0,0,0) for partition routing
         let repartition_random_state = REPARTITION_RANDOM_STATE;
+        let bounds_pushdown_enabled = context
+            .session_config()
+            .options()
+            .optimizer
+            .hash_join_bounds_pushdown;
         let build_accumulator = enable_dynamic_filter_pushdown
             .then(|| {
                 self.dynamic_filter.as_ref().map(|df| {
@@ -1316,6 +1321,7 @@ impl ExecutionPlan for HashJoinExec {
                             filter,
                             on_right,
                             repartition_random_state,
+                            bounds_pushdown_enabled,
                         ))
                     })))
                 })
@@ -1961,7 +1967,8 @@ async fn collect_left_input(
         PushdownStrategy::Empty
     } else {
         // If the build side is small enough we can use IN list pushdown.
-        // If it's too big we fall back to pushing down a reference to the hash table.
+        // If it's too big we fall back to pushing down a reference to the hash table
+        // (if map pushdown is enabled).
         // See `PushdownStrategy` for more details.
         let estimated_size = left_values
             .iter()
@@ -1975,11 +1982,17 @@ async fn collect_left_input(
                     .optimizer
                     .hash_join_inlist_pushdown_max_distinct_values
         {
-            PushdownStrategy::Map(Arc::clone(&map))
+            if config.optimizer.hash_join_map_pushdown {
+                PushdownStrategy::Map(Arc::clone(&map))
+            } else {
+                PushdownStrategy::Disabled
+            }
         } else if let Some(in_list_values) = build_struct_inlist_values(&left_values)? {
             PushdownStrategy::InList(in_list_values)
-        } else {
+        } else if config.optimizer.hash_join_map_pushdown {
             PushdownStrategy::Map(Arc::clone(&map))
+        } else {
+            PushdownStrategy::Disabled
         }
     };
 
