@@ -150,7 +150,15 @@ impl ScalarUDFImpl for ConcatWsFunc {
                 Some(Some(s)) => s,
                 Some(None) => {
                     // null literal string
-                    return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)));
+                    return match return_datatype {
+                        DataType::Utf8View => {
+                            Ok(ColumnarValue::Scalar(ScalarValue::Utf8View(None)))
+                        }
+                        DataType::LargeUtf8 => {
+                            Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(None)))
+                        }
+                        _ => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None))),
+                    };
                 }
                 None => return internal_err!("Expected string literal, got {scalar:?}"),
             };
@@ -194,7 +202,15 @@ impl ScalarUDFImpl for ConcatWsFunc {
                     ColumnarValueRef::Scalar(s.as_bytes())
                 }
                 Some(None) => {
-                    return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)));
+                    return match return_datatype {
+                        DataType::Utf8View => {
+                            Ok(ColumnarValue::Scalar(ScalarValue::Utf8View(None)))
+                        }
+                        DataType::LargeUtf8 => {
+                            Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(None)))
+                        }
+                        _ => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None))),
+                    };
                 }
                 None => {
                     return internal_err!("Expected string separator, got {scalar:?}");
@@ -480,10 +496,16 @@ fn simplify_concat_ws(delimiter: &Expr, args: &[Expr]) -> Result<ExprSimplifyRes
                     )))
                 }
                 // If the delimiter is null, then the value of the whole expression is null.
-                None => Ok(ExprSimplifyResult::Simplified(Expr::Literal(
-                    ScalarValue::Utf8(None),
-                    None,
-                ))),
+                None => {
+                    let null_scalar = match delimiter_type {
+                        DataType::LargeUtf8 => ScalarValue::LargeUtf8(None),
+                        DataType::Utf8View => ScalarValue::Utf8View(None),
+                        _ => ScalarValue::Utf8(None),
+                    };
+                    Ok(ExprSimplifyResult::Simplified(Expr::Literal(
+                        null_scalar, None,
+                    )))
+                }
             }
         }
         Expr::Literal(d, _) => internal_err!(
@@ -807,6 +829,116 @@ mod tests {
                 assert_eq!(&expected, array);
             }
             _ => panic!("Expected array result"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn concat_ws_utf8view_null_separator() -> Result<()> {
+        // All-scalar path: null Utf8View separator should return Utf8View(None)
+        let c0 = ColumnarValue::Scalar(ScalarValue::Utf8View(None));
+        let c1 =
+            ColumnarValue::Scalar(ScalarValue::Utf8View(Some("aa".to_string())));
+        let c2 =
+            ColumnarValue::Scalar(ScalarValue::Utf8View(Some("bb".to_string())));
+
+        let arg_fields = vec![
+            Field::new("a", Utf8View, true).into(),
+            Field::new("a", Utf8View, true).into(),
+            Field::new("a", Utf8View, true).into(),
+        ];
+        let args = ScalarFunctionArgs {
+            args: vec![c0, c1, c2],
+            arg_fields,
+            number_rows: 1,
+            return_field: Field::new("f", Utf8View, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+
+        let result = ConcatWsFunc::new().invoke_with_args(args)?;
+        match result {
+            ColumnarValue::Scalar(ScalarValue::Utf8View(None)) => {}
+            other => panic!("Expected Utf8View(None), got {other:?}"),
+        }
+
+        // Array path: null Utf8View scalar separator with array args
+        let c0 = ColumnarValue::Scalar(ScalarValue::Utf8View(None));
+        let c1 = ColumnarValue::Array(Arc::new(StringViewArray::from(vec![
+            "foo", "bar",
+        ])));
+
+        let arg_fields = vec![
+            Field::new("a", Utf8View, true).into(),
+            Field::new("a", Utf8View, true).into(),
+        ];
+        let args = ScalarFunctionArgs {
+            args: vec![c0, c1],
+            arg_fields,
+            number_rows: 2,
+            return_field: Field::new("f", Utf8View, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+
+        let result = ConcatWsFunc::new().invoke_with_args(args)?;
+        match result {
+            ColumnarValue::Scalar(ScalarValue::Utf8View(None)) => {}
+            other => panic!("Expected Utf8View(None), got {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn concat_ws_largeutf8_null_separator() -> Result<()> {
+        // All-scalar path: null LargeUtf8 separator should return LargeUtf8(None)
+        let c0 = ColumnarValue::Scalar(ScalarValue::LargeUtf8(None));
+        let c1 =
+            ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some("aa".to_string())));
+        let c2 =
+            ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some("bb".to_string())));
+
+        let arg_fields = vec![
+            Field::new("a", LargeUtf8, true).into(),
+            Field::new("a", LargeUtf8, true).into(),
+            Field::new("a", LargeUtf8, true).into(),
+        ];
+        let args = ScalarFunctionArgs {
+            args: vec![c0, c1, c2],
+            arg_fields,
+            number_rows: 1,
+            return_field: Field::new("f", LargeUtf8, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+
+        let result = ConcatWsFunc::new().invoke_with_args(args)?;
+        match result {
+            ColumnarValue::Scalar(ScalarValue::LargeUtf8(None)) => {}
+            other => panic!("Expected LargeUtf8(None), got {other:?}"),
+        }
+
+        // Array path: null LargeUtf8 scalar separator with array args
+        let c0 = ColumnarValue::Scalar(ScalarValue::LargeUtf8(None));
+        let c1 = ColumnarValue::Array(Arc::new(LargeStringArray::from(vec![
+            "foo", "bar",
+        ])));
+
+        let arg_fields = vec![
+            Field::new("a", LargeUtf8, true).into(),
+            Field::new("a", LargeUtf8, true).into(),
+        ];
+        let args = ScalarFunctionArgs {
+            args: vec![c0, c1],
+            arg_fields,
+            number_rows: 2,
+            return_field: Field::new("f", LargeUtf8, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+
+        let result = ConcatWsFunc::new().invoke_with_args(args)?;
+        match result {
+            ColumnarValue::Scalar(ScalarValue::LargeUtf8(None)) => {}
+            other => panic!("Expected LargeUtf8(None), got {other:?}"),
         }
 
         Ok(())
