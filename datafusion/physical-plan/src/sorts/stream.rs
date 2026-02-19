@@ -18,16 +18,20 @@
 use crate::SendableRecordBatchStream;
 use crate::sorts::cursor::{ArrayValues, CursorArray, RowValues};
 use crate::{PhysicalExpr, PhysicalSortExpr};
-use arrow::array::Array;
+use arrow::array::{Array, UInt32Array};
+use arrow::compute::take_record_batch;
 use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
 use arrow::row::{RowConverter, Rows, SortField};
+use arrow_ord::sort::lexsort_to_indices;
 use datafusion_common::{Result, internal_datafusion_err};
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::stream::{Fuse, StreamExt};
+use std::iter::FusedIterator;
 use std::marker::PhantomData;
+use std::mem;
 use std::sync::Arc;
 use std::task::{Context, Poll, ready};
 
@@ -103,7 +107,7 @@ impl ReusableRows {
         self.inner[stream_idx][1] = Some(Arc::clone(rows));
         // swap the current with the previous one, so that the next poll can reuse the Rows from the previous poll
         let [a, b] = &mut self.inner[stream_idx];
-        std::mem::swap(a, b);
+        mem::swap(a, b);
     }
 }
 
@@ -276,3 +280,105 @@ impl<T: CursorArray> PartitionedStream for FieldCursorStream<T> {
         }))
     }
 }
+
+/// A lazy, memory-efficient sort iterator used as a fallback during aggregate
+/// spill when there is not enough memory for an eager sort (which requires ~2x
+/// peak memory to hold both the unsorted and sorted copies simultaneously).
+///
+/// On the first call to `next()`, a sorted index array (`UInt32Array`) is
+/// computed via `lexsort_to_indices`. Subsequent calls yield chunks of
+/// `batch_size` rows by `take`-ing from the original batch using slices of
+/// this index array. Each `take` copies data for the chunk (not zero-copy),
+/// but only one chunk is live at a time since the caller consumes it before
+/// requesting the next. Once all rows have been yielded, the original batch
+/// and index array are dropped to free memory.
+///
+/// The caller must reserve `sizeof(batch) + sizeof(one chunk)` for this iterator,
+/// and free the reservation once the iterator is depleted.
+pub(crate) struct IncrementalSortIterator {
+    batch: RecordBatch,
+    expressions: LexOrdering,
+    batch_size: usize,
+    indices: Option<UInt32Array>,
+    cursor: usize,
+}
+
+impl IncrementalSortIterator {
+    pub(crate) fn new(
+        batch: RecordBatch,
+        expressions: LexOrdering,
+        batch_size: usize,
+    ) -> Self {
+        Self {
+            batch,
+            expressions,
+            batch_size,
+            cursor: 0,
+            indices: None,
+        }
+    }
+}
+
+impl Iterator for IncrementalSortIterator {
+    type Item = Result<RecordBatch>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.cursor >= self.batch.num_rows() {
+            return None;
+        }
+
+        match self.indices.as_ref() {
+            None => {
+                let sort_columns = match self
+                    .expressions
+                    .iter()
+                    .map(|expr| expr.evaluate_to_sort_column(&self.batch))
+                    .collect::<Result<Vec<_>>>()
+                {
+                    Ok(cols) => cols,
+                    Err(e) => return Some(Err(e)),
+                };
+
+                let indices = match lexsort_to_indices(&sort_columns, None) {
+                    Ok(indices) => indices,
+                    Err(e) => return Some(Err(e.into())),
+                };
+                self.indices = Some(indices);
+
+                // Call again, this time it will hit the Some(indices) branch and return the first batch
+                self.next()
+            }
+            Some(indices) => {
+                let batch_size = self.batch_size.min(self.batch.num_rows() - self.cursor);
+
+                // Perform the take to produce the next batch
+                let new_batch_indices = indices.slice(self.cursor, batch_size);
+                let new_batch = match take_record_batch(&self.batch, &new_batch_indices) {
+                    Ok(batch) => batch,
+                    Err(e) => return Some(Err(e.into())),
+                };
+
+                self.cursor += batch_size;
+
+                // If this is the last batch, we can release the memory
+                if self.cursor >= self.batch.num_rows() {
+                    let schema = self.batch.schema();
+                    let _ = mem::replace(&mut self.batch, RecordBatch::new_empty(schema));
+                    self.indices = None;
+                }
+
+                // Return the new batch
+                Some(Ok(new_batch))
+            }
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let num_rows = self.batch.num_rows();
+        let batch_size = self.batch_size;
+        let num_batches = num_rows.div_ceil(batch_size);
+        (num_batches, Some(num_batches))
+    }
+}
+
+impl FusedIterator for IncrementalSortIterator {}

@@ -26,3 +26,5 @@ pub mod sort;
 pub mod sort_preserving_merge;
 mod stream;
 pub mod streaming_merge;
+
+pub(crate) use stream::IncrementalSortIterator;
