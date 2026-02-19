@@ -17,7 +17,7 @@
 
 //! [`ScalarUDFImpl`] definitions for array_has, array_has_all and array_has_any functions.
 
-use arrow::array::{Array, ArrayRef, BooleanArray, Datum, Scalar};
+use arrow::array::{Array, ArrayRef, BooleanArray, BooleanBufferBuilder, Datum, Scalar};
 use arrow::buffer::BooleanBuffer;
 use arrow::datatypes::DataType;
 use arrow::row::{RowConverter, Rows, SortField};
@@ -366,44 +366,34 @@ fn array_has_dispatch_for_scalar(
         None => eq_array.values().clone(),
     };
 
-    // Check validity buffer to distinguish between null and empty arrays
     let validity = match &haystack {
         ArrayWrapper::FixedSizeList(arr) => arr.nulls(),
         ArrayWrapper::List(arr) => arr.nulls(),
         ArrayWrapper::LargeList(arr) => arr.nulls(),
     };
-
-    let offsets: Vec<usize> = haystack.offsets().collect();
     let mut matches = eq_bits.set_indices().peekable();
-    let mut final_contained = vec![Some(false); haystack.len()];
+    let mut values = BooleanBufferBuilder::new(haystack.len());
+    values.append_n(haystack.len(), false);
 
     for (i, (_start, end)) in haystack.offsets().tuple_windows().enumerate() {
-        let end = window[1];
+        let has_match = matches.peek().is_some_and(|&p| p < end);
 
-        // Check if the array at this position is null
-        if let Some(validity_buffer) = validity
-            && !validity_buffer.is_valid(i)
-        {
-            final_contained[i] = None; // null array -> null result
-            // Advance past any match positions in this null row's range.
-            while matches.peek().is_some_and(|&p| p < end) {
-                matches.next();
-            }
-            continue;
+        // Advance past all match positions in this row's range.
+        while matches.peek().is_some_and(|&p| p < end) {
+            matches.next();
         }
 
-        // Check if any match falls within this row's range.
-        if matches.peek().is_some_and(|&p| p < end) {
-            final_contained[i] = Some(true);
-            // Advance past remaining matches in this row.
-            while matches.peek().is_some_and(|&p| p < end) {
-                matches.next();
-            }
+        if has_match && !validity.is_some_and(|v| !v.is_valid(i)) {
+            values.set_bit(i, true);
         }
-        // else: no match in range, stays Some(false)
     }
 
-    Ok(Arc::new(BooleanArray::from(final_contained)))
+    // A null haystack row always produces a null output, so we can
+    // reuse the haystack's null buffer directly.
+    Ok(Arc::new(BooleanArray::new(
+        values.finish(),
+        validity.cloned(),
+    )))
 }
 
 fn array_has_all_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
