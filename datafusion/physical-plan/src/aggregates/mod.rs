@@ -51,7 +51,7 @@ use datafusion_physical_expr::{
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use itertools::Itertools;
 
-pub(crate) mod group_values;
+pub mod group_values;
 mod no_grouping;
 pub mod order;
 mod row_hash;
