@@ -53,7 +53,6 @@ use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::{
     PhysicalExpr, is_dynamic_physical_expr,
 };
-use datafusion_physical_plan::coalesce::{LimitedBatchCoalescer, PushBatchStatus};
 use datafusion_physical_plan::metrics::{
     Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder, PruningMetrics,
 };
@@ -640,7 +639,6 @@ impl FileOpener for ParquetOpener {
             };
 
             // Build row filter from collecting + promoted filters.
-            let mut has_row_filter = false;
             if !collecting.is_empty() || !promoted.is_empty() {
                 let row_filter_result = row_filter::build_row_filter(
                     collecting,
@@ -653,7 +651,6 @@ impl FileOpener for ParquetOpener {
 
                 match row_filter_result {
                     Ok(Some(result)) => {
-                        has_row_filter = true;
                         builder = builder.with_row_filter(result.row_filter);
                         // Unbuildable filters must be applied as post-scan
                         // to preserve correctness.
@@ -719,8 +716,7 @@ impl FileOpener for ParquetOpener {
                 .try_map_exprs(|expr| reassign_expr_columns(expr, &stream_schema))?;
 
             // Rebase post-scan filter expressions to the stream schema, keeping IDs
-            let post_scan_filter = post_scan_exprs
-                .is_empty()
+            let post_scan_filter = (!post_scan_exprs.is_empty())
                 .then(|| {
                     let rebased_post_scan: Vec<Arc<dyn PhysicalExpr>> = post_scan_exprs
                         .iter()
@@ -729,11 +725,7 @@ impl FileOpener for ParquetOpener {
                     Ok::<_, DataFusionError>(conjunction(rebased_post_scan))
                 })
                 .transpose()?;
-            let should_coalesce_batches = post_scan_filter.is_some() || has_row_filter;
-
             let projector = projection.make_projector(&stream_schema)?;
-
-            let coalesce_schema = Arc::clone(&output_schema);
 
             let stream = stream.map_err(DataFusionError::from).map(move |b| {
                 b.and_then(|b| {
@@ -783,14 +775,7 @@ impl FileOpener for ParquetOpener {
                 })
             });
 
-            // If we applied filtering we may be producing small batches.
-            // Coalesce them for upstream operators.
-            let stream = if should_coalesce_batches {
-                CoalescingStream::new(stream.boxed(), coalesce_schema, batch_size, limit)
-                    .boxed()
-            } else {
-                stream.boxed()
-            };
+            let stream = stream.boxed();
 
             if let Some(file_pruner) = file_pruner {
                 Ok(EarlyStoppingStream::new(
@@ -913,88 +898,6 @@ fn constant_value_from_stats(
     }
 
     None
-}
-
-/// Wraps an inner stream and coalesces small batches (produced by post-scan
-/// filtering) back up to `batch_size` before emitting downstream.
-///
-/// Also enforces `limit` when post-scan filters are present, because the
-/// Parquet reader's own limit is disabled in that case (post-scan filtering
-/// changes the row count after the reader has already counted).
-struct CoalescingStream {
-    input: futures::stream::BoxStream<'static, Result<RecordBatch>>,
-    coalescer: LimitedBatchCoalescer,
-    input_exhausted: bool,
-}
-
-impl CoalescingStream {
-    fn new(
-        input: futures::stream::BoxStream<'static, Result<RecordBatch>>,
-        schema: SchemaRef,
-        batch_size: usize,
-        limit: Option<usize>,
-    ) -> Self {
-        Self {
-            input,
-            coalescer: LimitedBatchCoalescer::new(schema, batch_size, limit),
-            input_exhausted: false,
-        }
-    }
-}
-
-impl Stream for CoalescingStream {
-    type Item = Result<RecordBatch>;
-
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        loop {
-            // Drain any completed batch first
-            if let Some(batch) = self.coalescer.next_completed_batch() {
-                return Poll::Ready(Some(Ok(batch)));
-            }
-
-            if self.input_exhausted {
-                return Poll::Ready(None);
-            }
-
-            match ready!(self.input.poll_next_unpin(cx)) {
-                None => {
-                    // Input done — flush remaining buffered rows
-                    if let Err(e) = self.coalescer.finish() {
-                        self.input_exhausted = true;
-                        return Poll::Ready(Some(Err(e)));
-                    }
-                    self.input_exhausted = true;
-                    // Loop back to drain the final batch from next_completed_batch
-                }
-                Some(Ok(batch)) => {
-                    match self.coalescer.push_batch(batch) {
-                        Ok(PushBatchStatus::Continue) => {
-                            // Keep pulling; loop will check next_completed_batch
-                        }
-                        Ok(PushBatchStatus::LimitReached) => {
-                            if let Err(e) = self.coalescer.finish() {
-                                self.input_exhausted = true;
-                                return Poll::Ready(Some(Err(e)));
-                            }
-                            self.input_exhausted = true;
-                            // Loop back to drain
-                        }
-                        Err(e) => {
-                            self.input_exhausted = true;
-                            return Poll::Ready(Some(Err(e)));
-                        }
-                    }
-                }
-                Some(Err(e)) => {
-                    self.input_exhausted = true;
-                    return Poll::Ready(Some(Err(e)));
-                }
-            }
-        }
-    }
 }
 
 /// Wraps an inner RecordBatchStream and a [`FilePruner`]
