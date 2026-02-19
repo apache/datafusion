@@ -27,9 +27,7 @@ use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::DataType;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_physical_expr::projection::ProjectionExprs;
-use datafusion_physical_expr::utils::{
-    collect_columns, reassign_expr_columns, split_conjunction,
-};
+use datafusion_physical_expr::utils::{conjunction_opt, reassign_expr_columns};
 use datafusion_physical_expr_adapter::replace_columns_with_literals;
 use std::collections::{HashMap, HashSet};
 use std::pin::Pin;
@@ -462,79 +460,35 @@ impl FileOpener for ParquetOpener {
             // `row_filter` for details.
             // ---------------------------------------------------------------------
 
-            // Filter pushdown: evaluate predicates during scan
+            // Filter pushdown: evaluate predicates during scan.
             //
-            // When predicate columns exactly match the projection columns
-            // and there is at most one static conjunct (excluding dynamic
-            // filters from TopK / joins), the RowFilter (late
-            // materialization) path provides no benefit: every projected
-            // column is a predicate column, so there are no extra columns
-            // whose decode could be skipped for non-matching rows, and
-            // with a single static conjunct there is no incremental
-            // evaluation advantage. Apply the predicate as a batch-level
-            // filter after decoding instead, avoiding the overhead of
-            // CachedArrayReader / ReadPlanBuilder / try_next_batch.
-            //
-            // When there are non-predicate projection columns (e.g.
-            // SELECT * WHERE col = X), RowFilter is valuable because it
-            // skips decoding those extra columns for non-matching rows.
-            //
-            // Multi-conjunct static predicates are left on the RowFilter
-            // path because the RowFilter evaluates conjuncts incrementally
-            // — a selective first conjunct can avoid decoding expensive
-            // later columns for non-matching rows.
+            // Each conjunct is evaluated individually inside
+            // `build_row_filter`: conjuncts whose required columns leave
+            // extra projected columns unread benefit from late
+            // materialization and stay in the RowFilter; conjuncts that
+            // reference all projected columns are demoted to batch-level
+            // filtering to avoid the overhead of the RowFilter machinery.
             let batch_filter_predicate = if let Some(predicate) =
                 pushdown_filters.then_some(predicate).flatten()
             {
-                let predicate_col_indices: HashSet<usize> =
-                    collect_columns(&predicate)
-                        .iter()
-                        .map(|c| c.index())
-                        .collect();
                 let projection_col_indices: HashSet<usize> =
                     projection.column_indices().into_iter().collect();
 
-                // Count only static conjuncts — dynamic filters (e.g.
-                // from TopK or join pushdown) are runtime-generated and
-                // reference the same projected columns, so they don't
-                // benefit from RowFilter's incremental evaluation.
-                let static_conjunct_count = split_conjunction(&predicate)
-                    .iter()
-                    .filter(|c| !is_dynamic_physical_expr(c))
-                    .count();
-                let skip_row_filter = !predicate_col_indices.is_empty()
-                    && predicate_col_indices == projection_col_indices
-                    && static_conjunct_count <= 1;
+                let (row_filter, demoted) = row_filter::build_row_filter(
+                    &predicate,
+                    &physical_file_schema,
+                    builder.metadata(),
+                    reorder_predicates,
+                    &file_metrics,
+                    &projection_col_indices,
+                )?;
 
-                if skip_row_filter {
-                    debug!(
-                        "Skipping RowFilter pushdown: all predicate columns {:?} \
-                         are in the output projection {:?}; will apply as batch filter",
-                        predicate_col_indices, projection_col_indices,
-                    );
-                    Some(predicate)
-                } else {
-                    let row_filter = row_filter::build_row_filter(
-                        &predicate,
-                        &physical_file_schema,
-                        builder.metadata(),
-                        reorder_predicates,
-                        &file_metrics,
-                    );
-
-                    match row_filter {
-                        Ok(Some(filter)) => {
-                            builder = builder.with_row_filter(filter);
-                        }
-                        Ok(None) => {}
-                        Err(e) => {
-                            debug!(
-                                "Ignoring error building row filter for '{predicate:?}': {e}"
-                            );
-                        }
-                    };
-                    None
+                if let Some(filter) = row_filter {
+                    builder = builder.with_row_filter(filter);
                 }
+
+                // Combine demoted conjuncts into a single batch filter
+                conjunction_opt(demoted)
             } else {
                 None
             };
@@ -2084,12 +2038,10 @@ mod test {
         );
     }
 
-    /// When all predicate columns are already in the output projection and
-    /// pushdown_filters is enabled, the opener should skip the RowFilter
-    /// (late materialization) path and apply filtering as a post-decode
-    /// batch filter instead.  This avoids the overhead of
-    /// CachedArrayReader / ReadPlanBuilder / try_next_batch when late
-    /// materialization provides no I/O benefit.
+    /// Per-conjunct RowFilter demotion: when a conjunct's required columns
+    /// cover all projected columns, it provides no column-decode savings
+    /// and is demoted to batch-level filtering.  Conjuncts with extra
+    /// projected columns stay in the RowFilter for late materialization.
     #[tokio::test]
     async fn test_skip_row_filter_when_filter_cols_subset_of_projection() {
         let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
@@ -2110,8 +2062,8 @@ mod test {
 
         // Case 1: filter_cols == projection_cols → batch filter path
         // Filter: a = 2, Projection: [a]
-        // predicate_col_indices = {0} == projection_col_indices = {0}
-        // Single conjunct + exact match → skip RowFilter, use batch filter.
+        // Conjunct cols = {0}, projection = {0} → no extra cols to skip
+        // decoding → demoted to batch filter.
         let expr = col("a").eq(lit(2));
         let predicate = logical2physical(&expr, &schema);
         let opener = ParquetOpenerBuilder::new()
@@ -2129,8 +2081,8 @@ mod test {
 
         // Case 1b: filter_cols ⊂ projection_cols → RowFilter path
         // Filter: a = 2, Projection: [a, b]
-        // predicate_col_indices = {0} ≠ projection_col_indices = {0, 1}
-        // RowFilter skips decoding non-predicate column b for non-matching rows.
+        // Conjunct cols = {0}, projection = {0, 1} → extra col b → RowFilter
+        // skips decoding column b for non-matching rows.
         let expr = col("a").eq(lit(2));
         let predicate = logical2physical(&expr, &schema);
         let opener = ParquetOpenerBuilder::new()
@@ -2148,7 +2100,7 @@ mod test {
 
         // Case 2: filter_cols ⊄ projection_cols → RowFilter path
         // Filter: b = 20, Projection: [a] (only column a)
-        // predicate_col_indices = {1}, projection_col_indices = {0} → NOT subset
+        // Conjunct cols = {1}, projection = {0} → extra col a → RowFilter
         let expr = col("b").eq(lit(20));
         let predicate = logical2physical(&expr, &schema);
         let opener = ParquetOpenerBuilder::new()
@@ -2167,9 +2119,9 @@ mod test {
             "RowFilter should return correct filtered values"
         );
 
-        // Case 3: filter_cols ⊆ projection_cols, no matches → 0 rows
+        // Case 3: no matches → 0 rows via batch filter
         // Filter: a = 99, Projection: [a]
-        // predicate_col_indices = {0}, projection_col_indices = {0} → subset
+        // Conjunct cols = {0}, projection = {0} → no extra cols → batch filter
         let expr = col("a").eq(lit(99));
         let predicate = logical2physical(&expr, &schema);
         let opener = ParquetOpenerBuilder::new()
@@ -2205,13 +2157,10 @@ mod test {
             "batch filter should return correct values"
         );
 
-        // Case 5: multi-conjunct predicate → RowFilter path (even when
-        // filter_cols == projection_cols). RowFilter evaluates conjuncts
-        // incrementally, so a selective first conjunct can avoid decoding
-        // expensive later columns for non-matching rows.
+        // Case 5: multi-conjunct predicate → RowFilter path
         // Filter: a = 2 AND b = 20, Projection: [a, b]
-        // predicate_col_indices = {0, 1}, projection_col_indices = {0, 1}
-        // Exact match BUT multi-conjunct → keep RowFilter for incremental eval.
+        // Per-conjunct: `a = 2` has extra col b, `b = 20` has extra col a
+        // → both kept in RowFilter for incremental evaluation.
         let expr = col("a").eq(lit(2)).and(col("b").eq(lit(20)));
         let predicate = logical2physical(&expr, &schema);
         let opener = ParquetOpenerBuilder::new()
@@ -2230,16 +2179,13 @@ mod test {
         // Case 6: single static conjunct + dynamic filter → batch filter path
         // Simulates TopK: `WHERE a = 2 ORDER BY a LIMIT N`
         // Predicate: `a = 2 AND <dynamic>(a < 3)`, Projection: [a]
-        // predicate_col_indices = {0} == projection_col_indices = {0}
-        // Only 1 static conjunct (dynamic excluded) → batch filter path.
+        // Per-conjunct: both conjuncts reference only col a = projection
+        // → no extra cols → all demoted to batch filter.
         let static_expr = logical2physical(&col("a").eq(lit(2)), &schema);
         let dynamic_expr =
             make_dynamic_expr(logical2physical(&col("a").lt(lit(3)), &schema));
-        let combined: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
-            static_expr,
-            Operator::And,
-            dynamic_expr,
-        ));
+        let combined: Arc<dyn PhysicalExpr> =
+            Arc::new(BinaryExpr::new(static_expr, Operator::And, dynamic_expr));
         let opener = ParquetOpenerBuilder::new()
             .with_store(Arc::clone(&store))
             .with_schema(Arc::clone(&schema))

@@ -65,7 +65,7 @@
 //! continue to be evaluated after the batches are materialized.
 
 use std::cmp::Ordering;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::sync::Arc;
 
 use arrow::array::BooleanArray;
@@ -81,6 +81,7 @@ use datafusion_common::Result;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::utils::reassign_expr_columns;
 use datafusion_physical_expr::{PhysicalExpr, split_conjunction};
 
@@ -567,24 +568,29 @@ fn columns_sorted(_columns: &[usize], _metadata: &ParquetMetaData) -> Result<boo
 /// * `reorder_predicates` - If true, reorder predicates to minimize I/O
 /// * `file_metrics` - Metrics for tracking filter performance
 ///
+/// # Parameters
+/// * `projection_col_indices` - Column indices (in the file schema) that will
+///   be projected in the output. Used to evaluate whether each conjunct benefits
+///   from late materialization: a conjunct whose required columns cover all
+///   projected columns provides no column-decode savings and is demoted to
+///   batch-level filtering.
+///
 /// # Returns
-/// * `Ok(Some(row_filter))` if the expression can be used as a RowFilter
-/// * `Ok(None)` if the expression cannot be used as a RowFilter
+/// * `Ok((Some(row_filter), demoted))` — `row_filter` contains the conjuncts
+///   that benefit from late materialization; `demoted` holds conjuncts that
+///   should be applied as a post-decode batch filter instead.
+/// * `Ok((None, demoted))` — no conjuncts benefit from RowFilter; all usable
+///   conjuncts are returned in `demoted`.
 /// * `Err(e)` if an error occurs while building the filter
-///
-/// Note: The returned `RowFilter` may not contain all conjuncts from the original
-/// expression. Conjuncts that cannot be evaluated as an `ArrowPredicate` are ignored.
-///
-/// For example, if the expression is `a = 1 AND b = 2 AND c = 3` and `b = 2`
-/// cannot be evaluated for some reason, the returned `RowFilter` will contain
-/// only `a = 1` and `c = 3`.
+#[expect(clippy::type_complexity)]
 pub fn build_row_filter(
     expr: &Arc<dyn PhysicalExpr>,
     file_schema: &SchemaRef,
     metadata: &ParquetMetaData,
     reorder_predicates: bool,
     file_metrics: &ParquetFileMetrics,
-) -> Result<Option<RowFilter>> {
+    projection_col_indices: &HashSet<usize>,
+) -> Result<(Option<RowFilter>, Vec<Arc<dyn PhysicalExpr>>)> {
     let rows_pruned = &file_metrics.pushdown_rows_pruned;
     let rows_matched = &file_metrics.pushdown_rows_matched;
     let time = &file_metrics.row_pushdown_eval_time;
@@ -593,21 +599,46 @@ pub fn build_row_filter(
     // `a = 1 AND b = 2 AND c = 3` -> [`a = 1`, `b = 2`, `c = 3`]
     let predicates = split_conjunction(expr);
 
-    // Determine which conjuncts can be evaluated as ArrowPredicates, if any
-    let mut candidates: Vec<FilterCandidate> = predicates
-        .into_iter()
-        .map(|expr| {
-            FilterCandidateBuilder::new(Arc::clone(expr), Arc::clone(file_schema))
-                .build(metadata)
-        })
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .flatten()
-        .collect();
+    // Evaluate each conjunct: keep those that benefit from late
+    // materialization (column-decode savings or page-index pruning),
+    // demote the rest for batch-level filtering.
+    let mut candidates: Vec<FilterCandidate> = Vec::new();
+    let mut demoted: Vec<Arc<dyn PhysicalExpr>> = Vec::new();
 
-    // no candidates
+    for pred_expr in predicates {
+        let candidate =
+            FilterCandidateBuilder::new(Arc::clone(pred_expr), Arc::clone(file_schema))
+                .build(metadata)?;
+
+        match candidate {
+            Some(c) => {
+                // Check if RowFilter saves column decoding for this conjunct:
+                // if there are projected columns NOT referenced by this
+                // conjunct, RowFilter can skip decoding them for non-matching
+                // rows.
+                let conjunct_cols: HashSet<usize> = collect_columns(&c.expr)
+                    .iter()
+                    .map(|col| col.index())
+                    .collect();
+                let has_extra_cols = projection_col_indices
+                    .iter()
+                    .any(|idx| !conjunct_cols.contains(idx));
+
+                if has_extra_cols || c.can_use_index {
+                    candidates.push(c);
+                } else {
+                    demoted.push(c.expr);
+                }
+            }
+            None => {
+                // Cannot be used as a RowFilter (e.g. unsupported nested
+                // column types); keep existing behaviour and drop silently.
+            }
+        }
+    }
+
     if candidates.is_empty() {
-        return Ok(None);
+        return Ok((None, demoted));
     }
 
     if reorder_predicates {
@@ -625,7 +656,7 @@ pub fn build_row_filter(
     // This ensures: rows_matched + rows_pruned = total rows processed
     let total_candidates = candidates.len();
 
-    candidates
+    let filters = candidates
         .into_iter()
         .enumerate()
         .map(|(idx, candidate)| {
@@ -650,8 +681,9 @@ pub fn build_row_filter(
             )
             .map(|pred| Box::new(pred) as _)
         })
-        .collect::<Result<Vec<_>, _>>()
-        .map(|filters| Some(RowFilter::new(filters)))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok((Some(RowFilter::new(filters)), demoted))
 }
 
 #[cfg(test)]
@@ -937,10 +969,20 @@ mod test {
         let file_metrics =
             ParquetFileMetrics::new(0, &format!("{func_name}.parquet"), &metrics);
 
-        let row_filter =
-            build_row_filter(&expr, &file_schema, &metadata, false, &file_metrics)
-                .expect("building row filter")
-                .expect("row filter should exist");
+        // Projection with an extra column index so every conjunct has at
+        // least one "extra" projected column and stays in the RowFilter.
+        // These tests exercise RowFilter mechanics, not per-conjunct demotion.
+        let projection: HashSet<usize> = (0..file_schema.fields().len() + 1).collect();
+        let (row_filter, _demoted) = build_row_filter(
+            &expr,
+            &file_schema,
+            &metadata,
+            false,
+            &file_metrics,
+            &projection,
+        )
+        .expect("building row filter");
+        let row_filter = row_filter.expect("row filter should exist");
 
         let reader = parquet_reader_builder
             .with_row_filter(row_filter)
