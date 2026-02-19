@@ -24,9 +24,7 @@ use std::sync::Arc;
 use crate::{
     PhysicalExpr,
     simplifier::{
-        const_evaluator::{create_dummy_batch, simplify_const_expr_with_dummy},
-        not::simplify_not_expr,
-        unwrap_cast::unwrap_cast_in_comparison,
+        const_evaluator::create_dummy_batch, unwrap_cast::unwrap_cast_in_comparison,
     },
 };
 
@@ -67,10 +65,11 @@ impl<'a> PhysicalExprSimplifier<'a> {
 
                 // Apply NOT expression simplification first, then unwrap cast optimization,
                 // then constant expression evaluation
-                let rewritten = simplify_not_expr(node, schema)?
+                #[expect(deprecated, reason = "`simplify_not_expr` is marked as deprecated until it's made private.")]
+                let rewritten = not::simplify_not_expr(node, schema)?
                     .transform_data(|node| unwrap_cast_in_comparison(node, schema))?
                     .transform_data(|node| {
-                        simplify_const_expr_with_dummy(node, &batch)
+                        const_evaluator::simplify_const_expr_immediate(node, &batch)
                     })?;
 
                 #[cfg(debug_assertions)]
