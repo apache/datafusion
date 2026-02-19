@@ -99,3 +99,11 @@ physical_plan
 01)ProjectionExec: expr=[__async_fn_0@1 as async_abs(data.x)]
 02)--AsyncFuncExec: async_expr=[async_expr(name=__async_fn_0, expr=async_abs(x@0))]
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Async udf with nesting
+query I rowsort
+select async_abs(async_abs(x)) from data;
+----
+10
+2
+
