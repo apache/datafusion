@@ -239,6 +239,11 @@ SELECT translate('12345', '143', NULL)
 ----
 NULL
 
+query T
+SELECT translate(arrow_cast('12345', 'LargeUtf8'), '143', 'ax')
+----
+a2x5
+
 statement ok
 CREATE TABLE test(
   c1 VARCHAR
