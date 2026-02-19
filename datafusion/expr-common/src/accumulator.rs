@@ -48,7 +48,7 @@ use std::fmt::Debug;
 /// [`evaluate`]: Self::evaluate
 /// [`merge_batch`]: Self::merge_batch
 /// [window function]: https://en.wikipedia.org/wiki/Window_function_(SQL)
-pub trait Accumulator: Send + Sync + Debug {
+pub trait Accumulator: Send + Sync + Debug + std::any::Any {
     /// Updates the accumulator's state from its input.
     ///
     /// `values` contains the arguments to this aggregate function.
