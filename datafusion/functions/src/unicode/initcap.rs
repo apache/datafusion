@@ -151,7 +151,7 @@ impl ScalarUDFImpl for InitcapFunc {
 }
 
 /// Converts the first letter of each word to uppercase and the rest to
-/// lowercase.  Words are sequences of alphanumeric characters separated by
+/// lowercase. Words are sequences of alphanumeric characters separated by
 /// non-alphanumeric characters.
 ///
 /// Example:
@@ -277,7 +277,7 @@ fn initcap_string(input: &str, container: &mut String) {
 mod tests {
     use crate::unicode::initcap::InitcapFunc;
     use crate::utils::test::test_function;
-    use arrow::array::{Array, ArrayRef, StringArray, StringViewArray};
+    use arrow::array::{Array, ArrayRef, LargeStringArray, StringArray, StringViewArray};
     use arrow::datatypes::DataType::{Utf8, Utf8View};
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
@@ -412,6 +412,32 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_initcap_ascii_large_array() -> Result<()> {
+        let array = LargeStringArray::from(vec![
+            Some("hello world"),
+            None,
+            Some("foo-bar_baz/baX"),
+            Some(""),
+            Some("123 abc 456DEF"),
+            Some("ALL CAPS"),
+            Some("already correct"),
+        ]);
+        let args: Vec<ArrayRef> = vec![Arc::new(array)];
+        let result = super::initcap::<i64>(&args)?;
+        let result = result.as_any().downcast_ref::<LargeStringArray>().unwrap();
+
+        assert_eq!(result.len(), 7);
+        assert_eq!(result.value(0), "Hello World");
+        assert!(result.is_null(1));
+        assert_eq!(result.value(2), "Foo-Bar_Baz/Bax");
+        assert_eq!(result.value(3), "");
+        assert_eq!(result.value(4), "123 Abc 456def");
+        assert_eq!(result.value(5), "All Caps");
+        assert_eq!(result.value(6), "Already Correct");
+        Ok(())
+    }
+
     /// Test that initcap works correctly on a sliced ASCII StringArray.
     #[test]
     fn test_initcap_sliced_ascii_array() -> Result<()> {
@@ -427,6 +453,28 @@ mod tests {
         let args: Vec<ArrayRef> = vec![Arc::new(sliced)];
         let result = super::initcap::<i32>(&args)?;
         let result = result.as_any().downcast_ref::<StringArray>().unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result.value(0), "Foo Bar");
+        assert_eq!(result.value(1), "Baz Qux");
+        Ok(())
+    }
+
+    /// Test that initcap works correctly on a sliced ASCII LargeStringArray.
+    #[test]
+    fn test_initcap_sliced_ascii_large_array() -> Result<()> {
+        let array = LargeStringArray::from(vec![
+            Some("hello world"),
+            Some("foo bar"),
+            Some("baz qux"),
+        ]);
+        // Slice to get only the last two elements. The resulting array's
+        // offsets are [11, 18, 25] (non-zero start), but value_data still
+        // contains the full original buffer.
+        let sliced = array.slice(1, 2);
+        let args: Vec<ArrayRef> = vec![Arc::new(sliced)];
+        let result = super::initcap::<i64>(&args)?;
+        let result = result.as_any().downcast_ref::<LargeStringArray>().unwrap();
 
         assert_eq!(result.len(), 2);
         assert_eq!(result.value(0), "Foo Bar");
