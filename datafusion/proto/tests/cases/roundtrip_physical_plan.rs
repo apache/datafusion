@@ -130,7 +130,9 @@ use crate::cases::{
     MyRegexUdfNode,
 };
 
-use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
+use datafusion_physical_expr::expressions::{
+    DynamicFilterPhysicalExpr, DynamicFilterSnapshot,
+};
 use datafusion_physical_expr::utils::reassign_expr_columns;
 
 /// Perform a serde roundtrip and assert that the string representation of the before and after plans
@@ -3066,8 +3068,8 @@ fn test_dynamic_filter_roundtrip() -> Result<()> {
         .expect("Should be DynamicFilterPhysicalExpr");
 
     assert_eq!(
-        df.current_snapshot().to_string(),
-        deserialized_df.current_snapshot().to_string(),
+        DynamicFilterSnapshot::from(df).to_string(),
+        DynamicFilterSnapshot::from(deserialized_df).to_string(),
         "Snapshots should be equal"
     );
 
@@ -3221,12 +3223,12 @@ fn test_deduplication_of_dynamic_filter_expression(
         .unwrap();
 
     assert_eq!(
-        filter_1_before_roundtrip.current_snapshot().to_string(),
-        df1.current_snapshot().to_string()
+        DynamicFilterSnapshot::from(filter_1_before_roundtrip).to_string(),
+        DynamicFilterSnapshot::from(df1).to_string()
     );
     assert_eq!(
-        filter_2_before_roundtrip.current_snapshot().to_string(),
-        df2.current_snapshot().to_string()
+        DynamicFilterSnapshot::from(filter_2_before_roundtrip).to_string(),
+        DynamicFilterSnapshot::from(df2).to_string()
     );
 
     Ok(())

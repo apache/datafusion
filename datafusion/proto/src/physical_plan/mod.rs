@@ -1,3 +1,4 @@
+use std::any::Any;
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -3962,13 +3963,8 @@ impl PhysicalProtoConverterExtension for DeduplicatingDeserializer {
                 };
 
                 // Get the base filter's structure
-                let Some(dynamic_filter_expr) =
-                    expr.as_any().downcast_ref::<DynamicFilterPhysicalExpr>()
-                else {
-                    return internal_err!(
-                        "dynamic_filter_id present in proto, but the expression was not a DynamicFilterPhysicalExpr"
-                    );
-                };
+                let dynamic_filter_expr = (expr as Arc<dyn Any + Send + Sync>).downcast::<DynamicFilterPhysicalExpr>()
+                    .map_err(|_| internal_datafusion_err!("dynamic_filter_id present in proto, but the expression was not a DynamicFilterPhysicalExpr"))?;
                 expr = Arc::new(dynamic_filter_expr.new_from_source(cached_df)?)
                     as Arc<dyn PhysicalExpr>;
             } else {

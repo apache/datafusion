@@ -151,6 +151,54 @@ impl Display for DynamicFilterSnapshot {
     }
 }
 
+impl From<DynamicFilterSnapshot> for DynamicFilterPhysicalExpr {
+    fn from(snapshot: DynamicFilterSnapshot) -> Self {
+        let DynamicFilterSnapshot {
+            children,
+            remapped_children,
+            generation,
+            inner_expr,
+            is_complete,
+        } = snapshot;
+
+        let state = if is_complete {
+            FilterState::Complete { generation }
+        } else {
+            FilterState::InProgress { generation }
+        };
+        let (state_watch, _) = watch::channel(state);
+
+        Self {
+            children,
+            remapped_children,
+            inner: Arc::new(RwLock::new(Inner {
+                generation,
+                expr: inner_expr,
+                is_complete,
+            })),
+            state_watch,
+            data_type: Arc::new(RwLock::new(None)),
+            nullable: Arc::new(RwLock::new(None)),
+        }
+    }
+}
+
+impl From<&DynamicFilterPhysicalExpr> for DynamicFilterSnapshot {
+    fn from(expr: &DynamicFilterPhysicalExpr) -> Self {
+        let (generation, inner_expr, is_complete) = {
+            let inner = expr.inner.read();
+            (inner.generation, Arc::clone(&inner.expr), inner.is_complete)
+        };
+        DynamicFilterSnapshot {
+            children: expr.children.clone(),
+            remapped_children: expr.remapped_children.clone(),
+            generation,
+            inner_expr,
+            is_complete,
+        }
+    }
+}
+
 impl Inner {
     fn new(expr: Arc<dyn PhysicalExpr>) -> Self {
         Self {
@@ -243,58 +291,6 @@ impl DynamicFilterPhysicalExpr {
         }
     }
 
-    /// Reconstructs a [`DynamicFilterPhysicalExpr`] from a snapshot.
-    ///
-    /// This is a low-level API intended for use by the proto deserialization layer.
-    #[doc(hidden)]
-    pub fn new_from_snapshot(snapshot: DynamicFilterSnapshot) -> Self {
-        let DynamicFilterSnapshot {
-            children,
-            remapped_children,
-            generation,
-            inner_expr,
-            is_complete,
-        } = snapshot;
-
-        let state = if is_complete {
-            FilterState::Complete { generation }
-        } else {
-            FilterState::InProgress { generation }
-        };
-        let (state_watch, _) = watch::channel(state);
-
-        Self {
-            children,
-            remapped_children,
-            inner: Arc::new(RwLock::new(Inner {
-                generation,
-                expr: inner_expr,
-                is_complete,
-            })),
-            state_watch,
-            data_type: Arc::new(RwLock::new(None)),
-            nullable: Arc::new(RwLock::new(None)),
-        }
-    }
-
-    /// Atomically captures all state needed for serialization into a [`DynamicFilterSnapshot`].
-    ///
-    /// This is a low-level API intended for use by the proto deserialization layer.
-    #[doc(hidden)]
-    pub fn current_snapshot(&self) -> DynamicFilterSnapshot {
-        let (generation, inner_expr, is_complete) = {
-            let inner = self.inner.read();
-            (inner.generation, Arc::clone(&inner.expr), inner.is_complete)
-        };
-        DynamicFilterSnapshot {
-            children: self.children.clone(),
-            remapped_children: self.remapped_children.clone(),
-            generation,
-            inner_expr,
-            is_complete,
-        }
-    }
-
     /// Create a new [`DynamicFilterPhysicalExpr`] from `self`, except it overwrites the
     /// internal state with the source filter's state.
     ///
@@ -303,16 +299,21 @@ impl DynamicFilterPhysicalExpr {
     /// # Safety
     ///
     /// The dynamic filter should not be in use when calling this method, otherwise there
-    /// may be undefined behavior. This method may do the following or worse:
+    /// may be undefined behavior. Changing the inner state of a filter may do the following:
     /// - transition the state to complete without notifying the watch
     /// - cause a generation number to be emitted which is out of order
-    pub fn new_from_source(&self, source: &DynamicFilterPhysicalExpr) -> Result<Self> {
-        // Best effort check that no one is subscribed.
-        if self.state_watch.receiver_count() > 0 {
+    pub fn new_from_source(
+        self: &Arc<Self>,
+        source: &DynamicFilterPhysicalExpr,
+    ) -> Result<Self> {
+        // If there's any references to this filter or any watchers, we should not replace the
+        // inner state.
+        if self.is_used() || self.state_watch.receiver_count() > 0 {
             return internal_err!(
-                "Cannot replace the inner state of a DynamicFilterPhysicalExpr that has subscribers"
+                "Cannot replace the inner state of a DynamicFilterPhysicalExpr that is in use"
             );
         };
+
         Ok(Self {
             children: self.children.clone(),
             remapped_children: self.remapped_children.clone(),
@@ -1020,13 +1021,13 @@ mod test {
         filter.mark_complete();
 
         // Take a snapshot and reconstruct
-        let snapshot = filter.current_snapshot();
-        let reconstructed = DynamicFilterPhysicalExpr::new_from_snapshot(snapshot);
+        let snapshot = DynamicFilterSnapshot::from(&filter);
+        let reconstructed = DynamicFilterPhysicalExpr::from(snapshot);
 
         // String representations should be equal
         assert_eq!(
-            filter.current_snapshot().to_string(),
-            reconstructed.current_snapshot().to_string(),
+            DynamicFilterSnapshot::from(&filter).to_string(),
+            DynamicFilterSnapshot::from(&reconstructed).to_string(),
         );
     }
 
@@ -1045,10 +1046,10 @@ mod test {
         // Create a target filter with different children
         let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Int32, false)]));
         let col_x = col("x", &schema).unwrap();
-        let target = DynamicFilterPhysicalExpr::new(
+        let target = Arc::new(DynamicFilterPhysicalExpr::new(
             vec![Arc::clone(&col_x)],
             lit(0) as Arc<dyn PhysicalExpr>,
-        );
+        ));
 
         // Create new filter from source's inner state
         let combined = target.new_from_source(&source).unwrap();
@@ -1061,7 +1062,7 @@ mod test {
         );
 
         // Verify children are from target, not source
-        let combined_snapshot = combined.current_snapshot();
+        let combined_snapshot = DynamicFilterSnapshot::from(&combined);
         assert_eq!(
             combined_snapshot.children().len(),
             1,

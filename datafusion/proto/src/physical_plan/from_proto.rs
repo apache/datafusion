@@ -529,16 +529,16 @@ pub fn parse_physical_expr_with_converter(
             )?;
 
             // Recreate filter from snapshot
-            let base_filter = Arc::new(DynamicFilterPhysicalExpr::new_from_snapshot(
-                DynamicFilterSnapshot::new(
-                    children,
-                    remapped_children,
-                    dynamic_filter.generation,
-                    inner_expr,
-                    dynamic_filter.is_complete,
-                ),
-            ));
-            base_filter as Arc<dyn PhysicalExpr>
+            let snapshot = DynamicFilterSnapshot::new(
+                children,
+                remapped_children,
+                dynamic_filter.generation,
+                inner_expr,
+                dynamic_filter.is_complete,
+            );
+            let base_filter: Arc<dyn PhysicalExpr> =
+                Arc::new(DynamicFilterPhysicalExpr::from(snapshot));
+            base_filter
         }
         ExprType::Extension(extension) => {
             let inputs: Vec<Arc<dyn PhysicalExpr>> = extension

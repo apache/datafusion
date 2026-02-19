@@ -36,9 +36,9 @@ use datafusion_physical_expr::window::{SlidingAggregateWindowExpr, StandardWindo
 use datafusion_physical_expr_common::physical_expr::snapshot_physical_expr;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_plan::expressions::{
-    BinaryExpr, CaseExpr, CastExpr, Column, DynamicFilterPhysicalExpr, InListExpr,
-    IsNotNullExpr, IsNullExpr, LikeExpr, Literal, NegativeExpr, NotExpr, TryCastExpr,
-    UnKnownColumn,
+    BinaryExpr, CaseExpr, CastExpr, Column, DynamicFilterPhysicalExpr,
+    DynamicFilterSnapshot, InListExpr, IsNotNullExpr, IsNullExpr, LikeExpr, Literal,
+    NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
 };
 use datafusion_physical_plan::joins::{HashExpr, HashTableLookupExpr};
 use datafusion_physical_plan::udaf::AggregateFunctionExpr;
@@ -330,7 +330,7 @@ pub fn serialize_physical_expr_with_converter(
         })
     } else if let Some(df) = expr.downcast_ref::<DynamicFilterPhysicalExpr>() {
         // Capture all state atomically
-        let snapshot = df.current_snapshot();
+        let snapshot = DynamicFilterSnapshot::from(df);
 
         let children = snapshot
             .children()
