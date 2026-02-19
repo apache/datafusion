@@ -109,10 +109,13 @@ unsafe extern "C" fn entries_fn_wrapper(
 }
 
 unsafe extern "C" fn release_fn_wrapper(options: &mut FFI_ExtensionOptions) {
-    let private_data = unsafe {
-        Box::from_raw(options.private_data as *mut ExtensionOptionsPrivateData)
-    };
-    drop(private_data);
+    unsafe {
+        debug_assert!(!options.private_data.is_null());
+        let private_data =
+            Box::from_raw(options.private_data as *mut ExtensionOptionsPrivateData);
+        drop(private_data);
+        options.private_data = std::ptr::null_mut();
+    }
 }
 
 impl Default for FFI_ExtensionOptions {

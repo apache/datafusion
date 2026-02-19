@@ -37,8 +37,7 @@ use datafusion_execution::config::SessionConfig;
 #[repr(C)]
 #[derive(Debug, StableAbi)]
 pub struct FFI_SessionConfig {
-    /// Return a hash map from key to value of the config options represented
-    /// by string values.
+    /// FFI stable configuration options.
     pub config_options: FFI_ConfigOptions,
 
     /// Used to create a clone on the provider of the execution plan. This should
