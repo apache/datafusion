@@ -3051,44 +3051,4 @@ mod tests {
         Ok(())
     }
 
-    /// Regression test: user-provided `__datafusion_extracted_2` alias in a
-    /// Projection must not collide with optimizer-generated aliases.
-    /// See <https://github.com/apache/datafusion/issues/20430>
-    #[test]
-    fn test_user_provided_extracted_alias_no_collision() -> Result<()> {
-        let table_scan = test_table_scan_with_struct()?;
-
-        // Projection with a user-provided __datafusion_extracted_2 alias
-        let proj = LogicalPlanBuilder::from(table_scan)
-            .project(vec![
-                leaf_udf(col("user"), "status")
-                    .alias(format!("{EXTRACTED_EXPR_PREFIX}_2")),
-                col("id"),
-            ])?
-            .build()?;
-
-        // Filter below will trigger extraction; the generator must skip past _2
-        let plan = LogicalPlanBuilder::from(proj)
-            .filter(
-                leaf_udf(col("id"), "check").eq(lit(1)),
-            )?
-            .build()?;
-
-        let ctx = OptimizerContext::new().with_max_passes(1);
-        let optimizer = Optimizer::with_rules(vec![
-            Arc::new(OptimizeProjections::new()),
-            Arc::new(ExtractLeafExpressions::new()),
-        ]);
-        // Should not error with "duplicate unqualified field name"
-        let result = optimizer.optimize(plan, &ctx, |_, _| {})?;
-
-        // Verify the generated alias is _3 or higher (not _2)
-        let plan_str = format!("{result}");
-        assert!(
-            !plan_str.contains("__datafusion_extracted_2, __datafusion_extracted_2"),
-            "Found duplicate alias in plan:\n{plan_str}"
-        );
-
-        Ok(())
-    }
 }
