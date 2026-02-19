@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+pub mod bitmap_bit_position;
 pub mod bitmap_count;
 
 use datafusion_expr::ScalarUDF;
@@ -22,6 +23,7 @@ use datafusion_functions::make_udf_function;
 use std::sync::Arc;
 
 make_udf_function!(bitmap_count::BitmapCount, bitmap_count);
+make_udf_function!(bitmap_bit_position::BitmapBitPosition, bitmap_bit_position);
 
 pub mod expr_fn {
     use datafusion_functions::export_functions;
@@ -31,8 +33,13 @@ pub mod expr_fn {
         "Returns the number of set bits in the input bitmap.",
         arg
     ));
+    export_functions!((
+        bitmap_bit_position,
+        "Returns the bit position for the given input child expression.",
+        arg
+    ));
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
-    vec![bitmap_count()]
+    vec![bitmap_count(), bitmap_bit_position()]
 }

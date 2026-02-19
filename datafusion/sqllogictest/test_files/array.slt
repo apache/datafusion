@@ -6832,7 +6832,7 @@ from array_distinct_table_2D;
 ----
 [[1, 2], [3, 4], [5, 6]]
 [[1, 2], [3, 4], [5, 6], [7, 8], [9, 10]]
-[NULL, [5, 6]]
+[[5, 6], NULL]
 
 query ?
 select array_distinct(column1)
@@ -6864,7 +6864,7 @@ from array_distinct_table_2D_fixed;
 ----
 [[1, 2], [3, 4], [5, 6]]
 [[1, 2], [3, 4], [5, 6], [7, 8], [9, 10]]
-[NULL, [5, 6]]
+[[5, 6], NULL]
 
 query ???
 select array_intersect(column1, column2),
