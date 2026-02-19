@@ -353,11 +353,27 @@ mod tests {
         Ok(())
     }
 
-    #[ignore]
     #[tokio::test]
     async fn tpch_test_17() -> Result<()> {
         let plan_str = tpch_plan_to_string(17).await?;
-        assert_snapshot!(plan_str, "panics due to out of bounds field access");
+        assert_snapshot!(
+        plan_str,
+        @r#"
+        Projection: sum(LINEITEM.L_EXTENDEDPRICE) / Decimal128(Some(70),2,1) AS AVG_YEARLY
+          Aggregate: groupBy=[[]], aggr=[[sum(LINEITEM.L_EXTENDEDPRICE)]]
+            Projection: LINEITEM.L_EXTENDEDPRICE
+              Filter: PART.P_PARTKEY = LINEITEM.L_PARTKEY AND PART.P_BRAND = Utf8("Brand#23") AND PART.P_CONTAINER = Utf8("MED BOX") AND LINEITEM.L_QUANTITY < (<subquery>)
+                Subquery:
+                  Projection: Decimal128(Some(2),2,1) * avg(LINEITEM.L_QUANTITY)
+                    Aggregate: groupBy=[[]], aggr=[[avg(LINEITEM.L_QUANTITY)]]
+                      Projection: LINEITEM.L_QUANTITY
+                        Filter: LINEITEM.L_PARTKEY = outer_ref(PART.P_PARTKEY)
+                          TableScan: LINEITEM
+                Cross Join:
+                  TableScan: LINEITEM
+                  TableScan: PART
+        "#
+                );
         Ok(())
     }
 
