@@ -17,8 +17,11 @@
 
 use std::sync::Arc;
 
-use arrow::array::{RecordBatch, record_batch};
-use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use arrow::array::{
+    Array, ArrayRef, BooleanArray, Int32Array, Int64Array, RecordBatch, StringArray,
+    StructArray, record_batch,
+};
+use arrow_schema::{DataType, Field, Fields, Schema, SchemaRef};
 use bytes::{BufMut, BytesMut};
 use datafusion::assert_batches_eq;
 use datafusion::common::Result;
@@ -318,6 +321,145 @@ async fn test_physical_expr_adapter_with_non_null_defaults() {
         "++",
     ];
     assert_batches_eq!(expected, &batches);
+}
+
+#[tokio::test]
+async fn test_struct_schema_evolution_projection_and_filter() -> Result<()> {
+    use std::collections::HashMap;
+
+    // Physical struct: {id: Int32, name: Utf8}
+    let physical_struct_fields: Fields = vec![
+        Arc::new(Field::new("id", DataType::Int32, false)),
+        Arc::new(Field::new("name", DataType::Utf8, true)),
+    ]
+    .into();
+
+    let struct_array = StructArray::new(
+        physical_struct_fields.clone(),
+        vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["a", "b", "c"])) as ArrayRef,
+        ],
+        None,
+    );
+
+    let physical_schema = Arc::new(Schema::new(vec![Field::new(
+        "s",
+        DataType::Struct(physical_struct_fields),
+        true,
+    )]));
+
+    let batch =
+        RecordBatch::try_new(Arc::clone(&physical_schema), vec![Arc::new(struct_array)])?;
+
+    let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+    let store_url = ObjectStoreUrl::parse("memory://").unwrap();
+    write_parquet(batch, store.clone(), "struct_evolution.parquet").await;
+
+    // Logical struct: {id: Int64?, name: Utf8?, extra: Boolean?} + metadata
+    let logical_struct_fields: Fields = vec![
+        Arc::new(Field::new("id", DataType::Int64, true)),
+        Arc::new(Field::new("name", DataType::Utf8, true)),
+        Arc::new(Field::new("extra", DataType::Boolean, true).with_metadata(
+            HashMap::from([("nested_meta".to_string(), "1".to_string())]),
+        )),
+    ]
+    .into();
+
+    let table_schema = Arc::new(Schema::new(vec![
+        Field::new("s", DataType::Struct(logical_struct_fields), false)
+            .with_metadata(HashMap::from([("top_meta".to_string(), "1".to_string())])),
+    ]));
+
+    let mut cfg = SessionConfig::new()
+        .with_collect_statistics(false)
+        .with_parquet_pruning(false)
+        .with_parquet_page_index_pruning(false);
+    cfg.options_mut().execution.parquet.pushdown_filters = true;
+
+    let ctx = SessionContext::new_with_config(cfg);
+    ctx.register_object_store(store_url.as_ref(), Arc::clone(&store));
+
+    let listing_table_config =
+        ListingTableConfig::new(ListingTableUrl::parse("memory:///").unwrap())
+            .infer_options(&ctx.state())
+            .await
+            .unwrap()
+            .with_schema(table_schema.clone())
+            .with_expr_adapter_factory(Arc::new(DefaultPhysicalExprAdapterFactory));
+
+    let table = ListingTable::try_new(listing_table_config).unwrap();
+    ctx.register_table("t", Arc::new(table)).unwrap();
+
+    let batches = ctx
+        .sql("SELECT s FROM t")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(batches.len(), 1);
+
+    // Verify top-level metadata propagation
+    let output_schema = batches[0].schema();
+    let s_field = output_schema.field_with_name("s").unwrap();
+    assert_eq!(
+        s_field.metadata().get("top_meta").map(String::as_str),
+        Some("1")
+    );
+
+    // Verify nested struct type/field propagation + values
+    let s_array = batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .expect("expected struct array");
+
+    let id_array = s_array
+        .column_by_name("id")
+        .expect("id column")
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .expect("id should be cast to Int64");
+    assert_eq!(id_array.values(), &[1, 2, 3]);
+
+    let extra_array = s_array.column_by_name("extra").expect("extra column");
+    assert_eq!(extra_array.null_count(), 3);
+
+    // Verify nested field metadata propagation
+    let extra_field = match s_field.data_type() {
+        DataType::Struct(fields) => fields
+            .iter()
+            .find(|f| f.name() == "extra")
+            .expect("extra field"),
+        other => panic!("expected struct type for s, got {other:?}"),
+    };
+    assert_eq!(
+        extra_field
+            .metadata()
+            .get("nested_meta")
+            .map(String::as_str),
+        Some("1")
+    );
+
+    // Smoke test: filtering on a missing nested field evaluates correctly
+    let filtered = ctx
+        .sql("SELECT get_field(s, 'extra') AS extra FROM t WHERE get_field(s, 'extra') IS NULL")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].num_rows(), 3);
+    let extra = filtered[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<BooleanArray>()
+        .expect("extra should be a boolean array");
+    assert_eq!(extra.null_count(), 3);
+
+    Ok(())
 }
 
 /// Test demonstrating that a single PhysicalExprAdapterFactory instance can be
