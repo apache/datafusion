@@ -503,7 +503,8 @@ fn simplify_concat_ws(delimiter: &Expr, args: &[Expr]) -> Result<ExprSimplifyRes
                         _ => ScalarValue::Utf8(None),
                     };
                     Ok(ExprSimplifyResult::Simplified(Expr::Literal(
-                        null_scalar, None,
+                        null_scalar,
+                        None,
                     )))
                 }
             }
@@ -838,10 +839,8 @@ mod tests {
     fn concat_ws_utf8view_null_separator() -> Result<()> {
         // All-scalar path: null Utf8View separator should return Utf8View(None)
         let c0 = ColumnarValue::Scalar(ScalarValue::Utf8View(None));
-        let c1 =
-            ColumnarValue::Scalar(ScalarValue::Utf8View(Some("aa".to_string())));
-        let c2 =
-            ColumnarValue::Scalar(ScalarValue::Utf8View(Some("bb".to_string())));
+        let c1 = ColumnarValue::Scalar(ScalarValue::Utf8View(Some("aa".to_string())));
+        let c2 = ColumnarValue::Scalar(ScalarValue::Utf8View(Some("bb".to_string())));
 
         let arg_fields = vec![
             Field::new("a", Utf8View, true).into(),
@@ -864,9 +863,8 @@ mod tests {
 
         // Array path: null Utf8View scalar separator with array args
         let c0 = ColumnarValue::Scalar(ScalarValue::Utf8View(None));
-        let c1 = ColumnarValue::Array(Arc::new(StringViewArray::from(vec![
-            "foo", "bar",
-        ])));
+        let c1 =
+            ColumnarValue::Array(Arc::new(StringViewArray::from(vec!["foo", "bar"])));
 
         let arg_fields = vec![
             Field::new("a", Utf8View, true).into(),
@@ -893,10 +891,8 @@ mod tests {
     fn concat_ws_largeutf8_null_separator() -> Result<()> {
         // All-scalar path: null LargeUtf8 separator should return LargeUtf8(None)
         let c0 = ColumnarValue::Scalar(ScalarValue::LargeUtf8(None));
-        let c1 =
-            ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some("aa".to_string())));
-        let c2 =
-            ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some("bb".to_string())));
+        let c1 = ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some("aa".to_string())));
+        let c2 = ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some("bb".to_string())));
 
         let arg_fields = vec![
             Field::new("a", LargeUtf8, true).into(),
@@ -919,9 +915,8 @@ mod tests {
 
         // Array path: null LargeUtf8 scalar separator with array args
         let c0 = ColumnarValue::Scalar(ScalarValue::LargeUtf8(None));
-        let c1 = ColumnarValue::Array(Arc::new(LargeStringArray::from(vec![
-            "foo", "bar",
-        ])));
+        let c1 =
+            ColumnarValue::Array(Arc::new(LargeStringArray::from(vec!["foo", "bar"])));
 
         let arg_fields = vec![
             Field::new("a", LargeUtf8, true).into(),
