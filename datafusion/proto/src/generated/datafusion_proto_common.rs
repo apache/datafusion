@@ -838,6 +838,10 @@ pub struct ParquetOptions {
     pub max_row_group_size: u64,
     #[prost(string, tag = "16")]
     pub created_by: ::prost::alloc::string::String,
+    #[prost(oneof = "parquet_options::PruningMaxInlistLimitOpt", tags = "35")]
+    pub pruning_max_inlist_limit_opt: ::core::option::Option<
+        parquet_options::PruningMaxInlistLimitOpt,
+    >,
     #[prost(oneof = "parquet_options::MetadataSizeHintOpt", tags = "4")]
     pub metadata_size_hint_opt: ::core::option::Option<
         parquet_options::MetadataSizeHintOpt,
@@ -875,6 +879,11 @@ pub struct ParquetOptions {
 }
 /// Nested message and enum types in `ParquetOptions`.
 pub mod parquet_options {
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum PruningMaxInlistLimitOpt {
+        #[prost(uint64, tag = "35")]
+        PruningMaxInlistLimit(u64),
+    }
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum MetadataSizeHintOpt {
         #[prost(uint64, tag = "4")]

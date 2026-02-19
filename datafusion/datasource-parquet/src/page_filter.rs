@@ -31,7 +31,7 @@ use arrow::{
 use datafusion_common::ScalarValue;
 use datafusion_common::pruning::PruningStatistics;
 use datafusion_physical_expr::{PhysicalExpr, split_conjunction};
-use datafusion_pruning::PruningPredicate;
+use datafusion_pruning::{PruningPredicate, PruningPredicateConfig};
 
 use log::{debug, trace};
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
@@ -119,14 +119,19 @@ impl PagePruningAccessPlanFilter {
     /// Create a new [`PagePruningAccessPlanFilter`] from a physical
     /// expression.
     #[expect(clippy::needless_pass_by_value)]
-    pub fn new(expr: &Arc<dyn PhysicalExpr>, schema: SchemaRef) -> Self {
+    pub fn new(
+        expr: &Arc<dyn PhysicalExpr>,
+        schema: SchemaRef,
+        config: &PruningPredicateConfig,
+    ) -> Self {
         // extract any single column predicates
         let predicates = split_conjunction(expr)
             .into_iter()
             .filter_map(|predicate| {
-                let pp = match PruningPredicate::try_new(
+                let pp = match PruningPredicate::try_new_with_config(
                     Arc::clone(predicate),
                     Arc::clone(&schema),
+                    config,
                 ) {
                     Ok(pp) => pp,
                     Err(e) => {

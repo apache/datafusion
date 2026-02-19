@@ -5695,6 +5695,9 @@ impl serde::Serialize for ParquetOptions {
         if !self.created_by.is_empty() {
             len += 1;
         }
+        if self.pruning_max_inlist_limit_opt.is_some() {
+            len += 1;
+        }
         if self.metadata_size_hint_opt.is_some() {
             len += 1;
         }
@@ -5805,6 +5808,15 @@ impl serde::Serialize for ParquetOptions {
         }
         if !self.created_by.is_empty() {
             struct_ser.serialize_field("createdBy", &self.created_by)?;
+        }
+        if let Some(v) = self.pruning_max_inlist_limit_opt.as_ref() {
+            match v {
+                parquet_options::PruningMaxInlistLimitOpt::PruningMaxInlistLimit(v) => {
+                    #[allow(clippy::needless_borrow)]
+                    #[allow(clippy::needless_borrows_for_generic_args)]
+                    struct_ser.serialize_field("pruningMaxInlistLimit", ToString::to_string(&v).as_str())?;
+                }
+            }
         }
         if let Some(v) = self.metadata_size_hint_opt.as_ref() {
             match v {
@@ -5944,6 +5956,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             "maxRowGroupSize",
             "created_by",
             "createdBy",
+            "pruning_max_inlist_limit",
+            "pruningMaxInlistLimit",
             "metadata_size_hint",
             "metadataSizeHint",
             "compression",
@@ -5989,6 +6003,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             DataPageRowCountLimit,
             MaxRowGroupSize,
             CreatedBy,
+            PruningMaxInlistLimit,
             MetadataSizeHint,
             Compression,
             DictionaryEnabled,
@@ -6042,6 +6057,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             "dataPageRowCountLimit" | "data_page_row_count_limit" => Ok(GeneratedField::DataPageRowCountLimit),
                             "maxRowGroupSize" | "max_row_group_size" => Ok(GeneratedField::MaxRowGroupSize),
                             "createdBy" | "created_by" => Ok(GeneratedField::CreatedBy),
+                            "pruningMaxInlistLimit" | "pruning_max_inlist_limit" => Ok(GeneratedField::PruningMaxInlistLimit),
                             "metadataSizeHint" | "metadata_size_hint" => Ok(GeneratedField::MetadataSizeHint),
                             "compression" => Ok(GeneratedField::Compression),
                             "dictionaryEnabled" | "dictionary_enabled" => Ok(GeneratedField::DictionaryEnabled),
@@ -6093,6 +6109,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                 let mut data_page_row_count_limit__ = None;
                 let mut max_row_group_size__ = None;
                 let mut created_by__ = None;
+                let mut pruning_max_inlist_limit_opt__ = None;
                 let mut metadata_size_hint_opt__ = None;
                 let mut compression_opt__ = None;
                 let mut dictionary_enabled_opt__ = None;
@@ -6246,6 +6263,12 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             }
                             created_by__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::PruningMaxInlistLimit => {
+                            if pruning_max_inlist_limit_opt__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("pruningMaxInlistLimit"));
+                            }
+                            pruning_max_inlist_limit_opt__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| parquet_options::PruningMaxInlistLimitOpt::PruningMaxInlistLimit(x.0));
+                        }
                         GeneratedField::MetadataSizeHint => {
                             if metadata_size_hint_opt__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("metadataSizeHint"));
@@ -6336,6 +6359,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     data_page_row_count_limit: data_page_row_count_limit__.unwrap_or_default(),
                     max_row_group_size: max_row_group_size__.unwrap_or_default(),
                     created_by: created_by__.unwrap_or_default(),
+                    pruning_max_inlist_limit_opt: pruning_max_inlist_limit_opt__,
                     metadata_size_hint_opt: metadata_size_hint_opt__,
                     compression_opt: compression_opt__,
                     dictionary_enabled_opt: dictionary_enabled_opt__,

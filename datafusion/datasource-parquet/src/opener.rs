@@ -49,7 +49,9 @@ use datafusion_physical_expr_common::physical_expr::{
 use datafusion_physical_plan::metrics::{
     Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder, PruningMetrics,
 };
-use datafusion_pruning::{FilePruner, PruningPredicate, build_pruning_predicate};
+use datafusion_pruning::{
+    FilePruner, PruningPredicate, PruningPredicateConfig, build_pruning_predicate,
+};
 
 use crate::sort::reverse_row_selection;
 #[cfg(feature = "parquet_encryption")]
@@ -104,6 +106,8 @@ pub(super) struct ParquetOpener {
     pub enable_bloom_filter: bool,
     /// Should row group pruning be applied
     pub enable_row_group_stats_pruning: bool,
+    /// Internals configuration of predicate pruning
+    pub(crate) pruning_predicate_config: PruningPredicateConfig,
     /// Coerce INT96 timestamps to specific TimeUnit
     pub coerce_int96: Option<TimeUnit>,
     /// Optional parquet FileDecryptionProperties
@@ -280,6 +284,7 @@ impl FileOpener for ParquetOpener {
 
         let reverse_row_groups = self.reverse_row_groups;
         let preserve_order = self.preserve_order;
+        let pruning_predicate_config = self.pruning_predicate_config.clone();
 
         Ok(Box::pin(async move {
             #[cfg(feature = "parquet_encryption")]
@@ -326,6 +331,7 @@ impl FileOpener for ParquetOpener {
                         &logical_file_schema,
                         &partitioned_file,
                         predicate_creation_errors.clone(),
+                        pruning_predicate_config.clone(),
                     )
                 });
 
@@ -426,6 +432,7 @@ impl FileOpener for ParquetOpener {
                 predicate.as_ref(),
                 &physical_file_schema,
                 &predicate_creation_errors,
+                &pruning_predicate_config,
             );
 
             // The page index is not stored inline in the parquet footer so the
@@ -513,6 +520,7 @@ impl FileOpener for ParquetOpener {
                         rg_metadata,
                         predicate,
                         &file_metrics,
+                        &pruning_predicate_config,
                     );
                 } else {
                     // Update metrics: statistics unavailable, so all row groups are
@@ -942,10 +950,12 @@ fn create_initial_plan(
 pub(crate) fn build_page_pruning_predicate(
     predicate: &Arc<dyn PhysicalExpr>,
     file_schema: &SchemaRef,
+    config: &PruningPredicateConfig,
 ) -> Arc<PagePruningAccessPlanFilter> {
     Arc::new(PagePruningAccessPlanFilter::new(
         predicate,
         Arc::clone(file_schema),
+        config,
     ))
 }
 
@@ -953,6 +963,7 @@ pub(crate) fn build_pruning_predicates(
     predicate: Option<&Arc<dyn PhysicalExpr>>,
     file_schema: &SchemaRef,
     predicate_creation_errors: &Count,
+    config: &PruningPredicateConfig,
 ) -> (
     Option<Arc<PruningPredicate>>,
     Option<Arc<PagePruningAccessPlanFilter>>,
@@ -964,8 +975,10 @@ pub(crate) fn build_pruning_predicates(
         Arc::clone(predicate),
         file_schema,
         predicate_creation_errors,
+        config,
     );
-    let page_pruning_predicate = build_page_pruning_predicate(predicate, file_schema);
+    let page_pruning_predicate =
+        build_page_pruning_predicate(predicate, file_schema, config);
     (pruning_predicate, Some(page_pruning_predicate))
 }
 
@@ -1036,6 +1049,7 @@ mod test {
         DefaultPhysicalExprAdapterFactory, replace_columns_with_literals,
     };
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
+    use datafusion_pruning::PruningPredicateConfig;
     use futures::{Stream, StreamExt};
     use object_store::{ObjectStore, memory::InMemory, path::Path};
     use parquet::arrow::ArrowWriter;
@@ -1189,6 +1203,7 @@ mod test {
                 enable_page_index: self.enable_page_index,
                 enable_bloom_filter: self.enable_bloom_filter,
                 enable_row_group_stats_pruning: self.enable_row_group_stats_pruning,
+                pruning_predicate_config: PruningPredicateConfig::default(),
                 coerce_int96: self.coerce_int96,
                 #[cfg(feature = "parquet_encryption")]
                 file_decryption_properties: None,

@@ -106,7 +106,7 @@ use datafusion_physical_plan::{ColumnarValue, PhysicalExpr};
 /// C: true  (rows might match x = 5)
 /// ```
 ///
-/// See [`PruningPredicate::try_new`] and [`PruningPredicate::prune`] for more information.
+/// See [`PruningPredicate::try_new_with_config`] and [`PruningPredicate::prune`] for more information.
 ///
 /// # Background
 ///
@@ -378,6 +378,17 @@ pub struct PruningPredicate {
     literal_guarantees: Vec<LiteralGuarantee>,
 }
 
+#[derive(Debug, Clone)]
+pub struct PruningPredicateConfig {
+    pub max_in_list: usize,
+}
+
+impl Default for PruningPredicateConfig {
+    fn default() -> Self {
+        PruningPredicateConfig { max_in_list: 20 }
+    }
+}
+
 /// Build a pruning predicate from an optional predicate expression.
 /// If the predicate is None or the predicate cannot be converted to a pruning
 /// predicate, return None.
@@ -387,8 +398,13 @@ pub fn build_pruning_predicate(
     predicate: Arc<dyn PhysicalExpr>,
     file_schema: &SchemaRef,
     predicate_creation_errors: &Count,
+    config: &PruningPredicateConfig,
 ) -> Option<Arc<PruningPredicate>> {
-    match PruningPredicate::try_new(predicate, Arc::clone(file_schema)) {
+    match PruningPredicate::try_new_with_config(
+        predicate,
+        Arc::clone(file_schema),
+        config,
+    ) {
         Ok(pruning_predicate) => {
             if !pruning_predicate.always_true() {
                 return Some(Arc::new(pruning_predicate));
@@ -433,6 +449,10 @@ impl UnhandledPredicateHook for ConstantUnhandledPredicateHook {
 }
 
 impl PruningPredicate {
+    pub fn try_new(expr: Arc<dyn PhysicalExpr>, schema: SchemaRef) -> Result<Self> {
+        Self::try_new_with_config(expr, schema, &PruningPredicateConfig::default())
+    }
+
     /// Try to create a new instance of [`PruningPredicate`]
     ///
     /// This will translate the provided `expr` filter expression into
@@ -461,7 +481,11 @@ impl PruningPredicate {
     /// returns a new expression.
     /// It is recommended that you pass the expressions through [`PhysicalExprSimplifier`]
     /// before calling this method to make sure the expressions can be used for pruning.
-    pub fn try_new(mut expr: Arc<dyn PhysicalExpr>, schema: SchemaRef) -> Result<Self> {
+    pub fn try_new_with_config(
+        mut expr: Arc<dyn PhysicalExpr>,
+        schema: SchemaRef,
+        config: &PruningPredicateConfig,
+    ) -> Result<Self> {
         // Get a (simpler) snapshot of the physical expr here to use with `PruningPredicate`.
         // In particular this unravels any `DynamicFilterPhysicalExpr`s by snapshotting them
         // so that PruningPredicate can work with a static expression.
@@ -487,6 +511,7 @@ impl PruningPredicate {
             &schema,
             &mut required_columns,
             &unhandled_hook,
+            config,
         );
         let predicate_schema = required_columns.schema();
         // Simplify the newly created predicate to get rid of redundant casts, comparisons, etc.
@@ -1356,20 +1381,18 @@ fn build_is_null_column_expr(
     }
 }
 
-/// The maximum number of entries in an `InList` that might be rewritten into
-/// an OR chain
-const MAX_LIST_VALUE_SIZE_REWRITE: usize = 20;
-
 /// Rewrite a predicate expression in terms of statistics (min/max/null_counts)
 /// for use as a [`PruningPredicate`].
 pub struct PredicateRewriter {
     unhandled_hook: Arc<dyn UnhandledPredicateHook>,
+    pruning_predicate_config: PruningPredicateConfig,
 }
 
 impl Default for PredicateRewriter {
     fn default() -> Self {
         Self {
             unhandled_hook: Arc::new(ConstantUnhandledPredicateHook::default()),
+            pruning_predicate_config: PruningPredicateConfig::default(),
         }
     }
 }
@@ -1385,7 +1408,10 @@ impl PredicateRewriter {
         self,
         unhandled_hook: Arc<dyn UnhandledPredicateHook>,
     ) -> Self {
-        Self { unhandled_hook }
+        Self {
+            unhandled_hook,
+            ..Self::default()
+        }
     }
 
     /// Translate logical filter expression into pruning predicate
@@ -1408,6 +1434,7 @@ impl PredicateRewriter {
             &Arc::new(schema.clone()),
             &mut required_columns,
             &self.unhandled_hook,
+            &self.pruning_predicate_config,
         )
     }
 }
@@ -1426,6 +1453,7 @@ fn build_predicate_expression(
     schema: &SchemaRef,
     required_columns: &mut RequiredColumns,
     unhandled_hook: &Arc<dyn UnhandledPredicateHook>,
+    config: &PruningPredicateConfig,
 ) -> Arc<dyn PhysicalExpr> {
     if is_always_false(expr) {
         // Shouldn't return `unhandled_hook.handle(expr)`
@@ -1461,9 +1489,7 @@ fn build_predicate_expression(
         }
     }
     if let Some(in_list) = expr_any.downcast_ref::<phys_expr::InListExpr>() {
-        if !in_list.list().is_empty()
-            && in_list.list().len() <= MAX_LIST_VALUE_SIZE_REWRITE
-        {
+        if !in_list.list().is_empty() && in_list.list().len() <= config.max_in_list {
             let eq_op = if in_list.negated() {
                 Operator::NotEq
             } else {
@@ -1491,6 +1517,7 @@ fn build_predicate_expression(
                 schema,
                 required_columns,
                 unhandled_hook,
+                config,
             );
         } else {
             return unhandled_hook.handle(expr);
@@ -1525,10 +1552,20 @@ fn build_predicate_expression(
     };
 
     if op == Operator::And || op == Operator::Or {
-        let left_expr =
-            build_predicate_expression(&left, schema, required_columns, unhandled_hook);
-        let right_expr =
-            build_predicate_expression(&right, schema, required_columns, unhandled_hook);
+        let left_expr = build_predicate_expression(
+            &left,
+            schema,
+            required_columns,
+            unhandled_hook,
+            config,
+        );
+        let right_expr = build_predicate_expression(
+            &right,
+            schema,
+            required_columns,
+            unhandled_hook,
+            config,
+        );
         // simplify boolean expression if applicable
         let expr = match (&left_expr, op, &right_expr) {
             (left, Operator::And, right)
@@ -3222,14 +3259,19 @@ mod tests {
     #[test]
     fn row_group_predicate_in_list_to_many_values() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
-        // test c1 in(1..21)
-        // in pruning.rs has MAX_LIST_VALUE_SIZE_REWRITE = 20, more than this value will be rewrite
-        // always true
-        let expr = col("c1").in_list((1..=21).map(lit).collect(), false);
+        let limit = 15i32;
+        let expr = col("c1").in_list((1..=limit).map(lit).collect(), false);
 
         let expected_expr = "true";
         let predicate_expr =
-            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+            test_build_predicate_expression_with_pruning_predicate_config(
+                &expr,
+                &schema,
+                &mut RequiredColumns::new(),
+                &PruningPredicateConfig {
+                    max_in_list: (limit - 1) as usize,
+                },
+            );
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         Ok(())
@@ -5394,6 +5436,20 @@ mod tests {
         schema: &Schema,
         required_columns: &mut RequiredColumns,
     ) -> Arc<dyn PhysicalExpr> {
+        test_build_predicate_expression_with_pruning_predicate_config(
+            expr,
+            schema,
+            required_columns,
+            &PruningPredicateConfig::default(),
+        )
+    }
+
+    fn test_build_predicate_expression_with_pruning_predicate_config(
+        expr: &Expr,
+        schema: &Schema,
+        required_columns: &mut RequiredColumns,
+        pruning_predicate_config: &PruningPredicateConfig,
+    ) -> Arc<dyn PhysicalExpr> {
         let expr = logical2physical(expr, schema);
         let unhandled_hook = Arc::new(ConstantUnhandledPredicateHook::default()) as _;
         build_predicate_expression(
@@ -5401,6 +5457,7 @@ mod tests {
             &Arc::new(schema.clone()),
             required_columns,
             &unhandled_hook,
+            pruning_predicate_config,
         )
     }
 
