@@ -1,0 +1,506 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+## Test physical plans with placeholders.
+##########
+
+statement ok
+CREATE TABLE t1(
+  id INT,
+  name TEXT
+) as VALUES
+  (1, 'Alex'),
+  (2, 'Bob'),
+  (3, 'Alice')
+
+# Filter with multiple placeholders
+query TT
+EXPLAIN SELECT id FROM t1 WHERE name = $1 OR id = $2
+----
+logical_plan
+01)Projection: t1.id
+02)--Filter: t1.name = $1 OR t1.id = $2
+03)----TableScan: t1 projection=[id, name]
+physical_plan
+01)FilterExec: name@1 = $1 OR id@0 = $2, projection=[id@0]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Projection with placeholder
+query TT
+EXPLAIN SELECT id + $1 FROM t1
+----
+logical_plan
+01)Projection: t1.id + $1
+02)--TableScan: t1 projection=[id]
+physical_plan
+01)ProjectionExec: expr=[id@0 + $1 as t1.id + $1]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Projection and filter with placeholders
+query TT
+EXPLAIN SELECT id + $1 FROM t1 WHERE name = $2
+----
+logical_plan
+01)Projection: t1.id + $1
+02)--Filter: t1.name = $2
+03)----TableScan: t1 projection=[id, name]
+physical_plan
+01)ProjectionExec: expr=[id@0 + $1 as t1.id + $1]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----FilterExec: name@1 = $2
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+DROP TABLE t1
+
+statement ok
+CREATE EXTERNAL TABLE agg_order (
+c1 INT NOT NULL,
+c2 INT NOT NULL,
+c3 INT NOT NULL
+)
+STORED AS CSV
+LOCATION '../core/tests/data/aggregate_agg_multi_order.csv'
+OPTIONS ('format.has_header' 'true');
+
+# Aggregate with placeholder in expression and ordering
+query TT
+EXPLAIN SELECT array_agg(c1 + $1 ORDER BY c2 DESC, c3) FROM agg_order;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[array_agg(agg_order.c1 + $1) ORDER BY [agg_order.c2 DESC NULLS FIRST, agg_order.c3 ASC NULLS LAST]]]
+02)--TableScan: agg_order projection=[c1, c2, c3]
+physical_plan
+01)AggregateExec: mode=Final, gby=[], aggr=[array_agg(agg_order.c1 + $1) ORDER BY [agg_order.c2 DESC NULLS FIRST, agg_order.c3 ASC NULLS LAST]]
+02)--CoalescePartitionsExec
+03)----AggregateExec: mode=Partial, gby=[], aggr=[array_agg(agg_order.c1 + $1) ORDER BY [agg_order.c2 DESC NULLS FIRST, agg_order.c3 ASC NULLS LAST]]
+04)------SortExec: expr=[c2@1 DESC, c3@2 ASC NULLS LAST], preserve_partitioning=[true]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/aggregate_agg_multi_order.csv]]}, projection=[c1, c2, c3], file_type=csv, has_header=true
+
+statement ok
+DROP TABLE agg_order
+
+statement ok
+CREATE EXTERNAL TABLE alltypes_plain STORED AS PARQUET LOCATION '../../parquet-testing/data/alltypes_plain.parquet';
+
+statement ok
+SET datafusion.execution.parquet.pushdown_filters = true;
+
+statement ok
+SET datafusion.execution.parquet.pushdown_filters = true;
+
+# Filter with placeholder and parquet pushdown
+query TT
+EXPLAIN SELECT smallint_col FROM alltypes_plain WHERE int_col = $1;
+----
+logical_plan
+01)Projection: alltypes_plain.smallint_col
+02)--Filter: alltypes_plain.int_col = $1
+03)----TableScan: alltypes_plain projection=[smallint_col, int_col], partial_filters=[alltypes_plain.int_col = $1]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[smallint_col], file_type=parquet, predicate=int_col@4 = $1, pruning_predicate=int_col_null_count@2 != row_count@3 AND int_col_min@0 <= $1 AND $1 <= int_col_max@1, required_guarantees=[]
+
+# Projection with placeholder on parquet table
+query TT
+EXPLAIN SELECT smallint_col + $1 FROM alltypes_plain;
+----
+logical_plan
+01)Projection: alltypes_plain.smallint_col + $1
+02)--TableScan: alltypes_plain projection=[smallint_col]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[smallint_col@3 + $1 as alltypes_plain.smallint_col + $1], file_type=parquet
+
+# Projection and filter with placeholders on parquet table
+query TT
+EXPLAIN select smallint_col + $1 FROM alltypes_plain WHERE int_col = $2
+----
+logical_plan
+01)Projection: alltypes_plain.smallint_col + $1
+02)--Filter: alltypes_plain.int_col = $2
+03)----TableScan: alltypes_plain projection=[smallint_col, int_col], partial_filters=[alltypes_plain.int_col = $2]
+physical_plan
+01)ProjectionExec: expr=[smallint_col@0 + $1 as alltypes_plain.smallint_col + $1]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[smallint_col, int_col], file_type=parquet, predicate=int_col@4 = $2, pruning_predicate=int_col_null_count@2 != row_count@3 AND int_col_min@0 <= $2 AND $2 <= int_col_max@1, required_guarantees=[]
+
+statement ok
+DROP TABLE alltypes_plain;
+
+##########
+## Joins with placeholders
+##########
+
+statement ok
+CREATE TABLE t1(id INT, name TEXT) AS VALUES (1, 'Alex'), (2, 'Bob');
+
+statement ok
+CREATE TABLE t2(id INT, age INT) AS VALUES (1, 25), (2, 30);
+
+# Join with placeholder in filter
+query TT
+EXPLAIN SELECT t1.name, t2.age FROM t1 JOIN t2 ON t1.id + $1 = t2.id;
+----
+logical_plan
+01)Projection: t1.name, t2.age
+02)--Inner Join: t1.id + $1 = t2.id
+03)----TableScan: t1 projection=[id, name]
+04)----TableScan: t2 projection=[id, age]
+physical_plan
+01)ProjectionExec: expr=[name@1 as name, age@0 as age]
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, t1.id + $1@2)], projection=[age@1, name@3]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)----ProjectionExec: expr=[id@0 as id, name@1 as name, id@0 + $1 as t1.id + $1]
+05)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Join with placeholder in filter
+query TT
+EXPLAIN SELECT t1.name, t2.age FROM t1 JOIN t2 ON t1.id = t2.id WHERE t2.age > $1;
+----
+logical_plan
+01)Projection: t1.name, t2.age
+02)--Inner Join: t1.id = t2.id
+03)----TableScan: t1 projection=[id, name]
+04)----Filter: t2.age > $1
+05)------TableScan: t2 projection=[id, age]
+physical_plan
+01)ProjectionExec: expr=[name@1 as name, age@0 as age]
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0)], projection=[age@1, name@3]
+03)----FilterExec: age@1 > $1
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Join with placeholder in projection
+query TT
+EXPLAIN SELECT t1.name, t2.age + $1 FROM t1 JOIN t2 ON t1.id = t2.id;
+----
+logical_plan
+01)Projection: t1.name, t2.age + $1
+02)--Inner Join: t1.id = t2.id
+03)----TableScan: t1 projection=[id, name]
+04)----TableScan: t2 projection=[id, age]
+physical_plan
+01)ProjectionExec: expr=[name@1 as name, age@3 + $1 as t2.age + $1]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----ProjectionExec: expr=[id@2 as id, name@3 as name, id@0 as id, age@1 as age]
+04)------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0)]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+06)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Join with placeholder in ON statement
+query TT
+EXPLAIN SELECT t1.name, t2.age FROM t1 JOIN t2 ON t1.id + t2.id = $1;
+----
+logical_plan
+01)Projection: t1.name, t2.age
+02)--Inner Join:  Filter: t1.id + t2.id = $1
+03)----TableScan: t1 projection=[id, name]
+04)----TableScan: t2 projection=[id, age]
+physical_plan
+01)ProjectionExec: expr=[name@1 as name, age@0 as age]
+02)--NestedLoopJoinExec: join_type=Inner, filter=id@0 + id@1 = $1, projection=[age@1, name@3]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+DROP TABLE t1;
+
+##########
+## Window Functions and UNION with placeholders
+##########
+
+statement ok
+CREATE TABLE t1(id INT, name TEXT) AS VALUES (1, 'Alex'), (2, 'Bob');
+
+# Window function with placeholder
+query TT
+EXPLAIN SELECT id, SUM(id) OVER (PARTITION BY name ORDER BY id) + $1 FROM t1;
+----
+logical_plan
+01)Projection: t1.id, sum(t1.id) PARTITION BY [t1.name] ORDER BY [t1.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW + $1
+02)--WindowAggr: windowExpr=[[sum(CAST(t1.id AS Int64)) PARTITION BY [t1.name] ORDER BY [t1.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+03)----TableScan: t1 projection=[id, name]
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, sum(t1.id) PARTITION BY [t1.name] ORDER BY [t1.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 + $1 as sum(t1.id) PARTITION BY [t1.name] ORDER BY [t1.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW + $1]
+02)--BoundedWindowAggExec: wdw=[sum(t1.id) PARTITION BY [t1.name] ORDER BY [t1.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(t1.id) PARTITION BY [t1.name] ORDER BY [t1.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----SortExec: expr=[name@1 ASC NULLS LAST, id@0 ASC NULLS LAST], preserve_partitioning=[false]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Window function with placeholder
+# Here we only resolve BoundedWindowAggExec.
+query TT
+EXPLAIN SELECT id, SUM(id + $1) OVER (PARTITION BY name ORDER BY id) FROM t1;
+----
+logical_plan
+01)Projection: t1.id, sum(t1.id + $1) PARTITION BY [t1.name] ORDER BY [t1.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+02)--WindowAggr: windowExpr=[[sum(CAST(t1.id + $1 AS Int64)) PARTITION BY [t1.name] ORDER BY [t1.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+03)----TableScan: t1 projection=[id, name]
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, sum(t1.id + $1) PARTITION BY [t1.name] ORDER BY [t1.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as sum(t1.id + $1) PARTITION BY [t1.name] ORDER BY [t1.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
+02)--BoundedWindowAggExec: wdw=[sum(t1.id + $1) PARTITION BY [t1.name] ORDER BY [t1.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(t1.id + $1) PARTITION BY [t1.name] ORDER BY [t1.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----SortExec: expr=[name@1 ASC NULLS LAST, id@0 ASC NULLS LAST], preserve_partitioning=[false]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# UNION with placeholder
+query TT
+EXPLAIN SELECT id FROM t1 WHERE id = $1 UNION ALL SELECT id FROM t1 WHERE id = $2;
+----
+logical_plan
+01)Union
+02)--Filter: t1.id = $1
+03)----TableScan: t1 projection=[id]
+04)--Filter: t1.id = $2
+05)----TableScan: t1 projection=[id]
+physical_plan
+01)UnionExec
+02)--FilterExec: id@0 = $1
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--FilterExec: id@0 = $2
+05)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+DROP TABLE t1;
+
+##########
+## Subqueries and CTEs with placeholders
+##########
+
+statement ok
+CREATE TABLE t1(id INT, name TEXT) AS VALUES (1, 'Alex'), (2, 'Bob');
+
+# Scalar subquery with placeholder
+query TT
+EXPLAIN SELECT id, (SELECT name FROM t1 WHERE id = $1) FROM t1;
+----
+logical_plan
+01)Projection: t1.id, __scalar_sq_1.name AS name
+02)--Left Join:
+03)----TableScan: t1 projection=[id]
+04)----SubqueryAlias: __scalar_sq_1
+05)------Projection: t1.name
+06)--------Filter: t1.id = $1
+07)----------TableScan: t1 projection=[id, name]
+physical_plan
+01)ProjectionExec: expr=[id@1 as id, name@0 as name]
+02)--NestedLoopJoinExec: join_type=Right
+03)----FilterExec: id@0 = $1, projection=[name@1]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+# CTE with placeholder
+query TT
+EXPLAIN WITH cte AS (SELECT * FROM t1 WHERE id = $1) SELECT * FROM cte;
+----
+logical_plan
+01)SubqueryAlias: cte
+02)--Filter: t1.id = $1
+03)----TableScan: t1 projection=[id, name]
+physical_plan
+01)FilterExec: id@0 = $1
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+DROP TABLE t1;
+
+##########
+## Group By and Order By with placeholders
+##########
+
+statement ok
+CREATE TABLE t1(id INT, name TEXT) AS VALUES (1, 'Alex'), (2, 'Bob'), (3, 'Alice');
+
+# Group by with placeholder in SELECT
+query TT
+EXPLAIN SELECT id + $1, COUNT(*) FROM t1 GROUP BY id;
+----
+logical_plan
+01)Projection: t1.id + $1, count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[t1.id]], aggr=[[count(Int64(1))]]
+03)----TableScan: t1 projection=[id]
+physical_plan
+01)ProjectionExec: expr=[id@0 + $1 as t1.id + $1, count(Int64(1))@1 as count(*)]
+02)--AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[count(Int64(1))]
+03)----RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1
+04)------AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[count(Int64(1))]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Group by with placeholder in HAVING
+query TT
+EXPLAIN SELECT id, COUNT(*) FROM t1 GROUP BY id HAVING COUNT(*) > $1;
+----
+logical_plan
+01)Projection: t1.id, count(Int64(1)) AS count(*)
+02)--Filter: count(Int64(1)) > CAST($1 AS Int64)
+03)----Aggregate: groupBy=[[t1.id]], aggr=[[count(Int64(1))]]
+04)------TableScan: t1 projection=[id]
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, count(Int64(1))@1 as count(*)]
+02)--FilterExec: count(Int64(1))@1 > $1
+03)----AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[count(Int64(1))]
+04)------RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1
+05)--------AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[count(Int64(1))]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Order by with placeholder
+query TT
+EXPLAIN SELECT id FROM t1 ORDER BY id + $1;
+----
+logical_plan
+01)Sort: t1.id + CAST($1 AS Int32) ASC NULLS LAST
+02)--TableScan: t1 projection=[id]
+physical_plan
+01)SortExec: expr=[id@0 + $1 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Group by and Order by with placeholders
+query TT
+EXPLAIN SELECT name, SUM(id) FROM t1 GROUP BY name ORDER BY SUM(id) + $1;
+----
+logical_plan
+01)Sort: sum(t1.id) + CAST($1 AS Int64) ASC NULLS LAST
+02)--Aggregate: groupBy=[[t1.name]], aggr=[[sum(CAST(t1.id AS Int64))]]
+03)----TableScan: t1 projection=[id, name]
+physical_plan
+01)SortPreservingMergeExec: [sum(t1.id)@1 + $1 ASC NULLS LAST]
+02)--SortExec: expr=[sum(t1.id)@1 + $1 ASC NULLS LAST], preserve_partitioning=[true]
+03)----AggregateExec: mode=FinalPartitioned, gby=[name@0 as name], aggr=[sum(t1.id)]
+04)------RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=1
+05)--------AggregateExec: mode=Partial, gby=[name@1 as name], aggr=[sum(t1.id)]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+DROP TABLE t1;
+
+##########
+## CAST and TRY_CAST with placeholders
+##########
+
+# Implicit CAST with placeholder
+query TT
+EXPLAIN SELECT $1::INT;
+----
+logical_plan
+01)Projection: CAST($1 AS Int32)
+02)--EmptyRelation: rows=1
+physical_plan
+01)ProjectionExec: expr=[$1]
+02)--PlaceholderRowExec
+
+# CAST with placeholder
+query TT
+EXPLAIN SELECT CAST($1 AS INT);
+----
+logical_plan
+01)Projection: CAST($1 AS Int32)
+02)--EmptyRelation: rows=1
+physical_plan
+01)ProjectionExec: expr=[$1]
+02)--PlaceholderRowExec
+
+# TRY_CAST with placeholder
+query TT
+EXPLAIN SELECT TRY_CAST($1 AS INT);
+----
+logical_plan
+01)Projection: TRY_CAST($1 AS Int32)
+02)--EmptyRelation: rows=1
+physical_plan
+01)ProjectionExec: expr=[TRY_CAST($1 AS Int32) as $1]
+02)--PlaceholderRowExec
+
+##########
+## IN and BETWEEN with placeholders
+##########
+
+statement ok
+CREATE TABLE t1(id INT, name TEXT) AS VALUES (1, 'Alex'), (2, 'Bob'), (3, 'Alice');
+
+# IN with placeholders
+query TT
+EXPLAIN SELECT id FROM t1 WHERE id IN ($1, $2, $3);
+----
+logical_plan
+01)Filter: t1.id = $1 OR t1.id = $2 OR t1.id = $3
+02)--TableScan: t1 projection=[id]
+physical_plan
+01)FilterExec: id@0 = $1 OR id@0 = $2 OR id@0 = $3
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# BETWEEN with placeholders
+query TT
+EXPLAIN SELECT id FROM t1 WHERE id BETWEEN $1 AND $2;
+----
+logical_plan
+01)Filter: t1.id >= $1 AND t1.id <= $2
+02)--TableScan: t1 projection=[id]
+physical_plan
+01)FilterExec: id@0 >= $1 AND id@0 <= $2
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+##########
+## String and Arithmetic operations with placeholders
+##########
+
+# String concatenation with placeholders
+query TT
+EXPLAIN SELECT $1::TEXT || $2::TEXT;
+----
+logical_plan
+01)Projection: CAST($1 AS Utf8View) || CAST($2 AS Utf8View)
+02)--EmptyRelation: rows=1
+physical_plan
+01)ProjectionExec: expr=[$1 || $2]
+02)--PlaceholderRowExec
+
+# Arithmetic with placeholders
+query TT
+EXPLAIN SELECT $1 + $2 * $3;
+----
+logical_plan
+01)Projection: $1 + CAST($2 AS Int64) * CAST($3 AS Int64)
+02)--EmptyRelation: rows=1
+physical_plan
+01)ProjectionExec: expr=[$1 + CAST($2 AS Int64) * CAST($3 AS Int64) as $1 + $2 * $3]
+02)--PlaceholderRowExec
+
+##########
+## LIKE and Regex with placeholders
+##########
+
+# LIKE with placeholder
+query TT
+EXPLAIN SELECT * FROM t1 WHERE name LIKE $1;
+----
+logical_plan
+01)Filter: t1.name LIKE $1
+02)--TableScan: t1 projection=[id, name]
+physical_plan
+01)FilterExec: name@1 LIKE $1
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Regex with placeholder
+query TT
+EXPLAIN SELECT * FROM t1 WHERE name ~ $1;
+----
+logical_plan
+01)Filter: t1.name ~ $1
+02)--TableScan: t1 projection=[id, name]
+physical_plan
+01)FilterExec: name@1 ~ $1
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+DROP TABLE t1;
