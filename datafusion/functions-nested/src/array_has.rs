@@ -383,7 +383,7 @@ fn array_has_dispatch_for_scalar(
             matches.next();
         }
 
-        if has_match && !validity.is_some_and(|v| !v.is_valid(i)) {
+        if has_match && validity.is_none_or(|v| v.is_valid(i)) {
             values.set_bit(i, true);
         }
     }
