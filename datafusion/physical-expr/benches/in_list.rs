@@ -23,8 +23,8 @@ use arrow::datatypes::{Field, Schema};
 use arrow::record_batch::RecordBatch;
 use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
-use datafusion_physical_expr::expressions::{col, in_list, lit};
 use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr::expressions::{col, in_list, lit};
 use rand::distr::Alphanumeric;
 use rand::prelude::*;
 use std::any::TypeId;
@@ -226,14 +226,10 @@ fn do_bench_dynamic(
     c: &mut Criterion,
     name: &str,
     values: ArrayRef,
-    list_cols: Vec<ArrayRef>,
+    list_cols: &[ArrayRef],
     _match_percent: f64,
 ) {
-    let mut fields = vec![Field::new(
-        "a",
-        values.data_type().clone(),
-        true,
-    )];
+    let mut fields = vec![Field::new("a", values.data_type().clone(), true)];
     let mut columns: Vec<ArrayRef> = vec![values];
 
     // Build list expressions: mix of column refs (forces dynamic path)
@@ -242,11 +238,7 @@ fn do_bench_dynamic(
         .enumerate()
         .map(|(i, col_arr)| {
             let name = format!("b{i}");
-            fields.push(Field::new(
-                &name,
-                col_arr.data_type().clone(),
-                true,
-            ));
+            fields.push(Field::new(&name, col_arr.data_type().clone(), true));
             columns.push(Arc::clone(col_arr));
             Field::new(&name, col_arr.data_type().clone(), true)
         })
@@ -258,15 +250,8 @@ fn do_bench_dynamic(
         .map(|f| col(f.name(), &schema).unwrap())
         .collect();
 
-    let expr = in_list(
-        col("a", &schema).unwrap(),
-        list_exprs,
-        &false,
-        &schema,
-    )
-    .unwrap();
-    let batch =
-        RecordBatch::try_new(Arc::new(schema), columns).unwrap();
+    let expr = in_list(col("a", &schema).unwrap(), list_exprs, &false, &schema).unwrap();
+    let batch = RecordBatch::try_new(Arc::new(schema), columns).unwrap();
 
     c.bench_function(name, |b| {
         b.iter(|| black_box(expr.evaluate(black_box(&batch)).unwrap()))
@@ -323,7 +308,7 @@ fn bench_dynamic_int32(c: &mut Criterion) {
                         (null_percent * 100.0) as u32
                     ),
                     Arc::new(values),
-                    list_cols,
+                    &list_cols,
                     match_percent,
                 );
             }
@@ -339,12 +324,10 @@ fn bench_dynamic_utf8(c: &mut Criterion) {
         for match_percent in [0.0, 0.5, 1.0] {
             // Generate the "needle" column
             let value_strings: Vec<Option<String>> = (0..ARRAY_LENGTH)
-                .map(|_| {
-                    rng.random_bool(0.8)
-                        .then(|| random_string(&mut rng, 12))
-                })
+                .map(|_| rng.random_bool(0.8).then(|| random_string(&mut rng, 12)))
                 .collect();
-            let values: StringArray = value_strings.iter().map(|s| s.as_deref()).collect();
+            let values: StringArray =
+                value_strings.iter().map(|s| s.as_deref()).collect();
 
             // Generate list columns with controlled match rate
             let list_cols: Vec<ArrayRef> = (0..list_size)
@@ -371,7 +354,7 @@ fn bench_dynamic_utf8(c: &mut Criterion) {
                     (match_percent * 100.0) as u32,
                 ),
                 Arc::new(values),
-                list_cols,
+                &list_cols,
                 match_percent,
             );
         }

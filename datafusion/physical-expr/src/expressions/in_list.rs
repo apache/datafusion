@@ -774,12 +774,9 @@ impl PhysicalExpr for InListExpr {
             None => {
                 // No static filter: iterate through each expression, compare, and OR results
                 let value = value.into_array(num_rows)?;
-                let use_arrow_eq =
-                    !value.data_type().is_nested();
-                let mut found = BooleanArray::new(
-                    BooleanBuffer::new_unset(num_rows),
-                    None,
-                );
+                let use_arrow_eq = !value.data_type().is_nested();
+                let mut found =
+                    BooleanArray::new(BooleanBuffer::new_unset(num_rows), None);
 
                 for expr in &self.list {
                     // Short-circuit: if every row is already true, skip remaining list items
@@ -801,9 +798,7 @@ impl PhysicalExpr for InListExpr {
                                 )?;
                                 (0..num_rows)
                                     .map(|i| {
-                                        if value.is_null(i)
-                                            || array.is_null(i)
-                                        {
+                                        if value.is_null(i) || array.is_null(i) {
                                             return None;
                                         }
                                         Some(cmp(i, i).is_eq())
@@ -820,8 +815,7 @@ impl PhysicalExpr for InListExpr {
                                 )
                             } else if use_arrow_eq {
                                 // Vectorized scalar comparison
-                                let scalar_datum =
-                                    scalar.to_scalar()?;
+                                let scalar_datum = scalar.to_scalar()?;
                                 arrow_eq(&value, &scalar_datum)?
                             } else {
                                 // Row-by-row comparator for nested types
@@ -836,9 +830,7 @@ impl PhysicalExpr for InListExpr {
                                         if value.is_null(i) {
                                             None
                                         } else {
-                                            Some(
-                                                cmp(i, 0).is_eq(),
-                                            )
+                                            Some(cmp(i, 0).is_eq())
                                         }
                                     })
                                     .collect::<BooleanArray>()
@@ -3547,8 +3539,7 @@ mod tests {
     #[test]
     fn test_dynamic_path_int32_scalars() -> Result<()> {
         // Dynamic path with scalar literals (bypassing static filter)
-        let schema =
-            Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
         let col_a = col("a", &schema)?;
         let batch = RecordBatch::try_new(
             Arc::new(schema),
@@ -3566,18 +3557,11 @@ mod tests {
         ];
         let expr = make_dynamic_in_list(col_a, list, false);
 
-        let result = expr
-            .evaluate(&batch)?
-            .into_array(batch.num_rows())?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
         let result = as_boolean_array(&result);
         assert_eq!(
             result,
-            &BooleanArray::from(vec![
-                Some(true),
-                Some(false),
-                Some(true),
-                None,
-            ])
+            &BooleanArray::from(vec![Some(true), Some(false), Some(true), None,])
         );
         Ok(())
     }
@@ -3593,37 +3577,22 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::new(schema.clone()),
             vec![
-                Arc::new(Int32Array::from(vec![
-                    Some(1),
-                    Some(2),
-                    Some(3),
-                    None,
-                ])),
+                Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3), None])),
                 Arc::new(Int32Array::from(vec![
                     Some(1),
                     Some(99),
                     Some(99),
                     Some(99),
                 ])),
-                Arc::new(Int32Array::from(vec![
-                    Some(99),
-                    Some(99),
-                    Some(3),
-                    None,
-                ])),
+                Arc::new(Int32Array::from(vec![Some(99), Some(99), Some(3), None])),
             ],
         )?;
 
         let col_a = col("a", &schema)?;
-        let list = vec![
-            col("b", &schema)?,
-            col("c", &schema)?,
-        ];
+        let list = vec![col("b", &schema)?, col("c", &schema)?];
         let expr = make_dynamic_in_list(col_a, list, false);
 
-        let result = expr
-            .evaluate(&batch)?
-            .into_array(batch.num_rows())?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
         let result = as_boolean_array(&result);
         // row 0: 1 IN (1, 99) → true
         // row 1: 2 IN (99, 99) → false
@@ -3631,12 +3600,7 @@ mod tests {
         // row 3: NULL IN (99, NULL) → NULL
         assert_eq!(
             result,
-            &BooleanArray::from(vec![
-                Some(true),
-                Some(false),
-                Some(true),
-                None,
-            ])
+            &BooleanArray::from(vec![Some(true), Some(false), Some(true), None,])
         );
         Ok(())
     }
@@ -3660,17 +3624,12 @@ mod tests {
         let list = vec![col("b", &schema)?];
         let expr = make_dynamic_in_list(col_a, list, false);
 
-        let result = expr
-            .evaluate(&batch)?
-            .into_array(batch.num_rows())?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
         let result = as_boolean_array(&result);
         // row 0: "x" IN ("x") → true
         // row 1: "y" IN ("x") → false
         // row 2: "z" IN ("z") → true
-        assert_eq!(
-            result,
-            &BooleanArray::from(vec![true, false, true])
-        );
+        assert_eq!(result, &BooleanArray::from(vec![true, false, true]));
         Ok(())
     }
 
@@ -3693,25 +3652,19 @@ mod tests {
         let list = vec![col("b", &schema)?];
         let expr = make_dynamic_in_list(col_a, list, true);
 
-        let result = expr
-            .evaluate(&batch)?
-            .into_array(batch.num_rows())?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
         let result = as_boolean_array(&result);
         // row 0: 1 NOT IN (1) → false
         // row 1: 2 NOT IN (99) → true
         // row 2: 3 NOT IN (3) → false
-        assert_eq!(
-            result,
-            &BooleanArray::from(vec![false, true, false])
-        );
+        assert_eq!(result, &BooleanArray::from(vec![false, true, false]));
         Ok(())
     }
 
     #[test]
     fn test_dynamic_path_null_in_list() -> Result<()> {
         // Dynamic path: list contains NULL scalar
-        let schema =
-            Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let col_a = col("a", &schema)?;
         let batch = RecordBatch::try_new(
             Arc::new(schema),
@@ -3724,16 +3677,11 @@ mod tests {
         ];
         let expr = make_dynamic_in_list(col_a, list, false);
 
-        let result = expr
-            .evaluate(&batch)?
-            .into_array(batch.num_rows())?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
         let result = as_boolean_array(&result);
         // row 0: 1 IN (NULL, 1) → true (true OR null = true)
         // row 1: 2 IN (NULL, 1) → NULL (false OR null = null)
-        assert_eq!(
-            result,
-            &BooleanArray::from(vec![Some(true), None])
-        );
+        assert_eq!(result, &BooleanArray::from(vec![Some(true), None]));
         Ok(())
     }
 
@@ -3758,20 +3706,12 @@ mod tests {
         )?;
 
         let col_a = col("a", &schema)?;
-        let list = vec![
-            col("b", &schema)?,
-            col("c", &schema)?,
-        ];
+        let list = vec![col("b", &schema)?, col("c", &schema)?];
         let expr = make_dynamic_in_list(col_a, list, false);
 
-        let result = expr
-            .evaluate(&batch)?
-            .into_array(batch.num_rows())?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
         let result = as_boolean_array(&result);
-        assert_eq!(
-            result,
-            &BooleanArray::from(vec![true, true, true])
-        );
+        assert_eq!(result, &BooleanArray::from(vec![true, true, true]));
         Ok(())
     }
 
@@ -3786,16 +3726,8 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::new(schema.clone()),
             vec![
-                Arc::new(Float64Array::from(vec![
-                    f64::NAN,
-                    1.0,
-                    f64::NAN,
-                ])),
-                Arc::new(Float64Array::from(vec![
-                    f64::NAN,
-                    2.0,
-                    0.0,
-                ])),
+                Arc::new(Float64Array::from(vec![f64::NAN, 1.0, f64::NAN])),
+                Arc::new(Float64Array::from(vec![f64::NAN, 2.0, 0.0])),
             ],
         )?;
 
@@ -3803,17 +3735,12 @@ mod tests {
         let list = vec![col("b", &schema)?];
         let expr = make_dynamic_in_list(col_a, list, false);
 
-        let result = expr
-            .evaluate(&batch)?
-            .into_array(batch.num_rows())?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
         let result = as_boolean_array(&result);
         // row 0: NaN IN (NaN) → true
         // row 1: 1.0 IN (2.0) → false
         // row 2: NaN IN (0.0) → false
-        assert_eq!(
-            result,
-            &BooleanArray::from(vec![true, false, false])
-        );
+        assert_eq!(result, &BooleanArray::from(vec![true, false, false]));
         Ok(())
     }
 }
