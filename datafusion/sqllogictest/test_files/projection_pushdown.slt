@@ -1949,3 +1949,16 @@ ORDER BY simple_struct.id;
 3 3
 4 4
 5 5
+
+# =========================================================================
+# Regression: user-provided __datafusion_extracted aliases must not
+# collide with optimizer-generated ones
+# (https://github.com/apache/datafusion/issues/20430)
+# =========================================================================
+
+query I
+SELECT s['value'] AS __datafusion_extracted_2
+FROM simple_struct
+WHERE COALESCE(s['value'], s['value']) = 100;
+----
+100
