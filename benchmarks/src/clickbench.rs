@@ -31,6 +31,8 @@ use datafusion_common::instant::Instant;
 
 /// SQL to create the hits view with proper EventDate casting.
 ///
+/// For detailed explanation, see benchmarks/README.md#clickbench
+///
 /// ClickBench stores EventDate as UInt16 (days since 1970-01-01) for
 /// storage efficiency (2 bytes vs 4-8 bytes for date types).
 /// This view transforms it to SQL DATE type for query compatibility.
