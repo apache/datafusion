@@ -245,6 +245,10 @@ unsafe extern "C" fn release_fn_wrapper(accumulator: &mut FFI_GroupsAccumulator)
 
 impl From<Box<dyn GroupsAccumulator>> for FFI_GroupsAccumulator {
     fn from(accumulator: Box<dyn GroupsAccumulator>) -> Self {
+        // if let Some(accumulator) = accumulator.into_any().downcast_ref::<ForeignGroupsAccumulator>() {
+        //     return accumulator.accumulator;
+        // }
+
         let supports_convert_to_state = accumulator.supports_convert_to_state();
         let private_data = GroupsAccumulatorPrivateData { accumulator };
 

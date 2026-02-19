@@ -158,10 +158,6 @@ impl PhysicalExtensionCodec for ParentPhysicalExtensionCodec {
             internal_err!("Not supported")
         }
     }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 }
 
 #[derive(Debug)]
@@ -235,9 +231,5 @@ impl PhysicalExtensionCodec for ChildPhysicalExtensionCodec {
         } else {
             internal_err!("Not supported")
         }
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }

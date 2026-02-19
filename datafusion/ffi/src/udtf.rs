@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
 use std::ffi::c_void;
 use std::sync::Arc;
 
@@ -166,6 +167,12 @@ impl FFI_TableFunction {
         runtime: Option<Handle>,
         logical_codec: FFI_LogicalExtensionCodec,
     ) -> Self {
+        if let Some(udtf) =
+            (Arc::clone(&udtf) as Arc<dyn Any>).downcast_ref::<ForeignTableFunction>()
+        {
+            return udtf.0.clone();
+        }
+
         let private_data = Box::new(TableFunctionPrivateData { udtf, runtime });
 
         Self {

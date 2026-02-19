@@ -232,6 +232,10 @@ impl Clone for FFI_ScalarUDF {
 
 impl From<Arc<ScalarUDF>> for FFI_ScalarUDF {
     fn from(udf: Arc<ScalarUDF>) -> Self {
+        if let Some(udf) = udf.inner().as_any().downcast_ref::<ForeignScalarUDF>() {
+            return udf.udf.clone();
+        }
+
         let name = udf.name().into();
         let aliases = udf.aliases().iter().map(|a| a.to_owned().into()).collect();
         let volatility = udf.signature().volatility.into();

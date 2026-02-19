@@ -205,6 +205,10 @@ unsafe extern "C" fn release_fn_wrapper(evaluator: &mut FFI_PartitionEvaluator) 
 
 impl From<Box<dyn PartitionEvaluator>> for FFI_PartitionEvaluator {
     fn from(evaluator: Box<dyn PartitionEvaluator>) -> Self {
+        // if let Ok(evaluator) = evaluator.into_any().downcast::<ForeignPartitionEvaluator>() {
+        //     return evaluator.evaluator;
+        // }
+
         let is_causal = evaluator.is_causal();
         let supports_bounded_execution = evaluator.supports_bounded_execution();
         let include_rank = evaluator.include_rank();

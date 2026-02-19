@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
 use std::ffi::c_void;
 use std::sync::Arc;
 
@@ -296,6 +297,12 @@ impl FFI_LogicalExtensionCodec {
         runtime: Option<Handle>,
         task_ctx_provider: impl Into<FFI_TaskContextProvider>,
     ) -> Self {
+        if let Some(codec) = (Arc::clone(&codec) as Arc<dyn Any>)
+            .downcast_ref::<ForeignLogicalExtensionCodec>()
+        {
+            return codec.0.clone();
+        }
+
         let task_ctx_provider = task_ctx_provider.into();
         let private_data = Box::new(LogicalExtensionCodecPrivateData { codec, runtime });
 
