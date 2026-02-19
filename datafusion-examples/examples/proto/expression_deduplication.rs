@@ -199,10 +199,6 @@ impl PhysicalExtensionCodec for CachingCodec {
     ) -> Result<()> {
         datafusion::common::not_impl_err!("No custom extension nodes")
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 impl PhysicalProtoConverterExtension for CachingCodec {

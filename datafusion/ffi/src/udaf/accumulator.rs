@@ -204,6 +204,10 @@ unsafe extern "C" fn release_fn_wrapper(accumulator: &mut FFI_Accumulator) {
 
 impl From<Box<dyn Accumulator>> for FFI_Accumulator {
     fn from(accumulator: Box<dyn Accumulator>) -> Self {
+        // if let Some(accumulator) = accumulator.into_any().downcast::<ForeignAccumulator>() {
+        //     return accumulator.accumulator;
+        // }
+
         let supports_retract_batch = accumulator.supports_retract_batch();
         let private_data = AccumulatorPrivateData { accumulator };
 

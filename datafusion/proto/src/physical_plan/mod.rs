@@ -3637,7 +3637,7 @@ pub trait AsExecutionPlan: Debug + Send + Sync + Clone {
         Self: Sized;
 }
 
-pub trait PhysicalExtensionCodec: Debug + Send + Sync {
+pub trait PhysicalExtensionCodec: Debug + Send + Sync + Any {
     fn try_decode(
         &self,
         buf: &[u8],
@@ -3688,8 +3688,6 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync {
     fn try_encode_udwf(&self, _node: &WindowUDF, _buf: &mut Vec<u8>) -> Result<()> {
         Ok(())
     }
-
-    fn as_any(&self) -> &dyn Any;
 }
 
 #[derive(Debug)]
@@ -3711,10 +3709,6 @@ impl PhysicalExtensionCodec for DefaultPhysicalExtensionCodec {
         _buf: &mut Vec<u8>,
     ) -> Result<()> {
         not_impl_err!("PhysicalExtensionCodec is not provided")
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 
@@ -4119,10 +4113,6 @@ impl PhysicalExtensionCodec for ComposedPhysicalExtensionCodec {
 
     fn try_encode_udaf(&self, node: &AggregateUDF, buf: &mut Vec<u8>) -> Result<()> {
         self.encode_protobuf(buf, |codec, data| codec.try_encode_udaf(node, data))
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 

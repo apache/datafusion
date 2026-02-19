@@ -15,9 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::ffi::c_void;
-use std::sync::Arc;
-
 use abi_stable::StableAbi;
 use abi_stable::std_types::{RResult, RSlice, RStr, RVec};
 use datafusion_common::error::Result;
@@ -27,6 +24,9 @@ use datafusion_expr::{
 };
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
+use std::any::Any;
+use std::ffi::c_void;
+use std::sync::Arc;
 use tokio::runtime::Handle;
 
 use crate::execution::FFI_TaskContextProvider;
@@ -271,8 +271,7 @@ impl FFI_PhysicalExtensionCodec {
         runtime: Option<Handle>,
         task_ctx_provider: impl Into<FFI_TaskContextProvider>,
     ) -> Self {
-        if let Some(codec) = codec
-            .as_any()
+        if let Some(codec) = (Arc::clone(&codec) as Arc<dyn Any>)
             .downcast_ref::<ForeignPhysicalExtensionCodec>()
         {
             return codec.0.clone();
@@ -408,10 +407,6 @@ impl PhysicalExtensionCodec for ForeignPhysicalExtensionCodec {
         buf.extend(bytes);
 
         Ok(())
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 
@@ -567,10 +562,6 @@ pub(crate) mod tests {
             buf.push(Self::RANK_UDWF_SERIALIZED);
 
             Ok(())
-        }
-
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
         }
     }
 
