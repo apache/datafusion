@@ -32,6 +32,7 @@ use crate::{
 use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::DataType;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
+use datafusion_physical_expr::conjunction;
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::utils::reassign_expr_columns;
 use datafusion_physical_expr_adapter::replace_columns_with_literals;
@@ -274,12 +275,9 @@ impl FileOpener for ParquetOpener {
             }
         }
         // Build combined predicate for file-level pruning
-        let predicate: Option<Arc<dyn PhysicalExpr>> =
-            predicate_conjuncts.as_ref().map(|c| {
-                datafusion_physical_expr::utils::conjunction(
-                    c.iter().map(|(_, e)| Arc::clone(e)),
-                )
-            });
+        let predicate: Option<Arc<dyn PhysicalExpr>> = predicate_conjuncts
+            .as_ref()
+            .map(|c| conjunction(c.iter().map(|(_, e)| Arc::clone(e))));
 
         let pushdown_filters = self.pushdown_filters;
         let force_filter_selections = self.force_filter_selections;
@@ -458,11 +456,7 @@ impl FileOpener for ParquetOpener {
             let predicate: Option<Arc<dyn PhysicalExpr>> = predicate_conjuncts
                 .as_ref()
                 .filter(|c| !c.is_empty())
-                .map(|c| {
-                    datafusion_physical_expr::utils::conjunction(
-                        c.iter().map(|(_, e)| Arc::clone(e)),
-                    )
-                });
+                .map(|c| conjunction(c.iter().map(|(_, e)| Arc::clone(e))));
 
             // Adapt projections to the physical file schema as well
             projection = projection
@@ -646,6 +640,7 @@ impl FileOpener for ParquetOpener {
             };
 
             // Build row filter from collecting + promoted filters.
+            let mut has_row_filter = false;
             if !collecting.is_empty() || !promoted.is_empty() {
                 let row_filter_result = row_filter::build_row_filter(
                     collecting,
@@ -658,6 +653,7 @@ impl FileOpener for ParquetOpener {
 
                 match row_filter_result {
                     Ok(Some(result)) => {
+                        has_row_filter = true;
                         builder = builder.with_row_filter(result.row_filter);
                         // Unbuildable filters must be applied as post-scan
                         // to preserve correctness.
@@ -723,14 +719,20 @@ impl FileOpener for ParquetOpener {
                 .try_map_exprs(|expr| reassign_expr_columns(expr, &stream_schema))?;
 
             // Rebase post-scan filter expressions to the stream schema, keeping IDs
-            let rebased_post_scan: Vec<Arc<dyn PhysicalExpr>> = post_scan_exprs
-                .iter()
-                .map(|f| reassign_expr_columns(Arc::clone(f), &stream_schema))
-                .collect::<Result<_>>()?;
+            let post_scan_filter = post_scan_exprs
+                .is_empty()
+                .then(|| {
+                    let rebased_post_scan: Vec<Arc<dyn PhysicalExpr>> = post_scan_exprs
+                        .iter()
+                        .map(|f| reassign_expr_columns(Arc::clone(f), &stream_schema))
+                        .collect::<Result<_>>()?;
+                    Ok::<_, DataFusionError>(conjunction(rebased_post_scan))
+                })
+                .transpose()?;
+            let should_coalesce_batches = post_scan_filter.is_some() || has_row_filter;
 
             let projector = projection.make_projector(&stream_schema)?;
 
-            let has_post_scan_filters = !rebased_post_scan.is_empty();
             let coalesce_schema = Arc::clone(&output_schema);
 
             let stream = stream.map_err(DataFusionError::from).map(move |b| {
@@ -744,13 +746,14 @@ impl FileOpener for ParquetOpener {
                     // Apply post-scan filters BEFORE projection.
                     // Filters evaluate against the raw stream batch which contains
                     // all columns needed by both filters and projections.
-                    let b = if !rebased_post_scan.is_empty() {
-                        let start = datafusion_common::instant::Instant::now();
-                        let filtered = apply_post_scan_filters(b, &rebased_post_scan)?;
-                        filter_apply_time.add_elapsed(start);
-                        filtered
-                    } else {
-                        b
+                    let b = match post_scan_filter.as_ref() {
+                        Some(filter) => {
+                            let start = datafusion_common::instant::Instant::now();
+                            let filtered = apply_post_scan_filters(b, filter)?;
+                            filter_apply_time.add_elapsed(start);
+                            filtered
+                        }
+                        None => b,
                     };
 
                     // Then project to output columns
@@ -780,9 +783,9 @@ impl FileOpener for ParquetOpener {
                 })
             });
 
-            // Post-scan filtering produces small batches (e.g. 8192 -> 50 rows);
-            // coalesce them back to target batch_size to avoid downstream overhead.
-            let stream = if has_post_scan_filters {
+            // If we applied filtering we may be producing small batches.
+            // Coalesce them for upstream operators.
+            let stream = if should_coalesce_batches {
                 CoalescingStream::new(stream.boxed(), coalesce_schema, batch_size, limit)
                     .boxed()
             } else {
@@ -817,40 +820,19 @@ impl FileOpener for ParquetOpener {
 /// correlation tracking is needed here.
 fn apply_post_scan_filters(
     batch: RecordBatch,
-    filter_exprs: &[Arc<dyn PhysicalExpr>],
+    expr: &Arc<dyn PhysicalExpr>,
 ) -> Result<RecordBatch> {
     use arrow::array::as_boolean_array;
     use arrow::compute::filter_record_batch;
 
-    if filter_exprs.is_empty() || batch.num_rows() == 0 {
+    if batch.num_rows() == 0 {
         return Ok(batch);
     }
 
-    let bool_arrays: Vec<arrow::array::BooleanArray> = filter_exprs
-        .iter()
-        .map(|expr| {
-            let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
-            Ok(as_boolean_array(result.as_ref()).clone())
-        })
-        .collect::<Result<_>>()?;
+    let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+    let mask = as_boolean_array(result.as_ref());
 
-    let combined = and_boolean_arrays(bool_arrays);
-    Ok(filter_record_batch(&batch, &combined)?)
-}
-
-/// Combine multiple boolean arrays with AND, returning a single boolean array.
-///
-/// Panics if `arrays` is empty.
-fn and_boolean_arrays(
-    arrays: Vec<arrow::array::BooleanArray>,
-) -> arrow::array::BooleanArray {
-    use arrow::compute::and;
-    let mut iter = arrays.into_iter();
-    let mut acc = iter.next().expect("at least one boolean array");
-    for arr in iter {
-        acc = and(&acc, &arr).expect("boolean AND should not fail on same-length arrays");
-    }
-    acc
+    Ok(filter_record_batch(&batch, mask)?)
 }
 
 /// Compute the average bytes per row from parquet metadata for the projected columns.
