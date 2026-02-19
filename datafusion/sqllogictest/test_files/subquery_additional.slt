@@ -1,0 +1,600 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+#############
+## Additional Subquery Tests
+##
+## Ported from DuckDB test suite with additional coverage for
+## scenarios not well covered in the existing subquery.slt.
+##
+## References:
+## - https://github.com/duckdb/duckdb/blob/main/test/sql/subquery/scalar/test_scalar_subquery.test
+## - https://github.com/duckdb/duckdb/blob/main/test/sql/subquery/scalar/test_nested_correlated_subquery.test_slow
+## - https://github.com/duckdb/duckdb/blob/main/test/sql/subquery/scalar/test_scalar_subquery_cte.test
+## - https://github.com/duckdb/duckdb/blob/main/test/sql/subquery/scalar/nested_subquery_window.test
+##
+## Part of https://github.com/apache/datafusion/issues/20240
+#############
+
+#############
+## Setup
+#############
+
+statement ok
+CREATE TABLE integers(i INTEGER) AS VALUES (1), (2), (3), (NULL);
+
+statement ok
+CREATE TABLE test(a INTEGER, b INTEGER) AS VALUES (11, 22), (12, 21), (13, 22);
+
+
+###########################################################
+## 1. Basic Scalar Subqueries (uncorrelated)
+## Reference: test_scalar_subquery.test
+###########################################################
+
+# Simple constant scalar subquery
+query I
+SELECT (SELECT 42)
+----
+42
+
+# Nested scalar subquery
+query I
+SELECT (SELECT (SELECT 42))
+----
+42
+
+# Scalar subquery in arithmetic (addition)
+query I
+SELECT 1 + (SELECT 1)
+----
+2
+
+# Scalar subquery equality check returns boolean
+query B
+SELECT 1 = (SELECT 1)
+----
+true
+
+# Scalar subquery inequality check
+query B
+SELECT 1 <> (SELECT 1)
+----
+false
+
+# Equality with NULL subquery
+query B
+SELECT 1 = (SELECT NULL)
+----
+NULL
+
+# NULL compared with scalar subquery
+query B
+SELECT NULL = (SELECT 1)
+----
+NULL
+
+# Subquery returning NULL (Null type maps to DFColumnType::Another)
+query ?
+SELECT (SELECT NULL)
+----
+NULL
+
+
+###########################################################
+## 2. Aliasing and Derived Table Subqueries
+## Reference: test_scalar_subquery.test
+###########################################################
+
+# Subquery as derived table with alias
+query I
+SELECT * FROM (SELECT 42) v1(a)
+----
+42
+
+# Derived table with exact alias count
+query II
+SELECT * FROM (SELECT 42, 41 AS x) v1(a, b)
+----
+42 41
+
+# Derived table - too few aliases should fail (DataFusion requires exact match)
+statement error
+SELECT * FROM (SELECT 42, 41 AS x) v1(a)
+
+# Derived table - too many aliases should fail
+statement error
+SELECT * FROM (SELECT 42, 41 AS x) v1(a, b, c)
+
+# Subquery in FROM with column selection
+query I
+SELECT a FROM (SELECT 42 AS a, 44 AS b) sub
+----
+42
+
+# Nested derived tables
+query I
+SELECT * FROM (SELECT * FROM (SELECT 42 AS val)) outer_sub
+----
+42
+
+
+###########################################################
+## 3. Scalar Subqueries with Table Data
+## Reference: test_scalar_subquery.test
+###########################################################
+
+# Operations on scalar subquery with table
+query I
+SELECT a * (SELECT 42) FROM test ORDER BY a
+----
+462
+504
+546
+
+# Subquery with aggregate minus scalar from table
+query I
+SELECT a - (SELECT sum(a) FROM test) FROM test ORDER BY a
+----
+-25
+-24
+-23
+
+# CASE WHEN with scalar aggregate subquery comparison
+query I
+SELECT CASE WHEN a > (SELECT avg(a) FROM test) THEN a * 2 ELSE b * 10 END FROM test ORDER BY a
+----
+220
+210
+26
+
+
+###########################################################
+## 4. Correlated Scalar Subqueries
+## Reference: test_scalar_subquery.test
+###########################################################
+
+# Correlated subquery: SUM with filter
+query II
+SELECT a, (SELECT SUM(b) FROM test tsub WHERE test.a = tsub.a) FROM test ORDER BY a
+----
+11 22
+12 21
+13 22
+
+# Correlated CASE WHEN returning constant
+# TODO: DataFusion cannot yet decorrelate scalar subqueries that have
+# outer references only in the projection (no FROM clause). The optimizer
+# sets can_pull_up=false when it encounters contains_outer_reference()
+# on a Projection node. See https://github.com/apache/datafusion/issues/20240
+# query II
+# SELECT a, (SELECT CASE WHEN test.a = 11 THEN 22 ELSE NULL END) FROM test ORDER BY a
+# ----
+# 11 22
+# 12 NULL
+# 13 NULL
+
+# Correlated scalar subquery with equality filter in WHERE clause
+query II
+SELECT * FROM test WHERE a = (SELECT MIN(a) FROM test t WHERE t.b = test.b) ORDER BY a
+----
+11 22
+12 21
+
+# Correlated subquery used in WHERE with EXISTS
+query II
+SELECT * FROM test WHERE EXISTS (SELECT a FROM test ts WHERE ts.a = test.a AND b > 21) ORDER BY a
+----
+11 22
+13 22
+
+
+###########################################################
+## 5. Nested Correlated Subqueries
+## Reference: test_nested_correlated_subquery.test_slow
+##
+## TODO: DataFusion cannot yet decorrelate nested scalar subqueries
+## that have outer references in the projection without a FROM clause.
+## The optimizer's PullUpCorrelatedExpr sets can_pull_up=false when
+## it encounters contains_outer_reference() on these Projection nodes.
+## See https://github.com/apache/datafusion/issues/20240
+###########################################################
+
+# Two-level nested correlated subquery
+# Reference: https://github.com/duckdb/duckdb/blob/main/test/sql/subquery/scalar/test_nested_correlated_subquery.test_slow#L22-L28
+# query II
+# SELECT i, (SELECT (SELECT 42 + i1.i) + 42 + i1.i) AS j FROM integers i1 ORDER BY i
+# ----
+# 1 86
+# 2 88
+# 3 90
+# NULL NULL
+
+# Correlated subquery referencing outer in deeply nested select
+# Reference: https://github.com/duckdb/duckdb/blob/main/test/sql/subquery/scalar/test_nested_correlated_subquery.test_slow#L40-L46
+# query II
+# SELECT i, (SELECT (SELECT (SELECT (SELECT i1.i + i1.i + i1.i + i1.i + i1.i)))) AS j FROM integers i1 ORDER BY i
+# ----
+# 1 5
+# 2 10
+# 3 15
+# NULL NULL
+
+# Correlated subquery with SUM and outer ref addition
+# Reference: https://github.com/duckdb/duckdb/blob/main/test/sql/subquery/scalar/test_nested_correlated_subquery.test_slow#L30-L36
+# query II
+# SELECT i, (SELECT (SELECT i1.i + SUM(i2.i)) FROM integers i2) AS j FROM integers i1 ORDER BY i
+# ----
+# 1 7
+# 2 8
+# 3 9
+# NULL NULL
+
+
+###########################################################
+## 6. Uncorrelated Subquery in WHERE with NOT EXISTS
+###########################################################
+
+# NOT EXISTS with uncorrelated empty subquery
+query I
+SELECT i FROM integers WHERE NOT EXISTS (SELECT 1 WHERE 1 = 0) ORDER BY i
+----
+1
+2
+3
+NULL
+
+# NOT EXISTS with uncorrelated subquery that returns rows
+query I
+SELECT i FROM integers WHERE NOT EXISTS (SELECT 1)
+----
+
+
+###########################################################
+## 7. Subquery with DISTINCT
+###########################################################
+
+# Correlated EXISTS with DISTINCT in subquery
+query II
+SELECT a, b FROM test WHERE EXISTS (SELECT DISTINCT b FROM test t2 WHERE t2.b = test.b AND t2.a <> test.a) ORDER BY a
+----
+11 22
+13 22
+
+# IN subquery with DISTINCT
+query I
+SELECT i FROM integers WHERE i IN (SELECT DISTINCT i FROM integers WHERE i > 1) ORDER BY i
+----
+2
+3
+
+
+###########################################################
+## 8. Subquery with COALESCE
+###########################################################
+
+# COALESCE wrapping a correlated scalar subquery
+query II
+SELECT i, COALESCE((SELECT i2.i FROM integers i2 WHERE i2.i = i1.i AND i2.i = 1), 0) AS val
+FROM integers i1 ORDER BY i
+----
+1 1
+2 0
+3 0
+NULL 0
+
+# COALESCE with uncorrelated scalar subquery
+query I
+SELECT COALESCE((SELECT NULL), 42)
+----
+42
+
+
+###########################################################
+## 9. Multiple Scalar Subqueries in SELECT
+###########################################################
+
+# Two independent uncorrelated scalar subqueries
+query II
+SELECT (SELECT MIN(i) FROM integers WHERE i IS NOT NULL), (SELECT MAX(i) FROM integers)
+----
+1 3
+
+# Combining correlated and uncorrelated subqueries in SELECT
+query III
+SELECT a,
+       (SELECT SUM(b) FROM test t2 WHERE t2.a = test.a) AS correlated_sum,
+       (SELECT COUNT(*) FROM test) AS total_rows
+FROM test ORDER BY a
+----
+11 22 3
+12 21 3
+13 22 3
+
+
+###########################################################
+## 10. Subquery in HAVING clause
+###########################################################
+
+# HAVING with uncorrelated scalar subquery
+query II
+SELECT b, SUM(a) FROM test GROUP BY b HAVING SUM(a) > (SELECT 23) ORDER BY b
+----
+22 24
+
+# HAVING with aggregate subquery comparison (>= since all groups have same avg)
+query IR
+SELECT b, AVG(a) FROM test GROUP BY b HAVING AVG(a) >= (SELECT AVG(a) FROM test) ORDER BY b
+----
+21 12
+22 12
+
+
+###########################################################
+## 11. Subquery with CASE WHEN Expressions
+###########################################################
+
+# Scalar subquery inside CASE WHEN condition
+query T
+SELECT CASE WHEN (SELECT MAX(i) FROM integers) > 2 THEN 'large' ELSE 'small' END
+----
+large
+
+# Correlated subquery inside CASE WHEN
+query IT
+SELECT a,
+       CASE WHEN (SELECT SUM(b) FROM test t2 WHERE t2.a = test.a) > 21
+            THEN 'high'
+            ELSE 'low'
+       END AS category
+FROM test ORDER BY a
+----
+11 high
+12 low
+13 high
+
+
+###########################################################
+## 12. Subquery Returning Zero Rows
+###########################################################
+
+# Scalar subquery returning no rows yields NULL
+query I
+SELECT (SELECT i FROM integers WHERE i > 100)
+----
+NULL
+
+# Correlated subquery returning no matching rows
+query II
+SELECT a, (SELECT SUM(b) FROM test t2 WHERE t2.a = test.a AND t2.a > 100) FROM test ORDER BY a
+----
+11 NULL
+12 NULL
+13 NULL
+
+# EXISTS with no matching rows returns false, so nothing returned
+query I
+SELECT a FROM test WHERE EXISTS (SELECT 1 FROM integers WHERE i > 100) ORDER BY a
+----
+
+
+###########################################################
+## 13. Subquery with ORDER BY / LIMIT
+###########################################################
+
+# Scalar subquery with ORDER BY and LIMIT 1
+query I
+SELECT (SELECT i FROM integers WHERE i IS NOT NULL ORDER BY i LIMIT 1)
+----
+1
+
+# Scalar subquery with ORDER BY DESC and LIMIT 1
+query I
+SELECT (SELECT i FROM integers WHERE i IS NOT NULL ORDER BY i DESC LIMIT 1)
+----
+3
+
+
+###########################################################
+## 14. Correlated Subquery with IN and NOT IN
+###########################################################
+
+# IN subquery with correlated filter
+query II
+SELECT a, b FROM test WHERE a IN (SELECT a FROM test t2 WHERE t2.b = test.b) ORDER BY a
+----
+11 22
+12 21
+13 22
+
+# NOT IN with correlated filter
+query II
+SELECT a, b FROM test WHERE a NOT IN (SELECT a FROM test t2 WHERE t2.b <> test.b) ORDER BY a
+----
+11 22
+12 21
+13 22
+
+
+###########################################################
+## 15. Correlated Subquery with Multiple Aggregates
+###########################################################
+
+# Multiple correlated scalar subqueries with non-COUNT aggregates
+# (Using SUM and AVG avoids the __always_true ambiguity that occurs when
+# COUNT triggers the count-bug fix with multiple correlated subqueries)
+query IIR
+SELECT a,
+       (SELECT SUM(b) FROM test t2 WHERE t2.b = test.b) AS total_b,
+       (SELECT AVG(a) FROM test t2 WHERE t2.b = test.b) AS avg_a
+FROM test ORDER BY a
+----
+11 44 12
+12 21 12
+13 44 12
+
+
+###########################################################
+## 16. Subquery with UNION / UNION ALL
+###########################################################
+
+# EXISTS with UNION ALL in subquery (uncorrelated; first arm returns rows)
+query I
+SELECT a FROM test WHERE EXISTS (
+    SELECT 1 FROM integers WHERE i > 2
+    UNION ALL
+    SELECT 1 FROM integers WHERE i < 0
+) ORDER BY a
+----
+11
+12
+13
+
+# IN subquery with UNION
+query I
+SELECT i FROM integers WHERE i IN (
+    SELECT 1
+    UNION
+    SELECT 3
+) ORDER BY i
+----
+1
+3
+
+
+###########################################################
+## 17. Scalar Subquery with CTE
+## Reference: test_scalar_subquery_cte.test
+###########################################################
+
+# Simple CTE in scalar subquery
+query I
+SELECT (WITH cte AS (SELECT 42 AS val) SELECT val FROM cte)
+----
+42
+
+# Arithmetic with CTE-based scalar subquery
+query I
+SELECT 1 + (WITH cte AS (SELECT 1 AS val) SELECT val FROM cte)
+----
+2
+
+# CTE returning NULL in scalar subquery (Null type maps to DFColumnType::Another)
+query ?
+SELECT (WITH cte AS (SELECT NULL AS val) SELECT val FROM cte)
+----
+NULL
+
+
+###########################################################
+## 18. Subquery in Expression Context
+###########################################################
+
+# Subquery result used in string concatenation
+query T
+SELECT 'count=' || CAST((SELECT COUNT(*) FROM test) AS VARCHAR)
+----
+count=3
+
+# Subquery result in arithmetic expression
+query I
+SELECT (SELECT MAX(a) FROM test) - (SELECT MIN(a) FROM test)
+----
+2
+
+# Subquery in BETWEEN
+query I
+SELECT a FROM test WHERE a BETWEEN (SELECT MIN(a) FROM test) AND (SELECT MIN(a) FROM test) + 1 ORDER BY a
+----
+11
+12
+
+
+###########################################################
+## 19. EXISTS with Correlated Inequality
+###########################################################
+
+# EXISTS with correlated less-than comparison
+query II
+SELECT a, b FROM test WHERE EXISTS (
+    SELECT 1 FROM test t2 WHERE t2.a < test.a AND t2.b = test.b
+) ORDER BY a
+----
+13 22
+
+# NOT EXISTS with correlated inequality
+query II
+SELECT a, b FROM test WHERE NOT EXISTS (
+    SELECT 1 FROM test t2 WHERE t2.a < test.a AND t2.b = test.b
+) ORDER BY a
+----
+11 22
+12 21
+
+
+###########################################################
+## 20. Nested subquery inside window function context
+## Reference: nested_subquery_window.test
+###########################################################
+
+# Subquery inside expression used with window aggregate
+query I
+SELECT (SELECT MAX(42) OVER ())
+----
+42
+
+
+###########################################################
+## 21. Subquery with NULL handling edge cases
+###########################################################
+
+# NULL compared via IN with subquery
+query B
+SELECT NULL IN (SELECT i FROM integers WHERE i IS NOT NULL)
+----
+NULL
+
+# NOT IN with NULL present in subquery result
+# When the subquery contains NULL, NOT IN should return NULL for non-matching rows
+query I
+SELECT i FROM integers WHERE i NOT IN (SELECT i FROM integers WHERE i = 1) AND i IS NOT NULL ORDER BY i
+----
+2
+3
+
+
+###########################################################
+## 22. Correlated subquery with GROUP BY in outer query
+###########################################################
+
+# Correlated scalar subquery used with GROUP BY in outer query
+query II
+SELECT b, SUM(a) + (SELECT COUNT(*) FROM test t2 WHERE t2.b = test.b) FROM test GROUP BY b ORDER BY b
+----
+21 13
+22 26
+
+
+###########################################################
+## Cleanup
+###########################################################
+
+statement ok
+DROP TABLE integers;
+
+statement ok
+DROP TABLE test;
