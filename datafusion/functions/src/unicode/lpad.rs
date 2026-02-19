@@ -299,7 +299,7 @@ where
                         builder.append_value(&string[..length]);
                     } else {
                         for _ in 0..(length - str_len) {
-                            builder.write_char(' ')?;
+                            builder.write_str(" ")?;
                         }
                         builder.append_value(string);
                     }
@@ -312,7 +312,7 @@ where
                         builder.append_value(graphemes_buf[..length].concat());
                     } else {
                         for _ in 0..(length - graphemes_buf.len()) {
-                            builder.write_char(' ')?;
+                            builder.write_str(" ")?;
                         }
                         builder.append_value(string);
                     }

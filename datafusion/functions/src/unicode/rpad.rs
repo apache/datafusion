@@ -246,7 +246,7 @@ where
                                 } else {
                                     builder.write_str(string)?;
                                     for _ in 0..(length - str_len) {
-                                        builder.write_char(' ')?;
+                                        builder.write_str(" ")?;
                                     }
                                     builder.append_value("");
                                 }
@@ -261,7 +261,7 @@ where
                                 } else {
                                     builder.write_str(string)?;
                                     for _ in 0..(length - graphemes_buf.len()) {
-                                        builder.write_char(' ')?;
+                                        builder.write_str(" ")?;
                                     }
                                     builder.append_value("");
                                 }
