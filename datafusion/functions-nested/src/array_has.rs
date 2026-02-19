@@ -377,7 +377,7 @@ fn array_has_dispatch_for_scalar(
     let mut matches = eq_bits.set_indices().peekable();
     let mut final_contained = vec![Some(false); haystack.len()];
 
-    for (i, window) in offsets.windows(2).enumerate() {
+    for (i, (_start, end)) in haystack.offsets().tuple_windows().enumerate() {
         let end = window[1];
 
         // Check if the array at this position is null
