@@ -114,10 +114,6 @@ impl OptimizerRule for ExtractLeafExpressions {
         "extract_leaf_expressions"
     }
 
-    fn apply_order(&self) -> Option<ApplyOrder> {
-        Some(ApplyOrder::TopDown)
-    }
-
     fn rewrite(
         &self,
         plan: LogicalPlan,
@@ -130,9 +126,11 @@ impl OptimizerRule for ExtractLeafExpressions {
 
         // Advance the alias generator past any user-provided __datafusion_extracted_N
         // aliases to prevent collisions when generating new extraction aliases.
-        advance_generator_past_existing(&plan, alias_generator);
+        advance_generator_past_existing(&plan, alias_generator)?;
 
-        extract_from_plan(plan, alias_generator)
+        plan.transform_down_with_subqueries(|plan| {
+            extract_from_plan(plan, alias_generator)
+        })
     }
 }
 
@@ -142,24 +140,26 @@ impl OptimizerRule for ExtractLeafExpressions {
 fn advance_generator_past_existing(
     plan: &LogicalPlan,
     alias_generator: &AliasGenerator,
-) {
-    for expr in plan.expressions() {
-        expr.apply(|e| {
-            if let Expr::Alias(alias) = e {
-                if let Some(id_str) = alias
-                    .name
-                    .strip_prefix(EXTRACTED_EXPR_PREFIX)
-                    .and_then(|s| s.strip_prefix('_'))
+) -> Result<()> {
+    plan.apply(|plan| {
+        plan.expressions().iter().try_for_each(|expr| {
+            expr.apply(|e| {
+                if let Expr::Alias(alias) = e
+                    && let Some(id_str) = alias
+                        .name
+                        .strip_prefix(EXTRACTED_EXPR_PREFIX)
+                        .and_then(|s| s.strip_prefix('_'))
+                    && let Ok(id) = id_str.parse::<usize>()
                 {
-                    if let Ok(id) = id_str.parse::<usize>() {
-                        alias_generator.update_min_id(id);
-                    }
+                    alias_generator.update_min_id(id);
                 }
-            }
-            Ok(TreeNodeRecursion::Continue)
-        })
-        .ok();
-    }
+                Ok(TreeNodeRecursion::Continue)
+            })?;
+            Ok::<(), datafusion_common::error::DataFusionError>(())
+        })?;
+        Ok(TreeNodeRecursion::Continue)
+    })
+    .map(|_| ())
 }
 
 /// Extracts `MoveTowardsLeafNodes` sub-expressions from a plan node.
@@ -3050,5 +3050,4 @@ mod tests {
 
         Ok(())
     }
-
 }
