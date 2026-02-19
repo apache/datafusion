@@ -299,8 +299,7 @@ pub struct ParquetSource {
     /// Tracks filter selectivity across files for adaptive filter reordering.
     /// Shared across all openers - each opener reads stats and makes its own
     /// decision about which filters to push down vs. apply post-scan.
-    pub(crate) selectivity_tracker:
-        Arc<parking_lot::RwLock<crate::selectivity::SelectivityTracker>>,
+    pub(crate) selectivity_tracker: Arc<crate::selectivity::SelectivityTracker>,
 }
 
 impl ParquetSource {
@@ -326,9 +325,9 @@ impl ParquetSource {
             #[cfg(feature = "parquet_encryption")]
             encryption_factory: None,
             reverse_row_groups: false,
-            selectivity_tracker: Arc::new(parking_lot::RwLock::new(
+            selectivity_tracker: Arc::new(
                 crate::selectivity::SelectivityTracker::default(),
-            )),
+            ),
         }
     }
 
@@ -339,14 +338,14 @@ impl ParquetSource {
     ) -> Self {
         // Update the selectivity tracker from the config
         let opts = &table_parquet_options.global;
-        self.selectivity_tracker = Arc::new(parking_lot::RwLock::new(
+        self.selectivity_tracker = Arc::new(
             crate::selectivity::SelectivityTracker::new()
                 .with_min_bytes_per_sec(opts.filter_pushdown_min_bytes_per_sec)
                 .with_correlation_threshold(opts.filter_correlation_threshold)
                 .with_min_rows_for_collection(opts.filter_statistics_collection_min_rows)
                 .with_collection_fraction(opts.filter_statistics_collection_fraction)
                 .with_max_rows_for_collection(opts.filter_statistics_collection_max_rows),
-        ));
+        );
         self.table_parquet_options = table_parquet_options;
         self
     }
@@ -601,7 +600,6 @@ impl FileSource for ParquetSource {
         // idempotent so it doesn't matter if multiple openers call it.
         if let Some(&total_rows) = base_config.statistics().num_rows.get_value() {
             self.selectivity_tracker
-                .write()
                 .notify_dataset_rows(total_rows as u64);
         }
 

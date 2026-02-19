@@ -24,7 +24,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use datafusion_common::instant::Instant;
 use log::debug;
+use parking_lot::RwLock;
 
 use datafusion_physical_expr_common::physical_expr::{
     OptionalFilterPhysicalExpr, PhysicalExpr, snapshot_generation,
@@ -65,7 +67,7 @@ enum PromotionStrategy {
 ///   on periodic re-evaluation if effectiveness drops below threshold after
 ///   accumulating `effective_min_rows` new rows.
 /// - **Any state** → [`Collecting`](Self::Collecting) when a dynamic filter's
-///   `snapshot_generation` changes (see [`SelectivityTracker::note_generation`]).
+///   `snapshot_generation` changes (see [`SelectivityTrackerInner::note_generation`]).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum FilterState {
     /// Still collecting stats — filter goes to post-scan for measurement.
@@ -225,9 +227,79 @@ impl PairKey {
     }
 }
 
+/// Immutable configuration for a [`SelectivityTracker`].
+///
+/// Use the builder methods to customise, then call [`build()`](TrackerConfig::build)
+/// to produce a ready-to-use tracker.
+pub struct TrackerConfig {
+    /// Minimum bytes/sec throughput for promoting a filter (default: INFINITY = disabled).
+    pub min_bytes_per_sec: f64,
+    /// Lift ratio above which two filters are considered correlated (default: 1.5).
+    pub correlation_threshold: f64,
+    /// Floor for the collection / re-evaluation window (default: 10 000).
+    pub min_rows_for_collection: u64,
+    /// Fraction of total dataset rows for the collection window (default: 0.0).
+    pub collection_fraction: f64,
+    /// Cap on collection / re-evaluation window size (default: 0 = no cap).
+    pub max_rows_for_collection: u64,
+}
+
+impl TrackerConfig {
+    pub fn new() -> Self {
+        Self {
+            min_bytes_per_sec: f64::INFINITY,
+            correlation_threshold: 1.5,
+            min_rows_for_collection: 10_000,
+            collection_fraction: 0.0,
+            max_rows_for_collection: 0,
+        }
+    }
+
+    pub fn with_min_bytes_per_sec(mut self, v: f64) -> Self {
+        self.min_bytes_per_sec = v;
+        self
+    }
+
+    pub fn with_correlation_threshold(mut self, v: f64) -> Self {
+        self.correlation_threshold = v;
+        self
+    }
+
+    pub fn with_min_rows_for_collection(mut self, v: u64) -> Self {
+        self.min_rows_for_collection = v;
+        self
+    }
+
+    pub fn with_collection_fraction(mut self, v: f64) -> Self {
+        self.collection_fraction = v;
+        self
+    }
+
+    pub fn with_max_rows_for_collection(mut self, v: u64) -> Self {
+        self.max_rows_for_collection = v;
+        self
+    }
+
+    pub fn build(self) -> SelectivityTracker {
+        SelectivityTracker {
+            config: self,
+            inner: RwLock::new(SelectivityTrackerInner::new()),
+        }
+    }
+}
+
+impl Default for TrackerConfig {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Cross-file adaptive system that measures filter effectiveness and decides
 /// which filters are promoted to row-level predicates (pushed into the Parquet
 /// reader) vs. applied post-scan or dropped entirely.
+///
+/// The `RwLock` is **private** — external callers cannot hold the guard across
+/// expensive work. All lock-holding code paths are auditable in this file.
 ///
 /// # Filter state machine
 ///
@@ -238,90 +310,18 @@ impl PairKey {
 ///                                    generation change resets to Collecting
 /// ```
 ///
-/// - **Collecting**: the filter runs post-scan so per-batch timing and
-///   selectivity can be measured. Transitions out once `effective_min_rows`
-///   rows have been observed.
-/// - **Promoted**: pushed as a row-level predicate inside the Parquet reader.
-///   Stats are cleared on the `Collecting → Promoted` transition so stale
-///   collection-phase data does not pollute post-promotion measurement.
-///   Already-promoted filters enjoy a *grace period*: they stay promoted
-///   during re-evaluation until enough new rows accumulate.
-/// - **Demoted**: below the effectiveness threshold but mandatory — stays in
-///   the post-scan path.
-/// - **Dropped**: below threshold *and* optional
-///   ([`OptionalFilterPhysicalExpr`]-wrapped) — the filter is never applied.
-///
-/// # Effectiveness metric
-///
-/// ```text
-/// effectiveness = (rows_pruned × bytes_per_row) × 1e9 / eval_nanos   [bytes/sec]
-/// ```
-///
-/// A filter is promoted when `effectiveness ≥ min_bytes_per_sec`.
-///
-/// # Correlation detection
-///
-/// During collection, pairwise pass counts are recorded for collecting
-/// filters. The lift ratio `P(A∧B) / (P(A)·P(B))` is compared against
-/// `correlation_threshold`. Correlated filters are grouped via union-find;
-/// only the most effective filter in each group is promoted, the rest are
-/// demoted (or dropped if optional).
-///
-/// # Dynamic filters
-///
-/// When a filter's `snapshot_generation` changes (e.g. a hash-join probe
-/// side is rebuilt), all stats for that filter are cleared and it resets to
-/// `Collecting`, giving the new predicate a fresh evaluation window.
-///
-/// # Lifecycle
-///
-/// 1. **Collection phase** — filters run post-scan with individual timing
-///    and pairwise correlation tracking.
-/// 2. **Decision** — once `effective_min_rows` rows are observed the filter
-///    is promoted, demoted, or dropped.
-/// 3. **Replay** — promoted filters are pushed into the Parquet reader;
-///    per-batch stats are written directly to the tracker from `evaluate()`.
-/// 4. **Re-evaluation** — every `effective_min_rows` additional rows the
-///    decision is revisited; a promoted filter may be demoted if its
-///    effectiveness has dropped.
-///
-/// # Configuration
-///
-/// | Field | Default | Effect |
-/// |---|---|---|
-/// | `min_bytes_per_sec` | `INFINITY` (disabled) | Threshold for promotion. `0.0` = all promoted. |
-/// | `correlation_threshold` | `1.5` | Lift ratio above which filters are grouped. Higher = less grouping. |
-/// | `min_rows_for_collection` | `10 000` | Floor for the collection / re-eval window. |
-/// | `collection_fraction` | `0.0` | Fraction of dataset rows for the window. Effective = `max(min_rows, fraction × total)`. |
-/// | `max_rows_for_collection` | `0` (no cap) | Cap on collection / re-eval window size. |
-///
-/// Filters are identified by stable [`FilterId`] indices assigned at
-/// predicate construction time, avoiding `ExprKey` mismatch when expressions
-/// are rebased or simplified per-file.
-#[derive(Debug)]
+/// See [`TrackerConfig`] for configuration knobs.
 pub struct SelectivityTracker {
-    /// Per-filter effectiveness statistics, keyed by FilterId
-    stats: HashMap<FilterId, SelectivityStats>,
-    /// Per-filter lifecycle state
-    filter_states: HashMap<FilterId, FilterState>,
-    /// Pairwise correlation statistics between filter pairs
-    correlations: HashMap<PairKey, CorrelationStats>,
-    /// Snapshot generation for each filter (for detecting dynamic filter updates)
-    snapshot_generations: HashMap<FilterId, u64>,
-    /// Incrementing counter for partition_filters calls (for log context).
-    partition_call_count: u64,
-    /// Minimum bytes/sec throughput for promoting a filter to row filter.
-    min_bytes_per_sec: f64,
-    /// Correlation ratio threshold for grouping filters.
-    correlation_threshold: f64,
-    /// Minimum rows that must be observed before a filter's evaluation threshold is met.
-    min_rows_for_collection: u64,
-    /// Fraction of total dataset rows for per-filter evaluation threshold.
-    collection_fraction: f64,
-    /// Maximum rows for per-filter evaluation threshold (0 = no cap).
-    max_rows_for_collection: u64,
-    /// Resolved minimum rows after notify_dataset_rows() is called.
-    resolved_min_rows: Option<u64>,
+    config: TrackerConfig,
+    inner: RwLock<SelectivityTrackerInner>,
+}
+
+impl std::fmt::Debug for SelectivityTracker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SelectivityTracker")
+            .field("config.min_bytes_per_sec", &self.config.min_bytes_per_sec)
+            .finish()
+    }
 }
 
 impl Default for SelectivityTracker {
@@ -333,161 +333,200 @@ impl Default for SelectivityTracker {
 impl SelectivityTracker {
     /// Create a new tracker with default settings (feature disabled).
     pub fn new() -> Self {
+        TrackerConfig::new().build()
+    }
+
+    /// Update stats for a filter after processing a batch.
+    ///
+    /// Acquires and releases the write lock in bounded time.
+    /// Debug-logs lock wait times > 100μs **after** dropping the lock.
+    pub(crate) fn update(
+        &self,
+        id: FilterId,
+        matched: u64,
+        total: u64,
+        eval_nanos: u64,
+        batch_bytes: u64,
+    ) {
+        let lock_wait_us = {
+            let lock_start = Instant::now();
+            let mut inner = self.inner.write();
+            let wait = lock_start.elapsed().as_micros();
+            inner.update(id, matched, total, eval_nanos, batch_bytes);
+            wait
+        }; // lock dropped here
+        if lock_wait_us > 100 {
+            debug!("FilterId {id}: selectivity write lock wait={lock_wait_us}μs");
+        }
+    }
+
+    /// Partition filters into collecting / promoted / post-scan.
+    pub(crate) fn partition_filters(
+        &self,
+        filters: Vec<(FilterId, Arc<dyn PhysicalExpr>)>,
+    ) -> PartitionedFilters {
+        self.inner.write().partition_filters(filters, &self.config)
+    }
+
+    /// Returns the number of times `partition_filters` has been called.
+    pub(crate) fn partition_call_count(&self) -> u64 {
+        self.inner.read().partition_call_count
+    }
+
+    /// Resolve the fraction-based collection threshold from dataset statistics.
+    pub(crate) fn notify_dataset_rows(&self, total_rows: u64) {
+        self.inner
+            .write()
+            .notify_dataset_rows(total_rows, &self.config);
+    }
+
+    // Builder-style constructors for convenience (delegating to TrackerConfig).
+
+    /// Set the minimum bytes/sec throughput for promoting a filter.
+    pub(crate) fn with_min_bytes_per_sec(self, v: f64) -> Self {
+        Self {
+            config: TrackerConfig {
+                min_bytes_per_sec: v,
+                ..self.config
+            },
+            ..self
+        }
+    }
+
+    /// Set the lift ratio above which two filters are considered correlated.
+    pub(crate) fn with_correlation_threshold(self, v: f64) -> Self {
+        Self {
+            config: TrackerConfig {
+                correlation_threshold: v,
+                ..self.config
+            },
+            ..self
+        }
+    }
+
+    /// Set the floor for the collection / re-evaluation window.
+    pub(crate) fn with_min_rows_for_collection(self, v: u64) -> Self {
+        Self {
+            config: TrackerConfig {
+                min_rows_for_collection: v,
+                ..self.config
+            },
+            ..self
+        }
+    }
+
+    /// Set the fraction of total dataset rows used for the collection window.
+    pub(crate) fn with_collection_fraction(self, v: f64) -> Self {
+        Self {
+            config: TrackerConfig {
+                collection_fraction: v,
+                ..self.config
+            },
+            ..self
+        }
+    }
+
+    /// Set the cap on collection / re-evaluation window size.
+    pub(crate) fn with_max_rows_for_collection(self, v: u64) -> Self {
+        Self {
+            config: TrackerConfig {
+                max_rows_for_collection: v,
+                ..self.config
+            },
+            ..self
+        }
+    }
+}
+
+/// Mutable state guarded by the `RwLock` inside [`SelectivityTracker`].
+#[derive(Debug)]
+struct SelectivityTrackerInner {
+    /// Per-filter effectiveness statistics, keyed by FilterId
+    stats: HashMap<FilterId, SelectivityStats>,
+    /// Per-filter lifecycle state
+    filter_states: HashMap<FilterId, FilterState>,
+    /// Pairwise correlation statistics between filter pairs
+    correlations: HashMap<PairKey, CorrelationStats>,
+    /// Snapshot generation for each filter (for detecting dynamic filter updates)
+    snapshot_generations: HashMap<FilterId, u64>,
+    /// Incrementing counter for partition_filters calls (for log context).
+    partition_call_count: u64,
+    /// Resolved minimum rows after notify_dataset_rows() is called.
+    resolved_min_rows: Option<u64>,
+}
+
+impl SelectivityTrackerInner {
+    fn new() -> Self {
         Self {
             stats: HashMap::new(),
             filter_states: HashMap::new(),
             correlations: HashMap::new(),
             snapshot_generations: HashMap::new(),
             partition_call_count: 0,
-            min_bytes_per_sec: f64::INFINITY,
-            correlation_threshold: 1.5,
-            min_rows_for_collection: 10_000,
-            collection_fraction: 0.0,
-            max_rows_for_collection: 0,
             resolved_min_rows: None,
         }
     }
 
-    /// Set the minimum bytes/sec throughput for promoting a filter.
-    ///
-    /// - `f64::INFINITY` (default): feature disabled — no filters promoted.
-    /// - `0.0`: all filters promoted unconditionally.
-    /// - Any positive value: only filters whose effectiveness meets or exceeds
-    ///   this threshold are promoted.
-    pub(crate) fn with_min_bytes_per_sec(mut self, min_bytes_per_sec: f64) -> Self {
-        self.min_bytes_per_sec = min_bytes_per_sec;
-        self
-    }
-
-    /// Set the lift ratio above which two filters are considered correlated.
-    ///
-    /// Default `1.5`. Higher values require stronger correlation before
-    /// grouping, resulting in fewer filters being deduplicated.
-    pub(crate) fn with_correlation_threshold(
-        mut self,
-        correlation_threshold: f64,
-    ) -> Self {
-        self.correlation_threshold = correlation_threshold;
-        self
-    }
-
-    /// Set the floor for the collection / re-evaluation window (default 10 000).
-    pub(crate) fn with_min_rows_for_collection(mut self, min_rows: u64) -> Self {
-        self.min_rows_for_collection = min_rows;
-        self
-    }
-
-    /// Set the fraction of total dataset rows used for the collection window.
-    ///
-    /// Default `0.0` (fraction-based sizing disabled). The effective minimum is
-    /// `max(min_rows_for_collection, fraction × total_dataset_rows)`, resolved
-    /// when [`notify_dataset_rows`](Self::notify_dataset_rows) is called.
-    pub(crate) fn with_collection_fraction(mut self, fraction: f64) -> Self {
-        self.collection_fraction = fraction;
-        self
-    }
-
-    /// Set the cap on collection / re-evaluation window size.
-    ///
-    /// Default `0` (no cap). When non-zero, `effective_min_rows` is clamped to
-    /// at most this value.
-    pub(crate) fn with_max_rows_for_collection(mut self, max_rows: u64) -> Self {
-        self.max_rows_for_collection = max_rows;
-        self
-    }
-
-    /// Map `min_bytes_per_sec` to the [`PromotionStrategy`] enum so the rest of
-    /// the code avoids fragile float comparisons.
-    fn promotion_strategy(&self) -> PromotionStrategy {
-        if self.min_bytes_per_sec.is_infinite() {
+    /// Map `min_bytes_per_sec` to the [`PromotionStrategy`] enum.
+    fn promotion_strategy(config: &TrackerConfig) -> PromotionStrategy {
+        if config.min_bytes_per_sec.is_infinite() {
             PromotionStrategy::Disabled
-        } else if self.min_bytes_per_sec == 0.0 {
+        } else if config.min_bytes_per_sec == 0.0 {
             PromotionStrategy::AllPromoted
         } else {
-            PromotionStrategy::Threshold(self.min_bytes_per_sec)
+            PromotionStrategy::Threshold(config.min_bytes_per_sec)
         }
     }
 
     /// Compute the effective collection / re-evaluation window size.
-    ///
-    /// `effective = min(max_rows, max(min_rows, resolved_fraction_rows))`.
-    /// When `max_rows_for_collection` is 0 the cap is not applied.
-    fn effective_min_rows(&self) -> u64 {
+    fn effective_min_rows(&self, config: &TrackerConfig) -> u64 {
         let base = self
             .resolved_min_rows
-            .unwrap_or(self.min_rows_for_collection);
-        if self.max_rows_for_collection > 0 {
-            base.min(self.max_rows_for_collection)
+            .unwrap_or(config.min_rows_for_collection);
+        if config.max_rows_for_collection > 0 {
+            base.min(config.max_rows_for_collection)
         } else {
             base
         }
     }
 
     /// Resolve the fraction-based collection threshold from dataset statistics.
-    ///
-    /// Called once when total row count is available. Sets `resolved_min_rows`
-    /// to `max(min_rows_for_collection, fraction × total_rows)`.
-    pub(crate) fn notify_dataset_rows(&mut self, total_rows: u64) {
-        if self.collection_fraction > 0.0 {
-            let fraction_rows = (self.collection_fraction * total_rows as f64) as u64;
+    fn notify_dataset_rows(&mut self, total_rows: u64, config: &TrackerConfig) {
+        if config.collection_fraction > 0.0 {
+            let fraction_rows = (config.collection_fraction * total_rows as f64) as u64;
             self.resolved_min_rows =
-                Some(self.min_rows_for_collection.max(fraction_rows));
+                Some(config.min_rows_for_collection.max(fraction_rows));
         }
-    }
-
-    /// Returns the number of times `partition_filters` has been called.
-    pub(crate) fn partition_call_count(&self) -> u64 {
-        self.partition_call_count
     }
 
     /// Check and update the snapshot generation for a filter.
-    ///
-    /// If the generation changed (dynamic filter updated), clear all stats and
-    /// correlations for this filter and reset it to [`FilterState::Collecting`].
-    /// Dynamic filters may be refined as the scan progresses (e.g. a hash-join
-    /// probe side is rebuilt with a more selective predicate), so the updated
-    /// filter deserves a fresh evaluation window.
-    ///
-    /// Generation `0` means the expression is static — no tracking needed.
     fn note_generation(&mut self, id: FilterId, generation: u64) {
         if generation == 0 {
-            // Static expression — no generation tracking needed
             return;
         }
         match self.snapshot_generations.get(&id) {
-            Some(&prev_generation) if prev_generation == generation => {
-                // No change
-            }
+            Some(&prev_generation) if prev_generation == generation => {}
             Some(_) => {
-                // Generation changed — dynamic filter updated
                 let current_state = self.filter_states.get(&id).copied();
                 debug!(
                     "FilterId {id} generation changed, resetting stats (state={current_state:?})"
                 );
                 self.stats.remove(&id);
                 self.snapshot_generations.insert(id, generation);
-                // Clear correlations involving this filter
                 self.correlations.retain(|pk, _| pk.0 != id && pk.1 != id);
             }
             None => {
-                // First time seeing this filter
                 self.snapshot_generations.insert(id, generation);
             }
         }
     }
 
-    /// Get the effectiveness (opaque ordering score) for a filter by ID.
+    /// Get the effectiveness for a filter by ID.
     fn get_effectiveness_by_id(&self, id: FilterId) -> Option<f64> {
         self.stats.get(&id).and_then(|s| s.effectiveness())
     }
 
     /// Demote a filter to post-scan or drop it entirely if optional.
-    ///
-    /// Mandatory filters (no [`OptionalFilterPhysicalExpr`] wrapper) become
-    /// [`FilterState::Demoted`] and are added to `post_scan`. Optional filters
-    /// become [`FilterState::Dropped`] and are not applied at all — the
-    /// upstream operator (e.g. `HashJoinExec`) enforces correctness
-    /// independently. Stats are cleared in both cases.
     fn demote_or_drop(
         &mut self,
         id: FilterId,
@@ -507,16 +546,28 @@ impl SelectivityTracker {
         self.stats.remove(&id);
     }
 
+    /// Update stats for a filter by ID after processing a batch.
+    fn update(
+        &mut self,
+        id: FilterId,
+        matched: u64,
+        total: u64,
+        eval_nanos: u64,
+        batch_bytes: u64,
+    ) {
+        self.stats
+            .entry(id)
+            .or_default()
+            .update(matched, total, eval_nanos, batch_bytes);
+    }
+
     /// Partition filters using correlation-based deduplication.
-    ///
-    /// Filters are identified by their stable FilterId. Correlated filters
-    /// are deduplicated: only the most effective from each correlated group
-    /// is promoted; the rest are demoted to post-scan.
-    pub(crate) fn partition_filters(
+    fn partition_filters(
         &mut self,
         filters: Vec<(FilterId, Arc<dyn PhysicalExpr>)>,
+        config: &TrackerConfig,
     ) -> PartitionedFilters {
-        let strategy = self.promotion_strategy();
+        let strategy = Self::promotion_strategy(config);
 
         // Disabled: nothing is promoted.
         if strategy == PromotionStrategy::Disabled {
@@ -547,7 +598,7 @@ impl SelectivityTracker {
                 promoted = filters;
             }
             PromotionStrategy::Threshold(threshold) => {
-                let min_rows = self.effective_min_rows();
+                let min_rows = self.effective_min_rows(config);
                 for (id, expr) in filters {
                     let state = self.filter_states.get(&id).copied();
 
@@ -592,9 +643,7 @@ impl SelectivityTracker {
                             // Grace period: keep promoted
                             promoted.push((id, expr));
                         } else {
-                            // Early promotion via confidence interval:
-                            // If the lower bound of the CI on mean effectiveness
-                            // exceeds the threshold, promote early (z=2.0 ≈ 97.7% one-sided).
+                            // Early promotion via confidence interval
                             let early_promote = self
                                 .stats
                                 .get(&id)
@@ -609,7 +658,6 @@ impl SelectivityTracker {
                                 self.filter_states.insert(id, FilterState::Promoted);
                                 promoted.push((id, expr));
                             } else {
-                                // Collecting or new: mark as Collecting, send to collecting row filter
                                 if state.is_none() {
                                     self.filter_states
                                         .insert(id, FilterState::Collecting);
@@ -623,15 +671,14 @@ impl SelectivityTracker {
             PromotionStrategy::Disabled => unreachable!(),
         }
 
-        // Deduplicate correlated filters among promoted only (collecting need unbiased measurement).
-        let groups = self.group_by_correlation_id(&promoted);
+        // Deduplicate correlated filters among promoted only
+        let groups = self.group_by_correlation_id(&promoted, config);
 
         let mut deduped_promoted: Vec<(FilterId, Arc<dyn PhysicalExpr>)> = Vec::new();
         for indices in groups {
             if indices.len() == 1 {
                 deduped_promoted.push(promoted[indices[0]].clone());
             } else {
-                // Find the most effective filter in the group
                 let best_idx = indices
                     .iter()
                     .copied()
@@ -645,7 +692,6 @@ impl SelectivityTracker {
                             .unwrap_or(std::cmp::Ordering::Equal)
                     })
                     .unwrap();
-                // Promote the best, demote the rest
                 for &i in &indices {
                     if i == best_idx {
                         deduped_promoted.push(promoted[i].clone());
@@ -681,7 +727,7 @@ impl SelectivityTracker {
         // Diagnostic logging
         self.partition_call_count += 1;
         if log::log_enabled!(log::Level::Debug) {
-            let min_rows = self.effective_min_rows();
+            let min_rows = self.effective_min_rows(config);
             let threshold_str = match strategy {
                 PromotionStrategy::Threshold(t) => format!("{t:.0} bytes/sec"),
                 PromotionStrategy::AllPromoted => "all promoted".to_string(),
@@ -714,7 +760,6 @@ impl SelectivityTracker {
                         )
                     }
                     _ => {
-                        // Grace period: no stats or not enough rows yet
                         let rows_so_far =
                             self.stats.get(&id).map_or(0, |s| s.rows_total());
                         let remaining = min_rows.saturating_sub(rows_so_far);
@@ -776,7 +821,6 @@ impl SelectivityTracker {
                 };
                 debug!("  Filter id={id}: {expr} [{detail}]");
             }
-            // Log any dropped filters
             for (id, state) in &self.filter_states {
                 if matches!(state, FilterState::Dropped) {
                     debug!("  Filter id={id}: DROPPED (optional, below threshold)");
@@ -801,27 +845,17 @@ impl SelectivityTracker {
         }
     }
 
-    /// Update stats for a filter by ID after processing a batch.
-    pub(crate) fn update(
-        &mut self,
-        id: FilterId,
-        matched: u64,
-        total: u64,
-        eval_nanos: u64,
-        batch_bytes: u64,
-    ) {
-        self.stats
-            .entry(id)
-            .or_default()
-            .update(matched, total, eval_nanos, batch_bytes);
-    }
-
     /// Compute the correlation ratio for two filters by ID.
-    fn correlation_ratio_by_id(&self, a: FilterId, b: FilterId) -> Option<f64> {
+    fn correlation_ratio_by_id(
+        &self,
+        a: FilterId,
+        b: FilterId,
+        config: &TrackerConfig,
+    ) -> Option<f64> {
         let stats_a = self.stats.get(&a)?;
         let stats_b = self.stats.get(&b)?;
 
-        let min_rows = self.effective_min_rows();
+        let min_rows = self.effective_min_rows(config);
         if stats_a.rows_total < min_rows || stats_b.rows_total < min_rows {
             return None;
         }
@@ -847,13 +881,10 @@ impl SelectivityTracker {
     }
 
     /// Group effective filters by correlation using union-find.
-    ///
-    /// Builds pairwise correlation edges where `lift > correlation_threshold`,
-    /// then uses union-find to merge connected filters into groups. Returns
-    /// one `Vec<usize>` per connected component (indices into `filters`).
     fn group_by_correlation_id(
         &self,
         filters: &[(FilterId, Arc<dyn PhysicalExpr>)],
+        config: &TrackerConfig,
     ) -> Vec<Vec<usize>> {
         let n = filters.len();
         if n <= 1 {
@@ -866,8 +897,8 @@ impl SelectivityTracker {
         for i in 0..n {
             for j in (i + 1)..n {
                 if let Some(ratio) =
-                    self.correlation_ratio_by_id(filters[i].0, filters[j].0)
-                    && ratio > self.correlation_threshold
+                    self.correlation_ratio_by_id(filters[i].0, filters[j].0, config)
+                    && ratio > config.correlation_threshold
                 {
                     union(&mut parent, &mut rank, i, j);
                 }
@@ -926,7 +957,7 @@ mod tests {
         ])
     }
 
-    impl SelectivityTracker {
+    impl SelectivityTrackerInner {
         /// Test helper: directly insert correlation stats for a pair of filters.
         fn update_correlation(
             &mut self,
@@ -965,6 +996,18 @@ mod tests {
         )))
     }
 
+    /// Helper: create a TrackerConfig and mutable inner for tests.
+    fn make_tracker(
+        min_bytes_per_sec: f64,
+        min_rows: u64,
+    ) -> (TrackerConfig, SelectivityTrackerInner) {
+        let config = TrackerConfig::new()
+            .with_min_bytes_per_sec(min_bytes_per_sec)
+            .with_min_rows_for_collection(min_rows);
+        let inner = SelectivityTrackerInner::new();
+        (config, inner)
+    }
+
     mod stats {
         use super::*;
 
@@ -988,24 +1031,19 @@ mod tests {
 
         #[test]
         fn effectiveness_bytes_per_sec_cases() {
-            // No data → None
             let stats = SelectivityStats::new(0, 0, 0, 0);
             assert!(stats.effectiveness().is_none());
 
-            // No eval time → None
             let stats = SelectivityStats::new(20, 100, 0, 1000);
             assert!(stats.effectiveness().is_none());
 
-            // No bytes → None
             let stats = SelectivityStats::new(20, 100, 1_000_000_000, 0);
             assert!(stats.effectiveness().is_none());
 
-            // 80 rows pruned, 10 bytes/row, 1 sec → 800 bytes/sec
             let stats = SelectivityStats::new(20, 100, 1_000_000_000, 1000);
             let eff = stats.effectiveness().unwrap();
             assert!((eff - 800.0).abs() < 0.001);
 
-            // 0 rows pruned → 0 bytes/sec
             let stats = SelectivityStats::new(100, 100, 1_000_000_000, 1000);
             let eff = stats.effectiveness().unwrap();
             assert!((eff - 0.0).abs() < 0.001);
@@ -1036,18 +1074,18 @@ mod tests {
 
         #[test]
         fn all_promoted_pushes_every_filter() {
-            let mut tracker = SelectivityTracker::new()
-                .with_min_bytes_per_sec(0.0)
-                .with_min_rows_for_collection(100);
+            let (config, mut inner) = make_tracker(0.0, 100);
 
             let filter1 = make_filter("a", 5);
             let filter2 = make_filter("a", 10);
 
-            tracker.update(0, 10, 100, 0, 0);
-            tracker.update(1, 10, 100, 0, 0);
+            inner.update(0, 10, 100, 0, 0);
+            inner.update(1, 10, 100, 0, 0);
 
-            let result = tracker
-                .partition_filters(vec![(0, filter1.clone()), (1, filter2.clone())]);
+            let result = inner.partition_filters(
+                vec![(0, filter1.clone()), (1, filter2.clone())],
+                &config,
+            );
 
             assert_eq!(result.promoted.len(), 2);
             assert_eq!(result.post_scan.len(), 0);
@@ -1055,41 +1093,38 @@ mod tests {
 
         #[test]
         fn threshold_promotes_above_demotes_below() {
-            let mut tracker = SelectivityTracker::new()
-                .with_min_bytes_per_sec(100.0)
-                .with_min_rows_for_collection(100);
+            let (config, mut inner) = make_tracker(100.0, 100);
 
             let filter1 = make_filter("a", 5);
             let filter2 = make_filter("a", 10);
             let optional_filter = make_optional_filter("c", 1);
 
-            // filter1: 80 rows pruned * 10 bytes/row = 800 bytes saved in 1 sec → 800 bytes/sec (above)
-            tracker.update(0, 20, 100, 1_000_000_000, 1000);
-            // filter2: 10 rows pruned * 10 bytes/row = 100 bytes saved in 10 sec → 10 bytes/sec (below)
-            tracker.update(1, 90, 100, 10_000_000_000, 1000);
-            // optional: 90 pruned * 100 bpr = 9000 bytes saved in 1s → 9000 bps (above)
-            tracker.update(2, 10, 100, 1_000_000_000, 10_000);
+            inner.update(0, 20, 100, 1_000_000_000, 1000);
+            inner.update(1, 90, 100, 10_000_000_000, 1000);
+            inner.update(2, 10, 100, 1_000_000_000, 10_000);
 
-            let result = tracker.partition_filters(vec![
-                (0, filter1.clone()),
-                (1, filter2.clone()),
-                (2, optional_filter.clone()),
-            ]);
+            let result = inner.partition_filters(
+                vec![
+                    (0, filter1.clone()),
+                    (1, filter2.clone()),
+                    (2, optional_filter.clone()),
+                ],
+                &config,
+            );
 
             assert_eq!(result.promoted.len(), 2);
             assert_eq!(result.post_scan.len(), 1);
             assert_eq!(result.post_scan[0].0, 1);
-            // Verify optional filter was promoted
             assert!(result.promoted.iter().any(|(id, _)| *id == 2));
         }
 
         #[test]
         fn disabled_sends_all_to_post_scan() {
-            let mut tracker = SelectivityTracker::new();
+            let (config, mut inner) = make_tracker(f64::INFINITY, 100);
             let filter = make_filter("a", 5);
-            tracker.update(0, 0, 100, 1, 1000);
+            inner.update(0, 0, 100, 1, 1000);
 
-            let result = tracker.partition_filters(vec![(0, filter.clone())]);
+            let result = inner.partition_filters(vec![(0, filter.clone())], &config);
 
             assert!(result.promoted.is_empty());
             assert_eq!(result.post_scan.len(), 1);
@@ -1097,19 +1132,19 @@ mod tests {
 
         #[test]
         fn correlated_pair_keeps_best_demotes_other() {
-            let mut tracker = SelectivityTracker::new()
-                .with_min_bytes_per_sec(0.0)
-                .with_min_rows_for_collection(100);
+            let (config, mut inner) = make_tracker(0.0, 100);
 
             let filter_a = make_filter("a", 5);
             let filter_b = make_filter("a", 10);
 
-            tracker.update(0, 30, 100, 0, 0);
-            tracker.update(1, 40, 100, 0, 0);
-            tracker.update_correlation(0, 1, 25, 100);
+            inner.update(0, 30, 100, 0, 0);
+            inner.update(1, 40, 100, 0, 0);
+            inner.update_correlation(0, 1, 25, 100);
 
-            let result = tracker
-                .partition_filters(vec![(0, filter_a.clone()), (1, filter_b.clone())]);
+            let result = inner.partition_filters(
+                vec![(0, filter_a.clone()), (1, filter_b.clone())],
+                &config,
+            );
 
             assert_eq!(result.promoted.len(), 1);
             assert_eq!(result.post_scan.len(), 1);
@@ -1117,62 +1152,56 @@ mod tests {
 
         #[test]
         fn two_correlated_groups_each_keep_best() {
-            let mut tracker = SelectivityTracker::new()
-                .with_min_bytes_per_sec(0.0)
-                .with_min_rows_for_collection(100);
+            let (config, mut inner) = make_tracker(0.0, 100);
 
             let filter_a = make_filter("a", 5);
             let filter_b = make_filter("a", 10);
             let filter_c = make_filter("c", 1);
             let filter_d = make_filter("d", 2);
 
-            tracker.update(0, 30, 100, 0, 0);
-            tracker.update(1, 40, 100, 0, 0);
-            tracker.update(2, 20, 100, 0, 0);
-            tracker.update(3, 35, 100, 0, 0);
+            inner.update(0, 30, 100, 0, 0);
+            inner.update(1, 40, 100, 0, 0);
+            inner.update(2, 20, 100, 0, 0);
+            inner.update(3, 35, 100, 0, 0);
 
-            // A-B correlated
-            tracker.update_correlation(0, 1, 25, 100);
-            // C-D correlated
-            tracker.update_correlation(2, 3, 15, 100);
-            // Cross-group: independent
-            tracker.update_correlation(0, 2, 6, 100);
-            tracker.update_correlation(1, 2, 8, 100);
-            tracker.update_correlation(0, 3, 10, 100);
-            tracker.update_correlation(1, 3, 14, 100);
+            inner.update_correlation(0, 1, 25, 100);
+            inner.update_correlation(2, 3, 15, 100);
+            inner.update_correlation(0, 2, 6, 100);
+            inner.update_correlation(1, 2, 8, 100);
+            inner.update_correlation(0, 3, 10, 100);
+            inner.update_correlation(1, 3, 14, 100);
 
-            let result = tracker.partition_filters(vec![
-                (0, filter_a.clone()),
-                (1, filter_b.clone()),
-                (2, filter_c.clone()),
-                (3, filter_d.clone()),
-            ]);
+            let result = inner.partition_filters(
+                vec![
+                    (0, filter_a.clone()),
+                    (1, filter_b.clone()),
+                    (2, filter_c.clone()),
+                    (3, filter_d.clone()),
+                ],
+                &config,
+            );
 
-            // One filter promoted per correlated pair, the other demoted
             assert_eq!(result.promoted.len(), 2);
             assert_eq!(result.post_scan.len(), 2);
         }
 
         #[test]
         fn ineffective_optional_dropped_mandatory_demoted() {
-            let mut tracker = SelectivityTracker::new()
-                .with_min_bytes_per_sec(100.0)
-                .with_min_rows_for_collection(100);
+            let (config, mut inner) = make_tracker(100.0, 100);
 
             let mandatory_filter = make_filter("a", 5);
             let optional_filter = make_optional_filter("c", 1);
 
-            // Both filters: 50 pruned * 100 bpr = 5000 bytes saved in 100s → 50 bps (below 100)
-            tracker.update(0, 50, 100, 100_000_000_000, 10_000);
-            tracker.update(1, 50, 100, 100_000_000_000, 10_000);
+            inner.update(0, 50, 100, 100_000_000_000, 10_000);
+            inner.update(1, 50, 100, 100_000_000_000, 10_000);
 
-            let result = tracker.partition_filters(vec![
-                (0, mandatory_filter.clone()),
-                (1, optional_filter.clone()),
-            ]);
+            let result = inner.partition_filters(
+                vec![(0, mandatory_filter.clone()), (1, optional_filter.clone())],
+                &config,
+            );
 
             assert_eq!(result.post_scan.len(), 1);
-            assert_eq!(result.post_scan[0].0, 0); // mandatory demoted
+            assert_eq!(result.post_scan[0].0, 0);
             assert!(result.promoted.is_empty());
         }
     }
@@ -1182,15 +1211,15 @@ mod tests {
 
         #[test]
         fn new_filters_stay_collecting_until_min_rows() {
-            let mut tracker = SelectivityTracker::new()
-                .with_min_bytes_per_sec(100.0)
-                .with_min_rows_for_collection(10_000);
+            let (config, mut inner) = make_tracker(100.0, 10_000);
 
             let filter_a = make_filter("a", 5);
             let filter_b = make_filter("a", 10);
 
-            let result = tracker
-                .partition_filters(vec![(0, filter_a.clone()), (1, filter_b.clone())]);
+            let result = inner.partition_filters(
+                vec![(0, filter_a.clone()), (1, filter_b.clone())],
+                &config,
+            );
 
             assert!(result.promoted.is_empty());
             assert_eq!(result.collecting.len(), 2);
@@ -1200,57 +1229,59 @@ mod tests {
         #[test]
         fn effective_min_rows_respects_fraction_floor_and_cap() {
             // Fraction increases effective_min_rows above the floor
-            let mut tracker = SelectivityTracker::new()
+            let config = TrackerConfig::new()
                 .with_min_bytes_per_sec(0.0)
                 .with_min_rows_for_collection(100)
                 .with_collection_fraction(0.05);
-            assert_eq!(tracker.effective_min_rows(), 100);
-            tracker.notify_dataset_rows(10_000);
-            assert_eq!(tracker.effective_min_rows(), 500); // 5% of 10k
+            let mut inner = SelectivityTrackerInner::new();
+            assert_eq!(inner.effective_min_rows(&config), 100);
+            inner.notify_dataset_rows(10_000, &config);
+            assert_eq!(inner.effective_min_rows(&config), 500);
 
             // Floor wins when fraction result is smaller
-            let mut tracker = SelectivityTracker::new()
+            let config2 = TrackerConfig::new()
                 .with_min_bytes_per_sec(0.0)
                 .with_min_rows_for_collection(1000)
                 .with_collection_fraction(0.05);
-            tracker.notify_dataset_rows(10_000);
-            assert_eq!(tracker.effective_min_rows(), 1000); // floor > 500
+            let mut inner2 = SelectivityTrackerInner::new();
+            inner2.notify_dataset_rows(10_000, &config2);
+            assert_eq!(inner2.effective_min_rows(&config2), 1000);
 
             // Cap limits effective_min_rows
-            let mut tracker = SelectivityTracker::new()
+            let config3 = TrackerConfig::new()
                 .with_min_bytes_per_sec(0.0)
                 .with_min_rows_for_collection(100)
                 .with_collection_fraction(0.05)
                 .with_max_rows_for_collection(500);
-            tracker.notify_dataset_rows(1_000_000);
-            assert_eq!(tracker.effective_min_rows(), 500); // capped
+            let mut inner3 = SelectivityTrackerInner::new();
+            inner3.notify_dataset_rows(1_000_000, &config3);
+            assert_eq!(inner3.effective_min_rows(&config3), 500);
         }
 
         #[test]
         fn filters_evaluated_independently_as_data_arrives() {
-            let mut tracker = SelectivityTracker::new()
-                .with_min_bytes_per_sec(100.0)
-                .with_min_rows_for_collection(100);
+            let (config, mut inner) = make_tracker(100.0, 100);
 
             let filter_a = make_filter("a", 5);
             let filter_b = make_filter("a", 10);
 
-            // filter0: enough rows, high throughput → should promote
-            // filter1: not enough rows yet → should stay in post-scan (Collecting)
-            tracker.update(0, 10, 100, 1_000_000_000, 10_000);
-            tracker.update(1, 5, 50, 500_000_000, 5_000);
+            inner.update(0, 10, 100, 1_000_000_000, 10_000);
+            inner.update(1, 5, 50, 500_000_000, 5_000);
 
-            let result = tracker
-                .partition_filters(vec![(0, filter_a.clone()), (1, filter_b.clone())]);
+            let result = inner.partition_filters(
+                vec![(0, filter_a.clone()), (1, filter_b.clone())],
+                &config,
+            );
             assert_eq!(result.promoted.len(), 1, "filter0 should be promoted");
             assert_eq!(result.promoted[0].0, 0);
             assert_eq!(result.collecting.len(), 1, "filter1 still collecting");
             assert_eq!(result.collecting[0].0, 1);
 
-            // Now feed filter1 enough high-throughput data to promote
-            tracker.update(1, 5, 50, 500_000_000, 5_000);
-            let result = tracker
-                .partition_filters(vec![(0, filter_a.clone()), (1, filter_b.clone())]);
+            inner.update(1, 5, 50, 500_000_000, 5_000);
+            let result = inner.partition_filters(
+                vec![(0, filter_a.clone()), (1, filter_b.clone())],
+                &config,
+            );
             assert_eq!(
                 result.promoted.len(),
                 2,
@@ -1264,20 +1295,15 @@ mod tests {
 
         #[test]
         fn early_promotion_via_confidence_interval() {
-            let mut tracker = SelectivityTracker::new()
-                .with_min_bytes_per_sec(100.0)
-                .with_min_rows_for_collection(10_000); // high min_rows
+            let (config, mut inner) = make_tracker(100.0, 10_000);
 
             let filter = make_filter("a", 5);
 
-            // Feed 3 batches of consistent high-effectiveness data (well above 100 bytes/sec).
-            // Each batch: 80 pruned * (1000/100 = 10 bytes/row) = 800 bytes saved in 1s = 800 bytes/sec
             for _ in 0..3 {
-                tracker.update(0, 20, 100, 1_000_000_000, 1000);
+                inner.update(0, 20, 100, 1_000_000_000, 1000);
             }
 
-            // Only 300 rows seen, far below min_rows=10000, but CI should trigger early promotion
-            let result = tracker.partition_filters(vec![(0, filter.clone())]);
+            let result = inner.partition_filters(vec![(0, filter.clone())], &config);
             assert_eq!(
                 result.promoted.len(),
                 1,
@@ -1288,20 +1314,14 @@ mod tests {
 
         #[test]
         fn no_early_promotion_with_high_variance() {
-            let mut tracker = SelectivityTracker::new()
-                .with_min_bytes_per_sec(500.0)
-                .with_min_rows_for_collection(10_000);
+            let (config, mut inner) = make_tracker(500.0, 10_000);
 
             let filter = make_filter("a", 5);
 
-            // Feed batches with wildly varying effectiveness
-            // Batch 1: 800 bytes/sec (above threshold)
-            tracker.update(0, 20, 100, 1_000_000_000, 1000);
-            // Batch 2: 10 bytes/sec (well below threshold)
-            tracker.update(0, 90, 100, 10_000_000_000, 1000);
+            inner.update(0, 20, 100, 1_000_000_000, 1000);
+            inner.update(0, 90, 100, 10_000_000_000, 1000);
 
-            // High variance → CI lower bound should be below threshold
-            let result = tracker.partition_filters(vec![(0, filter.clone())]);
+            let result = inner.partition_filters(vec![(0, filter.clone())], &config);
             assert!(
                 result.promoted.is_empty(),
                 "high-variance filter should NOT be early-promoted"
@@ -1310,16 +1330,13 @@ mod tests {
 
         #[test]
         fn no_early_promotion_with_single_sample() {
-            let mut tracker = SelectivityTracker::new()
-                .with_min_bytes_per_sec(100.0)
-                .with_min_rows_for_collection(10_000);
+            let (config, mut inner) = make_tracker(100.0, 10_000);
 
             let filter = make_filter("a", 5);
 
-            // Single batch — not enough for CI (need >= 2 samples)
-            tracker.update(0, 20, 100, 1_000_000_000, 1000);
+            inner.update(0, 20, 100, 1_000_000_000, 1000);
 
-            let result = tracker.partition_filters(vec![(0, filter.clone())]);
+            let result = inner.partition_filters(vec![(0, filter.clone())], &config);
             assert!(
                 result.promoted.is_empty(),
                 "single sample should not trigger early promotion"
@@ -1328,20 +1345,17 @@ mod tests {
 
         #[test]
         fn welford_stats_cleared_on_promotion() {
-            let mut tracker = SelectivityTracker::new()
-                .with_min_bytes_per_sec(100.0)
-                .with_min_rows_for_collection(10_000);
+            let (config, mut inner) = make_tracker(100.0, 10_000);
 
             let filter = make_filter("a", 5);
 
             for _ in 0..3 {
-                tracker.update(0, 20, 100, 1_000_000_000, 1000);
+                inner.update(0, 20, 100, 1_000_000_000, 1000);
             }
 
-            let result = tracker.partition_filters(vec![(0, filter.clone())]);
+            let result = inner.partition_filters(vec![(0, filter.clone())], &config);
             assert_eq!(result.promoted.len(), 1);
-            // Stats should be cleared on promotion
-            assert!(!tracker.stats.contains_key(&0));
+            assert!(!inner.stats.contains_key(&0));
         }
     }
 
@@ -1350,76 +1364,69 @@ mod tests {
 
         #[test]
         fn generation_change_resets_to_collecting() {
-            let mut tracker = SelectivityTracker::new()
-                .with_min_bytes_per_sec(100.0)
-                .with_min_rows_for_collection(100);
+            let (_config, mut inner) = make_tracker(100.0, 100);
 
-            tracker.update(0, 10, 100, 1_000_000_000, 10_000);
+            inner.update(0, 10, 100, 1_000_000_000, 10_000);
 
-            // Simulate generation change
-            tracker.note_generation(0, 1);
-            tracker.note_generation(0, 2); // changed!
+            inner.note_generation(0, 1);
+            inner.note_generation(0, 2);
 
-            assert!(tracker.needs_collection(0));
-            assert!(!tracker.stats.contains_key(&0));
+            assert!(inner.needs_collection(0));
+            assert!(!inner.stats.contains_key(&0));
         }
 
         #[test]
         fn collecting_to_promoted_clears_stats() {
-            let mut tracker = SelectivityTracker::new()
-                .with_min_bytes_per_sec(100.0)
-                .with_min_rows_for_collection(100);
+            let (config, mut inner) = make_tracker(100.0, 100);
 
             let filter_a = make_filter("a", 5);
 
-            // Collect stats during collection phase
-            tracker.update(0, 10, 100, 1_000_000_000, 10_000);
-            assert!(tracker.stats.contains_key(&0));
-            assert_eq!(tracker.stats.get(&0).unwrap().rows_total(), 100);
+            inner.update(0, 10, 100, 1_000_000_000, 10_000);
+            assert!(inner.stats.contains_key(&0));
+            assert_eq!(inner.stats.get(&0).unwrap().rows_total(), 100);
 
-            // Promote the filter — stats should be cleared
-            let result = tracker.partition_filters(vec![(0, filter_a.clone())]);
+            let result = inner.partition_filters(vec![(0, filter_a.clone())], &config);
             assert_eq!(result.promoted.len(), 1);
 
             assert!(
-                !tracker.stats.contains_key(&0),
+                !inner.stats.contains_key(&0),
                 "Stats should be cleared on Collecting→Promoted transition"
             );
         }
 
         #[test]
         fn grace_period_then_demotion_on_low_effectiveness() {
-            let mut tracker = SelectivityTracker::new()
-                .with_min_bytes_per_sec(100.0)
-                .with_min_rows_for_collection(100);
+            let (config, mut inner) = make_tracker(100.0, 100);
 
             let filter_a = make_filter("a", 5);
             let filter_b = make_filter("a", 10);
 
-            // Step 1: Feed filter 0 high-throughput data so it gets promoted.
-            tracker.update(0, 20, 100, 1_000_000_000, 1000);
+            inner.update(0, 20, 100, 1_000_000_000, 1000);
 
-            let result = tracker
-                .partition_filters(vec![(0, filter_a.clone()), (1, filter_b.clone())]);
+            let result = inner.partition_filters(
+                vec![(0, filter_a.clone()), (1, filter_b.clone())],
+                &config,
+            );
             assert_eq!(result.promoted.len(), 1);
-            assert_eq!(result.promoted[0].0, 0, "filter 0 should be promoted");
+            assert_eq!(result.promoted[0].0, 0);
 
-            // Step 2: Re-partition — filter 0 has no stats (cleared on promotion)
-            // but should stay promoted due to the grace period.
-            let result = tracker
-                .partition_filters(vec![(0, filter_a.clone()), (1, filter_b.clone())]);
+            let result = inner.partition_filters(
+                vec![(0, filter_a.clone()), (1, filter_b.clone())],
+                &config,
+            );
             assert!(
                 result.promoted.iter().any(|(id, _)| *id == 0),
                 "filter 0 should remain in row_filters during grace period"
             );
 
-            // Step 3: Feed filter 0 enough rows with low effectiveness, then it should demote.
             for _ in 0..5 {
-                tracker.update(0, 100, 100, 1_000_000_000, 1000);
+                inner.update(0, 100, 100, 1_000_000_000, 1000);
             }
 
-            let result = tracker
-                .partition_filters(vec![(0, filter_a.clone()), (1, filter_b.clone())]);
+            let result = inner.partition_filters(
+                vec![(0, filter_a.clone()), (1, filter_b.clone())],
+                &config,
+            );
             assert!(
                 !result.promoted.iter().any(|(id, _)| *id == 0),
                 "filter 0 should be demoted after accumulating enough low-effectiveness data"
@@ -1428,28 +1435,20 @@ mod tests {
 
         #[test]
         fn demoted_filter_stays_demoted_across_partitions() {
-            let mut tracker = SelectivityTracker::new()
-                .with_min_bytes_per_sec(100.0)
-                .with_min_rows_for_collection(100);
+            let (config, mut inner) = make_tracker(100.0, 100);
 
             let filter_a = make_filter("a", 5);
 
-            // Feed low-effectiveness data → demote
-            // 0 rows pruned → 0 bytes/sec (below threshold of 100)
-            tracker.update(0, 100, 100, 1_000_000_000, 1000);
+            inner.update(0, 100, 100, 1_000_000_000, 1000);
 
-            let result = tracker.partition_filters(vec![(0, filter_a.clone())]);
+            let result = inner.partition_filters(vec![(0, filter_a.clone())], &config);
             assert!(result.promoted.is_empty());
             assert_eq!(result.post_scan.len(), 1);
-            assert_eq!(
-                *tracker.filter_states.get(&0).unwrap(),
-                FilterState::Demoted
-            );
+            assert_eq!(*inner.filter_states.get(&0).unwrap(), FilterState::Demoted);
 
-            // Feed new high-effectiveness stats — should NOT re-promote
-            tracker.update(0, 10, 100, 1_000_000_000, 10_000);
+            inner.update(0, 10, 100, 1_000_000_000, 10_000);
 
-            let result = tracker.partition_filters(vec![(0, filter_a.clone())]);
+            let result = inner.partition_filters(vec![(0, filter_a.clone())], &config);
             assert!(
                 result.promoted.is_empty(),
                 "demoted filter should stay demoted even with new good stats"
@@ -1459,42 +1458,29 @@ mod tests {
 
         #[test]
         fn three_filters_transitive_correlation_grouping() {
-            let mut tracker = SelectivityTracker::new()
-                .with_min_bytes_per_sec(0.0)
-                .with_min_rows_for_collection(100);
+            let (config, mut inner) = make_tracker(0.0, 100);
 
             let filter_a = make_filter("a", 5);
             let filter_b = make_filter("a", 10);
             let filter_c = make_filter("c", 1);
 
-            // Give all filters stats with different effectiveness
-            // A: 70/100 matched → effectiveness from timing
-            tracker.update(0, 30, 100, 1_000_000_000, 10_000);
-            // B: 50/100 matched → best effectiveness
-            tracker.update(1, 50, 100, 500_000_000, 10_000);
-            // C: 60/100 matched
-            tracker.update(2, 40, 100, 1_000_000_000, 10_000);
+            inner.update(0, 30, 100, 1_000_000_000, 10_000);
+            inner.update(1, 50, 100, 500_000_000, 10_000);
+            inner.update(2, 40, 100, 1_000_000_000, 10_000);
 
-            // A↔B correlated (high lift)
-            // P(A)=0.3, P(B)=0.5, P(A∧B) should be >> P(A)*P(B)=0.15
-            tracker.update_correlation(0, 1, 28, 100); // lift = 0.28/0.15 = 1.87
+            inner.update_correlation(0, 1, 28, 100);
+            inner.update_correlation(1, 2, 38, 100);
+            inner.update_correlation(0, 2, 12, 100);
 
-            // B↔C correlated (high lift)
-            // P(B)=0.5, P(C)=0.4, P(B∧C) should be >> P(B)*P(C)=0.20
-            tracker.update_correlation(1, 2, 38, 100); // lift = 0.38/0.20 = 1.9
+            let result = inner.partition_filters(
+                vec![
+                    (0, filter_a.clone()),
+                    (1, filter_b.clone()),
+                    (2, filter_c.clone()),
+                ],
+                &config,
+            );
 
-            // A↔C NOT directly correlated (low lift)
-            // P(A)=0.3, P(C)=0.4, P(A∧C) ≈ P(A)*P(C)=0.12
-            tracker.update_correlation(0, 2, 12, 100); // lift = 0.12/0.12 = 1.0
-
-            let result = tracker.partition_filters(vec![
-                (0, filter_a.clone()),
-                (1, filter_b.clone()),
-                (2, filter_c.clone()),
-            ]);
-
-            // Union-find: A↔B and B↔C → all three in one group.
-            // Only the best (by effectiveness) is promoted; the other two are demoted.
             assert_eq!(
                 result.promoted.len(),
                 1,

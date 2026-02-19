@@ -73,7 +73,6 @@ use arrow::array::BooleanArray;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
-use parking_lot::RwLock;
 use parquet::arrow::ProjectionMask;
 use parquet::arrow::arrow_reader::{ArrowPredicate, RowFilter};
 use parquet::file::metadata::ParquetMetaData;
@@ -538,7 +537,7 @@ pub fn build_row_filter(
     file_schema: &SchemaRef,
     metadata: &ParquetMetaData,
     file_metrics: &ParquetFileMetrics,
-    selectivity_tracker: &Arc<RwLock<SelectivityTracker>>,
+    selectivity_tracker: &Arc<SelectivityTracker>,
 ) -> Result<Option<RowFilterWithMetrics>> {
     let rows_pruned = &file_metrics.pushdown_rows_pruned;
     let rows_matched = &file_metrics.pushdown_rows_matched;
@@ -566,10 +565,7 @@ pub fn build_row_filter(
 
     // 2. Collecting predicates with weighted shuffle
     if !collecting.is_empty() {
-        let shuffle_seed = {
-            let tracker = selectivity_tracker.read();
-            tracker.partition_call_count()
-        };
+        let shuffle_seed = selectivity_tracker.partition_call_count();
 
         let mut collecting_candidates: Vec<(FilterId, FilterCandidate, f64)> = Vec::new();
         for (id, expr) in collecting {
@@ -648,8 +644,8 @@ struct DatafusionArrowPredicateWithMetrics {
     projection_mask: ProjectionMask,
     /// Stable filter identifier for selectivity tracking
     filter_id: FilterId,
-    /// Shared selectivity tracker — per-batch stats are written here directly
-    selectivity_tracker: Arc<RwLock<SelectivityTracker>>,
+    /// Shared selectivity tracker (lock is internal)
+    selectivity_tracker: Arc<SelectivityTracker>,
     /// Global: how many rows were filtered out (shared across predicates)
     global_rows_pruned: metrics::Count,
     /// Global: how many rows passed (only tracked by last predicate)
@@ -663,7 +659,7 @@ impl DatafusionArrowPredicateWithMetrics {
         candidate: FilterCandidate,
         metadata: &ParquetMetaData,
         filter_id: FilterId,
-        selectivity_tracker: Arc<RwLock<SelectivityTracker>>,
+        selectivity_tracker: Arc<SelectivityTracker>,
         global_rows_pruned: metrics::Count,
         global_rows_matched: metrics::Count,
         time: metrics::Time,
@@ -711,18 +707,15 @@ impl ArrowPredicate for DatafusionArrowPredicateWithMetrics {
 
                 global_timer.stop();
 
-                // Write per-batch stats directly to the tracker
+                // Write per-batch stats to the tracker (lock is internal)
                 let nanos = start.elapsed().as_nanos() as u64;
-                {
-                    let mut tracker = self.selectivity_tracker.write();
-                    tracker.update(
-                        self.filter_id,
-                        num_matched as u64,
-                        input_rows,
-                        nanos,
-                        batch_bytes as u64,
-                    );
-                }
+                self.selectivity_tracker.update(
+                    self.filter_id,
+                    num_matched as u64,
+                    input_rows,
+                    nanos,
+                    batch_bytes as u64,
+                );
 
                 Ok(bool_arr)
             })
@@ -831,7 +824,7 @@ mod test {
             candidate,
             &metadata,
             0,
-            Arc::new(RwLock::new(SelectivityTracker::new())),
+            Arc::new(SelectivityTracker::new()),
             metrics::Count::new(),
             metrics::Count::new(),
             Time::new(),
@@ -873,7 +866,7 @@ mod test {
             candidate,
             &metadata,
             0,
-            Arc::new(RwLock::new(SelectivityTracker::new())),
+            Arc::new(SelectivityTracker::new()),
             metrics::Count::new(),
             metrics::Count::new(),
             Time::new(),
@@ -1020,7 +1013,7 @@ mod test {
         let metrics = ExecutionPlanMetricsSet::new();
         let file_metrics =
             ParquetFileMetrics::new(0, &format!("{func_name}.parquet"), &metrics);
-        let tracker = Arc::new(RwLock::new(SelectivityTracker::new()));
+        let tracker = Arc::new(SelectivityTracker::new());
         let result = build_row_filter(
             vec![],
             vec![(0, expr)],

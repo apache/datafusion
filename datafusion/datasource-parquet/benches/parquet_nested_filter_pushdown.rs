@@ -30,7 +30,6 @@ use datafusion_expr::{Expr, col};
 use datafusion_functions_nested::expr_fn::array_has;
 use datafusion_physical_expr::planner::logical2physical;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
-use parking_lot::RwLock;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::{ArrowWriter, ProjectionMask};
 use parquet::file::properties::WriterProperties;
@@ -117,7 +116,7 @@ fn scan_with_predicate(
     let file_metrics = ParquetFileMetrics::new(0, &path.display().to_string(), &metrics);
 
     let builder = if pushdown {
-        let tracker = Arc::new(RwLock::new(SelectivityTracker::new()));
+        let tracker = Arc::new(SelectivityTracker::new());
         if let Some(result) = build_row_filter(
             vec![],
             vec![(0, Arc::clone(predicate))],

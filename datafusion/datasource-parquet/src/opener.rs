@@ -128,7 +128,7 @@ pub(super) struct ParquetOpener {
     pub reverse_row_groups: bool,
     /// Shared selectivity tracker for adaptive filter reordering.
     /// Each opener reads stats and decides which filters to push down.
-    pub selectivity_tracker: Arc<parking_lot::RwLock<SelectivityTracker>>,
+    pub selectivity_tracker: Arc<SelectivityTracker>,
 }
 
 /// Represents a prepared access plan with optional row selection
@@ -626,27 +626,23 @@ impl FileOpener for ParquetOpener {
             // metrics from the arrow reader itself
             let arrow_reader_metrics = ArrowReaderMetrics::enabled();
 
-            // Partition filters under a brief write lock (needed for decision caching).
-            // Pass adapted conjuncts directly — no split_conjunction needed.
+            // Partition filters (lock is internal to SelectivityTracker).
             let PartitionedFilters {
                 collecting,
                 promoted,
                 mut post_scan,
-            } = {
-                let mut tracker = selectivity_tracker.write();
-                if pushdown_filters {
-                    if let Some(conjuncts) = predicate_conjuncts.clone() {
-                        if !conjuncts.is_empty() {
-                            tracker.partition_filters(conjuncts)
-                        } else {
-                            PartitionedFilters::default()
-                        }
+            } = if pushdown_filters {
+                if let Some(conjuncts) = predicate_conjuncts.clone() {
+                    if !conjuncts.is_empty() {
+                        selectivity_tracker.partition_filters(conjuncts)
                     } else {
                         PartitionedFilters::default()
                     }
                 } else {
                     PartitionedFilters::default()
                 }
+            } else {
+                PartitionedFilters::default()
             };
 
             // Build row filter from collecting + promoted filters.
@@ -1466,11 +1462,11 @@ mod test {
                 // Tests use 0.0 threshold to push all filters as row filters
                 // (skipping adaptive logic), and min_rows_for_collection=0 to
                 // disable the collection phase.
-                selectivity_tracker: Arc::new(parking_lot::RwLock::new(
+                selectivity_tracker: Arc::new(
                     SelectivityTracker::new()
                         .with_min_bytes_per_sec(0.0)
                         .with_min_rows_for_collection(0),
-                )),
+                ),
             }
         }
     }
