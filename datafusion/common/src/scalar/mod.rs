@@ -95,7 +95,7 @@ pub use struct_builder::ScalarStructBuilder;
 const SECONDS_PER_DAY: i64 = 86_400;
 const MILLIS_PER_DAY: i64 = SECONDS_PER_DAY * 1_000;
 const MICROS_PER_DAY: i64 = MILLIS_PER_DAY * 1_000;
-const NANOS_PER_DAY: i64 = MICROS_PER_DAY * 1_000;
+pub const NANOS_PER_DAY: i64 = MICROS_PER_DAY * 1_000;
 const MICROS_PER_MILLISECOND: i64 = 1_000;
 const NANOS_PER_MILLISECOND: i64 = 1_000_000;
 

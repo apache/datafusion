@@ -19,6 +19,8 @@ use crate::logical_plan::consumer::SubstraitConsumer;
 use crate::logical_plan::consumer::from_substrait_literal;
 use crate::logical_plan::consumer::from_substrait_named_struct;
 use crate::logical_plan::consumer::utils::ensure_schema_compatibility;
+use crate::logical_plan::utils::convert_literal_rows_from_substrait;
+use datafusion::catalog::TableProvider;
 use datafusion::common::{
     DFSchema, DFSchemaRef, TableReference, not_impl_err, plan_err,
     substrait_datafusion_err, substrait_err,
@@ -28,12 +30,21 @@ use datafusion::logical_expr::utils::split_conjunction_owned;
 use datafusion::logical_expr::{
     EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder, Values,
 };
+use prost::Message;
 use std::sync::Arc;
 use substrait::proto::expression::MaskExpression;
 use substrait::proto::read_rel::ReadType;
 use substrait::proto::read_rel::local_files::file_or_files::PathType::UriFile;
 use substrait::proto::{Expression, ReadRel};
 use url::Url;
+
+use crate::logical_plan::constants::TABLE_FUNCTION_TYPE_URL;
+use crate::logical_plan::table_function_extension::TableFunctionReadRelExtension;
+
+struct TableFunctionInvocation {
+    name: String,
+    arguments: Vec<substrait::proto::expression::Literal>,
+}
 
 #[expect(deprecated)]
 pub async fn from_read_rel(
@@ -44,6 +55,7 @@ pub async fn from_read_rel(
         consumer: &impl SubstraitConsumer,
         table_ref: TableReference,
         schema: DFSchema,
+        provider_override: Option<Arc<dyn TableProvider>>,
         projection: &Option<MaskExpression>,
         filter: &Option<Box<Expression>>,
     ) -> datafusion::common::Result<LogicalPlan> {
@@ -57,9 +69,12 @@ pub async fn from_read_rel(
         };
 
         let plan = {
-            let provider = match consumer.resolve_table_ref(&table_ref).await? {
-                Some(ref provider) => Arc::clone(provider),
-                _ => return plan_err!("No table named '{table_ref}'"),
+            let provider = match provider_override {
+                Some(provider) => provider,
+                None => match consumer.resolve_table_ref(&table_ref).await? {
+                    Some(ref provider) => Arc::clone(provider),
+                    _ => return plan_err!("No table named '{table_ref}'"),
+                },
             };
 
             LogicalPlanBuilder::scan_with_filters(
@@ -86,6 +101,7 @@ pub async fn from_read_rel(
 
     match &read.read_type {
         Some(ReadType::NamedTable(nt)) => {
+            let table_function = parse_table_function_metadata(read)?;
             let table_reference = match nt.names.len() {
                 0 => {
                     return plan_err!("No table name found in NamedTable");
@@ -104,10 +120,18 @@ pub async fn from_read_rel(
                 },
             };
 
+            let provider_override = match table_function {
+                Some(invocation) => {
+                    Some(resolve_table_function(consumer, &invocation).await?)
+                }
+                None => None,
+            };
+
             read_with_schema(
                 consumer,
                 table_reference,
                 substrait_schema,
+                provider_override,
                 &read.projection,
                 &read.filter,
             )
@@ -167,7 +191,7 @@ pub async fn from_read_rel(
                 }
                 exprs
             } else {
-                convert_literal_rows(consumer, vt, named_struct)?
+                convert_literal_rows_from_substrait(consumer, vt, named_struct)?
             };
 
             Ok(LogicalPlan::Values(Values {
@@ -211,6 +235,7 @@ pub async fn from_read_rel(
                 consumer,
                 table_reference,
                 substrait_schema,
+                None,
                 &read.projection,
                 &read.filter,
             )
@@ -222,44 +247,52 @@ pub async fn from_read_rel(
     }
 }
 
-/// Converts Substrait literal rows from a VirtualTable into DataFusion expressions.
-///
-/// This function processes the deprecated `values` field of VirtualTable, converting
-/// each literal value into a `Expr::Literal` while tracking and validating the name
-/// indices against the provided named struct schema.
-fn convert_literal_rows(
+fn parse_table_function_metadata(
+    read: &ReadRel,
+) -> datafusion::common::Result<Option<TableFunctionInvocation>> {
+    let enhancement = read
+        .advanced_extension
+        .as_ref()
+        .and_then(|ext| ext.enhancement.as_ref());
+
+    let Some(any) = enhancement else {
+        return Ok(None);
+    };
+
+    // Only parse table function read-rel extensions created by the local
+    // Substrait producer. This avoids accidentally interpreting unrelated
+    // extension payloads as table functions.
+    if any.type_url != TABLE_FUNCTION_TYPE_URL {
+        return Ok(None);
+    }
+
+    let metadata =
+        TableFunctionReadRelExtension::decode(any.value.as_ref()).map_err(|e| {
+            substrait_datafusion_err!("Failed to decode table function metadata: {e}")
+        })?;
+
+    Ok(Some(TableFunctionInvocation {
+        name: metadata.name,
+        arguments: metadata.arguments,
+    }))
+}
+
+async fn resolve_table_function(
     consumer: &impl SubstraitConsumer,
-    vt: &substrait::proto::read_rel::VirtualTable,
-    named_struct: &substrait::proto::NamedStruct,
-) -> datafusion::common::Result<Vec<Vec<Expr>>> {
-    #[expect(deprecated)]
-    vt.values
-        .iter()
-        .map(|row| {
-            let mut name_idx = 0;
-            let lits = row
-                .fields
-                .iter()
-                .map(|lit| {
-                    name_idx += 1; // top-level names are provided through schema
-                    Ok(Expr::Literal(from_substrait_literal(
-                        consumer,
-                        lit,
-                        &named_struct.names,
-                        &mut name_idx,
-                    )?, None))
-                })
-                .collect::<datafusion::common::Result<_>>()?;
-            if name_idx != named_struct.names.len() {
-                return substrait_err!(
-                    "Names list must match exactly to nested schema, but found {} uses for {} names",
-                    name_idx,
-                    named_struct.names.len()
-                );
-            }
-            Ok(lits)
-        })
-        .collect::<datafusion::common::Result<_>>()
+    invocation: &TableFunctionInvocation,
+) -> datafusion::common::Result<Arc<dyn TableProvider>> {
+    let table_function = match consumer.get_table_function(invocation.name.as_str()) {
+        Some(tf) => tf,
+        None => return plan_err!("No table function named '{}'", invocation.name),
+    };
+
+    let mut args = Vec::with_capacity(invocation.arguments.len());
+    for literal in &invocation.arguments {
+        let scalar_value = from_substrait_literal(consumer, literal, &vec![], &mut 0)?;
+        args.push(Expr::Literal(scalar_value, None));
+    }
+
+    table_function.create_table_provider(&args)
 }
 
 pub fn apply_masking(
