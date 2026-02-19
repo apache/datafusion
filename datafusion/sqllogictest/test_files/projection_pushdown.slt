@@ -1956,9 +1956,20 @@ ORDER BY simple_struct.id;
 # (https://github.com/apache/datafusion/issues/20430)
 # =========================================================================
 
+statement ok
+COPY ( select {f1: 1, f2: 2} as s
+) TO 'test_files/scratch/projection_pushdown/test.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE t
+STORED AS PARQUET
+LOCATION 'test_files/scratch/projection_pushdown/test.parquet';
+
 query I
-SELECT s['value'] AS __datafusion_extracted_2
-FROM simple_struct
-WHERE COALESCE(s['value'], s['value']) = 100;
+SELECT
+    get_field(s, 'f1') AS __datafusion_extracted_2
+FROM t
+WHERE COALESCE(get_field(s, 'f1'), get_field(s, 'f2')) = 1;
 ----
-100
+1
