@@ -299,3 +299,52 @@ async fn unparse_cross_join() -> Result<()> {
 
     Ok(())
 }
+
+// Issue #20437: https://github.com/apache/datafusion/issues/20437
+#[tokio::test]
+async fn test_hash_join_multi_key_dictionary_encoded() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    ctx.sql(
+        "CREATE TABLE small AS
+         SELECT id, arrow_cast(region, 'Dictionary(Int32, Utf8)') AS region
+         FROM (VALUES (1, 'west'), (2, 'west')) AS t(id, region)",
+    )
+    .await?
+    .collect()
+    .await?;
+
+    ctx.sql(
+        "CREATE TABLE large AS
+         SELECT id, region, value
+         FROM (VALUES (1, 'west', 100), (2, 'west', 200), (3, 'east', 300)) AS t(id, region, value)",
+    )
+    .await?
+    .collect()
+    .await?;
+
+    let results = ctx
+        .sql(
+            "SELECT s.id, s.region, l.value
+             FROM small s
+             JOIN large l ON s.id = l.id AND s.region = l.region
+             ORDER BY s.id",
+        )
+        .await?
+        .collect()
+        .await?;
+
+    assert_batches_eq!(
+        [
+            "+----+--------+-------+",
+            "| id | region | value |",
+            "+----+--------+-------+",
+            "| 1  | west   | 100   |",
+            "| 2  | west   | 200   |",
+            "+----+--------+-------+",
+        ],
+        &results
+    );
+
+    Ok(())
+}
