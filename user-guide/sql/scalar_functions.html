@@ -2557,16 +2557,16 @@ If count is negative, everything to the right of the final delimiter (counting f
 </section>
 <section id="translate">
 <h3><code class="docutils literal notranslate"><span class="pre">translate</span></code><a class="headerlink" href="#translate" title="Link to this heading">#</a></h3>
-<p>Translates characters in a string to specified translation characters.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">translate</span><span class="p">(</span><span class="n">str</span><span class="p">,</span><span class="w"> </span><span class="n">chars</span><span class="p">,</span><span class="w"> </span><span class="k">translation</span><span class="p">)</span>
+<p>Performs character-wise substitution based on a mapping.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">translate</span><span class="p">(</span><span class="n">str</span><span class="p">,</span><span class="w"> </span><span class="k">from</span><span class="p">,</span><span class="w"> </span><span class="k">to</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id153">
 <h4>Arguments<a class="headerlink" href="#id153" title="Link to this heading">#</a></h4>
 <ul class="simple">
 <li><p><strong>str</strong>: String expression to operate on. Can be a constant, column, or function, and any combination of operators.</p></li>
-<li><p><strong>chars</strong>: Characters to translate.</p></li>
-<li><p><strong>translation</strong>: Translation characters. Translation characters replace only characters at the same position in the <strong>chars</strong> string.</p></li>
+<li><p><strong>from</strong>: The characters to be replaced.</p></li>
+<li><p><strong>to</strong>: The characters to replace them with. Each character in <strong>from</strong> that is found in <strong>str</strong> is replaced by the character at the same index in <strong>to</strong>. Any characters in <strong>from</strong> that don’t have a corresponding character in <strong>to</strong> are removed. If a character appears more than once in <strong>from</strong>, the first occurrence determines the mapping.</p></li>
 </ul>
 </section>
 <section id="id154">
