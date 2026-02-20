@@ -522,7 +522,7 @@ fn array_has_any_with_scalar_string(
     scalar_values: &ArrayRef,
 ) -> Result<ColumnarValue> {
     let scalar_strings = string_array_to_vec(scalar_values.as_ref());
-    let has_null_scalar = scalar_strings.iter().any(|s| s.is_none());
+    let has_null_scalar = scalar_values.null_count() > 0;
 
     let (col_arr, is_scalar_output) = match columnar_arg {
         ColumnarValue::Array(arr) => (Arc::clone(arr), false),
