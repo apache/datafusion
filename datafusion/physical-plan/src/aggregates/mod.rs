@@ -869,6 +869,34 @@ impl AggregateExec {
         &self.input_order_mode
     }
 
+    /// Returns the dynamic filter expression for this aggregate, if set.
+    pub fn dynamic_filter(&self) -> Option<&Arc<DynamicFilterPhysicalExpr>> {
+        self.dynamic_filter.as_ref().map(|df| &df.filter)
+    }
+
+    /// Replace the dynamic filter expression, recomputing any internal state
+    /// which may depend on the previous dynamic filter.
+    ///
+    /// This is a no-op if the aggregate does not support dynamic filtering.
+    ///
+    /// If dynamic filtering is supported, this method returns an error if the filter's
+    /// children reference invalid columns in the aggregate's input schema.
+    pub fn with_dynamic_filter(
+        mut self,
+        filter: Arc<DynamicFilterPhysicalExpr>,
+    ) -> Result<Self> {
+        if let Some(supported_accumulators_info) = self.supported_accumulators_info() {
+            for child in filter.children() {
+                child.data_type(&self.input_schema)?;
+            }
+            self.dynamic_filter = Some(Arc::new(AggrDynFilter {
+                filter,
+                supported_accumulators_info,
+            }));
+        }
+        Ok(self)
+    }
+
     fn statistics_inner(&self, child_statistics: &Statistics) -> Result<Statistics> {
         // TODO stats: group expressions:
         // - once expressions will be able to compute their own stats, use it here
@@ -949,27 +977,40 @@ impl AggregateExec {
     /// - If yes, init one inside `AggregateExec`'s `dynamic_filter` field.
     /// - If not supported, `self.dynamic_filter` should be kept `None`
     fn init_dynamic_filter(&mut self) {
-        if (!self.group_by.is_empty()) || (!matches!(self.mode, AggregateMode::Partial)) {
-            debug_assert!(
-                self.dynamic_filter.is_none(),
-                "The current operator node does not support dynamic filter"
-            );
-            return;
-        }
-
         // Already initialized.
         if self.dynamic_filter.is_some() {
             return;
         }
 
-        // Collect supported accumulators
-        // It is assumed the order of aggregate expressions are not changed from `AggregateExec`
-        // to `AggregateStream`
+        if let Some(supported_accumulators_info) = self.supported_accumulators_info() {
+            // Collect column references for the dynamic filter expression.
+            let all_cols: Vec<Arc<dyn PhysicalExpr>> = supported_accumulators_info
+                .iter()
+                .map(|info| Arc::clone(&self.aggr_expr[info.aggr_index].expressions()[0]))
+                .collect();
+
+            self.dynamic_filter = Some(Arc::new(AggrDynFilter {
+                filter: Arc::new(DynamicFilterPhysicalExpr::new(all_cols, lit(true))),
+                supported_accumulators_info,
+            }));
+        }
+    }
+
+    /// Returns the supported accumulator info if this aggregate supports
+    /// dynamic filtering, or `None` otherwise.
+    ///
+    /// Dynamic filtering requires:
+    /// - `Partial` aggregation mode with no group-by expressions
+    /// - All aggregate functions are `min` or `max` with a single column arg
+    fn supported_accumulators_info(&self) -> Option<Vec<PerAccumulatorDynFilter>> {
+        if !self.group_by.is_empty() || !matches!(self.mode, AggregateMode::Partial) {
+            return None;
+        }
+
+        // Collect supported accumulators.
+        // It is assumed the order of aggregate expressions are not changed
+        // from `AggregateExec` to `AggregateStream`.
         let mut aggr_dyn_filters = Vec::new();
-        // All column references in the dynamic filter, used when initializing the dynamic
-        // filter, and it's used to decide if this dynamic filter is able to get push
-        // through certain node during optimization.
-        let mut all_cols: Vec<Arc<dyn PhysicalExpr>> = Vec::new();
         for (i, aggr_expr) in self.aggr_expr.iter().enumerate() {
             // 1. Only `min` or `max` aggregate function
             let fun_name = aggr_expr.fun().name();
@@ -987,7 +1028,6 @@ impl AggregateExec {
             if let [arg] = aggr_expr.expressions().as_slice()
                 && arg.as_any().is::<Column>()
             {
-                all_cols.push(Arc::clone(arg));
                 aggr_dyn_filters.push(PerAccumulatorDynFilter {
                     aggr_type,
                     aggr_index: i,
@@ -996,11 +1036,10 @@ impl AggregateExec {
             }
         }
 
-        if !aggr_dyn_filters.is_empty() {
-            self.dynamic_filter = Some(Arc::new(AggrDynFilter {
-                filter: Arc::new(DynamicFilterPhysicalExpr::new(all_cols, lit(true))),
-                supported_accumulators_info: aggr_dyn_filters,
-            }))
+        if aggr_dyn_filters.is_empty() {
+            None
+        } else {
+            Some(aggr_dyn_filters)
         }
     }
 
@@ -1807,6 +1846,7 @@ mod tests {
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::common;
     use crate::common::collect;
+    use crate::empty::EmptyExec;
     use crate::execution_plan::Boundedness;
     use crate::expressions::col;
     use crate::metrics::MetricValue;
@@ -1830,6 +1870,7 @@ mod tests {
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::first_last::{first_value_udaf, last_value_udaf};
     use datafusion_functions_aggregate::median::median_udaf;
+    use datafusion_functions_aggregate::min_max::min_udaf;
     use datafusion_functions_aggregate::sum::sum_udaf;
     use datafusion_physical_expr::Partitioning;
     use datafusion_physical_expr::PhysicalSortExpr;
@@ -3328,13 +3369,10 @@ mod tests {
         // Test with MIN for simple intermediate state (min) and AVG for multiple intermediate states (partial sum, partial count).
         let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![
             Arc::new(
-                AggregateExprBuilder::new(
-                    datafusion_functions_aggregate::min_max::min_udaf(),
-                    vec![col("b", &schema)?],
-                )
-                .schema(Arc::clone(&schema))
-                .alias("MIN(b)")
-                .build()?,
+                AggregateExprBuilder::new(min_udaf(), vec![col("b", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("MIN(b)")
+                    .build()?,
             ),
             Arc::new(
                 AggregateExprBuilder::new(avg_udaf(), vec![col("b", &schema)?])
@@ -3473,13 +3511,10 @@ mod tests {
         // Test with MIN for simple intermediate state (min) and AVG for multiple intermediate states (partial sum, partial count).
         let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![
             Arc::new(
-                AggregateExprBuilder::new(
-                    datafusion_functions_aggregate::min_max::min_udaf(),
-                    vec![col("b", &schema)?],
-                )
-                .schema(Arc::clone(&schema))
-                .alias("MIN(b)")
-                .build()?,
+                AggregateExprBuilder::new(min_udaf(), vec![col("b", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("MIN(b)")
+                    .build()?,
             ),
             Arc::new(
                 AggregateExprBuilder::new(avg_udaf(), vec![col("b", &schema)?])
@@ -3686,6 +3721,236 @@ mod tests {
             +---+---+--------+
         ");
         }
+        Ok(())
+    }
+
+    /// Tests that PartialReduce mode:
+    /// 1. Accepts state as input (like Final)
+    /// 2. Produces state as output (like Partial)
+    /// 3. Can be followed by a Final stage to get the correct result
+    ///
+    /// This simulates a tree-reduce pattern:
+    ///   Partial -> PartialReduce -> Final
+    #[tokio::test]
+    async fn test_partial_reduce_mode() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::UInt32, false),
+            Field::new("b", DataType::Float64, false),
+        ]));
+
+        // Produce two partitions of input data
+        let batch1 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(UInt32Array::from(vec![1, 2, 3])),
+                Arc::new(Float64Array::from(vec![10.0, 20.0, 30.0])),
+            ],
+        )?;
+        let batch2 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(UInt32Array::from(vec![1, 2, 3])),
+                Arc::new(Float64Array::from(vec![40.0, 50.0, 60.0])),
+            ],
+        )?;
+
+        let groups =
+            PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]);
+        let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![Arc::new(
+            AggregateExprBuilder::new(sum_udaf(), vec![col("b", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("SUM(b)")
+                .build()?,
+        )];
+
+        // Step 1: Partial aggregation on partition 1
+        let input1 =
+            TestMemoryExec::try_new_exec(&[vec![batch1]], Arc::clone(&schema), None)?;
+        let partial1 = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            groups.clone(),
+            aggregates.clone(),
+            vec![None],
+            input1,
+            Arc::clone(&schema),
+        )?);
+
+        // Step 2: Partial aggregation on partition 2
+        let input2 =
+            TestMemoryExec::try_new_exec(&[vec![batch2]], Arc::clone(&schema), None)?;
+        let partial2 = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            groups.clone(),
+            aggregates.clone(),
+            vec![None],
+            input2,
+            Arc::clone(&schema),
+        )?);
+
+        // Collect partial results
+        let task_ctx = Arc::new(TaskContext::default());
+        let partial_result1 =
+            crate::collect(Arc::clone(&partial1) as _, Arc::clone(&task_ctx)).await?;
+        let partial_result2 =
+            crate::collect(Arc::clone(&partial2) as _, Arc::clone(&task_ctx)).await?;
+
+        // The partial results have state schema (group cols + accumulator state)
+        let partial_schema = partial1.schema();
+
+        // Step 3: PartialReduce — combine partial results, still producing state
+        let combined_input = TestMemoryExec::try_new_exec(
+            &[partial_result1, partial_result2],
+            Arc::clone(&partial_schema),
+            None,
+        )?;
+        // Coalesce into a single partition for the PartialReduce
+        let coalesced = Arc::new(CoalescePartitionsExec::new(combined_input));
+
+        let partial_reduce = Arc::new(AggregateExec::try_new(
+            AggregateMode::PartialReduce,
+            groups.clone(),
+            aggregates.clone(),
+            vec![None],
+            coalesced,
+            Arc::clone(&partial_schema),
+        )?);
+
+        // Verify PartialReduce output schema matches Partial output schema
+        // (both produce state, not final values)
+        assert_eq!(partial_reduce.schema(), partial_schema);
+
+        // Collect PartialReduce results
+        let reduce_result =
+            crate::collect(Arc::clone(&partial_reduce) as _, Arc::clone(&task_ctx))
+                .await?;
+
+        // Step 4: Final aggregation on the PartialReduce output
+        let final_input = TestMemoryExec::try_new_exec(
+            &[reduce_result],
+            Arc::clone(&partial_schema),
+            None,
+        )?;
+        let final_agg = Arc::new(AggregateExec::try_new(
+            AggregateMode::Final,
+            groups.clone(),
+            aggregates.clone(),
+            vec![None],
+            final_input,
+            Arc::clone(&partial_schema),
+        )?);
+
+        let result = crate::collect(final_agg, Arc::clone(&task_ctx)).await?;
+
+        // Expected: group 1 -> 10+40=50, group 2 -> 20+50=70, group 3 -> 30+60=90
+        assert_snapshot!(batches_to_sort_string(&result), @r"
+            +---+--------+
+            | a | SUM(b) |
+            +---+--------+
+            | 1 | 50.0   |
+            | 2 | 70.0   |
+            | 3 | 90.0   |
+            +---+--------+
+        ");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_with_dynamic_filter() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        let child = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+
+        // Partial min triggers init_dynamic_filter.
+        let agg = AggregateExec::try_new(
+            AggregateMode::Partial,
+            PhysicalGroupBy::new_single(vec![]),
+            vec![Arc::new(
+                AggregateExprBuilder::new(min_udaf(), vec![col("a", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("min_a")
+                    .build()?,
+            )],
+            vec![None],
+            child,
+            Arc::clone(&schema),
+        )?;
+        let original_inner_id = agg
+            .dynamic_filter()
+            .expect("should have dynamic filter after init")
+            .inner_id();
+
+        let new_df = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![col("a", &schema)?],
+            lit(true),
+        ));
+        let agg = agg.with_dynamic_filter(Arc::clone(&new_df))?;
+        let restored = agg
+            .dynamic_filter()
+            .expect("should still have dynamic filter");
+        assert_eq!(restored.inner_id(), new_df.inner_id());
+        assert_ne!(restored.inner_id(), original_inner_id);
+        Ok(())
+    }
+
+    #[test]
+    fn test_with_dynamic_filter_noop_when_unsupported() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Int64, false),
+        ]));
+        let child = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+
+        // Final mode with a group-by does not support dynamic filters.
+        let agg = AggregateExec::try_new(
+            AggregateMode::Final,
+            PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]),
+            vec![Arc::new(
+                AggregateExprBuilder::new(sum_udaf(), vec![col("b", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("sum_b")
+                    .build()?,
+            )],
+            vec![None],
+            child,
+            Arc::clone(&schema),
+        )?;
+        assert!(agg.dynamic_filter().is_none());
+
+        // with_dynamic_filter should be a no-op.
+        let df = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![col("a", &schema)?],
+            lit(true),
+        ));
+        let agg = agg.with_dynamic_filter(df)?;
+        assert!(agg.dynamic_filter().is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn test_with_dynamic_filter_rejects_invalid_columns() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        let child = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+
+        let agg = AggregateExec::try_new(
+            AggregateMode::Partial,
+            PhysicalGroupBy::new_single(vec![]),
+            vec![Arc::new(
+                AggregateExprBuilder::new(min_udaf(), vec![col("a", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("min_a")
+                    .build()?,
+            )],
+            vec![None],
+            child,
+            Arc::clone(&schema),
+        )?;
+
+        // Column index 99 is out of bounds for the input schema.
+        let df = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::new(Column::new("bad", 99)) as _],
+            lit(true),
+        ));
+        assert!(agg.with_dynamic_filter(df).is_err());
         Ok(())
     }
 }

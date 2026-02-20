@@ -3894,7 +3894,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_is_used() {
 
         // Verify that a dynamic filter was created
         let dynamic_filter = hash_join
-            .dynamic_filter_for_test()
+            .dynamic_filter()
             .expect("Dynamic filter should be created");
 
         // Verify that is_used() returns the expected value based on probe side support.

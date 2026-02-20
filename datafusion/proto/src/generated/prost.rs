@@ -1717,6 +1717,9 @@ pub struct HashJoinExecNode {
     pub filter: ::core::option::Option<JoinFilter>,
     #[prost(uint32, repeated, tag = "9")]
     pub projection: ::prost::alloc::vec::Vec<u32>,
+    /// Optional dynamic filter expression for pushing down to the probe side.
+    #[prost(message, optional, tag = "10")]
+    pub dynamic_filter: ::core::option::Option<PhysicalExprNode>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SymmetricHashJoinExecNode {
@@ -1887,6 +1890,9 @@ pub struct AggregateExecNode {
     pub limit: ::core::option::Option<AggLimit>,
     #[prost(bool, tag = "12")]
     pub has_grouping_set: bool,
+    /// Optional dynamic filter expression for pushing down to the child.
+    #[prost(message, optional, tag = "13")]
+    pub dynamic_filter: ::core::option::Option<PhysicalExprNode>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GlobalLimitExecNode {
@@ -1917,6 +1923,9 @@ pub struct SortExecNode {
     pub fetch: i64,
     #[prost(bool, tag = "4")]
     pub preserve_partitioning: bool,
+    /// Optional dynamic filter expression for TopK pushdown.
+    #[prost(message, optional, tag = "5")]
+    pub dynamic_filter: ::core::option::Option<PhysicalExprNode>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SortPreservingMergeExecNode {

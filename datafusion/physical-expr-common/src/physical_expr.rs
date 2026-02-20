@@ -74,7 +74,9 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     /// Returns the physical expression as [`Any`] so that it can be
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
-    /// Get the data type of this expression, given the schema of the input
+    /// Get the data type of this expression, given the schema of the input.
+    /// Returns an error if the data type cannot be determined, ex. if the
+    /// schema is missing a required field.
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
         Ok(self.return_field(input_schema)?.data_type().to_owned())
     }

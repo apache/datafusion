@@ -63,6 +63,8 @@ use datafusion::physical_expr::window::{SlidingAggregateWindowExpr, StandardWind
 use datafusion::physical_expr::{
     LexOrdering, PhysicalSortRequirement, ScalarFunctionExpr,
 };
+use datafusion::physical_optimizer::PhysicalOptimizerRule;
+use datafusion::physical_optimizer::filter_pushdown::FilterPushdown;
 use datafusion::physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
@@ -106,6 +108,7 @@ use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err,
 };
 use datafusion_datasource::TableSchema;
+use datafusion_datasource::file::FileSource;
 use datafusion_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{
@@ -3293,6 +3296,259 @@ fn test_session_id_rotation_with_execution_plans() -> Result<()> {
 
     // Verify both plans have the expected structure
     assert_eq!(plan1.schema(), plan2.schema());
+
+    Ok(())
+}
+
+/// Create a DataSourceExec backed by a ParquetSource that accepts filter pushdown,
+/// along with a ConfigOptions that enables all dynamic filter pushdown options.
+fn datasource_for_dynamic_filter_pushdown(
+    schema: &Arc<Schema>,
+) -> (Arc<dyn ExecutionPlan>, ConfigOptions) {
+    let mut parquet_options = TableParquetOptions::new();
+    parquet_options.global.pushdown_filters = true;
+    let source = Arc::new(
+        ParquetSource::new(Arc::clone(schema))
+            .with_table_parquet_options(parquet_options),
+    );
+    let scan_config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
+            .with_file(PartitionedFile::new("/path/to/file.parquet", 1024))
+            .build();
+
+    let mut config = ConfigOptions::default();
+    config.execution.parquet.pushdown_filters = true;
+    config.optimizer.enable_join_dynamic_filter_pushdown = true;
+    config.optimizer.enable_aggregate_dynamic_filter_pushdown = true;
+    config.optimizer.enable_topk_dynamic_filter_pushdown = true;
+
+    (DataSourceExec::from_data_source(scan_config), config)
+}
+
+/// Test that plan containing a HashJoinExec with dynamic filter pushdown
+/// can be serialized and deserialized while preserving references to the dynamic filter.
+#[test]
+fn test_hash_join_with_dynamic_filter_roundtrip() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Int64, false)]));
+
+    let left_child = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+    let (right_child, config) = datasource_for_dynamic_filter_pushdown(&schema);
+
+    let on: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)> = vec![(
+        Arc::new(Column::new("col", 0)),
+        Arc::new(Column::new("col", 0)),
+    )];
+
+    let hash_join = Arc::new(HashJoinExec::try_new(
+        left_child,
+        right_child,
+        on,
+        None,
+        &JoinType::Inner,
+        None,
+        PartitionMode::CollectLeft,
+        NullEquality::NullEqualsNothing,
+        false,
+    )?) as Arc<dyn ExecutionPlan>;
+
+    // Run the optimizer rule for filter pushdown.
+    let optimizer = FilterPushdown::new_post_optimization();
+    let plan = optimizer.optimize(hash_join, &config)?;
+
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let converter = DeduplicatingProtoConverter {};
+    let deserialized = roundtrip_test_and_return(plan, &ctx, &codec, &converter)?;
+
+    // Extract the deserialized HashJoinExec and its dynamic filter.
+    let deserialized_join = deserialized
+        .as_any()
+        .downcast_ref::<HashJoinExec>()
+        .expect("Should be HashJoinExec");
+    let deserialized_hash_join_df = deserialized_join
+        .dynamic_filter()
+        .expect("HashJoinExec should have a dynamic filter after roundtrip");
+
+    // Extract the dynamic filter from the probe side's ParquetSource.
+    let deserialized_data_source = deserialized_join
+        .right()
+        .as_any()
+        .downcast_ref::<DataSourceExec>()
+        .expect("Right child should be DataSourceExec");
+    let (_, deserialized_parquet_source) = deserialized_data_source
+        .downcast_to_file_source::<ParquetSource>()
+        .expect("Should be ParquetSource");
+    let deserialized_predicate = deserialized_parquet_source
+        .filter()
+        .expect("ParquetSource should have a predicate after roundtrip");
+    let deserialized_predicate_df = deserialized_predicate
+        .as_any()
+        .downcast_ref::<DynamicFilterPhysicalExpr>()
+        .expect("ParquetSource predicate should contain a DynamicFilterPhysicalExpr");
+
+    // After roundtrip, the HashJoinExec's dynamic filter and the ParquetSource's
+    // predicate should share the same inner state.
+    assert_eq!(
+        deserialized_hash_join_df.inner_id(),
+        deserialized_predicate_df.inner_id(),
+        "HashJoinExec's dynamic filter should share inner state with the probe side's predicate"
+    );
+
+    Ok(())
+}
+
+/// Test that plan containing a AggregateExec with dynamic filter pushdown
+/// can be serialized and deserialized while preserving references to the dynamic filter.
+#[test]
+fn test_aggregate_with_dynamic_filter_roundtrip() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+    let col_a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+
+    let (child, config) = datasource_for_dynamic_filter_pushdown(&schema);
+
+    let agg = Arc::new(AggregateExec::try_new(
+        AggregateMode::Partial,
+        PhysicalGroupBy::new_single(vec![]),
+        vec![
+            AggregateExprBuilder::new(
+                datafusion::functions_aggregate::min_max::min_udaf(),
+                vec![Arc::clone(&col_a)],
+            )
+            .schema(Arc::clone(&schema))
+            .alias("min_a")
+            .build()
+            .map(Arc::new)?,
+        ],
+        vec![None],
+        child,
+        Arc::clone(&schema),
+    )?) as Arc<dyn ExecutionPlan>;
+
+    // Run the optimizer rule for filter pushdown.
+    let optimizer = FilterPushdown::new_post_optimization();
+    let plan = optimizer.optimize(agg, &config)?;
+
+    // Roundtrip with deduplication.
+    //
+    // Note: We don't use `roundtrip_test_and_return` here because there's a
+    // pre-existing issue with PhysicalGroupBy serialization where empty groups
+    // `[[]]` become `[]` after roundtrip. This behavior is unrelated to this test.
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let converter = DeduplicatingProtoConverter {};
+    let bytes = physical_plan_to_bytes_with_proto_converter(
+        Arc::clone(&plan),
+        &codec,
+        &converter,
+    )?;
+    let deserialized = physical_plan_from_bytes_with_proto_converter(
+        bytes.as_ref(),
+        ctx.task_ctx().as_ref(),
+        &codec,
+        &converter,
+    )?;
+
+    // Extract the deserialized AggregateExec and its dynamic filter.
+    let deserialized_agg = deserialized
+        .as_any()
+        .downcast_ref::<AggregateExec>()
+        .expect("Should be AggregateExec");
+    let deserialized_agg_df = deserialized_agg
+        .dynamic_filter()
+        .expect("AggregateExec should have a dynamic filter after roundtrip");
+
+    // Extract the dynamic filter from the child DataSourceExec.
+    let deserialized_data_source = deserialized_agg
+        .input()
+        .as_any()
+        .downcast_ref::<DataSourceExec>()
+        .expect("Child should be DataSourceExec");
+    let (_, deserialized_parquet_source) = deserialized_data_source
+        .downcast_to_file_source::<ParquetSource>()
+        .expect("Should be ParquetSource");
+    let deserialized_predicate = deserialized_parquet_source
+        .filter()
+        .expect("ParquetSource should have a predicate after roundtrip");
+    let deserialized_predicate_df = deserialized_predicate
+        .as_any()
+        .downcast_ref::<DynamicFilterPhysicalExpr>()
+        .expect("ParquetSource predicate should contain a DynamicFilterPhysicalExpr");
+
+    // The AggregateExec's dynamic filter and the child's predicate should
+    // share the same inner state after roundtrip.
+    assert_eq!(
+        deserialized_agg_df.inner_id(),
+        deserialized_predicate_df.inner_id(),
+        "AggregateExec's dynamic filter should share inner state with child's predicate"
+    );
+
+    Ok(())
+}
+
+/// Test that plan containing a SortExec with dynamic filter pushdown
+/// can be serialized and deserialized while preserving references to the dynamic filter.
+#[test]
+fn test_sort_topk_with_dynamic_filter_roundtrip() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+    let col_a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+
+    let (child, config) = datasource_for_dynamic_filter_pushdown(&schema);
+
+    let sort = Arc::new(
+        SortExec::new(
+            LexOrdering::new(vec![PhysicalSortExpr {
+                expr: Arc::clone(&col_a),
+                options: SortOptions::default(),
+            }])
+            .unwrap(),
+            child,
+        )
+        .with_fetch(Some(10)),
+    ) as Arc<dyn ExecutionPlan>;
+
+    // Verify the optimizer kept the dynamic filter on the AggregateExec.
+    let optimizer = FilterPushdown::new_post_optimization();
+    let plan = optimizer.optimize(sort, &config)?;
+
+    // Roundtrip with deduplication.
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let converter = DeduplicatingProtoConverter {};
+    let deserialized = roundtrip_test_and_return(plan, &ctx, &codec, &converter)?;
+
+    // Extract the deserialized SortExec and its dynamic filter.
+    let deserialized_sort = deserialized
+        .as_any()
+        .downcast_ref::<SortExec>()
+        .expect("Should be SortExec");
+    let deserialized_sort_df = deserialized_sort
+        .dynamic_filter()
+        .expect("SortExec should have a dynamic filter after roundtrip");
+
+    // Extract the dynamic filter from the child DataSourceExec.
+    let deserialized_data_source = deserialized_sort
+        .input()
+        .as_any()
+        .downcast_ref::<DataSourceExec>()
+        .expect("Child should be DataSourceExec");
+    let (_, deserialized_parquet_source) = deserialized_data_source
+        .downcast_to_file_source::<ParquetSource>()
+        .expect("Should be ParquetSource");
+    let deserialized_predicate = deserialized_parquet_source
+        .filter()
+        .expect("ParquetSource should have a predicate after roundtrip");
+    let deserialized_predicate_df = deserialized_predicate
+        .as_any()
+        .downcast_ref::<DynamicFilterPhysicalExpr>()
+        .expect("ParquetSource predicate should contain a DynamicFilterPhysicalExpr");
+
+    // The SortExec's dynamic filter and the child's predicate should
+    // share the same inner state after roundtrip.
+    assert_eq!(
+        deserialized_sort_df.inner_id(),
+        deserialized_predicate_df.inner_id(),
+        "SortExec's dynamic filter should share inner state with child's predicate"
+    );
 
     Ok(())
 }
