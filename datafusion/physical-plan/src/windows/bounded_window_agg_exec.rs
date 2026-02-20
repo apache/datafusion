@@ -65,6 +65,7 @@ use datafusion_physical_expr_common::sort_expr::{
     OrderingRequirements, PhysicalSortExpr,
 };
 
+use crate::execution_plan::CardinalityEffect;
 use ahash::RandomState;
 use futures::stream::Stream;
 use futures::{StreamExt, ready};
@@ -371,6 +372,10 @@ impl ExecutionPlan for BoundedWindowAggExec {
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         let input_stat = self.input.partition_statistics(partition)?;
         self.statistics_helper(input_stat)
+    }
+
+    fn cardinality_effect(&self) -> CardinalityEffect {
+        CardinalityEffect::Equal
     }
 }
 
