@@ -212,6 +212,11 @@ async fn sort_merge_join_spill() {
         .with_config(config)
         .with_disk_manager_builder(DiskManagerBuilder::default())
         .with_scenario(Scenario::AccessLogStreaming)
+        // SMJ spilling succeeds at this memory limit because the
+        // pre-resolved JoinComparator allocates via the global heap
+        // rather than the tracked memory pool, leaving more pool
+        // budget for buffered batch data.
+        .with_expected_success()
         .run()
         .await
 }

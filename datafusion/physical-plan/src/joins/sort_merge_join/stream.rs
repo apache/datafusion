@@ -34,7 +34,7 @@ use std::sync::atomic::Ordering::Relaxed;
 use std::task::{Context, Poll};
 
 use crate::joins::sort_merge_join::metrics::SortMergeJoinMetrics;
-use crate::joins::utils::{JoinFilter, compare_join_arrays};
+use crate::joins::utils::JoinFilter;
 use crate::metrics::RecordOutput;
 use crate::spill::spill_manager::SpillManager;
 use crate::{PhysicalExpr, RecordBatchStream, SendableRecordBatchStream};
@@ -286,10 +286,9 @@ pub(super) struct SortMergeJoinStream {
     // ========================================================================
     /// Output schema
     pub schema: SchemaRef,
-    /// Defines the null equality for the join.
-    pub null_equality: NullEquality,
-    /// Sort options of join columns used to sort streamed and buffered data stream
-    pub sort_options: Vec<SortOptions>,
+    /// Pre-resolved typed comparator for join key columns (holds sort options
+    /// and null equality internally)
+    pub comparator: JoinComparator,
     /// optional join filter
     pub filter: Option<JoinFilter>,
     /// How the join is performed
@@ -827,7 +826,7 @@ impl Stream for SortMergeJoinStream {
                         self.state = SortMergeJoinState::Exhausted;
                         continue;
                     }
-                    self.current_ordering = self.compare_streamed_buffered()?;
+                    self.current_ordering = self.compare_streamed_buffered();
                     self.state = SortMergeJoinState::JoinOutput;
                 }
                 SortMergeJoinState::JoinOutput => {
@@ -947,6 +946,12 @@ impl SortMergeJoinStream {
     ) -> Result<Self> {
         let streamed_schema = streamed.schema();
         let buffered_schema = buffered.schema();
+        let key_data_types: Vec<DataType> = on_streamed
+            .iter()
+            .map(|expr| expr.data_type(&streamed_schema))
+            .collect::<Result<Vec<_>>>()?;
+        let comparator =
+            JoinComparator::new(&key_data_types, sort_options, null_equality)?;
         let spill_manager = SpillManager::new(
             Arc::clone(&runtime_env),
             join_metrics.spill_metrics().clone(),
@@ -955,8 +960,7 @@ impl SortMergeJoinStream {
         .with_compression_type(spill_compression);
         Ok(Self {
             state: SortMergeJoinState::Init,
-            sort_options,
-            null_equality,
+            comparator,
             schema: Arc::clone(&schema),
             streamed_schema: Arc::clone(&streamed_schema),
             buffered_schema,
@@ -1193,12 +1197,12 @@ impl SortMergeJoinStream {
                         while self.buffered_data.tail_batch().range.end
                             < self.buffered_data.tail_batch().num_rows
                         {
-                            if is_join_arrays_equal(
+                            if self.comparator.is_equal(
                                 &self.buffered_data.head_batch().join_arrays,
                                 self.buffered_data.head_batch().range.start,
                                 &self.buffered_data.tail_batch().join_arrays,
                                 self.buffered_data.tail_batch().range.end,
-                            )? {
+                            ) {
                                 self.buffered_data.tail_batch_mut().range.end += 1;
                             } else {
                                 self.buffered_state = BufferedState::Ready;
@@ -1240,21 +1244,19 @@ impl SortMergeJoinStream {
     }
 
     /// Get comparison result of streamed row and buffered batches
-    fn compare_streamed_buffered(&self) -> Result<Ordering> {
+    fn compare_streamed_buffered(&self) -> Ordering {
         if self.streamed_state == StreamedState::Exhausted {
-            return Ok(Ordering::Greater);
+            return Ordering::Greater;
         }
         if !self.buffered_data.has_buffered_rows() {
-            return Ok(Ordering::Less);
+            return Ordering::Less;
         }
 
-        compare_join_arrays(
+        self.comparator.compare(
             &self.streamed_batch.join_arrays,
             self.streamed_batch.idx,
             &self.buffered_data.head_batch().join_arrays,
             self.buffered_data.head_batch().range.start,
-            &self.sort_options,
-            self.null_equality,
         )
     }
 
@@ -2096,77 +2098,275 @@ fn join_arrays(batch: &RecordBatch, on_column: &[PhysicalExprRef]) -> Vec<ArrayR
         .collect()
 }
 
-/// A faster version of compare_join_arrays() that only output whether
-/// the given two rows are equal
-fn is_join_arrays_equal(
-    left_arrays: &[ArrayRef],
-    left: usize,
-    right_arrays: &[ArrayRef],
-    right: usize,
-) -> Result<bool> {
-    let mut is_equal = true;
-    for (left_array, right_array) in left_arrays.iter().zip(right_arrays) {
-        macro_rules! compare_value {
-            ($T:ty) => {{
-                match (left_array.is_null(left), right_array.is_null(right)) {
-                    (false, false) => {
-                        let left_array =
-                            left_array.as_any().downcast_ref::<$T>().unwrap();
-                        let right_array =
-                            right_array.as_any().downcast_ref::<$T>().unwrap();
-                        if left_array.value(left) != right_array.value(right) {
-                            is_equal = false;
-                        }
-                    }
-                    (true, false) => is_equal = false,
-                    (false, true) => is_equal = false,
-                    _ => {}
-                }
+/// Type-erased comparison function for a single join key column.
+///
+/// Compares the value at `left_idx` in `left_array` with the value at
+/// `right_idx` in `right_array`. Returns `Ordering`.
+///
+/// The function is resolved once at plan initialization time,
+/// eliminating per-row runtime type dispatch overhead. Uses `Box<dyn Fn>`
+/// to support dictionary types that require capturing an inner comparator.
+type ColumnCompareFn =
+    Box<dyn Fn(&ArrayRef, usize, &ArrayRef, usize) -> Ordering + Send + Sync>;
+
+/// Pre-resolved comparator for join key columns.
+///
+/// Instead of matching on `DataType` for every row comparison, the data types
+/// are resolved once when the join stream is created, and typed comparison
+/// function pointers are stored. This eliminates the per-row type-dispatch
+/// overhead in the hot merge loop.
+pub(super) struct JoinComparator {
+    /// One comparison function per join key column, pre-resolved by data type.
+    column_comparators: Vec<ColumnCompareFn>,
+    /// Sort options per join key column.
+    sort_options: Vec<SortOptions>,
+    /// Null equality semantics.
+    null_equality: NullEquality,
+}
+
+impl JoinComparator {
+    /// Build a comparator from the join key data types, sort options, and null equality.
+    fn new(
+        data_types: &[DataType],
+        sort_options: Vec<SortOptions>,
+        null_equality: NullEquality,
+    ) -> Result<Self> {
+        let column_comparators = data_types
+            .iter()
+            .map(Self::resolve_compare_fn)
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self {
+            column_comparators,
+            sort_options,
+            null_equality,
+        })
+    }
+
+    /// Resolve the typed comparison function for a given data type.
+    fn resolve_compare_fn(dt: &DataType) -> Result<ColumnCompareFn> {
+        /// Build a comparator for primitive-like array types where `.value()`
+        /// returns a `Copy + Ord` type (integers, timestamps, dates, decimals).
+        macro_rules! make_comparator {
+            ($ArrayType:ty) => {{
+                Ok(Box::new(
+                    |left: &ArrayRef,
+                     left_idx: usize,
+                     right: &ArrayRef,
+                     right_idx: usize|
+                     -> Ordering {
+                        let left_arr =
+                            left.as_any().downcast_ref::<$ArrayType>().unwrap();
+                        let right_arr =
+                            right.as_any().downcast_ref::<$ArrayType>().unwrap();
+                        let l = left_arr.value(left_idx);
+                        let r = right_arr.value(right_idx);
+                        l.partial_cmp(&r).unwrap()
+                    },
+                ) as ColumnCompareFn)
             }};
         }
 
-        match left_array.data_type() {
-            DataType::Null => {}
-            DataType::Boolean => compare_value!(BooleanArray),
-            DataType::Int8 => compare_value!(Int8Array),
-            DataType::Int16 => compare_value!(Int16Array),
-            DataType::Int32 => compare_value!(Int32Array),
-            DataType::Int64 => compare_value!(Int64Array),
-            DataType::UInt8 => compare_value!(UInt8Array),
-            DataType::UInt16 => compare_value!(UInt16Array),
-            DataType::UInt32 => compare_value!(UInt32Array),
-            DataType::UInt64 => compare_value!(UInt64Array),
-            DataType::Float32 => compare_value!(Float32Array),
-            DataType::Float64 => compare_value!(Float64Array),
-            DataType::Utf8 => compare_value!(StringArray),
-            DataType::Utf8View => compare_value!(StringViewArray),
-            DataType::LargeUtf8 => compare_value!(LargeStringArray),
-            DataType::Binary => compare_value!(BinaryArray),
-            DataType::BinaryView => compare_value!(BinaryViewArray),
-            DataType::FixedSizeBinary(_) => compare_value!(FixedSizeBinaryArray),
-            DataType::LargeBinary => compare_value!(LargeBinaryArray),
-            DataType::Decimal32(..) => compare_value!(Decimal32Array),
-            DataType::Decimal64(..) => compare_value!(Decimal64Array),
-            DataType::Decimal128(..) => compare_value!(Decimal128Array),
-            DataType::Decimal256(..) => compare_value!(Decimal256Array),
-            DataType::Timestamp(time_unit, None) => match time_unit {
-                TimeUnit::Second => compare_value!(TimestampSecondArray),
-                TimeUnit::Millisecond => compare_value!(TimestampMillisecondArray),
-                TimeUnit::Microsecond => compare_value!(TimestampMicrosecondArray),
-                TimeUnit::Nanosecond => compare_value!(TimestampNanosecondArray),
-            },
-            DataType::Date32 => compare_value!(Date32Array),
-            DataType::Date64 => compare_value!(Date64Array),
-            dt => {
-                return not_impl_err!(
+        /// Build a comparator for byte-like array types where `.value()`
+        /// returns a reference (`&str` or `&[u8]`). We compare with `Ord::cmp`.
+        macro_rules! make_bytes_comparator {
+            ($ArrayType:ty) => {{
+                Ok(Box::new(
+                    |left: &ArrayRef,
+                     left_idx: usize,
+                     right: &ArrayRef,
+                     right_idx: usize|
+                     -> Ordering {
+                        let left_arr =
+                            left.as_any().downcast_ref::<$ArrayType>().unwrap();
+                        let right_arr =
+                            right.as_any().downcast_ref::<$ArrayType>().unwrap();
+                        let l = left_arr.value(left_idx);
+                        let r = right_arr.value(right_idx);
+                        Ord::cmp(l, r)
+                    },
+                ) as ColumnCompareFn)
+            }};
+        }
+
+        match dt {
+            DataType::Null => Ok(Box::new(|_, _, _, _| Ordering::Equal)),
+            DataType::Boolean => make_comparator!(BooleanArray),
+            DataType::Int8 => make_comparator!(Int8Array),
+            DataType::Int16 => make_comparator!(Int16Array),
+            DataType::Int32 => make_comparator!(Int32Array),
+            DataType::Int64 => make_comparator!(Int64Array),
+            DataType::UInt8 => make_comparator!(UInt8Array),
+            DataType::UInt16 => make_comparator!(UInt16Array),
+            DataType::UInt32 => make_comparator!(UInt32Array),
+            DataType::UInt64 => make_comparator!(UInt64Array),
+            DataType::Float32 => make_comparator!(Float32Array),
+            DataType::Float64 => make_comparator!(Float64Array),
+            DataType::Utf8 => make_bytes_comparator!(StringArray),
+            DataType::Utf8View => make_bytes_comparator!(StringViewArray),
+            DataType::LargeUtf8 => make_bytes_comparator!(LargeStringArray),
+            DataType::Binary => make_bytes_comparator!(BinaryArray),
+            DataType::BinaryView => make_bytes_comparator!(BinaryViewArray),
+            DataType::FixedSizeBinary(_) => {
+                make_bytes_comparator!(FixedSizeBinaryArray)
+            }
+            DataType::LargeBinary => make_bytes_comparator!(LargeBinaryArray),
+            DataType::Decimal32(..) => make_comparator!(Decimal32Array),
+            DataType::Decimal64(..) => make_comparator!(Decimal64Array),
+            DataType::Decimal128(..) => make_comparator!(Decimal128Array),
+            DataType::Decimal256(..) => make_comparator!(Decimal256Array),
+            DataType::Timestamp(TimeUnit::Second, None) => {
+                make_comparator!(TimestampSecondArray)
+            }
+            DataType::Timestamp(TimeUnit::Millisecond, None) => {
+                make_comparator!(TimestampMillisecondArray)
+            }
+            DataType::Timestamp(TimeUnit::Microsecond, None) => {
+                make_comparator!(TimestampMicrosecondArray)
+            }
+            DataType::Timestamp(TimeUnit::Nanosecond, None) => {
+                make_comparator!(TimestampNanosecondArray)
+            }
+            DataType::Date32 => make_comparator!(Date32Array),
+            DataType::Date64 => make_comparator!(Date64Array),
+            DataType::Dictionary(key_type, value_type) => {
+                let value_cmp = Self::resolve_compare_fn(value_type.as_ref())?;
+                let get_key = Self::resolve_dict_key_fn(key_type.as_ref())?;
+                Ok(Box::new(
+                    move |left: &ArrayRef,
+                          left_idx: usize,
+                          right: &ArrayRef,
+                          right_idx: usize|
+                          -> Ordering {
+                        use arrow::array::cast::AsArray;
+                        let left_dict = left.as_any_dictionary();
+                        let right_dict = right.as_any_dictionary();
+                        let lk = get_key(left_dict.keys(), left_idx);
+                        let rk = get_key(right_dict.keys(), right_idx);
+                        value_cmp(left_dict.values(), lk, right_dict.values(), rk)
+                    },
+                ))
+            }
+            other => {
+                not_impl_err!(
                     "Unsupported data type in sort merge join comparator: {}",
-                    dt
-                );
+                    other
+                )
             }
         }
-        if !is_equal {
-            return Ok(false);
+    }
+
+    /// Resolve a function that extracts a dictionary key as `usize` from a
+    /// keys array at a given index. Pre-resolved by key data type.
+    fn resolve_dict_key_fn(
+        key_type: &DataType,
+    ) -> Result<fn(&dyn Array, usize) -> usize> {
+        macro_rules! make_key_fn {
+            ($ArrayType:ty) => {
+                Ok((|keys: &dyn Array, idx: usize| -> usize {
+                    keys.as_any()
+                        .downcast_ref::<$ArrayType>()
+                        .unwrap()
+                        .value(idx) as usize
+                }) as fn(&dyn Array, usize) -> usize)
+            };
+        }
+        match key_type {
+            DataType::Int8 => make_key_fn!(Int8Array),
+            DataType::Int16 => make_key_fn!(Int16Array),
+            DataType::Int32 => make_key_fn!(Int32Array),
+            DataType::Int64 => make_key_fn!(Int64Array),
+            DataType::UInt8 => make_key_fn!(UInt8Array),
+            DataType::UInt16 => make_key_fn!(UInt16Array),
+            DataType::UInt32 => make_key_fn!(UInt32Array),
+            DataType::UInt64 => make_key_fn!(UInt64Array),
+            other => not_impl_err!(
+                "Unsupported dictionary key type in sort merge join: {}",
+                other
+            ),
         }
     }
-    Ok(true)
+
+    /// Compare two rows for ordering (used in the merge loop to decide
+    /// advance-streamed vs advance-buffered).
+    #[inline]
+    fn compare(
+        &self,
+        left_arrays: &[ArrayRef],
+        left_idx: usize,
+        right_arrays: &[ArrayRef],
+        right_idx: usize,
+    ) -> Ordering {
+        for ((cmp_fn, sort_opts), (left_arr, right_arr)) in self
+            .column_comparators
+            .iter()
+            .zip(&self.sort_options)
+            .zip(left_arrays.iter().zip(right_arrays))
+        {
+            let (left_null, right_null) =
+                (left_arr.is_null(left_idx), right_arr.is_null(right_idx));
+            let ord = match (left_null, right_null) {
+                (false, false) => {
+                    let ord = cmp_fn(left_arr, left_idx, right_arr, right_idx);
+                    if sort_opts.descending {
+                        ord.reverse()
+                    } else {
+                        ord
+                    }
+                }
+                (true, false) => {
+                    if sort_opts.nulls_first {
+                        Ordering::Less
+                    } else {
+                        Ordering::Greater
+                    }
+                }
+                (false, true) => {
+                    if sort_opts.nulls_first {
+                        Ordering::Greater
+                    } else {
+                        Ordering::Less
+                    }
+                }
+                (true, true) => match self.null_equality {
+                    NullEquality::NullEqualsNothing => Ordering::Less,
+                    NullEquality::NullEqualsNull => Ordering::Equal,
+                },
+            };
+            if !ord.is_eq() {
+                return ord;
+            }
+        }
+        Ordering::Equal
+    }
+
+    /// Check if two rows are equal (used when expanding buffered batches with
+    /// the same key). This is a fast-path that avoids sort-option logic.
+    #[inline]
+    fn is_equal(
+        &self,
+        left_arrays: &[ArrayRef],
+        left_idx: usize,
+        right_arrays: &[ArrayRef],
+        right_idx: usize,
+    ) -> bool {
+        for (cmp_fn, (left_arr, right_arr)) in self
+            .column_comparators
+            .iter()
+            .zip(left_arrays.iter().zip(right_arrays))
+        {
+            let (left_null, right_null) =
+                (left_arr.is_null(left_idx), right_arr.is_null(right_idx));
+            match (left_null, right_null) {
+                (false, false) => {
+                    if cmp_fn(left_arr, left_idx, right_arr, right_idx) != Ordering::Equal
+                    {
+                        return false;
+                    }
+                }
+                (true, true) => {}
+                _ => return false,
+            }
+        }
+        true
+    }
 }
