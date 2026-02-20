@@ -7012,6 +7012,60 @@ select arrays_zip([42], ['hello']);
 statement error
 select arrays_zip([1, 2, 3]);
 
+# arrays_zip with LargeList inputs
+query ?
+select arrays_zip(
+    arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'),
+    arrow_cast(make_array(10, 20, 30), 'LargeList(Int64)')
+);
+----
+[{c0: 1, c1: 10}, {c0: 2, c1: 20}, {c0: 3, c1: 30}]
+
+# arrays_zip with LargeList different lengths (padding)
+query ?
+select arrays_zip(
+    arrow_cast(make_array(1, 2), 'LargeList(Int64)'),
+    arrow_cast(make_array(10, 20, 30), 'LargeList(Int64)')
+);
+----
+[{c0: 1, c1: 10}, {c0: 2, c1: 20}, {c0: NULL, c1: 30}]
+
+# arrays_zip with FixedSizeList inputs
+query ?
+select arrays_zip(
+    arrow_cast(make_array(1, 2, 3), 'FixedSizeList(3, Int64)'),
+    arrow_cast(make_array(10, 20, 30), 'FixedSizeList(3, Int64)')
+);
+----
+[{c0: 1, c1: 10}, {c0: 2, c1: 20}, {c0: 3, c1: 30}]
+
+# arrays_zip mixing List and LargeList
+query ?
+select arrays_zip(
+    [1, 2, 3],
+    arrow_cast(make_array(10, 20, 30), 'LargeList(Int64)')
+);
+----
+[{c0: 1, c1: 10}, {c0: 2, c1: 20}, {c0: 3, c1: 30}]
+
+# arrays_zip mixing List and FixedSizeList with different lengths (padding)
+query ?
+select arrays_zip(
+    [1, 2, 3],
+    arrow_cast(make_array(10, 20), 'FixedSizeList(2, Int64)')
+);
+----
+[{c0: 1, c1: 10}, {c0: 2, c1: 20}, {c0: 3, c1: NULL}]
+
+# arrays_zip with LargeList and FixedSizeList mixed types
+query ?
+select arrays_zip(
+    arrow_cast(make_array(1, 2), 'LargeList(Int64)'),
+    arrow_cast(make_array('a', 'b'), 'FixedSizeList(2, Utf8)')
+);
+----
+[{c0: 1, c1: a}, {c0: 2, c1: b}]
+
 query ???
 select array_intersect(column1, column2),
        array_intersect(column3, column4),
