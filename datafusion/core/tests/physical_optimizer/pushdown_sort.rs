@@ -256,7 +256,8 @@ fn test_prefix_match_through_transparent_nodes() {
 
 #[test]
 fn test_no_prefix_match_wrong_direction() {
-    // Test that prefix matching does NOT work if the direction is wrong
+    // Test that when the requested sort [a DESC] matches a prefix of the source's
+    // natural ordering [a DESC, b ASC], the Sort is eliminated (Exact pushdown).
     let schema = schema();
 
     // Source has [a DESC, b ASC] ordering
@@ -265,7 +266,7 @@ fn test_no_prefix_match_wrong_direction() {
     let source_ordering = LexOrdering::new(vec![a.clone().reverse(), b]).unwrap();
     let source = parquet_exec_with_sort(schema.clone(), vec![source_ordering]);
 
-    // Request [a DESC] - same direction as source, NOT a reverse prefix
+    // Request [a DESC] - same direction as source prefix, Sort should be eliminated
     let same_direction = LexOrdering::new(vec![a.clone().reverse()]).unwrap();
     let plan = sort_exec(same_direction, source);
 
@@ -278,8 +279,7 @@ fn test_no_prefix_match_wrong_direction() {
         -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 DESC NULLS LAST, b@1 ASC], file_type=parquet
       output:
         Ok:
-          - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
-          -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 DESC NULLS LAST, b@1 ASC], file_type=parquet
+          - DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 DESC NULLS LAST, b@1 ASC], file_type=parquet
     "
     );
 }
