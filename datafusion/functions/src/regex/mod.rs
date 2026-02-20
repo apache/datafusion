@@ -23,6 +23,7 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
 pub mod regexpcount;
+pub mod regexpextract;
 pub mod regexpinstr;
 pub mod regexplike;
 pub mod regexpmatch;
@@ -30,6 +31,7 @@ pub mod regexpreplace;
 
 // create UDFs
 make_udf_function!(regexpcount::RegexpCountFunc, regexp_count);
+make_udf_function!(regexpextract::RegexpExtractFunc, regexp_extract);
 make_udf_function!(regexpinstr::RegexpInstrFunc, regexp_instr);
 make_udf_function!(regexpmatch::RegexpMatchFunc, regexp_match);
 make_udf_function!(regexplike::RegexpLikeFunc, regexp_like);
@@ -63,6 +65,19 @@ pub mod expr_fn {
             args.push(flags);
         };
         super::regexp_match().call(args)
+    }
+
+    /// Extracts a group that matches `regexp`. If `idx` is not specified,
+    /// it defaults to 1.
+    ///
+    /// Matches Spark's DataFrame API: `regexp_extract(e: Column, exp: String, groupIdx: Int)`
+    /// and the SQL syntax: `regexp_extract(str, regexp[, idx])`
+    pub fn regexp_extract(values: Expr, regex: Expr, idx: Option<Expr>) -> Expr {
+        let mut args = vec![values, regex];
+        if let Some(idx) = idx {
+            args.push(idx);
+        }
+        super::regexp_extract().call(args)
     }
 
     /// Returns index of regular expression matches in a string.
@@ -125,6 +140,7 @@ pub fn functions() -> Vec<Arc<datafusion_expr::ScalarUDF>> {
         regexp_instr(),
         regexp_like(),
         regexp_replace(),
+        regexp_extract(),
     ]
 }
 
