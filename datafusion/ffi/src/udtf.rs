@@ -20,21 +20,23 @@ use std::sync::Arc;
 
 use abi_stable::StableAbi;
 use abi_stable::std_types::{RResult, RVec};
-use datafusion_catalog::{TableFunctionImpl, TableProvider};
+use datafusion_catalog::{TableFunctionArgs, TableFunctionImpl, TableProvider};
+use datafusion_common::DataFusionError;
 use datafusion_common::error::Result;
 use datafusion_execution::TaskContext;
-use datafusion_expr::Expr;
 use datafusion_proto::logical_plan::from_proto::parse_exprs;
 use datafusion_proto::logical_plan::to_proto::serialize_exprs;
 use datafusion_proto::logical_plan::{
     DefaultLogicalExtensionCodec, LogicalExtensionCodec,
 };
 use datafusion_proto::protobuf::LogicalExprList;
+use datafusion_session::Session;
 use prost::Message;
 use tokio::runtime::Handle;
 
 use crate::execution::FFI_TaskContextProvider;
 use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
+use crate::session::{FFI_SessionRef, ForeignSession};
 use crate::table_provider::FFI_TableProvider;
 use crate::util::FFIResult;
 use crate::{df_result, rresult_return};
@@ -43,10 +45,21 @@ use crate::{df_result, rresult_return};
 #[repr(C)]
 #[derive(Debug, StableAbi)]
 pub struct FFI_TableFunction {
-    /// Equivalent to the `call` function of the TableFunctionImpl.
+    /// Equivalent to the [`TableFunctionImpl::call`].
     /// The arguments are Expr passed as protobuf encoded bytes.
+    #[deprecated(
+        since = "53.0.0",
+        note = "See TableFunctionImpl::call deprecation note"
+    )]
     pub call:
         unsafe extern "C" fn(udtf: &Self, args: RVec<u8>) -> FFIResult<FFI_TableProvider>,
+
+    /// Equivalent to the [`TableFunctionImpl::call_with_args`].
+    call_with_args: unsafe extern "C" fn(
+        udtf: &Self,
+        args: RVec<u8>,
+        session: FFI_SessionRef,
+    ) -> FFIResult<FFI_TableProvider>,
 
     pub logical_codec: FFI_LogicalExtensionCodec,
 
@@ -106,7 +119,50 @@ unsafe extern "C" fn call_fn_wrapper(
         codec.as_ref()
     ));
 
+    #[expect(deprecated)]
     let table_provider = rresult_return!(udtf_inner.call(&args));
+    RResult::ROk(FFI_TableProvider::new_with_ffi_codec(
+        table_provider,
+        false,
+        runtime,
+        udtf.logical_codec.clone(),
+    ))
+}
+
+unsafe extern "C" fn call_with_args_wrapper(
+    udtf: &FFI_TableFunction,
+    args: RVec<u8>,
+    session: FFI_SessionRef,
+) -> FFIResult<FFI_TableProvider> {
+    let runtime = udtf.runtime();
+    let udtf_inner = udtf.inner();
+
+    let ctx: Arc<TaskContext> =
+        rresult_return!((&udtf.logical_codec.task_ctx_provider).try_into());
+    let codec: Arc<dyn LogicalExtensionCodec> = (&udtf.logical_codec).into();
+
+    let proto_filters = rresult_return!(LogicalExprList::decode(args.as_ref()));
+
+    let args = rresult_return!(parse_exprs(
+        proto_filters.expr.iter(),
+        ctx.as_ref(),
+        codec.as_ref()
+    ));
+
+    let mut foreign_session = None;
+    let session = rresult_return!(
+        session
+            .as_local()
+            .map(Ok::<&(dyn Session + Send + Sync), DataFusionError>)
+            .unwrap_or_else(|| {
+                foreign_session = Some(ForeignSession::try_from(&session)?);
+                Ok(foreign_session.as_ref().unwrap())
+            })
+    );
+    let table_provider = rresult_return!(udtf_inner.call_with_args(TableFunctionArgs {
+        args: &args,
+        session
+    }));
     RResult::ROk(FFI_TableProvider::new_with_ffi_codec(
         table_provider,
         false,
@@ -169,7 +225,9 @@ impl FFI_TableFunction {
         let private_data = Box::new(TableFunctionPrivateData { udtf, runtime });
 
         Self {
+            #[expect(deprecated)]
             call: call_fn_wrapper,
+            call_with_args: call_with_args_wrapper,
             logical_codec,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
@@ -208,13 +266,32 @@ impl From<FFI_TableFunction> for Arc<dyn TableFunctionImpl> {
 }
 
 impl TableFunctionImpl for ForeignTableFunction {
-    fn call(&self, args: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+    fn call_with_args(&self, args: TableFunctionArgs) -> Result<Arc<dyn TableProvider>> {
+        let session =
+            FFI_SessionRef::new(args.session, None, self.0.logical_codec.clone());
+        let codec: Arc<dyn LogicalExtensionCodec> = (&self.0.logical_codec).into();
+        let expr_list = LogicalExprList {
+            expr: serialize_exprs(args.args, codec.as_ref())?,
+        };
+        let filters_serialized = expr_list.encode_to_vec().into();
+
+        let table_provider =
+            unsafe { (self.0.call_with_args)(&self.0, filters_serialized, session) };
+
+        let table_provider = df_result!(table_provider)?;
+        let table_provider: Arc<dyn TableProvider> = (&table_provider).into();
+
+        Ok(table_provider)
+    }
+
+    fn call(&self, args: &[datafusion_expr::Expr]) -> Result<Arc<dyn TableProvider>> {
         let codec: Arc<dyn LogicalExtensionCodec> = (&self.0.logical_codec).into();
         let expr_list = LogicalExprList {
             expr: serialize_exprs(args, codec.as_ref())?,
         };
         let filters_serialized = expr_list.encode_to_vec().into();
 
+        #[expect(deprecated)]
         let table_provider = unsafe { (self.0.call)(&self.0, filters_serialized) };
 
         let table_provider = df_result!(table_provider)?;
@@ -235,7 +312,9 @@ mod tests {
     use datafusion::logical_expr::ptr_eq::arc_ptr_eq;
     use datafusion::prelude::{SessionContext, lit};
     use datafusion::scalar::ScalarValue;
+    use datafusion_catalog::TableFunctionArgs;
     use datafusion_execution::TaskContextProvider;
+    use datafusion_expr::Expr;
 
     use super::*;
 
@@ -243,8 +322,12 @@ mod tests {
     struct TestUDTF {}
 
     impl TableFunctionImpl for TestUDTF {
-        fn call(&self, args: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+        fn call_with_args(
+            &self,
+            args: TableFunctionArgs,
+        ) -> Result<Arc<dyn TableProvider>> {
             let args = args
+                .args
                 .iter()
                 .map(|arg| {
                     if let Expr::Literal(scalar, _) = arg {
@@ -334,7 +417,10 @@ mod tests {
 
         let foreign_udf: Arc<dyn TableFunctionImpl> = local_udtf.into();
 
-        let table = foreign_udf.call(&[lit(6_u64), lit("one"), lit(2.0), lit(3_u64)])?;
+        let table = foreign_udf.call_with_args(TableFunctionArgs {
+            args: &[lit(6_u64), lit("one"), lit(2.0), lit(3_u64)],
+            session: &ctx.state(),
+        })?;
 
         let _ = ctx.register_table("test-table", table)?;
 
