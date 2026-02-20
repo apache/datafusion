@@ -523,8 +523,6 @@ fn array_has_any_with_scalar_string(
     columnar_arg: &ColumnarValue,
     scalar_values: &ArrayRef,
 ) -> Result<ColumnarValue> {
-    let has_null_scalar = scalar_values.null_count() > 0;
-
     let (col_arr, is_scalar_output) = match columnar_arg {
         ColumnarValue::Array(arr) => (Arc::clone(arr), false),
         ColumnarValue::Scalar(s) => (s.to_array_of_size(1)?, true),
@@ -535,16 +533,8 @@ fn array_has_any_with_scalar_string(
     let col_offsets: Vec<usize> = col_list.offsets().collect();
     let col_nulls = col_list.nulls();
 
-    let scalar_lookup = if scalar_values.len() > SCALAR_SMALL_THRESHOLD {
-        ScalarStringLookup::Set(
-            string_array_to_vec(scalar_values.as_ref())
-                .into_iter()
-                .flatten()
-                .collect(),
-        )
-    } else {
-        ScalarStringLookup::List(string_array_to_vec(scalar_values.as_ref()))
-    };
+    let scalar_lookup = ScalarStringLookup::new(scalar_values);
+    let has_null_scalar = scalar_values.null_count() > 0;
 
     let result = match col_values.data_type() {
         DataType::Utf8 => array_has_any_string_inner(
@@ -588,7 +578,27 @@ enum ScalarStringLookup<'a> {
     List(Vec<Option<&'a str>>),
 }
 
-impl ScalarStringLookup<'_> {
+impl<'a> ScalarStringLookup<'a> {
+    fn new(scalar_values: &'a ArrayRef) -> Self {
+        if scalar_values.len() > SCALAR_SMALL_THRESHOLD {
+            let set = match scalar_values.data_type() {
+                DataType::Utf8 => {
+                    scalar_values.as_string::<i32>().iter().flatten().collect()
+                }
+                DataType::LargeUtf8 => {
+                    scalar_values.as_string::<i64>().iter().flatten().collect()
+                }
+                DataType::Utf8View => {
+                    scalar_values.as_string_view().iter().flatten().collect()
+                }
+                _ => unreachable!(),
+            };
+            ScalarStringLookup::Set(set)
+        } else {
+            ScalarStringLookup::List(string_array_to_vec(scalar_values.as_ref()))
+        }
+    }
+
     fn contains(&self, value: &str) -> bool {
         match self {
             ScalarStringLookup::Set(set) => set.contains(value),
@@ -599,7 +609,7 @@ impl ScalarStringLookup<'_> {
 
 /// Inner implementation of the string scalar fast path, generic over string
 /// array type to allow direct element access by index.
-fn array_has_any_string_inner<'a, C: StringArrayType<'a>>(
+fn array_has_any_string_inner<'a, C: StringArrayType<'a> + Copy>(
     col_strings: C,
     col_offsets: &[usize],
     col_nulls: Option<&arrow::buffer::NullBuffer>,
