@@ -359,6 +359,9 @@ pub(super) struct SortMergeJoinStream {
     pub runtime_env: Arc<RuntimeEnv>,
     /// A unique number for each batch
     pub streamed_batch_counter: AtomicUsize,
+    /// Cached comparators for `compare_streamed_buffered`, rebuilt only when
+    /// the streamed or buffered join key arrays change.
+    compare_cache: Option<ComparatorCache>,
 }
 
 /// Staging area for joined data before output
@@ -987,6 +990,7 @@ impl SortMergeJoinStream {
             runtime_env,
             spill_manager,
             streamed_batch_counter: AtomicUsize::new(0),
+            compare_cache: None,
         })
     }
 
@@ -1242,7 +1246,7 @@ impl SortMergeJoinStream {
     }
 
     /// Get comparison result of streamed row and buffered batches
-    fn compare_streamed_buffered(&self) -> Result<Ordering> {
+    fn compare_streamed_buffered(&mut self) -> Result<Ordering> {
         if self.streamed_state == StreamedState::Exhausted {
             return Ok(Ordering::Greater);
         }
@@ -1250,15 +1254,31 @@ impl SortMergeJoinStream {
             return Ok(Ordering::Less);
         }
 
-        let left_arrays = &self.streamed_batch.join_arrays;
-        let right_arrays = &self.buffered_data.head_batch().join_arrays;
-        let comparators = self
-            .comparator
-            .build_comparators(left_arrays, right_arrays)?;
-        Ok(self.comparator.compare(
-            &comparators,
-            left_arrays,
-            right_arrays,
+        // Check if cached comparators are still valid (same arrays).
+        let left_ptr = array_id(&self.streamed_batch.join_arrays);
+        let right_ptr = array_id(&self.buffered_data.head_batch().join_arrays);
+        let needs_rebuild = match &self.compare_cache {
+            Some(c) => c.left_ptr != left_ptr || c.right_ptr != right_ptr,
+            None => true,
+        };
+        if needs_rebuild {
+            let comparators = self.comparator.build_comparators(
+                &self.streamed_batch.join_arrays,
+                &self.buffered_data.head_batch().join_arrays,
+            )?;
+            self.compare_cache = Some(ComparatorCache {
+                left_ptr,
+                right_ptr,
+                comparators,
+            });
+        }
+
+        let cache = self.compare_cache.as_ref().unwrap();
+        Ok(JoinComparator::compare(
+            self.comparator.null_equality,
+            &cache.comparators,
+            &self.streamed_batch.join_arrays,
+            &self.buffered_data.head_batch().join_arrays,
             self.streamed_batch.idx,
             self.buffered_data.head_batch().range.start,
         ))
@@ -2102,6 +2122,32 @@ fn join_arrays(batch: &RecordBatch, on_column: &[PhysicalExprRef]) -> Vec<ArrayR
         .collect()
 }
 
+/// Cached `DynComparator`s keyed by the identity of the arrays they were built from.
+///
+/// Since `DynComparator` captures array references at construction time, we must
+/// rebuild when the underlying arrays change. We detect changes by comparing
+/// the `Arc` data pointers of the first array on each side (all join key arrays
+/// come from the same batch, so they all change together).
+struct ComparatorCache {
+    /// Data pointer of the first left array.
+    left_ptr: usize,
+    /// Data pointer of the first right array.
+    right_ptr: usize,
+    /// Cached `DynComparator`s, one per join key column.
+    comparators: Vec<DynComparator>,
+}
+
+/// Returns a data-pointer identity for a slice of arrays.
+///
+/// All arrays in a join key set come from the same batch, so the first
+/// array's `Arc` pointer changing implies all arrays changed.
+#[inline]
+fn array_id(arrays: &[ArrayRef]) -> usize {
+    arrays
+        .first()
+        .map_or(0, |a| Arc::as_ptr(a) as *const () as usize)
+}
+
 /// Comparator for join key columns using Arrow's built-in `make_comparator`.
 ///
 /// Delegates to [`arrow_ord::ord::make_comparator`] which handles all Arrow
@@ -2154,7 +2200,7 @@ impl JoinComparator {
     /// returns `Equal` for null-null).
     #[inline]
     fn compare(
-        &self,
+        null_equality: NullEquality,
         comparators: &[DynComparator],
         left_arrays: &[ArrayRef],
         right_arrays: &[ArrayRef],
@@ -2169,7 +2215,7 @@ impl JoinComparator {
         }
         // All columns compared equal. If null-null should not match,
         // check whether any column pair has both sides null.
-        if self.null_equality == NullEquality::NullEqualsNothing {
+        if null_equality == NullEquality::NullEqualsNothing {
             for (l, r) in left_arrays.iter().zip(right_arrays) {
                 if l.is_null(left_idx) && r.is_null(right_idx) {
                     return Ordering::Less;
