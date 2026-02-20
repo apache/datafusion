@@ -580,11 +580,11 @@ fn array_has_any_with_scalar_string(
     }
 }
 
-/// Pre-computed lookup structure for the scalar string values.
+/// Pre-computed lookup structure for the scalar string fastpath.
 enum ScalarStringLookup<'a> {
     /// Large scalar: HashSet for O(1) lookups.
     Set(HashSet<&'a str>),
-    /// Small scalar: Vec for linear scan (avoids hashing overhead).
+    /// Small scalar: Vec for linear scan.
     List(Vec<Option<&'a str>>),
 }
 
