@@ -2838,10 +2838,10 @@ mod test {
         let result = try_cast_string_literal_to_type(&expr, &DataType::Int64).unwrap();
         assert_eq!(result, Some(lit(ScalarValue::Int64(Some(5)))));
 
-        // Successful cast: Utf8 "3.14" -> Float64
-        let expr = lit(ScalarValue::Utf8(Some("3.14".into())));
+        // Successful cast: Utf8 "2.5" -> Float64
+        let expr = lit(ScalarValue::Utf8(Some("2.5".into())));
         let result = try_cast_string_literal_to_type(&expr, &DataType::Float64).unwrap();
-        assert_eq!(result, Some(lit(ScalarValue::Float64(Some(3.14_f64)))));
+        assert_eq!(result, Some(lit(ScalarValue::Float64(Some(2.5)))));
 
         // Successful cast: Utf8 "100" -> Int32
         let expr = lit(ScalarValue::Utf8(Some("100".into())));
