@@ -226,8 +226,11 @@ fn bench_array_has_any(c: &mut Criterion, array_size: usize) {
     );
 
     // Benchmark: no match
-    let second_no_match =
-        create_int64_list_array_with_offset(NUM_ROWS, SMALL_ARRAY_SIZE, array_size as i64);
+    let second_no_match = create_int64_list_array_with_offset(
+        NUM_ROWS,
+        SMALL_ARRAY_SIZE,
+        array_size as i64,
+    );
     let args_no_match = vec![
         ColumnarValue::Array(first_arr.clone()),
         ColumnarValue::Array(second_no_match),
@@ -279,7 +282,8 @@ fn bench_array_has_any(c: &mut Criterion, array_size: usize) {
     );
 
     // Benchmark: scalar second arg, no match
-    let scalar_second_no_match = create_int64_scalar_list(SMALL_ARRAY_SIZE, array_size as i64);
+    let scalar_second_no_match =
+        create_int64_scalar_list(SMALL_ARRAY_SIZE, array_size as i64);
     let args_scalar_no_match = vec![
         ColumnarValue::Array(first_arr.clone()),
         ColumnarValue::Scalar(scalar_second_no_match),
@@ -512,7 +516,8 @@ fn bench_array_has_any_strings(c: &mut Criterion) {
         );
 
         // Benchmark: scalar second arg, no match
-        let scalar_second_no_match = create_string_scalar_list(SMALL_ARRAY_SIZE, "missing_");
+        let scalar_second_no_match =
+            create_string_scalar_list(SMALL_ARRAY_SIZE, "missing_");
         let args_scalar_no_match = vec![
             ColumnarValue::Array(first_arr.clone()),
             ColumnarValue::Scalar(scalar_second_no_match),
