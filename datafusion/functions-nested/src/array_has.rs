@@ -17,7 +17,9 @@
 
 //! [`ScalarUDFImpl`] definitions for array_has, array_has_all and array_has_any functions.
 
-use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, Datum, Scalar, StringArrayType};
+use arrow::array::{
+    Array, ArrayRef, AsArray, BooleanArray, Datum, Scalar, StringArrayType,
+};
 use arrow::buffer::BooleanBuffer;
 use arrow::datatypes::DataType;
 use arrow::row::{RowConverter, Rows, SortField};
