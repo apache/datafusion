@@ -51,5 +51,9 @@ pub mod expr_fn {
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
-    vec![bitmap_count(), bitmap_bit_position(), bitmap_bucket_number()]
+    vec![
+        bitmap_count(),
+        bitmap_bit_position(),
+        bitmap_bucket_number(),
+    ]
 }
