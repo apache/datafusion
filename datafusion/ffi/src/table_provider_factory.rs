@@ -57,7 +57,7 @@ pub struct FFI_TableProviderFactory {
     ///
     /// * `factory` - the table provider factory
     /// * `session_config` - session configuration
-    /// * `cmd_serialized` - a [`CreateExternalTableNode`] protobuf message serialized into bytes
+    /// * `cmd_serialized` - a ['CreateExternalTable`] encoded as a [`LogicalPlanNode`] protobuf message serialized into bytes
     ///   to pass across the FFI boundary.
     create: unsafe extern "C" fn(
         factory: &Self,
