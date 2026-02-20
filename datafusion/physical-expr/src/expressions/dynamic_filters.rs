@@ -308,7 +308,7 @@ impl DynamicFilterPhysicalExpr {
     ) -> Result<Self> {
         // If there's any references to this filter or any watchers, we should not replace the
         // inner state.
-        if self.is_used() || self.state_watch.receiver_count() > 0 {
+        if self.is_used() {
             return internal_err!(
                 "Cannot replace the inner state of a DynamicFilterPhysicalExpr that is in use"
             );
@@ -587,6 +587,16 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.render(f, |expr, f| expr.fmt_sql(f))
     }
+
+    fn snapshot(&self) -> Result<Option<Arc<dyn PhysicalExpr>>> {
+        // Return the current expression as a snapshot.
+        Ok(Some(self.current()?))
+    }
+
+    fn snapshot_generation(&self) -> u64 {
+        // Return the current generation of the expression.
+        self.inner.read().generation
+    }
 }
 
 #[cfg(test)]
@@ -714,6 +724,23 @@ mod test {
             .to_array_of_size(1)
             .unwrap();
         assert!(arr_1.eq(&expected));
+    }
+
+    #[test]
+    fn test_snapshot() {
+        let expr = lit(42) as Arc<dyn PhysicalExpr>;
+        let dynamic_filter = DynamicFilterPhysicalExpr::new(vec![], Arc::clone(&expr));
+
+        // Take a snapshot of the current expression
+        let snapshot = dynamic_filter.snapshot().unwrap();
+        assert_eq!(snapshot, Some(expr));
+
+        // Update the current expression
+        let new_expr = lit(100) as Arc<dyn PhysicalExpr>;
+        dynamic_filter.update(Arc::clone(&new_expr)).unwrap();
+        // Take another snapshot
+        let snapshot = dynamic_filter.snapshot().unwrap();
+        assert_eq!(snapshot, Some(new_expr));
     }
 
     #[test]
