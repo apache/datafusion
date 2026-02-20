@@ -499,15 +499,7 @@ fn array_has_any_with_scalar(
 
     // If scalar list is empty, result is always false
     if scalar_values.is_empty() {
-        return match columnar_arg {
-            ColumnarValue::Array(arr) => {
-                let result = BooleanArray::from(BooleanBuffer::new_unset(arr.len()));
-                Ok(ColumnarValue::Array(Arc::new(result)))
-            }
-            ColumnarValue::Scalar(_) => {
-                Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(false))))
-            }
-        };
+        return Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(false))));
     }
 
     match scalar_values.data_type() {
