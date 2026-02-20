@@ -24,18 +24,14 @@ use abi_stable::{
 use async_ffi::{FfiFuture, FutureExt};
 use async_trait::async_trait;
 use datafusion_catalog::{Session, TableProvider, TableProviderFactory};
-use datafusion_common::TableReference;
 use datafusion_common::error::{DataFusionError, Result};
 use datafusion_execution::TaskContext;
-use datafusion_expr::CreateExternalTable;
-use datafusion_proto::logical_plan::from_proto::{parse_expr, parse_sorts};
-use datafusion_proto::logical_plan::to_proto::{serialize_expr, serialize_sorts};
+use datafusion_expr::{CreateExternalTable, DdlStatement, LogicalPlan};
 use datafusion_proto::logical_plan::{
-    DefaultLogicalExtensionCodec, LogicalExtensionCodec,
+    AsLogicalPlan, DefaultLogicalExtensionCodec, LogicalExtensionCodec,
 };
-use datafusion_proto::protobuf::{CreateExternalTableNode, SortExprNodeCollection};
+use datafusion_proto::protobuf::LogicalPlanNode;
 use prost::Message;
-use std::collections::HashMap;
 use tokio::runtime::Handle;
 
 use crate::execution::FFI_TaskContextProvider;
@@ -145,6 +141,24 @@ impl FFI_TableProviderFactory {
         let private_data = self.private_data as *const FactoryPrivateData;
         unsafe { &(*private_data).runtime }
     }
+
+    fn deserialize_cmd(
+        &self,
+        cmd_serialized: &RVec<u8>,
+    ) -> Result<CreateExternalTable, DataFusionError> {
+        let task_ctx: Arc<TaskContext> =
+            (&self.logical_codec.task_ctx_provider).try_into()?;
+        let logical_codec: Arc<dyn LogicalExtensionCodec> = (&self.logical_codec).into();
+
+        let plan = LogicalPlanNode::decode(cmd_serialized.as_ref())
+            .map_err(|e| DataFusionError::Internal(format!("{e:?}")))?;
+        match plan.try_into_logical_plan(&task_ctx, logical_codec.as_ref())? {
+            LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) => Ok(cmd),
+            _ => Err(DataFusionError::Internal(
+                "Invalid logical plan in FFI_TableProviderFactory.".to_owned(),
+            )),
+        }
+    }
 }
 
 impl Clone for FFI_TableProviderFactory {
@@ -164,105 +178,43 @@ unsafe extern "C" fn create_fn_wrapper(
     session: FFI_SessionRef,
     cmd_serialized: RVec<u8>,
 ) -> FfiFuture<RResult<FFI_TableProvider, RString>> {
-    let task_ctx: Result<Arc<TaskContext>, DataFusionError> =
-        (&factory.logical_codec.task_ctx_provider).try_into();
-    let runtime = factory.runtime().clone();
-    let logical_codec: Arc<dyn LogicalExtensionCodec> = (&factory.logical_codec).into();
-    let ffi_logical_codec = factory.logical_codec.clone();
-    let internal_factory = Arc::clone(factory.inner());
+    let factory = factory.clone();
 
     async move {
-        let mut foreign_session = None;
-        let session = rresult_return!(
-            session
-                .as_local()
-                .map(Ok::<&(dyn Session + Send + Sync), DataFusionError>)
-                .unwrap_or_else(|| {
-                    foreign_session = Some(ForeignSession::try_from(&session)?);
-                    Ok(foreign_session.as_ref().unwrap())
-                })
+        let provider = rresult_return!(
+            create_fn_wrapper_impl(factory, session, cmd_serialized).await
         );
-
-        let task_ctx = rresult_return!(task_ctx);
-
-        let proto_cmd =
-            rresult_return!(CreateExternalTableNode::decode(cmd_serialized.as_ref()));
-
-        // Deserialize CreateExternalTable from protobuf
-        let pb_schema = rresult_return!(proto_cmd.schema.ok_or_else(|| {
-            DataFusionError::Internal(
-                "CreateExternalTableNode was missing required field schema".to_string(),
-            )
-        }));
-
-        let constraints = rresult_return!(proto_cmd.constraints.ok_or_else(|| {
-            DataFusionError::Internal(
-                "CreateExternalTableNode was missing required field constraints"
-                    .to_string(),
-            )
-        }));
-
-        let definition = if !proto_cmd.definition.is_empty() {
-            Some(proto_cmd.definition)
-        } else {
-            None
-        };
-
-        let mut order_exprs = Vec::with_capacity(proto_cmd.order_exprs.len());
-        for expr in &proto_cmd.order_exprs {
-            let sorts = rresult_return!(parse_sorts(
-                &expr.sort_expr_nodes,
-                task_ctx.as_ref(),
-                logical_codec.as_ref(),
-            ));
-            order_exprs.push(sorts);
-        }
-
-        let mut column_defaults = HashMap::with_capacity(proto_cmd.column_defaults.len());
-        for (col_name, expr) in &proto_cmd.column_defaults {
-            let expr = rresult_return!(parse_expr(
-                expr,
-                task_ctx.as_ref(),
-                logical_codec.as_ref()
-            ));
-            column_defaults.insert(col_name.clone(), expr);
-        }
-
-        let table_ref = rresult_return!(proto_cmd.name.as_ref().ok_or_else(|| {
-            DataFusionError::Internal(
-                "CreateExternalTableNode was missing required field name".to_string(),
-            )
-        }));
-
-        let name: TableReference = rresult_return!(table_ref.clone().try_into());
-
-        let cmd = CreateExternalTable {
-            schema: rresult_return!(pb_schema.try_into()),
-            name,
-            location: proto_cmd.location,
-            file_type: proto_cmd.file_type,
-            table_partition_cols: proto_cmd.table_partition_cols,
-            order_exprs,
-            if_not_exists: proto_cmd.if_not_exists,
-            or_replace: proto_cmd.or_replace,
-            temporary: proto_cmd.temporary,
-            definition,
-            unbounded: proto_cmd.unbounded,
-            options: proto_cmd.options,
-            constraints: constraints.into(),
-            column_defaults,
-        };
-
-        let provider = rresult_return!(internal_factory.create(session, &cmd).await);
-
-        RResult::ROk(FFI_TableProvider::new_with_ffi_codec(
-            provider,
-            true,
-            runtime.clone(),
-            ffi_logical_codec,
-        ))
+        RResult::ROk(provider)
     }
     .into_ffi()
+}
+
+async fn create_fn_wrapper_impl(
+    factory: FFI_TableProviderFactory,
+    session: FFI_SessionRef,
+    cmd_serialized: RVec<u8>,
+) -> Result<FFI_TableProvider, DataFusionError> {
+    let runtime = factory.runtime().clone();
+    let ffi_logical_codec = factory.logical_codec.clone();
+    let internal_factory = Arc::clone(factory.inner());
+    let cmd = factory.deserialize_cmd(&cmd_serialized)?;
+
+    let mut foreign_session = None;
+    let session = session
+        .as_local()
+        .map(Ok::<&(dyn Session + Send + Sync), DataFusionError>)
+        .unwrap_or_else(|| {
+            foreign_session = Some(ForeignSession::try_from(&session)?);
+            Ok(foreign_session.as_ref().unwrap())
+        })?;
+
+    let provider = internal_factory.create(session, &cmd).await?;
+    Ok(FFI_TableProvider::new_with_ffi_codec(
+        provider,
+        true,
+        runtime.clone(),
+        ffi_logical_codec,
+    ))
 }
 
 unsafe extern "C" fn clone_fn_wrapper(
@@ -303,6 +255,25 @@ unsafe extern "C" fn release_fn_wrapper(factory: &mut FFI_TableProviderFactory) 
 #[derive(Debug)]
 pub struct ForeignTableProviderFactory(pub FFI_TableProviderFactory);
 
+impl ForeignTableProviderFactory {
+    fn serialize_cmd(
+        &self,
+        cmd: CreateExternalTable,
+    ) -> Result<RVec<u8>, DataFusionError> {
+        let logical_codec: Arc<dyn LogicalExtensionCodec> =
+            (&self.0.logical_codec).into();
+
+        let plan = LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd));
+        let plan: LogicalPlanNode =
+            AsLogicalPlan::try_from_logical_plan(&plan, logical_codec.as_ref())?;
+
+        let mut buf: Vec<u8> = Vec::new();
+        plan.try_encode(&mut buf)?;
+
+        Ok(buf.into())
+    }
+}
+
 impl From<&FFI_TableProviderFactory> for Arc<dyn TableProviderFactory> {
     fn from(factory: &FFI_TableProviderFactory) -> Self {
         if (factory.library_marker_id)() == crate::get_library_marker_id() {
@@ -324,46 +295,10 @@ impl TableProviderFactory for ForeignTableProviderFactory {
         cmd: &CreateExternalTable,
     ) -> Result<Arc<dyn TableProvider>> {
         let session = FFI_SessionRef::new(session, None, self.0.logical_codec.clone());
-
-        let codec: Arc<dyn LogicalExtensionCodec> = (&self.0.logical_codec).into();
-
-        // Serialize CreateExternalTable to protobuf
-        let mut converted_order_exprs: Vec<SortExprNodeCollection> = vec![];
-        for order in &cmd.order_exprs {
-            let temp = SortExprNodeCollection {
-                sort_expr_nodes: serialize_sorts(order, codec.as_ref())?,
-            };
-            converted_order_exprs.push(temp);
-        }
-
-        let mut converted_column_defaults =
-            HashMap::with_capacity(cmd.column_defaults.len());
-        for (col_name, expr) in &cmd.column_defaults {
-            converted_column_defaults
-                .insert(col_name.clone(), serialize_expr(expr, codec.as_ref())?);
-        }
-
-        let proto_cmd = CreateExternalTableNode {
-            name: Some(cmd.name.clone().into()),
-            location: cmd.location.clone(),
-            file_type: cmd.file_type.clone(),
-            schema: Some(cmd.schema.as_ref().try_into()?),
-            table_partition_cols: cmd.table_partition_cols.clone(),
-            if_not_exists: cmd.if_not_exists,
-            or_replace: cmd.or_replace,
-            temporary: cmd.temporary,
-            order_exprs: converted_order_exprs,
-            definition: cmd.definition.clone().unwrap_or_default(),
-            unbounded: cmd.unbounded,
-            options: cmd.options.clone(),
-            constraints: Some(cmd.constraints.clone().into()),
-            column_defaults: converted_column_defaults,
-        };
-
-        let cmd_serialized = proto_cmd.encode_to_vec().into();
+        let cmd = self.serialize_cmd(cmd.clone())?;
 
         let provider = unsafe {
-            let maybe_provider = (self.0.create)(&self.0, session, cmd_serialized).await;
+            let maybe_provider = (self.0.create)(&self.0, session, cmd).await;
 
             let ffi_provider = df_result!(maybe_provider)?;
             ForeignTableProvider(ffi_provider)
@@ -377,7 +312,7 @@ impl TableProviderFactory for ForeignTableProviderFactory {
 mod tests {
     use arrow::datatypes::Schema;
     use datafusion::prelude::SessionContext;
-    use datafusion_common::ToDFSchema;
+    use datafusion_common::{TableReference, ToDFSchema};
     use datafusion_execution::TaskContextProvider;
     use std::collections::HashMap;
 
