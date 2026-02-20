@@ -315,7 +315,9 @@ impl SelectBuilder {
     }
     pub fn build(&self) -> Result<ast::Select, BuilderError> {
         Ok(ast::Select {
+            optimizer_hint: None,
             distinct: self.distinct.clone(),
+            select_modifiers: None,
             top_before_distinct: false,
             top: self.top.clone(),
             projection: self.projection.clone().unwrap_or_default(),
@@ -340,12 +342,12 @@ impl SelectBuilder {
             named_window: self.named_window.clone(),
             qualify: self.qualify.clone(),
             value_table_mode: self.value_table_mode,
-            connect_by: None,
+            connect_by: Vec::new(),
             window_before_qualify: false,
             prewhere: None,
             select_token: AttachedToken::empty(),
             flavor: match self.flavor {
-                Some(ref value) => value.clone(),
+                Some(ref value) => *value,
                 None => return Err(Into::into(UninitializedFieldError::from("flavor"))),
             },
             exclude: None,
@@ -608,6 +610,7 @@ impl DerivedRelationBuilder {
                 }
             },
             alias: self.alias.clone(),
+            sample: None,
         })
     }
     fn create_empty() -> Self {
