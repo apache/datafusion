@@ -2204,6 +2204,7 @@ dependencies = [
  "datafusion-functions-window",
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
+ "datafusion-physical-optimizer",
  "datafusion-physical-plan",
  "datafusion-proto",
  "datafusion-proto-common",
