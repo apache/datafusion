@@ -222,8 +222,7 @@ ORDER BY l.id;
 5 left5 right5
 
 # RIGHT JOIN: optimizer swaps to physical Left join (build=right_parquet, probe=left_parquet).
-# No self-generated dynamic filter (only Inner joins get that), but parent filters
-# on the preserved (build) side can still push down.
+# Physical Left join generates a self-generated dynamic filter on the probe side.
 query TT
 EXPLAIN SELECT l.*, r.info
 FROM left_parquet l
@@ -240,7 +239,7 @@ physical_plan
 01)ProjectionExec: expr=[id@1 as id, data@2 as data, info@0 as info]
 02)--HashJoinExec: mode=CollectLeft, join_type=Left, on=[(id@0, id@0)], projection=[info@1, id@2, data@3]
 03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id, info], file_type=parquet
-04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet
+04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet, predicate=DynamicFilter [ empty ]
 
 # RIGHT JOIN correctness: all right rows appear, unmatched left rows produce NULLs
 query ITT
@@ -291,6 +290,36 @@ physical_plan
 01)HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(id@0, id@0)]
 02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id], file_type=parquet
 03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet
+
+# LEFT SEMI JOIN (physical LeftSemi): reverse table roles so optimizer keeps LeftSemi
+# (right_parquet has 3 rows < left_parquet has 5 rows, so no swap occurs).
+# Physical LeftSemi generates a self-generated dynamic filter on the probe side.
+query TT
+EXPLAIN SELECT r.*
+FROM right_parquet r
+WHERE r.id IN (SELECT l.id FROM left_parquet l);
+----
+logical_plan
+01)LeftSemi Join: r.id = __correlated_sq_1.id
+02)--SubqueryAlias: r
+03)----TableScan: right_parquet projection=[id, info]
+04)--SubqueryAlias: __correlated_sq_1
+05)----SubqueryAlias: l
+06)------TableScan: left_parquet projection=[id]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(id@0, id@0)]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id, info], file_type=parquet
+03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id], file_type=parquet, predicate=DynamicFilter [ empty ]
+
+# LEFT SEMI (physical LeftSemi) correctness: only right rows with matching left ids
+query IT rowsort
+SELECT r.*
+FROM right_parquet r
+WHERE r.id IN (SELECT l.id FROM left_parquet l);
+----
+1 right1
+3 right3
+5 right5
 
 # LEFT ANTI JOIN: no self-generated dynamic filter, but parent filters can push
 # to the preserved (left/build) side.
