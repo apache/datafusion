@@ -18,10 +18,9 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{
-    Array, ArrayRef, NullBufferBuilder, StringArray, StringBuilder, StructArray,
-};
+use arrow::array::{Array, ArrayRef, NullBufferBuilder, StringBuilder, StructArray};
 use arrow::datatypes::{DataType, Field, FieldRef, Fields};
+use datafusion_common::cast::as_string_array;
 use datafusion_common::{Result, exec_err, internal_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -35,6 +34,10 @@ use datafusion_expr::{
 /// Extracts top-level fields from a JSON string and returns them as a struct.
 ///
 /// `json_tuple(json_string, field1, field2, ...) -> Struct<c0: Utf8, c1: Utf8, ...>`
+///
+/// Note: In Spark, `json_tuple` is a Generator that produces multiple columns directly.
+/// In DataFusion, a ScalarUDF can only return one value per row, so the result is wrapped
+/// in a Struct. The caller (e.g. Comet) is expected to destructure the struct fields.
 ///
 /// - Returns NULL for each field that is missing from the JSON object
 /// - Returns NULL for all fields if the input is NULL or not valid JSON
@@ -114,29 +117,15 @@ fn json_tuple_inner(args: &[ArrayRef], return_type: &DataType) -> Result<ArrayRe
     let num_rows = args[0].len();
     let num_fields = args.len() - 1;
 
-    let json_array = args[0]
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .ok_or_else(|| {
-            datafusion_common::internal_datafusion_err!(
-                "json_tuple requires a Utf8 string array for json_string argument"
-            )
-        })?;
+    let json_array = as_string_array(&args[0])?;
 
-    let field_arrays: Vec<&StringArray> = args[1..]
+    let field_arrays = args[1..]
         .iter()
-        .map(|arg| {
-            arg.as_any().downcast_ref::<StringArray>().ok_or_else(|| {
-                datafusion_common::internal_datafusion_err!(
-                    "json_tuple requires a Utf8 string for field name argument"
-                )
-            })
-        })
+        .map(|arg| as_string_array(arg))
         .collect::<Result<Vec<_>>>()?;
 
-    let mut builders: Vec<StringBuilder> = (0..num_fields)
-        .map(|_| StringBuilder::with_capacity(num_rows, num_rows * 32))
-        .collect();
+    let mut builders: Vec<StringBuilder> =
+        (0..num_fields).map(|_| StringBuilder::new()).collect();
 
     let mut null_buffer = NullBufferBuilder::new(num_rows);
 

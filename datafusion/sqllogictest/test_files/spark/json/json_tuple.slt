@@ -116,3 +116,39 @@ SELECT json_tuple(col1, col2, col3, col4) FROM (VALUES
 ) AS t(col1, col2, col3, col4);
 ----
 {c0: 1, c1: NULL, c2: 1}
+
+# Edge case: both json and field key are null
+query ?
+SELECT json_tuple(NULL::STRING, NULL::STRING);
+----
+NULL
+
+# Edge case: empty string json and empty string key
+query ?
+SELECT json_tuple(''::STRING, ''::STRING);
+----
+NULL
+
+# Edge case: mixed upper/lower case keys
+query ?
+SELECT json_tuple('{"Name":"Alice","name":"bob","NAME":"Charlie"}'::STRING, 'Name'::STRING, 'name'::STRING, 'NAME'::STRING);
+----
+{c0: Alice, c1: bob, c2: Charlie}
+
+# Edge case: UTF-8 Chinese characters
+query ?
+SELECT json_tuple('{"姓名":"小明","城市":"台北"}'::STRING, '姓名'::STRING, '城市'::STRING);
+----
+{c0: 小明, c1: 台北}
+
+# Edge case: UTF-8 Cyrillic characters
+query ?
+SELECT json_tuple('{"имя":"Иван","город":"Москва"}'::STRING, 'имя'::STRING, 'город'::STRING);
+----
+{c0: Иван, c1: Москва}
+
+# Verify return type with arrow_typeof
+query T
+SELECT arrow_typeof(json_tuple('{"a":1}'::STRING, 'a'::STRING));
+----
+Struct("c0": Utf8)
