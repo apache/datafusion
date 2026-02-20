@@ -304,12 +304,14 @@ source = { virtual = "benchmarks" }
 dependencies = [
     { name = "falsa" },
     { name = "rich" },
+    { name = "typing-extensions" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "falsa" },
     { name = "rich" },
+    { name = "typing-extensions" },
 ]
 
 [[package]]

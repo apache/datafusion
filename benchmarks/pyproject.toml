@@ -2,4 +2,5 @@
 name = "datafusion-benchmarks"
 version = "0.1.0"
 requires-python = ">=3.11"
-dependencies = ["rich", "falsa"]
+# typing_extensions is an undeclared dependency of falsa
+dependencies = ["rich", "falsa", "typing_extensions"]
