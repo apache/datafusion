@@ -145,11 +145,11 @@ fn advance_generator_past_existing(
         plan.expressions().iter().try_for_each(|expr| {
             expr.apply(|e| {
                 if let Expr::Alias(alias) = e
-                    && let Some(id_str) = alias
+                    && let Some(id) = alias
                         .name
                         .strip_prefix(EXTRACTED_EXPR_PREFIX)
                         .and_then(|s| s.strip_prefix('_'))
-                    && let Ok(id) = id_str.parse::<usize>()
+                        .and_then(|s| s.parse().ok())
                 {
                     alias_generator.update_min_id(id);
                 }
