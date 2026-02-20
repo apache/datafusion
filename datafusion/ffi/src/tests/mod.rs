@@ -78,6 +78,8 @@ pub struct ForeignLibraryModule {
 
     pub create_nullary_udf: extern "C" fn() -> FFI_ScalarUDF,
 
+    pub create_timezone_udf: extern "C" fn() -> FFI_ScalarUDF,
+
     pub create_table_function:
         extern "C" fn(FFI_LogicalExtensionCodec) -> FFI_TableFunction,
 
@@ -142,6 +144,7 @@ pub fn get_foreign_library_module() -> ForeignLibraryModuleRef {
         create_table: construct_table_provider,
         create_scalar_udf: create_ffi_abs_func,
         create_nullary_udf: create_ffi_random_func,
+        create_timezone_udf: udf_udaf_udwf::create_timezone_func,
         create_table_function: create_ffi_table_func,
         create_sum_udaf: create_ffi_sum_func,
         create_stddev_udaf: create_ffi_stddev_func,
