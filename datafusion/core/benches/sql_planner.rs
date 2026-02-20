@@ -121,6 +121,8 @@ fn register_defs(ctx: SessionContext, defs: Vec<TableDef>) -> SessionContext {
 
 fn register_clickbench_hits_table(rt: &Runtime) -> SessionContext {
     let ctx = SessionContext::new();
+    rt.block_on(ctx.sql("SET datafusion.execution.parquet.binary_as_string = true"))
+        .unwrap(); // Needed to make all queries work
 
     // use an external table for clickbench benchmarks
     let path =

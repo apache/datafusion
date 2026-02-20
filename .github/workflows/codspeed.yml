@@ -1,0 +1,72 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+name: CodSpeed
+
+concurrency:
+  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+on:
+  push:
+    branches-ignore:
+      - 'gh-readonly-queue/**'
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
+      - ".github/ISSUE_TEMPLATE/**"
+      - ".github/pull_request_template.md"
+  pull_request:
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
+      - ".github/ISSUE_TEMPLATE/**"
+      - ".github/pull_request_template.md"
+  merge_group:
+  # manual trigger
+  # https://docs.github.com/en/actions/managing-workflow-runs/manually-running-a-workflow
+  workflow_dispatch:
+
+jobs:
+  cargo_bench:
+    name: cargo bench benchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Cleanup image # save some space to download benchmark data
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5  # v2.8.2
+        with:
+          shared-key: "amd-ci-codspeed"
+          save-if: ${{ github.ref_name == 'main' }}
+      - name: Setup codspeed
+        run: cargo install cargo-codspeed
+      - name: Download benchmark data
+        run: benchmarks/bench.sh data clickbench_partitioned
+      - name: Install codpseed-criterion-compat
+        working-directory: datafusion/core
+        run: cargo add --dev --rename criterion --features async_tokio,async_futures codspeed-criterion-compat@4.2.0
+      - name: Build the benchmark targets
+        working-directory: datafusion/core
+        run: cargo codspeed build -j 2 --profile release-nonlto --bench sql_planner
+      - name: Run the benchmarks
+        uses: CodSpeedHQ/action@972e3437949c89e1357ebd1a2dbc852fcbc57245 # v4.5.1
+        with:
+          mode: simulation
+          working-directory: datafusion/core
+          run: cargo codspeed run
