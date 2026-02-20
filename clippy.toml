@@ -5,6 +5,8 @@ disallowed-methods = [
 
 disallowed-types = [
     { path = "std::time::Instant", reason = "Use `datafusion_common::instant::Instant` instead for WASM compatibility" },
+    { path = "std::collections::HashMap", reason = "Use `datafusion_common::HashMap` instead to ensure a single, uniform HashMap implementation (re-exported from hashbrown)" },
+    { path = "std::collections::HashSet", reason = "Use `datafusion_common::HashSet` instead to ensure a single, uniform HashSet implementation (re-exported from hashbrown)" },
 ]
 
 # Lowering the threshold to help prevent stack overflows (default is 16384)
