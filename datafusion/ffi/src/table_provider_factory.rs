@@ -173,6 +173,16 @@ impl Drop for FFI_TableProviderFactory {
     }
 }
 
+impl From<&FFI_TableProviderFactory> for Arc<dyn TableProviderFactory> {
+    fn from(factory: &FFI_TableProviderFactory) -> Self {
+        if (factory.library_marker_id)() == crate::get_library_marker_id() {
+            Arc::clone(factory.inner()) as Arc<dyn TableProviderFactory>
+        } else {
+            Arc::new(ForeignTableProviderFactory(factory.clone()))
+        }
+    }
+}
+
 unsafe extern "C" fn create_fn_wrapper(
     factory: &FFI_TableProviderFactory,
     session: FFI_SessionRef,
@@ -274,16 +284,6 @@ impl ForeignTableProviderFactory {
     }
 }
 
-impl From<&FFI_TableProviderFactory> for Arc<dyn TableProviderFactory> {
-    fn from(factory: &FFI_TableProviderFactory) -> Self {
-        if (factory.library_marker_id)() == crate::get_library_marker_id() {
-            Arc::clone(factory.inner()) as Arc<dyn TableProviderFactory>
-        } else {
-            Arc::new(ForeignTableProviderFactory(factory.clone()))
-        }
-    }
-}
-
 unsafe impl Send for ForeignTableProviderFactory {}
 unsafe impl Sync for ForeignTableProviderFactory {}
 
@@ -360,8 +360,10 @@ mod tests {
         let task_ctx_provider = FFI_TaskContextProvider::from(&task_ctx_provider);
 
         let factory = Arc::new(TestTableProviderFactory {});
-        let ffi_factory =
+        let mut ffi_factory =
             FFI_TableProviderFactory::new(factory, None, task_ctx_provider, None);
+        ffi_factory.library_marker_id = crate::mock_foreign_marker_id;
+
         let factory: Arc<dyn TableProviderFactory> = (&ffi_factory).into();
 
         let cmd = CreateExternalTable {
