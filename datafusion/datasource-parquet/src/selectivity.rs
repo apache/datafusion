@@ -23,8 +23,6 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-
-use datafusion_common::instant::Instant;
 use log::debug;
 use parking_lot::RwLock;
 
@@ -322,16 +320,9 @@ impl SelectivityTracker {
         eval_nanos: u64,
         batch_bytes: u64,
     ) {
-        let lock_wait_us = {
-            let lock_start = Instant::now();
-            let mut inner = self.inner.write();
-            let wait = lock_start.elapsed().as_micros();
-            inner.update(id, matched, total, eval_nanos, batch_bytes);
-            wait
-        }; // lock dropped here
-        if lock_wait_us > 100 {
-            debug!("FilterId {id}: selectivity write lock wait={lock_wait_us}μs");
-        }
+        self.inner
+            .write()
+            .update(id, matched, total, eval_nanos, batch_bytes);
     }
 
     /// Partition filters into collecting / promoted / post-scan.
@@ -345,6 +336,15 @@ impl SelectivityTracker {
     /// Returns the number of times `partition_filters` has been called.
     pub(crate) fn partition_call_count(&self) -> u64 {
         self.inner.read().partition_call_count
+    }
+
+    /// Returns true if the filter is in the Collecting state.
+    pub(crate) fn is_collecting(&self, id: FilterId) -> bool {
+        let inner = self.inner.read();
+        matches!(
+            inner.filter_states.get(&id),
+            Some(FilterState::Collecting) | None
+        )
     }
 
     /// Resolve the fraction-based collection threshold from dataset statistics.
@@ -657,7 +657,7 @@ impl SelectivityTrackerInner {
                 let rows_so_far = self.stats.get(&id).map_or(0, |s| s.rows_total());
                 let remaining = min_rows.saturating_sub(rows_so_far);
                 debug!(
-                    "  Filter id={id}: {expr} [COLLECTING as row-filter (need {remaining} more rows)]"
+                    "  Filter id={id}: {expr} [COLLECTING as row-filter (need {remaining} more rows, early-promoted)]"
                 );
             }
             for &(id, ref expr) in &promoted {
@@ -976,7 +976,7 @@ mod tests {
             );
 
             assert!(result.promoted.is_empty());
-            assert_eq!(result.collecting.len(), 2);
+            assert_eq!(result.collecting.len(), 2, "new filters should be collecting");
             assert!(result.post_scan.is_empty());
         }
 

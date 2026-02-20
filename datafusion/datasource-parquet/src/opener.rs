@@ -29,7 +29,7 @@ use crate::{
     ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
     apply_file_schema_type_coercions, coerce_int96_to_resolution, row_filter,
 };
-use arrow::array::{RecordBatch, RecordBatchOptions};
+use arrow::array::{BooleanArray, RecordBatch, RecordBatchOptions};
 use arrow::datatypes::DataType;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_physical_expr::conjunction;
@@ -638,6 +638,39 @@ impl FileOpener for ParquetOpener {
                 PartitionedFilters::default()
             };
 
+            // Redistribute collecting filters based on byte ratio heuristic.
+            // Filters whose columns are a large fraction of projected bytes
+            // go to post_scan to avoid row-level decode overhead.
+            let collecting = {
+                let projected_bytes = row_filter::total_compressed_bytes(
+                    &projection.column_indices(),
+                    builder.metadata(),
+                );
+                if projected_bytes == 0 {
+                    // No projected bytes (e.g., COUNT(*)) — all collecting go to post_scan
+                    post_scan.extend(collecting);
+                    Vec::new()
+                } else {
+                    let mut keep = Vec::new();
+                    for (id, expr) in collecting {
+                        let filter_bytes = row_filter::filter_required_bytes(
+                            &expr,
+                            &physical_file_schema,
+                            builder.metadata(),
+                        );
+                        let ratio = filter_bytes
+                            .map(|b| b as f64 / projected_bytes as f64)
+                            .unwrap_or(1.0);
+                        if ratio >= 0.5 {
+                            post_scan.push((id, expr));
+                        } else {
+                            keep.push((id, expr));
+                        }
+                    }
+                    keep
+                }
+            };
+
             // Build row filter from collecting + promoted filters.
             if !collecting.is_empty() || !promoted.is_empty() {
                 let row_filter_result = row_filter::build_row_filter(
@@ -663,15 +696,30 @@ impl FileOpener for ParquetOpener {
                 };
             }
 
-            // Extract exprs for downstream use (IDs no longer needed for post-scan)
-            let post_scan_exprs: Vec<Arc<dyn PhysicalExpr>> =
-                post_scan.into_iter().map(|(_, e)| e).collect();
+            // Split post-scan filters into collecting (need per-filter stats)
+            // and demoted (just apply as conjunction).
+            let mut collecting_post_scan: Vec<(crate::selectivity::FilterId, Arc<dyn PhysicalExpr>)> = Vec::new();
+            let mut demoted_post_scan: Vec<Arc<dyn PhysicalExpr>> = Vec::new();
+            for (id, expr) in post_scan {
+                if selectivity_tracker.is_collecting(id) {
+                    collecting_post_scan.push((id, expr));
+                } else {
+                    demoted_post_scan.push(expr);
+                }
+            }
 
-            // Include columns needed by post-scan filters in the projection mask,
-            // but don't add filter expressions as projection columns.
+            // Include columns needed by all post-scan filters in the projection mask.
             let mask = {
                 let mut all_indices: Vec<usize> = projection.column_indices();
-                for filter in &post_scan_exprs {
+                for (_, filter) in &collecting_post_scan {
+                    for col in datafusion_physical_expr::utils::collect_columns(filter) {
+                        let idx = col.index();
+                        if !all_indices.contains(&idx) {
+                            all_indices.push(idx);
+                        }
+                    }
+                }
+                for filter in &demoted_post_scan {
                     for col in datafusion_physical_expr::utils::collect_columns(filter) {
                         let idx = col.index();
                         if !all_indices.contains(&idx) {
@@ -682,10 +730,12 @@ impl FileOpener for ParquetOpener {
                 ProjectionMask::roots(builder.parquet_schema(), all_indices)
             };
 
+            let has_post_scan = !collecting_post_scan.is_empty() || !demoted_post_scan.is_empty();
+
             // Apply limit to the reader only when there are no post-scan filters.
             // If post-scan filters exist, the limit must be enforced after filtering
             // (otherwise the reader stops reading before the filter can find matches).
-            if post_scan_exprs.is_empty()
+            if !has_post_scan
                 && let Some(limit) = limit
             {
                 builder = builder.with_limit(limit);
@@ -715,16 +765,25 @@ impl FileOpener for ParquetOpener {
             let projection = projection
                 .try_map_exprs(|expr| reassign_expr_columns(expr, &stream_schema))?;
 
-            // Rebase post-scan filter expressions to the stream schema, keeping IDs
-            let post_scan_filter = (!post_scan_exprs.is_empty())
+            // Rebase collecting post-scan filters to stream schema
+            let collecting_post_scan: Vec<(crate::selectivity::FilterId, Arc<dyn PhysicalExpr>)> =
+                collecting_post_scan
+                    .into_iter()
+                    .map(|(id, expr)| {
+                        reassign_expr_columns(expr, &stream_schema).map(|e| (id, e))
+                    })
+                    .collect::<Result<_>>()?;
+            // Rebase demoted post-scan filters and conjoin
+            let demoted_post_scan_filter = (!demoted_post_scan.is_empty())
                 .then(|| {
-                    let rebased_post_scan: Vec<Arc<dyn PhysicalExpr>> = post_scan_exprs
+                    let rebased: Vec<Arc<dyn PhysicalExpr>> = demoted_post_scan
                         .iter()
                         .map(|f| reassign_expr_columns(Arc::clone(f), &stream_schema))
                         .collect::<Result<_>>()?;
-                    Ok::<_, DataFusionError>(conjunction(rebased_post_scan))
+                    Ok::<_, DataFusionError>(conjunction(rebased))
                 })
                 .transpose()?;
+            let post_scan_tracker = Arc::clone(&selectivity_tracker);
             let projector = projection.make_projector(&stream_schema)?;
 
             let stream = stream.map_err(DataFusionError::from).map(move |b| {
@@ -736,16 +795,18 @@ impl FileOpener for ParquetOpener {
                     );
 
                     // Apply post-scan filters BEFORE projection.
-                    // Filters evaluate against the raw stream batch which contains
-                    // all columns needed by both filters and projections.
-                    let b = match post_scan_filter.as_ref() {
-                        Some(filter) => {
-                            let start = datafusion_common::instant::Instant::now();
-                            let filtered = apply_post_scan_filters(b, filter)?;
-                            filter_apply_time.add_elapsed(start);
-                            filtered
-                        }
-                        None => b,
+                    let b = if !collecting_post_scan.is_empty() || demoted_post_scan_filter.is_some() {
+                        let start = datafusion_common::instant::Instant::now();
+                        let filtered = apply_post_scan_filters_with_stats(
+                            b,
+                            &collecting_post_scan,
+                            demoted_post_scan_filter.as_ref(),
+                            &post_scan_tracker,
+                        )?;
+                        filter_apply_time.add_elapsed(start);
+                        filtered
+                    } else {
+                        b
                     };
 
                     // Then project to output columns
@@ -791,33 +852,65 @@ impl FileOpener for ParquetOpener {
     }
 }
 
-/// Apply post-scan filters to a record batch.
+/// Apply post-scan filters with per-filter stats tracking for collecting filters.
 ///
-/// Operates in two modes depending on the tracker state:
-///
-/// 1. **Collecting** — at least one filter is still in `FilterState::Collecting`.
-///
-/// Apply post-scan filters to a record batch.
-///
-/// All collecting filters now run as row-filter predicates (via
-/// `CollectingArrowPredicate`), so post-scan only contains demoted
-/// filters that are past collection. No per-filter timing or
-/// correlation tracking is needed here.
-fn apply_post_scan_filters(
+/// Collecting filters are evaluated individually so their selectivity and
+/// evaluation time can be reported to the [`SelectivityTracker`]. Demoted
+/// filters are applied as a single conjunction (no stats needed).
+fn apply_post_scan_filters_with_stats(
     batch: RecordBatch,
-    expr: &Arc<dyn PhysicalExpr>,
+    collecting: &[(crate::selectivity::FilterId, Arc<dyn PhysicalExpr>)],
+    demoted_conjunction: Option<&Arc<dyn PhysicalExpr>>,
+    tracker: &SelectivityTracker,
 ) -> Result<RecordBatch> {
     use arrow::array::as_boolean_array;
-    use arrow::compute::filter_record_batch;
+    use arrow::compute::{and, filter_record_batch};
 
     if batch.num_rows() == 0 {
         return Ok(batch);
     }
 
-    let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
-    let mask = as_boolean_array(result.as_ref());
+    let batch_bytes = batch.get_array_memory_size() as u64;
+    let input_rows = batch.num_rows() as u64;
 
-    Ok(filter_record_batch(&batch, mask)?)
+    // Start with all-true mask
+    let mut combined_mask: Option<BooleanArray> = None;
+
+    // Evaluate each collecting filter individually and track stats
+    for &(id, ref expr) in collecting {
+        let start = datafusion_common::instant::Instant::now();
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let bool_arr = as_boolean_array(result.as_ref());
+        let nanos = start.elapsed().as_nanos() as u64;
+        let num_matched = bool_arr.true_count() as u64;
+
+        tracker.update(id, num_matched, input_rows, nanos, batch_bytes);
+
+        if num_matched < input_rows {
+            combined_mask = Some(match combined_mask {
+                Some(prev) => and(&prev, bool_arr)?,
+                None => bool_arr.clone(),
+            });
+        }
+    }
+
+    // Apply demoted conjunction
+    if let Some(demoted) = demoted_conjunction {
+        let result = demoted.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let bool_arr = as_boolean_array(result.as_ref());
+        let num_matched = bool_arr.true_count() as u64;
+        if num_matched < input_rows {
+            combined_mask = Some(match combined_mask {
+                Some(prev) => and(&prev, bool_arr)?,
+                None => bool_arr.clone(),
+            });
+        }
+    }
+
+    match combined_mask {
+        Some(mask) => Ok(filter_record_batch(&batch, &mask)?),
+        None => Ok(batch),
+    }
 }
 
 /// Compute the average bytes per row from parquet metadata for the projected columns.

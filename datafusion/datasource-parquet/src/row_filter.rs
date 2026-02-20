@@ -65,8 +65,6 @@
 //! continue to be evaluated after the batches are materialized.
 
 use std::collections::BTreeSet;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use arrow::array::BooleanArray;
@@ -490,22 +488,40 @@ fn columns_sorted(_columns: &[usize], _metadata: &ParquetMetaData) -> Result<boo
     Ok(false)
 }
 
-/// Compute a deterministic pseudo-random score for weighted shuffle.
+
+/// Compute the total compressed bytes required to evaluate a filter expression.
 ///
-/// Uses `(filter_id, shuffle_seed)` hashed together, then applies the
-/// weighted reservoir sampling trick: `hash_uniform.powf(1.0 / weight)`.
-/// Higher weight → higher expected score → earlier in the chain.
-fn weighted_shuffle_score(filter_id: FilterId, shuffle_seed: u64, weight: f64) -> f64 {
-    let mut hasher = DefaultHasher::new();
-    filter_id.hash(&mut hasher);
-    shuffle_seed.hash(&mut hasher);
-    let hash = hasher.finish();
-    // Map hash to (0, 1) uniform
-    let uniform = (hash as f64) / (u64::MAX as f64);
-    // Clamp to avoid log(0)
-    let uniform = uniform.clamp(1e-18, 1.0 - 1e-18);
-    // Weighted reservoir sampling trick
-    uniform.powf(1.0 / weight)
+/// Returns `None` if the expression cannot be pushed down (e.g., references
+/// unsupported nested types or columns not in the file).
+pub(crate) fn filter_required_bytes(
+    expr: &Arc<dyn PhysicalExpr>,
+    file_schema: &Schema,
+    metadata: &ParquetMetaData,
+) -> Option<usize> {
+    let columns = pushdown_columns(expr, file_schema).ok()??;
+    let root_indices: Vec<_> = columns.required_columns.into_iter().collect();
+    let leaf_indices = leaf_indices_for_roots(
+        &root_indices,
+        metadata.file_metadata().schema_descr(),
+        columns.nested,
+    );
+    size_of_columns(&leaf_indices, metadata).ok()
+}
+
+/// Compute the total compressed bytes for a set of column indices across all row groups.
+pub(crate) fn total_compressed_bytes(
+    column_indices: &[usize],
+    metadata: &ParquetMetaData,
+) -> usize {
+    let mut total = 0usize;
+    for rg in metadata.row_groups() {
+        for &idx in column_indices {
+            if idx < rg.num_columns() {
+                total += rg.column(idx).compressed_size() as usize;
+            }
+        }
+    }
+    total
 }
 
 /// Build a [`RowFilter`] from the given predicate expression if possible.
@@ -563,19 +579,15 @@ pub fn build_row_filter(
         }
     }
 
-    // 2. Collecting predicates with weighted shuffle
+    // 2. Collecting predicates sorted by required_bytes ascending (cheapest first)
     if !collecting.is_empty() {
-        let shuffle_seed = selectivity_tracker.partition_call_count();
-
-        let mut collecting_candidates: Vec<(FilterId, FilterCandidate, f64)> = Vec::new();
+        let mut collecting_candidates: Vec<(FilterId, FilterCandidate)> = Vec::new();
         for (id, expr) in collecting {
             match FilterCandidateBuilder::new(Arc::clone(&expr), Arc::clone(file_schema))
                 .build(metadata)
             {
                 Ok(Some(candidate)) => {
-                    let weight = 1.0 / (candidate.required_bytes as f64 + 1.0);
-                    let score = weighted_shuffle_score(id, shuffle_seed, weight);
-                    collecting_candidates.push((id, candidate, score));
+                    collecting_candidates.push((id, candidate));
                 }
                 _ => {
                     unbuildable_filters.push((id, expr));
@@ -583,11 +595,10 @@ pub fn build_row_filter(
             }
         }
 
-        // Sort by shuffle score descending (higher score = earlier in chain)
-        collecting_candidates
-            .sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+        // Sort by required_bytes ascending (cheapest filter first maximizes cascade benefit)
+        collecting_candidates.sort_by_key(|(_id, c)| c.required_bytes);
 
-        for (filter_id, candidate, _score) in collecting_candidates {
+        for (filter_id, candidate) in collecting_candidates {
             ordered_candidates.push((filter_id, candidate));
         }
     }
