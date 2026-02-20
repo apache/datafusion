@@ -497,7 +497,8 @@ fn array_has_any_with_scalar(
     // Convert the scalar to a 1-element ListArray, then extract the inner values
     let scalar_array = scalar_arg.to_array_of_size(1)?;
     let scalar_list: ArrayWrapper = scalar_array.as_ref().try_into()?;
-    let scalar_values = scalar_list.values();
+    let offsets: Vec<usize> = scalar_list.offsets().collect();
+    let scalar_values = scalar_list.values().slice(offsets[0], offsets[1] - offsets[0]);
 
     // If scalar list is empty, result is always false
     if scalar_values.is_empty() {
@@ -506,9 +507,9 @@ fn array_has_any_with_scalar(
 
     match scalar_values.data_type() {
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
-            array_has_any_with_scalar_string(columnar_arg, scalar_values)
+            array_has_any_with_scalar_string(columnar_arg, &scalar_values)
         }
-        _ => array_has_any_with_scalar_general(columnar_arg, scalar_values),
+        _ => array_has_any_with_scalar_general(columnar_arg, &scalar_values),
     }
 }
 
