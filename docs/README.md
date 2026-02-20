@@ -29,8 +29,8 @@ Install build dependencies and build the documentation using
 [uv](https://docs.astral.sh/uv/):
 
 ```sh
-uv sync --package datafusion-docs
-uv run --package datafusion-docs bash build.sh
+uv sync
+uv run bash build.sh
 ```
 
 The docs build regenerates the workspace dependency graph via

@@ -19,7 +19,7 @@
 # Script that updates versions for datafusion crates, locally
 #
 # dependencies:
-# uv sync --package datafusion-dev
+# uv sync
 
 import re
 import argparse
