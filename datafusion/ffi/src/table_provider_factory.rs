@@ -69,26 +69,26 @@ pub struct FFI_TableProviderFactory {
         cmd_serialized: RVec<u8>,
     ) -> FfiFuture<RResult<FFI_TableProvider, RString>>,
 
-    pub logical_codec: FFI_LogicalExtensionCodec,
+    logical_codec: FFI_LogicalExtensionCodec,
 
     /// Used to create a clone of the factory. This should only need to be called
     /// by the receiver of the factory.
-    pub clone: unsafe extern "C" fn(factory: &Self) -> Self,
+    clone: unsafe extern "C" fn(factory: &Self) -> Self,
 
     /// Release the memory of the private data when it is no longer being used.
-    pub release: unsafe extern "C" fn(factory: &mut Self),
+    release: unsafe extern "C" fn(factory: &mut Self),
 
     /// Return the major DataFusion version number of this factory.
-    pub version: unsafe extern "C" fn() -> u64,
+    version: unsafe extern "C" fn() -> u64,
 
     /// Internal data. This is only to be accessed by the provider of the factory.
     /// A [`ForeignTableProviderFactory`] should never attempt to access this data.
-    pub private_data: *mut c_void,
+    private_data: *mut c_void,
 
     /// Utility to identify when FFI objects are accessed locally through
     /// the foreign interface. See [`crate::get_library_marker_id`] and
     /// the crate's `README.md` for more information.
-    pub library_marker_id: extern "C" fn() -> usize,
+    library_marker_id: extern "C" fn() -> usize,
 }
 
 unsafe impl Send for FFI_TableProviderFactory {}
