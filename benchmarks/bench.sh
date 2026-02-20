@@ -53,7 +53,6 @@ $0 data [benchmark]
 $0 run [benchmark] [query]
 $0 compare <branch1> <branch2>
 $0 compare_detail <branch1> <branch2>
-$0 venv
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Examples:
@@ -71,7 +70,6 @@ data:            Generates or downloads data needed for benchmarking
 run:             Runs the named benchmark
 compare:         Compares fastest results from benchmark runs
 compare_detail:  Compares minimum, average (±stddev), and maximum results from benchmark runs
-venv:            Creates new venv (unless already exists) and installs compare's requirements into it
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Benchmarks
@@ -541,9 +539,6 @@ main() {
             ;;
         compare_detail)
             compare_benchmarks "$ARG2" "$ARG3" "--detailed"
-            ;;
-        venv)
-            setup_venv
             ;;
         "")
             usage
@@ -1260,10 +1255,6 @@ run_clickbench_sorted() {
         ${QUERY_ARG}
 }
 
-setup_venv() {
-    echo "Setting up Python environment via uv..."
-    uv sync --package "${UV_PACKAGE}"
-}
 
 # And start the process up
 main
