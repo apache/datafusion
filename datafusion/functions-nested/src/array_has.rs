@@ -542,7 +542,7 @@ fn array_has_any_with_scalar_string(
             scalar_strings.iter().copied().flatten().collect();
 
         for i in 0..col_list.len() {
-            if col_nulls.is_some_and(|v| !v.is_valid(i)) {
+            if col_nulls.is_some_and(|v| v.is_null(i)) {
                 builder.append_null();
                 continue;
             }
@@ -557,7 +557,7 @@ fn array_has_any_with_scalar_string(
     } else {
         // Small scalar: linear scan avoids HashSet hashing overhead
         for i in 0..col_list.len() {
-            if col_nulls.is_some_and(|v| !v.is_valid(i)) {
+            if col_nulls.is_some_and(|v| v.is_null(i)) {
                 builder.append_null();
                 continue;
             }
@@ -612,7 +612,7 @@ fn array_has_any_with_scalar_general(
             .collect();
 
         for i in 0..col_list.len() {
-            if col_nulls.is_some_and(|v| !v.is_valid(i)) {
+            if col_nulls.is_some_and(|v| v.is_null(i)) {
                 builder.append_null();
                 continue;
             }
@@ -625,7 +625,7 @@ fn array_has_any_with_scalar_general(
     } else {
         // Small scalar: linear scan avoids HashSet hashing overhead
         for i in 0..col_list.len() {
-            if col_nulls.is_some_and(|v| !v.is_valid(i)) {
+            if col_nulls.is_some_and(|v| v.is_null(i)) {
                 builder.append_null();
                 continue;
             }
