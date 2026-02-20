@@ -598,8 +598,7 @@ impl ScalarStringLookup<'_> {
 }
 
 /// Inner implementation of the string scalar fast path, generic over string
-/// array type so we can access column elements by index without materializing
-/// a `Vec<Option<&str>>` for the column values.
+/// array type to allow direct element access by index.
 fn array_has_any_string_inner<'a, C: StringArrayType<'a>>(
     col_strings: C,
     col_offsets: &[usize],
