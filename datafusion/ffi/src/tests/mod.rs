@@ -39,6 +39,8 @@ use super::udf::FFI_ScalarUDF;
 use crate::catalog_provider::FFI_CatalogProvider;
 use crate::catalog_provider_list::FFI_CatalogProviderList;
 use crate::config::extension_options::FFI_ExtensionOptions;
+use crate::execution_plan::FFI_ExecutionPlan;
+use crate::execution_plan::tests::EmptyExec;
 use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
 use crate::tests::catalog::create_catalog_provider_list;
 use crate::udaf::FFI_AggregateUDF;
@@ -92,6 +94,8 @@ pub struct ForeignLibraryModule {
     /// Create extension options, for either ConfigOptions or TableOptions
     pub create_extension_options: extern "C" fn() -> FFI_ExtensionOptions,
 
+    pub create_empty_exec: extern "C" fn() -> FFI_ExecutionPlan,
+
     pub version: extern "C" fn() -> u64,
 }
 
@@ -133,6 +137,13 @@ extern "C" fn construct_table_provider(
     }
 }
 
+pub(crate) extern "C" fn create_empty_exec() -> FFI_ExecutionPlan {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
+
+    let plan = Arc::new(EmptyExec::new(schema));
+    FFI_ExecutionPlan::new(plan, None)
+}
+
 #[export_root_module]
 /// This defines the entry point for using the module.
 pub fn get_foreign_library_module() -> ForeignLibraryModuleRef {
@@ -147,6 +158,7 @@ pub fn get_foreign_library_module() -> ForeignLibraryModuleRef {
         create_stddev_udaf: create_ffi_stddev_func,
         create_rank_udwf: create_ffi_rank_func,
         create_extension_options: config::create_extension_options,
+        create_empty_exec,
         version: super::version,
     }
     .leak_into_prefix()
