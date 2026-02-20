@@ -51,7 +51,7 @@ fn random_string(rng: &mut StdRng, len: usize) -> String {
 }
 
 const IN_LIST_LENGTHS: [usize; 4] = [3, 8, 28, 100];
-const DYNAMIC_LIST_LENGTHS: [usize; 3] = [3, 8, 28];
+const LIST_WITH_COLUMNS_LENGTHS: [usize; 3] = [3, 8, 28];
 const NULL_PERCENTS: [f64; 2] = [0., 0.2];
 const MATCH_PERCENTS: [f64; 3] = [0.0, 0.5, 1.0];
 const STRING_LENGTHS: [usize; 3] = [3, 12, 100];
@@ -222,9 +222,18 @@ fn bench_realistic_mixed_strings<A>(
     }
 }
 
-/// Benchmarks the dynamic evaluation path (no static filter) by including
+/// Benchmarks the column-reference evaluation path (no static filter) by including
 /// a column reference in the IN list, which prevents static filter creation.
-fn do_bench_dynamic(
+///
+/// This simulates SQL like:
+/// ```sql
+/// CREATE TABLE t (a INT, b0 INT, b1 INT, b2 INT);
+/// SELECT * FROM t WHERE a IN (b0, b1, b2);
+/// ```
+///
+/// - `values`: the "needle" column (`a`)
+/// - `list_cols`: the "haystack" columns (`b0`, `b1`, …)
+fn do_bench_with_columns(
     c: &mut Criterion,
     name: &str,
     values: ArrayRef,
@@ -233,7 +242,7 @@ fn do_bench_dynamic(
     let mut fields = vec![Field::new("a", values.data_type().clone(), true)];
     let mut columns: Vec<ArrayRef> = vec![values];
 
-    // Build list expressions: mix of column refs (forces dynamic path)
+    // Build list expressions: column refs (forces non-constant evaluation path)
     let schema_fields: Vec<Field> = list_cols
         .iter()
         .enumerate()
@@ -259,11 +268,17 @@ fn do_bench_dynamic(
     });
 }
 
-/// Benchmarks the dynamic IN list path for Int32 arrays with column references.
-fn bench_dynamic_int32(c: &mut Criterion) {
+/// Benchmarks the IN list path with column references for Int32 arrays.
+///
+/// Equivalent SQL:
+/// ```sql
+/// CREATE TABLE t (a INT, b0 INT, b1 INT, ...);
+/// SELECT * FROM t WHERE a IN (b0, b1, ...);
+/// ```
+fn bench_with_columns_int32(c: &mut Criterion) {
     let mut rng = StdRng::seed_from_u64(42);
 
-    for list_size in DYNAMIC_LIST_LENGTHS {
+    for list_size in LIST_WITH_COLUMNS_LENGTHS {
         for match_percent in MATCH_PERCENTS {
             for null_percent in NULL_PERCENTS {
                 // Generate the "needle" column
@@ -300,10 +315,10 @@ fn bench_dynamic_int32(c: &mut Criterion) {
                     })
                     .collect();
 
-                do_bench_dynamic(
+                do_bench_with_columns(
                     c,
                     &format!(
-                        "in_list_dynamic/Int32/list={}/match={}%/nulls={}%",
+                        "in_list_cols/Int32/list={}/match={}%/nulls={}%",
                         list_size,
                         (match_percent * 100.0) as u32,
                         (null_percent * 100.0) as u32
@@ -316,11 +331,17 @@ fn bench_dynamic_int32(c: &mut Criterion) {
     }
 }
 
-/// Benchmarks the dynamic IN list path for Utf8 arrays with column references.
-fn bench_dynamic_utf8(c: &mut Criterion) {
+/// Benchmarks the IN list path with column references for Utf8 arrays.
+///
+/// Equivalent SQL:
+/// ```sql
+/// CREATE TABLE t (a VARCHAR, b0 VARCHAR, b1 VARCHAR, ...);
+/// SELECT * FROM t WHERE a IN (b0, b1, ...);
+/// ```
+fn bench_with_columns_utf8(c: &mut Criterion) {
     let mut rng = StdRng::seed_from_u64(99);
 
-    for list_size in DYNAMIC_LIST_LENGTHS {
+    for list_size in LIST_WITH_COLUMNS_LENGTHS {
         for match_percent in MATCH_PERCENTS {
             // Generate the "needle" column
             let value_strings: Vec<Option<String>> = (0..ARRAY_LENGTH)
@@ -346,10 +367,10 @@ fn bench_dynamic_utf8(c: &mut Criterion) {
                 })
                 .collect();
 
-            do_bench_dynamic(
+            do_bench_with_columns(
                 c,
                 &format!(
-                    "in_list_dynamic/Utf8/list={}/match={}%",
+                    "in_list_cols/Utf8/list={}/match={}%",
                     list_size,
                     (match_percent * 100.0) as u32,
                 ),
@@ -408,9 +429,9 @@ fn criterion_benchmark(c: &mut Criterion) {
         |v| ScalarValue::TimestampNanosecond(Some(v), None),
     );
 
-    // Dynamic path benchmarks (non-constant list expressions)
-    bench_dynamic_int32(c);
-    bench_dynamic_utf8(c);
+    // Column-reference path benchmarks (non-constant list expressions)
+    bench_with_columns_int32(c);
+    bench_with_columns_utf8(c);
 }
 
 criterion_group! {
