@@ -212,7 +212,6 @@ fn pass_runtime_to_children(
     plan: &Arc<dyn ExecutionPlan>,
     runtime: &Handle,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-    println!("checking plan {:?}", plan.name());
     let mut updated_children = false;
     let plan_is_foreign = plan.as_any().is::<ForeignExecutionPlan>();
 
