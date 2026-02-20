@@ -447,7 +447,9 @@ the Rust standard <a class="reference external" href="https://doc.rust-lang.org/
 cargo<span class="w"> </span><span class="nb">test</span><span class="w"> </span>--profile<span class="o">=</span>ci<span class="w"> </span>--test<span class="w"> </span>sqllogictests
 <span class="c1"># Run a specific test file</span>
 cargo<span class="w"> </span><span class="nb">test</span><span class="w"> </span>--profile<span class="o">=</span>ci<span class="w"> </span>--test<span class="w"> </span>sqllogictests<span class="w"> </span>--<span class="w"> </span>aggregate.slt
-<span class="c1"># Run and update expected outputs</span>
+<span class="c1"># Run a specific test file and update expected outputs</span>
+cargo<span class="w"> </span><span class="nb">test</span><span class="w"> </span>--profile<span class="o">=</span>ci<span class="w"> </span>--test<span class="w"> </span>sqllogictests<span class="w"> </span>--<span class="w"> </span>aggregate.slt<span class="w"> </span>--complete
+<span class="c1"># Run and update expected outputs for all test files</span>
 cargo<span class="w"> </span><span class="nb">test</span><span class="w"> </span>--profile<span class="o">=</span>ci<span class="w"> </span>--test<span class="w"> </span>sqllogictests<span class="w"> </span>--<span class="w"> </span>--complete
 </pre></div>
 </div>
