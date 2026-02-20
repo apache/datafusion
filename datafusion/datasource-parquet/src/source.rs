@@ -293,6 +293,11 @@ pub struct ParquetSource {
     /// so we still need to sort them after reading, so the reverse scan is inexact.
     /// Used to optimize ORDER BY ... DESC on sorted data.
     reverse_row_groups: bool,
+    /// If true, read pages within row groups in reverse order.
+    /// Used in sort pushdown phase 1 to optimize ORDER BY ... DESC on sorted data.
+    /// Note: This is infrastructure for phase 1; actual page reversal may be implemented
+    /// in future phases depending on arrow-rs capabilities.
+    reverse_pages: bool,
 }
 
 impl ParquetSource {
@@ -318,6 +323,7 @@ impl ParquetSource {
             #[cfg(feature = "parquet_encryption")]
             encryption_factory: None,
             reverse_row_groups: false,
+            reverse_pages: false,
         }
     }
 
@@ -477,9 +483,20 @@ impl ParquetSource {
         self.reverse_row_groups = reverse_row_groups;
         self
     }
+
+    pub(crate) fn with_reverse_pages(mut self, reverse_pages: bool) -> Self {
+        self.reverse_pages = reverse_pages;
+        self
+    }
+
     #[cfg(test)]
     pub(crate) fn reverse_row_groups(&self) -> bool {
         self.reverse_row_groups
+    }
+
+    #[cfg(test)]
+    pub(crate) fn reverse_pages(&self) -> bool {
+        self.reverse_pages
     }
 }
 
@@ -568,6 +585,7 @@ impl FileSource for ParquetSource {
             encryption_factory: self.get_encryption_factory_with_config(),
             max_predicate_cache_size: self.max_predicate_cache_size(),
             reverse_row_groups: self.reverse_row_groups,
+            reverse_pages: self.reverse_pages,
         });
         Ok(opener)
     }
@@ -624,6 +642,10 @@ impl FileSource for ParquetSource {
                 // Add reverse_scan info if enabled
                 if self.reverse_row_groups {
                     write!(f, ", reverse_row_groups=true")?;
+                }
+
+                if self.reverse_pages {
+                    write!(f, ", reverse_pages=true")?;
                 }
 
                 // Try to build a the pruning predicates.
@@ -804,9 +826,12 @@ impl FileSource for ParquetSource {
             return Ok(SortOrderPushdownResult::Unsupported);
         }
 
-        // Return Inexact because we're only reversing row group order,
+        // Return Inexact because we're only reversing row group and page order,
         // not guaranteeing perfect row-level ordering
-        let new_source = self.clone().with_reverse_row_groups(true);
+        let new_source = self
+            .clone()
+            .with_reverse_row_groups(true)
+            .with_reverse_pages(true);
         Ok(SortOrderPushdownResult::Inexact {
             inner: Arc::new(new_source) as Arc<dyn FileSource>,
         })
@@ -815,6 +840,7 @@ impl FileSource for ParquetSource {
         // - File reordering based on min/max statistics
         // - Detection of exact ordering (return Exact to remove Sort operator)
         // - Partial sort pushdown for prefix matches
+        // - Actual page-level reversal implementation when arrow-rs supports it
     }
 }
 
@@ -916,5 +942,61 @@ mod tests {
 
         assert!(source.reverse_row_groups());
         assert!(source.filter().is_some());
+    }
+
+    #[test]
+    fn test_reverse_pages_default_value() {
+        use arrow::datatypes::Schema;
+
+        let schema = Arc::new(Schema::empty());
+        let source = ParquetSource::new(schema);
+
+        assert!(!source.reverse_pages());
+    }
+
+    #[test]
+    fn test_reverse_pages_with_setter() {
+        use arrow::datatypes::Schema;
+
+        let schema = Arc::new(Schema::empty());
+
+        let source = ParquetSource::new(schema.clone()).with_reverse_pages(true);
+        assert!(source.reverse_pages());
+
+        let source = source.with_reverse_pages(false);
+        assert!(!source.reverse_pages());
+    }
+
+    #[test]
+    fn test_reverse_pages_clone_preserves_value() {
+        use arrow::datatypes::Schema;
+
+        let schema = Arc::new(Schema::empty());
+
+        let source = ParquetSource::new(schema).with_reverse_pages(true);
+        let cloned = source.clone();
+
+        assert!(cloned.reverse_pages());
+        assert_eq!(source.reverse_pages(), cloned.reverse_pages());
+    }
+
+    #[test]
+    fn test_reverse_pages_independent_of_reverse_row_groups() {
+        use arrow::datatypes::Schema;
+
+        let schema = Arc::new(Schema::empty());
+
+        // Test: reverse_pages can be set independently
+        let source = ParquetSource::new(schema.clone())
+            .with_reverse_row_groups(true)
+            .with_reverse_pages(true);
+
+        assert!(source.reverse_row_groups());
+        assert!(source.reverse_pages());
+
+        // Test: reverse_pages can be set without reverse_row_groups
+        let source = ParquetSource::new(schema).with_reverse_pages(true);
+        assert!(!source.reverse_row_groups());
+        assert!(source.reverse_pages());
     }
 }
