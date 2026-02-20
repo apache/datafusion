@@ -580,22 +580,11 @@ enum ScalarStringLookup<'a> {
 
 impl<'a> ScalarStringLookup<'a> {
     fn new(scalar_values: &'a ArrayRef) -> Self {
-        if scalar_values.len() > SCALAR_SMALL_THRESHOLD {
-            let set = match scalar_values.data_type() {
-                DataType::Utf8 => {
-                    scalar_values.as_string::<i32>().iter().flatten().collect()
-                }
-                DataType::LargeUtf8 => {
-                    scalar_values.as_string::<i64>().iter().flatten().collect()
-                }
-                DataType::Utf8View => {
-                    scalar_values.as_string_view().iter().flatten().collect()
-                }
-                _ => unreachable!(),
-            };
-            ScalarStringLookup::Set(set)
+        let strings = string_array_to_vec(scalar_values.as_ref());
+        if strings.len() > SCALAR_SMALL_THRESHOLD {
+            ScalarStringLookup::Set(strings.into_iter().flatten().collect())
         } else {
-            ScalarStringLookup::List(string_array_to_vec(scalar_values.as_ref()))
+            ScalarStringLookup::List(strings)
         }
     }
 
