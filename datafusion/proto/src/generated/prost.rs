@@ -1294,7 +1294,7 @@ pub struct PhysicalExprNode {
     pub expr_id: ::core::option::Option<u64>,
     #[prost(
         oneof = "physical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21, 22"
     )]
     pub expr_type: ::core::option::Option<physical_expr_node::ExprType>,
 }
@@ -1347,6 +1347,8 @@ pub mod physical_expr_node {
         UnknownColumn(super::UnknownColumn),
         #[prost(message, tag = "21")]
         HashExpr(super::PhysicalHashExprNode),
+        #[prost(message, tag = "22")]
+        CastColumn(::prost::alloc::boxed::Box<super::PhysicalCastColumnNode>),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1523,6 +1525,52 @@ pub struct PhysicalCastNode {
     pub expr: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
     #[prost(message, optional, tag = "2")]
     pub arrow_type: ::core::option::Option<super::datafusion_common::ArrowType>,
+    #[prost(message, optional, tag = "3")]
+    pub cast_options: ::core::option::Option<PhysicalCastOptions>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalCastColumnNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub expr: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
+    #[prost(message, optional, tag = "2")]
+    pub input_field: ::core::option::Option<super::datafusion_common::Field>,
+    #[prost(message, optional, tag = "3")]
+    pub target_field: ::core::option::Option<super::datafusion_common::Field>,
+    /// DEPRECATED: Use cast_options instead of safe/format_options.
+    /// These fields retained for backward compatibility with DataFusion < 52.0
+    /// When deserializing, safe and format_options are only used if cast_options is not set.
+    #[prost(bool, tag = "4")]
+    pub safe: bool,
+    #[prost(message, optional, tag = "5")]
+    pub format_options: ::core::option::Option<FormatOptions>,
+    #[prost(message, optional, tag = "6")]
+    pub cast_options: ::core::option::Option<PhysicalCastOptions>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PhysicalCastOptions {
+    #[prost(bool, tag = "1")]
+    pub safe: bool,
+    #[prost(message, optional, tag = "2")]
+    pub format_options: ::core::option::Option<FormatOptions>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct FormatOptions {
+    #[prost(bool, tag = "1")]
+    pub safe: bool,
+    #[prost(string, tag = "2")]
+    pub null: ::prost::alloc::string::String,
+    #[prost(string, optional, tag = "3")]
+    pub date_format: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "4")]
+    pub datetime_format: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "5")]
+    pub timestamp_format: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "6")]
+    pub timestamp_tz_format: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "7")]
+    pub time_format: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "8")]
+    pub duration_format: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalNegativeNode {
@@ -2339,6 +2387,35 @@ impl InsertOp {
             "Append" => Some(Self::Append),
             "Overwrite" => Some(Self::Overwrite),
             "Replace" => Some(Self::Replace),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum DurationFormat {
+    Unspecified = 0,
+    Iso8601 = 1,
+    Pretty = 2,
+}
+impl DurationFormat {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "DURATION_FORMAT_UNSPECIFIED",
+            Self::Iso8601 => "DURATION_FORMAT_ISO8601",
+            Self::Pretty => "DURATION_FORMAT_PRETTY",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "DURATION_FORMAT_UNSPECIFIED" => Some(Self::Unspecified),
+            "DURATION_FORMAT_ISO8601" => Some(Self::Iso8601),
+            "DURATION_FORMAT_PRETTY" => Some(Self::Pretty),
             _ => None,
         }
     }

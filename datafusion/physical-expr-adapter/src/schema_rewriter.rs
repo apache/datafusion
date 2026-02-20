@@ -468,7 +468,10 @@ impl DefaultPhysicalExprAdapterRewriter {
         column: Column,
         logical_field: &Field,
     ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
-        let actual_physical_field = self.physical_file_schema.field(column.index());
+        // Look up the column index in the physical schema by name to ensure correctness
+        let physical_column_index = self.physical_file_schema.index_of(column.name())?;
+        let actual_physical_field =
+            self.physical_file_schema.field(physical_column_index);
 
         // For struct types, use validate_struct_compatibility which handles:
         // - Missing fields in source (filled with nulls)
@@ -498,12 +501,13 @@ impl DefaultPhysicalExprAdapterRewriter {
             }
         }
 
-        let cast_expr = Arc::new(CastColumnExpr::new(
+        let cast_expr = Arc::new(CastColumnExpr::new_with_schema(
             Arc::new(column),
             Arc::new(actual_physical_field.clone()),
             Arc::new(logical_field.clone()),
             None,
-        ));
+            Arc::clone(&self.physical_file_schema),
+        )?);
 
         Ok(Transformed::yes(cast_expr))
     }
@@ -720,12 +724,15 @@ mod tests {
         println!("Rewritten expression: {result}");
 
         let expected = expressions::BinaryExpr::new(
-            Arc::new(CastColumnExpr::new(
-                Arc::new(Column::new("a", 0)),
-                Arc::new(Field::new("a", DataType::Int32, false)),
-                Arc::new(Field::new("a", DataType::Int64, false)),
-                None,
-            )),
+            Arc::new(
+                CastColumnExpr::new(
+                    Arc::new(Column::new("a", 0)),
+                    Arc::new(Field::new("a", DataType::Int32, false)),
+                    Arc::new(Field::new("a", DataType::Int64, false)),
+                    None,
+                )
+                .unwrap(),
+            ),
             Operator::Plus,
             Arc::new(expressions::Literal::new(ScalarValue::Int64(Some(5)))),
         );
@@ -830,12 +837,15 @@ mod tests {
             false,
         ));
 
-        let expected = Arc::new(CastColumnExpr::new(
-            Arc::new(Column::new("data", 0)),
-            physical_field,
-            logical_field,
-            None,
-        )) as Arc<dyn PhysicalExpr>;
+        let expected = Arc::new(
+            CastColumnExpr::new(
+                Arc::new(Column::new("data", 0)),
+                physical_field,
+                logical_field,
+                None,
+            )
+            .unwrap(),
+        ) as Arc<dyn PhysicalExpr>;
 
         assert_eq!(result.to_string(), expected.to_string());
     }

@@ -880,7 +880,7 @@ mod tests {
 
         // Table schema is Utf8 but file schema is StringView
         let table_schema =
-            Arc::new(Schema::new(vec![Field::new("c1", DataType::Utf8, false)]));
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Utf8, true)]));
 
         // Predicate should prune all row groups
         let filter = col("c1").eq(lit(ScalarValue::Utf8(Some("aaa".to_string()))));
@@ -922,7 +922,7 @@ mod tests {
         let batch = create_batch(vec![("c1", c1.clone())]);
 
         let table_schema =
-            Arc::new(Schema::new(vec![Field::new("c1", DataType::UInt64, false)]));
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::UInt64, true)]));
 
         // Predicate should prune all row groups
         let filter = col("c1").eq(lit(ScalarValue::UInt64(Some(5))));
@@ -969,7 +969,7 @@ mod tests {
         let table_schema = Arc::new(Schema::new(vec![Field::new(
             "c1",
             DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
-            false,
+            true,
         )]));
         // One row should match, 2 pruned via page index, 1 pruned via filter pushdown
         let filter = col("c1").eq(lit(ScalarValue::TimestampMillisecond(

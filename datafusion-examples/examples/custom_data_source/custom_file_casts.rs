@@ -49,9 +49,9 @@ use object_store::{ObjectStore, PutPayload};
 pub async fn custom_file_casts() -> Result<()> {
     println!("=== Creating example data ===");
 
-    // Create a logical / table schema with an Int32 column
+    // Create a logical / table schema with an Int32 column (nullable)
     let logical_schema =
-        Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, true)]));
 
     // Create some data that can be cast (Int16 -> Int32 is widening) and some that cannot (Int64 -> Int32 is narrowing)
     let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
