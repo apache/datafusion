@@ -1036,7 +1036,19 @@ impl GroupedHashAggregateStream {
                     self.group_values.len()
                 };
 
-                if let Some(batch) = self.emit(EmitTo::First(n), false)? {
+                // Clamp to the sort boundary when using partial group ordering,
+                // otherwise remove_groups panics (#20445).
+                let n = match &self.group_ordering {
+                    GroupOrdering::None => n,
+                    _ => match self.group_ordering.emit_to() {
+                        Some(EmitTo::First(max)) => n.min(max),
+                        _ => 0,
+                    },
+                };
+
+                if n > 0
+                    && let Some(batch) = self.emit(EmitTo::First(n), false)?
+                {
                     Ok(Some(ExecutionState::ProducingOutput(batch)))
                 } else {
                     Err(oom)
