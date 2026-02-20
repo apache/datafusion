@@ -2841,7 +2841,7 @@ mod test {
         // Successful cast: Utf8 "3.14" -> Float64
         let expr = lit(ScalarValue::Utf8(Some("3.14".into())));
         let result = try_cast_string_literal_to_type(&expr, &DataType::Float64).unwrap();
-        assert_eq!(result, Some(lit(ScalarValue::Float64(Some(3.14)))));
+        assert_eq!(result, Some(lit(ScalarValue::Float64(Some(3.14_f64)))));
 
         // Successful cast: Utf8 "100" -> Int32
         let expr = lit(ScalarValue::Utf8(Some("100".into())));
@@ -2879,6 +2879,7 @@ mod test {
         assert_eq!(result, Some(lit(ScalarValue::Int64(None))));
     }
 
+    #[test]
     fn in_subquery_cast_all() -> Result<()> {
         let empty_inside = empty_with_type(DataType::Decimal128(10, 5));
         let empty_outside = empty_with_type(DataType::Decimal128(8, 8));
