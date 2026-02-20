@@ -1735,9 +1735,12 @@ mod tests {
         let plan = table_scan(Some("m4"), &schema, None)?
             .aggregate(
                 Vec::<Expr>::new(),
-                vec![max(col(Column::new_unqualified("tag.one"))).alias("tag.one")],
+                vec![
+                    max(Expr::Column(Column::new_unqualified("tag.one")))
+                        .alias("tag.one"),
+                ],
             )?
-            .project([col(Column::new_unqualified("tag.one"))])?
+            .project([Expr::Column(Column::new_unqualified("tag.one"))])?
             .build()?;
 
         assert_optimized_plan_equal!(
@@ -1843,7 +1846,15 @@ mod tests {
         let table2_scan = scan_empty(Some("test2"), &schema, None)?.build()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .join(table2_scan, JoinType::Left, (vec!["a"], vec!["c1"]), None)?
+            .join(
+                table2_scan,
+                JoinType::Left,
+                (
+                    vec![Column::from_qualified_name("a")],
+                    vec![Column::from_qualified_name("c1")],
+                ),
+                None,
+            )?
             .project(vec![col("a"), col("b"), col("c1")])?
             .build()?;
 
@@ -1895,7 +1906,15 @@ mod tests {
         let table2_scan = scan_empty(Some("test2"), &schema, None)?.build()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .join(table2_scan, JoinType::Left, (vec!["a"], vec!["c1"]), None)?
+            .join(
+                table2_scan,
+                JoinType::Left,
+                (
+                    vec![Column::from_qualified_name("a")],
+                    vec![Column::from_qualified_name("c1")],
+                ),
+                None,
+            )?
             // projecting joined column `a` should push the right side column `c1` projection as
             // well into test2 table even though `c1` is not referenced in projection.
             .project(vec![col("a"), col("b")])?
@@ -1950,7 +1969,11 @@ mod tests {
         let table2_scan = scan_empty(Some("test2"), &schema, None)?.build()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .join_using(table2_scan, JoinType::Left, vec!["a".into()])?
+            .join_using(
+                table2_scan,
+                JoinType::Left,
+                vec![Column::from_qualified_name("a")],
+            )?
             .project(vec![col("a"), col("b")])?
             .build()?;
 

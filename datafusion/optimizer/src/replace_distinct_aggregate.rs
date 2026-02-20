@@ -26,7 +26,7 @@ use datafusion_common::{Column, Result};
 use datafusion_expr::expr_rewriter::normalize_cols;
 use datafusion_expr::utils::expand_wildcard;
 use datafusion_expr::{Aggregate, Distinct, DistinctOn, Expr, LogicalPlan};
-use datafusion_expr::{ExprFunctionExt, Limit, LogicalPlanBuilder, col, lit};
+use datafusion_expr::{ExprFunctionExt, Limit, LogicalPlanBuilder, lit};
 
 /// Optimizer that replaces logical [[Distinct]] with a logical [[Aggregate]]
 ///
@@ -179,7 +179,7 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
                     .skip(expr_cnt)
                     .zip(schema.iter())
                     .map(|((new_qualifier, new_field), (old_qualifier, old_field))| {
-                        col(Column::from((new_qualifier, new_field)))
+                        Expr::Column(Column::from((new_qualifier, new_field)))
                             .alias_qualified(old_qualifier.cloned(), old_field.name())
                     })
                     .collect::<Vec<Expr>>();

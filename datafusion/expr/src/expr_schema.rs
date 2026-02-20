@@ -972,11 +972,8 @@ mod tests {
         assert_eq!(meta, expr.metadata(&schema).unwrap());
 
         // outer ref constructed by `out_ref_col_with_metadata` should be metadata-preserving
-        let outer_ref = out_ref_col_with_metadata(
-            DataType::Int32,
-            meta.to_hashmap(),
-            Column::from_name("foo"),
-        );
+        let outer_ref =
+            out_ref_col_with_metadata(DataType::Int32, meta.to_hashmap(), "foo");
         assert_eq!(meta, outer_ref.metadata(&schema).unwrap());
     }
 

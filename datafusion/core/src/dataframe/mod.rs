@@ -545,7 +545,10 @@ impl DataFrame {
         columns: &[&str],
         options: UnnestOptions,
     ) -> Result<DataFrame> {
-        let columns = columns.iter().map(|c| Column::from(*c)).collect();
+        let columns = columns
+            .iter()
+            .map(|c| Column::from_qualified_name(*c))
+            .collect();
         let plan = LogicalPlanBuilder::from(self.plan)
             .unnest_columns_with_options(columns, options)?
             .build()?;
@@ -1288,7 +1291,16 @@ impl DataFrame {
             .join(
                 right.plan,
                 join_type,
-                (left_cols.to_vec(), right_cols.to_vec()),
+                (
+                    left_cols
+                        .iter()
+                        .map(|c| Column::from_qualified_name(*c))
+                        .collect(),
+                    right_cols
+                        .iter()
+                        .map(|c| Column::from_qualified_name(*c))
+                        .collect(),
+                ),
                 filter,
             )?
             .build()?;
@@ -2202,7 +2214,7 @@ impl DataFrame {
                     col_exists = true;
                     Some((new_column.clone(), true))
                 } else {
-                    let e = col(Column::from((qualifier, field)));
+                    let e = Expr::Column(Column::from((qualifier, field)));
                     Some((e, self.projection_requires_validation))
                 }
             })
@@ -2280,12 +2292,12 @@ impl DataFrame {
             .map(|(qualifier, field)| {
                 if qualifier.eq(&qualifier_rename) && field == field_rename {
                     (
-                        col(Column::from((qualifier, field)))
+                        Expr::Column(Column::from((qualifier, field)))
                             .alias_qualified(qualifier.cloned(), new_name),
                         false,
                     )
                 } else {
-                    (col(Column::from((qualifier, field))), false)
+                    (Expr::Column(Column::from((qualifier, field))), false)
                 }
             })
             .collect::<Vec<_>>();

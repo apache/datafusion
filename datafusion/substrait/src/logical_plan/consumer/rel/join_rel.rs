@@ -75,7 +75,7 @@ pub async fn from_join_rel(
             .build()
         }
         None => {
-            let on: Vec<String> = vec![];
+            let on: Vec<Column> = vec![];
             left.join_detailed(
                 right.build()?,
                 join_type,

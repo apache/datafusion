@@ -202,19 +202,23 @@ pub(super) fn rewrite_plan_for_sort_on_non_projected_fields(
         .enumerate()
         .map(|(i, f)| match f {
             Expr::Alias(alias) => {
-                let a = Expr::Column(alias.name.clone().into());
+                let a = Expr::Column(Column::from_qualified_name(alias.name.clone()));
                 map.insert(a.clone(), f.clone());
                 a
             }
             Expr::Column(_) => {
                 map.insert(
-                    Expr::Column(inner_p.schema.field(i).name().into()),
+                    Expr::Column(Column::from_qualified_name(
+                        inner_p.schema.field(i).name(),
+                    )),
                     f.clone(),
                 );
                 f.clone()
             }
             _ => {
-                let a = Expr::Column(inner_p.schema.field(i).name().into());
+                let a = Expr::Column(Column::from_qualified_name(
+                    inner_p.schema.field(i).name(),
+                ));
                 map.insert(a.clone(), f.clone());
                 a
             }

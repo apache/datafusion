@@ -65,15 +65,15 @@ use std::sync::Arc;
 /// let c3 = col(r#""A""#);
 /// assert_ne!(c1, c3);
 /// ```
-pub fn col(ident: impl Into<Column>) -> Expr {
-    Expr::Column(ident.into())
+pub fn col(ident: impl Into<String>) -> Expr {
+    Expr::Column(Column::from_qualified_name(ident))
 }
 
 /// Create an out reference column which hold a reference that has been resolved to a field
 /// outside of the current plan.
 /// The expression created by this function does not preserve the metadata of the outer column.
 /// Please use `out_ref_col_with_metadata` if you want to preserve the metadata.
-pub fn out_ref_col(dt: DataType, ident: impl Into<Column>) -> Expr {
+pub fn out_ref_col(dt: DataType, ident: impl Into<String>) -> Expr {
     out_ref_col_with_metadata(dt, HashMap::new(), ident)
 }
 
@@ -81,9 +81,9 @@ pub fn out_ref_col(dt: DataType, ident: impl Into<Column>) -> Expr {
 pub fn out_ref_col_with_metadata(
     dt: DataType,
     metadata: HashMap<String, String>,
-    ident: impl Into<Column>,
+    ident: impl Into<String>,
 ) -> Expr {
-    let column = ident.into();
+    let column = Column::from_qualified_name(ident);
     let field: FieldRef =
         Arc::new(Field::new(column.name(), dt, true).with_metadata(metadata));
     Expr::OuterReferenceColumn(field, column)
