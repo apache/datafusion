@@ -3008,7 +3008,7 @@ impl ScalarValue {
     ///
     /// Errors if `self` is
     /// - a decimal that fails be converted to a decimal array of size
-    /// - a `FixedsizeList` that fails to be concatenated into an array of size
+    /// - a `FixedSizeList` that fails to be concatenated into an array of size
     /// - a `List` that fails to be concatenated into an array of size
     /// - a `Dictionary` that fails be converted to a dictionary array of size
     pub fn to_array_of_size(&self, size: usize) -> Result<ArrayRef> {
@@ -3435,12 +3435,26 @@ impl ScalarValue {
     }
 
     fn list_to_array_of_size(arr: &dyn Array, size: usize) -> Result<ArrayRef> {
-        let arrays = repeat_n(arr, size).collect::<Vec<_>>();
-        let ret = match !arrays.is_empty() {
-            true => arrow::compute::concat(arrays.as_slice())?,
-            false => arr.slice(0, 0),
-        };
-        Ok(ret)
+        if size == 0 {
+            return Ok(arr.slice(0, 0));
+        }
+        if arr.len() == 1 {
+            // We will typically be called with a 1-element array; in that case,
+            // use `take` rather than `concat`. Using `concat` is very expensive
+            // if the inner element type is `StringViewArray` because it results
+            // in making `size` copies of the StringViewArray, each with their
+            // own data buffers. All of these data buffers will be preserved by
+            // `concat`, making subsequent access to the resulting ListArray
+            // very expensive.
+            //
+            // Using `take` preserves the source array's buffer count, avoiding
+            // this problem.
+            let indices = UInt32Array::from(vec![0; size]);
+            Ok(arrow::compute::take(arr, &indices, None)?)
+        } else {
+            let arrays = repeat_n(arr, size).collect::<Vec<_>>();
+            Ok(arrow::compute::concat(arrays.as_slice())?)
+        }
     }
 
     /// Retrieve ScalarValue for each row in `array`
