@@ -1529,7 +1529,9 @@ impl SortMergeJoinStream {
 
             // Prepare the columns we apply join filter on later.
             // Only for joined rows between streamed and buffered.
-            let filter_columns = if chunk.buffered_batch_idx.is_some() {
+            let filter_columns = if let Some(buffered_batch_idx) =
+                chunk.buffered_batch_idx
+            {
                 if !matches!(self.join_type, JoinType::Right) {
                     if matches!(
                         self.join_type,
@@ -1537,7 +1539,7 @@ impl SortMergeJoinStream {
                     ) {
                         let right_cols = fetch_right_columns_by_idxs(
                             &self.buffered_data,
-                            chunk.buffered_batch_idx.unwrap(),
+                            buffered_batch_idx,
                             &right_indices,
                         )?;
 
@@ -1548,7 +1550,7 @@ impl SortMergeJoinStream {
                     ) {
                         let right_cols = fetch_right_columns_by_idxs(
                             &self.buffered_data,
-                            chunk.buffered_batch_idx.unwrap(),
+                            buffered_batch_idx,
                             &right_indices,
                         )?;
 
