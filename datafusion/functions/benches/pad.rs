@@ -15,7 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrowPrimitiveType, OffsetSizeTrait, PrimitiveArray};
+use arrow::array::{
+    ArrowPrimitiveType, GenericStringBuilder, OffsetSizeTrait, PrimitiveArray,
+    StringViewBuilder,
+};
 use arrow::datatypes::{DataType, Field, Int64Type};
 use arrow::util::bench_util::{
     create_string_array_with_len, create_string_view_array_with_len,
@@ -29,6 +32,51 @@ use rand::distr::{Distribution, Uniform};
 use std::hint::black_box;
 use std::sync::Arc;
 use std::time::Duration;
+
+const UNICODE_STRINGS: &[&str] = &[
+    "Ñandú",
+    "Íslensku",
+    "Þjóðarinnar",
+    "Ελληνική",
+    "Иванович",
+    "データフュージョン",
+    "José García",
+    "Ölçü bïrïmï",
+    "Ÿéšṱëṟḏàÿ",
+    "Ährenstraße",
+];
+
+fn create_unicode_string_array<O: OffsetSizeTrait>(
+    size: usize,
+    null_density: f32,
+) -> arrow::array::GenericStringArray<O> {
+    let mut rng = rand::rng();
+    let mut builder = GenericStringBuilder::<O>::new();
+    for i in 0..size {
+        if rng.random::<f32>() < null_density {
+            builder.append_null();
+        } else {
+            builder.append_value(UNICODE_STRINGS[i % UNICODE_STRINGS.len()]);
+        }
+    }
+    builder.finish()
+}
+
+fn create_unicode_string_view_array(
+    size: usize,
+    null_density: f32,
+) -> arrow::array::StringViewArray {
+    let mut rng = rand::rng();
+    let mut builder = StringViewBuilder::with_capacity(size);
+    for i in 0..size {
+        if rng.random::<f32>() < null_density {
+            builder.append_null();
+        } else {
+            builder.append_value(UNICODE_STRINGS[i % UNICODE_STRINGS.len()]);
+        }
+    }
+    builder.finish()
+}
 
 struct Filter<Dist> {
     dist: Dist,
@@ -65,6 +113,34 @@ where
             }
         })
         .collect()
+}
+
+/// Create args for pad benchmark with Unicode strings
+fn create_unicode_pad_args(
+    size: usize,
+    target_len: usize,
+    use_string_view: bool,
+) -> Vec<ColumnarValue> {
+    let length_array =
+        Arc::new(create_primitive_array::<Int64Type>(size, 0.0, target_len));
+
+    if use_string_view {
+        let string_array = create_unicode_string_view_array(size, 0.1);
+        let fill_array = create_unicode_string_view_array(size, 0.1);
+        vec![
+            ColumnarValue::Array(Arc::new(string_array)),
+            ColumnarValue::Array(length_array),
+            ColumnarValue::Array(Arc::new(fill_array)),
+        ]
+    } else {
+        let string_array = create_unicode_string_array::<i32>(size, 0.1);
+        let fill_array = create_unicode_string_array::<i32>(size, 0.1);
+        vec![
+            ColumnarValue::Array(Arc::new(string_array)),
+            ColumnarValue::Array(length_array),
+            ColumnarValue::Array(Arc::new(fill_array)),
+        ]
+    }
 }
 
 /// Create args for pad benchmark
@@ -208,6 +284,58 @@ fn criterion_benchmark(c: &mut Criterion) {
             },
         );
 
+        // Utf8 type with Unicode strings
+        let args = create_unicode_pad_args(size, 20, false);
+        let arg_fields = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| {
+                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+            })
+            .collect::<Vec<_>>();
+
+        group.bench_function(
+            format!("lpad utf8 unicode [size={size}, target=20]"),
+            |b| {
+                b.iter(|| {
+                    let args_cloned = args.clone();
+                    black_box(unicode::lpad().invoke_with_args(ScalarFunctionArgs {
+                        args: args_cloned,
+                        arg_fields: arg_fields.clone(),
+                        number_rows: size,
+                        return_field: Field::new("f", DataType::Utf8, true).into(),
+                        config_options: Arc::clone(&config_options),
+                    }))
+                })
+            },
+        );
+
+        // StringView type with Unicode strings
+        let args = create_unicode_pad_args(size, 20, true);
+        let arg_fields = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| {
+                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+            })
+            .collect::<Vec<_>>();
+
+        group.bench_function(
+            format!("lpad stringview unicode [size={size}, target=20]"),
+            |b| {
+                b.iter(|| {
+                    let args_cloned = args.clone();
+                    black_box(unicode::lpad().invoke_with_args(ScalarFunctionArgs {
+                        args: args_cloned,
+                        arg_fields: arg_fields.clone(),
+                        number_rows: size,
+                        return_field: Field::new("f", DataType::Utf8View, true).into(),
+                        config_options: Arc::clone(&config_options),
+                    }))
+                })
+            },
+        );
+
         group.finish();
     }
 
@@ -308,6 +436,58 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         group.bench_function(
             format!("rpad stringview [size={size}, str_len=20, target=50]"),
+            |b| {
+                b.iter(|| {
+                    let args_cloned = args.clone();
+                    black_box(unicode::rpad().invoke_with_args(ScalarFunctionArgs {
+                        args: args_cloned,
+                        arg_fields: arg_fields.clone(),
+                        number_rows: size,
+                        return_field: Field::new("f", DataType::Utf8View, true).into(),
+                        config_options: Arc::clone(&config_options),
+                    }))
+                })
+            },
+        );
+
+        // Utf8 type with Unicode strings
+        let args = create_unicode_pad_args(size, 20, false);
+        let arg_fields = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| {
+                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+            })
+            .collect::<Vec<_>>();
+
+        group.bench_function(
+            format!("rpad utf8 unicode [size={size}, target=20]"),
+            |b| {
+                b.iter(|| {
+                    let args_cloned = args.clone();
+                    black_box(unicode::rpad().invoke_with_args(ScalarFunctionArgs {
+                        args: args_cloned,
+                        arg_fields: arg_fields.clone(),
+                        number_rows: size,
+                        return_field: Field::new("f", DataType::Utf8, true).into(),
+                        config_options: Arc::clone(&config_options),
+                    }))
+                })
+            },
+        );
+
+        // StringView type with Unicode strings
+        let args = create_unicode_pad_args(size, 20, true);
+        let arg_fields = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| {
+                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+            })
+            .collect::<Vec<_>>();
+
+        group.bench_function(
+            format!("rpad stringview unicode [size={size}, target=20]"),
             |b| {
                 b.iter(|| {
                     let args_cloned = args.clone();
