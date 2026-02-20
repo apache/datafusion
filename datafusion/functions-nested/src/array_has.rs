@@ -17,7 +17,7 @@
 
 //! [`ScalarUDFImpl`] definitions for array_has, array_has_all and array_has_any functions.
 
-use arrow::array::{Array, ArrayRef, BooleanArray, Datum, Scalar};
+use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, Datum, Scalar, StringArrayType};
 use arrow::buffer::BooleanBuffer;
 use arrow::datatypes::DataType;
 use arrow::row::{RowConverter, Rows, SortField};
@@ -521,7 +521,6 @@ fn array_has_any_with_scalar_string(
     columnar_arg: &ColumnarValue,
     scalar_values: &ArrayRef,
 ) -> Result<ColumnarValue> {
-    let scalar_strings = string_array_to_vec(scalar_values.as_ref());
     let has_null_scalar = scalar_values.null_count() > 0;
 
     let (col_arr, is_scalar_output) = match columnar_arg {
@@ -530,48 +529,45 @@ fn array_has_any_with_scalar_string(
     };
 
     let col_list: ArrayWrapper = col_arr.as_ref().try_into()?;
-    let all_col_strings = string_array_to_vec(col_list.values().as_ref());
+    let col_values = col_list.values();
     let col_offsets: Vec<usize> = col_list.offsets().collect();
     let col_nulls = col_list.nulls();
 
-    let mut builder = BooleanArray::builder(col_list.len());
-
-    if scalar_strings.len() > SCALAR_SMALL_THRESHOLD {
-        // Large scalar: build HashSet for O(1) lookups
-        let scalar_set: HashSet<&str> =
-            scalar_strings.iter().copied().flatten().collect();
-
-        for i in 0..col_list.len() {
-            if col_nulls.is_some_and(|v| v.is_null(i)) {
-                builder.append_null();
-                continue;
-            }
-            let start = col_offsets[i];
-            let end = col_offsets[i + 1];
-            let found = (start..end).any(|j| match all_col_strings[j] {
-                Some(s) => scalar_set.contains(s),
-                None => has_null_scalar,
-            });
-            builder.append_value(found);
-        }
+    let scalar_lookup = if scalar_values.len() > SCALAR_SMALL_THRESHOLD {
+        ScalarStringLookup::Set(
+            string_array_to_vec(scalar_values.as_ref())
+                .into_iter()
+                .flatten()
+                .collect(),
+        )
     } else {
-        // Small scalar: linear scan avoids HashSet hashing overhead
-        for i in 0..col_list.len() {
-            if col_nulls.is_some_and(|v| v.is_null(i)) {
-                builder.append_null();
-                continue;
-            }
-            let start = col_offsets[i];
-            let end = col_offsets[i + 1];
-            let found = (start..end).any(|j| match all_col_strings[j] {
-                Some(s) => scalar_strings.contains(&Some(s)),
-                None => has_null_scalar,
-            });
-            builder.append_value(found);
-        }
-    }
+        ScalarStringLookup::List(string_array_to_vec(scalar_values.as_ref()))
+    };
 
-    let result: ArrayRef = Arc::new(builder.finish());
+    let result = match col_values.data_type() {
+        DataType::Utf8 => array_has_any_string_inner(
+            col_values.as_string::<i32>(),
+            &col_offsets,
+            col_nulls,
+            has_null_scalar,
+            &scalar_lookup,
+        ),
+        DataType::LargeUtf8 => array_has_any_string_inner(
+            col_values.as_string::<i64>(),
+            &col_offsets,
+            col_nulls,
+            has_null_scalar,
+            &scalar_lookup,
+        ),
+        DataType::Utf8View => array_has_any_string_inner(
+            col_values.as_string_view(),
+            &col_offsets,
+            col_nulls,
+            has_null_scalar,
+            &scalar_lookup,
+        ),
+        _ => unreachable!("array_has_any_with_scalar_string called with non-string type"),
+    };
 
     if is_scalar_output {
         Ok(ColumnarValue::Scalar(ScalarValue::try_from_array(
@@ -580,6 +576,56 @@ fn array_has_any_with_scalar_string(
     } else {
         Ok(ColumnarValue::Array(result))
     }
+}
+
+/// Pre-computed lookup structure for the scalar string values.
+enum ScalarStringLookup<'a> {
+    /// Large scalar: HashSet for O(1) lookups.
+    Set(HashSet<&'a str>),
+    /// Small scalar: Vec for linear scan (avoids hashing overhead).
+    List(Vec<Option<&'a str>>),
+}
+
+impl ScalarStringLookup<'_> {
+    fn contains(&self, value: &str) -> bool {
+        match self {
+            ScalarStringLookup::Set(set) => set.contains(value),
+            ScalarStringLookup::List(list) => list.contains(&Some(value)),
+        }
+    }
+}
+
+/// Inner implementation of the string scalar fast path, generic over string
+/// array type so we can access column elements by index without materializing
+/// a `Vec<Option<&str>>` for the column values.
+fn array_has_any_string_inner<'a, C: StringArrayType<'a>>(
+    col_strings: C,
+    col_offsets: &[usize],
+    col_nulls: Option<&arrow::buffer::NullBuffer>,
+    has_null_scalar: bool,
+    scalar_lookup: &ScalarStringLookup<'_>,
+) -> ArrayRef {
+    let num_rows = col_offsets.len() - 1;
+    let mut builder = BooleanArray::builder(num_rows);
+
+    for i in 0..num_rows {
+        if col_nulls.is_some_and(|v| v.is_null(i)) {
+            builder.append_null();
+            continue;
+        }
+        let start = col_offsets[i];
+        let end = col_offsets[i + 1];
+        let found = (start..end).any(|j| {
+            if col_strings.is_null(j) {
+                has_null_scalar
+            } else {
+                scalar_lookup.contains(col_strings.value(j))
+            }
+        });
+        builder.append_value(found);
+    }
+
+    Arc::new(builder.finish())
 }
 
 /// General scalar fast path for `array_has_any`, using RowConverter for
