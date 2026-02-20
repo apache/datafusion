@@ -254,10 +254,6 @@ impl ExecutionPlan for MockExec {
     }
 
     // Panics if one of the batches is an error
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
-    }
-
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         if partition.is_some() {
             return Ok(Statistics::new_unknown(&self.schema));
@@ -408,10 +404,6 @@ impl ExecutionPlan for BarrierExec {
 
         // returned stream simply reads off the rx stream
         Ok(builder.build())
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
@@ -598,10 +590,6 @@ impl ExecutionPlan for StatisticsExec {
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         unimplemented!("This plan only serves for testing statistics")
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        Ok(self.stats.clone())
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {

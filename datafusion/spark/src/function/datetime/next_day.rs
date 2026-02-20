@@ -18,7 +18,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, AsArray, Date32Array, StringArrayType, new_null_array};
+use arrow::array::{ArrayRef, AsArray, Date32Array, StringArrayType};
 use arrow::datatypes::{DataType, Date32Type, Field, FieldRef};
 use chrono::{Datelike, Duration, Weekday};
 use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
@@ -129,10 +129,7 @@ impl ScalarUDFImpl for SparkNextDay {
                         } else {
                             // TODO: if spark.sql.ansi.enabled is false,
                             //  returns NULL instead of an error for a malformed dayOfWeek.
-                            Ok(ColumnarValue::Array(Arc::new(new_null_array(
-                                &DataType::Date32,
-                                date_array.len(),
-                            ))))
+                            Ok(ColumnarValue::Scalar(ScalarValue::Date32(None)))
                         }
                     }
                     _ => exec_err!(
