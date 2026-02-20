@@ -789,11 +789,8 @@ impl ScalarUDFImpl for ArrayHasAny {
         // array_has_any is symmetric: if either argument is scalar, build a
         // HashSet from it and probe with the rows of the other argument.
         match (&first_arg, &second_arg) {
-            (_, ColumnarValue::Scalar(scalar)) => {
-                array_has_any_with_scalar(first_arg, scalar)
-            }
-            (ColumnarValue::Scalar(scalar), _) => {
-                array_has_any_with_scalar(second_arg, scalar)
+            (cv, ColumnarValue::Scalar(scalar)) | (ColumnarValue::Scalar(scalar), cv) => {
+                array_has_any_with_scalar(cv, scalar)
             }
             _ => make_scalar_function(array_has_any_inner)(&args.args),
         }
