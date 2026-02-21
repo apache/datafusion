@@ -894,7 +894,7 @@ impl MultiColumnDistinctCountAccumulator {
                 .iter()
                 .next()
                 .map(|vals| {
-                    (ScalarValue::size_of_vec(&vals) - std::mem::size_of_val(&vals))
+                    (ScalarValue::size_of_vec(vals) - std::mem::size_of_val(vals))
                         * self.values.capacity()
                 })
                 .unwrap_or(0)
@@ -907,9 +907,7 @@ impl MultiColumnDistinctCountAccumulator {
             + self
                 .values
                 .iter()
-                .map(|vals| {
-                    ScalarValue::size_of_vec(&vals) - std::mem::size_of_val(&vals)
-                })
+                .map(|vals| ScalarValue::size_of_vec(vals) - std::mem::size_of_val(vals))
                 .sum::<usize>()
             + (std::mem::size_of::<DataType>() * self.state_data_types.capacity())
             + self
