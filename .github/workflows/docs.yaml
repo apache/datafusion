@@ -41,7 +41,7 @@ jobs:
           path: asf-site
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@f0ec1fc3b38f5e7cd731bb6ce540c5af426746bb  # v6.1.0
+        uses: astral-sh/setup-uv@eac588ad8def6316056a12d4907a9d4d84ff7a3b  # v7.3.0
 
       - name: Install dependencies
         run: uv sync --package datafusion-docs
