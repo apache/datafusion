@@ -99,13 +99,13 @@ async fn setup_minio_container() -> Result<ContainerAsync<minio::MinIO>, String>
                     let stdout = container.stdout_to_vec().await.unwrap_or_default();
                     let stderr = container.stderr_to_vec().await.unwrap_or_default();
 
-                    panic!(
+                    return Err(format!(
                         "Failed to execute command: {}\nError: {}\nStdout: {:?}\nStderr: {:?}",
                         cmd_ref,
                         e,
                         String::from_utf8_lossy(&stdout),
                         String::from_utf8_lossy(&stderr)
-                    );
+                    ));
                 }
             }
 
@@ -255,7 +255,7 @@ async fn test_cli() {
             eprintln!("Skipping test: Docker pull rate limit reached: {e}");
             return;
         }
-        Err(e) => panic!("{e}"),
+        e @ Err(_) => e.unwrap(),
     };
 
     let settings = make_settings();
@@ -295,7 +295,7 @@ async fn test_aws_options() {
             eprintln!("Skipping test: Docker pull rate limit reached: {e}");
             return;
         }
-        Err(e) => panic!("{e}"),
+        e @ Err(_) => e.unwrap(),
     };
     let port = container.get_host_port_ipv4(9000).await.unwrap();
 
@@ -393,7 +393,7 @@ async fn test_s3_url_fallback() {
             eprintln!("Skipping test: Docker pull rate limit reached: {e}");
             return;
         }
-        Err(e) => panic!("{e}"),
+        e @ Err(_) => e.unwrap(),
     };
 
     let mut settings = make_settings();
@@ -430,7 +430,7 @@ async fn test_object_store_profiling() {
             eprintln!("Skipping test: Docker pull rate limit reached: {e}");
             return;
         }
-        Err(e) => panic!("{e}"),
+        e @ Err(_) => e.unwrap(),
     };
     let mut settings = make_settings();
 
