@@ -738,7 +738,7 @@ impl HashJoinExec {
     }
 
     fn allow_join_dynamic_filter_pushdown(&self, config: &ConfigOptions) -> bool {
-        if self.join_type != JoinType::Inner
+        if !matches!(self.join_type, JoinType::Inner | JoinType::Left | JoinType::LeftSemi)
             || !config.optimizer.enable_join_dynamic_filter_pushdown
         {
             return false;
