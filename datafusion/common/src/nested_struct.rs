@@ -50,6 +50,7 @@ use std::{collections::HashSet, sync::Arc};
 ///
 /// # Errors
 /// Returns a `DataFusionError::Plan` if the source column is not a struct type
+/// trigger ci
 fn cast_struct_column(
     source_col: &ArrayRef,
     target_fields: &[Arc<Field>],
