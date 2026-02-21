@@ -133,13 +133,20 @@ impl ScalarUDFImpl for RegexpLikeFunc {
         let args = &args.args;
         match args.as_slice() {
             [ColumnarValue::Scalar(value), ColumnarValue::Scalar(pattern)] => {
+                let value = scalar_string(value)?;
+                let pattern = scalar_string(pattern)?;
                 regexp_like_scalar(value, pattern, None)
             }
             [
                 ColumnarValue::Scalar(value),
                 ColumnarValue::Scalar(pattern),
                 ColumnarValue::Scalar(flags),
-            ] => regexp_like_scalar(value, pattern, Some(flags)),
+            ] => {
+                let value = scalar_string(value)?;
+                let pattern = scalar_string(pattern)?;
+                let flags = scalar_string(flags)?;
+                regexp_like_scalar(value, pattern, flags)
+            }
             [ColumnarValue::Array(values), ColumnarValue::Scalar(pattern)] => {
                 let pattern = scalar_string(pattern)?;
                 let array = regexp_like_array_scalar(values, pattern, None)?;
@@ -372,18 +379,14 @@ fn regexp_like_array_scalar(
 }
 
 fn regexp_like_scalar(
-    value: &ScalarValue,
-    pattern: &ScalarValue,
-    flags: Option<&ScalarValue>,
+    value: Option<&str>,
+    pattern: Option<&str>,
+    flags: Option<&str>,
 ) -> Result<ColumnarValue> {
-    let flags = flags.map(scalar_string).transpose()?.flatten();
-
     if flags.is_some_and(|flagz| flagz.contains('g')) {
         return plan_err!("regexp_like() does not support the \"global\" option");
     }
 
-    let value = scalar_string(value)?;
-    let pattern = scalar_string(pattern)?;
     if value.is_none() || pattern.is_none() {
         return Ok(ColumnarValue::Scalar(ScalarValue::Boolean(None)));
     }
