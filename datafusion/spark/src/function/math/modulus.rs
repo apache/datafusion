@@ -15,8 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::array::new_null_array;
 use arrow::compute::kernels::numeric::add;
-use arrow::compute::kernels::{cmp::lt, numeric::rem, zip::zip};
+use arrow::compute::kernels::{
+    cmp::{eq, lt},
+    numeric::rem,
+    zip::zip,
+};
 use arrow::datatypes::DataType;
 use datafusion_common::{Result, ScalarValue, assert_eq_or_internal_err};
 use datafusion_expr::{
@@ -24,28 +29,64 @@ use datafusion_expr::{
 };
 use std::any::Any;
 
+/// Attempts `rem(left, right)` with per-element divide-by-zero handling.
+/// In ANSI mode, any zero divisor causes an error.
+/// In legacy mode (ANSI off), positions where the divisor is zero return NULL
+/// while other positions compute normally.
+fn try_rem(
+    left: &arrow::array::ArrayRef,
+    right: &arrow::array::ArrayRef,
+    enable_ansi_mode: bool,
+) -> Result<arrow::array::ArrayRef> {
+    match rem(left, right) {
+        Ok(result) => Ok(result),
+        Err(arrow::error::ArrowError::DivideByZero) if !enable_ansi_mode => {
+            // Integer rem fails when ANY divisor element is zero.
+            // Handle per-element: replace zeros with 1, compute rem, then null out zero positions.
+            let zero = ScalarValue::new_zero(right.data_type())?
+                .to_array_of_size(right.len())?;
+            let is_zero = eq(right, &zero)?;
+            let one =
+                ScalarValue::new_one(right.data_type())?.to_array_of_size(right.len())?;
+            let safe_right = zip(&is_zero, &one, right)?;
+            let result = rem(left, &safe_right)?;
+            let null_array = new_null_array(result.data_type(), result.len());
+            Ok(zip(&is_zero, &null_array, &result)?)
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
 /// Spark-compatible `mod` function
-/// This function directly uses Arrow's arithmetic_op function for modulo operations
-pub fn spark_mod(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+/// In ANSI mode, division by zero throws an error.
+/// In legacy mode, division by zero returns NULL (Spark behavior).
+pub fn spark_mod(
+    args: &[ColumnarValue],
+    enable_ansi_mode: bool,
+) -> Result<ColumnarValue> {
     assert_eq_or_internal_err!(args.len(), 2, "mod expects exactly two arguments");
     let args = ColumnarValue::values_to_arrays(args)?;
-    let result = rem(&args[0], &args[1])?;
+    let result = try_rem(&args[0], &args[1], enable_ansi_mode)?;
     Ok(ColumnarValue::Array(result))
 }
 
 /// Spark-compatible `pmod` function
-/// This function directly uses Arrow's arithmetic_op function for modulo operations
-pub fn spark_pmod(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+/// In ANSI mode, division by zero throws an error.
+/// In legacy mode, division by zero returns NULL (Spark behavior).
+pub fn spark_pmod(
+    args: &[ColumnarValue],
+    enable_ansi_mode: bool,
+) -> Result<ColumnarValue> {
     assert_eq_or_internal_err!(args.len(), 2, "pmod expects exactly two arguments");
     let args = ColumnarValue::values_to_arrays(args)?;
     let left = &args[0];
     let right = &args[1];
     let zero = ScalarValue::new_zero(left.data_type())?.to_array_of_size(left.len())?;
-    let result = rem(left, right)?;
+    let result = try_rem(left, right, enable_ansi_mode)?;
     let neg = lt(&result, &zero)?;
     let plus = zip(&neg, right, &zero)?;
     let result = add(&plus, &result)?;
-    let result = rem(&result, right)?;
+    let result = try_rem(&result, right, enable_ansi_mode)?;
     Ok(ColumnarValue::Array(result))
 }
 
@@ -95,7 +136,7 @@ impl ScalarUDFImpl for SparkMod {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        spark_mod(&args.args)
+        spark_mod(&args.args, args.config_options.execution.enable_ansi_mode)
     }
 }
 
@@ -145,7 +186,7 @@ impl ScalarUDFImpl for SparkPmod {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        spark_pmod(&args.args)
+        spark_pmod(&args.args, args.config_options.execution.enable_ansi_mode)
     }
 }
 
@@ -165,7 +206,7 @@ mod test {
         let left_value = ColumnarValue::Array(Arc::new(left));
         let right_value = ColumnarValue::Array(Arc::new(right));
 
-        let result = spark_mod(&[left_value, right_value]).unwrap();
+        let result = spark_mod(&[left_value, right_value], false).unwrap();
 
         if let ColumnarValue::Array(result_array) = result {
             let result_int32 =
@@ -187,7 +228,7 @@ mod test {
         let left_value = ColumnarValue::Array(Arc::new(left));
         let right_value = ColumnarValue::Array(Arc::new(right));
 
-        let result = spark_mod(&[left_value, right_value]).unwrap();
+        let result = spark_mod(&[left_value, right_value], false).unwrap();
 
         if let ColumnarValue::Array(result_array) = result {
             let result_int64 =
@@ -228,7 +269,7 @@ mod test {
         let left_value = ColumnarValue::Array(Arc::new(left));
         let right_value = ColumnarValue::Array(Arc::new(right));
 
-        let result = spark_mod(&[left_value, right_value]).unwrap();
+        let result = spark_mod(&[left_value, right_value], false).unwrap();
 
         if let ColumnarValue::Array(result_array) = result {
             let result_float64 = result_array
@@ -284,7 +325,7 @@ mod test {
         let left_value = ColumnarValue::Array(Arc::new(left));
         let right_value = ColumnarValue::Array(Arc::new(right));
 
-        let result = spark_mod(&[left_value, right_value]).unwrap();
+        let result = spark_mod(&[left_value, right_value], false).unwrap();
 
         if let ColumnarValue::Array(result_array) = result {
             let result_float32 = result_array
@@ -319,7 +360,7 @@ mod test {
 
         let left_value = ColumnarValue::Array(Arc::new(left));
 
-        let result = spark_mod(&[left_value, right_value]).unwrap();
+        let result = spark_mod(&[left_value, right_value], false).unwrap();
 
         if let ColumnarValue::Array(result_array) = result {
             let result_int32 =
@@ -337,20 +378,43 @@ mod test {
         let left = Int32Array::from(vec![Some(10)]);
         let left_value = ColumnarValue::Array(Arc::new(left));
 
-        let result = spark_mod(&[left_value]);
+        let result = spark_mod(&[left_value], false);
         assert!(result.is_err());
     }
 
     #[test]
-    fn test_mod_zero_division() {
+    fn test_mod_zero_division_legacy() {
+        // In legacy mode (ANSI off), division by zero returns NULL per-element
         let left = Int32Array::from(vec![Some(10), Some(7), Some(15)]);
         let right = Int32Array::from(vec![Some(0), Some(2), Some(4)]);
 
         let left_value = ColumnarValue::Array(Arc::new(left));
         let right_value = ColumnarValue::Array(Arc::new(right));
 
-        let result = spark_mod(&[left_value, right_value]);
-        assert!(result.is_err()); // Division by zero should error
+        let result = spark_mod(&[left_value, right_value], false).unwrap();
+
+        if let ColumnarValue::Array(result_array) = result {
+            let result_int32 =
+                result_array.as_any().downcast_ref::<Int32Array>().unwrap();
+            assert!(result_int32.is_null(0)); // 10 % 0 = NULL
+            assert_eq!(result_int32.value(1), 1); // 7 % 2 = 1
+            assert_eq!(result_int32.value(2), 3); // 15 % 4 = 3
+        } else {
+            panic!("Expected array result");
+        }
+    }
+
+    #[test]
+    fn test_mod_zero_division_ansi() {
+        // In ANSI mode, division by zero should error
+        let left = Int32Array::from(vec![Some(10), Some(7), Some(15)]);
+        let right = Int32Array::from(vec![Some(0), Some(2), Some(4)]);
+
+        let left_value = ColumnarValue::Array(Arc::new(left));
+        let right_value = ColumnarValue::Array(Arc::new(right));
+
+        let result = spark_mod(&[left_value, right_value], true);
+        assert!(result.is_err());
     }
 
     // PMOD tests
@@ -362,7 +426,7 @@ mod test {
         let left_value = ColumnarValue::Array(Arc::new(left));
         let right_value = ColumnarValue::Array(Arc::new(right));
 
-        let result = spark_pmod(&[left_value, right_value]).unwrap();
+        let result = spark_pmod(&[left_value, right_value], false).unwrap();
 
         if let ColumnarValue::Array(result_array) = result {
             let result_int32 =
@@ -385,7 +449,7 @@ mod test {
         let left_value = ColumnarValue::Array(Arc::new(left));
         let right_value = ColumnarValue::Array(Arc::new(right));
 
-        let result = spark_pmod(&[left_value, right_value]).unwrap();
+        let result = spark_pmod(&[left_value, right_value], false).unwrap();
 
         if let ColumnarValue::Array(result_array) = result {
             let result_int64 =
@@ -425,7 +489,7 @@ mod test {
         let left_value = ColumnarValue::Array(Arc::new(left));
         let right_value = ColumnarValue::Array(Arc::new(right));
 
-        let result = spark_pmod(&[left_value, right_value]).unwrap();
+        let result = spark_pmod(&[left_value, right_value], false).unwrap();
 
         if let ColumnarValue::Array(result_array) = result {
             let result_float64 = result_array
@@ -476,7 +540,7 @@ mod test {
         let left_value = ColumnarValue::Array(Arc::new(left));
         let right_value = ColumnarValue::Array(Arc::new(right));
 
-        let result = spark_pmod(&[left_value, right_value]).unwrap();
+        let result = spark_pmod(&[left_value, right_value], false).unwrap();
 
         if let ColumnarValue::Array(result_array) = result {
             let result_float32 = result_array
@@ -508,7 +572,7 @@ mod test {
 
         let left_value = ColumnarValue::Array(Arc::new(left));
 
-        let result = spark_pmod(&[left_value, right_value]).unwrap();
+        let result = spark_pmod(&[left_value, right_value], false).unwrap();
 
         if let ColumnarValue::Array(result_array) = result {
             let result_int32 =
@@ -527,20 +591,43 @@ mod test {
         let left = Int32Array::from(vec![Some(10)]);
         let left_value = ColumnarValue::Array(Arc::new(left));
 
-        let result = spark_pmod(&[left_value]);
+        let result = spark_pmod(&[left_value], false);
         assert!(result.is_err());
     }
 
     #[test]
-    fn test_pmod_zero_division() {
+    fn test_pmod_zero_division_legacy() {
+        // In legacy mode (ANSI off), division by zero returns NULL per-element
         let left = Int32Array::from(vec![Some(10), Some(-7), Some(15)]);
         let right = Int32Array::from(vec![Some(0), Some(0), Some(4)]);
 
         let left_value = ColumnarValue::Array(Arc::new(left));
         let right_value = ColumnarValue::Array(Arc::new(right));
 
-        let result = spark_pmod(&[left_value, right_value]);
-        assert!(result.is_err()); // Division by zero should error
+        let result = spark_pmod(&[left_value, right_value], false).unwrap();
+
+        if let ColumnarValue::Array(result_array) = result {
+            let result_int32 =
+                result_array.as_any().downcast_ref::<Int32Array>().unwrap();
+            assert!(result_int32.is_null(0)); // 10 pmod 0 = NULL
+            assert!(result_int32.is_null(1)); // -7 pmod 0 = NULL
+            assert_eq!(result_int32.value(2), 3); // 15 pmod 4 = 3
+        } else {
+            panic!("Expected array result");
+        }
+    }
+
+    #[test]
+    fn test_pmod_zero_division_ansi() {
+        // In ANSI mode, division by zero should error
+        let left = Int32Array::from(vec![Some(10), Some(-7), Some(15)]);
+        let right = Int32Array::from(vec![Some(0), Some(0), Some(4)]);
+
+        let left_value = ColumnarValue::Array(Arc::new(left));
+        let right_value = ColumnarValue::Array(Arc::new(right));
+
+        let result = spark_pmod(&[left_value, right_value], true);
+        assert!(result.is_err());
     }
 
     #[test]
@@ -552,7 +639,7 @@ mod test {
         let left_value = ColumnarValue::Array(Arc::new(left));
         let right_value = ColumnarValue::Array(Arc::new(right));
 
-        let result = spark_pmod(&[left_value, right_value]).unwrap();
+        let result = spark_pmod(&[left_value, right_value], false).unwrap();
 
         if let ColumnarValue::Array(result_array) = result {
             let result_int32 =
@@ -590,7 +677,7 @@ mod test {
         let left_value = ColumnarValue::Array(Arc::new(left));
         let right_value = ColumnarValue::Array(Arc::new(right));
 
-        let result = spark_pmod(&[left_value, right_value]).unwrap();
+        let result = spark_pmod(&[left_value, right_value], false).unwrap();
 
         if let ColumnarValue::Array(result_array) = result {
             let result_int32 =
