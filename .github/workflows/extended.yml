@@ -171,7 +171,3 @@ jobs:
         run: |
           cargo test --features backtrace,parquet_encryption --profile release-nonlto --test sqllogictests -- --include-sqlite
           cargo clean
-
-
-
-
