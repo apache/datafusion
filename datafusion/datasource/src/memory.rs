@@ -29,6 +29,7 @@ use crate::source::{DataSource, DataSourceExec};
 
 use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::{Schema, SchemaRef};
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     Result, ScalarValue, assert_or_internal_err, plan_err, project_schema,
 };
@@ -251,6 +252,19 @@ impl DataSource for MemorySourceConfig {
                 .map(|s| Arc::new(s) as Arc<dyn DataSource>)
             })
             .transpose()
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Visit expressions in sort_information
+        for ordering in &self.sort_information {
+            for sort_expr in ordering {
+                f(sort_expr.expr.as_ref())?;
+            }
+        }
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 

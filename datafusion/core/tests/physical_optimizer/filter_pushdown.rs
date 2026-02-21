@@ -4086,3 +4086,104 @@ async fn test_filter_with_projection_pushdown() {
     ];
     assert_batches_eq!(expected, &result);
 }
+
+/// Test that ExecutionPlan::apply_expressions() can discover dynamic filters across the plan tree
+#[tokio::test]
+async fn test_discover_dynamic_filters_via_expressions_api() {
+    use datafusion_common::JoinType;
+    use datafusion_common::tree_node::TreeNodeRecursion;
+    use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
+    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
+
+    fn count_dynamic_filters(plan: &Arc<dyn ExecutionPlan>) -> usize {
+        let mut count = 0;
+
+        // Check expressions from this node using apply_expressions
+        let _ = plan.apply_expressions(&mut |expr| {
+            if let Some(_df) = expr.as_any().downcast_ref::<DynamicFilterPhysicalExpr>() {
+                count += 1;
+            }
+            Ok(TreeNodeRecursion::Continue)
+        });
+
+        // Recursively visit children
+        for child in plan.children() {
+            count += count_dynamic_filters(child);
+        }
+
+        count
+    }
+
+    // Create build side (left)
+    let build_batches =
+        vec![record_batch!(("a", Utf8, ["foo", "bar"]), ("b", Int32, [1, 2])).unwrap()];
+    let build_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Int32, false),
+    ]));
+    let build_scan = TestScanBuilder::new(build_schema.clone())
+        .with_support(true)
+        .with_batches(build_batches)
+        .build();
+
+    // Create probe side (right)
+    let probe_batches = vec![
+        record_batch!(
+            ("a", Utf8, ["foo", "bar", "baz", "qux"]),
+            ("c", Float64, [1.0, 2.0, 3.0, 4.0])
+        )
+        .unwrap(),
+    ];
+    let probe_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("c", DataType::Float64, false),
+    ]));
+    let probe_scan = TestScanBuilder::new(probe_schema.clone())
+        .with_support(true)
+        .with_batches(probe_batches)
+        .build();
+
+    // Create HashJoinExec
+    let plan = Arc::new(
+        HashJoinExec::try_new(
+            build_scan,
+            probe_scan,
+            vec![(
+                col("a", &build_schema).unwrap(),
+                col("a", &probe_schema).unwrap(),
+            )],
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            datafusion_common::NullEquality::NullEqualsNothing,
+            false,
+        )
+        .unwrap(),
+    ) as Arc<dyn ExecutionPlan>;
+
+    // Before optimization: no dynamic filters
+    let count_before = count_dynamic_filters(&plan);
+    assert_eq!(
+        count_before, 0,
+        "Before optimization, should have no dynamic filters"
+    );
+
+    // Apply filter pushdown optimization (this creates dynamic filters)
+    let mut config = ConfigOptions::default();
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+    config.execution.parquet.pushdown_filters = true;
+    let optimized_plan = FilterPushdown::new_post_optimization()
+        .optimize(plan, &config)
+        .unwrap();
+
+    // After optimization: should discover dynamic filters
+    // We expect 2 dynamic filters:
+    // 1. In the HashJoinExec (producer)
+    // 2. In the DataSourceExec (consumer, pushed down to the probe side)
+    let count_after = count_dynamic_filters(&optimized_plan);
+    assert_eq!(
+        count_after, 2,
+        "After optimization, should discover exactly 2 dynamic filters (1 in HashJoinExec, 1 in DataSourceExec), found {count_after}"
+    );
+}

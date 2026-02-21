@@ -36,6 +36,7 @@ use crate::{DisplayAs, DisplayFormatType, PlanProperties};
 
 use arrow::array::{Array, ArrayRef, Int32Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     Result, Statistics, assert_or_internal_err, config::ConfigOptions, project_schema,
 };
@@ -45,7 +46,9 @@ use datafusion_physical_expr::equivalence::{
 };
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::collect_columns;
-use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, Partitioning};
+use datafusion_physical_expr::{
+    EquivalenceProperties, LexOrdering, Partitioning, PhysicalExpr,
+};
 
 use futures::{Future, FutureExt};
 
@@ -140,6 +143,19 @@ impl ExecutionPlan for TestMemoryExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         Vec::new()
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Apply to all sort information orderings
+        for ordering in &self.sort_information {
+            for sort_expr in ordering {
+                f(sort_expr.expr.as_ref())?;
+            }
+        }
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn with_new_children(

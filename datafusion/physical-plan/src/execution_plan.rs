@@ -26,7 +26,9 @@ use crate::sort_pushdown::SortOrderPushdownResult;
 pub use crate::stream::EmptyRecordBatchStream;
 
 pub use datafusion_common::hash_utils;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
 pub use datafusion_common::utils::project_schema;
 pub use datafusion_common::{ColumnStatistics, Statistics, internal_err};
 pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
@@ -203,6 +205,74 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// a single value for unary nodes, or two values for binary nodes (such as
     /// joins).
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>>;
+
+    /// Apply a closure `f` to each expression (non-recursively) in the current
+    /// physical plan node. This does not include expressions in any children.
+    ///
+    /// The closure `f` is applied to expressions in the order they appear in the plan.
+    /// The closure can return `TreeNodeRecursion::Continue` to continue visiting,
+    /// `TreeNodeRecursion::Stop` to stop visiting immediately, or `TreeNodeRecursion::Jump`
+    /// to skip any remaining expressions (though typically all expressions are visited).
+    ///
+    /// The expressions visited do not necessarily represent or even contribute
+    /// to the output schema of this node. For example, `FilterExec` visits the
+    /// filter predicate even though the output of a Filter has the same columns
+    /// as the input.
+    ///
+    /// # Example Usage
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use datafusion_physical_plan::ExecutionPlan;
+    /// # use datafusion_common::tree_node::TreeNodeRecursion;
+    /// # fn example(plan: Arc<dyn ExecutionPlan>) -> datafusion_common::Result<()> {
+    /// // Count the number of expressions
+    /// let mut count = 0;
+    /// plan.apply_expressions(&mut |_expr| {
+    ///     count += 1;
+    ///     Ok(TreeNodeRecursion::Continue)
+    /// })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Implementation Examples
+    ///
+    /// ## Node with no expressions (e.g., EmptyExec, MemoryExec)
+    /// ```ignore
+    /// fn apply_expressions(
+    ///     &self,
+    ///     _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    /// ) -> Result<TreeNodeRecursion> {
+    ///     Ok(TreeNodeRecursion::Continue)
+    /// }
+    /// ```
+    ///
+    /// ## Node with a single expression (e.g., FilterExec)
+    /// ```ignore
+    /// fn apply_expressions(
+    ///     &self,
+    ///     f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    /// ) -> Result<TreeNodeRecursion> {
+    ///     f(self.predicate.as_ref())
+    /// }
+    /// ```
+    ///
+    /// ## Node with multiple expressions (e.g., ProjectionExec, JoinExec)
+    /// ```ignore
+    /// fn apply_expressions(
+    ///     &self,
+    ///     f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    /// ) -> Result<TreeNodeRecursion> {
+    ///     for expr in &self.expressions {
+    ///         f(expr.as_ref())?;
+    ///     }
+    ///     Ok(TreeNodeRecursion::Continue)
+    /// }
+    /// ```
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion>;
 
     /// Returns a new `ExecutionPlan` where all existing children were replaced
     /// by the `children`, in order
@@ -1489,6 +1559,13 @@ mod tests {
             unimplemented!()
         }
 
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
+        }
+
         fn execute(
             &self,
             _partition: usize,
@@ -1543,6 +1620,13 @@ mod tests {
 
         fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
             vec![]
+        }
+
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
         }
 
         fn with_new_children(

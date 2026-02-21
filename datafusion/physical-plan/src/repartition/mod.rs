@@ -46,6 +46,7 @@ use arrow::compute::take_arrays;
 use arrow::datatypes::{SchemaRef, UInt32Type};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::transpose;
 use datafusion_common::{
     ColumnStatistics, DataFusionError, HashMap, assert_or_internal_err,
@@ -897,6 +898,19 @@ impl ExecutionPlan for RepartitionExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Apply to hash partition expressions if this is a hash repartition
+        if let Partitioning::Hash(exprs, _) = self.partitioning() {
+            for expr in exprs {
+                f(expr.as_ref())?;
+            }
+        }
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn with_new_children(

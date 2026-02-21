@@ -17,6 +17,7 @@
 
 use arrow_schema::SchemaRef;
 use datafusion_common::internal_datafusion_err;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
@@ -109,5 +110,20 @@ impl ExecutionPlan for OnceExec {
         let stream = self.stream.lock().unwrap().take();
 
         stream.ok_or_else(|| internal_datafusion_err!("Stream already consumed"))
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(
+            &dyn datafusion_physical_plan::PhysicalExpr,
+        ) -> datafusion_common::Result<TreeNodeRecursion>,
+    ) -> datafusion_common::Result<TreeNodeRecursion> {
+        // Visit expressions in the output ordering from equivalence properties
+        if let Some(ordering) = self.cache.output_ordering() {
+            for sort_expr in ordering {
+                f(sort_expr.expr.as_ref())?;
+            }
+        }
+        Ok(TreeNodeRecursion::Continue)
     }
 }

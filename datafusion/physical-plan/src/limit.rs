@@ -32,10 +32,11 @@ use crate::{DisplayFormatType, Distribution, ExecutionPlan, Partitioning};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, assert_eq_or_internal_err, internal_err};
 use datafusion_execution::TaskContext;
 
-use datafusion_physical_expr::LexOrdering;
+use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -162,6 +163,19 @@ impl ExecutionPlan for GlobalLimitExec {
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
         vec![false]
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Apply to required ordering expressions if present
+        if let Some(ordering) = &self.required_ordering {
+            for sort_expr in ordering {
+                f(sort_expr.expr.as_ref())?;
+            }
+        }
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn with_new_children(
@@ -325,6 +339,19 @@ impl ExecutionPlan for LocalLimitExec {
 
     fn maintains_input_order(&self) -> Vec<bool> {
         vec![true]
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Apply to required ordering expressions if present
+        if let Some(ordering) = &self.required_ordering {
+            for sort_expr in ordering {
+                f(sort_expr.expr.as_ref())?;
+            }
+        }
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn with_new_children(

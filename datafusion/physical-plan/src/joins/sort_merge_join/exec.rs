@@ -44,6 +44,7 @@ use crate::{
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::SchemaRef;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     JoinSide, JoinType, NullEquality, Result, assert_eq_or_internal_err, internal_err,
     plan_err,
@@ -434,6 +435,22 @@ impl ExecutionPlan for SortMergeJoinExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.left, &self.right]
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn crate::PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Apply to join keys from both sides
+        for (left, right) in &self.on {
+            f(left.as_ref())?;
+            f(right.as_ref())?;
+        }
+        // Apply to join filter expressions if present
+        if let Some(filter) = &self.filter {
+            f(filter.expression().as_ref())?;
+        }
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn with_new_children(

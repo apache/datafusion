@@ -33,6 +33,7 @@ use datafusion::{
     scalar::ScalarValue,
 };
 use datafusion_catalog::Session;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{project_schema, stats::Precision};
 use datafusion_physical_expr::EquivalenceProperties;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
@@ -187,6 +188,21 @@ impl ExecutionPlan for StatisticsValidation {
         } else {
             Ok(self.stats.clone())
         }
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(
+            &dyn datafusion::physical_plan::PhysicalExpr,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Visit expressions in the output ordering from equivalence properties
+        if let Some(ordering) = self.cache.output_ordering() {
+            for sort_expr in ordering {
+                f(sort_expr.expr.as_ref())?;
+            }
+        }
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 

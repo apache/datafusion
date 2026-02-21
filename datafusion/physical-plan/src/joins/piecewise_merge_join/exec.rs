@@ -23,6 +23,7 @@ use arrow::{
 };
 use arrow_schema::{SchemaRef, SortOptions};
 use datafusion_common::not_impl_err;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{JoinSide, Result, internal_err};
 use datafusion_execution::{
     SendableRecordBatchStream,
@@ -483,6 +484,16 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.buffered, &self.streamed]
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Apply to the two expressions being compared in the range predicate
+        f(self.on.0.as_ref())?;
+        f(self.on.1.as_ref())?;
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
