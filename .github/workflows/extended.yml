@@ -81,7 +81,9 @@ jobs:
           source $HOME/.cargo/env
           rustup toolchain install
       - name: Install Protobuf Compiler
-        run: sudo apt-get install -y protobuf-compiler
+        run:
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
       - name: Prepare cargo build
         run: |
           cargo check --profile ci --all-targets
@@ -108,7 +110,9 @@ jobs:
           source $HOME/.cargo/env
           rustup toolchain install
       - name: Install Protobuf Compiler
-        run: sudo apt-get install -y protobuf-compiler
+        run:
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
       # For debugging, test binaries can be large.
       - name: Show available disk space
         run: |
