@@ -50,12 +50,12 @@ pub struct CommonOpt {
 
     /// Memory limit (e.g. '100M', '1.5G'). If not specified, run all pre-defined memory limits for given query
     /// if there's any, otherwise run with no memory limit.
-    #[arg(long = "memory-limit", value_parser = parse_memory_limit)]
+    #[arg(long = "memory-limit", value_parser = parse_capacity_limit)]
     pub memory_limit: Option<usize>,
 
     /// The amount of memory to reserve for sort spill operations. DataFusion's default value will be used
     /// if not specified.
-    #[arg(long = "sort-spill-reservation-bytes", value_parser = parse_memory_limit)]
+    #[arg(long = "sort-spill-reservation-bytes", value_parser = parse_capacity_limit)]
     pub sort_spill_reservation_bytes: Option<usize>,
 
     /// Activate debug mode to see more details
@@ -116,20 +116,20 @@ impl CommonOpt {
     }
 }
 
-/// Parse memory limit from string to number of bytes
-/// e.g. '1.5G', '100M' -> 1572864
-fn parse_memory_limit(limit: &str) -> Result<usize, String> {
+/// Parse capacity limit from string to number of bytes by allowing units: K, M and G.
+/// Supports formats like '1.5G', '100M' -> 1572864
+fn parse_capacity_limit(limit: &str) -> Result<usize, String> {
     let (number, unit) = limit.split_at(limit.len() - 1);
     let number: f64 = number
         .parse()
-        .map_err(|_| format!("Failed to parse number from memory limit '{limit}'"))?;
+        .map_err(|_| format!("Failed to parse number from capacity limit '{limit}'"))?;
 
     match unit {
         "K" => Ok((number * 1024.0) as usize),
         "M" => Ok((number * 1024.0 * 1024.0) as usize),
         "G" => Ok((number * 1024.0 * 1024.0 * 1024.0) as usize),
         _ => Err(format!(
-            "Unsupported unit '{unit}' in memory limit '{limit}'"
+            "Unsupported unit '{unit}' in capacity limit '{limit}'. Unit must be one of: 'K', 'M', 'G'"
         )),
     }
 }
@@ -139,16 +139,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_memory_limit_all() {
+    fn test_parse_capacity_limit_all() {
         // Test valid inputs
-        assert_eq!(parse_memory_limit("100K").unwrap(), 102400);
-        assert_eq!(parse_memory_limit("1.5M").unwrap(), 1572864);
-        assert_eq!(parse_memory_limit("2G").unwrap(), 2147483648);
+        assert_eq!(parse_capacity_limit("100K").unwrap(), 102400);
+        assert_eq!(parse_capacity_limit("1.5M").unwrap(), 1572864);
+        assert_eq!(parse_capacity_limit("2G").unwrap(), 2147483648);
 
         // Test invalid unit
-        assert!(parse_memory_limit("500X").is_err());
+        assert!(parse_capacity_limit("500X").is_err());
 
         // Test invalid number
-        assert!(parse_memory_limit("abcM").is_err());
+        assert!(parse_capacity_limit("abcM").is_err());
     }
 }
