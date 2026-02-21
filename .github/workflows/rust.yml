@@ -15,6 +15,8 @@
 # specific language governing permissions and limitations
 # under the License.
 
+# For some actions, we use Runs-On to run them on ASF infrastructure: https://datafusion.apache.org/contributor-guide/#ci-runners
+
 name: Rust
 
 concurrency:
@@ -140,6 +142,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
+      - uses: runs-on/action@cd2b598b0515d39d78c38a02d529db87d2196d1e  # v2.0.3
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
@@ -321,6 +324,7 @@ jobs:
     needs: linux-build-lib
     runs-on: ${{ github.repository_owner == 'apache' && format('runs-on={0},family=m8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     steps:
+      - uses: runs-on/action@cd2b598b0515d39d78c38a02d529db87d2196d1e  # v2.0.3
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           submodules: true
@@ -383,6 +387,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
+      - uses: runs-on/action@cd2b598b0515d39d78c38a02d529db87d2196d1e  # v2.0.3
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           submodules: true
@@ -404,6 +409,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
+      - uses: runs-on/action@cd2b598b0515d39d78c38a02d529db87d2196d1e  # v2.0.3
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
@@ -492,6 +498,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
+      - uses: runs-on/action@cd2b598b0515d39d78c38a02d529db87d2196d1e  # v2.0.3
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           submodules: true
@@ -516,6 +523,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
+      - uses: runs-on/action@cd2b598b0515d39d78c38a02d529db87d2196d1e  # v2.0.3
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           submodules: true
@@ -646,6 +654,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
+      - uses: runs-on/action@cd2b598b0515d39d78c38a02d529db87d2196d1e  # v2.0.3
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           submodules: true
@@ -692,6 +701,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
+      - uses: runs-on/action@cd2b598b0515d39d78c38a02d529db87d2196d1e  # v2.0.3
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           submodules: true
