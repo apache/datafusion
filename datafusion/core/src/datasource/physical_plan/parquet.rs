@@ -47,6 +47,7 @@ mod tests {
     use arrow_schema::{SchemaRef, TimeUnit};
     use bytes::{BufMut, BytesMut};
     use datafusion_common::config::TableParquetOptions;
+    use datafusion_common::parquet_config::DFTimeUnit;
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
     use datafusion_common::{Result, ScalarValue, assert_contains};
     use datafusion_datasource::file_format::FileFormat;
@@ -1342,7 +1343,7 @@ mod tests {
 
         let time_units_and_expected = vec![
             (
-                None, // Same as "ns" time_unit
+                None,
                 Arc::new(Int64Array::from(vec![
                     Some(1704141296123456000), // Reads as nanosecond fine (note 3 extra 0s)
                     Some(1704070800000000000), // Reads as nanosecond fine (note 3 extra 0s)
@@ -1353,7 +1354,7 @@ mod tests {
                 ])),
             ),
             (
-                Some("ns".to_string()),
+                Some(DFTimeUnit::Nanosecond),
                 Arc::new(Int64Array::from(vec![
                     Some(1704141296123456000),
                     Some(1704070800000000000),
@@ -1364,7 +1365,7 @@ mod tests {
                 ])),
             ),
             (
-                Some("us".to_string()),
+                Some(DFTimeUnit::Microsecond),
                 Arc::new(Int64Array::from(vec![
                     Some(1704141296123456),
                     Some(1704070800000000),
@@ -1379,7 +1380,7 @@ mod tests {
         for (time_unit, expected) in time_units_and_expected {
             let parquet_exec = scan_format(
                 &state,
-                &ParquetFormat::default().with_coerce_int96(time_unit.clone()),
+                &ParquetFormat::default().with_coerce_int96(time_unit),
                 Some(schema.clone()),
                 &testdata,
                 filename,
@@ -1428,7 +1429,7 @@ mod tests {
 
         let parquet_exec = scan_format(
             &state,
-            &ParquetFormat::default().with_coerce_int96(Some("us".to_string())),
+            &ParquetFormat::default().with_coerce_int96(Some(DFTimeUnit::Microsecond)),
             None,
             testdata,
             filename,

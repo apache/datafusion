@@ -348,6 +348,8 @@ impl LogicalExtensionCodec for JsonLogicalExtensionCodec {
 
 #[cfg(feature = "parquet")]
 mod parquet {
+    use std::str::FromStr;
+
     use super::*;
 
     use crate::protobuf::{
@@ -359,6 +361,7 @@ mod parquet {
     use datafusion_common::config::{
         ParquetColumnOptions, ParquetOptions, TableParquetOptions,
     };
+    use datafusion_common::parquet_config::DFTimeUnit;
     use datafusion_datasource_parquet::file_format::ParquetFormatFactory;
 
     impl TableParquetOptionsProto {
@@ -420,8 +423,8 @@ mod parquet {
                 schema_force_view_types: global_options.global.schema_force_view_types,
                 binary_as_string: global_options.global.binary_as_string,
                 skip_arrow_metadata: global_options.global.skip_arrow_metadata,
-                coerce_int96_opt: global_options.global.coerce_int96.map(|compression| {
-                    parquet_options::CoerceInt96Opt::CoerceInt96(compression)
+                coerce_int96_opt: global_options.global.coerce_int96.map(|time_unit| {
+                    parquet_options::CoerceInt96Opt::CoerceInt96(time_unit.to_string())
                 }),
                 max_predicate_cache_size_opt: global_options.global.max_predicate_cache_size.map(|size| {
                     parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(size as u64)
@@ -520,7 +523,7 @@ mod parquet {
             binary_as_string: proto.binary_as_string,
             skip_arrow_metadata: proto.skip_arrow_metadata,
             coerce_int96: proto.coerce_int96_opt.as_ref().map(|opt| match opt {
-                parquet_options::CoerceInt96Opt::CoerceInt96(coerce_int96) => coerce_int96.clone(),
+                parquet_options::CoerceInt96Opt::CoerceInt96(v) => DFTimeUnit::from_str(v).unwrap(),
             }),
             max_predicate_cache_size: proto.max_predicate_cache_size_opt.as_ref().map(|opt| match opt {
                 parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(size) => *size as usize,
