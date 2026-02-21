@@ -156,6 +156,26 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
         table_ref: &TableReference,
     ) -> datafusion::common::Result<Option<Arc<dyn TableProvider>>>;
 
+    /// Resolves a list of local file paths to a TableProvider.
+    ///
+    /// Override this method to customize how file paths from Substrait LocalFiles
+    /// are resolved to table providers. The default implementation returns an error
+    /// since resolving arbitrary file paths requires access to an object store or
+    /// file system which may not be available in all contexts.
+    ///
+    /// # Arguments
+    /// * `paths` - List of file paths (URIs) from Substrait LocalFiles
+    /// * `schema` - The expected schema of the files
+    async fn resolve_local_files(
+        &self,
+        _paths: &[String],
+        _schema: &DFSchema,
+    ) -> datafusion::common::Result<Arc<dyn TableProvider>> {
+        not_impl_err!(
+            "resolve_local_files is not implemented. Override this method to support LocalFiles read types."
+        )
+    }
+
     // TODO: Remove these two methods
     //   Ideally, the abstract consumer should not place any constraints on implementations.
     //   The functionality for which the Extensions and FunctionRegistry is needed should be abstracted
