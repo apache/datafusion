@@ -1093,15 +1093,12 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             filter_pushdown_min_bytes_per_sec: value.filter_pushdown_min_bytes_per_sec_opt.map(|opt| match opt {
                 protobuf::parquet_options::FilterPushdownMinBytesPerSecOpt::FilterPushdownMinBytesPerSec(v) => v,
             }).unwrap_or(f64::INFINITY),
-            filter_statistics_collection_min_rows: value.filter_statistics_collection_min_rows_opt.map(|opt| match opt {
-                protobuf::parquet_options::FilterStatisticsCollectionMinRowsOpt::FilterStatisticsCollectionMinRows(v) => v,
-            }).unwrap_or(10_000),
-            filter_statistics_collection_fraction: value.filter_statistics_collection_fraction_opt.map(|opt| match opt {
-                protobuf::parquet_options::FilterStatisticsCollectionFractionOpt::FilterStatisticsCollectionFraction(v) => v,
-            }).unwrap_or(0.0),
-            filter_statistics_collection_max_rows: value.filter_statistics_collection_max_rows_opt.map(|opt| match opt {
-                protobuf::parquet_options::FilterStatisticsCollectionMaxRowsOpt::FilterStatisticsCollectionMaxRows(v) => v,
-            }).unwrap_or(1_000_000),
+            filter_collecting_byte_ratio_threshold: value.filter_collecting_byte_ratio_threshold_opt.map(|opt| match opt {
+                protobuf::parquet_options::FilterCollectingByteRatioThresholdOpt::FilterCollectingByteRatioThreshold(v) => v,
+            }).unwrap_or(0.2),
+            filter_confidence_z: value.filter_confidence_z_opt.map(|opt| match opt {
+                protobuf::parquet_options::FilterConfidenceZOpt::FilterConfidenceZ(v) => v,
+            }).unwrap_or(2.0),
         })
     }
 }

@@ -488,7 +488,6 @@ fn columns_sorted(_columns: &[usize], _metadata: &ParquetMetaData) -> Result<boo
     Ok(false)
 }
 
-
 /// Compute the total compressed bytes required to evaluate a filter expression.
 ///
 /// Returns `None` if the expression cannot be pushed down (e.g., references

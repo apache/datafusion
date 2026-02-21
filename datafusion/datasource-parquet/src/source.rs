@@ -341,9 +341,8 @@ impl ParquetSource {
         self.selectivity_tracker = Arc::new(
             crate::selectivity::SelectivityTracker::new()
                 .with_min_bytes_per_sec(opts.filter_pushdown_min_bytes_per_sec)
-                .with_min_rows_for_collection(opts.filter_statistics_collection_min_rows)
-                .with_collection_fraction(opts.filter_statistics_collection_fraction)
-                .with_max_rows_for_collection(opts.filter_statistics_collection_max_rows),
+                .with_byte_ratio_threshold(opts.filter_collecting_byte_ratio_threshold)
+                .with_confidence_z(opts.filter_confidence_z),
         );
         self.table_parquet_options = table_parquet_options;
         self
@@ -591,16 +590,6 @@ impl FileSource for ParquetSource {
             reverse_row_groups: self.reverse_row_groups,
             selectivity_tracker: Arc::clone(&self.selectivity_tracker),
         });
-
-        // Notify the selectivity tracker of the total dataset row count
-        // so fraction-based collection thresholds can be resolved.
-        // This only needs to happen once, but we don't have access to FileScanConfig
-        // until this point -> we do it in the opener and make `notify_dataset_rows`
-        // idempotent so it doesn't matter if multiple openers call it.
-        if let Some(&total_rows) = base_config.statistics().num_rows.get_value() {
-            self.selectivity_tracker
-                .notify_dataset_rows(total_rows as u64);
-        }
 
         Ok(opener)
     }

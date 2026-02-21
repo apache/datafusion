@@ -609,17 +609,14 @@ message ParquetOptions {
   }
 
   // field 36 removed (filter_correlation_threshold)
+  // fields 37-39 removed (filter_statistics_collection_min_rows, fraction, max_rows)
 
-  oneof filter_statistics_collection_min_rows_opt {
-    uint64 filter_statistics_collection_min_rows = 37;
+  oneof filter_collecting_byte_ratio_threshold_opt {
+    double filter_collecting_byte_ratio_threshold = 40;
   }
 
-  oneof filter_statistics_collection_fraction_opt {
-    double filter_statistics_collection_fraction = 38;
-  }
-
-  oneof filter_statistics_collection_max_rows_opt {
-    uint64 filter_statistics_collection_max_rows = 39;
+  oneof filter_confidence_z_opt {
+    double filter_confidence_z = 41;
   }
 }
 

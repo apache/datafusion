@@ -641,6 +641,8 @@ impl FileOpener for ParquetOpener {
             // Redistribute collecting filters based on byte ratio heuristic.
             // Filters whose columns are a large fraction of projected bytes
             // go to post_scan to avoid row-level decode overhead.
+            let byte_ratio_threshold: f64 =
+                selectivity_tracker.config().byte_ratio_threshold;
             let collecting = {
                 let projected_bytes = row_filter::total_compressed_bytes(
                     &projection.column_indices(),
@@ -661,7 +663,7 @@ impl FileOpener for ParquetOpener {
                         let ratio = filter_bytes
                             .map(|b| b as f64 / projected_bytes as f64)
                             .unwrap_or(1.0);
-                        if ratio >= 0.5 {
+                        if ratio >= byte_ratio_threshold {
                             post_scan.push((id, expr));
                         } else {
                             keep.push((id, expr));
@@ -698,7 +700,10 @@ impl FileOpener for ParquetOpener {
 
             // Split post-scan filters into collecting (need per-filter stats)
             // and demoted (just apply as conjunction).
-            let mut collecting_post_scan: Vec<(crate::selectivity::FilterId, Arc<dyn PhysicalExpr>)> = Vec::new();
+            let mut collecting_post_scan: Vec<(
+                crate::selectivity::FilterId,
+                Arc<dyn PhysicalExpr>,
+            )> = Vec::new();
             let mut demoted_post_scan: Vec<Arc<dyn PhysicalExpr>> = Vec::new();
             for (id, expr) in post_scan {
                 if selectivity_tracker.is_collecting(id) {
@@ -730,14 +735,13 @@ impl FileOpener for ParquetOpener {
                 ProjectionMask::roots(builder.parquet_schema(), all_indices)
             };
 
-            let has_post_scan = !collecting_post_scan.is_empty() || !demoted_post_scan.is_empty();
+            let has_post_scan =
+                !collecting_post_scan.is_empty() || !demoted_post_scan.is_empty();
 
             // Apply limit to the reader only when there are no post-scan filters.
             // If post-scan filters exist, the limit must be enforced after filtering
             // (otherwise the reader stops reading before the filter can find matches).
-            if !has_post_scan
-                && let Some(limit) = limit
-            {
+            if !has_post_scan && let Some(limit) = limit {
                 builder = builder.with_limit(limit);
             }
 
@@ -766,13 +770,15 @@ impl FileOpener for ParquetOpener {
                 .try_map_exprs(|expr| reassign_expr_columns(expr, &stream_schema))?;
 
             // Rebase collecting post-scan filters to stream schema
-            let collecting_post_scan: Vec<(crate::selectivity::FilterId, Arc<dyn PhysicalExpr>)> =
-                collecting_post_scan
-                    .into_iter()
-                    .map(|(id, expr)| {
-                        reassign_expr_columns(expr, &stream_schema).map(|e| (id, e))
-                    })
-                    .collect::<Result<_>>()?;
+            let collecting_post_scan: Vec<(
+                crate::selectivity::FilterId,
+                Arc<dyn PhysicalExpr>,
+            )> = collecting_post_scan
+                .into_iter()
+                .map(|(id, expr)| {
+                    reassign_expr_columns(expr, &stream_schema).map(|e| (id, e))
+                })
+                .collect::<Result<_>>()?;
             // Rebase demoted post-scan filters and conjoin
             let demoted_post_scan_filter = (!demoted_post_scan.is_empty())
                 .then(|| {
@@ -795,7 +801,9 @@ impl FileOpener for ParquetOpener {
                     );
 
                     // Apply post-scan filters BEFORE projection.
-                    let b = if !collecting_post_scan.is_empty() || demoted_post_scan_filter.is_some() {
+                    let b = if !collecting_post_scan.is_empty()
+                        || demoted_post_scan_filter.is_some()
+                    {
                         let start = datafusion_common::instant::Instant::now();
                         let filtered = apply_post_scan_filters_with_stats(
                             b,
@@ -1438,12 +1446,9 @@ mod test {
                 reverse_row_groups: self.reverse_row_groups,
                 preserve_order: self.preserve_order,
                 // Tests use 0.0 threshold to push all filters as row filters
-                // (skipping adaptive logic), and min_rows_for_collection=0 to
-                // disable the collection phase.
+                // (AllPromoted strategy, skipping adaptive logic).
                 selectivity_tracker: Arc::new(
-                    SelectivityTracker::new()
-                        .with_min_bytes_per_sec(0.0)
-                        .with_min_rows_for_collection(0),
+                    SelectivityTracker::new().with_min_bytes_per_sec(0.0),
                 ),
             }
         }

@@ -875,25 +875,18 @@ pub struct ParquetOptions {
         parquet_options::FilterPushdownMinBytesPerSecOpt,
     >,
     #[prost(
-        oneof = "parquet_options::FilterStatisticsCollectionMinRowsOpt",
-        tags = "37"
+        oneof = "parquet_options::FilterCollectingByteRatioThresholdOpt",
+        tags = "40"
     )]
-    pub filter_statistics_collection_min_rows_opt: ::core::option::Option<
-        parquet_options::FilterStatisticsCollectionMinRowsOpt,
+    pub filter_collecting_byte_ratio_threshold_opt: ::core::option::Option<
+        parquet_options::FilterCollectingByteRatioThresholdOpt,
     >,
     #[prost(
-        oneof = "parquet_options::FilterStatisticsCollectionFractionOpt",
-        tags = "38"
+        oneof = "parquet_options::FilterConfidenceZOpt",
+        tags = "41"
     )]
-    pub filter_statistics_collection_fraction_opt: ::core::option::Option<
-        parquet_options::FilterStatisticsCollectionFractionOpt,
-    >,
-    #[prost(
-        oneof = "parquet_options::FilterStatisticsCollectionMaxRowsOpt",
-        tags = "39"
-    )]
-    pub filter_statistics_collection_max_rows_opt: ::core::option::Option<
-        parquet_options::FilterStatisticsCollectionMaxRowsOpt,
+    pub filter_confidence_z_opt: ::core::option::Option<
+        parquet_options::FilterConfidenceZOpt,
     >,
 }
 /// Nested message and enum types in `ParquetOptions`.
@@ -958,20 +951,15 @@ pub mod parquet_options {
         #[prost(double, tag = "35")]
         FilterPushdownMinBytesPerSec(f64),
     }
-    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Oneof)]
-    pub enum FilterStatisticsCollectionMinRowsOpt {
-        #[prost(uint64, tag = "37")]
-        FilterStatisticsCollectionMinRows(u64),
+    #[derive(Clone, Copy, PartialEq, ::prost::Oneof)]
+    pub enum FilterCollectingByteRatioThresholdOpt {
+        #[prost(double, tag = "40")]
+        FilterCollectingByteRatioThreshold(f64),
     }
     #[derive(Clone, Copy, PartialEq, ::prost::Oneof)]
-    pub enum FilterStatisticsCollectionFractionOpt {
-        #[prost(double, tag = "38")]
-        FilterStatisticsCollectionFraction(f64),
-    }
-    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Oneof)]
-    pub enum FilterStatisticsCollectionMaxRowsOpt {
-        #[prost(uint64, tag = "39")]
-        FilterStatisticsCollectionMaxRows(u64),
+    pub enum FilterConfidenceZOpt {
+        #[prost(double, tag = "41")]
+        FilterConfidenceZ(f64),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]

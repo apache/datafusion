@@ -21,10 +21,10 @@
 //! per-filter lifecycle, `PartitionedFilters` for the output consumed by
 //! `ParquetOpener::open`, and [`FilterId`] for stable filter identification.
 
-use std::collections::HashMap;
-use std::sync::Arc;
 use log::debug;
 use parking_lot::RwLock;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use datafusion_physical_expr_common::physical_expr::{
     OptionalFilterPhysicalExpr, PhysicalExpr, snapshot_generation,
@@ -63,7 +63,7 @@ enum PromotionStrategy {
 ///   ([`OptionalFilterPhysicalExpr`]).
 /// - [`Promoted`](Self::Promoted) → [`Demoted`](Self::Demoted)/[`Dropped`](Self::Dropped)
 ///   on periodic re-evaluation if effectiveness drops below threshold after
-///   accumulating `effective_min_rows` new rows.
+///   CI upper bound drops below threshold.
 /// - **Any state** → [`Collecting`](Self::Collecting) when a dynamic filter's
 ///   `snapshot_generation` changes (see [`SelectivityTrackerInner::note_generation`]).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -128,35 +128,6 @@ impl SelectivityStats {
         }
     }
 
-    /// Number of rows that matched (passed) the filter.
-    fn rows_matched(&self) -> u64 {
-        self.rows_matched
-    }
-
-    /// Total number of rows evaluated.
-    fn rows_total(&self) -> u64 {
-        self.rows_total
-    }
-
-    /// Cumulative evaluation time in nanoseconds.
-    fn eval_nanos(&self) -> u64 {
-        self.eval_nanos
-    }
-
-    /// Returns the selectivity (fraction of rows filtered out).
-    ///
-    /// - 1.0 = perfect filter (all rows filtered out)
-    /// - 0.0 = useless filter (no rows filtered out)
-    ///
-    /// Returns 0.0 if no rows have been evaluated (unknown selectivity).
-    fn selectivity(&self) -> f64 {
-        if self.rows_total == 0 {
-            0.0 // Unknown, assume no filtering
-        } else {
-            1.0 - (self.rows_matched as f64 / self.rows_total as f64)
-        }
-    }
-
     /// Returns the effectiveness as an opaque ordering score (higher = run first).
     ///
     /// Currently computed as bytes/sec throughput using self-contained stats.
@@ -182,6 +153,19 @@ impl SelectivityStats {
         let variance = self.eff_m2 / (self.sample_count - 1) as f64;
         let stderr = (variance / self.sample_count as f64).sqrt();
         Some(self.eff_mean - confidence_z * stderr)
+    }
+
+    /// Returns the upper bound of a confidence interval on mean effectiveness.
+    ///
+    /// Uses Welford's online variance: `mean + z * stderr`.
+    /// Returns `None` if fewer than 2 samples.
+    fn confidence_upper_bound(&self, confidence_z: f64) -> Option<f64> {
+        if self.sample_count < 2 {
+            return None;
+        }
+        let variance = self.eff_m2 / (self.sample_count - 1) as f64;
+        let stderr = (variance / self.sample_count as f64).sqrt();
+        Some(self.eff_mean + confidence_z * stderr)
     }
 
     /// Update stats with new observations.
@@ -214,21 +198,18 @@ impl SelectivityStats {
 pub struct TrackerConfig {
     /// Minimum bytes/sec throughput for promoting a filter (default: INFINITY = disabled).
     pub min_bytes_per_sec: f64,
-    /// Floor for the collection / re-evaluation window (default: 10 000).
-    pub min_rows_for_collection: u64,
-    /// Fraction of total dataset rows for the collection window (default: 0.0).
-    pub collection_fraction: f64,
-    /// Cap on collection / re-evaluation window size (default: 0 = no cap).
-    pub max_rows_for_collection: u64,
+    /// Byte-ratio threshold for placing collecting filters at row-level vs post-scan.
+    pub byte_ratio_threshold: f64,
+    /// Z-score for confidence intervals on filter effectiveness.
+    pub confidence_z: f64,
 }
 
 impl TrackerConfig {
     pub fn new() -> Self {
         Self {
             min_bytes_per_sec: f64::INFINITY,
-            min_rows_for_collection: 10_000,
-            collection_fraction: 0.0,
-            max_rows_for_collection: 0,
+            byte_ratio_threshold: 0.2,
+            confidence_z: 2.0,
         }
     }
 
@@ -237,18 +218,13 @@ impl TrackerConfig {
         self
     }
 
-    pub fn with_min_rows_for_collection(mut self, v: u64) -> Self {
-        self.min_rows_for_collection = v;
+    pub fn with_byte_ratio_threshold(mut self, v: f64) -> Self {
+        self.byte_ratio_threshold = v;
         self
     }
 
-    pub fn with_collection_fraction(mut self, v: f64) -> Self {
-        self.collection_fraction = v;
-        self
-    }
-
-    pub fn with_max_rows_for_collection(mut self, v: u64) -> Self {
-        self.max_rows_for_collection = v;
+    pub fn with_confidence_z(mut self, v: f64) -> Self {
+        self.confidence_z = v;
         self
     }
 
@@ -333,11 +309,6 @@ impl SelectivityTracker {
         self.inner.write().partition_filters(filters, &self.config)
     }
 
-    /// Returns the number of times `partition_filters` has been called.
-    pub(crate) fn partition_call_count(&self) -> u64 {
-        self.inner.read().partition_call_count
-    }
-
     /// Returns true if the filter is in the Collecting state.
     pub(crate) fn is_collecting(&self, id: FilterId) -> bool {
         let inner = self.inner.read();
@@ -347,11 +318,9 @@ impl SelectivityTracker {
         )
     }
 
-    /// Resolve the fraction-based collection threshold from dataset statistics.
-    pub(crate) fn notify_dataset_rows(&self, total_rows: u64) {
-        self.inner
-            .write()
-            .notify_dataset_rows(total_rows, &self.config);
+    /// Access the tracker's configuration.
+    pub(crate) fn config(&self) -> &TrackerConfig {
+        &self.config
     }
 
     // Builder-style constructors for convenience (delegating to TrackerConfig).
@@ -367,33 +336,22 @@ impl SelectivityTracker {
         }
     }
 
-    /// Set the floor for the collection / re-evaluation window.
-    pub(crate) fn with_min_rows_for_collection(self, v: u64) -> Self {
+    /// Set the byte-ratio threshold for collecting filter placement.
+    pub(crate) fn with_byte_ratio_threshold(self, v: f64) -> Self {
         Self {
             config: TrackerConfig {
-                min_rows_for_collection: v,
+                byte_ratio_threshold: v,
                 ..self.config
             },
             ..self
         }
     }
 
-    /// Set the fraction of total dataset rows used for the collection window.
-    pub(crate) fn with_collection_fraction(self, v: f64) -> Self {
+    /// Set the confidence z-score for promotion/demotion decisions.
+    pub(crate) fn with_confidence_z(self, v: f64) -> Self {
         Self {
             config: TrackerConfig {
-                collection_fraction: v,
-                ..self.config
-            },
-            ..self
-        }
-    }
-
-    /// Set the cap on collection / re-evaluation window size.
-    pub(crate) fn with_max_rows_for_collection(self, v: u64) -> Self {
-        Self {
-            config: TrackerConfig {
-                max_rows_for_collection: v,
+                confidence_z: v,
                 ..self.config
             },
             ..self
@@ -412,8 +370,6 @@ struct SelectivityTrackerInner {
     snapshot_generations: HashMap<FilterId, u64>,
     /// Incrementing counter for partition_filters calls (for log context).
     partition_call_count: u64,
-    /// Resolved minimum rows after notify_dataset_rows() is called.
-    resolved_min_rows: Option<u64>,
 }
 
 impl SelectivityTrackerInner {
@@ -423,7 +379,6 @@ impl SelectivityTrackerInner {
             filter_states: HashMap::new(),
             snapshot_generations: HashMap::new(),
             partition_call_count: 0,
-            resolved_min_rows: None,
         }
     }
 
@@ -435,27 +390,6 @@ impl SelectivityTrackerInner {
             PromotionStrategy::AllPromoted
         } else {
             PromotionStrategy::Threshold(config.min_bytes_per_sec)
-        }
-    }
-
-    /// Compute the effective collection / re-evaluation window size.
-    fn effective_min_rows(&self, config: &TrackerConfig) -> u64 {
-        let base = self
-            .resolved_min_rows
-            .unwrap_or(config.min_rows_for_collection);
-        if config.max_rows_for_collection > 0 {
-            base.min(config.max_rows_for_collection)
-        } else {
-            base
-        }
-    }
-
-    /// Resolve the fraction-based collection threshold from dataset statistics.
-    fn notify_dataset_rows(&mut self, total_rows: u64, config: &TrackerConfig) {
-        if config.collection_fraction > 0.0 {
-            let fraction_rows = (config.collection_fraction * total_rows as f64) as u64;
-            self.resolved_min_rows =
-                Some(config.min_rows_for_collection.max(fraction_rows));
         }
     }
 
@@ -554,10 +488,16 @@ impl SelectivityTrackerInner {
 
         match strategy {
             PromotionStrategy::AllPromoted => {
-                promoted = filters;
+                // All filters start as promoted row filters unconditionally.
+                for (id, expr) in filters {
+                    self.filter_states
+                        .entry(id)
+                        .or_insert(FilterState::Promoted);
+                    promoted.push((id, expr));
+                }
             }
             PromotionStrategy::Threshold(threshold) => {
-                let min_rows = self.effective_min_rows(config);
+                let confidence_z = config.confidence_z;
                 for (id, expr) in filters {
                     let state = self.filter_states.get(&id).copied();
 
@@ -573,166 +513,107 @@ impl SelectivityTrackerInner {
                         _ => {}
                     }
 
-                    // Active states: Collecting, Promoted, or new (None)
-                    let has_enough = self
+                    if state == Some(FilterState::Promoted) {
+                        // Promoted filter: check for demotion via CI upper bound
+                        let should_demote = self
+                            .stats
+                            .get(&id)
+                            .and_then(|s| s.confidence_upper_bound(confidence_z))
+                            .is_some_and(|ub| ub < threshold);
+                        if should_demote {
+                            debug!(
+                                "FilterId {id}: Promoted → Demoted via CI upper bound < {threshold:.0} bytes/sec — {expr}"
+                            );
+                            self.demote_or_drop(id, &expr, &mut post_scan);
+                        } else {
+                            promoted.push((id, expr));
+                        }
+                        continue;
+                    }
+
+                    // Collecting or new: check CI for promotion/demotion
+                    let lower = self
                         .stats
                         .get(&id)
-                        .is_some_and(|s| s.rows_total >= min_rows);
+                        .and_then(|s| s.confidence_lower_bound(confidence_z));
+                    let upper = self
+                        .stats
+                        .get(&id)
+                        .and_then(|s| s.confidence_upper_bound(confidence_z));
 
-                    if has_enough {
-                        match self.stats.get(&id).and_then(|s| s.effectiveness()) {
-                            Some(eff) if eff >= threshold => {
-                                // Clear stats if transitioning from Collecting/new
-                                if matches!(state, None | Some(FilterState::Collecting)) {
-                                    debug!(
-                                        "FilterId {id}: Collecting → Promoted at {eff:.0} bytes/sec — {expr}"
-                                    );
-                                    self.stats.remove(&id);
-                                }
-                                self.filter_states.insert(id, FilterState::Promoted);
-                                promoted.push((id, expr));
-                            }
-                            _ => {
-                                self.demote_or_drop(id, &expr, &mut post_scan);
-                            }
-                        }
+                    if lower.is_some_and(|lb| lb >= threshold) {
+                        debug!(
+                            "FilterId {id}: Collecting → Promoted via CI lower bound >= {threshold:.0} bytes/sec — {expr}"
+                        );
+                        self.stats.remove(&id);
+                        self.filter_states.insert(id, FilterState::Promoted);
+                        promoted.push((id, expr));
+                    } else if upper.is_some_and(|ub| ub < threshold) {
+                        debug!(
+                            "FilterId {id}: Collecting → Demoted via CI upper bound < {threshold:.0} bytes/sec — {expr}"
+                        );
+                        self.demote_or_drop(id, &expr, &mut post_scan);
                     } else {
-                        // Not enough rows yet
-                        if state == Some(FilterState::Promoted) {
-                            // Grace period: keep promoted
-                            promoted.push((id, expr));
-                        } else {
-                            // Early promotion via confidence interval
-                            let early_promote = self
-                                .stats
-                                .get(&id)
-                                .and_then(|s| s.confidence_lower_bound(2.0))
-                                .is_some_and(|lb| lb >= threshold);
-
-                            if early_promote {
-                                debug!(
-                                    "FilterId {id}: early promotion via CI — lower bound >= {threshold:.0} bytes/sec — {expr}"
-                                );
-                                self.stats.remove(&id);
-                                self.filter_states.insert(id, FilterState::Promoted);
-                                promoted.push((id, expr));
-                            } else {
-                                if state.is_none() {
-                                    self.filter_states
-                                        .insert(id, FilterState::Collecting);
-                                }
-                                collecting.push((id, expr));
-                            }
+                        if state.is_none() {
+                            self.filter_states.insert(id, FilterState::Collecting);
                         }
+                        collecting.push((id, expr));
                     }
                 }
             }
             PromotionStrategy::Disabled => unreachable!(),
         }
 
-        // Sort promoted by effectiveness descending
-        let mut promoted = promoted;
+        // Sort all row-level filters (promoted + collecting) by effectiveness
+        // descending, falling back to byte ratio ascending for filters without stats.
         promoted.sort_by(|a, b| {
-            let eff_a = self.get_effectiveness_by_id(a.0).unwrap_or(0.0);
-            let eff_b = self.get_effectiveness_by_id(b.0).unwrap_or(0.0);
-            eff_b
-                .partial_cmp(&eff_a)
-                .unwrap_or(std::cmp::Ordering::Equal)
+            let eff_a = self.get_effectiveness_by_id(a.0);
+            let eff_b = self.get_effectiveness_by_id(b.0);
+            match (eff_a, eff_b) {
+                (Some(ea), Some(eb)) => {
+                    eb.partial_cmp(&ea).unwrap_or(std::cmp::Ordering::Equal)
+                }
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            }
         });
 
         // Diagnostic logging
         self.partition_call_count += 1;
         if log::log_enabled!(log::Level::Debug) {
-            let min_rows = self.effective_min_rows(config);
             let threshold_str = match strategy {
                 PromotionStrategy::Threshold(t) => format!("{t:.0} bytes/sec"),
                 PromotionStrategy::AllPromoted => "all promoted".to_string(),
                 PromotionStrategy::Disabled => "disabled".to_string(),
             };
             debug!(
-                "Filter partition #{}: strategy={:?}, threshold={}, collection_min_rows={}",
-                self.partition_call_count, strategy, threshold_str, min_rows,
+                "Filter partition #{}: strategy={:?}, threshold={}, confidence_z={}",
+                self.partition_call_count, strategy, threshold_str, config.confidence_z,
             );
             for &(id, ref expr) in &collecting {
-                let rows_so_far = self.stats.get(&id).map_or(0, |s| s.rows_total());
-                let remaining = min_rows.saturating_sub(rows_so_far);
-                debug!(
-                    "  Filter id={id}: {expr} [COLLECTING as row-filter (need {remaining} more rows, early-promoted)]"
-                );
+                let samples = self.stats.get(&id).map_or(0, |s| s.sample_count);
+                debug!("  Filter id={id}: {expr} [COLLECTING ({samples} samples)]");
             }
             for &(id, ref expr) in &promoted {
                 let detail = match self.stats.get(&id) {
-                    Some(s) if s.rows_total() >= min_rows => {
-                        let eff = s.effectiveness();
-                        let eval_ms = s.eval_nanos() as f64 / 1_000_000.0;
-                        let eff_str =
-                            eff.map_or_else(|| "N/A".to_string(), |v| format!("{v:.0}"));
+                    Some(s) => {
+                        let eff_str = s
+                            .effectiveness()
+                            .map_or_else(|| "N/A".to_string(), |v| format!("{v:.0}"));
                         format!(
-                            "rows={}/{} matched, selectivity={:.4}, eval_time={eval_ms:.2}ms, bytes_seen={}, effectiveness={eff_str} bytes/sec → PROMOTED (re-confirmed, >= {threshold_str})",
-                            s.rows_matched(),
-                            s.rows_total(),
-                            s.selectivity(),
-                            s.bytes_seen,
+                            "PROMOTED ({} samples, eff={eff_str} bytes/sec)",
+                            s.sample_count
                         )
                     }
-                    _ => {
-                        let rows_so_far =
-                            self.stats.get(&id).map_or(0, |s| s.rows_total());
-                        let remaining = min_rows.saturating_sub(rows_so_far);
-                        format!(
-                            "PROMOTED (grace period, re-eval after {remaining} more rows)"
-                        )
-                    }
+                    None => "PROMOTED (fresh)".to_string(),
                 };
                 debug!("  Filter id={id}: {expr} [{detail}]");
             }
             for &(id, ref expr) in &post_scan {
                 let state = self.filter_states.get(&id).copied();
                 let detail = match state {
-                    Some(FilterState::Collecting) | None => {
-                        let rows_so_far =
-                            self.stats.get(&id).map_or(0, |s| s.rows_total());
-                        let remaining = min_rows.saturating_sub(rows_so_far);
-                        let label = if state.is_none() {
-                            "COLLECTING (new)"
-                        } else {
-                            "COLLECTING"
-                        };
-                        match self.stats.get(&id) {
-                            Some(s) => {
-                                let eff = s.effectiveness();
-                                let eval_ms = s.eval_nanos() as f64 / 1_000_000.0;
-                                let eff_str = eff.map_or_else(
-                                    || "N/A".to_string(),
-                                    |v| format!("{v:.0}"),
-                                );
-                                format!(
-                                    "rows={}/{} matched, selectivity={:.4}, eval_time={eval_ms:.2}ms, bytes_seen={}, effectiveness={eff_str} bytes/sec → {label} (need {remaining} more rows)",
-                                    s.rows_matched(),
-                                    s.rows_total(),
-                                    s.selectivity(),
-                                    s.bytes_seen,
-                                )
-                            }
-                            None => format!("{label} (need {remaining} more rows)"),
-                        }
-                    }
-                    Some(FilterState::Demoted) => match self.stats.get(&id) {
-                        Some(s) => {
-                            let eff = s.effectiveness();
-                            let eval_ms = s.eval_nanos() as f64 / 1_000_000.0;
-                            let eff_str = eff
-                                .map_or_else(|| "N/A".to_string(), |v| format!("{v:.0}"));
-                            format!(
-                                "rows={}/{} matched, selectivity={:.4}, eval_time={eval_ms:.2}ms, bytes_seen={}, effectiveness={eff_str} bytes/sec → DEMOTED (below {threshold_str})",
-                                s.rows_matched(),
-                                s.rows_total(),
-                                s.selectivity(),
-                                s.bytes_seen,
-                            )
-                        }
-                        None => format!("DEMOTED (below {threshold_str})"),
-                    },
+                    Some(FilterState::Demoted) => "DEMOTED".to_string(),
                     _ => format!("{state:?}"),
                 };
                 debug!("  Filter id={id}: {expr} [{detail}]");
@@ -760,7 +641,6 @@ impl SelectivityTrackerInner {
             post_scan,
         }
     }
-
 }
 
 #[cfg(test)]
@@ -806,13 +686,8 @@ mod tests {
     }
 
     /// Helper: create a TrackerConfig and mutable inner for tests.
-    fn make_tracker(
-        min_bytes_per_sec: f64,
-        min_rows: u64,
-    ) -> (TrackerConfig, SelectivityTrackerInner) {
-        let config = TrackerConfig::new()
-            .with_min_bytes_per_sec(min_bytes_per_sec)
-            .with_min_rows_for_collection(min_rows);
+    fn make_tracker(min_bytes_per_sec: f64) -> (TrackerConfig, SelectivityTrackerInner) {
+        let config = TrackerConfig::new().with_min_bytes_per_sec(min_bytes_per_sec);
         let inner = SelectivityTrackerInner::new();
         (config, inner)
     }
@@ -821,38 +696,28 @@ mod tests {
         use super::*;
 
         #[test]
-        fn selectivity_fraction_cases() {
+        fn effectiveness_none_cases() {
+            // No data → no effectiveness
             let stats = SelectivityStats::new(0, 0, 0, 0);
-            assert_eq!(stats.selectivity(), 0.0);
+            assert!(stats.effectiveness().is_none());
 
-            let stats = SelectivityStats::new(100, 100, 0, 0);
-            assert_eq!(stats.selectivity(), 0.0);
+            // No eval time → no effectiveness
+            let stats = SelectivityStats::new(20, 100, 0, 1000);
+            assert!(stats.effectiveness().is_none());
 
-            let stats = SelectivityStats::new(0, 100, 0, 0);
-            assert_eq!(stats.selectivity(), 1.0);
-
-            let stats = SelectivityStats::new(20, 100, 0, 0);
-            assert_eq!(stats.selectivity(), 0.8);
-
-            let stats = SelectivityStats::new(50, 100, 0, 0);
-            assert_eq!(stats.selectivity(), 0.5);
+            // No bytes → no effectiveness
+            let stats = SelectivityStats::new(20, 100, 1_000_000_000, 0);
+            assert!(stats.effectiveness().is_none());
         }
 
         #[test]
         fn effectiveness_bytes_per_sec_cases() {
-            let stats = SelectivityStats::new(0, 0, 0, 0);
-            assert!(stats.effectiveness().is_none());
-
-            let stats = SelectivityStats::new(20, 100, 0, 1000);
-            assert!(stats.effectiveness().is_none());
-
-            let stats = SelectivityStats::new(20, 100, 1_000_000_000, 0);
-            assert!(stats.effectiveness().is_none());
-
+            // 80 rows pruned * 10 bytes/row = 800 bytes saved in 1 sec = 800 bytes/sec
             let stats = SelectivityStats::new(20, 100, 1_000_000_000, 1000);
             let eff = stats.effectiveness().unwrap();
             assert!((eff - 800.0).abs() < 0.001);
 
+            // 0 rows pruned = 0 effectiveness
             let stats = SelectivityStats::new(100, 100, 1_000_000_000, 1000);
             let eff = stats.effectiveness().unwrap();
             assert!((eff - 0.0).abs() < 0.001);
@@ -861,20 +726,19 @@ mod tests {
         #[test]
         fn update_accumulates_across_batches() {
             let mut stats = SelectivityStats::default();
-            assert_eq!(stats.rows_matched(), 0);
-            assert_eq!(stats.rows_total(), 0);
-            assert_eq!(stats.eval_nanos(), 0);
+            assert_eq!(stats.rows_matched, 0);
+            assert_eq!(stats.rows_total, 0);
+            assert_eq!(stats.eval_nanos, 0);
 
             stats.update(20, 100, 500, 1000);
-            assert_eq!(stats.rows_matched(), 20);
-            assert_eq!(stats.rows_total(), 100);
-            assert_eq!(stats.eval_nanos(), 500);
+            assert_eq!(stats.rows_matched, 20);
+            assert_eq!(stats.rows_total, 100);
+            assert_eq!(stats.eval_nanos, 500);
 
             stats.update(30, 100, 300, 1000);
-            assert_eq!(stats.rows_matched(), 50);
-            assert_eq!(stats.rows_total(), 200);
-            assert_eq!(stats.eval_nanos(), 800);
-            assert_eq!(stats.selectivity(), 0.75);
+            assert_eq!(stats.rows_matched, 50);
+            assert_eq!(stats.rows_total, 200);
+            assert_eq!(stats.eval_nanos, 800);
         }
     }
 
@@ -883,7 +747,7 @@ mod tests {
 
         #[test]
         fn all_promoted_pushes_every_filter() {
-            let (config, mut inner) = make_tracker(0.0, 100);
+            let (config, mut inner) = make_tracker(0.0);
 
             let filter1 = make_filter("a", 5);
             let filter2 = make_filter("a", 10);
@@ -902,15 +766,18 @@ mod tests {
 
         #[test]
         fn threshold_promotes_above_demotes_below() {
-            let (config, mut inner) = make_tracker(100.0, 100);
+            let (config, mut inner) = make_tracker(100.0);
 
             let filter1 = make_filter("a", 5);
             let filter2 = make_filter("a", 10);
             let optional_filter = make_optional_filter("c", 1);
 
-            inner.update(0, 20, 100, 1_000_000_000, 1000);
-            inner.update(1, 90, 100, 10_000_000_000, 1000);
-            inner.update(2, 10, 100, 1_000_000_000, 10_000);
+            // Multiple consistent samples for CI to converge
+            for _ in 0..3 {
+                inner.update(0, 20, 100, 1_000_000_000, 1000); // eff=800 > 100
+                inner.update(1, 90, 100, 10_000_000_000, 1000); // eff=1 < 100
+                inner.update(2, 10, 100, 1_000_000_000, 10_000); // eff=9000 > 100
+            }
 
             let result = inner.partition_filters(
                 vec![
@@ -929,7 +796,7 @@ mod tests {
 
         #[test]
         fn disabled_sends_all_to_post_scan() {
-            let (config, mut inner) = make_tracker(f64::INFINITY, 100);
+            let (config, mut inner) = make_tracker(f64::INFINITY);
             let filter = make_filter("a", 5);
             inner.update(0, 0, 100, 1, 1000);
 
@@ -941,13 +808,16 @@ mod tests {
 
         #[test]
         fn ineffective_optional_dropped_mandatory_demoted() {
-            let (config, mut inner) = make_tracker(100.0, 100);
+            let (config, mut inner) = make_tracker(100.0);
 
             let mandatory_filter = make_filter("a", 5);
             let optional_filter = make_optional_filter("c", 1);
 
-            inner.update(0, 50, 100, 100_000_000_000, 10_000);
-            inner.update(1, 50, 100, 100_000_000_000, 10_000);
+            // Multiple consistent samples for CI to converge on low effectiveness
+            for _ in 0..3 {
+                inner.update(0, 50, 100, 100_000_000_000, 10_000);
+                inner.update(1, 50, 100, 100_000_000_000, 10_000);
+            }
 
             let result = inner.partition_filters(
                 vec![(0, mandatory_filter.clone()), (1, optional_filter.clone())],
@@ -964,8 +834,8 @@ mod tests {
         use super::*;
 
         #[test]
-        fn new_filters_stay_collecting_until_min_rows() {
-            let (config, mut inner) = make_tracker(100.0, 10_000);
+        fn new_filters_stay_collecting_without_enough_samples() {
+            let (config, mut inner) = make_tracker(100.0);
 
             let filter_a = make_filter("a", 5);
             let filter_b = make_filter("a", 10);
@@ -976,50 +846,26 @@ mod tests {
             );
 
             assert!(result.promoted.is_empty());
-            assert_eq!(result.collecting.len(), 2, "new filters should be collecting");
+            assert_eq!(
+                result.collecting.len(),
+                2,
+                "new filters should be collecting"
+            );
             assert!(result.post_scan.is_empty());
         }
 
         #[test]
-        fn effective_min_rows_respects_fraction_floor_and_cap() {
-            // Fraction increases effective_min_rows above the floor
-            let config = TrackerConfig::new()
-                .with_min_bytes_per_sec(0.0)
-                .with_min_rows_for_collection(100)
-                .with_collection_fraction(0.05);
-            let mut inner = SelectivityTrackerInner::new();
-            assert_eq!(inner.effective_min_rows(&config), 100);
-            inner.notify_dataset_rows(10_000, &config);
-            assert_eq!(inner.effective_min_rows(&config), 500);
-
-            // Floor wins when fraction result is smaller
-            let config2 = TrackerConfig::new()
-                .with_min_bytes_per_sec(0.0)
-                .with_min_rows_for_collection(1000)
-                .with_collection_fraction(0.05);
-            let mut inner2 = SelectivityTrackerInner::new();
-            inner2.notify_dataset_rows(10_000, &config2);
-            assert_eq!(inner2.effective_min_rows(&config2), 1000);
-
-            // Cap limits effective_min_rows
-            let config3 = TrackerConfig::new()
-                .with_min_bytes_per_sec(0.0)
-                .with_min_rows_for_collection(100)
-                .with_collection_fraction(0.05)
-                .with_max_rows_for_collection(500);
-            let mut inner3 = SelectivityTrackerInner::new();
-            inner3.notify_dataset_rows(1_000_000, &config3);
-            assert_eq!(inner3.effective_min_rows(&config3), 500);
-        }
-
-        #[test]
         fn filters_evaluated_independently_as_data_arrives() {
-            let (config, mut inner) = make_tracker(100.0, 100);
+            let (config, mut inner) = make_tracker(100.0);
 
             let filter_a = make_filter("a", 5);
             let filter_b = make_filter("a", 10);
 
-            inner.update(0, 10, 100, 1_000_000_000, 10_000);
+            // Give filter0 enough consistent samples for CI promotion
+            for _ in 0..3 {
+                inner.update(0, 10, 100, 1_000_000_000, 10_000);
+            }
+            // filter1 has only 1 sample — not enough for CI
             inner.update(1, 5, 50, 500_000_000, 5_000);
 
             let result = inner.partition_filters(
@@ -1031,7 +877,10 @@ mod tests {
             assert_eq!(result.collecting.len(), 1, "filter1 still collecting");
             assert_eq!(result.collecting[0].0, 1);
 
-            inner.update(1, 5, 50, 500_000_000, 5_000);
+            // Give filter1 more consistent samples
+            for _ in 0..2 {
+                inner.update(1, 5, 50, 500_000_000, 5_000);
+            }
             let result = inner.partition_filters(
                 vec![(0, filter_a.clone()), (1, filter_b.clone())],
                 &config,
@@ -1049,7 +898,7 @@ mod tests {
 
         #[test]
         fn early_promotion_via_confidence_interval() {
-            let (config, mut inner) = make_tracker(100.0, 10_000);
+            let (config, mut inner) = make_tracker(100.0);
 
             let filter = make_filter("a", 5);
 
@@ -1068,7 +917,7 @@ mod tests {
 
         #[test]
         fn no_early_promotion_with_high_variance() {
-            let (config, mut inner) = make_tracker(500.0, 10_000);
+            let (config, mut inner) = make_tracker(500.0);
 
             let filter = make_filter("a", 5);
 
@@ -1084,7 +933,7 @@ mod tests {
 
         #[test]
         fn no_early_promotion_with_single_sample() {
-            let (config, mut inner) = make_tracker(100.0, 10_000);
+            let (config, mut inner) = make_tracker(100.0);
 
             let filter = make_filter("a", 5);
 
@@ -1099,7 +948,7 @@ mod tests {
 
         #[test]
         fn welford_stats_cleared_on_promotion() {
-            let (config, mut inner) = make_tracker(100.0, 10_000);
+            let (config, mut inner) = make_tracker(100.0);
 
             let filter = make_filter("a", 5);
 
@@ -1118,7 +967,7 @@ mod tests {
 
         #[test]
         fn generation_change_resets_to_collecting() {
-            let (_config, mut inner) = make_tracker(100.0, 100);
+            let (_config, mut inner) = make_tracker(100.0);
 
             inner.update(0, 10, 100, 1_000_000_000, 10_000);
 
@@ -1131,13 +980,15 @@ mod tests {
 
         #[test]
         fn collecting_to_promoted_clears_stats() {
-            let (config, mut inner) = make_tracker(100.0, 100);
+            let (config, mut inner) = make_tracker(100.0);
 
             let filter_a = make_filter("a", 5);
 
-            inner.update(0, 10, 100, 1_000_000_000, 10_000);
+            // Need multiple samples for CI
+            for _ in 0..3 {
+                inner.update(0, 10, 100, 1_000_000_000, 10_000);
+            }
             assert!(inner.stats.contains_key(&0));
-            assert_eq!(inner.stats.get(&0).unwrap().rows_total(), 100);
 
             let result = inner.partition_filters(vec![(0, filter_a.clone())], &config);
             assert_eq!(result.promoted.len(), 1);
@@ -1149,51 +1000,42 @@ mod tests {
         }
 
         #[test]
-        fn grace_period_then_demotion_on_low_effectiveness() {
-            let (config, mut inner) = make_tracker(100.0, 100);
+        fn promoted_filter_demoted_on_low_effectiveness() {
+            let (config, mut inner) = make_tracker(100.0);
 
             let filter_a = make_filter("a", 5);
-            let filter_b = make_filter("a", 10);
 
-            inner.update(0, 20, 100, 1_000_000_000, 1000);
-
-            let result = inner.partition_filters(
-                vec![(0, filter_a.clone()), (1, filter_b.clone())],
-                &config,
-            );
-            assert_eq!(result.promoted.len(), 1);
-            assert_eq!(result.promoted[0].0, 0);
-
-            let result = inner.partition_filters(
-                vec![(0, filter_a.clone()), (1, filter_b.clone())],
-                &config,
-            );
-            assert!(
-                result.promoted.iter().any(|(id, _)| *id == 0),
-                "filter 0 should remain in row_filters during grace period"
-            );
-
-            for _ in 0..5 {
-                inner.update(0, 100, 100, 1_000_000_000, 1000);
+            // Promote filter via CI (high effectiveness)
+            for _ in 0..3 {
+                inner.update(0, 20, 100, 1_000_000_000, 1000); // eff=800
             }
 
-            let result = inner.partition_filters(
-                vec![(0, filter_a.clone()), (1, filter_b.clone())],
-                &config,
-            );
+            let result = inner.partition_filters(vec![(0, filter_a.clone())], &config);
+            assert_eq!(result.promoted.len(), 1, "filter should be promoted");
+
+            // Now feed low-effectiveness data as a promoted filter
+            // Stats were cleared on promotion, so these are fresh
+            for _ in 0..5 {
+                inner.update(0, 100, 100, 1_000_000_000, 1000); // eff=0
+            }
+
+            let result = inner.partition_filters(vec![(0, filter_a.clone())], &config);
             assert!(
                 !result.promoted.iter().any(|(id, _)| *id == 0),
-                "filter 0 should be demoted after accumulating enough low-effectiveness data"
+                "filter 0 should be demoted after accumulating low-effectiveness data"
             );
         }
 
         #[test]
         fn demoted_filter_stays_demoted_across_partitions() {
-            let (config, mut inner) = make_tracker(100.0, 100);
+            let (config, mut inner) = make_tracker(100.0);
 
             let filter_a = make_filter("a", 5);
 
-            inner.update(0, 100, 100, 1_000_000_000, 1000);
+            // Multiple samples needed for CI to converge on low effectiveness
+            for _ in 0..3 {
+                inner.update(0, 100, 100, 1_000_000_000, 1000); // eff=0
+            }
 
             let result = inner.partition_filters(vec![(0, filter_a.clone())], &config);
             assert!(result.promoted.is_empty());
@@ -1209,6 +1051,5 @@ mod tests {
             );
             assert_eq!(result.post_scan.len(), 1);
         }
-
     }
 }
