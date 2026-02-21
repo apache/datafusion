@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-extern crate criterion;
-
 use std::hint::black_box;
 use std::sync::Arc;
 

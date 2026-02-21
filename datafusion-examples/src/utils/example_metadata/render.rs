@@ -85,15 +85,6 @@ cargo run --example dataframe -- dataframe
 ```
 "#;
 
-/// Well-known abbreviations used to preserve correct capitalization
-/// when generating human-readable documentation titles.
-pub const ABBREVIATIONS: &[(&str, &str)] = &[
-    ("dataframe", "DataFrame"),
-    ("io", "IO"),
-    ("sql", "SQL"),
-    ("udf", "UDF"),
-];
-
 /// Generates Markdown documentation for DataFusion examples.
 ///
 /// If `group` is `None`, documentation is generated for all example groups.

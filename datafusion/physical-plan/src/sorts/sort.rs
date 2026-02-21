@@ -819,7 +819,8 @@ impl ExternalSorter {
         match e {
             DataFusionError::ResourcesExhausted(_) => e.context(
                 "Not enough memory to continue external sort. \
-                    Consider increasing the memory limit, or decreasing sort_spill_reservation_bytes"
+                    Consider increasing the memory limit config: 'datafusion.runtime.memory_limit', \
+                    or decreasing the config: 'datafusion.execution.sort_spill_reservation_bytes'."
             ),
             // This is not an OOM error, so just return it as is.
             _ => e,
@@ -1352,10 +1353,6 @@ impl ExecutionPlan for SortExec {
         Some(self.metrics_set.clone_inner())
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
-    }
-
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         if !self.preserve_partitioning() {
             return self
@@ -1736,6 +1733,21 @@ mod tests {
             "Assertion failed: expected a ResourcesExhausted error, but got: {err:?}"
         );
 
+        // Verify external sorter error message when resource is exhausted
+        let config_vector = vec![
+            "datafusion.runtime.memory_limit",
+            "datafusion.execution.sort_spill_reservation_bytes",
+        ];
+        let error_message = err.message().to_string();
+        for config in config_vector.into_iter() {
+            assert!(
+                error_message.as_str().contains(config),
+                "Config: '{}' should be contained in error message: {}.",
+                config,
+                error_message.as_str()
+            );
+        }
+
         Ok(())
     }
 
@@ -1756,7 +1768,7 @@ mod tests {
 
         // The input has 200 partitions, each partition has a batch containing 100 rows.
         // Each row has a single Utf8 column, the Utf8 string values are roughly 42 bytes.
-        // The total size of the input is roughly 8.4 KB.
+        // The total size of the input is roughly 820 KB.
         let input = test::scan_partitioned_utf8(200);
         let schema = input.schema();
 

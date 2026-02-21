@@ -20,10 +20,12 @@
 //! An example group is defined as a directory containing a `main.rs` file
 //! under the examples root. This module is intentionally filesystem-focused
 //! and does not perform any parsing or rendering.
+//! Discovery fails if no valid example groups are found.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use datafusion::common::exec_err;
 use datafusion::error::Result;
 
 /// Discovers all example group directories under the given root.
@@ -35,10 +37,15 @@ pub fn discover_example_groups(root: &Path) -> Result<Vec<PathBuf>> {
         let entry = entry?;
         let path = entry.path();
 
-        if path.is_dir() && path.join("main.rs").exists() {
+        if path.is_dir() && path.join("main.rs").is_file() {
             groups.push(path);
         }
     }
+
+    if groups.is_empty() {
+        return exec_err!("No example groups found under: {}", root.display());
+    }
+
     groups.sort();
     Ok(groups)
 }
@@ -46,6 +53,8 @@ pub fn discover_example_groups(root: &Path) -> Result<Vec<PathBuf>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::utils::example_metadata::test_utils::assert_exec_err_contains;
 
     use std::fs::{self, File};
 
@@ -66,10 +75,29 @@ mod tests {
         fs::create_dir(&group2)?;
 
         let groups = discover_example_groups(root)?;
-
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0], group1);
+        Ok(())
+    }
 
+    #[test]
+    fn discover_example_groups_errors_if_main_rs_is_a_directory() -> Result<()> {
+        let tmp = TempDir::new()?;
+        let root = tmp.path();
+        let group = root.join("group");
+        fs::create_dir(&group)?;
+        fs::create_dir(group.join("main.rs"))?;
+
+        let err = discover_example_groups(root).unwrap_err();
+        assert_exec_err_contains(err, "No example groups found");
+        Ok(())
+    }
+
+    #[test]
+    fn discover_example_groups_errors_if_none_found() -> Result<()> {
+        let tmp = TempDir::new()?;
+        let err = discover_example_groups(tmp.path()).unwrap_err();
+        assert_exec_err_contains(err, "No example groups found");
         Ok(())
     }
 }

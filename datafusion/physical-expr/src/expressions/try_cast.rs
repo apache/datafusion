@@ -206,7 +206,7 @@ mod tests {
             for (i, x) in $VEC.iter().enumerate() {
                 match x {
                     Some(x) => assert_eq!(result.value(i), *x),
-                    None => assert!(!result.is_valid(i)),
+                    None => assert!(result.is_null(i)),
                 }
             }
         }};
@@ -260,7 +260,7 @@ mod tests {
             for (i, x) in $VEC.iter().enumerate() {
                 match x {
                     Some(x) => assert_eq!(result.value(i), *x),
-                    None => assert!(!result.is_valid(i)),
+                    None => assert!(result.is_null(i)),
                 }
             }
         }};

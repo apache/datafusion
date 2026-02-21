@@ -92,3 +92,7 @@ name = "array_remove"
 [[bench]]
 harness = false
 name = "array_repeat"
+
+[[bench]]
+harness = false
+name = "array_set_ops"

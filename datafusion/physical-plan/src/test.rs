@@ -169,10 +169,6 @@ impl ExecutionPlan for TestMemoryExec {
         unimplemented!()
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        self.statistics_inner()
-    }
-
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         if partition.is_some() {
             Ok(Statistics::new_unknown(&self.schema))

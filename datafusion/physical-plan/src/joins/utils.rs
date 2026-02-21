@@ -977,6 +977,17 @@ pub(crate) fn apply_join_filter_to_indices(
     ))
 }
 
+/// Creates a [RecordBatch] with zero columns but the given row count.
+/// Used when a join has an empty projection (e.g. `SELECT count(1) ...`).
+fn new_empty_schema_batch(schema: &Schema, row_count: usize) -> Result<RecordBatch> {
+    let options = RecordBatchOptions::new().with_row_count(Some(row_count));
+    Ok(RecordBatch::try_new_with_options(
+        Arc::new(schema.clone()),
+        vec![],
+        &options,
+    )?)
+}
+
 /// Returns a new [RecordBatch] by combining the `left` and `right` according to `indices`.
 /// The resulting batch has [Schema] `schema`.
 pub(crate) fn build_batch_from_indices(
@@ -989,15 +1000,7 @@ pub(crate) fn build_batch_from_indices(
     build_side: JoinSide,
 ) -> Result<RecordBatch> {
     if schema.fields().is_empty() {
-        let options = RecordBatchOptions::new()
-            .with_match_field_names(true)
-            .with_row_count(Some(build_indices.len()));
-
-        return Ok(RecordBatch::try_new_with_options(
-            Arc::new(schema.clone()),
-            vec![],
-            &options,
-        )?);
+        return new_empty_schema_batch(schema, build_indices.len());
     }
 
     // build the columns of the new [RecordBatch]:
@@ -1057,6 +1060,9 @@ pub(crate) fn build_batch_empty_build_side(
         // the remaining joins will return data for the right columns and null for the left ones
         JoinType::Right | JoinType::Full | JoinType::RightAnti | JoinType::RightMark => {
             let num_rows = probe_batch.num_rows();
+            if schema.fields().is_empty() {
+                return new_empty_schema_batch(schema, num_rows);
+            }
             let mut columns: Vec<Arc<dyn Array>> =
                 Vec::with_capacity(schema.fields().len());
 
@@ -2886,6 +2892,37 @@ mod tests {
             join_schema.metadata(),
             &HashMap::from([("key".to_string(), "right".to_string())])
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_build_batch_empty_build_side_empty_schema() -> Result<()> {
+        // When the output schema has no fields (empty projection pushed into
+        // the join), build_batch_empty_build_side should return a RecordBatch
+        // with the correct row count but no columns.
+        let empty_schema = Schema::empty();
+
+        let build_batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)])),
+            vec![Arc::new(arrow::array::Int32Array::from(vec![1, 2, 3]))],
+        )?;
+
+        let probe_batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("b", DataType::Int32, true)])),
+            vec![Arc::new(arrow::array::Int32Array::from(vec![4, 5, 6, 7]))],
+        )?;
+
+        let result = build_batch_empty_build_side(
+            &empty_schema,
+            &build_batch,
+            &probe_batch,
+            &[], // no column indices with empty projection
+            JoinType::Right,
+        )?;
+
+        assert_eq!(result.num_rows(), 4);
+        assert_eq!(result.num_columns(), 0);
 
         Ok(())
     }

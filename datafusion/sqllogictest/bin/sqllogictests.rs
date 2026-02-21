@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use clap::Parser;
+use clap::{ColorChoice, Parser};
 use datafusion::common::instant::Instant;
 use datafusion::common::utils::get_available_parallelism;
 use datafusion::common::{DataFusionError, Result, exec_datafusion_err, exec_err};
@@ -44,7 +44,9 @@ use datafusion::common::runtime::SpawnedTask;
 use futures::FutureExt;
 use std::ffi::OsStr;
 use std::fs;
+use std::io::{IsTerminal, stdout};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 #[cfg(feature = "postgres")]
 mod postgres_container;
@@ -123,6 +125,8 @@ async fn run_tests() -> Result<()> {
     .unwrap()
     .progress_chars("##-");
 
+    let colored_output = options.is_colored();
+
     let start = Instant::now();
 
     let test_files = read_test_files(&options)?;
@@ -176,6 +180,7 @@ async fn run_tests() -> Result<()> {
                             m_style_clone,
                             filters.as_ref(),
                             currently_running_sql_tracker_clone,
+                            colored_output,
                         )
                         .await?
                     }
@@ -187,6 +192,7 @@ async fn run_tests() -> Result<()> {
                             m_style_clone,
                             filters.as_ref(),
                             currently_running_sql_tracker_clone,
+                            colored_output,
                         )
                         .await?
                     }
@@ -294,6 +300,7 @@ async fn run_test_file_substrait_round_trip(
     mp_style: ProgressStyle,
     filters: &[Filter],
     currently_executing_sql_tracker: CurrentlyExecutingSqlTracker,
+    colored_output: bool,
 ) -> Result<()> {
     let TestFile {
         path,
@@ -323,7 +330,7 @@ async fn run_test_file_substrait_round_trip(
     runner.with_column_validator(strict_column_validator);
     runner.with_normalizer(value_normalizer);
     runner.with_validator(validator);
-    let res = run_file_in_runner(path, runner, filters).await;
+    let res = run_file_in_runner(path, runner, filters, colored_output).await;
     pb.finish_and_clear();
     res
 }
@@ -335,6 +342,7 @@ async fn run_test_file(
     mp_style: ProgressStyle,
     filters: &[Filter],
     currently_executing_sql_tracker: CurrentlyExecutingSqlTracker,
+    colored_output: bool,
 ) -> Result<()> {
     let TestFile {
         path,
@@ -364,7 +372,7 @@ async fn run_test_file(
     runner.with_column_validator(strict_column_validator);
     runner.with_normalizer(value_normalizer);
     runner.with_validator(validator);
-    let result = run_file_in_runner(path, runner, filters).await;
+    let result = run_file_in_runner(path, runner, filters, colored_output).await;
     pb.finish_and_clear();
     result
 }
@@ -373,6 +381,7 @@ async fn run_file_in_runner<D: AsyncDB, M: MakeConnection<Conn = D>>(
     path: PathBuf,
     mut runner: sqllogictest::Runner<D, M>,
     filters: &[Filter],
+    colored_output: bool,
 ) -> Result<()> {
     let path = path.canonicalize()?;
     let records =
@@ -386,7 +395,11 @@ async fn run_file_in_runner<D: AsyncDB, M: MakeConnection<Conn = D>>(
             continue;
         }
         if let Err(err) = runner.run_async(record).await {
-            errs.push(format!("{err}"));
+            if colored_output {
+                errs.push(format!("{}", err.display(true)));
+            } else {
+                errs.push(format!("{err}"));
+            }
         }
     }
 
@@ -479,7 +492,7 @@ async fn run_test_file_with_postgres(
     runner.with_column_validator(strict_column_validator);
     runner.with_normalizer(value_normalizer);
     runner.with_validator(validator);
-    let result = run_file_in_runner(path, runner, filters).await;
+    let result = run_file_in_runner(path, runner, filters, false).await;
     pb.finish_and_clear();
     result
 }
@@ -772,6 +785,14 @@ struct Options {
         default_value_t = get_available_parallelism()
     )]
     test_threads: usize,
+
+    #[clap(
+        long,
+        value_name = "MODE",
+        help = "Control colored output",
+        default_value_t = ColorChoice::Auto
+    )]
+    color: ColorChoice,
 }
 
 impl Options {
@@ -811,6 +832,37 @@ impl Options {
 
         if self.show_output {
             eprintln!("WARNING: Ignoring `--show-output` compatibility option");
+        }
+    }
+
+    /// Determine if colour output should be enabled, respecting --color, NO_COLOR, CARGO_TERM_COLOR, and terminal detection
+    fn is_colored(&self) -> bool {
+        // NO_COLOR takes precedence
+        if std::env::var_os("NO_COLOR").is_some() {
+            return false;
+        }
+
+        match self.color {
+            ColorChoice::Always => true,
+            ColorChoice::Never => false,
+            ColorChoice::Auto => {
+                // CARGO_TERM_COLOR takes precedence over auto-detection
+                let cargo_term_color = ColorChoice::from_str(
+                    &std::env::var("CARGO_TERM_COLOR")
+                        .unwrap_or_else(|_| "auto".to_string()),
+                )
+                .unwrap_or(ColorChoice::Auto);
+                match cargo_term_color {
+                    ColorChoice::Always => true,
+                    ColorChoice::Never => false,
+                    ColorChoice::Auto => {
+                        // Auto for both CLI argument and CARGO_TERM_COLOR,
+                        // then use colors by default for non-dumb terminals
+                        stdout().is_terminal()
+                            && std::env::var("TERM").unwrap_or_default() != "dumb"
+                    }
+                }
+            }
         }
     }
 }

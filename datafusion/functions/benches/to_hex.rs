@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-extern crate criterion;
-
 use arrow::array::Int64Array;
 use arrow::datatypes::{DataType, Field, Int32Type, Int64Type};
 use arrow::util::bench_util::create_primitive_array;

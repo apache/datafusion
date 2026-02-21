@@ -45,7 +45,7 @@ async-trait = { workspace = true }
 bigdecimal = { workspace = true }
 bytes = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }
-clap = { version = "4.5.57", features = ["derive", "env"] }
+clap = { version = "4.5.59", features = ["derive", "env"] }
 datafusion = { workspace = true, default-features = true, features = ["avro"] }
 datafusion-spark = { workspace = true, features = ["core"] }
 datafusion-substrait = { workspace = true, default-features = true }
@@ -58,7 +58,7 @@ object_store = { workspace = true }
 postgres-types = { version = "0.2.12", features = ["derive", "with-chrono-0_4"], optional = true }
 # When updating the following dependency verify that sqlite test file regeneration works correctly
 # by running the regenerate_sqlite_files.sh script.
-sqllogictest = "0.29.0"
+sqllogictest = "0.29.1"
 sqlparser = { workspace = true }
 tempfile = { workspace = true }
 testcontainers-modules = { workspace = true, features = ["postgres"], optional = true }

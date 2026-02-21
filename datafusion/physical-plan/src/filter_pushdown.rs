@@ -37,14 +37,13 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use arrow_schema::Schema;
+use arrow_schema::SchemaRef;
 use datafusion_common::{
     Result,
-    tree_node::{TreeNode, TreeNodeRecursion},
+    tree_node::{Transformed, TreeNode},
 };
-use datafusion_physical_expr::{expressions::Column, utils::reassign_expr_columns};
+use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use itertools::Itertools;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FilterPushdownPhase {
@@ -310,53 +309,80 @@ pub struct ChildFilterDescription {
     pub(crate) self_filters: Vec<Arc<dyn PhysicalExpr>>,
 }
 
-/// A utility for checking whether a filter expression can be pushed down
-/// to a child node based on column availability.
+/// Validates and remaps filter column references to a target schema in one step.
 ///
-/// This checker validates that all columns referenced in a filter expression
-/// exist in the target schema. If any column in the filter is not present
-/// in the schema, the filter cannot be pushed down to that child.
-pub(crate) struct FilterColumnChecker<'a> {
-    column_names: HashSet<&'a str>,
+/// When pushing filters from a parent to a child node, we need to:
+/// 1. Verify that all columns referenced by the filter exist in the target
+/// 2. Remap column indices to match the target schema
+///
+/// `allowed_indices` controls which column indices (in the parent schema) are
+/// considered valid. For single-input nodes this defaults to
+/// `0..child_schema.len()` (all columns are reachable). For join nodes it is
+/// restricted to the subset of output columns that map to the target child,
+/// which is critical when different sides have same-named columns.
+pub(crate) struct FilterRemapper {
+    /// The target schema to remap column indices into.
+    child_schema: SchemaRef,
+    /// Only columns at these indices (in the *parent* schema) are considered
+    /// valid. For non-join nodes this defaults to `0..child_schema.len()`.
+    allowed_indices: HashSet<usize>,
 }
 
-impl<'a> FilterColumnChecker<'a> {
-    /// Creates a new [`FilterColumnChecker`] from the given schema.
-    ///
-    /// Extracts all column names from the schema's fields to build
-    /// a lookup set for efficient column existence checks.
-    pub(crate) fn new(input_schema: &'a Schema) -> Self {
-        let column_names: HashSet<&str> = input_schema
-            .fields()
-            .iter()
-            .map(|f| f.name().as_str())
-            .collect();
-        Self { column_names }
+impl FilterRemapper {
+    /// Create a remapper that accepts any column whose index falls within
+    /// `0..child_schema.len()` and whose name exists in the target schema.
+    pub(crate) fn new(child_schema: SchemaRef) -> Self {
+        let allowed_indices = (0..child_schema.fields().len()).collect();
+        Self {
+            child_schema,
+            allowed_indices,
+        }
     }
 
-    /// Checks whether a filter expression can be pushed down to the child
-    /// whose schema was used to create this checker.
-    ///
-    /// Returns `true` if all [`Column`] references in the filter expression
-    /// exist in the target schema, `false` otherwise.
-    ///
-    /// This method traverses the entire expression tree, checking each
-    /// column reference against the available column names.
-    pub(crate) fn can_pushdown(&self, filter: &Arc<dyn PhysicalExpr>) -> bool {
-        let mut can_apply = true;
-        filter
-            .apply(|expr| {
-                if let Some(column) = expr.as_any().downcast_ref::<Column>()
-                    && !self.column_names.contains(column.name())
-                {
-                    can_apply = false;
-                    return Ok(TreeNodeRecursion::Stop);
-                }
+    /// Create a remapper that only accepts columns at the given indices.
+    /// This is used by join nodes to restrict pushdown to one side of the
+    /// join when both sides have same-named columns.
+    fn with_allowed_indices(
+        child_schema: SchemaRef,
+        allowed_indices: HashSet<usize>,
+    ) -> Self {
+        Self {
+            child_schema,
+            allowed_indices,
+        }
+    }
 
-                Ok(TreeNodeRecursion::Continue)
-            })
-            .expect("infallible traversal");
-        can_apply
+    /// Try to remap a filter's column references to the target schema.
+    ///
+    /// Validates and remaps in a single tree traversal: for each column,
+    /// checks that its index is in the allowed set and that
+    /// its name exists in the target schema, then remaps the index.
+    /// Returns `Some(remapped)` if all columns are valid, or `None` if any
+    /// column fails validation.
+    pub(crate) fn try_remap(
+        &self,
+        filter: &Arc<dyn PhysicalExpr>,
+    ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
+        let mut all_valid = true;
+        let transformed = Arc::clone(filter).transform_down(|expr| {
+            if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+                if self.allowed_indices.contains(&col.index())
+                    && let Ok(new_index) = self.child_schema.index_of(col.name())
+                {
+                    Ok(Transformed::yes(Arc::new(Column::new(
+                        col.name(),
+                        new_index,
+                    ))))
+                } else {
+                    all_valid = false;
+                    Ok(Transformed::complete(expr))
+                }
+            } else {
+                Ok(Transformed::no(expr))
+            }
+        })?;
+
+        Ok(all_valid.then_some(transformed.data))
     }
 }
 
@@ -372,24 +398,41 @@ impl ChildFilterDescription {
         parent_filters: &[Arc<dyn PhysicalExpr>],
         child: &Arc<dyn crate::ExecutionPlan>,
     ) -> Result<Self> {
-        let child_schema = child.schema();
+        let remapper = FilterRemapper::new(child.schema());
+        Self::remap_filters(parent_filters, &remapper)
+    }
 
-        // Build a set of column names in the child schema for quick lookup
-        let checker = FilterColumnChecker::new(&child_schema);
+    /// Like [`Self::from_child`], but restricts which parent-level columns are
+    /// considered reachable through this child.
+    ///
+    /// `allowed_indices` is the set of column indices (in the *parent*
+    /// schema) that map to this child's side of a join. A filter is only
+    /// eligible for pushdown when **every** column index it references
+    /// appears in `allowed_indices`.
+    ///
+    /// This prevents incorrect pushdown when different join sides have
+    /// columns with the same name: matching on index ensures a filter
+    /// referencing the right side's `k@2` is not pushed to the left side
+    /// which also has a column named `k` but at a different index.
+    pub fn from_child_with_allowed_indices(
+        parent_filters: &[Arc<dyn PhysicalExpr>],
+        allowed_indices: HashSet<usize>,
+        child: &Arc<dyn crate::ExecutionPlan>,
+    ) -> Result<Self> {
+        let remapper =
+            FilterRemapper::with_allowed_indices(child.schema(), allowed_indices);
+        Self::remap_filters(parent_filters, &remapper)
+    }
 
-        // Analyze each parent filter
+    fn remap_filters(
+        parent_filters: &[Arc<dyn PhysicalExpr>],
+        remapper: &FilterRemapper,
+    ) -> Result<Self> {
         let mut child_parent_filters = Vec::with_capacity(parent_filters.len());
-
         for filter in parent_filters {
-            if checker.can_pushdown(filter) {
-                // All columns exist in child - we can push down
-                // Need to reassign column indices to match child schema
-                let reassigned_filter =
-                    reassign_expr_columns(Arc::clone(filter), &child_schema)?;
-                child_parent_filters
-                    .push(PushedDownPredicate::supported(reassigned_filter));
+            if let Some(remapped) = remapper.try_remap(filter)? {
+                child_parent_filters.push(PushedDownPredicate::supported(remapped));
             } else {
-                // Some columns don't exist in child - cannot push down
                 child_parent_filters
                     .push(PushedDownPredicate::unsupported(Arc::clone(filter)));
             }
@@ -399,6 +442,17 @@ impl ChildFilterDescription {
             parent_filters: child_parent_filters,
             self_filters: vec![],
         })
+    }
+
+    /// Mark all parent filters as unsupported for this child.
+    pub fn all_unsupported(parent_filters: &[Arc<dyn PhysicalExpr>]) -> Self {
+        Self {
+            parent_filters: parent_filters
+                .iter()
+                .map(|f| PushedDownPredicate::unsupported(Arc::clone(f)))
+                .collect(),
+            self_filters: vec![],
+        }
     }
 
     /// Add a self filter (from the current node) to be pushed down to this child.
@@ -476,15 +530,9 @@ impl FilterDescription {
         children: &[&Arc<dyn crate::ExecutionPlan>],
     ) -> Self {
         let mut desc = Self::new();
-        let child_filters = parent_filters
-            .iter()
-            .map(|f| PushedDownPredicate::unsupported(Arc::clone(f)))
-            .collect_vec();
         for _ in 0..children.len() {
-            desc = desc.with_child(ChildFilterDescription {
-                parent_filters: child_filters.clone(),
-                self_filters: vec![],
-            });
+            desc =
+                desc.with_child(ChildFilterDescription::all_unsupported(parent_filters));
         }
         desc
     }

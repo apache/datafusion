@@ -38,6 +38,22 @@ use datafusion_expr::ColumnarValue;
 /// from the beginning of the input string where the trimmed result starts.
 pub(crate) trait Trimmer {
     fn trim<'a>(input: &'a str, pattern: &[char]) -> (&'a str, u32);
+
+    /// Optimized trim for a single ASCII byte.
+    /// Uses byte-level scanning instead of char-level iteration.
+    fn trim_ascii_char(input: &str, byte: u8) -> (&str, u32);
+}
+
+/// Returns the number of leading bytes matching `byte`
+#[inline]
+fn leading_bytes(bytes: &[u8], byte: u8) -> usize {
+    bytes.iter().take_while(|&&b| b == byte).count()
+}
+
+/// Returns the number of trailing bytes matching `byte`
+#[inline]
+fn trailing_bytes(bytes: &[u8], byte: u8) -> usize {
+    bytes.iter().rev().take_while(|&&b| b == byte).count()
 }
 
 /// Left trim - removes leading characters
@@ -46,9 +62,18 @@ pub(crate) struct TrimLeft;
 impl Trimmer for TrimLeft {
     #[inline]
     fn trim<'a>(input: &'a str, pattern: &[char]) -> (&'a str, u32) {
+        if pattern.len() == 1 && pattern[0].is_ascii() {
+            return Self::trim_ascii_char(input, pattern[0] as u8);
+        }
         let trimmed = input.trim_start_matches(pattern);
         let offset = (input.len() - trimmed.len()) as u32;
         (trimmed, offset)
+    }
+
+    #[inline]
+    fn trim_ascii_char(input: &str, byte: u8) -> (&str, u32) {
+        let start = leading_bytes(input.as_bytes(), byte);
+        (&input[start..], start as u32)
     }
 }
 
@@ -58,8 +83,18 @@ pub(crate) struct TrimRight;
 impl Trimmer for TrimRight {
     #[inline]
     fn trim<'a>(input: &'a str, pattern: &[char]) -> (&'a str, u32) {
+        if pattern.len() == 1 && pattern[0].is_ascii() {
+            return Self::trim_ascii_char(input, pattern[0] as u8);
+        }
         let trimmed = input.trim_end_matches(pattern);
         (trimmed, 0)
+    }
+
+    #[inline]
+    fn trim_ascii_char(input: &str, byte: u8) -> (&str, u32) {
+        let bytes = input.as_bytes();
+        let end = bytes.len() - trailing_bytes(bytes, byte);
+        (&input[..end], 0)
     }
 }
 
@@ -69,10 +104,21 @@ pub(crate) struct TrimBoth;
 impl Trimmer for TrimBoth {
     #[inline]
     fn trim<'a>(input: &'a str, pattern: &[char]) -> (&'a str, u32) {
+        if pattern.len() == 1 && pattern[0].is_ascii() {
+            return Self::trim_ascii_char(input, pattern[0] as u8);
+        }
         let left_trimmed = input.trim_start_matches(pattern);
         let offset = (input.len() - left_trimmed.len()) as u32;
         let trimmed = left_trimmed.trim_end_matches(pattern);
         (trimmed, offset)
+    }
+
+    #[inline]
+    fn trim_ascii_char(input: &str, byte: u8) -> (&str, u32) {
+        let bytes = input.as_bytes();
+        let start = leading_bytes(bytes, byte);
+        let end = bytes.len() - trailing_bytes(&bytes[start..], byte);
+        (&input[start..end], start as u32)
     }
 }
 
@@ -99,19 +145,24 @@ fn string_view_trim<Tr: Trimmer>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     match args.len() {
         1 => {
-            // Default whitespace trim - pattern is just space
-            let pattern = [' '];
+            // Trim spaces by default
             for (src_str_opt, raw_view) in string_view_array
                 .iter()
                 .zip(string_view_array.views().iter())
             {
-                trim_and_append_view::<Tr>(
-                    src_str_opt,
-                    &pattern,
-                    &mut views_buf,
-                    &mut null_builder,
-                    raw_view,
-                );
+                if let Some(src_str) = src_str_opt {
+                    let (trimmed, offset) = Tr::trim_ascii_char(src_str, b' ');
+                    make_and_append_view(
+                        &mut views_buf,
+                        &mut null_builder,
+                        raw_view,
+                        trimmed,
+                        offset,
+                    );
+                } else {
+                    null_builder.append_null();
+                    views_buf.push(0);
+                }
             }
         }
         2 => {
@@ -141,6 +192,7 @@ fn string_view_trim<Tr: Trimmer>(args: &[ArrayRef]) -> Result<ArrayRef> {
                 }
             } else {
                 // Per-row pattern - must compute pattern chars for each row
+                let mut pattern: Vec<char> = Vec::new();
                 for ((src_str_opt, raw_view), characters_opt) in string_view_array
                     .iter()
                     .zip(string_view_array.views().iter())
@@ -149,7 +201,8 @@ fn string_view_trim<Tr: Trimmer>(args: &[ArrayRef]) -> Result<ArrayRef> {
                     if let (Some(src_str), Some(characters)) =
                         (src_str_opt, characters_opt)
                     {
-                        let pattern: Vec<char> = characters.chars().collect();
+                        pattern.clear();
+                        pattern.extend(characters.chars());
                         let (trimmed, offset) = Tr::trim(src_str, &pattern);
                         make_and_append_view(
                             &mut views_buf,
@@ -225,11 +278,10 @@ fn string_trim<T: OffsetSizeTrait, Tr: Trimmer>(args: &[ArrayRef]) -> Result<Arr
 
     match args.len() {
         1 => {
-            // Default whitespace trim - pattern is just space
-            let pattern = [' '];
+            // Trim spaces by default
             let result = string_array
                 .iter()
-                .map(|string| string.map(|s| Tr::trim(s, &pattern).0))
+                .map(|string| string.map(|s| Tr::trim_ascii_char(s, b' ').0))
                 .collect::<GenericStringArray<T>>();
 
             Ok(Arc::new(result) as ArrayRef)
@@ -255,12 +307,14 @@ fn string_trim<T: OffsetSizeTrait, Tr: Trimmer>(args: &[ArrayRef]) -> Result<Arr
             }
 
             // Per-row pattern - must compute pattern chars for each row
+            let mut pattern: Vec<char> = Vec::new();
             let result = string_array
                 .iter()
                 .zip(characters_array.iter())
                 .map(|(string, characters)| match (string, characters) {
                     (Some(s), Some(c)) => {
-                        let pattern: Vec<char> = c.chars().collect();
+                        pattern.clear();
+                        pattern.extend(c.chars());
                         Some(Tr::trim(s, &pattern).0)
                     }
                     _ => None,

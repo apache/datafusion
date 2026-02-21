@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use arrow::array::{
     ArrayAccessor, ArrayIter, ArrayRef, ArrowPrimitiveType, AsArray, OffsetSizeTrait,
-    PrimitiveArray, new_null_array,
+    PrimitiveArray,
 };
 use arrow::datatypes::{ArrowNativeType, DataType, Int32Type, Int64Type};
 
@@ -138,9 +138,11 @@ impl ScalarUDFImpl for FindInSetFunc {
                     | ScalarValue::LargeUtf8(str_list_literal),
                 ),
             ) => {
-                let result_array = match str_list_literal {
+                match str_list_literal {
                     // find_in_set(column_a, null) = null
-                    None => new_null_array(return_field.data_type(), str_array.len()),
+                    None => Ok(ColumnarValue::Scalar(ScalarValue::try_new_null(
+                        return_field.data_type(),
+                    )?)),
                     Some(str_list_literal) => {
                         let str_list = str_list_literal.split(',').collect::<Vec<&str>>();
                         let result = match str_array.data_type() {
@@ -171,10 +173,9 @@ impl ScalarUDFImpl for FindInSetFunc {
                                 )
                             }
                         };
-                        Arc::new(result?)
+                        Ok(ColumnarValue::Array(Arc::new(result?)))
                     }
-                };
-                Ok(ColumnarValue::Array(result_array))
+                }
             }
 
             // `string` is scalar, `str_list` is an array
@@ -186,11 +187,11 @@ impl ScalarUDFImpl for FindInSetFunc {
                 ),
                 ColumnarValue::Array(str_list_array),
             ) => {
-                let res = match string_literal {
+                match string_literal {
                     // find_in_set(null, column_b) = null
-                    None => {
-                        new_null_array(return_field.data_type(), str_list_array.len())
-                    }
+                    None => Ok(ColumnarValue::Scalar(ScalarValue::try_new_null(
+                        return_field.data_type(),
+                    )?)),
                     Some(string) => {
                         let result = match str_list_array.data_type() {
                             DataType::Utf8 => {
@@ -217,10 +218,9 @@ impl ScalarUDFImpl for FindInSetFunc {
                                 )
                             }
                         };
-                        Arc::new(result?)
+                        Ok(ColumnarValue::Array(Arc::new(result?)))
                     }
-                };
-                Ok(ColumnarValue::Array(res))
+                }
             }
 
             // both inputs are arrays

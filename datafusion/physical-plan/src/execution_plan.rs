@@ -472,17 +472,6 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         None
     }
 
-    /// Returns statistics for this `ExecutionPlan` node. If statistics are not
-    /// available, should return [`Statistics::new_unknown`] (the default), not
-    /// an error.
-    ///
-    /// For TableScan executors, which supports filter pushdown, special attention
-    /// needs to be paid to whether the stats returned by this method are exact or not
-    #[deprecated(since = "48.0.0", note = "Use `partition_statistics` method instead")]
-    fn statistics(&self) -> Result<Statistics> {
-        Ok(Statistics::new_unknown(&self.schema()))
-    }
-
     /// Returns statistics for a specific partition of this `ExecutionPlan` node.
     /// If statistics are not available, should return [`Statistics::new_unknown`]
     /// (the default), not an error.
@@ -1508,10 +1497,6 @@ mod tests {
             unimplemented!()
         }
 
-        fn statistics(&self) -> Result<Statistics> {
-            unimplemented!()
-        }
-
         fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
             unimplemented!()
         }
@@ -1572,10 +1557,6 @@ mod tests {
             _partition: usize,
             _context: Arc<TaskContext>,
         ) -> Result<SendableRecordBatchStream> {
-            unimplemented!()
-        }
-
-        fn statistics(&self) -> Result<Statistics> {
             unimplemented!()
         }
 

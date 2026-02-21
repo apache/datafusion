@@ -29,7 +29,7 @@ use datafusion::logical_expr::TableProviderFilterPushDown;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
-    SendableRecordBatchStream, Statistics,
+    SendableRecordBatchStream,
 };
 use datafusion::prelude::*;
 use datafusion::scalar::ScalarValue;
@@ -148,12 +148,6 @@ impl ExecutionPlan for CustomPlan {
                     .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
             })),
         )))
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        // here we could provide more accurate statistics
-        // but we want to test the filter pushdown not the CBOs
-        Ok(Statistics::new_unknown(&self.schema()))
     }
 }
 

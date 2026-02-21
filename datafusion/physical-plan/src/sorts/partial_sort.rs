@@ -329,10 +329,6 @@ impl ExecutionPlan for PartialSortExec {
         Some(self.metrics_set.clone_inner())
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        self.input.partition_statistics(None)
-    }
-
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         self.input.partition_statistics(partition)
     }

@@ -15,18 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#[macro_use]
-extern crate criterion;
-extern crate arrow;
-
 use std::{hint::black_box, sync::Arc};
 
-use crate::criterion::Criterion;
 use arrow::{
     array::{ArrayRef, FixedSizeListArray, Int32Array, ListArray, ListViewArray},
     buffer::{NullBuffer, OffsetBuffer, ScalarBuffer},
     datatypes::{DataType, Field},
 };
+use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_functions_nested::reverse::array_reverse_inner;
 
 fn array_reverse(array: &ArrayRef) -> ArrayRef {

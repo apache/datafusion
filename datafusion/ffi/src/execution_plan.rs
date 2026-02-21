@@ -367,10 +367,6 @@ pub(crate) mod tests {
         ) -> Result<SendableRecordBatchStream> {
             unimplemented!()
         }
-
-        fn statistics(&self) -> Result<datafusion::common::Statistics> {
-            unimplemented!()
-        }
     }
 
     #[test]

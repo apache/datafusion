@@ -35,6 +35,7 @@ use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, LexRequirement, OrderingRequirements, PhysicalSortExpr,
     PhysicalSortRequirement,
 };
+use datafusion_physical_plan::aggregates::AggregateExec;
 use datafusion_physical_plan::execution_plan::CardinalityEffect;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::utils::{
@@ -353,6 +354,8 @@ fn pushdown_requirement_to_children(
                 Ok(None)
             }
         }
+    } else if let Some(aggregate_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
+        handle_aggregate_pushdown(aggregate_exec, parent_required)
     } else if maintains_input_order.is_empty()
         || !maintains_input_order.iter().any(|o| *o)
         || plan.as_any().is::<RepartitionExec>()
@@ -386,6 +389,77 @@ fn pushdown_requirement_to_children(
         handle_custom_pushdown(plan, parent_required, &maintains_input_order)
     }
     // TODO: Add support for Projection push down
+}
+
+/// Try to push sorting through  [`AggregateExec`]
+///
+/// `AggregateExec` only preserves the input order of its group by columns
+/// (not aggregates in general, which are formed from arbitrary expressions over
+/// input)
+///
+/// Thus function rewrites the parent required ordering in terms of the
+/// aggregate input if possible. This rewritten requirement represents the
+/// ordering of the `AggregateExec`'s **input** that would also satisfy the
+/// **parent** ordering.
+///
+/// If no such mapping is possible (e.g. because the sort references aggregate
+/// columns), returns None.
+fn handle_aggregate_pushdown(
+    aggregate_exec: &AggregateExec,
+    parent_required: OrderingRequirements,
+) -> Result<Option<Vec<Option<OrderingRequirements>>>> {
+    if !aggregate_exec
+        .maintains_input_order()
+        .into_iter()
+        .any(|o| o)
+    {
+        return Ok(None);
+    }
+
+    let group_expr = aggregate_exec.group_expr();
+    // GROUPING SETS introduce additional output columns and NULL substitutions;
+    // skip pushdown until we can map those cases safely.
+    if group_expr.has_grouping_set() {
+        return Ok(None);
+    }
+
+    let group_input_exprs = group_expr.input_exprs();
+    let parent_requirement = parent_required.into_single();
+    let mut child_requirement = Vec::with_capacity(parent_requirement.len());
+
+    for req in parent_requirement {
+        // Sort above AggregateExec should reference its output columns. Map each
+        // output group-by column to its original input expression.
+        let Some(column) = req.expr.as_any().downcast_ref::<Column>() else {
+            return Ok(None);
+        };
+        if column.index() >= group_input_exprs.len() {
+            // AggregateExec does not produce output that is sorted on aggregate
+            // columns so those can not be pushed through.
+            return Ok(None);
+        }
+        child_requirement.push(PhysicalSortRequirement::new(
+            Arc::clone(&group_input_exprs[column.index()]),
+            req.options,
+        ));
+    }
+
+    let Some(child_requirement) = LexRequirement::new(child_requirement) else {
+        return Ok(None);
+    };
+
+    // Keep sort above aggregate unless input ordering already satisfies the
+    // mapped requirement.
+    if aggregate_exec
+        .input()
+        .equivalence_properties()
+        .ordering_satisfy_requirement(child_requirement.iter().cloned())?
+    {
+        let child_requirements = OrderingRequirements::new(child_requirement);
+        Ok(Some(vec![Some(child_requirements)]))
+    } else {
+        Ok(None)
+    }
 }
 
 /// Return true if pushing the sort requirements through a node would violate

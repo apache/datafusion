@@ -15,17 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#[macro_use]
-extern crate criterion;
-use criterion::Criterion;
+use criterion::{Criterion, criterion_group, criterion_main};
 
 use parking_lot::Mutex;
 use std::sync::Arc;
 
 use tokio::runtime::Runtime;
-
-extern crate arrow;
-extern crate datafusion;
 
 use arrow::{
     array::{Float32Array, Float64Array},

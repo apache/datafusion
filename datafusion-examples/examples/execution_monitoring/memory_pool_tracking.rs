@@ -110,7 +110,8 @@ async fn automatic_usage_example() -> Result<()> {
             println!("✓ Expected memory limit error during data processing:");
             println!("Error: {e}");
             /* Example error message:
-                Error: Not enough memory to continue external sort. Consider increasing the memory limit, or decreasing sort_spill_reservation_bytes
+                Error: Not enough memory to continue external sort. Consider increasing the memory limit config: 'datafusion.runtime.memory_limit',
+                or decreasing the config: 'datafusion.execution.sort_spill_reservation_bytes'.
                 caused by
                     Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:
                     ExternalSorterMerge[3]#112(can spill: false) consumed 10.0 MB, peak 10.0 MB,
