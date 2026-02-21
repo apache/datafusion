@@ -20,10 +20,11 @@ use arrow::{array::RecordBatch, compute::concat_batches};
 use datafusion::{datasource::object_store::ObjectStoreUrl, physical_plan::PhysicalExpr};
 use datafusion_common::{Result, config::ConfigOptions, internal_err};
 use datafusion_datasource::{
-    PartitionedFile, file::FileSource, file_scan_config::FileScanConfig,
-    file_scan_config::FileScanConfigBuilder, file_stream::FileOpenFuture,
-    file_stream::FileOpener, source::DataSourceExec,
+    PartitionedFile, file::FileSource, file_groups::FileGroup,
+    file_scan_config::FileScanConfig, file_scan_config::FileScanConfigBuilder,
+    file_stream::FileOpenFuture, file_stream::FileOpener, source::DataSourceExec,
 };
+use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
@@ -53,6 +54,7 @@ pub struct TestOpener {
     batch_size: Option<usize>,
     projection: Option<ProjectionExprs>,
     predicate: Option<Arc<dyn PhysicalExpr>>,
+    partition: usize,
 }
 
 impl FileOpener for TestOpener {
@@ -73,9 +75,20 @@ impl FileOpener for TestOpener {
             batches = new_batches.into_iter().collect();
         }
 
+        let predicate = self
+            .predicate
+            .clone()
+            .map(|p| {
+                DynamicFilterPhysicalExpr::bind_for_partition_in_expr_tree(
+                    p,
+                    self.partition,
+                )
+            })
+            .transpose()?;
+
         let mut new_batches = Vec::new();
         for batch in batches {
-            let batch = if let Some(predicate) = &self.predicate {
+            let batch = if let Some(predicate) = &predicate {
                 batch_filter(&batch, predicate)?
             } else {
                 batch
@@ -105,18 +118,25 @@ pub struct TestSource {
     predicate: Option<Arc<dyn PhysicalExpr>>,
     batch_size: Option<usize>,
     batches: Vec<RecordBatch>,
+    per_partition_batches: Option<Vec<Vec<RecordBatch>>>,
     metrics: ExecutionPlanMetricsSet,
     projection: Option<ProjectionExprs>,
     table_schema: datafusion_datasource::TableSchema,
 }
 
 impl TestSource {
-    pub fn new(schema: SchemaRef, support: bool, batches: Vec<RecordBatch>) -> Self {
+    pub fn new(
+        schema: SchemaRef,
+        support: bool,
+        batches: Vec<RecordBatch>,
+        per_partition_batches: Option<Vec<Vec<RecordBatch>>>,
+    ) -> Self {
         let table_schema = datafusion_datasource::TableSchema::new(schema, vec![]);
         Self {
             support,
             metrics: ExecutionPlanMetricsSet::new(),
             batches,
+            per_partition_batches,
             predicate: None,
             batch_size: None,
             projection: None,
@@ -130,13 +150,20 @@ impl FileSource for TestSource {
         &self,
         _object_store: Arc<dyn ObjectStore>,
         _base_config: &FileScanConfig,
-        _partition: usize,
+        partition: usize,
     ) -> Result<Arc<dyn FileOpener>> {
+        let batches = if let Some(ref per_partition) = self.per_partition_batches {
+            per_partition.get(partition).cloned().unwrap_or_default()
+        } else {
+            self.batches.clone()
+        };
+
         Ok(Arc::new(TestOpener {
-            batches: self.batches.clone(),
+            batches,
             batch_size: self.batch_size,
             projection: self.projection.clone(),
             predicate: self.predicate.clone(),
+            partition,
         }))
     }
 
@@ -245,7 +272,9 @@ impl FileSource for TestSource {
 pub struct TestScanBuilder {
     support: bool,
     batches: Vec<RecordBatch>,
+    per_partition_batches: Vec<Vec<RecordBatch>>,
     schema: SchemaRef,
+    file_groups: Vec<FileGroup>,
 }
 
 impl TestScanBuilder {
@@ -253,7 +282,9 @@ impl TestScanBuilder {
         Self {
             support: false,
             batches: vec![],
+            per_partition_batches: vec![],
             schema,
+            file_groups: vec![],
         }
     }
 
@@ -267,17 +298,38 @@ impl TestScanBuilder {
         self
     }
 
+    pub fn with_batches_for_partition(mut self, batches: Vec<RecordBatch>) -> Self {
+        self.per_partition_batches.push(batches);
+        self
+    }
+
+    pub fn with_file_group(mut self, group: FileGroup) -> Self {
+        self.file_groups.push(group);
+        self
+    }
+
     pub fn build(self) -> Arc<dyn ExecutionPlan> {
+        let per_partition_batches = if self.per_partition_batches.is_empty() {
+            None
+        } else {
+            Some(self.per_partition_batches)
+        };
         let source = Arc::new(TestSource::new(
             Arc::clone(&self.schema),
             self.support,
             self.batches,
+            per_partition_batches,
         ));
-        let base_config =
-            FileScanConfigBuilder::new(ObjectStoreUrl::parse("test://").unwrap(), source)
-                .with_file(PartitionedFile::new("test.parquet", 123))
-                .build();
-        DataSourceExec::from_data_source(base_config)
+        let mut builder =
+            FileScanConfigBuilder::new(ObjectStoreUrl::parse("test://").unwrap(), source);
+        if self.file_groups.is_empty() {
+            builder = builder.with_file(PartitionedFile::new("test.parquet", 123));
+        } else {
+            for group in self.file_groups {
+                builder = builder.with_file_group(group);
+            }
+        }
+        DataSourceExec::from_data_source(builder.build())
     }
 }
 

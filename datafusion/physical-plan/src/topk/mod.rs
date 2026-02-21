@@ -43,7 +43,10 @@ use datafusion_execution::{
 };
 use datafusion_physical_expr::{
     PhysicalExpr,
-    expressions::{BinaryExpr, DynamicFilterPhysicalExpr, is_not_null, is_null, lit},
+    expressions::{
+        BinaryExpr, DynamicFilterPhysicalExpr, DynamicFilterUpdate, is_not_null, is_null,
+        lit,
+    },
 };
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use parking_lot::RwLock;
@@ -415,7 +418,7 @@ impl TopK {
         if let Some(pred) = predicate
             && !pred.eq(&lit(true))
         {
-            filter.expr.update(pred)?;
+            filter.expr.update(DynamicFilterUpdate::Global(pred))?;
         }
 
         Ok(())

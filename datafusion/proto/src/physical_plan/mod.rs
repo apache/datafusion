@@ -69,8 +69,9 @@ use datafusion_physical_plan::expressions::PhysicalSortExpr;
 use datafusion_physical_plan::filter::{FilterExec, FilterExecBuilder};
 use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion_physical_plan::joins::{
-    CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
-    StreamJoinPartitionMode, SymmetricHashJoinExec,
+    CrossJoinExec, DynamicFilterRoutingMode, HashJoinExec, HashJoinExecBuilder,
+    NestedLoopJoinExec, PartitionMode, SortMergeJoinExec, StreamJoinPartitionMode,
+    SymmetricHashJoinExec,
 };
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::memory::LazyMemoryExec;
@@ -1380,6 +1381,24 @@ impl protobuf::PhysicalPlanNode {
             protobuf::PartitionMode::Partitioned => PartitionMode::Partitioned,
             protobuf::PartitionMode::Auto => PartitionMode::Auto,
         };
+        let dynamic_filter_routing_mode =
+            protobuf::HashJoinDynamicFilterRoutingMode::try_from(
+                hashjoin.dynamic_filter_routing_mode,
+            )
+            .map_err(|_| {
+                proto_error(format!(
+                    "Received a HashJoinNode message with unknown HashJoinDynamicFilterRoutingMode {}",
+                    hashjoin.dynamic_filter_routing_mode
+                ))
+            })?;
+        let dynamic_filter_routing_mode = match dynamic_filter_routing_mode {
+            protobuf::HashJoinDynamicFilterRoutingMode::CaseHash => {
+                DynamicFilterRoutingMode::CaseHash
+            }
+            protobuf::HashJoinDynamicFilterRoutingMode::PartitionIndex => {
+                DynamicFilterRoutingMode::PartitionIndex
+            }
+        };
         let projection = if !hashjoin.projection.is_empty() {
             Some(
                 hashjoin
@@ -1391,17 +1410,16 @@ impl protobuf::PhysicalPlanNode {
         } else {
             None
         };
-        Ok(Arc::new(HashJoinExec::try_new(
-            left,
-            right,
-            on,
-            filter,
-            &join_type.into(),
-            projection,
-            partition_mode,
-            null_equality.into(),
-            hashjoin.null_aware,
-        )?))
+        Ok(Arc::new(
+            HashJoinExecBuilder::new(left, right, on, join_type.into())
+                .with_filter(filter)
+                .with_projection(projection)
+                .with_partition_mode(partition_mode)
+                .with_null_equality(null_equality.into())
+                .with_null_aware(hashjoin.null_aware)
+                .with_dynamic_filter_routing_mode(dynamic_filter_routing_mode)
+                .build()?,
+        ))
     }
 
     fn try_into_symmetric_hash_join_physical_plan(
@@ -2430,6 +2448,14 @@ impl protobuf::PhysicalPlanNode {
             PartitionMode::Partitioned => protobuf::PartitionMode::Partitioned,
             PartitionMode::Auto => protobuf::PartitionMode::Auto,
         };
+        let dynamic_filter_routing_mode = match exec.dynamic_filter_routing_mode {
+            DynamicFilterRoutingMode::CaseHash => {
+                protobuf::HashJoinDynamicFilterRoutingMode::CaseHash
+            }
+            DynamicFilterRoutingMode::PartitionIndex => {
+                protobuf::HashJoinDynamicFilterRoutingMode::PartitionIndex
+            }
+        };
 
         Ok(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::HashJoin(Box::new(
@@ -2445,6 +2471,7 @@ impl protobuf::PhysicalPlanNode {
                         v.iter().map(|x| *x as u32).collect::<Vec<u32>>()
                     }),
                     null_aware: exec.null_aware,
+                    dynamic_filter_routing_mode: dynamic_filter_routing_mode.into(),
                 },
             ))),
         })

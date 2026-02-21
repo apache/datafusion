@@ -34,6 +34,7 @@ use crate::utils::{
 use arrow::compute::SortOptions;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
+use datafusion_common::plan_err;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_expr::logical_plan::{Aggregate, JoinType};
@@ -49,7 +50,8 @@ use datafusion_physical_plan::aggregates::{
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::execution_plan::EmissionType;
 use datafusion_physical_plan::joins::{
-    CrossJoinExec, HashJoinExec, HashJoinExecBuilder, PartitionMode, SortMergeJoinExec,
+    CrossJoinExec, DynamicFilterRoutingMode, HashJoinExec, HashJoinExecBuilder,
+    PartitionMode, SortMergeJoinExec,
 };
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::repartition::RepartitionExec;
@@ -296,6 +298,7 @@ pub fn adjust_input_keys_ordering(
         mode,
         null_equality,
         null_aware,
+        dynamic_filter_routing_mode,
         ..
     }) = plan.as_any().downcast_ref::<HashJoinExec>()
     {
@@ -317,6 +320,7 @@ pub fn adjust_input_keys_ordering(
                     .with_partition_mode(PartitionMode::Partitioned)
                     .with_null_equality(*null_equality)
                     .with_null_aware(*null_aware)
+                    .with_dynamic_filter_routing_mode(*dynamic_filter_routing_mode)
                     .build()
                     .map(|e| Arc::new(e) as _)
                 };
@@ -622,6 +626,7 @@ pub fn reorder_join_keys_to_inputs(
         mode,
         null_equality,
         null_aware,
+        dynamic_filter_routing_mode,
         ..
     }) = plan_any.downcast_ref::<HashJoinExec>()
     {
@@ -651,6 +656,7 @@ pub fn reorder_join_keys_to_inputs(
                     .with_partition_mode(PartitionMode::Partitioned)
                     .with_null_equality(*null_equality)
                     .with_null_aware(*null_aware)
+                    .with_dynamic_filter_routing_mode(*dynamic_filter_routing_mode)
                     .build()?,
                 ));
             }
@@ -870,7 +876,14 @@ fn add_roundrobin_on_top(
 
         let new_plan = Arc::new(repartition) as _;
 
-        Ok(DistributionContext::new(new_plan, true, vec![input]))
+        Ok(DistributionContext::new(
+            new_plan,
+            DistFlags {
+                dist_changing: true,
+                repartitioned: true,
+            },
+            vec![input],
+        ))
     } else {
         // Partition is not helpful, we already have desired number of partitions.
         Ok(input)
@@ -939,7 +952,14 @@ fn add_hash_on_top(
                 .with_preserve_order();
         let plan = Arc::new(repartition) as _;
 
-        return Ok(DistributionContext::new(plan, true, vec![input]));
+        return Ok(DistributionContext::new(
+            plan,
+            DistFlags {
+                dist_changing: true,
+                repartitioned: true,
+            },
+            vec![input],
+        ));
     }
 
     Ok(input)
@@ -976,7 +996,14 @@ fn add_merge_on_top(input: DistributionContext) -> DistributionContext {
             Arc::new(CoalescePartitionsExec::new(Arc::clone(&input.plan))) as _
         };
 
-        DistributionContext::new(new_plan, true, vec![input])
+        DistributionContext::new(
+            new_plan,
+            DistFlags {
+                dist_changing: true,
+                repartitioned: input.data.repartitioned,
+            },
+            vec![input],
+        )
     } else {
         input
     }
@@ -1040,7 +1067,7 @@ pub fn replace_order_preserving_variants(
         .children
         .into_iter()
         .map(|child| {
-            if child.data {
+            if child.data.dist_changing {
                 replace_order_preserving_variants(child)
             } else {
                 Ok(child)
@@ -1377,7 +1404,7 @@ pub fn ensure_distribution(
                     .ordering_satisfy_requirement(sort_req.clone())?;
 
                 if (!ordering_satisfied || !order_preserving_variants_desirable)
-                    && child.data
+                    && child.data.dist_changing
                 {
                     child = replace_order_preserving_variants(child)?;
                     // If ordering requirements were satisfied before repartitioning,
@@ -1395,7 +1422,7 @@ pub fn ensure_distribution(
                     }
                 }
                 // Stop tracking distribution changing operators
-                child.data = false;
+                child.data.dist_changing = false;
             } else {
                 // no ordering requirement
                 match requirement {
@@ -1454,21 +1481,87 @@ pub fn ensure_distribution(
         plan.with_new_children(children_plans)?
     };
 
+    /// Helper to describe partitioning scheme for error messages
+    fn partitioning_scheme_name(is_repartitioned: bool) -> &'static str {
+        if is_repartitioned {
+            "hash-repartitioned"
+        } else {
+            "file-grouped"
+        }
+    }
+
+    // For partitioned hash joins, decide dynamic filter routing mode.
+    //
+    // Dynamic filtering requires matching partitioning schemes on both sides:
+    // - PartitionIndex: Both sides use file-grouped partitioning (value-based).
+    //   Partition i on build corresponds to partition i on probe by partition value.
+    // - CaseHash: Both sides use hash repartitioning (hash-based).
+    //   Uses CASE expression with hash(row) % N to route to correct partition filter.
+    //
+    // NOTE: If partitioning schemes are misaligned (one file-grouped, one hash-repartitioned),
+    // the partitioned join itself is incorrect.
+    // Partition assignments don't match:
+    // - File-grouped: partition 0 = all rows where column="A" (value-based)
+    // - Hash-repartitioned: partition 0 = all rows where hash(column) % N == 0 (hash-based)
+    // These are incompatible, so the join will miss matching rows.
+    plan = if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>()
+        && matches!(hash_join.mode, PartitionMode::Partitioned)
+    {
+        let routing_mode = match (
+            children[0].data.repartitioned,
+            children[1].data.repartitioned,
+        ) {
+            (false, false) => DynamicFilterRoutingMode::PartitionIndex,
+            (true, true) => DynamicFilterRoutingMode::CaseHash,
+            _ => {
+                // Misaligned partitioning schemes
+                return plan_err!(
+                    "Partitioned hash join has incompatible partitioning schemes: \
+                     left side is {}, right side is {}.",
+                    partitioning_scheme_name(children[0].data.repartitioned),
+                    partitioning_scheme_name(children[1].data.repartitioned)
+                );
+            }
+        };
+
+        if routing_mode != hash_join.dynamic_filter_routing_mode {
+            Arc::new(
+                HashJoinExecBuilder::from(hash_join)
+                    .with_dynamic_filter_routing_mode(routing_mode)
+                    .build()?,
+            )
+        } else {
+            plan
+        }
+    } else {
+        plan
+    };
+
     Ok(Transformed::yes(DistributionContext::new(
         plan, data, children,
     )))
 }
 
-/// Keeps track of distribution changing operators (like `RepartitionExec`,
-/// `SortPreservingMergeExec`, `CoalescePartitionsExec`) and their ancestors.
-/// Using this information, we can optimize distribution of the plan if/when
-/// necessary.
-pub type DistributionContext = PlanContext<bool>;
+/// State propagated during the bottom-up pass in [`ensure_distribution`].
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DistFlags {
+    /// Whether a distribution-changing operator (`RepartitionExec`, `SortPreservingMergeExec`,
+    /// `CoalescePartitionsExec`) exists in the subtree.
+    pub dist_changing: bool,
+    /// Whether the output partitioning originates from a [`RepartitionExec`].
+    /// Used by partitioned hash joins to choose the dynamic filter routing
+    /// mode.
+    pub repartitioned: bool,
+}
+
+pub type DistributionContext = PlanContext<DistFlags>;
 
 fn update_children(mut dist_context: DistributionContext) -> Result<DistributionContext> {
     for child_context in dist_context.children.iter_mut() {
         let child_plan_any = child_context.plan.as_any();
-        child_context.data =
+
+        // Track distribution-changing operators for order-preservation optimization.
+        child_context.data.dist_changing =
             if let Some(repartition) = child_plan_any.downcast_ref::<RepartitionExec>() {
                 !matches!(
                     repartition.partitioning(),
@@ -1478,23 +1571,46 @@ fn update_children(mut dist_context: DistributionContext) -> Result<Distribution
                 child_plan_any.is::<SortPreservingMergeExec>()
                     || child_plan_any.is::<CoalescePartitionsExec>()
                     || child_context.plan.children().is_empty()
-                    || child_context.children[0].data
+                    || child_context.children[0].data.dist_changing
                     || child_context
                         .plan
                         .required_input_distribution()
                         .iter()
                         .zip(child_context.children.iter())
                         .any(|(required_dist, child_context)| {
-                            child_context.data
+                            child_context.data.dist_changing
                                 && matches!(
                                     required_dist,
                                     Distribution::UnspecifiedDistribution
                                 )
                         })
-            }
+            };
+
+        // Track whether partitioning originates from a RepartitionExec, following the partition
+        // determining path through the context tree.
+        child_context.data.repartitioned =
+            if let Some(repartition) = child_plan_any.downcast_ref::<RepartitionExec>() {
+                !matches!(
+                    repartition.partitioning(),
+                    Partitioning::UnknownPartitioning(_)
+                )
+            } else if child_context.plan.children().is_empty() {
+                false
+            } else if let Some(hj) = child_plan_any.downcast_ref::<HashJoinExec>()
+                && matches!(hj.mode, PartitionMode::CollectLeft)
+            {
+                // CollectLeft: output partitioning comes from the probe (right) side
+                child_context
+                    .children
+                    .get(1)
+                    .map(|c| c.data.repartitioned)
+                    .unwrap_or(false)
+            } else {
+                child_context.children.iter().any(|c| c.data.repartitioned)
+            };
     }
 
-    dist_context.data = false;
+    dist_context.data = DistFlags::default();
     Ok(dist_context)
 }
 

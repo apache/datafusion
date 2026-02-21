@@ -30,7 +30,7 @@ use datafusion_common::{Result, ScalarValue, internal_datafusion_err, internal_e
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_expr::expressions::{BinaryExpr, lit};
+use datafusion_physical_expr::expressions::{BinaryExpr, DynamicFilterUpdate, lit};
 use futures::stream::BoxStream;
 use std::borrow::Cow;
 use std::cmp::Ordering;
@@ -197,7 +197,9 @@ impl AggregateStreamInner {
         // but only if any bound actually changed.
         if bounds_changed {
             let predicate = self.build_dynamic_filter_from_accumulator_bounds()?;
-            filter_state.filter.update(predicate)?;
+            filter_state
+                .filter
+                .update(DynamicFilterUpdate::Global(predicate))?;
         }
 
         Ok(())
