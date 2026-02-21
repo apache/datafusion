@@ -5533,6 +5533,94 @@ mod tests {
         assert_eq!(empty_array.len(), 0);
     }
 
+    #[test]
+    fn test_to_array_of_size_list_size_one() {
+        // size=1 takes the fast path (Arc::clone), verify it returns
+        // the same data
+        let arr = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+            Some(10),
+            Some(20),
+        ])]);
+        let sv = ScalarValue::List(Arc::new(arr.clone()));
+        let result = sv.to_array_of_size(1).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(&arr, result.as_list::<i32>());
+    }
+
+    #[test]
+    fn test_to_array_of_size_list_empty_inner() {
+        // A list scalar containing an empty list: [[]]
+        let arr = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(Vec::<
+            Option<i32>,
+        >::new(
+        ))]);
+        let sv = ScalarValue::List(Arc::new(arr));
+        let result = sv.to_array_of_size(3).unwrap();
+        let result_list = result.as_list::<i32>();
+        assert_eq!(result_list.len(), 3);
+        for i in 0..3 {
+            assert_eq!(result_list.value(i).len(), 0);
+        }
+    }
+
+    #[test]
+    fn test_to_array_of_size_large_list() {
+        // LargeList (i64 offsets) with size=3
+        let mut builder = LargeListBuilder::new(Int32Builder::new());
+        builder.values().append_value(100);
+        builder.values().append_value(200);
+        builder.append(true);
+        let arr = builder.finish();
+        let sv = ScalarValue::LargeList(Arc::new(arr));
+
+        let result = sv.to_array_of_size(3).unwrap();
+        let result_list = result.as_list::<i64>();
+        assert_eq!(result_list.len(), 3);
+        for i in 0..3 {
+            let inner = result_list.value(i);
+            let inner_vals = inner.as_primitive::<Int32Type>();
+            assert_eq!(inner_vals.values().as_ref(), &[100, 200]);
+        }
+    }
+
+    #[test]
+    fn test_list_to_array_of_size_multi_row() {
+        // Call list_to_array_of_size directly with arr.len() > 1 to
+        // ensure that works, although this is never done today.
+        let arr = Int32Array::from(vec![Some(10), None, Some(30)]);
+        let result = ScalarValue::list_to_array_of_size(&arr, 3).unwrap();
+        // 3 rows * 3 elements = 9 total
+        assert_eq!(result.len(), 9);
+        let result = result.as_primitive::<Int32Type>();
+        assert_eq!(
+            result.iter().collect::<Vec<_>>(),
+            vec![
+                Some(10),
+                None,
+                Some(30),
+                Some(10),
+                None,
+                Some(30),
+                Some(10),
+                None,
+                Some(30),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_to_array_of_size_null_list() {
+        // A null List scalar replicated to size 3
+        let sv = ScalarValue::try_from(&DataType::List(Arc::new(Field::new_list_field(
+            DataType::Int32,
+            true,
+        ))))
+        .unwrap();
+        let result = sv.to_array_of_size(3).unwrap();
+        assert_eq!(result.len(), 3);
+        assert_eq!(result.null_count(), 3);
+    }
+
     /// See https://github.com/apache/datafusion/issues/18870
     #[test]
     fn test_to_array_of_size_for_none_fsb() {
