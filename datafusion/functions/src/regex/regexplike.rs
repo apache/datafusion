@@ -345,11 +345,9 @@ fn regexp_like_array_scalar(
 ) -> Result<ArrayRef> {
     use DataType::*;
 
-    if pattern.is_none() {
+    let Some(pattern) = pattern else {
         return Ok(Arc::new(BooleanArray::new_null(values.len())));
-    }
-
-    let pattern = pattern.unwrap();
+    };
     let array = match values.data_type() {
         Utf8 => {
             let array = values.as_string::<i32>();
