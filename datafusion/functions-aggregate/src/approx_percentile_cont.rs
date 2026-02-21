@@ -52,17 +52,17 @@ create_func!(ApproxPercentileCont, approx_percentile_cont_udaf);
 
 /// Computes the approximate percentile continuous of a set of numbers
 pub fn approx_percentile_cont(
-    order_by: Sort,
+    expr: Expr,
     percentile: Expr,
     centroids: Option<Expr>,
+    asc: bool,
 ) -> Expr {
-    let expr = order_by.expr.clone();
-
     let args = if let Some(centroids) = centroids {
-        vec![expr, percentile, centroids]
+        vec![expr.clone(), percentile, centroids]
     } else {
-        vec![expr, percentile]
+        vec![expr.clone(), percentile]
     };
+    let order_by = Sort::new(expr, asc, false);
 
     Expr::AggregateFunction(AggregateFunction::new_udf(
         approx_percentile_cont_udaf(),
