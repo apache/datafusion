@@ -2980,6 +2980,7 @@ SELECT count(c1, c2) FROM test
 3
 
 # count(distinct) with multiple arguments
+query I
 SELECT count(distinct c1, c2) FROM test
 ----
 2
