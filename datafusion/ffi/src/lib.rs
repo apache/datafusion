@@ -39,6 +39,7 @@ pub mod record_batch_stream;
 pub mod schema_provider;
 pub mod session;
 pub mod table_provider;
+pub mod table_provider_factory;
 pub mod table_source;
 pub mod udaf;
 pub mod udf;
