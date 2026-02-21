@@ -22,6 +22,7 @@ use crate::expr::{
     WindowFunctionParams,
 };
 use crate::type_coercion::functions::{UDFCoercionExt, fields_with_udf};
+use crate::type_coercion::{is_interval, is_timestamp};
 use crate::udf::ReturnFieldArgs;
 use crate::{LogicalPlan, Projection, Subquery, WindowFunctionDefinition, utils};
 use arrow::compute::can_cast_types;
@@ -116,7 +117,16 @@ impl ExprSchemable for Expr {
                 },
                 _ => expr.get_type(schema),
             },
-            Expr::Negative(expr) => expr.get_type(schema),
+            Expr::Negative(expr) => {
+                let data_type = expr.get_type(schema)?;
+                if is_negatable(&data_type) {
+                    Ok(data_type)
+                } else {
+                    plan_err!(
+                        "Negation only supports numeric, interval and timestamp types"
+                    )
+                }
+            }
             Expr::Column(c) => Ok(schema.data_type(c)?.clone()),
             Expr::OuterReferenceColumn(field, _) => Ok(field.data_type().clone()),
             Expr::ScalarVariable(field, _) => Ok(field.data_type().clone()),
@@ -449,7 +459,16 @@ impl ExprSchemable for Expr {
                     .map(|(_, f)| f)?
                     .with_field_metadata(&combined_metadata))
             }
-            Expr::Negative(expr) => expr.to_field(schema).map(|(_, f)| f),
+            Expr::Negative(expr) => {
+                let field = expr.to_field(schema).map(|(_, f)| f)?;
+                if is_negatable(field.data_type()) {
+                    Ok(field)
+                } else {
+                    plan_err!(
+                        "Negation only supports numeric, interval and timestamp types"
+                    )
+                }
+            }
             Expr::Column(c) => schema.field_from_column(c).map(Arc::clone),
             Expr::OuterReferenceColumn(field, _) => {
                 Ok(Arc::clone(field).renamed(&schema_name))
@@ -695,6 +714,13 @@ pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subq
         outer_ref_columns: subquery.outer_ref_columns,
         spans: Spans::new(),
     })
+}
+
+/// Determine whether the given data type `dt` supports the negation operator.
+///
+/// Negation is supported for numeric, interval, timestamp types, and null.
+fn is_negatable(dt: &DataType) -> bool {
+    dt.is_numeric() || is_interval(dt) || is_timestamp(dt) || dt.is_null()
 }
 
 #[cfg(test)]
@@ -1093,5 +1119,46 @@ mod tests {
         let schema = MockExprSchema::new();
 
         assert_eq!(meta, expr.metadata(&schema).unwrap());
+    }
+
+    #[test]
+    fn test_negation_type_check() {
+        use arrow::datatypes::TimeUnit;
+
+        let valid_types = [
+            DataType::Int64,
+            DataType::UInt64,
+            DataType::Float64,
+            DataType::Interval(arrow::datatypes::IntervalUnit::DayTime),
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            DataType::Null,
+        ];
+        let invalid_types = [
+            DataType::Utf8,
+            DataType::Boolean,
+            DataType::Binary,
+            DataType::Date32,
+        ];
+
+        for dt in valid_types {
+            let schema = MockExprSchema::new().with_data_type(dt.clone());
+            let expr = Expr::Negative(Box::new(col("foo")));
+            assert_eq!(expr.get_type(&schema).unwrap(), dt,);
+            assert!(expr.to_field(&schema).is_ok());
+        }
+
+        for dt in invalid_types {
+            let schema = MockExprSchema::new().with_data_type(dt.clone());
+            let expr = Expr::Negative(Box::new(col("foo")));
+            let get_type_err = expr.get_type(&schema);
+            assert!(get_type_err.unwrap_err().to_string().contains(
+                "Negation only supports numeric, interval and timestamp types"
+            ),);
+
+            let to_field_err = expr.to_field(&schema);
+            assert!(to_field_err.unwrap_err().to_string().contains(
+                "Negation only supports numeric, interval and timestamp types"
+            ),);
+        }
     }
 }
