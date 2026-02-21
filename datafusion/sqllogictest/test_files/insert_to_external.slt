@@ -199,7 +199,7 @@ select * from partitioned_insert_test_readback order by a,b,c;
 2 20 200
 
 query I
-select count(*) from partitioned_insert_test_readback where b=100;
+select count(*) from partitioned_insert_test_readback where b='100';
 ----
 3
 

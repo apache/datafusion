@@ -249,24 +249,6 @@ explain select a from t where a != '100';
 ----
 physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter/t.parquet]]}, projection=[a], file_type=parquet, predicate=a@0 != 100, pruning_predicate=a_null_count@2 != row_count@3 AND (a_min@0 != 100 OR 100 != a_max@1), required_guarantees=[a not in (100)]
 
-# The predicate should still have the column cast when the value is a NOT valid i32
-query TT
-explain select a from t where a = '99999999999';
-----
-physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter/t.parquet]]}, projection=[a], file_type=parquet, predicate=CAST(a@0 AS Utf8) = 99999999999
-
-# The predicate should still have the column cast when the value is a NOT valid i32
-query TT
-explain select a from t where a = '99.99';
-----
-physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter/t.parquet]]}, projection=[a], file_type=parquet, predicate=CAST(a@0 AS Utf8) = 99.99
-
-# The predicate should still have the column cast when the value is a NOT valid i32
-query TT
-explain select a from t where a = '';
-----
-physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter/t.parquet]]}, projection=[a], file_type=parquet, predicate=CAST(a@0 AS Utf8) = 
-
 # The predicate should not have a column cast when the operator is = or != and the literal can be round-trip casted without losing information.
 query TT
 explain select a from t where cast(a as string) = '100';

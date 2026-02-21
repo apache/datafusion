@@ -438,31 +438,17 @@ mod tests {
 
     #[tokio::test]
     async fn tpch_test_21() -> Result<()> {
-        let plan_str = tpch_plan_to_string(21).await?;
-        assert_snapshot!(
-        plan_str,
-        @r#"
-        Projection: SUPPLIER.S_NAME, count(Int64(1)) AS NUMWAIT
-          Limit: skip=0, fetch=100
-            Sort: count(Int64(1)) DESC NULLS FIRST, SUPPLIER.S_NAME ASC NULLS LAST
-              Aggregate: groupBy=[[SUPPLIER.S_NAME]], aggr=[[count(Int64(1))]]
-                Projection: SUPPLIER.S_NAME
-                  Filter: SUPPLIER.S_SUPPKEY = LINEITEM.L_SUPPKEY AND ORDERS.O_ORDERKEY = LINEITEM.L_ORDERKEY AND ORDERS.O_ORDERSTATUS = Utf8("F") AND LINEITEM.L_RECEIPTDATE > LINEITEM.L_COMMITDATE AND EXISTS (<subquery>) AND NOT EXISTS (<subquery>) AND SUPPLIER.S_NATIONKEY = NATION.N_NATIONKEY AND NATION.N_NAME = Utf8("SAUDI ARABIA")
-                    Subquery:
-                      Filter: LINEITEM.L_ORDERKEY = LINEITEM.L_TAX AND LINEITEM.L_SUPPKEY != LINEITEM.L_LINESTATUS
-                        TableScan: LINEITEM
-                    Subquery:
-                      Filter: LINEITEM.L_ORDERKEY = LINEITEM.L_TAX AND LINEITEM.L_SUPPKEY != LINEITEM.L_LINESTATUS AND LINEITEM.L_RECEIPTDATE > LINEITEM.L_COMMITDATE
-                        TableScan: LINEITEM
-                    Cross Join:
-                      Cross Join:
-                        Cross Join:
-                          TableScan: SUPPLIER
-                          TableScan: LINEITEM
-                        TableScan: ORDERS
-                      TableScan: NATION
-        "#
-                        );
+        // The substrait plan for TPC-H Q21 has incorrect column references
+        // (e.g., L_SUPPKEY != L_LINESTATUS which is Int64 != Utf8). This
+        // correctly fails because string-numeric column comparisons are
+        // rejected. String-numeric coercion only applies to literals.
+        let result = tpch_plan_to_string(21).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Cannot infer common argument type for comparison operation"),
+            "unexpected error: {err}"
+        );
         Ok(())
     }
 

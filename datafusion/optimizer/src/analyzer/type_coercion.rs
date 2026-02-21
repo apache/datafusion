@@ -31,8 +31,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::{
     Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, TableReference,
-    exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err,
-    plan_err,
+    exec_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
 };
 use datafusion_expr::expr::{
     self, AggregateFunctionParams, Alias, Between, BinaryExpr, Case, Exists, InList,
@@ -41,12 +40,12 @@ use datafusion_expr::expr::{
 use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
 use datafusion_expr::expr_schema::cast_subquery;
 use datafusion_expr::logical_plan::Subquery;
-use datafusion_expr::type_coercion::binary::{comparison_coercion, like_coercion};
+use datafusion_expr::type_coercion::binary::{
+    comparison_coercion, like_coercion, type_union_coercion,
+};
 use datafusion_expr::type_coercion::functions::{UDFCoercionExt, fields_with_udf};
 use datafusion_expr::type_coercion::is_datetime;
-use datafusion_expr::type_coercion::other::{
-    get_coerce_type_for_case_expression, get_coerce_type_for_list,
-};
+use datafusion_expr::type_coercion::other::get_coerce_type_for_case_expression;
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     Cast, Expr, ExprSchemable, Join, Limit, LogicalPlan, Operator, Projection, Union,
@@ -125,14 +124,6 @@ fn analyze_internal(
     // select t2.c2 from t1 where t1.c1 in (select t2.c1 from t2 where t2.c2=t1.c3)
     schema.merge(external_schema);
 
-    // Coerce filter predicates to boolean (handles `WHERE NULL`)
-    let plan = if let LogicalPlan::Filter(mut filter) = plan {
-        filter.predicate = filter.predicate.cast_to(&DataType::Boolean, &schema)?;
-        LogicalPlan::Filter(filter)
-    } else {
-        plan
-    };
-
     let mut expr_rewrite = TypeCoercionRewriter::new(&schema);
 
     let name_preserver = NamePreserver::new(&plan);
@@ -142,10 +133,51 @@ fn analyze_internal(
         expr.rewrite(&mut expr_rewrite)
             .map(|transformed| transformed.update_data(|e| original_name.restore(e)))
     })?
+    // Coerce filter predicates to boolean (handles `WHERE NULL`).
+    // This must happen after the expression rewriter so that expression
+    // types are resolved (e.g., string-literal-to-numeric casts).
+    .map_data(|plan| {
+        if let LogicalPlan::Filter(mut filter) = plan {
+            filter.predicate = filter.predicate.cast_to(&DataType::Boolean, &schema)?;
+            Ok(LogicalPlan::Filter(filter))
+        } else {
+            Ok(plan)
+        }
+    })?
     // some plans need extra coercion after their expressions are coerced
     .map_data(|plan| expr_rewrite.coerce_plan(plan))?
     // recompute the schema after the expressions have been rewritten as the types may have changed
     .map_data(|plan| plan.recompute_schema())
+}
+
+/// If `expr` is a string literal and `target_type` is numeric, cast the
+/// literal's [`ScalarValue`] to the numeric type and return the rewritten
+/// expression. Returns `Ok(None)` when the rewrite does not apply, or `Err`
+/// when the literal cannot be cast (e.g., `'hello'` → `Int64`).
+///
+/// TODO: this function is called during the analyzer pass, but
+/// `Expr::get_type()` for `BinaryExpr` calls `BinaryTypeCoercer` (which
+/// uses `comparison_coercion`) *before* the analyzer runs. This means
+/// string-numeric comparisons in projection expressions (e.g.,
+/// `SELECT column1 < '5' FROM int_table`) fail at plan creation time
+/// because `Projection::try_new` computes the output schema via
+/// `Expr::get_type()`. The same comparison works in a WHERE clause
+/// because `Filter` does not eagerly compute the predicate's type.
+fn try_cast_string_literal_to_type(
+    expr: &Expr,
+    target_type: &DataType,
+) -> Result<Option<Expr>> {
+    let Expr::Literal(scalar, metadata) = expr else {
+        return Ok(None);
+    };
+    if !scalar.data_type().is_string() {
+        return Ok(None);
+    }
+    if !target_type.is_numeric() {
+        return Ok(None);
+    }
+    let casted = scalar.cast_to(target_type)?;
+    Ok(Some(Expr::Literal(casted, metadata.clone())))
 }
 
 /// Rewrite expressions to apply type coercion.
@@ -592,6 +624,32 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 ))))
             }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+                // For comparison operators, try to cast string literals to the
+                // other side's numeric type before general coercion. This lets
+                // `int_col < '5'` work (literal cast) while rejecting
+                // `text_col < 5` (no implicit column cast).
+                let (left, right) = if matches!(
+                    op,
+                    Operator::Eq
+                        | Operator::NotEq
+                        | Operator::Lt
+                        | Operator::LtEq
+                        | Operator::Gt
+                        | Operator::GtEq
+                        | Operator::IsDistinctFrom
+                        | Operator::IsNotDistinctFrom
+                ) {
+                    let left_type = left.get_type(self.schema)?;
+                    let right_type = right.get_type(self.schema)?;
+                    let new_left = try_cast_string_literal_to_type(&left, &right_type)?;
+                    let new_right = try_cast_string_literal_to_type(&right, &left_type)?;
+                    (
+                        new_left.map(Box::new).unwrap_or(left),
+                        new_right.map(Box::new).unwrap_or(right),
+                    )
+                } else {
+                    (left, right)
+                };
                 let (left, right) =
                     self.coerce_binary_op(*left, self.schema, op, *right, self.schema)?;
                 Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr::new(
@@ -608,23 +666,38 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
             }) => {
                 let expr_type = expr.get_type(self.schema)?;
                 let low_type = low.get_type(self.schema)?;
+                // Try casting string literals to the other side's numeric
+                // type in both directions, mirroring BinaryExpr behavior.
+                // This handles both `int_col BETWEEN '1' AND '10'` and
+                // `'5' BETWEEN 1 AND 10`.
+                let low = try_cast_string_literal_to_type(&low, &expr_type)?
+                    .map(Box::new)
+                    .unwrap_or(low);
+                let high = try_cast_string_literal_to_type(&high, &expr_type)?
+                    .map(Box::new)
+                    .unwrap_or(high);
+                let expr = try_cast_string_literal_to_type(&expr, &low_type)?
+                    .map(Box::new)
+                    .unwrap_or(expr);
+                let expr_type = expr.get_type(self.schema)?;
+                let low_type = low.get_type(self.schema)?;
                 let low_coerced_type = comparison_coercion(&expr_type, &low_type)
                     .ok_or_else(|| {
-                        internal_datafusion_err!(
+                        plan_datafusion_err!(
                             "Failed to coerce types {expr_type} and {low_type} in BETWEEN expression"
                         )
                     })?;
                 let high_type = high.get_type(self.schema)?;
                 let high_coerced_type = comparison_coercion(&expr_type, &high_type)
                     .ok_or_else(|| {
-                        internal_datafusion_err!(
+                        plan_datafusion_err!(
                             "Failed to coerce types {expr_type} and {high_type} in BETWEEN expression"
                         )
                     })?;
                 let coercion_type =
                     comparison_coercion(&low_coerced_type, &high_coerced_type)
                         .ok_or_else(|| {
-                            internal_datafusion_err!(
+                            plan_datafusion_err!(
                                 "Failed to coerce types {expr_type} and {high_type} in BETWEEN expression"
                             )
                         })?;
@@ -641,19 +714,61 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 negated,
             }) => {
                 let expr_data_type = expr.get_type(self.schema)?;
+                // Cast string literals in the list to the expression's
+                // numeric type, so that `int_col IN ('5', '10')` uses
+                // numeric semantics rather than coercing to Utf8.
+                let list: Vec<Expr> = list
+                    .into_iter()
+                    .map(|list_expr| {
+                        Ok(
+                            try_cast_string_literal_to_type(&list_expr, &expr_data_type)?
+                                .unwrap_or(list_expr),
+                        )
+                    })
+                    .collect::<Result<Vec<_>>>()?;
                 let list_data_types = list
                     .iter()
                     .map(|list_expr| list_expr.get_type(self.schema))
                     .collect::<Result<Vec<_>>>()?;
-                let result_type =
-                    get_coerce_type_for_list(&expr_data_type, &list_data_types);
+                // Also try to cast the expression if it's a string
+                // literal and the list items are numeric (e.g.,
+                // '5' IN (1, 2, 3)), mirroring BinaryExpr behavior.
+                let (expr, expr_data_type) = if !list_data_types.is_empty() {
+                    let list_common_type = list_data_types
+                        .iter()
+                        .skip(1)
+                        .try_fold(list_data_types[0].clone(), |acc, dt| {
+                            comparison_coercion(&acc, dt)
+                        });
+                    if let Some(ref target_type) = list_common_type {
+                        match try_cast_string_literal_to_type(&expr, target_type)? {
+                            Some(new_expr) => {
+                                let dt = new_expr.get_type(self.schema)?;
+                                (Box::new(new_expr), dt)
+                            }
+                            None => (expr, expr_data_type),
+                        }
+                    } else {
+                        (expr, expr_data_type)
+                    }
+                } else {
+                    (expr, expr_data_type)
+                };
+                // Use comparison_coercion (not type_union_coercion) so
+                // that string-numeric mismatches that cannot be resolved
+                // by literal casting are rejected — consistent with
+                // BinaryExpr rejecting `text_col = 5`.
+                let result_type = list_data_types
+                    .iter()
+                    .try_fold(expr_data_type.clone(), |acc, dt| {
+                        comparison_coercion(&acc, dt)
+                    });
                 match result_type {
                     None => plan_err!(
                         "Can not find compatible types to compare {expr_data_type} with [{}]",
                         list_data_types.iter().join(", ")
                     ),
                     Some(coerced_type) => {
-                        // find the coerced type
                         let cast_expr = expr.cast_to(&coerced_type, self.schema)?;
                         let cast_list_expr = list
                             .into_iter()
@@ -1184,7 +1299,7 @@ fn coerce_union_schema_with_schema(
             plan_schema.fields().iter()
         ) {
             let coerced_type =
-                comparison_coercion(union_datatype, plan_field.data_type()).ok_or_else(
+                type_union_coercion(union_datatype, plan_field.data_type()).ok_or_else(
                     || {
                         plan_datafusion_err!(
                             "Incompatible inputs for Union: Previous inputs were \
@@ -2712,6 +2827,56 @@ mod test {
           EmptyRelation: rows=0
         "
         )
+    }
+
+    #[test]
+    fn try_cast_string_literal_to_numeric() {
+        use super::try_cast_string_literal_to_type;
+
+        // Successful cast: Utf8 "5" -> Int64
+        let expr = lit(ScalarValue::Utf8(Some("5".into())));
+        let result = try_cast_string_literal_to_type(&expr, &DataType::Int64).unwrap();
+        assert_eq!(result, Some(lit(ScalarValue::Int64(Some(5)))));
+
+        // Successful cast: Utf8 "2.5" -> Float64
+        let expr = lit(ScalarValue::Utf8(Some("2.5".into())));
+        let result = try_cast_string_literal_to_type(&expr, &DataType::Float64).unwrap();
+        assert_eq!(result, Some(lit(ScalarValue::Float64(Some(2.5)))));
+
+        // Successful cast: Utf8 "100" -> Int32
+        let expr = lit(ScalarValue::Utf8(Some("100".into())));
+        let result = try_cast_string_literal_to_type(&expr, &DataType::Int32).unwrap();
+        assert_eq!(result, Some(lit(ScalarValue::Int32(Some(100)))));
+
+        // Successful cast: Utf8 "42" -> UInt64
+        let expr = lit(ScalarValue::Utf8(Some("42".into())));
+        let result = try_cast_string_literal_to_type(&expr, &DataType::UInt64).unwrap();
+        assert_eq!(result, Some(lit(ScalarValue::UInt64(Some(42)))));
+
+        // Failed cast: non-numeric string
+        let expr = lit(ScalarValue::Utf8(Some("hello".into())));
+        let result = try_cast_string_literal_to_type(&expr, &DataType::Int64);
+        assert!(result.is_err());
+
+        // Non-string literal: returns None (no-op)
+        let expr = lit(ScalarValue::Int64(Some(5)));
+        let result = try_cast_string_literal_to_type(&expr, &DataType::Int64).unwrap();
+        assert_eq!(result, None);
+
+        // Non-numeric target type: returns None (no-op)
+        let expr = lit(ScalarValue::Utf8(Some("5".into())));
+        let result = try_cast_string_literal_to_type(&expr, &DataType::Boolean).unwrap();
+        assert_eq!(result, None);
+
+        // Non-literal expression: returns None (no-op)
+        let expr = col("a");
+        let result = try_cast_string_literal_to_type(&expr, &DataType::Int64).unwrap();
+        assert_eq!(result, None);
+
+        // NULL Utf8 literal: cast succeeds, producing typed NULL
+        let expr = lit(ScalarValue::Utf8(None));
+        let result = try_cast_string_literal_to_type(&expr, &DataType::Int64).unwrap();
+        assert_eq!(result, Some(lit(ScalarValue::Int64(None))));
     }
 
     #[test]

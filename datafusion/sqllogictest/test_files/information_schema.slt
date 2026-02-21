@@ -162,7 +162,7 @@ SET datafusion.execution.planning_concurrency = 3;
 
 # when setting target_partitions and planning_concurrency to 3, their values will be 3
 query TB rowsort
-SELECT name, value = 3 FROM information_schema.df_settings WHERE name IN ('datafusion.execution.target_partitions', 'datafusion.execution.planning_concurrency');
+SELECT name, value = '3' FROM information_schema.df_settings WHERE name IN ('datafusion.execution.target_partitions', 'datafusion.execution.planning_concurrency');
 ----
 datafusion.execution.planning_concurrency true
 datafusion.execution.target_partitions true
@@ -176,7 +176,7 @@ SET datafusion.execution.planning_concurrency = 0;
 # when setting target_partitions and planning_concurrency to 0, their values will be equal to the
 # default values, which are different from 0 (which is invalid)
 query TB rowsort
-SELECT name, value = 0 FROM information_schema.df_settings WHERE name IN ('datafusion.execution.target_partitions', 'datafusion.execution.planning_concurrency');
+SELECT name, value = '0' FROM information_schema.df_settings WHERE name IN ('datafusion.execution.target_partitions', 'datafusion.execution.planning_concurrency');
 ----
 datafusion.execution.planning_concurrency false
 datafusion.execution.target_partitions false

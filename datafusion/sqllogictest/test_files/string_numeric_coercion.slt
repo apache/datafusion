@@ -1,0 +1,345 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+## Tests for string-numeric comparison coercion
+## Verifies that when comparing a numeric column to a string literal,
+## the comparison is performed numerically (not lexicographically).
+## See: https://github.com/apache/datafusion/issues/15161
+##########
+
+# Setup test data
+statement ok
+CREATE TABLE t_int AS VALUES (1), (5), (325), (499), (1000);
+
+statement ok
+CREATE TABLE t_float AS VALUES (1.5), (5.0), (325.7), (499.9), (1000.1);
+
+# -------------------------------------------------
+# Integer column with comparison operators vs string literals.
+# Ensure that the comparison is done with numeric semantics,
+# not lexicographically.
+# -------------------------------------------------
+
+query I rowsort
+SELECT * FROM t_int WHERE column1 < '5';
+----
+1
+
+query I rowsort
+SELECT * FROM t_int WHERE column1 > '5';
+----
+1000
+325
+499
+
+query I rowsort
+SELECT * FROM t_int WHERE column1 <= '5';
+----
+1
+5
+
+query I rowsort
+SELECT * FROM t_int WHERE column1 >= '5';
+----
+1000
+325
+499
+5
+
+query I rowsort
+SELECT * FROM t_int WHERE column1 = '5';
+----
+5
+
+query I rowsort
+SELECT * FROM t_int WHERE column1 != '5';
+----
+1
+1000
+325
+499
+
+query I rowsort
+SELECT * FROM t_int WHERE column1 < '10';
+----
+1
+5
+
+query I rowsort
+SELECT * FROM t_int WHERE column1 <= '100';
+----
+1
+5
+
+query I rowsort
+SELECT * FROM t_int WHERE column1 > '100';
+----
+1000
+325
+499
+
+# -------------------------------------------------
+# Float column with comparison operators vs string literals
+# -------------------------------------------------
+
+query R rowsort
+SELECT * FROM t_float WHERE column1 < '5';
+----
+1.5
+
+query R rowsort
+SELECT * FROM t_float WHERE column1 > '5';
+----
+1000.1
+325.7
+499.9
+
+query R rowsort
+SELECT * FROM t_float WHERE column1 = '5';
+----
+5
+
+query R rowsort
+SELECT * FROM t_float WHERE column1 = '5.0';
+----
+5
+
+# -------------------------------------------------
+# Error on strings that cannot be cast to the numeric column type
+# -------------------------------------------------
+
+# Non-numeric string
+statement error Arrow error: Cast error: Cannot cast string 'hello' to value of Int64 type
+SELECT * FROM t_int WHERE column1 < 'hello';
+
+# Decimal string against integer column
+statement error Arrow error: Cast error: Cannot cast string '99.99' to value of Int64 type
+SELECT * FROM t_int WHERE column1 = '99.99';
+
+# Empty string
+statement error Arrow error: Cast error: Cannot cast string '' to value of Int64 type
+SELECT * FROM t_int WHERE column1 = '';
+
+# Overflow
+statement error Arrow error: Cast error: Cannot cast string '99999999999999999999' to value of Int64 type
+SELECT * FROM t_int WHERE column1 = '99999999999999999999';
+
+# -------------------------------------------------
+# UNION behaves differently: we coerce the numeric column to be
+# a string
+# -------------------------------------------------
+
+statement ok
+CREATE TABLE t_str AS VALUES ('one'), ('two'), ('three');
+
+query T rowsort
+SELECT column1 FROM t_int UNION ALL SELECT column1 FROM t_str;
+----
+1
+1000
+325
+499
+5
+one
+three
+two
+
+# Verify the UNION coerces to Utf8 (not numeric)
+query TT
+EXPLAIN SELECT column1 FROM t_int UNION ALL SELECT column1 FROM t_str;
+----
+logical_plan
+01)Union
+02)--Projection: CAST(t_int.column1 AS Utf8) AS column1
+03)----TableScan: t_int projection=[column1]
+04)--TableScan: t_str projection=[column1]
+physical_plan
+01)UnionExec
+02)--ProjectionExec: expr=[CAST(column1@0 AS Utf8) as column1]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# -------------------------------------------------
+# BETWEEN with string literal bounds against a numeric column
+# -------------------------------------------------
+
+query I rowsort
+SELECT * FROM t_int WHERE column1 BETWEEN '5' AND '100';
+----
+5
+
+# -------------------------------------------------
+# IN list with string literals against numeric column.
+# String literals are cast to the column's numeric type,
+# giving numeric semantics (same as comparison operators).
+# -------------------------------------------------
+
+query I rowsort
+SELECT * FROM t_int WHERE column1 IN ('5', '325');
+----
+325
+5
+
+query I rowsort
+SELECT * FROM t_int WHERE column1 IN ('100');
+----
+
+# NOT IN
+query I rowsort
+SELECT * FROM t_int WHERE column1 NOT IN ('5', '325');
+----
+1
+1000
+499
+
+# Float column: '5' matches 5.0 (numeric semantics).
+# Under lexicographic semantics this would fail because
+# CAST(5.0 AS Utf8) produces '5.0', which does not equal '5'.
+query R
+SELECT * FROM t_float WHERE column1 IN ('5');
+----
+5
+
+# Non-numeric string in IN list should error
+statement error Arrow error: Cast error: Cannot cast string 'hello' to value of Int64 type
+SELECT * FROM t_int WHERE column1 IN ('5', 'hello');
+
+# -------------------------------------------------
+# Mixed BETWEEN bounds: one string, one numeric
+# -------------------------------------------------
+
+query I rowsort
+SELECT * FROM t_int WHERE column1 BETWEEN 5 AND '100';
+----
+5
+
+query I rowsort
+SELECT * FROM t_int WHERE column1 BETWEEN '5' AND 100;
+----
+5
+
+# NOT BETWEEN
+query I rowsort
+SELECT * FROM t_int WHERE column1 NOT BETWEEN '5' AND '100';
+----
+1
+1000
+325
+499
+
+# -------------------------------------------------
+# String literal expression with numeric bounds
+# (reverse direction: cast the expression, not just the bounds)
+# -------------------------------------------------
+
+query B
+SELECT '5' BETWEEN 1 AND 10;
+----
+true
+
+query B
+SELECT '0' BETWEEN 1 AND 10;
+----
+false
+
+query B
+SELECT '5' NOT BETWEEN 1 AND 10;
+----
+false
+
+# Non-numeric string literal with numeric bounds should error
+statement error Arrow error: Cast error: Cannot cast string 'hello' to value of Int64 type
+SELECT 'hello' BETWEEN 1 AND 10;
+
+# -------------------------------------------------
+# Decimal column with string literal comparisons
+# -------------------------------------------------
+
+statement ok
+CREATE TABLE t_dec AS SELECT CAST(column1 AS DECIMAL(10,2)) AS column1 FROM (VALUES (1.50), (5.00), (325.75), (499.99), (1000.10));
+
+query R rowsort
+SELECT * FROM t_dec WHERE column1 = '5.00';
+----
+5
+
+query R rowsort
+SELECT * FROM t_dec WHERE column1 < '100';
+----
+1.5
+5
+
+query R rowsort
+SELECT * FROM t_dec WHERE column1 > '500';
+----
+1000.1
+
+query R rowsort
+SELECT * FROM t_dec WHERE column1 BETWEEN '5' AND '500';
+----
+325.75
+499.99
+5
+
+# Non-numeric string against decimal column
+statement error Arrow error: Cast error: Cannot cast string 'hello' to value of Decimal128\(38, 10\) type
+SELECT * FROM t_dec WHERE column1 = 'hello';
+
+statement ok
+DROP TABLE t_dec;
+
+# -------------------------------------------------
+# String column compared to numeric literal should error
+# (no implicit column cast — only string literals are
+# cast to numeric, not the reverse)
+# -------------------------------------------------
+
+statement ok
+CREATE TABLE t_mixed AS VALUES (1, 'hello');
+
+# text column compared to numeric literal
+statement error Cannot infer common argument type for comparison operation
+SELECT * FROM t_mixed WHERE column2 < 5;
+
+# text column compared to numeric column
+statement error Cannot infer common argument type for comparison operation
+SELECT * FROM t_mixed WHERE column2 = column1;
+
+# text column in numeric literal list
+statement error Can not find compatible types to compare Utf8 with \[Int64, Int64\]
+SELECT * FROM t_mixed WHERE column2 IN (5, 10);
+
+# text column BETWEEN numeric literals
+statement error Failed to coerce types Utf8 and Int64 in BETWEEN expression
+SELECT * FROM t_mixed WHERE column2 BETWEEN 1 AND 10;
+
+statement ok
+DROP TABLE t_mixed;
+
+# -------------------------------------------------
+# Cleanup
+# -------------------------------------------------
+
+statement ok
+DROP TABLE t_int;
+
+statement ok
+DROP TABLE t_float;
+
+statement ok
+DROP TABLE t_str;

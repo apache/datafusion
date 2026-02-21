@@ -38,7 +38,7 @@ fn test_ree_type_coercion() {
         Some(Int32)
     );
 
-    // Since we can coerce values of Int16 to Utf8 can support this: Coercion of Int16 to Utf8
+    // String-vs-numeric REE comparisons are rejected
     let lhs_type = RunEndEncoded(
         Arc::new(Field::new("run_ends", Int8, false)),
         Arc::new(Field::new("values", Utf8, false)),
@@ -47,10 +47,7 @@ fn test_ree_type_coercion() {
         Arc::new(Field::new("run_ends", Int8, false)),
         Arc::new(Field::new("values", Int16, false)),
     );
-    assert_eq!(
-        ree_comparison_coercion(&lhs_type, &rhs_type, true),
-        Some(Utf8)
-    );
+    assert_eq!(ree_comparison_coercion(&lhs_type, &rhs_type, true), None);
 
     // Since we can coerce values of Utf8 to Binary can support this
     let lhs_type = RunEndEncoded(
