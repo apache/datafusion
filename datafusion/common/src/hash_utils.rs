@@ -24,6 +24,7 @@ use arrow::compute::take;
 use arrow::datatypes::*;
 #[cfg(not(feature = "force_hash_collisions"))]
 use arrow::{downcast_dictionary_array, downcast_primitive_array};
+#[cfg(not(feature = "force_hash_collisions"))]
 use itertools::Itertools;
 use std::collections::HashMap;
 
@@ -280,6 +281,7 @@ fn hash_array<T>(
 /// HAS_NULLS: do we have to check null in the inner loop
 /// HAS_BUFFERS: if true, array has external buffers; if false, all strings are inlined/ less then 12 bytes
 /// REHASH: if true, combining with existing hash, otherwise initializing
+#[cfg(not(feature = "force_hash_collisions"))]
 #[inline(never)]
 fn hash_string_view_array_inner<
     T: ByteViewType,
@@ -400,6 +402,7 @@ fn hash_generic_byte_view_array<T: ByteViewType>(
 /// - `HAS_NULL_KEYS`: Whether to check for null dictionary keys
 /// - `HAS_NULL_VALUES`: Whether to check for null dictionary values
 /// - `MULTI_COL`: Whether to combine with existing hash (true) or initialize (false)
+#[cfg(not(feature = "force_hash_collisions"))]
 #[inline(never)]
 fn hash_dictionary_inner<
     K: ArrowDictionaryKeyType,
