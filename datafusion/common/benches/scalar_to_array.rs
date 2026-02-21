@@ -28,7 +28,7 @@ use std::sync::Arc;
 /// Build a `ScalarValue::List` of `num_elements` Utf8View strings whose
 /// inner StringViewArray has `num_buffers` data buffers.
 fn make_list_scalar(num_elements: usize, num_buffers: usize) -> ScalarValue {
-    let elements_per_buffer = (num_elements + num_buffers - 1) / num_buffers;
+    let elements_per_buffer = num_elements.div_ceil(num_buffers);
 
     let mut small_arrays: Vec<ArrayRef> = Vec::new();
     let mut remaining = num_elements;
