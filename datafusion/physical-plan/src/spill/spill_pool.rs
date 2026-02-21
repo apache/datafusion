@@ -1441,4 +1441,44 @@ mod tests {
 
         Ok(())
     }
+    
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn test_concurrent_writer_reader_race_condition() -> Result<()> {
+        // stress testing the concurncy in the reader and the reader to make sure there is now race condtion
+        // going for 100 iterations with a 5 batches per iteration 
+        const NUM_BATCHES: usize = 5;
+        const ITERATIONS: usize = 100;
+
+        for iteration in 0..ITERATIONS {
+            let (writer, mut reader) = create_spill_channel(1024 * 1024);
+    
+            let writer_handle = SpawnedTask::spawn(async move {
+                for i in 0..NUM_BATCHES {
+                    let batch = create_test_batch(i as i32 * 10, 10);
+                    writer.push_batch(&batch).unwrap();
+                    tokio::task::yield_now().await;
+                }
+            });
+    
+            let reader_handle = SpawnedTask::spawn(async move {
+                let mut batches_read = 0;
+                while let Some(result) = reader.next().await {
+                    let _batch = result.unwrap();
+                    batches_read += 1;
+                    tokio::task::yield_now().await;
+                }
+                batches_read
+            });
+    
+            writer_handle.join().await.unwrap();
+            let batches_read = reader_handle.join().await.unwrap();
+
+            assert_eq!(
+                batches_read, NUM_BATCHES,
+                "Iteration {iteration}: Expected {NUM_BATCHES} got {batches_read}."
+            );
+        }
+
+        Ok(())
+    }
 }
