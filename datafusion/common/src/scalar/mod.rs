@@ -5537,7 +5537,8 @@ mod tests {
     fn test_to_array_of_size_list_size_one() {
         // size=1 takes the fast path (Arc::clone)
         let arr = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
-            Some(10), Some(20),
+            Some(10),
+            Some(20),
         ])]);
         let sv = ScalarValue::List(Arc::new(arr.clone()));
         let result = sv.to_array_of_size(1).unwrap();
@@ -5559,9 +5560,11 @@ mod tests {
 
     #[test]
     fn test_to_array_of_size_large_list() {
-        let arr = LargeListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(
-            vec![Some(100), Some(200)],
-        )]);
+        let arr =
+            LargeListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+                Some(100),
+                Some(200),
+            ])]);
         let sv = ScalarValue::LargeList(Arc::new(arr));
         let result = sv.to_array_of_size(3).unwrap();
         let expected = LargeListArray::from_iter_primitive::<Int32Type, _, _>(vec![
@@ -5581,9 +5584,15 @@ mod tests {
         assert_eq!(
             result.iter().collect::<Vec<_>>(),
             vec![
-                Some(10), None, Some(30),
-                Some(10), None, Some(30),
-                Some(10), None, Some(30),
+                Some(10),
+                None,
+                Some(30),
+                Some(10),
+                None,
+                Some(30),
+                Some(10),
+                None,
+                Some(30),
             ]
         );
     }
