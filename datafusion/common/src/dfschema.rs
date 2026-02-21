@@ -1213,21 +1213,25 @@ impl Display for DFSchema {
 /// widely used in the DataFusion codebase.
 pub trait ExprSchema: std::fmt::Debug {
     /// Is this column reference nullable?
+    #[deprecated(since = "53.0.0", note = "use field_from_column")]
     fn nullable(&self, col: &Column) -> Result<bool> {
         Ok(self.field_from_column(col)?.is_nullable())
     }
 
     /// What is the datatype of this column?
+    #[deprecated(since = "53.0.0", note = "use field_from_column")]
     fn data_type(&self, col: &Column) -> Result<&DataType> {
         Ok(self.field_from_column(col)?.data_type())
     }
 
     /// Returns the column's optional metadata.
+    #[deprecated(since = "53.0.0", note = "use field_from_column")]
     fn metadata(&self, col: &Column) -> Result<&HashMap<String, String>> {
         Ok(self.field_from_column(col)?.metadata())
     }
 
     /// Return the column's datatype and nullability
+    #[deprecated(since = "53.0.0", note = "use field_from_column")]
     fn data_type_and_nullable(&self, col: &Column) -> Result<(&DataType, bool)> {
         let field = self.field_from_column(col)?;
         Ok((field.data_type(), field.is_nullable()))
@@ -1239,22 +1243,6 @@ pub trait ExprSchema: std::fmt::Debug {
 
 // Implement `ExprSchema` for `Arc<DFSchema>`
 impl<P: AsRef<DFSchema> + std::fmt::Debug> ExprSchema for P {
-    fn nullable(&self, col: &Column) -> Result<bool> {
-        self.as_ref().nullable(col)
-    }
-
-    fn data_type(&self, col: &Column) -> Result<&DataType> {
-        self.as_ref().data_type(col)
-    }
-
-    fn metadata(&self, col: &Column) -> Result<&HashMap<String, String>> {
-        ExprSchema::metadata(self.as_ref(), col)
-    }
-
-    fn data_type_and_nullable(&self, col: &Column) -> Result<(&DataType, bool)> {
-        self.as_ref().data_type_and_nullable(col)
-    }
-
     fn field_from_column(&self, col: &Column) -> Result<&FieldRef> {
         self.as_ref().field_from_column(col)
     }

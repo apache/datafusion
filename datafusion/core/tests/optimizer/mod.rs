@@ -282,7 +282,7 @@ fn test_nested_schema_nullability() {
     .unwrap();
 
     let expr = col("parent").field("child");
-    assert!(expr.nullable(&dfschema).unwrap());
+    assert!(expr.to_field(&dfschema).unwrap().1.is_nullable());
 }
 
 #[test]

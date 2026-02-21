@@ -74,7 +74,9 @@ impl CaseBuilder {
         let then_types: Vec<DataType> = then_expr
             .iter()
             .map(|e| match e {
-                Expr::Literal(_, _) => e.get_type(&DFSchema::empty()),
+                Expr::Literal(_, _) => {
+                    Ok(e.to_field(&DFSchema::empty())?.1.data_type().clone())
+                }
                 _ => Ok(DataType::Null),
             })
             .collect::<Result<Vec<_>>>()?;

@@ -468,7 +468,7 @@ fn boundary_analysis_in_conjunctions_demo() -> Result<()> {
     Ok(())
 }
 
-/// This function shows how to use `Expr::get_type` to retrieve the DataType
+/// This function shows how to use `Expr::to_field` to retrieve the DataType
 /// of an expression
 fn expression_type_demo() -> Result<()> {
     let expr = col("c");
@@ -481,14 +481,20 @@ fn expression_type_demo() -> Result<()> {
         vec![Field::new("c", DataType::Utf8, true)].into(),
         HashMap::new(),
     )?;
-    assert_eq!("Utf8", format!("{}", expr.get_type(&schema).unwrap()));
+    assert_eq!(
+        "Utf8",
+        format!("{}", expr.to_field(&schema).unwrap().1.data_type())
+    );
 
     // Using a schema where the column `foo` is of type Int32
     let schema = DFSchema::from_unqualified_fields(
         vec![Field::new("c", DataType::Int32, true)].into(),
         HashMap::new(),
     )?;
-    assert_eq!("Int32", format!("{}", expr.get_type(&schema).unwrap()));
+    assert_eq!(
+        "Int32",
+        format!("{}", expr.to_field(&schema).unwrap().1.data_type())
+    );
 
     // Get the type of an expression that adds 2 columns. Adding an Int32
     // and Float32 results in Float32 type
@@ -501,7 +507,10 @@ fn expression_type_demo() -> Result<()> {
         .into(),
         HashMap::new(),
     )?;
-    assert_eq!("Float32", format!("{}", expr.get_type(&schema).unwrap()));
+    assert_eq!(
+        "Float32",
+        format!("{}", expr.to_field(&schema).unwrap().1.data_type())
+    );
 
     Ok(())
 }

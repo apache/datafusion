@@ -85,17 +85,17 @@ impl SimplifyContext {
 
     /// Returns true if this Expr has boolean type
     pub fn is_boolean_type(&self, expr: &Expr) -> Result<bool> {
-        Ok(expr.get_type(&self.schema)? == DataType::Boolean)
+        Ok(expr.to_field(&self.schema)?.1.data_type() == &DataType::Boolean)
     }
 
     /// Returns true if expr is nullable
     pub fn nullable(&self, expr: &Expr) -> Result<bool> {
-        expr.nullable(self.schema.as_ref())
+        Ok(expr.to_field(&self.schema)?.1.is_nullable())
     }
 
     /// Returns data type of this expr needed for determining optimized int type of a value
     pub fn get_data_type(&self, expr: &Expr) -> Result<DataType> {
-        expr.get_type(&self.schema)
+        Ok(expr.to_field(&self.schema)?.1.data_type().clone())
     }
 
     /// Returns the time at which the query execution started.

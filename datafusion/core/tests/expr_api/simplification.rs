@@ -748,14 +748,14 @@ fn test_simplify_concat() -> Result<()> {
         null,
         col("c5"),
     ]);
-    let expr_datatype = expr.get_type(schema.as_ref())?;
+    let expr_datatype = expr.to_field(schema.as_ref())?.1.data_type().clone();
     let expected = concat(vec![
         col("c1"),
         lit(ScalarValue::Utf8View(Some("hello rust!".to_string()))),
         col("c2"),
         col("c5"),
     ]);
-    let expected_datatype = expected.get_type(schema.as_ref())?;
+    let expected_datatype = expected.to_field(schema.as_ref())?.1.data_type().clone();
     assert_eq!(expr_datatype, expected_datatype);
     test_simplify(expr, expected);
     Ok(())

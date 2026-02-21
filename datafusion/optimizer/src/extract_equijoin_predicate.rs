@@ -250,8 +250,10 @@ fn split_op_and_other_join_predicates(
                     find_valid_equijoin_key_pair(left, right, left_schema, right_schema)?;
 
                 if let Some((left_expr, right_expr)) = join_key_pair {
-                    let left_expr_type = left_expr.get_type(left_schema)?;
-                    let right_expr_type = right_expr.get_type(right_schema)?;
+                    let left_expr_type =
+                        left_expr.to_field(left_schema)?.1.data_type().clone();
+                    let right_expr_type =
+                        right_expr.to_field(right_schema)?.1.data_type().clone();
 
                     if can_hash(&left_expr_type) && can_hash(&right_expr_type) {
                         accum_join_keys.push((left_expr, right_expr));

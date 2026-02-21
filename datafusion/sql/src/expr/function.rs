@@ -290,7 +290,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let is_two_array_syntax = args.len() == 2
                     && args.iter().all(|arg| {
                         matches!(
-                            arg.get_type(schema),
+                            arg.to_field(schema).map(|f| f.1.data_type().clone()),
                             Ok(DataType::List(_))
                                 | Ok(DataType::LargeList(_))
                                 | Ok(DataType::FixedSizeList(_, _))
@@ -901,7 +901,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     pub(crate) fn check_unnest_arg(arg: &Expr, schema: &DFSchema) -> Result<()> {
         // Check argument type, array types are supported
-        match arg.get_type(schema)? {
+        match arg.to_field(schema)?.1.data_type() {
             DataType::List(_)
             | DataType::LargeList(_)
             | DataType::FixedSizeList(_, _)

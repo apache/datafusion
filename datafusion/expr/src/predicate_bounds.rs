@@ -84,10 +84,10 @@ impl PredicateBoundsEvaluator<'_> {
             }
             Expr::IsNull(e) => {
                 // If `e` is not nullable, then `e IS NULL` is provably false
-                if !e.nullable(self.input_schema)? {
+                if !e.to_field(self.input_schema)?.1.is_nullable() {
                     NullableInterval::FALSE
                 } else {
-                    match e.get_type(self.input_schema)? {
+                    match e.to_field(self.input_schema)?.1.data_type() {
                         // If `e` is a boolean expression, check if `e` is provably 'unknown'.
                         DataType::Boolean => self.evaluate_bounds(e)?.is_unknown()?,
                         // If `e` is not a boolean expression, check if `e` is provably null
@@ -97,10 +97,10 @@ impl PredicateBoundsEvaluator<'_> {
             }
             Expr::IsNotNull(e) => {
                 // If `e` is not nullable, then `e IS NOT NULL` is provably true
-                if !e.nullable(self.input_schema)? {
+                if !e.to_field(self.input_schema)?.1.is_nullable() {
                     NullableInterval::TRUE
                 } else {
-                    match e.get_type(self.input_schema)? {
+                    match e.to_field(self.input_schema)?.1.data_type() {
                         // If `e` is a boolean expression, try to evaluate it and test for not unknown
                         DataType::Boolean => {
                             self.evaluate_bounds(e)?.is_unknown()?.not()?
@@ -166,7 +166,9 @@ impl PredicateBoundsEvaluator<'_> {
         }
 
         // If `expr` is not nullable, we can be certain `expr` is not null
-        if let Ok(false) = expr.nullable(self.input_schema) {
+        if let Ok(field) = expr.to_field(self.input_schema)
+            && !field.1.is_nullable()
+        {
             return NullableInterval::FALSE;
         }
 

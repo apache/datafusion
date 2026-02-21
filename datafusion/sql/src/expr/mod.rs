@@ -895,7 +895,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         let pattern = self.sql_expr_to_logical_expr(pattern, schema, planner_context)?;
-        let pattern_type = pattern.get_type(schema)?;
+        let pattern_type = pattern.to_field(schema)?.1.data_type().clone();
         if pattern_type != DataType::Utf8 && pattern_type != DataType::Null {
             return plan_err!("Invalid pattern in SIMILAR TO expression");
         }
@@ -1019,7 +1019,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // to align with postgres / duckdb semantics
         let expr = match dt.data_type() {
             DataType::Timestamp(TimeUnit::Nanosecond, tz)
-                if expr.get_type(schema)? == DataType::Int64 =>
+                if expr.to_field(schema)?.1.data_type() == &DataType::Int64 =>
             {
                 Expr::Cast(Cast::new(
                     Box::new(expr),
