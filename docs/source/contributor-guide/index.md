@@ -221,6 +221,7 @@ For the standard GitHub runners, this action will do nothing.
 ##### Spot Instances
 
 By default, Runs-On actions run as [spot instances](https://runs-on.com/configuration/spot-instances/), which means they might occasionally be interrupted. In the CI you would see:
+
 ```
 Error: The operation was canceled.
 ```
