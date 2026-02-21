@@ -25,6 +25,7 @@ use datafusion::execution::context::TaskContext;
 use datafusion::prelude::SessionConfig;
 use datafusion_execution::cache::DefaultListFilesCache;
 use datafusion_execution::cache::cache_manager::CacheManagerConfig;
+use datafusion_execution::cache::cache_unit::DefaultFileStatisticsCache;
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 use datafusion_physical_plan::common::collect;
 
@@ -323,6 +324,51 @@ async fn test_list_files_cache_ttl() {
 
     update_limit(&ctx, "1m30s").await;
     assert_eq!(get_limit(&ctx), Duration::from_secs(90));
+}
+
+#[tokio::test]
+async fn test_file_statistics_cache_limit() {
+    let file_statistics_cache = Arc::new(DefaultFileStatisticsCache::default());
+
+    let rt = RuntimeEnvBuilder::new()
+        .with_cache_manager(
+            CacheManagerConfig::default()
+                .with_file_statistics_cache(Some(file_statistics_cache)),
+        )
+        .build_arc()
+        .unwrap();
+
+    let ctx = SessionContext::new_with_config_rt(SessionConfig::default(), rt);
+
+    let update_limit = async |ctx: &SessionContext, limit: &str| {
+        ctx.sql(
+            format!("SET datafusion.runtime.file_statistics_cache_limit = '{limit}'")
+                .as_str(),
+        )
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    };
+
+    let get_limit = |ctx: &SessionContext| -> usize {
+        ctx.task_ctx()
+            .runtime_env()
+            .cache_manager
+            .get_file_statistic_cache()
+            .unwrap()
+            .cache_limit()
+    };
+
+    update_limit(&ctx, "1M").await;
+    assert_eq!(get_limit(&ctx), 1024 * 1024);
+
+    update_limit(&ctx, "42G").await;
+    assert_eq!(get_limit(&ctx), 42 * 1024 * 1024 * 1024);
+
+    update_limit(&ctx, "23K").await;
+    assert_eq!(get_limit(&ctx), 23 * 1024);
 }
 
 #[tokio::test]

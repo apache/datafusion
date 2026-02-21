@@ -324,6 +324,7 @@ datafusion.optimizer.repartition_windows true
 datafusion.optimizer.skip_failed_rules false
 datafusion.optimizer.subset_repartition_threshold 4
 datafusion.optimizer.top_down_join_key_reordering true
+datafusion.runtime.file_statistics_cache_limit 1M
 datafusion.runtime.list_files_cache_limit 1M
 datafusion.runtime.list_files_cache_ttl NULL
 datafusion.runtime.max_temp_directory_size 100G
@@ -462,6 +463,7 @@ datafusion.optimizer.repartition_windows true Should DataFusion repartition data
 datafusion.optimizer.skip_failed_rules false When set to true, the logical plan optimizer will produce warning messages if any optimization rules produce errors and then proceed to the next rule. When set to false, any rules that produce errors will cause the query to fail
 datafusion.optimizer.subset_repartition_threshold 4 Partition count threshold for subset satisfaction optimization. When the current partition count is >= this threshold, DataFusion will skip repartitioning if the required partitioning expression is a subset of the current partition expression such as Hash(a) satisfies Hash(a, b). When the current partition count is < this threshold, DataFusion will repartition to increase parallelism even when subset satisfaction applies. Set to 0 to always repartition (disable subset satisfaction optimization). Set to a high value to always use subset satisfaction. Example (subset_repartition_threshold = 4): ```text     Hash([a]) satisfies Hash([a, b]) because (Hash([a, b]) is subset of Hash([a])     If current partitions (3) < threshold (4), repartition:     AggregateExec: mode=FinalPartitioned, gby=[a, b], aggr=[SUM(x)]       RepartitionExec: partitioning=Hash([a, b], 8), input_partitions=3         AggregateExec: mode=Partial, gby=[a, b], aggr=[SUM(x)]           DataSourceExec: file_groups={...}, output_partitioning=Hash([a], 3)     If current partitions (8) >= threshold (4), use subset satisfaction:     AggregateExec: mode=SinglePartitioned, gby=[a, b], aggr=[SUM(x)]       DataSourceExec: file_groups={...}, output_partitioning=Hash([a], 8) ```
 datafusion.optimizer.top_down_join_key_reordering true When set to true, the physical plan optimizer will run a top down process to reorder the join keys
+datafusion.runtime.file_statistics_cache_limit 1M Maximum memory to use for file statistics cache. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.
 datafusion.runtime.list_files_cache_limit 1M Maximum memory to use for list files cache. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.
 datafusion.runtime.list_files_cache_ttl NULL TTL (time-to-live) of the entries in the list file cache. Supports units m (minutes), and s (seconds). Example: '2m' for 2 minutes.
 datafusion.runtime.max_temp_directory_size 100G Maximum temporary file directory size. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.

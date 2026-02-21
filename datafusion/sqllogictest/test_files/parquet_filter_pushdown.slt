@@ -37,6 +37,9 @@ COPY  (
  )  TO 'test_files/scratch/parquet_filter_pushdown/parquet_table/2.parquet'
 STORED AS PARQUET;
 
+statement ok
+set datafusion.runtime.file_statistics_cache_limit = "0K";
+
 
 ## Create table without filter pushdown
 ## (pushdown setting is part of the table, but is copied from the session settings)

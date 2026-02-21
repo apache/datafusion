@@ -177,6 +177,10 @@ physical_plan
 statement ok
 DROP TABLE test_table;
 
+# Disable file statistics cache because file statistics have been previously created
+statement ok
+set datafusion.runtime.file_statistics_cache_limit = "0K";
+
 statement ok
 CREATE EXTERNAL TABLE test_table (
   partition_col TEXT NOT NULL,

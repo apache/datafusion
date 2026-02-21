@@ -103,6 +103,7 @@ fn create_runtime_config_entries(
     metadata_cache_limit: Option<String>,
     list_files_cache_limit: Option<String>,
     list_files_cache_ttl: Option<String>,
+    file_statistics_cache_limit: Option<String>,
 ) -> Vec<ConfigEntry> {
     vec![
         ConfigEntry {
@@ -134,6 +135,11 @@ fn create_runtime_config_entries(
             key: "datafusion.runtime.list_files_cache_ttl".to_string(),
             value: list_files_cache_ttl,
             description: "TTL (time-to-live) of the entries in the list file cache. Supports units m (minutes), and s (seconds). Example: '2m' for 2 minutes.",
+        },
+        ConfigEntry {
+            key: "datafusion.runtime.file_statistics_cache_limit".to_string(),
+            value: file_statistics_cache_limit,
+            description: "Maximum memory to use for file statistics cache. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.",
         },
     ]
 }
@@ -296,6 +302,14 @@ impl RuntimeEnv {
             .get_list_files_cache_ttl()
             .map(format_duration);
 
+        let file_statistics_cache_limit =
+            self.cache_manager.get_file_statistic_cache_limit();
+        let file_statistics_cache_value = format_byte_size(
+            file_statistics_cache_limit
+                .try_into()
+                .expect("File statistics cache size conversion failed"),
+        );
+
         create_runtime_config_entries(
             memory_limit_value,
             Some(max_temp_dir_value),
@@ -303,6 +317,7 @@ impl RuntimeEnv {
             Some(metadata_cache_value),
             Some(list_files_cache_value),
             list_files_cache_ttl,
+            Some(file_statistics_cache_value),
         )
     }
 }
@@ -438,6 +453,11 @@ impl RuntimeEnvBuilder {
         self
     }
 
+    pub fn with_file_statistics_cache_limit(mut self, limit: usize) -> Self {
+        self.cache_manager = self.cache_manager.with_file_statistics_cache_limit(limit);
+        self
+    }
+
     /// Build a RuntimeEnv
     pub fn build(self) -> Result<RuntimeEnv> {
         let Self {
@@ -475,9 +495,10 @@ impl RuntimeEnvBuilder {
     /// Create a new RuntimeEnvBuilder from an existing RuntimeEnv
     pub fn from_runtime_env(runtime_env: &RuntimeEnv) -> Self {
         let cache_config = CacheManagerConfig {
-            table_files_statistics_cache: runtime_env
+            file_statistics_cache: runtime_env.cache_manager.get_file_statistic_cache(),
+            file_statistics_cache_limit: runtime_env
                 .cache_manager
-                .get_file_statistic_cache(),
+                .get_file_statistic_cache_limit(),
             list_files_cache: runtime_env.cache_manager.get_list_files_cache(),
             list_files_cache_limit: runtime_env
                 .cache_manager
@@ -514,6 +535,7 @@ impl RuntimeEnvBuilder {
             Some("50M".to_owned()),
             Some("1M".to_owned()),
             None,
+            Some("1M".to_owned()),
         )
     }
 
