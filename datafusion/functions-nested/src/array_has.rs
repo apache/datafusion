@@ -847,8 +847,7 @@ impl ScalarUDFImpl for ArrayHasAny {
     ) -> Result<ColumnarValue> {
         let [first_arg, second_arg] = take_function_args(self.name(), &args.args)?;
 
-        // array_has_any is symmetric: if either argument is scalar, build a
-        // HashSet from it and probe with the rows of the other argument.
+        // If either argument is scalar, use the fast path.
         match (&first_arg, &second_arg) {
             (cv, ColumnarValue::Scalar(scalar)) | (ColumnarValue::Scalar(scalar), cv) => {
                 array_has_any_with_scalar(cv, scalar)
