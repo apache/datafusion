@@ -401,11 +401,10 @@ impl FileFormat for ParquetFormat {
         // is not deterministic. Thus, to ensure deterministic schema inference
         // sort the files first.
         // https://github.com/apache/datafusion/pull/6629
-        schemas.sort_unstable_by(|(location1, _), (location2, _)| location1.cmp(location2));
+        schemas
+            .sort_unstable_by(|(location1, _), (location2, _)| location1.cmp(location2));
 
-        let schemas = schemas
-            .into_iter()
-            .map(|(_, schema)| schema);
+        let schemas = schemas.into_iter().map(|(_, schema)| schema);
 
         let schema = if self.skip_metadata() {
             Schema::try_merge(clear_metadata(schemas))
