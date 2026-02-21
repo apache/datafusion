@@ -1,0 +1,207 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Tests for Spark-compatible murmur3_hash (also available as `hash`)
+# Reference: https://spark.apache.org/docs/latest/api/sql/index.html#hash
+
+# Basic integer tests
+query I
+SELECT murmur3_hash(1);
+----
+-1712319331
+
+query I
+SELECT murmur3_hash(0);
+----
+-1670924195
+
+query I
+SELECT murmur3_hash(-1);
+----
+-939490007
+
+# Test with `hash` alias
+query I
+SELECT hash(1);
+----
+-1712319331
+
+query I
+SELECT hash('hello');
+----
+-1008564952
+
+# String tests
+query I
+SELECT murmur3_hash('Spark');
+----
+228093765
+
+query I
+SELECT murmur3_hash('');
+----
+142593372
+
+query I
+SELECT murmur3_hash('abc');
+----
+1322437556
+
+# Boundary values
+query I
+SELECT murmur3_hash(arrow_cast(2147483647, 'Int32'));
+----
+133916647
+
+query I
+SELECT murmur3_hash(arrow_cast(-2147483648, 'Int32'));
+----
+723455942
+
+query I
+SELECT murmur3_hash(arrow_cast(9223372036854775807, 'Int64'));
+----
+-1604625029
+
+query I
+SELECT murmur3_hash(arrow_cast(-9223372036854775808, 'Int64'));
+----
+-853646085
+
+# Emoji and CJK strings
+query I
+SELECT murmur3_hash('😁');
+----
+885025535
+
+query I
+SELECT murmur3_hash('天地');
+----
+-1899966402
+
+# NULL handling - nulls don't change the hash (keeps seed value 42)
+query I
+SELECT murmur3_hash(NULL);
+----
+42
+
+# Multiple column hashing
+query I
+SELECT murmur3_hash(1, 2);
+----
+-1181176833
+
+query I
+SELECT murmur3_hash('a', 'b', 'c');
+----
+-1512497118
+
+query I
+SELECT murmur3_hash(1, 'hello');
+----
+-389038858
+
+# Int64 tests
+query I
+SELECT murmur3_hash(arrow_cast(1, 'Int64'));
+----
+-1712319331
+
+query I
+SELECT murmur3_hash(arrow_cast(0, 'Int64'));
+----
+-1670924195
+
+# Float tests - note: -0.0 and 0.0 hash to the same value in Spark
+query I
+SELECT murmur3_hash(1.0);
+----
+-460888942
+
+query I
+SELECT murmur3_hash(0.0);
+----
+-1670924195
+
+query I
+SELECT murmur3_hash(-0.0);
+----
+-1670924195
+
+# Float edge cases
+query I
+SELECT murmur3_hash(-1.0);
+----
+332927831
+
+query I
+SELECT murmur3_hash(arrow_cast(1.0E20, 'Float64'));
+----
+1801804228
+
+# Boolean tests
+query I
+SELECT murmur3_hash(true);
+----
+-559580957
+
+query I
+SELECT murmur3_hash(false);
+----
+933211791
+
+# Binary tests
+query I
+SELECT murmur3_hash(arrow_cast('hello', 'Binary'));
+----
+-1008564952
+
+# Date tests
+query I
+SELECT murmur3_hash(arrow_cast('2023-01-15', 'Date32'));
+----
+1059174970
+
+# Struct hashing
+query I
+SELECT murmur3_hash(named_struct('a', 1, 'b', 2));
+----
+-1181176833
+
+# Array/List hashing
+query I
+SELECT murmur3_hash(arrow_cast(make_array(1, 2, 3), 'List(Int32)'));
+----
+-1823081949
+
+# Test with table data
+statement ok
+CREATE TABLE hash_test AS SELECT * FROM (VALUES
+    (1, 'a'),
+    (2, 'b'),
+    (3, 'c')
+) AS t(id, name);
+
+query II
+SELECT id, murmur3_hash(id, name) FROM hash_test ORDER BY id;
+----
+1 573093329
+2 -436607593
+3 -1127961587
+
+statement ok
+DROP TABLE hash_test;

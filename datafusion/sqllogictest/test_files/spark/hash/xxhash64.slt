@@ -1,0 +1,196 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Tests for Spark-compatible xxhash64
+# Reference: https://spark.apache.org/docs/latest/api/sql/index.html#xxhash64
+
+# Basic integer tests (Int32 - hashed as 4 bytes)
+query I
+SELECT xxhash64(1);
+----
+-7001672635703045582
+
+query I
+SELECT xxhash64(0);
+----
+-5252525462095825812
+
+query I
+SELECT xxhash64(-1);
+----
+3858142552250413010
+
+# Boundary values
+query I
+SELECT xxhash64(arrow_cast(2147483647, 'Int32'));
+----
+1508894993788531228
+
+query I
+SELECT xxhash64(arrow_cast(-2147483648, 'Int32'));
+----
+2073849959933241805
+
+query I
+SELECT xxhash64(arrow_cast(9223372036854775807, 'Int64'));
+----
+-3246596055638297850
+
+query I
+SELECT xxhash64(arrow_cast(-9223372036854775808, 'Int64'));
+----
+-8619748838626508300
+
+# String tests
+query I
+SELECT xxhash64('hello');
+----
+-4367754540140381902
+
+query I
+SELECT xxhash64('');
+----
+-7444071767201028348
+
+query I
+SELECT xxhash64('abc');
+----
+1423657621850124518
+
+# Emoji and CJK strings
+query I
+SELECT xxhash64('😁');
+----
+-6337236088984028203
+
+query I
+SELECT xxhash64('天地');
+----
+-235771157374669727
+
+# NULL handling - nulls don't change the hash (keeps seed value 42)
+query I
+SELECT xxhash64(NULL);
+----
+42
+
+# Multiple column hashing
+query I
+SELECT xxhash64(1, 2);
+----
+-8198029865082835910
+
+query I
+SELECT xxhash64('a', 'b', 'c');
+----
+-8775012835737190202
+
+query I
+SELECT xxhash64(1, 'hello');
+----
+-7340167327466467369
+
+# Int64 tests
+query I
+SELECT xxhash64(arrow_cast(1, 'Int64'));
+----
+-7001672635703045582
+
+query I
+SELECT xxhash64(arrow_cast(0, 'Int64'));
+----
+-5252525462095825812
+
+# Float tests - note: -0.0 and 0.0 hash to the same value in Spark
+query I
+SELECT xxhash64(1.0);
+----
+-2162451265447482029
+
+query I
+SELECT xxhash64(0.0);
+----
+-5252525462095825812
+
+query I
+SELECT xxhash64(-0.0);
+----
+-5252525462095825812
+
+# Float edge cases
+query I
+SELECT xxhash64(-1.0);
+----
+-8296228499959607521
+
+query I
+SELECT xxhash64(arrow_cast(1.0E20, 'Float64'));
+----
+-1089066926670605926
+
+# Boolean tests
+query I
+SELECT xxhash64(true);
+----
+-6698625589789238999
+
+query I
+SELECT xxhash64(false);
+----
+3614696996920510707
+
+# Binary tests
+query I
+SELECT xxhash64(arrow_cast('hello', 'Binary'));
+----
+-4367754540140381902
+
+# Date tests
+query I
+SELECT xxhash64(arrow_cast('2023-01-15', 'Date32'));
+----
+290591839883576215
+
+# Struct hashing
+query I
+SELECT xxhash64(named_struct('a', 1, 'b', 2));
+----
+-8198029865082835910
+
+# Array/List hashing
+query I
+SELECT xxhash64(arrow_cast(make_array(1, 2, 3), 'List(Int32)'));
+----
+6258084186791473711
+
+# Test with table data
+statement ok
+CREATE TABLE xxhash_test AS SELECT * FROM (VALUES
+    (1, 'a'),
+    (2, 'b'),
+    (3, 'c')
+) AS t(id, name);
+
+query II
+SELECT id, xxhash64(id, name) FROM xxhash_test ORDER BY id;
+----
+1 -8527884376001292090
+2 -7687314219880041104
+3 -7773406846575579340
+
+statement ok
+DROP TABLE xxhash_test;
