@@ -3438,23 +3438,10 @@ impl ScalarValue {
         if size == 0 {
             return Ok(arr.slice(0, 0));
         }
-        if arr.len() == 1 {
-            // We will typically be called with a 1-element array; in that case,
-            // use `take` rather than `concat`. Using `concat` is very expensive
-            // if the inner element type is `StringViewArray` because it results
-            // in making `size` copies of the StringViewArray, each with their
-            // own data buffers. All of these data buffers will be preserved by
-            // `concat`, making subsequent access to the resulting ListArray
-            // very expensive.
-            //
-            // Using `take` preserves the source array's buffer count, avoiding
-            // this problem.
-            let indices = UInt32Array::from(vec![0; size]);
-            Ok(arrow::compute::take(arr, &indices, None)?)
-        } else {
-            let arrays = repeat_n(arr, size).collect::<Vec<_>>();
-            Ok(arrow::compute::concat(arrays.as_slice())?)
-        }
+
+        let n = arr.len() as u32;
+        let indices = UInt32Array::from_iter_values((0..size).flat_map(|_| 0..n));
+        Ok(arrow::compute::take(arr, &indices, None)?)
     }
 
     /// Retrieve ScalarValue for each row in `array`
