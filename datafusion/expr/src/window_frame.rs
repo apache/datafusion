@@ -27,9 +27,138 @@ use crate::{expr::Sort, lit};
 use std::fmt::{self, Formatter};
 use std::hash::Hash;
 
+use arrow::compute::SortOptions;
+use arrow::datatypes::DataType;
+use datafusion_common::ord::{ArrayComparator, DeltaValue, Op, make_comparator};
 use datafusion_common::{Result, ScalarValue, plan_err};
 #[cfg(feature = "sql")]
 use sqlparser::ast::{self, ValueWithSpan};
+
+#[derive(Debug, Clone)]
+pub struct WindowFrameBoundsComparators {
+    pub start_bound_comparators: Option<Vec<ArrayComparator>>,
+    pub end_bound_comparators: Option<Vec<ArrayComparator>>,
+}
+
+impl WindowFrameBoundsComparators {
+    /// Creates comparators for the start and end bounds of a RANGE window frame.
+    ///
+    /// Returns `None` if the frame is not a RANGE frame (ROWS and GROUPS frames
+    /// do not require range-based comparators).
+    ///
+    /// Each bound produces a `Vec<ArrayComparator>` — one comparator per ORDER BY
+    /// column — that, when called with `(search_array, search_idx, current_array,
+    /// current_idx)`, computes `search_val [cmp] current_val ± delta` according
+    /// to the sort direction and bound type:
+    ///
+    /// - `UNBOUNDED PRECEDING` / `UNBOUNDED FOLLOWING` → `None` (no comparator needed)
+    /// - `N PRECEDING` (asc)  → right_delta = `current - N`  (SubWrapping)
+    /// - `N PRECEDING` (desc) → right_delta = `current + N`  (AddWrapping)
+    /// - `N FOLLOWING` (asc)  → right_delta = `current + N`  (AddWrapping)
+    /// - `N FOLLOWING` (desc) → right_delta = `current - N`  (SubWrapping)
+    /// - `CURRENT ROW`        → no delta
+    pub fn new(frame: &WindowFrame, columns: &[(DataType, SortOptions)]) -> Option<Self> {
+        // Comparators are only needed for RANGE frames.
+        if frame.units != WindowFrameUnits::Range {
+            return None;
+        }
+
+        let sort_descending = columns.first().map(|(_, o)| o.descending).unwrap_or(false);
+
+        let start_bound_comparators =
+            Self::build_bound_comparators(&frame.start_bound, columns, sort_descending)
+                .ok()?;
+        let end_bound_comparators =
+            Self::build_bound_comparators(&frame.end_bound, columns, sort_descending)
+                .ok()?;
+
+        Some(Self {
+            start_bound_comparators,
+            end_bound_comparators,
+        })
+    }
+
+    /// Builds per-column `ArrayComparator`s for a single bound.
+    ///
+    /// Returns `Ok(None)` for UNBOUNDED bounds (no comparator is needed).
+    fn build_bound_comparators(
+        bound: &WindowFrameBound,
+        columns: &[(DataType, SortOptions)],
+        sort_descending: bool,
+    ) -> Result<Option<Vec<ArrayComparator>>> {
+        match bound {
+            WindowFrameBound::Preceding(delta) if delta.is_null() => {
+                // UNBOUNDED PRECEDING — no comparator needed
+                Ok(None)
+            }
+            WindowFrameBound::Following(delta) if delta.is_null() => {
+                // UNBOUNDED FOLLOWING — no comparator needed
+                Ok(None)
+            }
+            WindowFrameBound::Preceding(delta) => {
+                // right_delta = current ± delta  (preceding = true)
+                let comparators =
+                    Self::build_comparators(columns, Some(delta), true, sort_descending)?;
+                Ok(Some(comparators))
+            }
+            WindowFrameBound::Following(delta) => {
+                // right_delta = current ± delta  (preceding = false)
+                let comparators = Self::build_comparators(
+                    columns,
+                    Some(delta),
+                    false,
+                    sort_descending,
+                )?;
+                Ok(Some(comparators))
+            }
+            WindowFrameBound::CurrentRow => {
+                // No delta — compare values directly
+                let comparators =
+                    Self::build_comparators(columns, None, false, sort_descending)?;
+                Ok(Some(comparators))
+            }
+        }
+    }
+
+    /// Builds one `ArrayComparator` per ORDER BY column.
+    ///
+    /// The comparator evaluates `search_val [cmp] current_val ± delta` where the
+    /// delta is applied to the **right** (current-row) side:
+    ///
+    /// | preceding | sort_descending | right op   |
+    /// |-----------|-----------------|------------|
+    /// | true      | false (asc)     | Sub        |
+    /// | true      | true  (desc)    | Add        |
+    /// | false     | false (asc)     | Add        |
+    /// | false     | true  (desc)    | Sub        |
+    ///
+    /// Equivalently: `add = (preceding == sort_descending)`.
+    fn build_comparators(
+        columns: &[(DataType, SortOptions)],
+        delta: Option<&ScalarValue>,
+        preceding: bool,
+        sort_descending: bool,
+    ) -> Result<Vec<ArrayComparator>> {
+        let mut comparators = Vec::with_capacity(columns.len());
+        for (data_type, sort_options) in columns {
+            let right_delta = delta.map(|d| {
+                let add = preceding == sort_descending;
+                DeltaValue {
+                    value: d.clone(),
+                    op: if add {
+                        Op::AddWrapping
+                    } else {
+                        Op::SubWrapping
+                    },
+                }
+            });
+            let cmp =
+                make_comparator(data_type.clone(), None, right_delta, *sort_options)?;
+            comparators.push(cmp);
+        }
+        Ok(comparators)
+    }
+}
 
 /// The frame specification determines which output rows are read by an aggregate
 /// window function. The ending frame boundary can be omitted if the `BETWEEN`

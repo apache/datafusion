@@ -105,7 +105,7 @@ pub fn create_window_expr(
         WindowFunctionDefinition::AggregateUDF(fun) => {
             let aggregate = if distinct {
                 AggregateExprBuilder::new(Arc::clone(fun), args.to_vec())
-                    .schema(input_schema)
+                    .schema(Arc::clone(&input_schema))
                     .alias(name)
                     .with_ignore_nulls(ignore_nulls)
                     .distinct()
@@ -113,7 +113,7 @@ pub fn create_window_expr(
                     .map(Arc::new)?
             } else {
                 AggregateExprBuilder::new(Arc::clone(fun), args.to_vec())
-                    .schema(input_schema)
+                    .schema(Arc::clone(&input_schema))
                     .alias(name)
                     .with_ignore_nulls(ignore_nulls)
                     .build()
@@ -125,6 +125,7 @@ pub fn create_window_expr(
                 window_frame,
                 aggregate,
                 filter,
+                &input_schema,
             )
         }
         WindowFunctionDefinition::WindowUDF(fun) => Arc::new(StandardWindowExpr::new(
@@ -132,6 +133,7 @@ pub fn create_window_expr(
             partition_by,
             order_by,
             window_frame,
+            Arc::clone(&input_schema),
         )),
     })
 }
@@ -143,6 +145,7 @@ fn window_expr_from_aggregate_expr(
     window_frame: Arc<WindowFrame>,
     aggregate: Arc<AggregateFunctionExpr>,
     filter: Option<Arc<dyn PhysicalExpr>>,
+    input_schema: &SchemaRef,
 ) -> Arc<dyn WindowExpr> {
     // Is there a potentially unlimited sized window frame?
     let unbounded_window = window_frame.is_ever_expanding();
@@ -154,6 +157,7 @@ fn window_expr_from_aggregate_expr(
             order_by,
             window_frame,
             filter,
+            Arc::clone(input_schema),
         ))
     } else {
         Arc::new(PlainAggregateWindowExpr::new(
@@ -162,6 +166,7 @@ fn window_expr_from_aggregate_expr(
             order_by,
             window_frame,
             filter,
+            Arc::clone(input_schema),
         ))
     }
 }

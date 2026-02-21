@@ -19,19 +19,20 @@
 
 use std::{collections::VecDeque, ops::Range, sync::Arc};
 
-use crate::{WindowFrame, WindowFrameBound, WindowFrameUnits};
+use crate::{
+    WindowFrame, WindowFrameBound, WindowFrameUnits,
+    window_frame::WindowFrameBoundsComparators,
+};
 
 use arrow::{
-    array::{ArrayRef, make_comparator},
-    compute::{
-        SortOptions, concat, concat_batches,
-        kernels::numeric::{add_wrapping, sub_wrapping},
-    },
+    array::ArrayRef,
+    compute::{SortOptions, concat, concat_batches},
     datatypes::{DataType, SchemaRef},
     record_batch::RecordBatch,
 };
 use datafusion_common::{
     Result, ScalarValue, internal_datafusion_err, internal_err,
+    ord::ArrayComparator,
     utils::{get_row_at_idx, search_in_slice},
 };
 
@@ -141,27 +142,20 @@ pub enum WindowFrameContext {
 
 impl WindowFrameContext {
     /// Create a new state object for the given window frame.
-    pub fn new(window_frame: Arc<WindowFrame>, sort_options: Vec<SortOptions>) -> Self {
+    pub fn new(
+        window_frame: Arc<WindowFrame>,
+        frame_bounds_comparators: Option<WindowFrameBoundsComparators>,
+    ) -> Self {
         match window_frame.units {
             WindowFrameUnits::Rows => WindowFrameContext::Rows(window_frame),
             WindowFrameUnits::Range => WindowFrameContext::Range {
                 window_frame,
-                state: WindowFrameStateRange::new(sort_options),
+                state: WindowFrameStateRange::new(frame_bounds_comparators),
             },
             WindowFrameUnits::Groups => WindowFrameContext::Groups {
                 window_frame,
                 state: WindowFrameStateGroups::default(),
             },
-        }
-    }
-
-    pub fn calculate_bounds(&mut self, range_columns: &[ArrayRef]) -> Result<()> {
-        match self {
-            WindowFrameContext::Range {
-                window_frame,
-                state,
-            } => state.calculate_bounds(window_frame, range_columns),
-            _ => Ok(()),
         }
     }
 
@@ -183,7 +177,13 @@ impl WindowFrameContext {
             WindowFrameContext::Range {
                 window_frame,
                 state,
-            } => state.calculate_range(window_frame, last_range, length, idx),
+            } => state.calculate_range(
+                window_frame,
+                range_columns,
+                last_range,
+                length,
+                idx,
+            ),
             // Sort options is not used in GROUPS mode calculations as the
             // inequality of two rows indicates a group change, and ordering
             // or position of NULLs do not impact inequality.
@@ -298,195 +298,31 @@ impl PartitionBatchState {
     }
 }
 
-type SharedDynComparator = Arc<dyn Fn(usize, usize) -> std::cmp::Ordering + Send + Sync>;
-
-/// Holds pre-computed comparators for finding RANGE window frame boundaries for all rows in the batch.
-#[derive(Clone)]
-pub struct WindowBoundStateRange {
-    start_bound_comparators: Option<Vec<SharedDynComparator>>,
-    end_bound_comparators: Option<Vec<SharedDynComparator>>,
-}
-
-impl std::fmt::Debug for WindowBoundStateRange {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("WindowBoundStateRange")
-            .field(
-                "start_bound_comparators",
-                &self.start_bound_comparators.as_ref().map(|c| c.len()),
-            )
-            .field(
-                "end_bound_comparators",
-                &self.end_bound_comparators.as_ref().map(|c| c.len()),
-            )
-            .finish()
-    }
-}
-
-impl WindowBoundStateRange {
-    pub fn try_new(
-        window_frame: &Arc<WindowFrame>,
-        range_columns: &[ArrayRef],
-        sort_options: &[SortOptions],
-    ) -> Result<Self> {
-        let sort_descending = sort_options.first().map(|o| o.descending).unwrap_or(false);
-
-        let start_bound_comparators = Self::build_bound_comparators(
-            &window_frame.start_bound,
-            range_columns,
-            sort_options,
-            sort_descending,
-        )?;
-        let end_bound_comparators = Self::build_bound_comparators(
-            &window_frame.end_bound,
-            range_columns,
-            sort_options,
-            sort_descending,
-        )?;
-        Ok(Self {
-            start_bound_comparators,
-            end_bound_comparators,
-        })
-    }
-
-    fn build_bound_comparators(
-        bound: &WindowFrameBound,
-        range_columns: &[ArrayRef],
-        sort_options: &[SortOptions],
-        sort_descending: bool,
-    ) -> Result<Option<Vec<SharedDynComparator>>> {
-        match bound {
-            WindowFrameBound::Preceding(delta) if delta.is_null() => {
-                // UNBOUNDED PRECEDING
-                Ok(None)
-            }
-            WindowFrameBound::Following(delta) if delta.is_null() => {
-                // UNBOUNDED FOLLOWING
-                Ok(None)
-            }
-            WindowFrameBound::Preceding(delta) => {
-                let comparators = Self::build_comparators(
-                    range_columns,
-                    Some(delta),
-                    true,
-                    sort_descending,
-                    sort_options,
-                )?;
-                Ok(Some(comparators))
-            }
-            WindowFrameBound::Following(delta) => {
-                let comparators = Self::build_comparators(
-                    range_columns,
-                    Some(delta),
-                    false,
-                    sort_descending,
-                    sort_options,
-                )?;
-                Ok(Some(comparators))
-            }
-            WindowFrameBound::CurrentRow => {
-                let comparators = Self::build_comparators(
-                    range_columns,
-                    None,
-                    false,
-                    sort_descending,
-                    sort_options,
-                )?;
-                Ok(Some(comparators))
-            }
-        }
-    }
-
-    fn build_comparators(
-        range_columns: &[ArrayRef],
-        delta: Option<&ScalarValue>,
-        preceding: bool,
-        sort_descending: bool,
-        sort_options: &[SortOptions],
-    ) -> Result<Vec<SharedDynComparator>> {
-        let mut comparators: Vec<SharedDynComparator> =
-            Vec::with_capacity(range_columns.len());
-        for (col, opt) in range_columns.iter().zip(sort_options.iter()) {
-            let cmp = match delta {
-                Some(d) => {
-                    let bound_col =
-                        Self::compute_bound_array(col, d, preceding, sort_descending)?;
-                    make_comparator(col, &bound_col, *opt)
-                }
-                None => make_comparator(col, col, *opt),
-            }
-            .map_err(|e| internal_datafusion_err!("Failed to create comparator: {e}"))?;
-
-            comparators.push(Arc::from(cmp));
-        }
-        Ok(comparators)
-    }
-
-    /// Computes array for a given bound.
-    /// For PRECEDING with descending=false: bound = value + delta
-    /// For PRECEDING with descending=true: bound = value - delta
-    /// For FOLLOWING with descending=false: bound = value + delta  
-    /// For FOLLOWING with descending=true: bound = value - delta
-    fn compute_bound_array(
-        range_column: &ArrayRef,
-        delta: &ScalarValue,
-        preceding: bool,
-        sort_descending: bool,
-    ) -> Result<ArrayRef> {
-        let delta_scalar = delta.to_scalar()?;
-        let add = preceding == sort_descending;
-
-        // TODO: Handle overflows.
-        let result = if add {
-            add_wrapping(range_column, &delta_scalar)
-        } else {
-            sub_wrapping(range_column, &delta_scalar)
-        };
-        result.map_err(|e| internal_datafusion_err!("Failed to compute bound array: {e}"))
-    }
-}
-
 /// This structure encapsulates all the state information we require as we scan
 /// ranges of data while processing RANGE frames.
-/// Attribute `sort_options` stores the column ordering specified by the ORDER
-/// BY clause. This information is used to calculate the range.
 #[derive(Debug, Default, Clone)]
 pub struct WindowFrameStateRange {
-    sort_options: Vec<SortOptions>,
-    bound_state: Option<WindowBoundStateRange>,
+    frame_comparators: Option<WindowFrameBoundsComparators>,
 }
 
 impl WindowFrameStateRange {
     /// Create a new object to store the search state.
-    fn new(sort_options: Vec<SortOptions>) -> Self {
-        Self {
-            sort_options,
-            bound_state: None,
-        }
-    }
-
-    fn calculate_bounds(
-        &mut self,
-        window_frame: &Arc<WindowFrame>,
-        range_columns: &[ArrayRef],
-    ) -> Result<()> {
-        let bound_state = WindowBoundStateRange::try_new(
-            window_frame,
-            range_columns,
-            &self.sort_options,
-        )?;
-        self.bound_state = Some(bound_state);
-        Ok(())
+    fn new(frame_comparators: Option<WindowFrameBoundsComparators>) -> Self {
+        Self { frame_comparators }
     }
 
     fn calculate_range(
         &self,
         window_frame: &Arc<WindowFrame>,
+        range_columns: &[ArrayRef],
         last_range: &Range<usize>,
         length: usize,
         idx: usize,
     ) -> Result<Range<usize>> {
-        let bound_state = self.bound_state.as_ref().ok_or_else(|| {
-            internal_datafusion_err!("Missing precalculated WindowBoundStateRange")
+        let frame_comparators = self.frame_comparators.as_ref().ok_or_else(|| {
+            internal_datafusion_err!(
+                "Missing WindowFrameBoundsComparators for RANGE frame"
+            )
         })?;
 
         let start = match window_frame.start_bound {
@@ -494,7 +330,7 @@ impl WindowFrameStateRange {
             WindowFrameBound::Preceding(_)
             | WindowFrameBound::CurrentRow
             | WindowFrameBound::Following(_) => {
-                let comparators = bound_state
+                let comparators = frame_comparators
                     .start_bound_comparators
                     .as_ref()
                     .ok_or_else(|| {
@@ -502,6 +338,7 @@ impl WindowFrameStateRange {
                     })?;
                 self.search_index_of_row::<true>(
                     comparators,
+                    range_columns,
                     last_range.start,
                     length,
                     idx,
@@ -514,12 +351,17 @@ impl WindowFrameStateRange {
             WindowFrameBound::Preceding(_)
             | WindowFrameBound::CurrentRow
             | WindowFrameBound::Following(_) => {
-                let comparators =
-                    bound_state.end_bound_comparators.as_ref().ok_or_else(|| {
+                let comparators = frame_comparators
+                    .end_bound_comparators
+                    .as_ref()
+                    // .map(|c| c as &[ArrayComparator])
+                    // .unwrap_or_else(|| &[]);
+                    .ok_or_else(|| {
                         internal_datafusion_err!("Missing end_bound comparators")
                     })?;
                 self.search_index_of_row::<false>(
                     comparators,
+                    range_columns,
                     last_range.end,
                     length,
                     idx,
@@ -529,15 +371,26 @@ impl WindowFrameStateRange {
         Ok(Range { start, end })
     }
 
+    /// Scans `range_columns` starting from `search_start` to find the first index
+    /// where the comparator no longer satisfies the bound condition.
+    ///
+    /// - `SIDE = true`  → start bound: stop when `search_val >= current_val ± delta` (i.e. `!cmp.is_lt()`)
+    /// - `SIDE = false` → end bound:   stop when `search_val >  current_val ± delta` (i.e. `!cmp.is_le()`)
     fn search_index_of_row<const SIDE: bool>(
         &self,
-        comparators: &[SharedDynComparator],
+        comparators: &[ArrayComparator],
+        range_columns: &[ArrayRef],
         mut search_start: usize,
         length: usize,
         current_idx: usize,
     ) -> usize {
         while search_start < length {
-            let cmp = self.compare_indexes(comparators, search_start, current_idx);
+            let cmp = self.compare_indexes(
+                comparators,
+                range_columns,
+                search_start,
+                current_idx,
+            );
             let stop = if SIDE { !cmp.is_lt() } else { !cmp.is_le() };
             if stop {
                 break;
@@ -549,12 +402,13 @@ impl WindowFrameStateRange {
 
     fn compare_indexes(
         &self,
-        comparators: &[SharedDynComparator],
+        comparators: &[ArrayComparator],
+        range_columns: &[ArrayRef],
         search_idx: usize,
         current_idx: usize,
     ) -> std::cmp::Ordering {
-        for comparator in comparators {
-            let cmp = comparator(search_idx, current_idx);
+        for (comparator, col) in comparators.iter().zip(range_columns.iter()) {
+            let cmp = comparator(col.as_ref(), search_idx, col.as_ref(), current_idx);
             if cmp != std::cmp::Ordering::Equal {
                 return cmp;
             }
@@ -834,12 +688,12 @@ mod tests {
         window_frame: &Arc<WindowFrame>,
         expected_results: Vec<Range<usize>>,
     ) -> Result<()> {
-        let mut window_frame_context =
-            WindowFrameContext::new(Arc::clone(window_frame), vec![]);
         let (range_columns, _) = get_test_data();
+        let frame_comparators = WindowFrameBoundsComparators::new(window_frame, &[]);
+        let mut window_frame_context =
+            WindowFrameContext::new(Arc::clone(window_frame), frame_comparators);
         let n_row = range_columns[0].len();
         let mut last_range = Range { start: 0, end: 0 };
-        window_frame_context.calculate_bounds(&range_columns)?;
         for (idx, expected_range) in expected_results.into_iter().enumerate() {
             let range = window_frame_context.calculate_range(
                 &range_columns,

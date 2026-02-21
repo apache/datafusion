@@ -1678,6 +1678,7 @@ mod tests {
                     WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
                     WindowFrameBound::CurrentRow,
                 )),
+                Arc::clone(&schema),
             )) as _,
             // NTH_VALUE(a, -1)
             Arc::new(StandardWindowExpr::new(
@@ -1689,6 +1690,7 @@ mod tests {
                     WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
                     WindowFrameBound::CurrentRow,
                 )),
+                Arc::clone(&schema),
             )) as _,
             // NTH_VALUE(a, -2)
             Arc::new(StandardWindowExpr::new(
@@ -1700,6 +1702,7 @@ mod tests {
                     WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
                     WindowFrameBound::CurrentRow,
                 )),
+                Arc::clone(&schema),
             )) as _,
         ];
         let physical_plan = BoundedWindowAggExec::try_new(
