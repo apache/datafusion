@@ -489,6 +489,12 @@ pub trait TableProviderFactory: Debug + Sync + Send {
 pub trait TableFunctionImpl: Debug + Sync + Send {
     /// Create a table provider
     fn call(&self, args: &[Expr]) -> Result<Arc<dyn TableProvider>>;
+
+    /// Returns true if the arguments should be coerced and simplified.
+    /// Defaults to true for backward compatibility.
+    fn coerce_arguments(&self) -> bool {
+        true
+    }
 }
 
 /// A table that uses a function to generate data
@@ -519,5 +525,10 @@ impl TableFunction {
     /// Get the function implementation and generate a table
     pub fn create_table_provider(&self, args: &[Expr]) -> Result<Arc<dyn TableProvider>> {
         self.fun.call(args)
+    }
+
+    /// Returns true if the arguments should be coerced and simplified
+    pub fn coerce_arguments(&self) -> bool {
+        self.fun.coerce_arguments()
     }
 }
