@@ -66,10 +66,9 @@ jobs:
   # Check crate compiles and base cargo check passes
   linux-build-lib:
     name: linux build test
-    runs-on: ${{ github.repository_owner == 'apache' && format('runs-on={0},family=m8a,cpu=8,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     # note: do not use amd/rust container to preserve disk space
     steps:
-      - uses: runs-on/action@cd2b598b0515d39d78c38a02d529db87d2196d1e  # v2.0.3
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
@@ -81,9 +80,7 @@ jobs:
           source $HOME/.cargo/env
           rustup toolchain install
       - name: Install Protobuf Compiler
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y protobuf-compiler
+        run: sudo apt-get install -y protobuf-compiler
       - name: Prepare cargo build
         run: |
           cargo check --profile ci --all-targets
@@ -93,10 +90,9 @@ jobs:
   linux-test-extended:
     name: cargo test 'extended_tests' (amd64)
     needs: [linux-build-lib]
-    runs-on: ${{ github.repository_owner == 'apache' && format('runs-on={0},family=m8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     # note: do not use amd/rust container to preserve disk space
     steps:
-      - uses: runs-on/action@cd2b598b0515d39d78c38a02d529db87d2196d1e  # v2.0.3
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
@@ -110,9 +106,7 @@ jobs:
           source $HOME/.cargo/env
           rustup toolchain install
       - name: Install Protobuf Compiler
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y protobuf-compiler
+        run: sudo apt-get install -y protobuf-compiler
       # For debugging, test binaries can be large.
       - name: Show available disk space
         run: |
@@ -139,11 +133,10 @@ jobs:
   # Check answers are correct when hash values collide
   hash-collisions:
     name: cargo test hash collisions (amd64)
-    runs-on: ${{ github.repository_owner == 'apache' && format('runs-on={0},family=m8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@cd2b598b0515d39d78c38a02d529db87d2196d1e  # v2.0.3
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
@@ -161,11 +154,10 @@ jobs:
 
   sqllogictest-sqlite:
     name: "Run sqllogictests with the sqlite test suite"
-    runs-on: ${{ github.repository_owner == 'apache' && format('runs-on={0},family=m8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@cd2b598b0515d39d78c38a02d529db87d2196d1e  # v2.0.3
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
@@ -175,8 +167,6 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5  # v2.8.2
       - name: Run sqllogictest
         run: |
           cargo test --features backtrace,parquet_encryption --profile release-nonlto --test sqllogictests -- --include-sqlite
