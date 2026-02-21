@@ -28,6 +28,7 @@ pub mod expr_ext;
 pub mod getfield;
 pub mod greatest;
 mod greatest_least_utils;
+pub mod input_file_name;
 pub mod least;
 pub mod named_struct;
 pub mod nullif;
@@ -57,6 +58,7 @@ make_udf_function!(union_extract::UnionExtractFun, union_extract);
 make_udf_function!(union_tag::UnionTagFunc, union_tag);
 make_udf_function!(version::VersionFunc, version);
 make_udf_function!(arrow_metadata::ArrowMetadataFunc, arrow_metadata);
+make_udf_function!(input_file_name::InputFileNameFunc, input_file_name);
 
 pub mod expr_fn {
     use datafusion_expr::{Expr, Literal};
@@ -113,6 +115,9 @@ pub mod expr_fn {
         union_tag,
         "Returns the name of the currently selected field in the union",
         arg1
+    ),(
+        input_file_name,
+        "Returns the path of the input file that produced the current row",
     ));
 
     #[doc = "Returns the value of the field with the given name from the struct"]
@@ -160,6 +165,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         union_extract(),
         union_tag(),
         version(),
+        input_file_name(),
         r#struct(),
     ]
 }
