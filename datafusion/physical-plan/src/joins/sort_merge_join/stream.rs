@@ -1490,13 +1490,24 @@ impl SortMergeJoinStream {
                 continue;
             }
 
-            let mut left_columns = self
-                .streamed_batch
-                .batch
-                .columns()
-                .iter()
-                .map(|column| take(column, &left_indices, None))
-                .collect::<Result<Vec<_>, ArrowError>>()?;
+            let mut left_columns =
+                if let Some(range) = is_contiguous_range(&left_indices) {
+                    // When indices form a contiguous range (common for the streamed
+                    // side which advances sequentially), use zero-copy slice instead
+                    // of the O(n) take kernel.
+                    self.streamed_batch
+                        .batch
+                        .slice(range.start, range.len())
+                        .columns()
+                        .to_vec()
+                } else {
+                    self.streamed_batch
+                        .batch
+                        .columns()
+                        .iter()
+                        .map(|column| take(column, &left_indices, None))
+                        .collect::<Result<Vec<_>, ArrowError>>()?
+                };
 
             // The row indices of joined buffered batch
             let right_indices: UInt64Array = chunk.buffered_indices.finish();
@@ -1972,6 +1983,30 @@ fn produce_buffered_null_batch(
     )?))
 }
 
+/// Checks if a `UInt64Array` contains a contiguous ascending range (e.g. [3,4,5,6]).
+/// Returns `Some(start..start+len)` if so, `None` otherwise.
+/// This allows replacing an O(n) `take` with an O(1) `slice`.
+#[inline]
+fn is_contiguous_range(indices: &UInt64Array) -> Option<Range<usize>> {
+    if indices.is_empty() || indices.null_count() > 0 {
+        return None;
+    }
+    let start = indices.value(0);
+    let len = indices.len() as u64;
+    // Quick rejection: if last element doesn't match expected, not contiguous
+    if indices.value(indices.len() - 1) != start + len - 1 {
+        return None;
+    }
+    // Verify every element is sequential (handles duplicates and gaps)
+    let values = indices.values();
+    for i in 1..values.len() {
+        if values[i] != start + i as u64 {
+            return None;
+        }
+    }
+    Some(start as usize..(start + len) as usize)
+}
+
 /// Get `buffered_indices` rows for `buffered_data[buffered_batch_idx]` by specific column indices
 #[inline(always)]
 fn fetch_right_columns_by_idxs(
@@ -1992,12 +2027,21 @@ fn fetch_right_columns_from_batch_by_idxs(
 ) -> Result<Vec<ArrayRef>> {
     match &buffered_batch.batch {
         // In memory batch
-        BufferedBatchState::InMemory(batch) => Ok(batch
-            .columns()
-            .iter()
-            .map(|column| take(column, &buffered_indices, None))
-            .collect::<Result<Vec<_>, ArrowError>>()
-            .map_err(Into::<DataFusionError>::into)?),
+        // In memory batch
+        BufferedBatchState::InMemory(batch) => {
+            // When indices form a contiguous range (common in SMJ since the
+            // buffered side is scanned sequentially), use zero-copy slice.
+            if let Some(range) = is_contiguous_range(buffered_indices) {
+                Ok(batch.slice(range.start, range.len()).columns().to_vec())
+            } else {
+                Ok(batch
+                    .columns()
+                    .iter()
+                    .map(|column| take(column, buffered_indices, None))
+                    .collect::<Result<Vec<_>, ArrowError>>()
+                    .map_err(Into::<DataFusionError>::into)?)
+            }
+        }
         // If the batch was spilled to disk, less likely
         BufferedBatchState::Spilled(spill_file) => {
             let mut buffered_cols: Vec<ArrayRef> =
