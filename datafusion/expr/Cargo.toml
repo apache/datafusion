@@ -46,7 +46,8 @@ recursive_protection = ["dep:recursive"]
 sql = ["sqlparser"]
 
 [dependencies]
-arrow = { workspace = true }
+arrow = { workspace = true, features = ["canonical_extension_types"] }
+arrow-schema = { workspace = true, features = ["canonical_extension_types"] }
 async-trait = { workspace = true }
 chrono = { workspace = true }
 datafusion-common = { workspace = true, default-features = false }

@@ -15,15 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod builtin;
-mod canonical_extensions;
-mod extension;
-mod field;
-mod logical;
-mod native;
+//! This module contains code that enables DataFusion's extension type capabilities.
 
-pub use builtin::*;
-pub use extension::*;
-pub use field::*;
-pub use logical::*;
-pub use native::*;
+mod array_formatter_factory;
+
+pub use array_formatter_factory::*;

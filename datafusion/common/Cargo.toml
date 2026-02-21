@@ -67,6 +67,7 @@ apache-avro = { workspace = true, features = [
 ], optional = true }
 arrow = { workspace = true }
 arrow-ipc = { workspace = true }
+arrow-schema = { workspace = true, features = ["canonical_extension_types"] }
 chrono = { workspace = true }
 half = { workspace = true }
 hashbrown = { workspace = true }
@@ -81,6 +82,7 @@ paste = { workspace = true }
 recursive = { workspace = true, optional = true }
 sqlparser = { workspace = true, optional = true }
 tokio = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 web-time = "1.1.0"
