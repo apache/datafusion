@@ -344,18 +344,24 @@ fn test_create_physical_expr_nvl2() {
 async fn test_create_physical_expr_coercion() {
     // create_physical_expr does apply type coercion and unwrapping in cast
     //
-    // expect the cast on the literals
-    // compare string function to int  `id = 1`
-    create_expr_test(col("id").eq(lit(1i32)), "id@0 = CAST(1 AS Utf8)");
-    create_expr_test(lit(1i32).eq(col("id")), "CAST(1 AS Utf8) = id@0");
-    // compare int col to string literal `i = '202410'`
-    // Note this casts the column (not the field)
-    create_expr_test(col("i").eq(lit("202410")), "CAST(i@1 AS Utf8) = 202410");
-    create_expr_test(lit("202410").eq(col("i")), "202410 = CAST(i@1 AS Utf8)");
-    // however, when simplified the casts on i should removed
-    // https://github.com/apache/datafusion/issues/14944
-    create_simplified_expr_test(col("i").eq(lit("202410")), "CAST(i@1 AS Utf8) = 202410");
-    create_simplified_expr_test(lit("202410").eq(col("i")), "CAST(i@1 AS Utf8) = 202410");
+    // With numeric-preferring comparison coercion, comparing string to int
+    // coerces to the numeric type:
+    // compare string column to int literal `id = 1` (id is Utf8)
+    create_expr_test(col("id").eq(lit(1i32)), "CAST(id@0 AS Int32) = 1");
+    create_expr_test(lit(1i32).eq(col("id")), "1 = CAST(id@0 AS Int32)");
+    // compare int col to string literal `i = '202410'` (i is Int64)
+    // The string literal is cast to Int64 (numeric preferred)
+    create_expr_test(col("i").eq(lit("202410")), "i@1 = CAST(202410 AS Int64)");
+    create_expr_test(lit("202410").eq(col("i")), "CAST(202410 AS Int64) = i@1");
+    // when simplified, the literal cast is constant-folded
+    create_simplified_expr_test(
+        col("i").eq(lit("202410")),
+        "i@1 = CAST(202410 AS Int64)",
+    );
+    create_simplified_expr_test(
+        lit("202410").eq(col("i")),
+        "i@1 = CAST(202410 AS Int64)",
+    );
 }
 
 /// Evaluates the specified expr as an aggregate and compares the result to the

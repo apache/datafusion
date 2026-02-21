@@ -158,7 +158,7 @@ pub enum Arity {
 pub enum TypeSignature {
     /// One or more arguments of a common type out of a list of valid types.
     ///
-    /// For functions that take no arguments (e.g. `random()` see [`TypeSignature::Nullary`]).
+    /// For functions that take no arguments (e.g. `random()`) see [`TypeSignature::Nullary`]).
     ///
     /// # Examples
     ///
@@ -197,7 +197,7 @@ pub enum TypeSignature {
     /// One or more arguments coercible to a single, comparable type.
     ///
     /// Each argument will be coerced to a single type using the
-    /// coercion rules described in [`comparison_coercion_numeric`].
+    /// coercion rules described in [`comparison_coercion`].
     ///
     /// # Examples
     ///
@@ -205,13 +205,14 @@ pub enum TypeSignature {
     /// the types will both be coerced to `i64` before the function is invoked.
     ///
     /// If the `nullif('1', 2)` function is called with `Utf8` and `i64` arguments
-    /// the types will both be coerced to `Utf8` before the function is invoked.
+    /// the types will both be coerced to `Int64` before the function is invoked
+    /// (numeric is preferred over string).
     ///
     /// Note:
     /// - For functions that take no arguments (e.g. `random()` see [`TypeSignature::Nullary`]).
     /// - If all arguments have type [`DataType::Null`], they are coerced to `Utf8`
     ///
-    /// [`comparison_coercion_numeric`]: crate::type_coercion::binary::comparison_coercion_numeric
+    /// [`comparison_coercion`]: crate::type_coercion::binary::comparison_coercion
     Comparable(usize),
     /// One or more arguments of arbitrary types.
     ///

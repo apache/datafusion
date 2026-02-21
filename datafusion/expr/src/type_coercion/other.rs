@@ -17,7 +17,7 @@
 
 use arrow::datatypes::DataType;
 
-use super::binary::comparison_coercion;
+use super::binary::type_union_coercion;
 
 /// Attempts to coerce the types of `list_types` to be comparable with the
 /// `expr_type`.
@@ -29,7 +29,7 @@ pub fn get_coerce_type_for_list(
     list_types
         .iter()
         .try_fold(expr_type.clone(), |left_type, right_type| {
-            comparison_coercion(&left_type, right_type)
+            type_union_coercion(&left_type, right_type)
         })
 }
 
@@ -47,8 +47,6 @@ pub fn get_coerce_type_for_case_expression(
     when_or_then_types
         .iter()
         .try_fold(case_or_else_type, |left_type, right_type| {
-            // TODO: now just use the `equal` coercion rule for case when. If find the issue, and
-            // refactor again.
-            comparison_coercion(&left_type, right_type)
+            type_union_coercion(&left_type, right_type)
         })
 }
