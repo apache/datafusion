@@ -15,58 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
-use arrow::array::timezone::Tz;
 use arrow::array::{
     Array, ArrowPrimitiveType, AsArray, GenericStringArray, PrimitiveArray,
     StringArrayType, StringViewArray,
 };
 use arrow::compute::DecimalCast;
-use arrow::compute::kernels::cast_utils::string_to_datetime;
 use arrow::datatypes::{DataType, TimeUnit};
 use arrow_buffer::ArrowNativeType;
-use chrono::LocalResult::Single;
-use chrono::format::{Parsed, StrftimeItems, parse};
-use chrono::{DateTime, TimeZone, Utc};
 use datafusion_common::cast::as_generic_string_array;
 use datafusion_common::{
-    DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err,
-    internal_datafusion_err, unwrap_or_internal_err,
+    Result, ScalarValue, exec_err, internal_datafusion_err, unwrap_or_internal_err,
 };
 use datafusion_expr::ColumnarValue;
-
-/// Error message if nanosecond conversion request beyond supported interval
-const ERR_NANOSECONDS_NOT_SUPPORTED: &str = "The dates that can be represented as nanoseconds have to be between 1677-09-21T00:12:44.0 and 2262-04-11T23:47:16.854775804";
-
-static UTC: LazyLock<Tz> = LazyLock::new(|| "UTC".parse().expect("UTC is always valid"));
-
-/// Converts a string representation of a date‑time into a timestamp expressed in
-/// nanoseconds since the Unix epoch.
-///
-/// This helper is a thin wrapper around the more general `string_to_datetime`
-/// function. It accepts an optional `timezone` which, if `None`, defaults to
-/// Coordinated Universal Time (UTC). The string `s` must contain a valid
-/// date‑time format that can be parsed by the underlying chrono parser.
-///
-/// # Return Value
-///
-/// * `Ok(i64)` – The number of nanoseconds since `1970‑01‑01T00:00:00Z`.
-/// * `Err(DataFusionError)` – If the string cannot be parsed, the parsed
-///   value is out of range (between 1677-09-21T00:12:44.0 and 2262-04-11T23:47:16.854775804)
-///   or the parsed value does not correspond to an unambiguous time.
-pub(crate) fn string_to_timestamp_nanos_with_timezone(
-    timezone: &Option<Tz>,
-    s: &str,
-) -> Result<i64> {
-    let tz = timezone.as_ref().unwrap_or(&UTC);
-    let dt = string_to_datetime(tz, s)?;
-    let parsed = dt
-        .timestamp_nanos_opt()
-        .ok_or_else(|| exec_datafusion_err!("{ERR_NANOSECONDS_NOT_SUPPORTED}"))?;
-
-    Ok(parsed)
-}
 
 /// Checks that all the arguments from the second are of type [Utf8], [LargeUtf8] or [Utf8View]
 ///
@@ -90,161 +52,6 @@ pub(crate) fn validate_data_types(args: &[ColumnarValue], name: &str) -> Result<
     }
 
     Ok(())
-}
-
-/// Accepts a string and parses it using the [`chrono::format::strftime`] specifiers
-/// relative to the provided `timezone`
-///
-/// If a timestamp is ambiguous, for example as a result of daylight-savings time, an error
-/// will be returned
-///
-/// Note that parsing [IANA timezones] is not supported yet in chrono - <https://github.com/chronotope/chrono/issues/38>
-/// and this implementation only supports named timezones at the end of the string preceded by a space.
-///
-/// [`chrono::format::strftime`]: https://docs.rs/chrono/latest/chrono/format/strftime/index.html
-/// [IANA timezones]: https://www.iana.org/time-zones
-pub(crate) fn string_to_datetime_formatted<T: TimeZone>(
-    timezone: &T,
-    s: &str,
-    format: &str,
-) -> Result<DateTime<T>, DataFusionError> {
-    let err = |err_ctx: &str| {
-        exec_datafusion_err!(
-            "Error parsing timestamp from '{s}' using format '{format}': {err_ctx}"
-        )
-    };
-
-    let mut datetime_str = s;
-    let mut format = format;
-
-    // Manually handle the most common case of a named timezone at the end of the timestamp.
-    // Note that %+ handles 'Z' at the end of the string without a space. This code doesn't
-    // handle named timezones with no preceding space since that would require writing a
-    // custom parser (or switching to Jiff)
-    let tz: Option<chrono_tz::Tz> = if format.trim_end().ends_with(" %Z") {
-        // grab the string after the last space as the named timezone
-        if let Some((dt_str, timezone_name)) = datetime_str.trim_end().rsplit_once(' ') {
-            datetime_str = dt_str;
-
-            // attempt to parse the timezone name
-            let result: Result<chrono_tz::Tz, chrono_tz::ParseError> =
-                timezone_name.parse();
-            let Ok(tz) = result else {
-                return Err(err(&result.unwrap_err().to_string()));
-            };
-
-            // successfully parsed the timezone name, remove the ' %Z' from the format
-            format = &format[..format.len() - 3];
-
-            Some(tz)
-        } else {
-            None
-        }
-    } else if format.contains("%Z") {
-        return Err(err(
-            "'%Z' is only supported at the end of the format string preceded by a space",
-        ));
-    } else {
-        None
-    };
-
-    let mut parsed = Parsed::new();
-    parse(&mut parsed, datetime_str, StrftimeItems::new(format))
-        .map_err(|e| err(&e.to_string()))?;
-
-    let dt = match tz {
-        Some(tz) => {
-            // A timezone was manually parsed out, convert it to a fixed offset
-            match parsed.to_datetime_with_timezone(&tz) {
-                Ok(dt) => Ok(dt.fixed_offset()),
-                Err(e) => Err(e),
-            }
-        }
-        // default to parse the string assuming it has a timezone
-        None => parsed.to_datetime(),
-    };
-
-    if let Err(e) = &dt {
-        // no timezone or other failure, try without a timezone
-        let ndt = parsed
-            .to_naive_datetime_with_offset(0)
-            .or_else(|_| parsed.to_naive_date().map(|nd| nd.into()));
-        if let Err(e) = &ndt {
-            return Err(err(&e.to_string()));
-        }
-
-        if let Single(e) = &timezone.from_local_datetime(&ndt.unwrap()) {
-            Ok(e.to_owned())
-        } else {
-            Err(err(&e.to_string()))
-        }
-    } else {
-        Ok(dt.unwrap().with_timezone(timezone))
-    }
-}
-
-/// Accepts a string with a `chrono` format and converts it to a
-/// nanosecond precision timestamp relative to the provided `timezone`.
-///
-/// See [`chrono::format::strftime`] for the full set of supported formats.
-///
-/// Implements the `to_timestamp` function to convert a string to a
-/// timestamp, following the model of spark SQL’s to_`timestamp`.
-///
-/// Internally, this function uses the `chrono` library for the
-/// datetime parsing
-///
-/// ## Timestamp Precision
-///
-/// Function uses the maximum precision timestamps supported by
-/// Arrow (nanoseconds stored as a 64-bit integer) timestamps. This
-/// means the range of dates that timestamps can represent is ~1677 AD
-/// to 2262 AM
-///
-/// ## Timezone / Offset Handling
-///
-/// Numerical values of timestamps are stored compared to offset UTC.
-///
-/// Any timestamp in the formatting string is handled according to the rules
-/// defined by `chrono`.
-///
-/// [`chrono::format::strftime`]: https://docs.rs/chrono/latest/chrono/format/strftime/index.html
-#[inline]
-pub(crate) fn string_to_timestamp_nanos_formatted_with_timezone(
-    timezone: &Option<Tz>,
-    s: &str,
-    format: &str,
-) -> Result<i64, DataFusionError> {
-    let dt = string_to_datetime_formatted(timezone.as_ref().unwrap_or(&UTC), s, format)?;
-    let parsed = dt
-        .timestamp_nanos_opt()
-        .ok_or_else(|| exec_datafusion_err!("{ERR_NANOSECONDS_NOT_SUPPORTED}"))?;
-
-    Ok(parsed)
-}
-
-/// Accepts a string with a `chrono` format and converts it to a
-/// millisecond precision timestamp relative to the provided `timezone`.
-///
-/// See [`chrono::format::strftime`] for the full set of supported formats.
-///
-/// Internally, this function uses the `chrono` library for the
-/// datetime parsing
-///
-/// ## Timezone / Offset Handling
-///
-/// Numerical values of timestamps are stored compared to offset UTC.
-///
-/// Any timestamp in the formatting string is handled according to the rules
-/// defined by `chrono`.
-///
-/// [`chrono::format::strftime`]: https://docs.rs/chrono/latest/chrono/format/strftime/index.html
-#[inline]
-pub(crate) fn string_to_timestamp_millis_formatted(s: &str, format: &str) -> Result<i64> {
-    Ok(string_to_datetime_formatted(&Utc, s, format)?
-        .naive_utc()
-        .and_utc()
-        .timestamp_millis())
 }
 
 pub(crate) fn handle<O, F>(
@@ -306,7 +113,7 @@ pub(crate) fn handle_multiple<O, F, M>(
 ) -> Result<ColumnarValue>
 where
     O: ArrowPrimitiveType,
-    F: Fn(&str, &str) -> Result<O::Native>,
+    F: Fn(&str, &[&str]) -> Result<O::Native>,
     M: Fn(O::Native) -> O::Native,
 {
     match &args[0] {
@@ -353,11 +160,7 @@ where
         // if the first argument is a scalar utf8 all arguments are expected to be scalar utf8
         ColumnarValue::Scalar(scalar) => match scalar.try_as_str() {
             Some(a) => {
-                let a = a.as_ref();
-                // ASK: Why do we trust `a` to be non-null at this point?
-                let a = unwrap_or_internal_err!(a);
-
-                let mut ret = None;
+                let mut vals = vec![];
 
                 for (pos, v) in args.iter().enumerate().skip(1) {
                     let ColumnarValue::Scalar(
@@ -372,17 +175,22 @@ where
                     };
 
                     if let Some(s) = x {
-                        match op(a, s.as_str()) {
-                            Ok(r) => {
-                                let result = op2(r).to_i64();
-                                let s = scalar_value(dt, result)?;
-                                ret = Some(Ok(ColumnarValue::Scalar(s)));
-                                break;
-                            }
-                            Err(e) => ret = Some(Err(e)),
-                        }
+                        vals.push(s.as_str());
                     }
                 }
+
+                let a = a.as_ref();
+                // ASK: Why do we trust `a` to be non-null at this point?
+                let a = unwrap_or_internal_err!(a);
+
+                let ret = match op(a, &vals) {
+                    Ok(r) => {
+                        let result = op2(r).to_i64();
+                        let s = scalar_value(dt, result)?;
+                        Some(Ok(ColumnarValue::Scalar(s)))
+                    }
+                    Err(e) => Some(Err(e)),
+                };
 
                 unwrap_or_internal_err!(ret)
             }
@@ -411,7 +219,7 @@ pub(crate) fn strings_to_primitive_function<O, F, F2>(
 ) -> Result<PrimitiveArray<O>>
 where
     O: ArrowPrimitiveType,
-    F: Fn(&str, &str) -> Result<O::Native>,
+    F: Fn(&str, &[&str]) -> Result<O::Native>,
     F2: Fn(O::Native) -> O::Native,
 {
     if args.len() < 2 {
@@ -472,7 +280,7 @@ fn handle_array_op<'a, O, V, F, F2>(
 where
     V: StringArrayType<'a>,
     O: ArrowPrimitiveType,
-    F: Fn(&str, &str) -> Result<O::Native>,
+    F: Fn(&str, &[&str]) -> Result<O::Native>,
     F2: Fn(O::Native) -> O::Native,
 {
     first
@@ -481,25 +289,38 @@ where
         .map(|(pos, x)| {
             let mut val = None;
             if let Some(x) = x {
+                let mut v = vec![];
+
                 for arg in args {
-                    let v = match arg {
+                    match arg {
                         ColumnarValue::Array(a) => match a.data_type() {
-                            DataType::Utf8View => Ok(a.as_string_view().value(pos)),
-                            DataType::LargeUtf8 => Ok(a.as_string::<i64>().value(pos)),
-                            DataType::Utf8 => Ok(a.as_string::<i32>().value(pos)),
-                            other => exec_err!("Unexpected type encountered '{other}'"),
+                            DataType::Utf8View => v.push(a.as_string_view().value(pos)),
+                            DataType::LargeUtf8 => {
+                                v.push(a.as_string::<i64>().value(pos))
+                            }
+                            DataType::Utf8 => v.push(a.as_string::<i32>().value(pos)),
+                            other => {
+                                return exec_err!(
+                                    "Unexpected type encountered '{other}'"
+                                );
+                            }
                         },
                         ColumnarValue::Scalar(s) => match s.try_as_str() {
-                            Some(Some(v)) => Ok(v),
+                            Some(Some(s)) => v.push(s),
                             Some(None) => continue, // null string
-                            None => exec_err!("Unexpected scalar type encountered '{s}'"),
+                            None => {
+                                return exec_err!(
+                                    "Unexpected scalar type encountered '{s}'"
+                                );
+                            }
                         },
-                    }?;
+                    };
+                }
 
-                    let r = op(x, v);
+                if !v.is_empty() {
+                    let r = op(x, &v);
                     if let Ok(inner) = r {
                         val = Some(Ok(op2(inner)));
-                        break;
                     } else {
                         val = Some(r);
                     }

@@ -19,7 +19,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::datetime::common::*;
-use arrow::array::timezone::Tz;
+use crate::datetime::parser::DateTimeParser;
 use arrow::array::{
     Array, Decimal128Array, Float16Array, Float32Array, Float64Array,
     TimestampNanosecondArray,
@@ -90,6 +90,7 @@ only supported at the end of the string preceded by a space.
 pub struct ToTimestampFunc {
     signature: Signature,
     timezone: Option<Arc<str>>,
+    parser: Box<dyn DateTimeParser>,
 }
 
 #[user_doc(
@@ -140,6 +141,7 @@ only supported at the end of the string preceded by a space.
 pub struct ToTimestampSecondsFunc {
     signature: Signature,
     timezone: Option<Arc<str>>,
+    parser: Box<dyn DateTimeParser>,
 }
 
 #[user_doc(
@@ -190,6 +192,7 @@ only supported at the end of the string preceded by a space.
 pub struct ToTimestampMillisFunc {
     signature: Signature,
     timezone: Option<Arc<str>>,
+    parser: Box<dyn DateTimeParser>,
 }
 
 #[user_doc(
@@ -240,6 +243,7 @@ only supported at the end of the string preceded by a space.
 pub struct ToTimestampMicrosFunc {
     signature: Signature,
     timezone: Option<Arc<str>>,
+    parser: Box<dyn DateTimeParser>,
 }
 
 #[user_doc(
@@ -289,10 +293,12 @@ only supported at the end of the string preceded by a space.
 pub struct ToTimestampNanosFunc {
     signature: Signature,
     timezone: Option<Arc<str>>,
+    parser: Box<dyn DateTimeParser>,
 }
 
 /// Macro to generate boilerplate constructors and config methods for ToTimestamp* functions.
-/// Generates: Default impl, deprecated new(), new_with_config(), and extracts timezone from ConfigOptions.
+/// Generates: Default impl, deprecated new(), new_with_config(), with_datetime_parser(), and
+/// extracts timezone from ConfigOptions.
 macro_rules! impl_to_timestamp_constructors {
     ($func:ty) => {
         impl Default for $func {
@@ -320,7 +326,18 @@ macro_rules! impl_to_timestamp_constructors {
                         .time_zone
                         .as_ref()
                         .map(|tz| Arc::from(tz.as_str())),
+                    parser: super::parser::get_date_time_parser(config),
                 }
+            }
+
+            /// Set a custom date time parser.
+            pub fn with_datetime_parser(
+                &mut self,
+                parser: Box<dyn DateTimeParser>,
+            ) -> &mut Self {
+                self.parser = parser;
+
+                self
             }
         }
     };
@@ -485,9 +502,12 @@ impl ScalarUDFImpl for ToTimestampFunc {
                 decimal128_to_timestamp_nanos(&arg, tz)
             }
             Decimal128(_, _) => decimal128_to_timestamp_nanos(&args[0], tz),
-            Utf8View | LargeUtf8 | Utf8 => {
-                to_timestamp_impl::<TimestampNanosecondType>(&args, "to_timestamp", &tz)
-            }
+            Utf8View | LargeUtf8 | Utf8 => to_timestamp_impl::<TimestampNanosecondType>(
+                &args,
+                "to_timestamp",
+                &tz,
+                &self.parser,
+            ),
             other => {
                 exec_err!("Unsupported data type {other} for function to_timestamp")
             }
@@ -560,6 +580,7 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
                 &args,
                 "to_timestamp_seconds",
                 &self.timezone,
+                &self.parser,
             ),
             other => {
                 exec_err!(
@@ -636,6 +657,7 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
                 &args,
                 "to_timestamp_millis",
                 &self.timezone,
+                &self.parser,
             ),
             other => {
                 exec_err!(
@@ -712,6 +734,7 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
                 &args,
                 "to_timestamp_micros",
                 &self.timezone,
+                &self.parser,
             ),
             other => {
                 exec_err!(
@@ -788,6 +811,7 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
                 &args,
                 "to_timestamp_nanos",
                 &self.timezone,
+                &self.parser,
             ),
             other => {
                 exec_err!(
@@ -803,10 +827,12 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
     }
 }
 
+#[expect(clippy::borrowed_box)]
 fn to_timestamp_impl<T: ArrowTimestampType + ScalarType<i64>>(
     args: &[ColumnarValue],
     name: &str,
     timezone: &Option<Arc<str>>,
+    parser: &Box<dyn DateTimeParser>,
 ) -> Result<ColumnarValue> {
     let factor = match T::UNIT {
         Second => 1_000_000_000,
@@ -815,23 +841,18 @@ fn to_timestamp_impl<T: ArrowTimestampType + ScalarType<i64>>(
         Nanosecond => 1,
     };
 
-    let tz = match timezone.clone() {
-        Some(tz) => Some(tz.parse::<Tz>()?),
-        None => None,
-    };
+    let tz = timezone.clone().unwrap_or_else(|| "UTC".into());
 
     match args.len() {
         1 => handle::<T, _>(
             args,
-            move |s| string_to_timestamp_nanos_with_timezone(&tz, s).map(|n| n / factor),
+            move |s| parser.string_to_timestamp_nanos(&tz, s).map(|n| n / factor),
             name,
             &Timestamp(T::UNIT, timezone.clone()),
         ),
         n if n >= 2 => handle_multiple::<T, _, _>(
             args,
-            move |s, format| {
-                string_to_timestamp_nanos_formatted_with_timezone(&tz, s, format)
-            },
+            move |s, formats| parser.string_to_timestamp_nanos_formatted(&tz, s, formats),
             |n| n / factor,
             name,
             &Timestamp(T::UNIT, timezone.clone()),
@@ -844,6 +865,8 @@ fn to_timestamp_impl<T: ArrowTimestampType + ScalarType<i64>>(
 mod tests {
     use std::sync::Arc;
 
+    use super::*;
+    use crate::datetime::parser::chrono::ChronoDateTimeParser;
     use arrow::array::types::Int64Type;
     use arrow::array::{
         Array, PrimitiveArray, TimestampMicrosecondArray, TimestampMillisecondArray,
@@ -856,47 +879,67 @@ mod tests {
     use datafusion_common::{DataFusionError, ScalarValue, assert_contains};
     use datafusion_expr::{ScalarFunctionArgs, ScalarFunctionImplementation};
 
-    use super::*;
-
     fn to_timestamp(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         let timezone: Option<Arc<str>> = Some("UTC".into());
-        to_timestamp_impl::<TimestampNanosecondType>(args, "to_timestamp", &timezone)
+        let parser = Box::new(ChronoDateTimeParser::new()) as Box<dyn DateTimeParser>;
+
+        to_timestamp_impl::<TimestampNanosecondType>(
+            args,
+            "to_timestamp",
+            &timezone,
+            &parser,
+        )
     }
 
     /// to_timestamp_millis SQL function
     fn to_timestamp_millis(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         let timezone: Option<Arc<str>> = Some("UTC".into());
+        let parser = Box::new(ChronoDateTimeParser::new()) as Box<dyn DateTimeParser>;
+
         to_timestamp_impl::<TimestampMillisecondType>(
             args,
             "to_timestamp_millis",
             &timezone,
+            &parser,
         )
     }
 
     /// to_timestamp_micros SQL function
     fn to_timestamp_micros(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         let timezone: Option<Arc<str>> = Some("UTC".into());
+        let parser = Box::new(ChronoDateTimeParser::new()) as Box<dyn DateTimeParser>;
+
         to_timestamp_impl::<TimestampMicrosecondType>(
             args,
             "to_timestamp_micros",
             &timezone,
+            &parser,
         )
     }
 
     /// to_timestamp_nanos SQL function
     fn to_timestamp_nanos(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         let timezone: Option<Arc<str>> = Some("UTC".into());
+        let parser = Box::new(ChronoDateTimeParser::new()) as Box<dyn DateTimeParser>;
+
         to_timestamp_impl::<TimestampNanosecondType>(
             args,
             "to_timestamp_nanos",
             &timezone,
+            &parser,
         )
     }
 
     /// to_timestamp_seconds SQL function
     fn to_timestamp_seconds(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         let timezone: Option<Arc<str>> = Some("UTC".into());
-        to_timestamp_impl::<TimestampSecondType>(args, "to_timestamp_seconds", &timezone)
+        let parser = Box::new(ChronoDateTimeParser::new()) as Box<dyn DateTimeParser>;
+        to_timestamp_impl::<TimestampSecondType>(
+            args,
+            "to_timestamp_seconds",
+            &timezone,
+            &parser,
+        )
     }
 
     fn udfs_and_timeunit() -> Vec<(Box<dyn ScalarUDFImpl>, TimeUnit)> {
@@ -1508,7 +1551,7 @@ mod tests {
             ColumnarValue::Array(Arc::new(format3_builder.finish()) as ArrayRef),
         ];
 
-        let expected_err = "Execution error: Error parsing timestamp from '2020-09-08T13:42:29.19085Z' using format '%H:%M:%S': input contains invalid characters";
+        let expected_err = "Execution error: Error parsing timestamp from '2020-09-08T13:42:29.19085Z' using formats: [\"%s\", \"%c\", \"%H:%M:%S\"]: input contains invalid characters";
         match to_timestamp(&string_array) {
             Ok(_) => panic!("Expected error but got success"),
             Err(e) => {
@@ -1556,11 +1599,9 @@ mod tests {
     }
 
     fn parse_timestamp_formatted(s: &str, format: &str) -> Result<i64, DataFusionError> {
-        let result = string_to_timestamp_nanos_formatted_with_timezone(
-            &Some("UTC".parse()?),
-            s,
-            format,
-        );
+        let timezone = "UTC";
+        let parser = Box::new(ChronoDateTimeParser::new()) as Box<dyn DateTimeParser>;
+        let result = parser.string_to_timestamp_nanos_formatted(timezone, s, &[format]);
         if let Err(e) = &result {
             eprintln!("Error parsing timestamp '{s}' using format '{format}': {e:?}");
         }
@@ -1586,14 +1627,16 @@ mod tests {
             ),
         ];
 
+        let timezone = "UTC";
+        let parser = Box::new(ChronoDateTimeParser::new()) as Box<dyn DateTimeParser>;
+
         for (s, f, ctx) in cases {
-            let expected = format!(
-                "Execution error: Error parsing timestamp from '{s}' using format '{f}': {ctx}"
-            );
-            let actual = string_to_datetime_formatted(&Utc, s, f)
+            let expected = ctx.to_string();
+            let actual = parser
+                .string_to_timestamp_nanos_formatted(timezone, s, &[f])
                 .unwrap_err()
                 .strip_backtrace();
-            assert_eq!(actual, expected)
+            assert_contains!(actual, expected);
         }
     }
 
@@ -1616,14 +1659,16 @@ mod tests {
             ),
         ];
 
+        let timezone = "UTC";
+        let parser = Box::new(ChronoDateTimeParser::new()) as Box<dyn DateTimeParser>;
+
         for (s, f, ctx) in cases {
-            let expected = format!(
-                "Execution error: Error parsing timestamp from '{s}' using format '{f}': {ctx}"
-            );
-            let actual = string_to_datetime_formatted(&Utc, s, f)
+            let expected = ctx.to_string();
+            let actual = parser
+                .string_to_timestamp_nanos_formatted(timezone, s, &[f])
                 .unwrap_err()
                 .strip_backtrace();
-            assert_eq!(actual, expected)
+            assert_contains!(actual, expected);
         }
     }
 
