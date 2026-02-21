@@ -405,8 +405,7 @@ impl FileFormat for ParquetFormat {
 
         let schemas = schemas
             .into_iter()
-            .map(|(_, schema)| schema)
-            .collect::<Vec<_>>();
+            .map(|(_, schema)| schema);
 
         let schema = if self.skip_metadata() {
             Schema::try_merge(clear_metadata(schemas))
