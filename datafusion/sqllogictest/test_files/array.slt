@@ -6866,6 +6866,206 @@ from array_distinct_table_2D_fixed;
 [[1, 2], [3, 4], [5, 6], [7, 8], [9, 10]]
 [[5, 6], NULL]
 
+## arrays_zip (aliases: `list_zip`)
+
+# Spark example: arrays_zip(array(1, 2, 3), array(2, 3, 4))
+query ?
+select arrays_zip([1, 2, 3], [2, 3, 4]);
+----
+[{c0: 1, c1: 2}, {c0: 2, c1: 3}, {c0: 3, c1: 4}]
+
+# Spark example: arrays_zip(array(1, 2), array(2, 3), array(3, 4))
+query ?
+select arrays_zip([1, 2], [2, 3], [3, 4]);
+----
+[{c0: 1, c1: 2, c2: 3}, {c0: 2, c1: 3, c2: 4}]
+
+# basic: two integer arrays of equal length
+query ?
+select arrays_zip([1, 2, 3], [10, 20, 30]);
+----
+[{c0: 1, c1: 10}, {c0: 2, c1: 20}, {c0: 3, c1: 30}]
+
+# basic: two arrays with different element types (int + string)
+query ?
+select arrays_zip([1, 2, 3], ['a', 'b', 'c']);
+----
+[{c0: 1, c1: a}, {c0: 2, c1: b}, {c0: 3, c1: c}]
+
+# three arrays of equal length
+query ?
+select arrays_zip([1, 2, 3], [10, 20, 30], [100, 200, 300]);
+----
+[{c0: 1, c1: 10, c2: 100}, {c0: 2, c1: 20, c2: 200}, {c0: 3, c1: 30, c2: 300}]
+
+# four arrays of equal length
+query ?
+select arrays_zip([1], [2], [3], [4]);
+----
+[{c0: 1, c1: 2, c2: 3, c3: 4}]
+
+# mixed element types: float + boolean
+query ?
+select arrays_zip([1.5, 2.5], [true, false]);
+----
+[{c0: 1.5, c1: true}, {c0: 2.5, c1: false}]
+
+# different length arrays: shorter array padded with NULLs
+query ?
+select arrays_zip([1, 2], [3, 4, 5]);
+----
+[{c0: 1, c1: 3}, {c0: 2, c1: 4}, {c0: NULL, c1: 5}]
+
+# different length arrays: first longer
+query ?
+select arrays_zip([1, 2, 3], [10]);
+----
+[{c0: 1, c1: 10}, {c0: 2, c1: NULL}, {c0: 3, c1: NULL}]
+
+# different length: one single element, other three elements
+query ?
+select arrays_zip([1], ['a', 'b', 'c']);
+----
+[{c0: 1, c1: a}, {c0: NULL, c1: b}, {c0: NULL, c1: c}]
+
+# empty arrays
+query ?
+select arrays_zip([], []);
+----
+[]
+
+# one empty, one non-empty
+query ?
+select arrays_zip([], [1, 2, 3]);
+----
+[{c0: NULL, c1: 1}, {c0: NULL, c1: 2}, {c0: NULL, c1: 3}]
+
+# NULL elements inside arrays
+query ?
+select arrays_zip([1, NULL, 3], ['a', 'b', 'c']);
+----
+[{c0: 1, c1: a}, {c0: NULL, c1: b}, {c0: 3, c1: c}]
+
+# all NULL elements
+query ?
+select arrays_zip([NULL::int, NULL, NULL], [NULL::text, NULL, NULL]);
+----
+[{c0: NULL, c1: NULL}, {c0: NULL, c1: NULL}, {c0: NULL, c1: NULL}]
+
+# both args are NULL (entire list null)
+query ?
+select arrays_zip(NULL::int[], NULL::int[]);
+----
+NULL
+
+# one arg is NULL list, other is real array
+query ?
+select arrays_zip(NULL::int[], [1, 2, 3]);
+----
+[{c0: NULL, c1: 1}, {c0: NULL, c1: 2}, {c0: NULL, c1: 3}]
+
+# real array + NULL list
+query ?
+select arrays_zip([1, 2], NULL::text[]);
+----
+[{c0: 1, c1: NULL}, {c0: 2, c1: NULL}]
+
+# column-level test with multiple rows
+query ?
+select arrays_zip(a, b) from (values ([1, 2], [10, 20]), ([3, 4, 5], [30]), ([6], [60, 70])) as t(a, b);
+----
+[{c0: 1, c1: 10}, {c0: 2, c1: 20}]
+[{c0: 3, c1: 30}, {c0: 4, c1: NULL}, {c0: 5, c1: NULL}]
+[{c0: 6, c1: 60}, {c0: NULL, c1: 70}]
+
+# column-level test with NULL rows
+query ?
+select arrays_zip(a, b) from (values ([1, 2], [10, 20]), (null, [30, 40]), ([5, 6], null)) as t(a, b);
+----
+[{c0: 1, c1: 10}, {c0: 2, c1: 20}]
+[{c0: NULL, c1: 30}, {c0: NULL, c1: 40}]
+[{c0: 5, c1: NULL}, {c0: 6, c1: NULL}]
+
+# alias: list_zip
+query ?
+select list_zip([1, 2], [3, 4]);
+----
+[{c0: 1, c1: 3}, {c0: 2, c1: 4}]
+
+# column test: total values equal (3 each) but per-row lengths differ
+# a: [1]     b: [10, 20]   → row 0: a has 1, b has 2
+# a: [2, 3]  b: [30]       → row 1: a has 2, b has 1
+# total a values = 3, total b values = 3 (same!) but rows are misaligned
+query ?
+select arrays_zip(a, b) from (values ([1], [10, 20]), ([2, 3], [30])) as t(a, b);
+----
+[{c0: 1, c1: 10}, {c0: NULL, c1: 20}]
+[{c0: 2, c1: 30}, {c0: 3, c1: NULL}]
+
+# single element arrays
+query ?
+select arrays_zip([42], ['hello']);
+----
+[{c0: 42, c1: hello}]
+
+# error: too few arguments
+statement error
+select arrays_zip([1, 2, 3]);
+
+# arrays_zip with LargeList inputs
+query ?
+select arrays_zip(
+    arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'),
+    arrow_cast(make_array(10, 20, 30), 'LargeList(Int64)')
+);
+----
+[{c0: 1, c1: 10}, {c0: 2, c1: 20}, {c0: 3, c1: 30}]
+
+# arrays_zip with LargeList different lengths (padding)
+query ?
+select arrays_zip(
+    arrow_cast(make_array(1, 2), 'LargeList(Int64)'),
+    arrow_cast(make_array(10, 20, 30), 'LargeList(Int64)')
+);
+----
+[{c0: 1, c1: 10}, {c0: 2, c1: 20}, {c0: NULL, c1: 30}]
+
+# arrays_zip with FixedSizeList inputs
+query ?
+select arrays_zip(
+    arrow_cast(make_array(1, 2, 3), 'FixedSizeList(3, Int64)'),
+    arrow_cast(make_array(10, 20, 30), 'FixedSizeList(3, Int64)')
+);
+----
+[{c0: 1, c1: 10}, {c0: 2, c1: 20}, {c0: 3, c1: 30}]
+
+# arrays_zip mixing List and LargeList
+query ?
+select arrays_zip(
+    [1, 2, 3],
+    arrow_cast(make_array(10, 20, 30), 'LargeList(Int64)')
+);
+----
+[{c0: 1, c1: 10}, {c0: 2, c1: 20}, {c0: 3, c1: 30}]
+
+# arrays_zip mixing List and FixedSizeList with different lengths (padding)
+query ?
+select arrays_zip(
+    [1, 2, 3],
+    arrow_cast(make_array(10, 20), 'FixedSizeList(2, Int64)')
+);
+----
+[{c0: 1, c1: 10}, {c0: 2, c1: 20}, {c0: 3, c1: NULL}]
+
+# arrays_zip with LargeList and FixedSizeList mixed types
+query ?
+select arrays_zip(
+    arrow_cast(make_array(1, 2), 'LargeList(Int64)'),
+    arrow_cast(make_array('a', 'b'), 'FixedSizeList(2, Utf8)')
+);
+----
+[{c0: 1, c1: a}, {c0: 2, c1: b}]
+
 query ???
 select array_intersect(column1, column2),
        array_intersect(column3, column4),
