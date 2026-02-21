@@ -51,7 +51,7 @@ use crate::{
     Statistics,
 };
 
-use arrow::array::{Array, RecordBatch, RecordBatchOptions, StringViewArray};
+use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::SpillCompression;
@@ -402,8 +402,6 @@ impl ExternalSorter {
                 Some((self.spill_manager.create_in_progress_file("Sorting")?, 0));
         }
 
-        Self::organize_stringview_arrays(globally_sorted_batches)?;
-
         debug!("Spilling sort data of ExternalSorter to disk whilst inserting");
 
         let batches_to_spill = std::mem::take(globally_sorted_batches);
@@ -443,71 +441,6 @@ impl ExternalSorter {
                 max_record_batch_memory,
             });
         }
-
-        Ok(())
-    }
-
-    /// Reconstruct `globally_sorted_batches` to organize the payload buffers of each
-    /// `StringViewArray` in sequential order by calling `gc()` on them.
-    ///
-    /// Note this is a workaround until <https://github.com/apache/arrow-rs/issues/7185> is
-    /// available
-    ///
-    /// # Rationale
-    /// After (merge-based) sorting, all batches will be sorted into a single run,
-    /// but physically this sorted run is chunked into many small batches. For
-    /// `StringViewArray`s inside each sorted run, their inner buffers are not
-    /// re-constructed by default, leading to non-sequential payload locations
-    /// (permutated by `interleave()` Arrow kernel). A single payload buffer might
-    /// be shared by multiple `RecordBatch`es.
-    /// When writing each batch to disk, the writer has to write all referenced buffers,
-    /// because they have to be read back one by one to reduce memory usage. This
-    /// causes extra disk reads and writes, and potentially execution failure.
-    ///
-    /// # Example
-    /// Before sorting:
-    /// batch1 -> buffer1
-    /// batch2 -> buffer2
-    ///
-    /// sorted_batch1 -> buffer1
-    ///               -> buffer2
-    /// sorted_batch2 -> buffer1
-    ///               -> buffer2
-    ///
-    /// Then when spilling each batch, the writer has to write all referenced buffers
-    /// repeatedly.
-    fn organize_stringview_arrays(
-        globally_sorted_batches: &mut Vec<RecordBatch>,
-    ) -> Result<()> {
-        let mut organized_batches = Vec::with_capacity(globally_sorted_batches.len());
-
-        for batch in globally_sorted_batches.drain(..) {
-            let mut new_columns: Vec<Arc<dyn Array>> =
-                Vec::with_capacity(batch.num_columns());
-
-            let mut arr_mutated = false;
-            for array in batch.columns() {
-                if let Some(string_view_array) =
-                    array.as_any().downcast_ref::<StringViewArray>()
-                {
-                    let new_array = string_view_array.gc();
-                    new_columns.push(Arc::new(new_array));
-                    arr_mutated = true;
-                } else {
-                    new_columns.push(Arc::clone(array));
-                }
-            }
-
-            let organized_batch = if arr_mutated {
-                RecordBatch::try_new(batch.schema(), new_columns)?
-            } else {
-                batch
-            };
-
-            organized_batches.push(organized_batch);
-        }
-
-        *globally_sorted_batches = organized_batches;
 
         Ok(())
     }

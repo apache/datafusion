@@ -2464,6 +2464,7 @@ version = "52.1.0"
 dependencies = [
  "ahash",
  "arrow",
+ "arrow-data",
  "arrow-ord",
  "arrow-schema",
  "async-trait",
