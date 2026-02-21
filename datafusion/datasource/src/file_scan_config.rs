@@ -596,7 +596,8 @@ impl DataSource for FileScanConfig {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 let schema = self.projected_schema().map_err(|_| std::fmt::Error {})?;
-                let orderings = get_projected_output_ordering(self, &schema);
+                let eq_props = self.eq_properties();
+                let orderings = eq_props.oeq_class();
 
                 write!(f, "file_groups=")?;
                 FileGroupsDisplay(&self.file_groups).fmt_as(t, f)?;
@@ -635,7 +636,7 @@ impl DataSource for FileScanConfig {
                     write!(f, ", limit={limit}")?;
                 }
 
-                display_orderings(f, &orderings)?;
+                display_orderings(f, orderings)?;
 
                 if !self.constraints.is_empty() {
                     write!(f, ", {}", self.constraints)?;
@@ -929,16 +930,69 @@ impl FileScanConfig {
     /// Returns only the output orderings that are validated against actual
     /// file group statistics.
     ///
+    /// The various listing tables do not attempt to read all files
+    /// concurrently, instead they read files in sequence within a
+    /// partition. This is an important property as it allows plans to
+    /// run against 1000s of files and not try to open them all
+    /// concurrently.
+    ///
+    /// However, it means if we assign more than one file to a partition
+    /// the output sort order will not be preserved unless the files'
+    /// min/max statistics prove the combined stream is still ordered.
+    ///
+    /// When only 1 file is assigned to each partition, each partition is
+    /// correctly sorted on `(A, B, C)`:
+    ///
+    /// ```text
+    /// ┏ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ┓
+    ///   ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐ ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─  ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─  ┌ ─ ─ ─ ─ ─ ─ ─ ─ ┐
+    /// ┃   ┌───────────────┐     ┌──────────────┐ │   ┌──────────────┐ │   ┌─────────────┐   ┃
+    ///   │ │   1.parquet   │ │ │ │  2.parquet   │   │ │  3.parquet   │   │ │  4.parquet  │ │
+    /// ┃   │ Sort: A, B, C │     │Sort: A, B, C │ │   │Sort: A, B, C │ │   │Sort: A, B, C│   ┃
+    ///   │ └───────────────┘ │ │ └──────────────┘   │ └──────────────┘   │ └─────────────┘ │
+    /// ┃  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─   ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘  ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘  ─ ─ ─ ─ ─ ─ ─ ─ ─  ┃
+    ///      Partition 1          Partition 2          Partition 3          Partition 4
+    /// ┃                                                                                        ┃
+    ///  ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━
+    ///                                      DataSourceExec
+    /// ```
+    ///
+    /// However, when more than 1 file is assigned to each partition, each
+    /// partition is NOT necessarily sorted on `(A, B, C)`. Once the second
+    /// file is scanned, the same values for A, B and C can be repeated in
+    /// the same sorted stream:
+    ///
+    /// ```text
+    /// ┏ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━
+    ///   ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐ ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─  ┃
+    /// ┃   ┌───────────────┐     ┌──────────────┐ │
+    ///   │ │   1.parquet   │ │ │ │  2.parquet   │   ┃
+    /// ┃   │ Sort: A, B, C │     │Sort: A, B, C │ │
+    ///   │ └───────────────┘ │ │ └──────────────┘   ┃
+    /// ┃   ┌───────────────┐     ┌──────────────┐ │
+    ///   │ │   3.parquet   │ │ │ │  4.parquet   │   ┃
+    /// ┃   │ Sort: A, B, C │     │Sort: A, B, C │ │
+    ///   │ └───────────────┘ │ │ └──────────────┘   ┃
+    /// ┃  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─   ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
+    ///      Partition 1          Partition 2         ┃
+    /// ┃
+    ///  ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ┛
+    ///              DataSourceExec
+    /// ```
+    ///
     /// For example, individual files may be ordered by `col1 ASC`,
-    /// but if we have files with these min/max statistics in a single partition / file group:
+    /// but if we have files with these min/max statistics in a single
+    /// partition / file group:
     ///
     /// - file1: min(col1) = 10, max(col1) = 20
     /// - file2: min(col1) = 5, max(col1) = 15
     ///
-    /// Because reading file1 followed by file2 would produce out-of-order output (there is overlap
-    /// in the ranges), we cannot retain `col1 ASC` as a valid output ordering.
+    /// Because reading file1 followed by file2 would produce out-of-order
+    /// output (there is overlap in the ranges), we cannot retain `col1 ASC`
+    /// as a valid output ordering.
     ///
-    /// Similarly this would not be a valid order (non-overlapping ranges but not ordered):
+    /// Similarly this would not be a valid order (non-overlapping ranges
+    /// but not ordered):
     ///
     /// - file1: min(col1) = 20, max(col1) = 30
     /// - file2: min(col1) = 10, max(col1) = 15
@@ -948,13 +1002,14 @@ impl FileScanConfig {
     /// - file1: min(col1) = 5, max(col1) = 15
     /// - file2: min(col1) = 16, max(col1) = 25
     ///
-    /// Then we know that reading file1 followed by file2 will produce ordered output,
-    /// so `col1 ASC` would be retained.
+    /// Then we know that reading file1 followed by file2 will produce
+    /// ordered output, so `col1 ASC` would be retained.
     ///
-    /// Note that we are checking for ordering *within* *each* file group / partition,
-    /// files in different partitions are read independently and do not affect each other's ordering.
-    /// Merging of the multiple partition streams into a single ordered stream is handled
-    /// upstream e.g. by `SortPreservingMergeExec`.
+    /// Note that we are checking for ordering *within* *each* file group /
+    /// partition — files in different partitions are read independently and
+    /// do not affect each other's ordering. Merging of the multiple
+    /// partition streams into a single ordered stream is handled upstream
+    /// e.g. by `SortPreservingMergeExec`.
     fn validated_output_ordering(&self) -> Vec<LexOrdering> {
         let schema = self.file_source.table_schema().table_schema();
         validate_orderings(&self.output_ordering, schema, &self.file_groups, None)
@@ -1295,13 +1350,15 @@ impl Debug for FileScanConfig {
 
 impl DisplayAs for FileScanConfig {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {
-        let schema = self.projected_schema().map_err(|_| std::fmt::Error {})?;
-        let orderings = get_projected_output_ordering(self, &schema);
+        let eq_props = self.eq_properties();
+        let orderings = eq_props.oeq_class();
 
         write!(f, "file_groups=")?;
         FileGroupsDisplay(&self.file_groups).fmt_as(t, f)?;
 
-        if !schema.fields().is_empty() {
+        if let Ok(schema) = self.projected_schema()
+            && !schema.fields().is_empty()
+        {
             write!(f, ", projection={}", ProjectSchemaDisplay(&schema))?;
         }
 
@@ -1309,7 +1366,7 @@ impl DisplayAs for FileScanConfig {
             write!(f, ", limit={limit}")?;
         }
 
-        display_orderings(f, &orderings)?;
+        display_orderings(f, orderings)?;
 
         if !self.constraints.is_empty() {
             write!(f, ", {}", self.constraints)?;
@@ -1317,21 +1374,6 @@ impl DisplayAs for FileScanConfig {
 
         Ok(())
     }
-}
-
-/// Get the indices of columns in a projection if the projection is a simple
-/// list of columns.
-/// If there are any expressions other than columns, returns None.
-fn ordered_column_indices_from_projection(
-    projection: &ProjectionExprs,
-) -> Option<Vec<usize>> {
-    projection
-        .expr_iter()
-        .map(|e| {
-            let index = e.as_any().downcast_ref::<Column>()?.index();
-            Some(index)
-        })
-        .collect::<Option<Vec<usize>>>()
 }
 
 /// Check whether a given ordering is valid for all file groups by verifying
@@ -1377,115 +1419,6 @@ fn validate_orderings(
         })
         .cloned()
         .collect()
-}
-
-/// The various listing tables does not attempt to read all files
-/// concurrently, instead they will read files in sequence within a
-/// partition.  This is an important property as it allows plans to
-/// run against 1000s of files and not try to open them all
-/// concurrently.
-///
-/// However, it means if we assign more than one file to a partition
-/// the output sort order will not be preserved as illustrated in the
-/// following diagrams:
-///
-/// When only 1 file is assigned to each partition, each partition is
-/// correctly sorted on `(A, B, C)`
-///
-/// ```text
-/// ┏ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ┓
-///   ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐ ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─  ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─  ┌ ─ ─ ─ ─ ─ ─ ─ ─ ┐
-/// ┃   ┌───────────────┐     ┌──────────────┐ │   ┌──────────────┐ │   ┌─────────────┐   ┃
-///   │ │   1.parquet   │ │ │ │  2.parquet   │   │ │  3.parquet   │   │ │  4.parquet  │ │
-/// ┃   │ Sort: A, B, C │     │Sort: A, B, C │ │   │Sort: A, B, C │ │   │Sort: A, B, C│   ┃
-///   │ └───────────────┘ │ │ └──────────────┘   │ └──────────────┘   │ └─────────────┘ │
-/// ┃                                          │                    │                     ┃
-///   │                   │ │                    │                    │                 │
-/// ┃                                          │                    │                     ┃
-///   │                   │ │                    │                    │                 │
-/// ┃                                          │                    │                     ┃
-///   │                   │ │                    │                    │                 │
-/// ┃  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─   ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘  ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘  ─ ─ ─ ─ ─ ─ ─ ─ ─  ┃
-///      DataFusion           DataFusion           DataFusion           DataFusion
-/// ┃    Partition 1          Partition 2          Partition 3          Partition 4       ┃
-///  ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━
-///
-///                                      DataSourceExec
-/// ```
-///
-/// However, when more than 1 file is assigned to each partition, each
-/// partition is NOT correctly sorted on `(A, B, C)`. Once the second
-/// file is scanned, the same values for A, B and C can be repeated in
-/// the same sorted stream
-///
-///```text
-/// ┏ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━
-///   ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐ ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─  ┃
-/// ┃   ┌───────────────┐     ┌──────────────┐ │
-///   │ │   1.parquet   │ │ │ │  2.parquet   │   ┃
-/// ┃   │ Sort: A, B, C │     │Sort: A, B, C │ │
-///   │ └───────────────┘ │ │ └──────────────┘   ┃
-/// ┃   ┌───────────────┐     ┌──────────────┐ │
-///   │ │   3.parquet   │ │ │ │  4.parquet   │   ┃
-/// ┃   │ Sort: A, B, C │     │Sort: A, B, C │ │
-///   │ └───────────────┘ │ │ └──────────────┘   ┃
-/// ┃                                          │
-///   │                   │ │                    ┃
-/// ┃  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─   ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
-///      DataFusion           DataFusion         ┃
-/// ┃    Partition 1          Partition 2
-///  ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ┛
-///
-///              DataSourceExec
-/// ```
-fn get_projected_output_ordering(
-    base_config: &FileScanConfig,
-    projected_schema: &SchemaRef,
-) -> Vec<LexOrdering> {
-    let projected_orderings =
-        project_orderings(&base_config.output_ordering, projected_schema);
-
-    let indices = base_config
-        .file_source
-        .projection()
-        .as_ref()
-        .map(|p| ordered_column_indices_from_projection(p));
-
-    match indices {
-        Some(Some(indices)) => {
-            // Simple column projection — validate with statistics
-            validate_orderings(
-                &projected_orderings,
-                projected_schema,
-                &base_config.file_groups,
-                Some(indices.as_slice()),
-            )
-        }
-        None => {
-            // No projection — validate with statistics (no remapping needed)
-            validate_orderings(
-                &projected_orderings,
-                projected_schema,
-                &base_config.file_groups,
-                None,
-            )
-        }
-        Some(None) => {
-            // Complex projection (expressions, not simple columns) — can't
-            // determine column indices for statistics. Still valid if all
-            // file groups have at most one file.
-            if base_config.file_groups.iter().all(|g| g.len() <= 1) {
-                projected_orderings
-            } else {
-                debug!(
-                    "Skipping specified output orderings. \
-                     Some file groups couldn't be determined to be sorted: {:?}",
-                    base_config.file_groups
-                );
-                vec![]
-            }
-        }
-    }
 }
 
 /// Convert type to a type suitable for use as a `ListingTable`
@@ -2582,5 +2515,248 @@ mod tests {
         assert_eq!(pushed_files[1].object_meta.location.as_ref(), "file1");
 
         Ok(())
+    }
+
+    /// Helper: create a `PartitionedFile` with min/max stats for the given columns.
+    fn partitioned_file_with_stats(
+        name: &str,
+        col_stats: Vec<(ScalarValue, ScalarValue)>,
+    ) -> PartitionedFile {
+        let column_statistics: Vec<ColumnStatistics> = col_stats
+            .into_iter()
+            .map(|(min, max)| ColumnStatistics {
+                min_value: Precision::Exact(min),
+                max_value: Precision::Exact(max),
+                null_count: Precision::Exact(0),
+                ..ColumnStatistics::new_unknown()
+            })
+            .collect();
+        let stats = Statistics {
+            num_rows: Precision::Exact(100),
+            total_byte_size: Precision::Absent,
+            column_statistics,
+        };
+        PartitionedFile::new(name, 1024).with_statistics(Arc::new(stats))
+    }
+
+    /// Regression test: with a complex projection like `a + 1`, the display
+    /// path should still show orderings (it delegates to `eq_properties()`
+    /// which validates at table-schema level, then projects correctly).
+    #[test]
+    fn test_display_ordering_with_complex_projection_multi_file() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+
+        let table_schema = TableSchema::new(Arc::clone(&schema), vec![]);
+        let file_source: Arc<dyn FileSource> =
+            Arc::new(MockSource::new(table_schema.clone()));
+
+        // Two files in one group, non-overlapping b statistics
+        let file1 = partitioned_file_with_stats(
+            "file1",
+            vec![
+                (ScalarValue::Int32(Some(0)), ScalarValue::Int32(Some(100))), // a
+                (ScalarValue::Int32(Some(1)), ScalarValue::Int32(Some(10))),  // b
+            ],
+        );
+        let file2 = partitioned_file_with_stats(
+            "file2",
+            vec![
+                (ScalarValue::Int32(Some(0)), ScalarValue::Int32(Some(100))), // a
+                (ScalarValue::Int32(Some(11)), ScalarValue::Int32(Some(20))), // b
+            ],
+        );
+
+        let sort_b_asc = PhysicalSortExpr::new(
+            Arc::new(Column::new("b", 1)),
+            arrow::compute::SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+        );
+
+        let config = FileScanConfigBuilder::new(
+            ObjectStoreUrl::parse("test:///").unwrap(),
+            Arc::clone(&file_source),
+        )
+        .with_file_groups(vec![FileGroup::new(vec![file1, file2])])
+        .with_output_ordering(vec![LexOrdering::new(vec![sort_b_asc]).unwrap()])
+        .build();
+
+        // Push a complex projection: [a + 1 AS x, b]
+        let expr_a_plus_1: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Plus,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+        ));
+        let exprs = ProjectionExprs::new(vec![
+            ProjectionExpr::new(expr_a_plus_1, "x"),
+            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b"),
+        ]);
+
+        let data_source = config
+            .try_swapping_with_projection(&exprs)
+            .unwrap()
+            .expect("projection swap should succeed");
+        let new_config = data_source
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .expect("Expected FileScanConfig");
+
+        // Format via DisplayAs and verify ordering is present
+        let display = format!(
+            "{}",
+            datafusion_physical_plan::display::VerboseDisplay(new_config.clone())
+        );
+        assert!(
+            display.contains("output_ordering="),
+            "Expected output_ordering in display, but got: {display}"
+        );
+        assert!(
+            display.contains("b@1 ASC"),
+            "Expected 'b@1 ASC' in display, but got: {display}"
+        );
+    }
+
+    /// Verify orderings ARE dropped when file statistics overlap
+    /// (ordering is genuinely invalid for multi-file groups).
+    #[test]
+    fn test_display_ordering_dropped_for_overlapping_stats() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+
+        let table_schema = TableSchema::new(Arc::clone(&schema), vec![]);
+        let file_source: Arc<dyn FileSource> =
+            Arc::new(MockSource::new(table_schema.clone()));
+
+        // Two files in one group, OVERLAPPING b statistics
+        let file1 = partitioned_file_with_stats(
+            "file1",
+            vec![
+                (ScalarValue::Int32(Some(0)), ScalarValue::Int32(Some(100))),
+                (ScalarValue::Int32(Some(1)), ScalarValue::Int32(Some(10))),
+            ],
+        );
+        let file2 = partitioned_file_with_stats(
+            "file2",
+            vec![
+                (ScalarValue::Int32(Some(0)), ScalarValue::Int32(Some(100))),
+                (ScalarValue::Int32(Some(5)), ScalarValue::Int32(Some(20))), // overlaps!
+            ],
+        );
+
+        let sort_b_asc = PhysicalSortExpr::new(
+            Arc::new(Column::new("b", 1)),
+            arrow::compute::SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+        );
+
+        let config = FileScanConfigBuilder::new(
+            ObjectStoreUrl::parse("test:///").unwrap(),
+            Arc::clone(&file_source),
+        )
+        .with_file_groups(vec![FileGroup::new(vec![file1, file2])])
+        .with_output_ordering(vec![LexOrdering::new(vec![sort_b_asc]).unwrap()])
+        .build();
+
+        // Format and verify ordering is NOT present
+        let display = format!(
+            "{}",
+            datafusion_physical_plan::display::VerboseDisplay(config.clone())
+        );
+        assert!(
+            !display.contains("output_ordering"),
+            "Expected no output_ordering for overlapping stats, but got: {display}"
+        );
+    }
+
+    /// Verify the display path and optimization path agree: orderings from
+    /// `eq_properties().oeq_class()` match what appears in `fmt_as()` output.
+    #[test]
+    fn test_display_ordering_matches_eq_properties() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+
+        let table_schema = TableSchema::new(Arc::clone(&schema), vec![]);
+        let file_source: Arc<dyn FileSource> =
+            Arc::new(MockSource::new(table_schema.clone()));
+
+        // Non-overlapping b statistics across two files
+        let file1 = partitioned_file_with_stats(
+            "file1",
+            vec![
+                (ScalarValue::Int32(Some(0)), ScalarValue::Int32(Some(100))),
+                (ScalarValue::Int32(Some(1)), ScalarValue::Int32(Some(10))),
+            ],
+        );
+        let file2 = partitioned_file_with_stats(
+            "file2",
+            vec![
+                (ScalarValue::Int32(Some(0)), ScalarValue::Int32(Some(100))),
+                (ScalarValue::Int32(Some(11)), ScalarValue::Int32(Some(20))),
+            ],
+        );
+
+        let sort_b_asc = PhysicalSortExpr::new(
+            Arc::new(Column::new("b", 1)),
+            arrow::compute::SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+        );
+
+        let config = FileScanConfigBuilder::new(
+            ObjectStoreUrl::parse("test:///").unwrap(),
+            Arc::clone(&file_source),
+        )
+        .with_file_groups(vec![FileGroup::new(vec![file1, file2])])
+        .with_output_ordering(vec![LexOrdering::new(vec![sort_b_asc]).unwrap()])
+        .build();
+
+        // Simple projection [a, b]
+        let exprs = ProjectionExprs::new(vec![
+            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a"),
+            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b"),
+        ]);
+
+        let data_source = config
+            .try_swapping_with_projection(&exprs)
+            .unwrap()
+            .expect("projection swap should succeed");
+        let new_config = data_source
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .expect("Expected FileScanConfig");
+
+        // Get orderings from eq_properties (what the optimizer sees)
+        let eq_props = new_config.eq_properties();
+        let oeq_orderings = eq_props.oeq_class();
+        assert!(
+            !oeq_orderings.is_empty(),
+            "eq_properties should report orderings for valid non-overlapping files"
+        );
+
+        // Get display output
+        let display = format!(
+            "{}",
+            datafusion_physical_plan::display::VerboseDisplay(new_config.clone())
+        );
+
+        // Verify they agree: each ordering from eq_properties should appear in display
+        for ordering in oeq_orderings.iter() {
+            let ordering_str = format!("{ordering}");
+            assert!(
+                display.contains(&ordering_str),
+                "Display should contain ordering '{ordering_str}', but got: {display}"
+            );
+        }
     }
 }
