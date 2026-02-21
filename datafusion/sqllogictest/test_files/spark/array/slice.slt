@@ -114,3 +114,21 @@ query ?
 SELECT slice([1, 2, 3, 4], CAST('2' AS INT), 4);
 ----
 [2, 3, 4]
+
+query ?
+SELECT slice(column1, column2, column3)
+FROM VALUES
+(NULL, 1, 2),
+(NULL, 1, -2),
+(NULL, -1, 2),
+(NULL, 0, 2);
+----
+NULL
+NULL
+NULL
+NULL
+
+query ?
+SELECT slice(slice(NULL, 1, 2), 1, 2)
+----
+NULL
