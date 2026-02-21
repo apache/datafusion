@@ -1490,24 +1490,24 @@ impl SortMergeJoinStream {
                 continue;
             }
 
-            let mut left_columns =
-                if let Some(range) = is_contiguous_range(&left_indices) {
-                    // When indices form a contiguous range (common for the streamed
-                    // side which advances sequentially), use zero-copy slice instead
-                    // of the O(n) take kernel.
-                    self.streamed_batch
-                        .batch
-                        .slice(range.start, range.len())
-                        .columns()
-                        .to_vec()
-                } else {
-                    self.streamed_batch
-                        .batch
-                        .columns()
-                        .iter()
-                        .map(|column| take(column, &left_indices, None))
-                        .collect::<Result<Vec<_>, ArrowError>>()?
-                };
+            let mut left_columns = if let Some(range) = is_contiguous_range(&left_indices)
+            {
+                // When indices form a contiguous range (common for the streamed
+                // side which advances sequentially), use zero-copy slice instead
+                // of the O(n) take kernel.
+                self.streamed_batch
+                    .batch
+                    .slice(range.start, range.len())
+                    .columns()
+                    .to_vec()
+            } else {
+                self.streamed_batch
+                    .batch
+                    .columns()
+                    .iter()
+                    .map(|column| take(column, &left_indices, None))
+                    .collect::<Result<Vec<_>, ArrowError>>()?
+            };
 
             // The row indices of joined buffered batch
             let right_indices: UInt64Array = chunk.buffered_indices.finish();
