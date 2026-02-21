@@ -648,6 +648,12 @@ impl ConstEvaluator {
             }
             Expr::Cast(Cast { expr, data_type })
             | Expr::TryCast(TryCast { expr, data_type }) => {
+                // Fast path: only struct targets need struct-specific foldability checks.
+                // For non-struct casts, avoid deriving the source type from an empty schema.
+                if !matches!(data_type, DataType::Struct(_)) {
+                    return true;
+                }
+
                 if let (
                     Ok(DataType::Struct(source_fields)),
                     DataType::Struct(target_fields),
@@ -5338,5 +5344,28 @@ mod tests {
             result, expr,
             "Struct cast with empty (0-row) array should remain unchanged"
         );
+    }
+
+    #[test]
+    fn test_cast_heavy_non_struct_chain_foldable() {
+        // Exercise a cast-heavy, non-struct simplification path to protect against
+        // planner regressions in cast eligibility checks.
+        let expr = (0..64).fold(
+            Expr::Literal(ScalarValue::Int32(Some(7)), None),
+            |acc, i| {
+                let target_type = if i % 2 == 0 {
+                    DataType::Int64
+                } else {
+                    DataType::Int32
+                };
+                Expr::Cast(Cast::new(Box::new(acc), target_type))
+            },
+        );
+
+        let simplifier =
+            ExprSimplifier::new(SimplifyContext::default().with_schema(test_schema()));
+        let result = simplifier.simplify(expr).unwrap();
+
+        assert_eq!(result, Expr::Literal(ScalarValue::Int32(Some(7)), None));
     }
 }
