@@ -383,6 +383,7 @@ mod parquet {
                 force_filter_selections: global_options.global.force_filter_selections,
                 data_pagesize_limit: global_options.global.data_pagesize_limit as u64,
                 write_batch_size: global_options.global.write_batch_size as u64,
+                dynamic_filter_pushdown: global_options.global.dynamic_filter_pushdown,
                 writer_version: global_options.global.writer_version.to_string(),
                 compression_opt: global_options.global.compression.map(|compression| {
                     parquet_options::CompressionOpt::Compression(compression)
@@ -475,6 +476,7 @@ mod parquet {
                 parquet_options::MetadataSizeHintOpt::MetadataSizeHint(size) => *size as usize,
             }),
             pushdown_filters: proto.pushdown_filters,
+            dynamic_filter_pushdown: proto.dynamic_filter_pushdown,
             reorder_filters: proto.reorder_filters,
             force_filter_selections: proto.force_filter_selections,
             data_pagesize_limit: proto.data_pagesize_limit as usize,

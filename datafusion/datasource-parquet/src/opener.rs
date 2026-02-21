@@ -92,6 +92,9 @@ pub(super) struct ParquetOpener {
     /// Should the filters be evaluated during the parquet scan using
     /// [`DataFusionArrowPredicate`](row_filter::DatafusionArrowPredicate)?
     pub pushdown_filters: bool,
+    /// Should dynamic filter expressions be included in the row-level filter?
+    /// If false, dynamic filters are stripped before building the RowFilter.
+    pub dynamic_filter_pushdown: bool,
     /// Should the filters be reordered to optimize the scan?
     pub reorder_filters: bool,
     /// Should we force the reader to use RowSelections for filtering
@@ -262,6 +265,7 @@ impl FileOpener for ParquetOpener {
 
         let reorder_predicates = self.reorder_filters;
         let pushdown_filters = self.pushdown_filters;
+        let dynamic_filter_pushdown = self.dynamic_filter_pushdown;
         let force_filter_selections = self.force_filter_selections;
         let coerce_int96 = self.coerce_int96;
         let enable_bloom_filter = self.enable_bloom_filter;
@@ -461,25 +465,36 @@ impl FileOpener for ParquetOpener {
 
             // Filter pushdown: evaluate predicates during scan
             if let Some(predicate) = pushdown_filters.then_some(predicate).flatten() {
-                let row_filter = row_filter::build_row_filter(
-                    &predicate,
-                    &physical_file_schema,
-                    builder.metadata(),
-                    reorder_predicates,
-                    &file_metrics,
-                );
-
-                match row_filter {
-                    Ok(Some(filter)) => {
-                        builder = builder.with_row_filter(filter);
-                    }
-                    Ok(None) => {}
-                    Err(e) => {
-                        debug!(
-                            "Ignoring error building row filter for '{predicate:?}': {e}"
-                        );
-                    }
+                // If dynamic filter row-level filtering is disabled, strip
+                // dynamic filter expressions before building the RowFilter.
+                // Dynamic filters will still be used for pruning (file, row
+                // group, page level) above.
+                let predicate = if !dynamic_filter_pushdown {
+                    strip_dynamic_filters(&predicate)
+                } else {
+                    Some(predicate)
                 };
+                if let Some(predicate) = predicate {
+                    let row_filter = row_filter::build_row_filter(
+                        &predicate,
+                        &physical_file_schema,
+                        builder.metadata(),
+                        reorder_predicates,
+                        &file_metrics,
+                    );
+
+                    match row_filter {
+                        Ok(Some(filter)) => {
+                            builder = builder.with_row_filter(filter);
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            debug!(
+                                "Ignoring error building row filter for '{predicate:?}': {e}"
+                            );
+                        }
+                    };
+                }
             };
             if force_filter_selections {
                 builder =
@@ -1000,6 +1015,43 @@ async fn load_page_index<T: AsyncFileReader>(
     }
 }
 
+/// Strips dynamic filter expressions from a predicate, replacing them with
+/// `lit(true)`, then simplifying the result.
+/// Returns `None` if the entire predicate becomes trivially true after stripping.
+fn strip_dynamic_filters(
+    predicate: &Arc<dyn PhysicalExpr>,
+) -> Option<Arc<dyn PhysicalExpr>> {
+    use datafusion_common::tree_node::{Transformed, TreeNode};
+    use datafusion_physical_expr::expressions::lit;
+
+    let result = Arc::clone(predicate)
+        .transform_up(|expr| {
+            // Check if this individual node is dynamic (has non-zero generation)
+            if expr.snapshot_generation() != 0 {
+                Ok(Transformed::yes(lit(true)))
+            } else {
+                Ok(Transformed::no(expr))
+            }
+        })
+        .expect("strip_dynamic_filters transform is infallible");
+
+    if !result.transformed {
+        // No dynamic filters found, return the predicate as-is
+        return Some(Arc::clone(predicate));
+    }
+
+    let expr = result.data;
+    // If the entire predicate simplified to a literal true, return None
+    if let Some(literal) = expr
+        .as_any()
+        .downcast_ref::<datafusion_physical_expr::expressions::Literal>()
+        && literal.value() == &ScalarValue::Boolean(Some(true))
+    {
+        return None;
+    }
+    Some(expr)
+}
+
 fn should_enable_page_index(
     enable_page_index: bool,
     page_pruning_predicate: &Option<Arc<PagePruningAccessPlanFilter>>,
@@ -1055,6 +1107,7 @@ mod test {
         metadata_size_hint: Option<usize>,
         metrics: ExecutionPlanMetricsSet,
         pushdown_filters: bool,
+        dynamic_filter_pushdown: bool,
         reorder_filters: bool,
         force_filter_selections: bool,
         enable_page_index: bool,
@@ -1081,6 +1134,7 @@ mod test {
                 metadata_size_hint: None,
                 metrics: ExecutionPlanMetricsSet::new(),
                 pushdown_filters: false,
+                dynamic_filter_pushdown: false,
                 reorder_filters: false,
                 force_filter_selections: false,
                 enable_page_index: false,
@@ -1184,6 +1238,7 @@ mod test {
                     DefaultParquetFileReaderFactory::new(store),
                 ),
                 pushdown_filters: self.pushdown_filters,
+                dynamic_filter_pushdown: self.dynamic_filter_pushdown,
                 reorder_filters: self.reorder_filters,
                 force_filter_selections: self.force_filter_selections,
                 enable_page_index: self.enable_page_index,
