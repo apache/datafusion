@@ -20,11 +20,16 @@
 //! joined output by given join type and other options.
 
 use std::any::Any;
+use std::collections::HashSet;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
 use crate::execution_plan::{EmissionType, boundedness_from_children};
 use crate::expressions::PhysicalSortExpr;
+use crate::filter_pushdown::{
+    ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
+    FilterPushdownPropagation,
+};
 use crate::joins::sort_merge_join::metrics::SortMergeJoinMetrics;
 use crate::joins::sort_merge_join::stream::SortMergeJoinStream;
 use crate::joins::utils::{
@@ -44,6 +49,7 @@ use crate::{
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::SchemaRef;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::{
     JoinSide, JoinType, NullEquality, Result, assert_eq_or_internal_err, internal_err,
     plan_err,
@@ -51,7 +57,7 @@ use datafusion_common::{
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
-use datafusion_physical_expr_common::physical_expr::{PhysicalExprRef, fmt_sql};
+use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, PhysicalExprRef, fmt_sql};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
 
 /// Join execution plan that executes equi-join predicates on multiple partitions using Sort-Merge
@@ -593,5 +599,57 @@ impl ExecutionPlan for SortMergeJoinExec {
             self.sort_options.clone(),
             self.null_equality,
         )?)))
+    }
+
+    fn gather_filters_for_pushdown(
+        &self,
+        _phase: FilterPushdownPhase,
+        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        _config: &ConfigOptions,
+    ) -> Result<FilterDescription> {
+        // Only support Inner joins for now — other join types have complex
+        // column routing semantics (e.g. nullable sides, semi/anti output
+        // restrictions) that require careful handling.
+        if self.join_type != JoinType::Inner {
+            return Ok(FilterDescription::all_unsupported(
+                &parent_filters,
+                &self.children(),
+            ));
+        }
+
+        // For Inner joins, the output schema is [left_cols..., right_cols...].
+        // Build allowed index sets for each side so that
+        // `from_child_with_allowed_indices` can route each parent filter to
+        // the correct child based on column references.
+        let left_col_count = self.left.schema().fields().len();
+        let total_col_count = self.schema.fields().len();
+
+        let left_allowed: HashSet<usize> = (0..left_col_count).collect();
+        let right_allowed: HashSet<usize> = (left_col_count..total_col_count).collect();
+
+        let left_child = ChildFilterDescription::from_child_with_allowed_indices(
+            &parent_filters,
+            left_allowed,
+            &self.left,
+        )?;
+
+        let right_child = ChildFilterDescription::from_child_with_allowed_indices(
+            &parent_filters,
+            right_allowed,
+            &self.right,
+        )?;
+
+        Ok(FilterDescription::new()
+            .with_child(left_child)
+            .with_child(right_child))
+    }
+
+    fn handle_child_pushdown_result(
+        &self,
+        _phase: FilterPushdownPhase,
+        child_pushdown_result: ChildPushdownResult,
+        _config: &ConfigOptions,
+    ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+        Ok(FilterPushdownPropagation::if_any(child_pushdown_result))
     }
 }

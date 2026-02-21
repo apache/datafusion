@@ -455,6 +455,317 @@ async fn test_static_filter_pushdown_through_hash_join() {
     );
 }
 
+// ==== SortMergeJoin Filter Pushdown tests ====
+
+/// Helper to create a SortMergeJoinExec with the given schemas and join type.
+/// Uses default SortOptions (ascending, nulls last) and NullEquality::NullEqualsNothing.
+fn smj_join(
+    left: Arc<dyn ExecutionPlan>,
+    right: Arc<dyn ExecutionPlan>,
+    on: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>,
+    join_type: datafusion_common::JoinType,
+) -> Arc<dyn ExecutionPlan> {
+    use datafusion_physical_plan::joins::SortMergeJoinExec;
+    let sort_options = vec![SortOptions::default(); on.len()];
+    Arc::new(
+        SortMergeJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            join_type,
+            sort_options,
+            datafusion_common::NullEquality::NullEqualsNothing,
+        )
+        .unwrap(),
+    )
+}
+
+/// Tests static filter pushdown through SortMergeJoinExec for Inner joins.
+/// Verifies that:
+/// - Left-side filters are pushed down to the left child
+/// - Right-side filters are pushed down to the right child
+/// - Cross-side filters (referencing both sides) remain as FilterExec
+/// Also tests that non-Inner join types (Left) reject pushdown.
+#[test]
+fn test_static_filter_pushdown_through_sort_merge_join() {
+    use datafusion_common::JoinType;
+
+    let left_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Utf8, false),
+        Field::new("c", DataType::Float64, false),
+    ]));
+    let left_scan = TestScanBuilder::new(Arc::clone(&left_schema))
+        .with_support(true)
+        .build();
+
+    let right_schema = Arc::new(Schema::new(vec![
+        Field::new("d", DataType::Utf8, false),
+        Field::new("e", DataType::Utf8, false),
+        Field::new("f", DataType::Float64, false),
+    ]));
+    let right_scan = TestScanBuilder::new(Arc::clone(&right_schema))
+        .with_support(true)
+        .build();
+
+    // Inner join on a = d
+    let on = vec![(
+        col("a", &left_schema).unwrap(),
+        col("d", &right_schema).unwrap(),
+    )];
+    let join = smj_join(left_scan, right_scan, on, JoinType::Inner);
+
+    let join_schema = join.schema();
+
+    // Filter on left side column: a = 'aa'
+    let left_filter = col_lit_predicate("a", "aa", &join_schema);
+    // Filter on right side column: e = 'ba'
+    let right_filter = col_lit_predicate("e", "ba", &join_schema);
+    // Filter that references both sides: a = d (should not be pushed down)
+    let cross_filter = Arc::new(BinaryExpr::new(
+        col("a", &join_schema).unwrap(),
+        Operator::Eq,
+        col("d", &join_schema).unwrap(),
+    )) as Arc<dyn PhysicalExpr>;
+
+    let filter =
+        Arc::new(FilterExec::try_new(left_filter, Arc::clone(&join) as _).unwrap());
+    let filter = Arc::new(FilterExec::try_new(right_filter, filter).unwrap());
+    let plan = Arc::new(FilterExec::try_new(cross_filter, filter).unwrap())
+        as Arc<dyn ExecutionPlan>;
+
+    // Both left and right single-side filters are pushed down; cross filter stays
+    insta::assert_snapshot!(
+        OptimizationTest::new(Arc::clone(&plan), FilterPushdown::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: a@0 = d@3
+        -   FilterExec: e@4 = ba
+        -     FilterExec: a@0 = aa
+        -       SortMergeJoinExec: join_type=Inner, on=[(a@0, d@0)]
+        -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+        -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, e, f], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - FilterExec: a@0 = d@3
+          -   SortMergeJoinExec: join_type=Inner, on=[(a@0, d@0)]
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = aa
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, e, f], file_type=test, pushdown_supported=true, predicate=e@1 = ba
+    "
+    );
+
+    // Test Left join: all filters should remain as FilterExec since we only
+    // support Inner joins for now.
+    let left_scan = TestScanBuilder::new(Arc::clone(&left_schema))
+        .with_support(true)
+        .build();
+    let right_scan = TestScanBuilder::new(Arc::clone(&right_schema))
+        .with_support(true)
+        .build();
+    let on = vec![(
+        col("a", &left_schema).unwrap(),
+        col("d", &right_schema).unwrap(),
+    )];
+    let join = smj_join(left_scan, right_scan, on, JoinType::Left);
+
+    let join_schema = join.schema();
+    let left_filter = col_lit_predicate("a", "aa", &join_schema);
+    let right_filter = col_lit_predicate("e", "ba", &join_schema);
+    let filter =
+        Arc::new(FilterExec::try_new(left_filter, Arc::clone(&join) as _).unwrap());
+    let plan = Arc::new(FilterExec::try_new(right_filter, filter).unwrap())
+        as Arc<dyn ExecutionPlan>;
+
+    // Neither filter is pushed into the scans because Left join is not yet supported.
+    // The two adjacent FilterExec nodes get collapsed into a single combined predicate.
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: e@4 = ba
+        -   FilterExec: a@0 = aa
+        -     SortMergeJoinExec: join_type=Left, on=[(a@0, d@0)]
+        -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+        -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, e, f], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - FilterExec: e@4 = ba AND a@0 = aa
+          -   SortMergeJoinExec: join_type=Left, on=[(a@0, d@0)]
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, e, f], file_type=test, pushdown_supported=true
+    "
+    );
+}
+
+/// Tests that TopK dynamic filters pass through SortMergeJoinExec to reach scan nodes.
+/// This is the primary motivation for the feature: enabling TopK sort optimizations
+/// when the query plan uses sort-merge joins.
+#[tokio::test]
+async fn test_dynamic_filter_pushdown_through_sort_merge_join_with_topk() {
+    use datafusion_common::JoinType;
+
+    let left_batches = vec![
+        record_batch!(
+            ("a", Utf8, ["aa", "ab"]),
+            ("b", Utf8, ["ba", "bb"]),
+            ("c", Float64, [1.0, 2.0])
+        )
+        .unwrap(),
+    ];
+    let left_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Utf8, false),
+        Field::new("c", DataType::Float64, false),
+    ]));
+    let left_scan = TestScanBuilder::new(Arc::clone(&left_schema))
+        .with_support(true)
+        .with_batches(left_batches)
+        .build();
+
+    let right_batches = vec![
+        record_batch!(
+            ("d", Utf8, ["aa", "ab", "ac", "ad"]),
+            ("e", Utf8, ["ba", "bb", "bc", "bd"]),
+            ("f", Float64, [1.0, 2.0, 3.0, 4.0])
+        )
+        .unwrap(),
+    ];
+    let right_schema = Arc::new(Schema::new(vec![
+        Field::new("d", DataType::Utf8, false),
+        Field::new("e", DataType::Utf8, false),
+        Field::new("f", DataType::Float64, false),
+    ]));
+    let right_scan = TestScanBuilder::new(Arc::clone(&right_schema))
+        .with_support(true)
+        .with_batches(right_batches)
+        .build();
+
+    let on = vec![(
+        col("a", &left_schema).unwrap(),
+        col("d", &right_schema).unwrap(),
+    )];
+    let join = smj_join(left_scan, right_scan, on, JoinType::Inner);
+
+    let join_schema = join.schema();
+
+    // Add a TopK SortExec (sort with fetch) on a right-side column
+    let sort_expr =
+        PhysicalSortExpr::new(col("e", &join_schema).unwrap(), SortOptions::default());
+    let plan = Arc::new(
+        SortExec::new(LexOrdering::new(vec![sort_expr]).unwrap(), join)
+            .with_fetch(Some(2)),
+    ) as Arc<dyn ExecutionPlan>;
+
+    let mut config = ConfigOptions::default();
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+    config.execution.parquet.pushdown_filters = true;
+
+    // Apply post-optimization filter pushdown (where dynamic filters live)
+    let plan = FilterPushdown::new_post_optimization()
+        .optimize(Arc::clone(&plan), &config)
+        .unwrap();
+
+    // The TopK dynamic filter should pass through the SMJ to the right scan
+    insta::assert_snapshot!(
+        format_plan_for_test(&plan),
+        @r"
+    - SortExec: TopK(fetch=2), expr=[e@4 ASC], preserve_partitioning=[false]
+    -   SortMergeJoinExec: join_type=Inner, on=[(a@0, d@0)]
+    -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+    -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, e, f], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ empty ]
+    "
+    );
+
+    // Execute the plan and check that the dynamic filter gets populated
+    let session_ctx = SessionContext::new_with_config(SessionConfig::new());
+    session_ctx.register_object_store(
+        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
+        Arc::new(InMemory::new()),
+    );
+    let state = session_ctx.state();
+    let task_ctx = state.task_ctx();
+    let mut stream = plan.execute(0, Arc::clone(&task_ctx)).unwrap();
+    // Iterate one batch to trigger dynamic filter population
+    stream.next().await.unwrap().unwrap();
+
+    // After execution, the dynamic filter should be populated with actual bounds
+    insta::assert_snapshot!(
+        format_plan_for_test(&plan),
+        @r"
+    - SortExec: TopK(fetch=2), expr=[e@4 ASC], preserve_partitioning=[false], filter=[e@4 IS NULL OR e@4 < bb]
+    -   SortMergeJoinExec: join_type=Inner, on=[(a@0, d@0)]
+    -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+    -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, e, f], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ e@1 IS NULL OR e@1 < bb ]
+    "
+    );
+}
+
+/// Tests filter pushdown for all non-Inner join types to ensure they correctly
+/// reject pushdown (conservative behavior).
+#[test]
+fn test_smj_filter_pushdown_non_inner_unsupported() {
+    use datafusion_common::JoinType;
+
+    let left_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Utf8, false),
+    ]));
+    let right_schema = Arc::new(Schema::new(vec![
+        Field::new("c", DataType::Utf8, false),
+        Field::new("d", DataType::Utf8, false),
+    ]));
+
+    // Test each non-Inner join type that SMJ supports
+    for join_type in [
+        JoinType::Left,
+        JoinType::Right,
+        JoinType::Full,
+        JoinType::LeftSemi,
+        JoinType::LeftAnti,
+        JoinType::RightSemi,
+        JoinType::RightAnti,
+    ] {
+        let left_scan = TestScanBuilder::new(Arc::clone(&left_schema))
+            .with_support(true)
+            .build();
+        let right_scan = TestScanBuilder::new(Arc::clone(&right_schema))
+            .with_support(true)
+            .build();
+        let on = vec![(
+            col("a", &left_schema).unwrap(),
+            col("c", &right_schema).unwrap(),
+        )];
+        let join = smj_join(left_scan, right_scan, on, join_type);
+
+        let join_schema = join.schema();
+        // Pick a column from the join output; for semi/anti joins only
+        // one side's columns are present
+        let filter_col = match join_type {
+            JoinType::RightSemi | JoinType::RightAnti => "c",
+            _ => "a",
+        };
+        let filter_pred = col_lit_predicate(filter_col, "x", &join_schema);
+        let plan = Arc::new(FilterExec::try_new(filter_pred, join).unwrap())
+            as Arc<dyn ExecutionPlan>;
+
+        let result = OptimizationTest::new(plan, FilterPushdown::new(), true);
+        let output = format!("{result}");
+        // The filter should remain as a FilterExec (not pushed into the scan)
+        assert!(
+            output.contains("FilterExec"),
+            "Expected FilterExec to remain for {join_type:?} join, got:\n{output}"
+        );
+        // The scan should NOT have a predicate
+        assert!(
+            !output.contains("predicate="),
+            "Expected no predicate pushdown for {join_type:?} join, got:\n{output}"
+        );
+    }
+}
+
 #[test]
 fn test_filter_collapse() {
     // filter should be pushed down into the parquet scan with two filters
