@@ -92,6 +92,10 @@ pub struct RunOpt {
     /// True by default.
     #[arg(short = 'j', long = "prefer_hash_join", default_value = "true")]
     prefer_hash_join: BoolDefaultTrue,
+
+    /// How many bytes to buffer on the probe side of hash joins.
+    #[arg(long, default_value = "0")]
+    hash_join_buffering_capacity: usize,
 }
 
 fn map_query_id_to_str(query_id: usize) -> &'static str {
@@ -306,6 +310,8 @@ impl RunOpt {
             .config()?
             .with_collect_statistics(!self.disable_statistics);
         config.options_mut().optimizer.prefer_hash_join = self.prefer_hash_join;
+        config.options_mut().execution.hash_join_buffering_capacity =
+            self.hash_join_buffering_capacity;
         let rt_builder = self.common.runtime_env_builder()?;
         let ctx = SessionContext::new_with_config_rt(config, rt_builder.build_arc()?);
 
@@ -527,6 +533,7 @@ mod tests {
             output_path: None,
             disable_statistics: false,
             prefer_hash_join: true,
+            hash_join_buffering_capacity: 0,
         };
         opt.register_tables(&ctx).await?;
         let queries = get_query_sql(map_query_id_to_str(query))?;
@@ -563,6 +570,7 @@ mod tests {
             output_path: None,
             disable_statistics: false,
             prefer_hash_join: true,
+            hash_join_buffering_capacity: 0,
         };
         opt.register_tables(&ctx).await?;
         let queries = get_query_sql(map_query_id_to_str(query))?;
