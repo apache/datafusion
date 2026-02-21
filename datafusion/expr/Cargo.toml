@@ -64,5 +64,10 @@ sqlparser = { workspace = true, optional = true }
 
 [dev-dependencies]
 ctor = { workspace = true }
+datafusion-macros = { workspace = true }
 env_logger = { workspace = true }
 insta = { workspace = true }
+
+[package.metadata.cargo-machete]
+# See: https://github.com/bnjbvr/cargo-machete/issues/163
+ignored = ["datafusion-macros"]

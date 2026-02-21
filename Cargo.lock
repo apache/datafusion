@@ -2160,6 +2160,7 @@ dependencies = [
  "datafusion-expr-common",
  "datafusion-functions-aggregate-common",
  "datafusion-functions-window-common",
+ "datafusion-macros",
  "datafusion-physical-expr-common",
  "env_logger",
  "indexmap 2.13.0",
