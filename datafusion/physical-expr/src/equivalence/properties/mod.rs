@@ -207,8 +207,13 @@ impl EquivalenceProperties {
     }
 
     /// Adds constraints to the properties.
-    pub fn with_constraints(mut self, constraints: Constraints) -> Self {
+    pub fn set_constraints(&mut self, constraints: Constraints) {
         self.constraints = constraints;
+    }
+
+    /// Adds constraints to the properties.
+    pub fn with_constraints(mut self, constraints: Constraints) -> Self {
+        self.set_constraints(constraints);
         self
     }
 

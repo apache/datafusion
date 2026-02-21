@@ -44,7 +44,7 @@ pub struct EmptyExec {
     schema: SchemaRef,
     /// Number of partitions
     partitions: usize,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl EmptyExec {
@@ -54,7 +54,7 @@ impl EmptyExec {
         EmptyExec {
             schema,
             partitions: 1,
-            cache,
+            cache: Arc::new(cache),
         }
     }
 
@@ -63,7 +63,7 @@ impl EmptyExec {
         self.partitions = partitions;
         // Changing partitions may invalidate output partitioning, so update it:
         let output_partitioning = Self::output_partitioning_helper(self.partitions);
-        self.cache = self.cache.with_partitioning(output_partitioning);
+        Arc::make_mut(&mut self.cache).partitioning = output_partitioning;
         self
     }
 
@@ -115,7 +115,7 @@ impl ExecutionPlan for EmptyExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 

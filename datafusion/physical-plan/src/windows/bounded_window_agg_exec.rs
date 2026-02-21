@@ -36,7 +36,7 @@ use crate::windows::{
 use crate::{
     ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
     ExecutionPlanProperties, InputOrderMode, PlanProperties, RecordBatchStream,
-    SendableRecordBatchStream, Statistics, WindowExpr,
+    SendableRecordBatchStream, Statistics, WindowExpr, check_if_same_properties,
 };
 
 use arrow::compute::take_record_batch;
@@ -93,7 +93,7 @@ pub struct BoundedWindowAggExec {
     // See `get_ordered_partition_by_indices` for more details.
     ordered_partition_by_indices: Vec<usize>,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
     /// If `can_rerepartition` is false, partition_keys is always empty.
     can_repartition: bool,
 }
@@ -134,7 +134,7 @@ impl BoundedWindowAggExec {
             metrics: ExecutionPlanMetricsSet::new(),
             input_order_mode,
             ordered_partition_by_indices,
-            cache,
+            cache: Arc::new(cache),
             can_repartition,
         })
     }
@@ -248,6 +248,17 @@ impl BoundedWindowAggExec {
             total_byte_size: Precision::Absent,
         })
     }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(self)
+        }
+    }
 }
 
 impl DisplayAs for BoundedWindowAggExec {
@@ -304,7 +315,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -339,6 +350,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        check_if_same_properties!(self, children);
         Ok(Arc::new(BoundedWindowAggExec::try_new(
             self.window_expr.clone(),
             Arc::clone(&children[0]),

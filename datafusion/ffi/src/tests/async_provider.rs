@@ -162,7 +162,7 @@ impl Drop for AsyncTableProvider {
 
 #[derive(Debug)]
 struct AsyncTestExecutionPlan {
-    properties: datafusion_physical_plan::PlanProperties,
+    properties: Arc<datafusion_physical_plan::PlanProperties>,
     batch_request: mpsc::Sender<bool>,
     batch_receiver: broadcast::Receiver<Option<RecordBatch>>,
 }
@@ -173,12 +173,12 @@ impl AsyncTestExecutionPlan {
         batch_receiver: broadcast::Receiver<Option<RecordBatch>>,
     ) -> Self {
         Self {
-            properties: datafusion_physical_plan::PlanProperties::new(
+            properties: Arc::new(datafusion_physical_plan::PlanProperties::new(
                 EquivalenceProperties::new(super::create_test_schema()),
                 Partitioning::UnknownPartitioning(3),
                 datafusion_physical_plan::execution_plan::EmissionType::Incremental,
                 datafusion_physical_plan::execution_plan::Boundedness::Bounded,
-            ),
+            )),
             batch_request,
             batch_receiver,
         }
@@ -194,7 +194,7 @@ impl ExecutionPlan for AsyncTestExecutionPlan {
         self
     }
 
-    fn properties(&self) -> &datafusion_physical_plan::PlanProperties {
+    fn properties(&self) -> &Arc<datafusion_physical_plan::PlanProperties> {
         &self.properties
     }
 

@@ -618,7 +618,7 @@ pub struct SampleExec {
     upper_bound: f64,
     seed: u64,
     metrics: ExecutionPlanMetricsSet,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl SampleExec {
@@ -656,7 +656,7 @@ impl SampleExec {
             upper_bound,
             seed,
             metrics: ExecutionPlanMetricsSet::new(),
-            cache,
+            cache: Arc::new(cache),
         })
     }
 
@@ -686,7 +686,7 @@ impl ExecutionPlan for SampleExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 

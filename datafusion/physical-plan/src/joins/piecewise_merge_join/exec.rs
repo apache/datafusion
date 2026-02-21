@@ -51,7 +51,9 @@ use crate::joins::piecewise_merge_join::utils::{
 };
 use crate::joins::utils::asymmetric_join_output_partitioning;
 use crate::metrics::MetricsSet;
-use crate::{DisplayAs, DisplayFormatType, ExecutionPlanProperties};
+use crate::{
+    DisplayAs, DisplayFormatType, ExecutionPlanProperties, check_if_same_properties,
+};
 use crate::{
     ExecutionPlan, PlanProperties,
     joins::{
@@ -86,7 +88,7 @@ use crate::{
 /// Both sides are sorted so that we can iterate from index 0 to the end on each side.  This ordering ensures
 /// that when we find the first matching pair of rows, we can emit the current stream row joined with all remaining
 /// probe rows from the match position onward, without rescanning earlier probe rows.
-///  
+///
 /// For `<` and `<=` operators, both inputs are sorted in **descending** order, while for `>` and `>=` operators
 /// they are sorted in **ascending** order. This choice ensures that the pointer on the buffered side can advance
 /// monotonically as we stream new batches from the stream side.
@@ -129,34 +131,34 @@ use crate::{
 ///
 /// Processing Row 1:
 ///
-///       Sorted Buffered Side                                         Sorted Streamed Side          
-///       ┌──────────────────┐                                         ┌──────────────────┐         
-///     1 │       100        │                                       1 │       100        │        
-///       ├──────────────────┤                                         ├──────────────────┤         
-///     2 │       200        │ ─┐                                    2 │       200        │        
-///       ├──────────────────┤  │  For row 1 on streamed side with     ├──────────────────┤         
-///     3 │       200        │  │  value 100, we emit rows 2 - 5.    3 │       500        │       
+///       Sorted Buffered Side                                         Sorted Streamed Side
+///       ┌──────────────────┐                                         ┌──────────────────┐
+///     1 │       100        │                                       1 │       100        │
+///       ├──────────────────┤                                         ├──────────────────┤
+///     2 │       200        │ ─┐                                    2 │       200        │
+///       ├──────────────────┤  │  For row 1 on streamed side with     ├──────────────────┤
+///     3 │       200        │  │  value 100, we emit rows 2 - 5.    3 │       500        │
 ///       ├──────────────────┤  │  as matches when the operator is     └──────────────────┘
 ///     4 │       300        │  │  `Operator::Lt` (<) Emitting all
 ///       ├──────────────────┤  │  rows after the first match (row
 ///     5 │       400        │ ─┘  2 buffered side; 100 < 200)
-///       └──────────────────┘     
+///       └──────────────────┘
 ///
 /// Processing Row 2:
 ///   By sorting the streamed side we know
 ///
-///       Sorted Buffered Side                                         Sorted Streamed Side          
-///       ┌──────────────────┐                                         ┌──────────────────┐         
-///     1 │       100        │                                       1 │       100        │        
-///       ├──────────────────┤                                         ├──────────────────┤         
-///     2 │       200        │ <- Start here when probing for the    2 │       200        │        
-///       ├──────────────────┤    streamed side row 2.                 ├──────────────────┤         
-///     3 │       200        │                                       3 │       500        │       
+///       Sorted Buffered Side                                         Sorted Streamed Side
+///       ┌──────────────────┐                                         ┌──────────────────┐
+///     1 │       100        │                                       1 │       100        │
+///       ├──────────────────┤                                         ├──────────────────┤
+///     2 │       200        │ <- Start here when probing for the    2 │       200        │
+///       ├──────────────────┤    streamed side row 2.                 ├──────────────────┤
+///     3 │       200        │                                       3 │       500        │
 ///       ├──────────────────┤                                         └──────────────────┘
-///     4 │       300        │  
-///       ├──────────────────┤  
+///     4 │       300        │
+///       ├──────────────────┤
 ///     5 │       400        │
-///       └──────────────────┘     
+///       └──────────────────┘
 /// ```
 ///
 /// ## Existence Joins (Semi, Anti, Mark)
@@ -202,10 +204,10 @@ use crate::{
 ///          1 │       100        │        1 │       500        │
 ///            ├──────────────────┤          ├──────────────────┤
 ///          2 │       200        │        2 │       200        │
-///            ├──────────────────┤          ├──────────────────┤    
+///            ├──────────────────┤          ├──────────────────┤
 ///          3 │       200        │        3 │       300        │
 ///            ├──────────────────┤          └──────────────────┘
-///          4 │       300        │ ─┐       
+///          4 │       300        │ ─┐
 ///            ├──────────────────┤  | We emit matches for row 4 - 5
 ///          5 │       400        │ ─┘ on the buffered side.
 ///            └──────────────────┘
@@ -236,11 +238,11 @@ use crate::{
 ///
 /// # Mark Join:
 /// Sorts the probe side, then computes the min/max range of the probe keys and scans the buffered side only
-/// within that range.  
+/// within that range.
 ///   Complexity: `O(|S| + scan(R[range]))`.
 ///
 /// ## Nested Loop Join
-/// Compares every row from `S` with every row from `R`.  
+/// Compares every row from `S` with every row from `R`.
 ///   Complexity: `O(|S| * |R|)`.
 ///
 /// ## Nested Loop Join
@@ -273,13 +275,12 @@ pub struct PiecewiseMergeJoinExec {
     left_child_plan_required_order: LexOrdering,
     /// The right sort order, descending for `<`, `<=` operations + ascending for `>`, `>=` operations
     /// Unsorted for mark joins
-    #[expect(dead_code)]
     right_batch_required_orders: LexOrdering,
 
     /// This determines the sort order of all join columns used in sorting the stream and buffered execution plans.
     sort_options: SortOptions,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
     /// Number of partitions to process
     num_partitions: usize,
 }
@@ -373,7 +374,7 @@ impl PiecewiseMergeJoinExec {
             left_child_plan_required_order,
             right_batch_required_orders,
             sort_options,
-            cache,
+            cache: Arc::new(cache),
             num_partitions,
         })
     }
@@ -466,6 +467,31 @@ impl PiecewiseMergeJoinExec {
     pub fn swap_inputs(&self) -> Result<Arc<dyn ExecutionPlan>> {
         todo!()
     }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        let buffered = children.swap_remove(0);
+        let streamed = children.swap_remove(0);
+        Self {
+            buffered,
+            streamed,
+            on: self.on.clone(),
+            operator: self.operator,
+            join_type: self.join_type,
+            schema: Arc::clone(&self.schema),
+            left_child_plan_required_order: self.left_child_plan_required_order.clone(),
+            right_batch_required_orders: self.right_batch_required_orders.clone(),
+            sort_options: self.sort_options,
+            cache: Arc::clone(&self.cache),
+            num_partitions: self.num_partitions,
+
+            // Re-set state.
+            metrics: ExecutionPlanMetricsSet::new(),
+            buffered_fut: Default::default(),
+        }
+    }
 }
 
 impl ExecutionPlan for PiecewiseMergeJoinExec {
@@ -477,7 +503,7 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -511,6 +537,7 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        check_if_same_properties!(self, children);
         match &children[..] {
             [left, right] => Ok(Arc::new(PiecewiseMergeJoinExec::try_new(
                 Arc::clone(left),
@@ -525,6 +552,13 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
                 children.len()
             ),
         }
+    }
+
+    fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(self.with_new_children_and_same_properties(vec![
+            Arc::clone(&self.buffered),
+            Arc::clone(&self.streamed),
+        ])))
     }
 
     fn execute(

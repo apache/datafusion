@@ -89,7 +89,7 @@ pub struct DataSinkExec {
     count_schema: SchemaRef,
     /// Optional required sort order for output data.
     sort_order: Option<LexRequirement>,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl Debug for DataSinkExec {
@@ -117,7 +117,7 @@ impl DataSinkExec {
             sink,
             count_schema: make_count_schema(),
             sort_order,
-            cache,
+            cache: Arc::new(cache),
         }
     }
 
@@ -174,7 +174,7 @@ impl ExecutionPlan for DataSinkExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
