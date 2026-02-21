@@ -23,7 +23,7 @@ use arrow::array::{
     cast::AsArray,
 };
 use arrow::datatypes::{DataType, i256};
-use datafusion_common::Result;
+use datafusion_common::{Result, internal_err};
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::EmitTo;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::group_index_operations::{
@@ -31,7 +31,7 @@ use datafusion_functions_aggregate_common::aggregate::groups_accumulator::group_
 };
 use half::f16;
 use hashbrown::hash_table::HashTable;
-use std::collections::VecDeque;
+use std::{collections::VecDeque, mem};
 use std::mem::size_of;
 use std::sync::Arc;
 
@@ -125,7 +125,7 @@ impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
             map: HashTable::with_capacity(128),
             values,
             null_group: None,
-           random_state: crate::aggregates::AGGREGATION_HASH_SEED,
+            random_state: crate::aggregates::AGGREGATION_HASH_SEED,
             block_size: None,
         }
     }
@@ -145,13 +145,13 @@ where
                     group_values.push_back(new_block);
                 }
             };
-            self.get_or_create_groups::<_, BlockedGroupIndexOperations>(
+            self.get_or_create_groups_internal::<_, BlockedGroupIndexOperations>(
                 cols,
                 groups,
                 before_add_group,
             )
         } else {
-            self.get_or_create_groups::<_, FlatGroupIndexOperations>(
+            self.get_or_create_groups_internal::<_, FlatGroupIndexOperations>(
                 cols,
                 groups,
                 |_: &mut VecDeque<Vec<T::Native>>| {},
@@ -177,114 +177,11 @@ where
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
-        fn build_primitive<T: ArrowPrimitiveType>(
-            values: Vec<T::Native>,
-            null_idx: Option<usize>,
-        ) -> PrimitiveArray<T> {
-            let nulls = null_idx.map(|null_idx| {
-                let mut buffer = NullBufferBuilder::new(values.len());
-                buffer.append_n_non_nulls(null_idx);
-                buffer.append_null();
-                buffer.append_n_non_nulls(values.len() - null_idx - 1);
-                // NOTE: The inner builder must be constructed as there is at least one null
-                buffer.finish().unwrap()
-            });
-            PrimitiveArray::<T>::new(values.into(), nulls)
+        if self.block_size.is_some() {
+            self.emit_groups_internal::<BlockedGroupIndexOperations>(emit_to)
+        } else {
+            self.emit_groups_internal::<FlatGroupIndexOperations>(emit_to)
         }
-
-        let array: PrimitiveArray<T> = match emit_to {
-            // ===============================================
-            // Emitting in flat mode
-            // ===============================================
-            EmitTo::All => {
-                assert!(
-                    self.block_size.is_none(),
-                    "only support EmitTo::All in flat mode"
-                );
-
-                self.map.clear();
-                build_primitive(
-                    std::mem::take(self.values.back_mut().unwrap()),
-                    self.null_group.take().map(|idx| idx as usize),
-                )
-            }
-
-            EmitTo::First(n) => {
-                self.map.retain(|entry| {
-                    assert!(
-                        self.block_size.is_none(),
-                        "only support EmitTo::First in flat mode"
-                    );
-
-                    // Decrement group index by n
-                    let group_idx = entry.0;
-                    match group_idx.checked_sub(n) {
-                        // Group index was >= n, shift value down
-                        Some(sub) => {
-                            entry.0 = sub;
-                            true
-                        }
-                        // Group index was < n, so remove from table
-                        None => false,
-                    }
-                });
-
-                let null_group = match &mut self.null_group {
-                    Some(v) if *v >= n => {
-                        *v -= n;
-                        None
-                    }
-                    Some(_) => self.null_group.take(),
-                    None => None,
-                };
-
-                let single_block = self.values.back_mut().unwrap();
-                let mut split = single_block.split_off(n as usize);
-                std::mem::swap(single_block, &mut split);
-                build_primitive(split, null_group.map(|idx| idx as usize))
-            }
-
-            // ===============================================
-            // Emitting in blocked mode
-            // ===============================================
-            EmitTo::NextBlock => {
-                assert!(
-                    self.block_size.is_some(),
-                    "only support EmitTo::Next in blocked group values"
-                );
-
-                // Similar as `EmitTo:All`, we will clear the old index infos both
-                // in `map` and `null_group`
-                self.map.clear();
-
-                let null_block_pair_opt = self.null_group.map(|packed_idx| {
-                    (
-                        BlockedGroupIndexOperations::get_block_id(packed_idx),
-                        BlockedGroupIndexOperations::get_block_offset(packed_idx),
-                    )
-                });
-                let null_idx = match null_block_pair_opt {
-                    Some((blk_id, blk_offset)) if blk_id > 0 => {
-                        let new_blk_id = blk_id - 1;
-                        let new_packed_idx = BlockedGroupIndexOperations::pack_index(
-                            new_blk_id, blk_offset,
-                        );
-                        self.null_group = Some(new_packed_idx);
-                        None
-                    }
-                    Some((_, blk_offset)) => {
-                        self.null_group = None;
-                        Some(blk_offset as usize)
-                    }
-                    None => None,
-                };
-
-                let emit_blk = self.values.pop_front().unwrap();
-                build_primitive(emit_blk, null_idx)
-            }
-        };
-
-        Ok(vec![Arc::new(array.with_data_type(self.data_type.clone()))])
     }
 
     fn clear_shrink(&mut self, num_rows: usize) {
@@ -325,7 +222,7 @@ impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T>
 where
     T::Native: HashValue,
 {
-    fn get_or_create_groups<F, O>(
+    fn get_or_create_groups_internal<F, O>(
         &mut self,
         cols: &[ArrayRef],
         groups: &mut Vec<usize>,
@@ -339,7 +236,7 @@ where
         groups.clear();
 
         for v in cols[0].as_primitive::<T>() {
-            let group_index = match v {
+            let packed_index = match v {
                 None => *self.null_group.get_or_insert_with(|| {
                     // Actions before add new group like checking if room is enough
                     before_add_group(&mut self.values);
@@ -353,15 +250,16 @@ where
 
                     // Get group index and finish actions needed it
                     O::pack_index(block_id, block_offset)
-                }),
+                }) as usize,
                 Some(key) => {
                     let state = &self.random_state;
                     let hash = key.hash(state);
                     let insert = self.map.entry(
                         hash,
                         |&(g, _)| unsafe {
-                            let block_id = O::get_block_id(*g);
-                            let block_offset = O::get_block_offset(*g);
+                            let packed_index = g as u64;
+                            let block_id = O::get_block_id(packed_index);
+                            let block_offset = O::get_block_offset(packed_index);
                             self.values
                                 .get(block_id as usize)
                                 .unwrap()
@@ -372,7 +270,10 @@ where
                     );
 
                     match insert {
-                        hashbrown::hash_table::Entry::Occupied(o) => *o.get(),
+                        hashbrown::hash_table::Entry::Occupied(o) => {
+                            let (packed_index, _) = *o.get();
+                            packed_index
+                        }
                         hashbrown::hash_table::Entry::Vacant(v) => {
                             // Actions before add new group like checking if room is enough
                             before_add_group(&mut self.values);
@@ -385,16 +286,129 @@ where
                             current_block.push(key);
 
                             // Get group index and finish actions needed it
-                            let packed_index = O::pack_index(block_id, block_offset);
-                            v.insert(packed_index);
+                            let packed_index =
+                                O::pack_index(block_id, block_offset) as usize;
+                            v.insert((packed_index, hash));
                             packed_index
                         }
                     }
                 }
             };
-            groups.push(group_index as usize)
+            groups.push(packed_index)
         }
         Ok(())
+    }
+
+    fn emit_groups_internal<O: GroupIndexOperations>(
+        &mut self,
+        emit_to: EmitTo,
+    ) -> Result<Vec<ArrayRef>> {
+        fn build_primitive<T: ArrowPrimitiveType>(
+            values: Vec<T::Native>,
+            null_idx: Option<usize>,
+        ) -> PrimitiveArray<T> {
+            let nulls = null_idx.map(|null_idx| {
+                let mut buffer = NullBufferBuilder::new(values.len());
+                buffer.append_n_non_nulls(null_idx);
+                buffer.append_null();
+                buffer.append_n_non_nulls(values.len() - null_idx - 1);
+                // NOTE: The inner builder must be constructed as there is at least one null
+                buffer.finish().unwrap()
+            });
+            PrimitiveArray::<T>::new(values.into(), nulls)
+        }
+
+        let array: PrimitiveArray<T> = match (self.block_size, emit_to) {
+            // ===============================================
+            // Emitting in flat mode
+            // ===============================================
+            (None, EmitTo::All) => {
+                self.map.clear();
+                let values = mem::take(self.values.back_mut().unwrap());
+                let null_group_opt = self.null_group.take().map(|packed_index| {
+                    let blk_offset = O::get_block_offset(packed_index);
+                    blk_offset as usize
+                });
+                build_primitive(values, null_group_opt)
+            }
+            (None, EmitTo::First(n)) => {
+                let n = n as u64;
+                // Decrement group index by n in `map`
+                self.map.retain(|entry| {
+                    let packed_index = entry.0 as u64;
+                    let blk_offset = O::get_block_offset(packed_index);
+                    match blk_offset.checked_sub(n) {
+                        // Group index was >= n, shift value down
+                        Some(sub) => {
+                            let packed_index = O::pack_index(0, sub);
+                            entry.0 = packed_index as usize;
+                            true
+                        }
+                        // Group index was < n, so remove from table
+                        None => false,
+                    }
+                });
+
+                // Decrement group index by n in `null_group`
+                let null_group_opt = match &mut self.null_group {
+                    Some(v) if *v >= n => {
+                        let mut blk_offset = O::get_block_offset(*v);
+                        blk_offset -= n;
+                        *v = O::pack_index(0, blk_offset);
+                        None
+                    }
+                    Some(_) => self.null_group.take().map(|packed_index| {
+                        let blk_offset = O::get_block_offset(packed_index);
+                        blk_offset as usize
+                    }),
+                    None => None,
+                };
+
+                let single_block = self.values.back_mut().unwrap();
+                let mut split = single_block.split_off(n as usize);
+                mem::swap(single_block, &mut split);
+                build_primitive(split, null_group_opt)
+            }
+            // ===============================================
+            // Emitting in blocked mode
+            // ===============================================
+            (Some(_), EmitTo::NextBlock) => {
+                // Similar as `EmitTo:All`, we will clear the old index infos both
+                // in `map` and `null_group`
+                self.map.clear();
+
+                let null_block_pair_opt = self.null_group.map(|packed_index| {
+                    (
+                        O::get_block_id(packed_index),
+                        O::get_block_offset(packed_index),
+                    )
+                });
+                let null_idx = match null_block_pair_opt {
+                    Some((blk_id, blk_offset)) if blk_id > 0 => {
+                        let new_blk_id = blk_id - 1;
+                        let new_packed_index = O::pack_index(new_blk_id, blk_offset);
+                        self.null_group = Some(new_packed_index);
+                        None
+                    }
+                    Some((_, blk_offset)) => {
+                        self.null_group = None;
+                        Some(blk_offset as usize)
+                    }
+                    None => None,
+                };
+
+                let emit_blk = self.values.pop_front().unwrap();
+                build_primitive(emit_blk, null_idx)
+            }
+            (blk_size, emit_to) => {
+                return internal_err!(
+                    "invalid emit_to for mode, emit_to:{emit_to:?}, block_size:{:?}",
+                    self.block_size
+                );
+            }
+        };
+
+        Ok(vec![Arc::new(array.with_data_type(self.data_type.clone()))])
     }
 }
 

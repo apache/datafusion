@@ -440,6 +440,7 @@ impl GroupsAccumulator for ForeignGroupsAccumulator {
 pub enum FFI_EmitTo {
     All,
     First(usize),
+    NextBlock,
 }
 
 impl From<EmitTo> for FFI_EmitTo {
@@ -447,6 +448,7 @@ impl From<EmitTo> for FFI_EmitTo {
         match value {
             EmitTo::All => Self::All,
             EmitTo::First(v) => Self::First(v),
+            EmitTo::NextBlock => Self::NextBlock,
         }
     }
 }
@@ -456,6 +458,7 @@ impl From<FFI_EmitTo> for EmitTo {
         match value {
             FFI_EmitTo::All => Self::All,
             FFI_EmitTo::First(v) => Self::First(v),
+            FFI_EmitTo::NextBlock => Self::NextBlock,
         }
     }
 }

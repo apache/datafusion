@@ -792,7 +792,7 @@ where
             sum_data_type: sum_data_type.clone(),
             counts: vec![],
             sums: vec![],
-            null_state: FlatNullState::new(),
+            null_state: FlatNullState::new(None),
             avg_fn,
         }
     }
@@ -919,7 +919,7 @@ where
             total_num_groups,
             |_, group_index, partial_count| {
                 // SAFETY: group_index is guaranteed to be in bounds
-                let count = unsafe { self.counts.get_unchecked_mut(group_index) };
+                let count = unsafe { self.counts.get_unchecked_mut(group_index as usize) };
                 *count += partial_count;
             },
         );
@@ -936,7 +936,7 @@ where
             total_num_groups,
             |_, group_index, new_value: <T as ArrowPrimitiveType>::Native| {
                 // SAFETY: group_index is guaranteed to be in bounds
-                let sum = unsafe { self.sums.get_unchecked_mut(group_index) };
+                let sum = unsafe { self.sums.get_unchecked_mut(group_index as usize) };
                 *sum = sum.add_wrapping(new_value);
             },
         );

@@ -99,7 +99,7 @@ impl GroupsAccumulator for MinMaxStructAccumulator {
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        let (_, min_maxes) = self.inner.emit_to(emit_to);
+        let (_, min_maxes) = self.inner.emit_to(emit_to)?;
         let fields = match &self.inner.data_type {
             DataType::Struct(fields) => fields,
             _ => return internal_err!("Data type is not a struct"),
@@ -273,13 +273,13 @@ impl MinMaxStructState {
     ///
     /// - `data_capacity`: the total length of all strings and their contents,
     /// - `min_maxes`: the actual min/max values for each group
-    fn emit_to(&mut self, emit_to: EmitTo) -> (usize, Vec<Option<StructArray>>) {
+    fn emit_to(&mut self, emit_to: EmitTo) -> Result<(usize, Vec<Option<StructArray>>)> {
         match emit_to {
             EmitTo::All => {
-                (
+                Ok((
                     std::mem::take(&mut self.total_data_bytes), // reset total bytes and min_max
                     std::mem::take(&mut self.min_max),
-                )
+                ))
             }
             EmitTo::First(n) => {
                 let first_min_maxes: Vec<_> = self.min_max.drain(..n).collect();
@@ -288,7 +288,10 @@ impl MinMaxStructState {
                     .map(|opt| opt.as_ref().map(|s| s.len()).unwrap_or(0))
                     .sum();
                 self.total_data_bytes -= first_data_capacity;
-                (first_data_capacity, first_min_maxes)
+                Ok((first_data_capacity, first_min_maxes))
+            }
+            EmitTo::NextBlock => {
+                internal_err!("min/max struct does not support blocked groups")
             }
         }
     }

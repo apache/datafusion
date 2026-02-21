@@ -230,7 +230,7 @@ impl GeometricMeanGroupsAccumulator {
             return_data_type: DataType::Float64,
             counts: vec![],
             prods: vec![],
-            null_state: FlatNullState::new(),
+            null_state: FlatNullState::new(None),
         }
     }
 }
