@@ -3588,7 +3588,7 @@ impl ScalarValue {
     /// Converts a value in `array` at `index` into a ScalarValue
     pub fn try_from_array(array: &dyn Array, index: usize) -> Result<Self> {
         // handle NULL value
-        if !array.is_valid(index) {
+        if array.is_null(index) {
             return array.data_type().try_into();
         }
 
