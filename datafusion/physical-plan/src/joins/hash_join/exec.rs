@@ -809,6 +809,37 @@ impl HashJoinExec {
         self.dynamic_filter.as_ref().map(|df| &df.filter)
     }
 
+    /// Set the dynamic filter for proto deserialization purposes.
+    /// This method is intended for use during proto deserialization only.
+    #[doc(hidden)]
+    pub fn with_dynamic_filter(
+        mut self,
+        filter_expr: Arc<dyn PhysicalExpr>,
+    ) -> Result<Self> {
+        // Verify it's actually a DynamicFilterPhysicalExpr
+        if !filter_expr.as_any().is::<DynamicFilterPhysicalExpr>() {
+            return internal_err!(
+                "Expected DynamicFilterPhysicalExpr but got: {:?}",
+                filter_expr
+            );
+        }
+
+        // Safety: We just verified it's a DynamicFilterPhysicalExpr above.
+        // We need to convert Arc<dyn PhysicalExpr> to Arc<DynamicFilterPhysicalExpr>.
+        // This is safe because:
+        // 1. We verified the concrete type above
+        // 2. Both Arc pointers have the same memory layout and point to the same allocation
+        // 3. We're only changing the compile-time type information, not the runtime data
+        let raw_ptr = Arc::into_raw(filter_expr) as *const () as *const DynamicFilterPhysicalExpr;
+        let filter = unsafe { Arc::from_raw(raw_ptr) };
+
+        self.dynamic_filter = Some(HashJoinExecDynamicFilter {
+            filter,
+            build_accumulator: OnceLock::new(),
+        });
+        Ok(self)
+    }
+
     /// Calculate order preservation flags for this hash join.
     fn maintains_input_order(join_type: JoinType) -> Vec<bool> {
         vec![

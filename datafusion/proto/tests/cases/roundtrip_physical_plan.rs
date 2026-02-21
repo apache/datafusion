@@ -309,6 +309,196 @@ fn roundtrip_hash_join() -> Result<()> {
 }
 
 #[test]
+fn roundtrip_hash_join_with_dynamic_filter() -> Result<()> {
+    use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
+
+    let field_a = Field::new("col", DataType::Int64, false);
+    let schema_left = Schema::new(vec![field_a.clone()]);
+    let schema_right = Schema::new(vec![field_a]);
+    let on = vec![(
+        Arc::new(Column::new("col", schema_left.index_of("col")?)) as _,
+        Arc::new(Column::new("col", schema_right.index_of("col")?)) as _,
+    )];
+
+    let schema_left = Arc::new(schema_left);
+    let schema_right = Arc::new(schema_right);
+
+    // Create a dynamic filter that would filter the right (probe) side
+    let right_col_expr = Arc::new(Column::new("col", 0)) as Arc<dyn PhysicalExpr>;
+    let placeholder = Arc::new(Literal::new(ScalarValue::Boolean(Some(true))));
+    let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
+        vec![right_col_expr],
+        placeholder,
+    )) as Arc<dyn PhysicalExpr>;
+
+    // Create a hash join with the dynamic filter
+    let hash_join = HashJoinExec::try_new(
+        Arc::new(EmptyExec::new(schema_left.clone())),
+        Arc::new(EmptyExec::new(schema_right.clone())),
+        on.clone(),
+        None,
+        &JoinType::Inner,
+        None,
+        PartitionMode::CollectLeft,
+        NullEquality::NullEqualsNothing,
+        false,
+    )?;
+
+    // Set the dynamic filter
+    let hash_join = hash_join.with_dynamic_filter(dynamic_filter)?;
+
+    // Test round-trip serialization
+    roundtrip_test(Arc::new(hash_join))?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_hash_join_with_dynamic_filter_optimized() -> Result<()> {
+    use datafusion::prelude::SessionContext;
+    use datafusion_common::config::ConfigOptions;
+    use datafusion::physical_optimizer::PhysicalOptimizerRule;
+    use datafusion::physical_optimizer::filter_pushdown::FilterPushdown;
+    use datafusion::arrow::array::Int32Array;
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use arrow::array::RecordBatch;
+
+    // Create a session context with dynamic filter pushdown enabled
+    let mut config = ConfigOptions::default();
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+
+    let ctx = SessionContext::new_with_config(config.into());
+
+    // Create build_table: (id, value)
+    let build_batch = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("value", DataType::Int32, false),
+        ])),
+        vec![
+            Arc::new(Int32Array::from(vec![1, 2])),
+            Arc::new(Int32Array::from(vec![100, 200])),
+        ],
+    )?;
+    ctx.register_batch("build_table", build_batch)?;
+
+    // Create probe_table: (id, data)
+    let probe_batch = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("data", DataType::Int32, false),
+        ])),
+        vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4])),
+            Arc::new(Int32Array::from(vec![10, 20, 30, 40])),
+        ],
+    )?;
+    ctx.register_batch("probe_table", probe_batch)?;
+
+    // Execute join query
+    let df = ctx.sql("SELECT * FROM build_table b JOIN probe_table p ON b.id = p.id").await?;
+    let (state, logical_plan) = df.into_parts();
+
+    // Create physical plan
+    let physical_plan = state.create_physical_plan(&logical_plan).await?;
+
+    // Apply FilterPushdown optimizer
+    let filter_pushdown = FilterPushdown::new_post_optimization();
+    let optimized_plan = filter_pushdown.optimize(physical_plan, state.config().options())?;
+
+    println!("=== BEFORE SERIALIZATION ===");
+    println!("{}", datafusion::physical_plan::displayable(optimized_plan.as_ref()).indent(true));
+
+    // Check and print Arc addresses of dynamic filters
+    fn print_filter_arc_addresses(plan: &Arc<dyn ExecutionPlan>, depth: usize) {
+        use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
+        use datafusion::datasource::source::DataSourceExec;
+
+        let indent = "  ".repeat(depth);
+
+        if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>() {
+            if let Some(filter) = hash_join.dynamic_filter_for_test() {
+                let ptr = Arc::as_ptr(filter) as *const () as u64;
+                let strong_count = Arc::strong_count(filter);
+                println!("{}HashJoinExec dynamic_filter: 0x{:x} (strong_count={})", indent, ptr, strong_count);
+
+                // Check if it's a DynamicFilterPhysicalExpr
+                if (filter as &dyn std::any::Any).downcast_ref::<DynamicFilterPhysicalExpr>().is_some() {
+                    println!("{}  -> Is DynamicFilterPhysicalExpr", indent);
+                }
+            }
+        }
+
+        // Check DataSourceExec for filters
+        if let Some(data_source) = plan.as_any().downcast_ref::<DataSourceExec>() {
+            if let Some(filter_expr) = data_source.filter_for_test() {
+                let ptr = Arc::as_ptr(&filter_expr) as *const () as u64;
+                let strong_count = Arc::strong_count(&filter_expr);
+                println!("{}DataSourceExec filter: 0x{:x} (strong_count={})", indent, ptr, strong_count);
+
+                // Check if it's a DynamicFilterPhysicalExpr
+                if (filter_expr.as_ref() as &dyn std::any::Any).downcast_ref::<DynamicFilterPhysicalExpr>().is_some() {
+                    println!("{}  -> Is DynamicFilterPhysicalExpr", indent);
+                }
+            }
+        }
+
+        for child in plan.children() {
+            print_filter_arc_addresses(child, depth + 1);
+        }
+    }
+
+    fn check_hash_join_filter(plan: &Arc<dyn ExecutionPlan>) -> bool {
+        if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>() {
+            if hash_join.dynamic_filter_for_test().is_some() {
+                println!("✓ Found HashJoinExec with dynamic filter");
+                return true;
+            }
+        }
+        for child in plan.children() {
+            if check_hash_join_filter(child) {
+                return true;
+            }
+        }
+        false
+    }
+
+    let has_filter_before = check_hash_join_filter(&optimized_plan);
+    println!("Has dynamic filter before: {}", has_filter_before);
+
+    // Print Arc addresses before serialization
+    print_filter_arc_addresses(&optimized_plan, 0);
+
+    // Serialize
+    let codec = datafusion_proto::physical_plan::DefaultPhysicalExtensionCodec {};
+    let proto_converter = datafusion_proto::physical_plan::DefaultPhysicalProtoConverter;
+    let proto = datafusion_proto::protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
+        optimized_plan.clone(),
+        &codec,
+        &proto_converter,
+    )?;
+
+    // Deserialize
+    let task_ctx = state.task_ctx();
+    let deserialized_plan = proto.try_into_physical_plan(
+        &task_ctx,
+        &codec,
+    )?;
+
+    println!("\n=== AFTER DESERIALIZATION ===");
+    println!("{}", datafusion::physical_plan::displayable(deserialized_plan.as_ref()).indent(true));
+
+    // Check if HashJoinExec still has a dynamic filter
+    let has_filter_after = check_hash_join_filter(&deserialized_plan);
+    println!("Has dynamic filter after: {}", has_filter_after);
+
+    assert_eq!(has_filter_before, has_filter_after,
+        "Dynamic filter should be preserved through serialization");
+
+    Ok(())
+}
+
+#[test]
 fn roundtrip_nested_loop_join() -> Result<()> {
     let field_a = Field::new("col", DataType::Int64, false);
     let schema_left = Schema::new(vec![field_a.clone()]);
@@ -2648,7 +2838,7 @@ fn test_expression_deduplication() -> Result<()> {
 
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
-    let proto_converter = DeduplicatingProtoConverter {};
+    let proto_converter = DeduplicatingProtoConverter::default();
 
     // Perform roundtrip
     let bytes = physical_plan_to_bytes_with_proto_converter(
@@ -2658,7 +2848,7 @@ fn test_expression_deduplication() -> Result<()> {
     )?;
 
     // Create a new converter for deserialization (fresh cache)
-    let deser_converter = DeduplicatingProtoConverter {};
+    let deser_converter = DeduplicatingProtoConverter::default();
     let result_plan = physical_plan_from_bytes_with_proto_converter(
         bytes.as_ref(),
         ctx.task_ctx().as_ref(),
@@ -2705,7 +2895,7 @@ fn test_expression_deduplication_arc_sharing() -> Result<()> {
 
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
-    let proto_converter = DeduplicatingProtoConverter {};
+    let proto_converter = DeduplicatingProtoConverter::default();
 
     // Serialize
     let bytes = physical_plan_to_bytes_with_proto_converter(
@@ -2715,7 +2905,7 @@ fn test_expression_deduplication_arc_sharing() -> Result<()> {
     )?;
 
     // Deserialize with a fresh converter
-    let deser_converter = DeduplicatingProtoConverter {};
+    let deser_converter = DeduplicatingProtoConverter::default();
     let result_plan = physical_plan_from_bytes_with_proto_converter(
         bytes.as_ref(),
         ctx.task_ctx().as_ref(),
@@ -2815,7 +3005,7 @@ fn test_deduplication_within_plan_deserialization() -> Result<()> {
 
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
-    let proto_converter = DeduplicatingProtoConverter {};
+    let proto_converter = DeduplicatingProtoConverter::default();
 
     // Serialize
     let bytes = physical_plan_to_bytes_with_proto_converter(
@@ -2895,7 +3085,7 @@ fn test_deduplication_within_expr_deserialization() -> Result<()> {
 
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
-    let proto_converter = DeduplicatingProtoConverter {};
+    let proto_converter = DeduplicatingProtoConverter::default();
 
     // Serialize the expression
     let proto = proto_converter.physical_expr_to_proto(&binary_expr, &codec)?;
@@ -2961,7 +3151,7 @@ fn test_session_id_rotation_between_serializations() -> Result<()> {
     let col_expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
 
     let codec = DefaultPhysicalExtensionCodec {};
-    let proto_converter = DeduplicatingProtoConverter {};
+    let proto_converter = DeduplicatingProtoConverter::default();
 
     // First serialization
     let proto1 = proto_converter.physical_expr_to_proto(&col_expr, &codec)?;
@@ -3008,7 +3198,7 @@ fn test_session_id_rotation_with_execution_plans() -> Result<()> {
     )?);
 
     let codec = DefaultPhysicalExtensionCodec {};
-    let proto_converter = DeduplicatingProtoConverter {};
+    let proto_converter = DeduplicatingProtoConverter::default();
 
     // First serialization
     let bytes1 = physical_plan_to_bytes_with_proto_converter(
@@ -3034,7 +3224,7 @@ fn test_session_id_rotation_with_execution_plans() -> Result<()> {
 
     // But both should deserialize correctly
     let ctx = SessionContext::new();
-    let deser_converter = DeduplicatingProtoConverter {};
+    let deser_converter = DeduplicatingProtoConverter::default();
 
     let plan1 = datafusion_proto::bytes::physical_plan_from_bytes_with_proto_converter(
         bytes1.as_ref(),
@@ -3052,6 +3242,77 @@ fn test_session_id_rotation_with_execution_plans() -> Result<()> {
 
     // Verify both plans have the expected structure
     assert_eq!(plan1.schema(), plan2.schema());
+
+    Ok(())
+}
+
+/// Test that DynamicFilterPhysicalExpr instances with shared inner Arc
+/// get properly deduplicated during serialization (same expr_id).
+#[test]
+fn test_dynamic_filter_inner_id_used_for_deduplication() -> Result<()> {
+    use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, Column, lit};
+    use datafusion_physical_expr::utils::reassign_expr_columns;
+    use datafusion_proto::physical_plan::DeduplicatingProtoConverter;
+
+    // Create a DynamicFilterPhysicalExpr
+    let _schema1 = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int32, false),
+        Field::new("b", DataType::Int32, false),
+    ]));
+
+    let col_a = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
+    let original_filter = Arc::new(DynamicFilterPhysicalExpr::new(
+        vec![col_a],
+        lit(true),
+    ));
+
+    // Remap to a different schema (simulating what happens during filter pushdown)
+    let schema2 = Arc::new(Schema::new(vec![
+        Field::new("b", DataType::Int32, false),
+        Field::new("a", DataType::Int32, false), // 'a' now at index 1
+    ]));
+
+    let remapped_filter = reassign_expr_columns(
+        original_filter.clone() as Arc<dyn PhysicalExpr>,
+        &schema2,
+    )?;
+    let remapped_dynamic = Arc::downcast::<DynamicFilterPhysicalExpr>(remapped_filter)
+        .expect("Should still be DynamicFilterPhysicalExpr");
+
+    // Verify they have different outer Arc addresses but same inner_id
+    let original_ptr = Arc::as_ptr(&original_filter) as *const () as u64;
+    let remapped_ptr = Arc::as_ptr(&remapped_dynamic) as *const () as u64;
+    let original_inner = original_filter.inner_id();
+    let remapped_inner = remapped_dynamic.inner_id();
+
+    println!("Original filter ptr: 0x{:x}, inner_id: 0x{:x}", original_ptr, original_inner);
+    println!("Remapped filter ptr: 0x{:x}, inner_id: 0x{:x}", remapped_ptr, remapped_inner);
+
+    assert_ne!(original_ptr, remapped_ptr, "Outer Arcs should be different");
+    assert_eq!(original_inner, remapped_inner, "Inner Arcs should be the same");
+
+    // Now test that serialization uses inner_id for deduplication
+    let codec = DefaultPhysicalExtensionCodec {};
+    let converter = DeduplicatingProtoConverter::default();
+
+    // Serialize both filters
+    let proto1 = converter.physical_expr_to_proto(&(original_filter.clone() as Arc<dyn PhysicalExpr>), &codec)?;
+    let proto2 = converter.physical_expr_to_proto(&(remapped_dynamic.clone() as Arc<dyn PhysicalExpr>), &codec)?;
+
+    // Extract expr_ids
+    let expr_id1 = proto1.expr_id.expect("Should have expr_id");
+    let expr_id2 = proto2.expr_id.expect("Should have expr_id");
+
+    println!("Original filter expr_id: {}", expr_id1);
+    println!("Remapped filter expr_id: {}", expr_id2);
+
+    // CRITICAL: They should have the SAME expr_id because they share the same inner Arc!
+    // This is the fix we implemented - using inner_id() for DynamicFilterPhysicalExpr
+    assert_eq!(
+        expr_id1, expr_id2,
+        "Dynamic filters sharing the same inner Arc must have the same expr_id!\n\
+         This ensures proper deduplication during deserialization."
+    );
 
     Ok(())
 }

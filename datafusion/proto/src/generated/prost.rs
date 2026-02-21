@@ -1294,7 +1294,7 @@ pub struct PhysicalExprNode {
     pub expr_id: ::core::option::Option<u64>,
     #[prost(
         oneof = "physical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21, 22"
     )]
     pub expr_type: ::core::option::Option<physical_expr_node::ExprType>,
 }
@@ -1347,7 +1347,20 @@ pub mod physical_expr_node {
         UnknownColumn(super::UnknownColumn),
         #[prost(message, tag = "21")]
         HashExpr(super::PhysicalHashExprNode),
+        #[prost(message, tag = "22")]
+        DynamicFilter(::prost::alloc::boxed::Box<super::PhysicalDynamicFilterExprNode>),
     }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalDynamicFilterExprNode {
+    /// The child expressions (columns referenced by this filter)
+    #[prost(message, repeated, tag = "1")]
+    pub children: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    /// The initial/placeholder expression (typically lit(true))
+    #[prost(message, optional, boxed, tag = "2")]
+    pub initial_expr: ::core::option::Option<
+        ::prost::alloc::boxed::Box<PhysicalExprNode>,
+    >,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalScalarUdfNode {
@@ -1715,6 +1728,8 @@ pub struct HashJoinExecNode {
     pub projection: ::prost::alloc::vec::Vec<u32>,
     #[prost(bool, tag = "10")]
     pub null_aware: bool,
+    #[prost(message, optional, tag = "11")]
+    pub dynamic_filter: ::core::option::Option<PhysicalExprNode>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SymmetricHashJoinExecNode {

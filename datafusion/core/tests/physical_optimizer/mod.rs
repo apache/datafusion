@@ -39,3 +39,4 @@ mod test_utils;
 mod window_optimize;
 
 mod pushdown_utils;
+mod test_dynamic_filter_arc_sharing;

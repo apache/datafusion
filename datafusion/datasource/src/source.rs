@@ -469,6 +469,16 @@ impl DataSourceExec {
                     .map(|source| (file_scan_conf, source))
             })
     }
+
+    /// Get the filter expression (which may include dynamic filters) for debugging/testing.
+    /// Returns `None` if the data source is not a FileScanConfig or has no filter.
+    #[doc(hidden)]
+    pub fn filter_for_test(&self) -> Option<Arc<dyn PhysicalExpr>> {
+        self.data_source()
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .and_then(|file_scan_conf| file_scan_conf.file_source().filter())
+    }
 }
 
 /// Create a new `DataSourceExec` from a `DataSource`
