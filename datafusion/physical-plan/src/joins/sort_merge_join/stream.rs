@@ -611,7 +611,7 @@ impl Stream for SortMergeJoinStream {
                       .debug_assert_metadata_aligned();
 
                     // For filtered joins, skip output and let Init state handle it
-                    if self.needs_deferred_filtering() {
+                    if needs_deferred_filtering(&self.filter, self.join_type) {
                         self.state = next_state.as_ref().clone();
                         continue;
                     }
