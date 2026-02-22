@@ -17,6 +17,7 @@
 
 pub mod array_contains;
 pub mod repeat;
+pub mod sequence;
 pub mod shuffle;
 pub mod slice;
 pub mod spark_array;
@@ -30,6 +31,7 @@ make_udf_function!(spark_array::SparkArray, array);
 make_udf_function!(shuffle::SparkShuffle, shuffle);
 make_udf_function!(repeat::SparkArrayRepeat, array_repeat);
 make_udf_function!(slice::SparkSlice, slice);
+make_udf_function!(sequence::SparkSequence, sequence);
 
 pub mod expr_fn {
     use datafusion_functions::export_functions;
@@ -55,6 +57,11 @@ pub mod expr_fn {
         "Returns a slice of the array from the start index with the given length.",
         array start length
     ));
+    export_functions!((
+        sequence,
+        "Returns a sequence of the array from the start index and end index.",
+        start stop
+    ));
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
@@ -63,6 +70,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         array(),
         shuffle(),
         array_repeat(),
+        sequence(),
         slice(),
     ]
 }

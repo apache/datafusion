@@ -202,7 +202,7 @@ impl Range {
     }
 
     /// Generate `generate_series()` function which includes upper bound.
-    fn generate_series() -> Self {
+    pub fn generate_series() -> Self {
         Self {
             signature: Self::defined_signature(),
             include_upper_bound: true,
@@ -296,7 +296,7 @@ impl Range {
     /// gen_range(3) => [0, 1, 2]
     /// gen_range(1, 4) => [1, 2, 3]
     /// gen_range(1, 7, 2) => [1, 3, 5]
-    fn gen_range_inner(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+    pub fn gen_range_inner(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
         let (start_array, stop_array, step_array) = match args {
             [stop_array] => (None, as_int64_array(stop_array)?, None),
             [start_array, stop_array] => (
@@ -330,10 +330,23 @@ impl Range {
                         usize::try_from(step.unsigned_abs()).map_err(|_| {
                             not_impl_datafusion_err!("step {} can't fit into usize", step)
                         })?;
-                    values.extend(
-                        gen_range_iter(start, stop, step < 0, self.include_upper_bound)
+                    if start < stop {
+                        values.extend(
+                            gen_range_iter(
+                                start,
+                                stop,
+                                step < 0,
+                                self.include_upper_bound,
+                            )
                             .step_by(step_abs),
-                    );
+                        )
+                    } else {
+                        values.extend(
+                            gen_range_iter(start, stop, true, self.include_upper_bound)
+                                .step_by(step_abs),
+                        )
+                    };
+
                     offsets.push(values.len() as i32);
                     valid.append_non_null();
                 }
@@ -353,7 +366,7 @@ impl Range {
         Ok(arr)
     }
 
-    fn gen_range_date(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+    pub fn gen_range_date(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
         let [start, stop, step] = take_function_args(self.name(), args)?;
         let step = as_interval_mdn_array(step)?;
 
@@ -417,7 +430,7 @@ impl Range {
         Ok(arr)
     }
 
-    fn gen_range_timestamp(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+    pub fn gen_range_timestamp(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
         let [start, stop, step] = take_function_args(self.name(), args)?;
         let step = as_interval_mdn_array(step)?;
 
