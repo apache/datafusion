@@ -17,6 +17,7 @@
 
 pub mod map_from_arrays;
 pub mod map_from_entries;
+pub mod map_func;
 pub mod str_to_map;
 mod utils;
 
@@ -24,12 +25,19 @@ use datafusion_expr::ScalarUDF;
 use datafusion_functions::make_udf_function;
 use std::sync::Arc;
 
+make_udf_function!(map_func::Map, map_);
 make_udf_function!(map_from_arrays::MapFromArrays, map_from_arrays);
 make_udf_function!(map_from_entries::MapFromEntries, map_from_entries);
 make_udf_function!(str_to_map::SparkStrToMap, str_to_map);
 
 pub mod expr_fn {
     use datafusion_functions::export_functions;
+
+    export_functions!((
+        map_,
+        "Creates a map from alternating key-value pairs.",
+        args,
+    ));
 
     export_functions!((
         map_from_arrays,
@@ -51,5 +59,5 @@ pub mod expr_fn {
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
-    vec![map_from_arrays(), map_from_entries(), str_to_map()]
+    vec![map_(), map_from_arrays(), map_from_entries(), str_to_map()]
 }

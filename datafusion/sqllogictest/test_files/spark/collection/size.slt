@@ -60,12 +60,12 @@ SELECT size(arrow_cast(make_array(1, 2, 3, 4), 'FixedSizeList(4, Int32)'));
 
 # Map size tests
 query I
-SELECT size(map(make_array('a', 'b', 'c'), make_array(1, 2, 3)));
+SELECT size(map('a', 1, 'b', 2, 'c', 3));
 ----
 3
 
 query I
-SELECT size(map(make_array('a'), make_array(1)));
+SELECT size(map('a', 1));
 ----
 1
 
@@ -90,10 +90,8 @@ SELECT size(NULL::int[]);
 
 
 # Empty map
-query I
-SELECT size(map(arrow_cast(make_array(), 'List(Utf8)'), arrow_cast(make_array(), 'List(Int32)')));
-----
-0
+query error DataFusion error: Error during planning: Function 'map' expected at least one argument but received 0
+SELECT size(map());
 
 # String array
 query I
@@ -124,7 +122,7 @@ SELECT size(column1) FROM VALUES ([1]), ([1,2]), ([]), (NULL);
 
 # Map column tests (with NULL values)
 query I
-SELECT size(column1) FROM VALUES (map(['a'], [1])), (map(['a','b'], [1,2])), (NULL);
+SELECT size(column1) FROM VALUES (map('a', 1)), (map('a', 2, 'b', 3)), (NULL);
 ----
 1
 2
