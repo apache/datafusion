@@ -3434,11 +3434,19 @@ impl ScalarValue {
         }
     }
 
+    /// Repeats the rows of `arr` `size` times, producing an array with
+    /// `arr.len() * size` total rows.
     fn list_to_array_of_size(arr: &dyn Array, size: usize) -> Result<ArrayRef> {
         if size == 0 {
             return Ok(arr.slice(0, 0));
         }
 
+        // Examples: given `arr = [[A, B, C]]` and `size = 3`, `indices = [0, 0, 0]` and
+        // the result is `[[A, B, C], [A, B, C], [A, B, C]]`.
+        //
+        // Given `arr = [[A, B], [C]]` and `size = 2`, `indices = [0, 1, 0, 1]` and the
+        // result is `[[A, B], [C], [A, B], [C]]`. (But in practice, we are always called
+        // with `arr.len() == 1`.)
         let n = arr.len() as u32;
         let indices = UInt32Array::from_iter_values((0..size).flat_map(|_| 0..n));
         Ok(arrow::compute::take(arr, &indices, None)?)
