@@ -429,7 +429,9 @@ impl MemoryReservation {
         let size = self.size.load(atomic::Ordering::Relaxed);
         match capacity.cmp(&size) {
             Ordering::Greater => self.try_grow(capacity - size)?,
-            Ordering::Less => self.shrink(size - capacity),
+            Ordering::Less => {
+                self.try_shrink(size - capacity)?;
+            }
             _ => {}
         };
         Ok(())
