@@ -743,6 +743,10 @@ config_namespace! {
         /// (reading) Use any available bloom filters when reading parquet files
         pub bloom_filter_on_read: bool, default = true
 
+        /// (reading) If true, the parquet reader will share work between partitions
+        /// using morsel-driven execution. This can help mitigate data skew.
+        pub allow_morsel_driven: bool, default = true
+
         /// (reading) The maximum predicate cache size, in bytes. When
         /// `pushdown_filters` is enabled, sets the maximum memory used to cache
         /// the results of predicate evaluation between filter evaluation and

@@ -536,6 +536,7 @@ impl FileFormat for ParquetFormat {
 
         let conf = FileScanConfigBuilder::from(conf)
             .with_source(Arc::new(source))
+            .with_morsel_driven(self.options.global.allow_morsel_driven)
             .build();
         Ok(DataSourceExec::from_data_source(conf))
     }

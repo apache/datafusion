@@ -53,6 +53,7 @@ use datafusion_physical_plan::{
     metrics::ExecutionPlanMetricsSet,
 };
 use log::{debug, warn};
+use std::sync::{Mutex, Weak};
 use std::{any::Any, fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::Arc};
 
 /// [`FileScanConfig`] represents scanning data from a group of files
@@ -204,6 +205,13 @@ pub struct FileScanConfig {
     /// If the number of file partitions > target_partitions, the file partitions will be grouped
     /// in a round-robin fashion such that number of file partitions = target_partitions.
     pub partitioned_by_file_group: bool,
+    /// When true, use morsel-driven execution to avoid data skew.
+    /// This means all partitions share a single pool of work.
+    pub morsel_driven: bool,
+    /// Shared work queue for morsel-driven execution.
+    /// This uses a Weak pointer to allow the queue to be dropped when all execution
+    /// partitions are finished, supporting re-executability of the physical plan.
+    pub(crate) morsel_queue: Arc<Mutex<Weak<crate::file_stream::WorkQueue>>>,
 }
 
 /// A builder for [`FileScanConfig`]'s.
@@ -274,6 +282,7 @@ pub struct FileScanConfigBuilder {
     batch_size: Option<usize>,
     expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
     partitioned_by_file_group: bool,
+    morsel_driven: bool,
 }
 
 impl FileScanConfigBuilder {
@@ -300,6 +309,7 @@ impl FileScanConfigBuilder {
             batch_size: None,
             expr_adapter_factory: None,
             partitioned_by_file_group: false,
+            morsel_driven: false,
         }
     }
 
@@ -500,6 +510,12 @@ impl FileScanConfigBuilder {
         self
     }
 
+    /// Set whether to use morsel-driven execution.
+    pub fn with_morsel_driven(mut self, morsel_driven: bool) -> Self {
+        self.morsel_driven = morsel_driven;
+        self
+    }
+
     /// Build the final [`FileScanConfig`] with all the configured settings.
     ///
     /// This method takes ownership of the builder and returns the constructed `FileScanConfig`.
@@ -521,6 +537,7 @@ impl FileScanConfigBuilder {
             batch_size,
             expr_adapter_factory: expr_adapter,
             partitioned_by_file_group,
+            morsel_driven,
         } = self;
 
         let constraints = constraints.unwrap_or_default();
@@ -546,6 +563,8 @@ impl FileScanConfigBuilder {
             expr_adapter_factory: expr_adapter,
             statistics,
             partitioned_by_file_group,
+            morsel_driven,
+            morsel_queue: Arc::new(Mutex::new(Weak::new())),
         }
     }
 }
@@ -565,6 +584,7 @@ impl From<FileScanConfig> for FileScanConfigBuilder {
             batch_size: config.batch_size,
             expr_adapter_factory: config.expr_adapter_factory,
             partitioned_by_file_group: config.partitioned_by_file_group,
+            morsel_driven: config.morsel_driven,
         }
     }
 }

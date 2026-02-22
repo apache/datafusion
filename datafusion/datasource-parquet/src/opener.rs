@@ -52,6 +52,8 @@ use datafusion_physical_plan::metrics::{
 use datafusion_pruning::{FilePruner, PruningPredicate, build_pruning_predicate};
 
 use crate::sort::reverse_row_selection;
+use futures::future::{BoxFuture, ready};
+use parquet::file::metadata::ParquetMetaData;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_common::config::EncryptionFactoryOptions;
 #[cfg(feature = "parquet_encryption")]
@@ -122,6 +124,14 @@ pub(super) struct ParquetOpener {
     pub reverse_row_groups: bool,
 }
 
+/// A morsel of work for Parquet execution, containing cached metadata and an access plan.
+pub struct ParquetMorsel {
+    /// Cached Parquet metadata
+    pub metadata: Arc<ParquetMetaData>,
+    /// Access plan for this morsel (usually selecting a single row group)
+    pub access_plan: ParquetAccessPlan,
+}
+
 /// Represents a prepared access plan with optional row selection
 pub(crate) struct PreparedAccessPlan {
     /// Row group indexes to read
@@ -146,10 +156,7 @@ impl PreparedAccessPlan {
     }
 
     /// Reverse the access plan for reverse scanning
-    pub(crate) fn reverse(
-        mut self,
-        file_metadata: &parquet::file::metadata::ParquetMetaData,
-    ) -> Result<Self> {
+    pub(crate) fn reverse(mut self, file_metadata: &ParquetMetaData) -> Result<Self> {
         // Get the row group indexes before reversing
         let row_groups_to_scan = self.row_group_indexes.clone();
 
@@ -181,6 +188,119 @@ impl PreparedAccessPlan {
 }
 
 impl FileOpener for ParquetOpener {
+    fn morselize(
+        &self,
+        partitioned_file: PartitionedFile,
+    ) -> BoxFuture<'static, Result<Vec<PartitionedFile>>> {
+        if partitioned_file
+            .extensions
+            .as_ref()
+            .map(|e| e.is::<ParquetMorsel>())
+            .unwrap_or(false)
+        {
+            return Box::pin(ready(Ok(vec![partitioned_file])));
+        }
+
+        let file_metrics = ParquetFileMetrics::new(
+            self.partition_index,
+            partitioned_file.object_meta.location.as_ref(),
+            &self.metrics,
+        );
+
+        let metadata_size_hint = partitioned_file
+            .metadata_size_hint
+            .or(self.metadata_size_hint);
+
+        let mut async_file_reader: Box<dyn AsyncFileReader> =
+            match self.parquet_file_reader_factory.create_reader(
+                self.partition_index,
+                partitioned_file.clone(),
+                metadata_size_hint,
+                &self.metrics,
+            ) {
+                Ok(reader) => reader,
+                Err(e) => return Box::pin(ready(Err(e))),
+            };
+
+        let options = ArrowReaderOptions::new().with_page_index(false);
+        #[cfg(feature = "parquet_encryption")]
+        let encryption_context = self.get_encryption_context();
+
+        let expr_adapter_factory = Arc::clone(&self.expr_adapter_factory);
+        let table_schema = self.table_schema.clone();
+        let predicate = self.predicate.clone();
+        let metrics = self.metrics.clone();
+
+        Box::pin(async move {
+            #[cfg(feature = "parquet_encryption")]
+            let options = if let Some(fd_val) = encryption_context
+                .get_file_decryption_properties(&partitioned_file.object_meta.location)
+                .await?
+            {
+                options.with_file_decryption_properties(Arc::clone(&fd_val))
+            } else {
+                options
+            };
+
+            let mut _metadata_timer = file_metrics.metadata_load_time.timer();
+            let reader_metadata =
+                ArrowReaderMetadata::load_async(&mut async_file_reader, options).await?;
+            let metadata = reader_metadata.metadata();
+            let num_row_groups = metadata.num_row_groups();
+
+            // Adapt the physical schema to the file schema for pruning
+            let physical_file_schema = Arc::clone(reader_metadata.schema());
+            let logical_file_schema = table_schema.file_schema();
+            let rewriter = expr_adapter_factory.create(
+                Arc::clone(logical_file_schema),
+                Arc::clone(&physical_file_schema),
+            )?;
+            let simplifier = PhysicalExprSimplifier::new(&physical_file_schema);
+            let adapted_predicate = predicate
+                .as_ref()
+                .map(|p| simplifier.simplify(rewriter.rewrite(Arc::clone(p))?))
+                .transpose()?;
+
+            let predicate_creation_errors = MetricBuilder::new(&metrics)
+                .global_counter("num_predicate_creation_errors");
+
+            let (pruning_predicate, _) = build_pruning_predicates(
+                adapted_predicate.as_ref(),
+                &physical_file_schema,
+                &predicate_creation_errors,
+            );
+
+            let mut row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(num_row_groups));
+            if let Some(predicate) = pruning_predicate {
+                row_groups.prune_by_statistics(
+                    &physical_file_schema,
+                    reader_metadata.parquet_schema(),
+                    metadata.row_groups(),
+                    predicate.as_ref(),
+                    &file_metrics,
+                );
+            }
+            let access_plan = row_groups.build();
+
+            let mut morsels = Vec::with_capacity(access_plan.len());
+            for i in 0..num_row_groups {
+                if !access_plan.should_scan(i) {
+                    continue;
+                }
+                let mut morsel_access_plan = ParquetAccessPlan::new_none(num_row_groups);
+                morsel_access_plan.scan(i);
+                let morsel = ParquetMorsel {
+                    metadata: Arc::clone(metadata),
+                    access_plan: morsel_access_plan,
+                };
+                let mut f = partitioned_file.clone();
+                f.extensions = Some(Arc::new(morsel));
+                morsels.push(f);
+            }
+            Ok(morsels)
+        })
+    }
+
     fn open(&self, partitioned_file: PartitionedFile) -> Result<FileOpenFuture> {
         // -----------------------------------
         // Step: prepare configurations, etc.
@@ -358,10 +478,18 @@ impl FileOpener for ParquetOpener {
             // Begin by loading the metadata from the underlying reader (note
             // the returned metadata may actually include page indexes as some
             // readers may return page indexes even when not requested -- for
-            // example when they are cached)
-            let mut reader_metadata =
+            // example when they are cached).
+            // If this is a morsel, we might already have the metadata cached.
+            let mut reader_metadata = if let Some(morsel) = partitioned_file
+                .extensions
+                .as_ref()
+                .and_then(|e| e.downcast_ref::<ParquetMorsel>())
+            {
+                ArrowReaderMetadata::try_new(Arc::clone(&morsel.metadata), options.clone())?
+            } else {
                 ArrowReaderMetadata::load_async(&mut async_file_reader, options.clone())
-                    .await?;
+                    .await?
+            };
 
             // Note about schemas: we are actually dealing with **3 different schemas** here:
             // - The table schema as defined by the TableProvider.
@@ -927,6 +1055,14 @@ fn create_initial_plan(
 
             // check row group count matches the plan
             return Ok(access_plan.clone());
+        } else if let Some(morsel) = extensions.downcast_ref::<ParquetMorsel>() {
+            let plan_len = morsel.access_plan.len();
+            if plan_len != row_group_count {
+                return exec_err!(
+                    "Invalid ParquetMorsel AccessPlan for {file_name}. Specified {plan_len} row groups, but file has {row_group_count}"
+                );
+            }
+            return Ok(morsel.access_plan.clone());
         } else {
             debug!("DataSourceExec Ignoring unknown extension specified for {file_name}");
         }
