@@ -275,13 +275,6 @@ fn get_field_id(field: &arrow::datatypes::Field) -> Option<i32> {
 }
 
 /// Find field index by field ID with fallback to name-based matching
-///
-/// # Limitations
-///
-/// TODO: Currently only supports flat schemas. For nested schemas, this function
-/// would need to accept a field path (e.g., ["address", "city"]) and return
-/// a path of indices. This requires matching nested field IDs at each level
-/// of the schema hierarchy.
 fn find_field_index(
     column_name: &str,
     source_schema: &Schema,
@@ -293,8 +286,6 @@ fn find_field_index(
     // Check if field has a field ID
     if let Some(source_field_id) = get_field_id(source_field) {
         // Search target schema for matching field ID
-        // TODO: For nested schemas, this needs to recursively match field IDs
-        // through the struct hierarchy
         for (idx, target_field) in target_schema.fields().iter().enumerate() {
             if let Some(target_field_id) = get_field_id(target_field)
                 && source_field_id == target_field_id
@@ -322,13 +313,9 @@ fn find_field_index(
 ///
 /// # Limitations
 ///
-/// TODO: Currently only supports flat schemas (top-level columns). Nested field
-/// references (e.g., "address.city") are not yet supported. Supporting nested
-/// fields would require:
-/// - Path-based field ID matching through struct hierarchies
-/// - Recursive traversal of both expression tree and schema tree
-/// - Updates to Column representation to track nested paths
-///
+/// Currently only supports flat schemas (top-level columns). Nested field
+/// references (e.g., "address.city") are not yet supported.
+/// For nested schema see: (<https://github.com/apache/datafusion/issues/20475>)
 /// # Errors
 ///
 /// This function will return an error if any column in the expression cannot be found
