@@ -244,7 +244,7 @@ datafusion.execution.parquet.dictionary_enabled true
 datafusion.execution.parquet.dictionary_page_size_limit 1048576
 datafusion.execution.parquet.enable_page_index true
 datafusion.execution.parquet.encoding NULL
-datafusion.execution.parquet.field_id_read_enabled false
+datafusion.execution.parquet.field_id_enabled false
 datafusion.execution.parquet.force_filter_selections false
 datafusion.execution.parquet.max_predicate_cache_size NULL
 datafusion.execution.parquet.max_row_group_size 1048576

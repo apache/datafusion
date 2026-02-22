@@ -284,8 +284,8 @@ impl ParquetFormat {
     }
 
     /// Get whether field ID reading is enabled from options
-    pub fn field_id_read_enabled(&self) -> bool {
-        self.options.global.field_id_read_enabled
+    pub fn field_id_enabled(&self) -> bool {
+        self.options.global.field_id_enabled
     }
 }
 
@@ -391,7 +391,7 @@ impl FileFormat for ParquetFormat {
                     .with_decryption_properties(file_decryption_properties)
                     .with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)))
                     .with_coerce_int96(coerce_int96)
-                    .with_enable_field_ids(self.field_id_read_enabled())
+                    .with_enable_field_ids(self.field_id_enabled())
                     .fetch_schema_with_location()
                     .await?;
                 Ok::<_, DataFusionError>(result)

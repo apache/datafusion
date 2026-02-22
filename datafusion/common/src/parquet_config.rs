@@ -24,7 +24,7 @@ use crate::error::{DataFusionError, Result};
 /// Metadata key for storing Parquet field IDs in Arrow field metadata.
 ///
 /// Field IDs are stable identifiers for columns in Parquet files that enable
-/// schema evolution with renamed or reordered columns. When `field_id_read_enabled`
+/// schema evolution with renamed or reordered columns. When `field_id_enabled`
 /// is true, DataFusion stores field IDs from Parquet files in Arrow field metadata
 /// using this key, allowing columns to be matched by ID instead of name.
 ///

@@ -568,10 +568,7 @@ impl FileSource for ParquetSource {
             encryption_factory: self.get_encryption_factory_with_config(),
             max_predicate_cache_size: self.max_predicate_cache_size(),
             reverse_row_groups: self.reverse_row_groups,
-            field_id_read_enabled: self
-                .table_parquet_options
-                .global
-                .field_id_read_enabled,
+            field_id_enabled: self.table_parquet_options.global.field_id_enabled,
         });
         Ok(opener)
     }

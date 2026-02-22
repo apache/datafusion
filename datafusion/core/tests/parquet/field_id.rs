@@ -90,7 +90,7 @@ async fn test_read_parquet_with_field_ids_enabled() -> Result<()> {
 
     // Create context with field ID reading enabled
     let ctx = SessionContext::new();
-    ctx.sql("SET datafusion.execution.parquet.field_id_read_enabled = true")
+    ctx.sql("SET datafusion.execution.parquet.field_id_enabled = true")
         .await?
         .collect()
         .await?;
@@ -190,7 +190,7 @@ async fn test_schema_evolution_renamed_columns() -> Result<()> {
 
     // Create context with field ID reading enabled
     let ctx = SessionContext::new();
-    ctx.sql("SET datafusion.execution.parquet.field_id_read_enabled = true")
+    ctx.sql("SET datafusion.execution.parquet.field_id_enabled = true")
         .await?
         .collect()
         .await?;
@@ -247,7 +247,7 @@ async fn test_schema_evolution_reordered_columns() -> Result<()> {
 
     // Create context with field ID reading enabled
     let ctx = SessionContext::new();
-    ctx.sql("SET datafusion.execution.parquet.field_id_read_enabled = true")
+    ctx.sql("SET datafusion.execution.parquet.field_id_enabled = true")
         .await?
         .collect()
         .await?;
@@ -315,7 +315,7 @@ async fn test_projection_with_field_ids() -> Result<()> {
     create_parquet_file_with_field_ids(file_path.to_str().unwrap(), schema, vec![batch])?;
 
     let ctx = SessionContext::new();
-    ctx.sql("SET datafusion.execution.parquet.field_id_read_enabled = true")
+    ctx.sql("SET datafusion.execution.parquet.field_id_enabled = true")
         .await?
         .collect()
         .await?;
@@ -372,7 +372,7 @@ async fn test_filter_with_field_ids() -> Result<()> {
     create_parquet_file_with_field_ids(file_path.to_str().unwrap(), schema, vec![batch])?;
 
     let ctx = SessionContext::new();
-    ctx.sql("SET datafusion.execution.parquet.field_id_read_enabled = true")
+    ctx.sql("SET datafusion.execution.parquet.field_id_enabled = true")
         .await?
         .collect()
         .await?;
@@ -426,7 +426,7 @@ async fn test_aggregation_with_field_ids() -> Result<()> {
     create_parquet_file_with_field_ids(file_path.to_str().unwrap(), schema, vec![batch])?;
 
     let ctx = SessionContext::new();
-    ctx.sql("SET datafusion.execution.parquet.field_id_read_enabled = true")
+    ctx.sql("SET datafusion.execution.parquet.field_id_enabled = true")
         .await?
         .collect()
         .await?;
@@ -512,7 +512,7 @@ async fn test_schema_evolution_added_column() -> Result<()> {
 
     // Create context with field ID reading enabled
     let ctx = SessionContext::new();
-    ctx.sql("SET datafusion.execution.parquet.field_id_read_enabled = true")
+    ctx.sql("SET datafusion.execution.parquet.field_id_enabled = true")
         .await?
         .collect()
         .await?;
@@ -595,7 +595,7 @@ async fn test_schema_evolution_missing_column() -> Result<()> {
 
     // Create context with field ID reading enabled
     let ctx = SessionContext::new();
-    ctx.sql("SET datafusion.execution.parquet.field_id_read_enabled = true")
+    ctx.sql("SET datafusion.execution.parquet.field_id_enabled = true")
         .await?
         .collect()
         .await?;
@@ -682,7 +682,7 @@ async fn test_schema_evolution_column_type_changed() -> Result<()> {
 
     // Create context with field ID reading enabled
     let ctx = SessionContext::new();
-    ctx.sql("SET datafusion.execution.parquet.field_id_read_enabled = true")
+    ctx.sql("SET datafusion.execution.parquet.field_id_enabled = true")
         .await?
         .collect()
         .await?;
@@ -730,7 +730,7 @@ async fn test_schema_evolution_column_type_changed() -> Result<()> {
     Ok(())
 }
 
-/// Test to verify that nested struct types are rejected when field_id_read_enabled = true
+/// Test to verify that nested struct types are rejected when field_id_enabled = true
 #[tokio::test]
 async fn test_nested_struct_with_field_ids_fails_with_clear_error() -> Result<()> {
     let tmp_dir = TempDir::new()?;
@@ -764,7 +764,7 @@ async fn test_nested_struct_with_field_ids_fails_with_clear_error() -> Result<()
     // Write to Parquet
     create_parquet_file_with_field_ids(file_path.to_str().unwrap(), schema, vec![batch])?;
 
-    // Reading with field_id_read_enabled = false should work fine
+    // Reading with field_id_enabled = false should work fine
     let ctx = SessionContext::new();
     ctx.register_parquet(
         "test",
@@ -781,8 +781,8 @@ async fn test_nested_struct_with_field_ids_fails_with_clear_error() -> Result<()
     // Clean up for next test
     ctx.deregister_table("test")?;
 
-    // Now enable field_id_read_enabled
-    ctx.sql("SET datafusion.execution.parquet.field_id_read_enabled = true")
+    // Now enable field_id_enabled
+    ctx.sql("SET datafusion.execution.parquet.field_id_enabled = true")
         .await?
         .collect()
         .await?;
@@ -817,7 +817,7 @@ async fn test_nested_struct_with_field_ids_fails_with_clear_error() -> Result<()
             ctx.sql("SELECT age FROM test").await?;
 
             panic!(
-                "Expected error when registering Parquet file with nested types and field_id_read_enabled=true"
+                "Expected error when registering Parquet file with nested types and field_id_enabled=true"
             );
         }
     }

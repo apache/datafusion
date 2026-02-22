@@ -751,10 +751,10 @@ config_namespace! {
         /// parquet reader setting. 0 means no caching.
         pub max_predicate_cache_size: Option<usize>, default = None
 
-        /// (reading) If true, use Parquet field IDs for column resolution instead of
+        /// If true, use Parquet field IDs for column resolution instead of
         /// column names. This enables schema evolution with renamed/reordered columns.
         /// When field IDs are unavailable, falls back to name-based matching.
-        pub field_id_read_enabled: bool, default = false
+        pub field_id_enabled: bool, default = false
 
         // The following options affect writing to parquet files
         // and map to parquet::file::properties::WriterProperties

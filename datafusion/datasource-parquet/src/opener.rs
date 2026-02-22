@@ -123,7 +123,7 @@ pub(super) struct ParquetOpener {
     /// Whether to read row groups in reverse order
     pub reverse_row_groups: bool,
     /// Whether to use Parquet field IDs for column resolution
-    pub field_id_read_enabled: bool,
+    pub field_id_enabled: bool,
 }
 
 /// Represents a prepared access plan with optional row selection
@@ -209,7 +209,7 @@ impl FileOpener for ParquetOpener {
             )?;
 
         let batch_size = self.batch_size;
-        let field_id_read_enabled = self.field_id_read_enabled;
+        let field_id_enabled = self.field_id_enabled;
 
         // Calculate the output schema from the original projection (before literal replacement)
         // so we get correct field names from column references
@@ -383,7 +383,7 @@ impl FileOpener for ParquetOpener {
             if let Some(merged) = apply_file_schema_type_coercions(
                 &logical_file_schema,
                 &physical_file_schema,
-                field_id_read_enabled,
+                field_id_enabled,
             ) {
                 physical_file_schema = Arc::new(merged);
                 options = options.with_schema(Arc::clone(&physical_file_schema));
@@ -630,7 +630,7 @@ impl FileOpener for ParquetOpener {
             // Rebase column indices to match the narrowed stream schema.
             // The projection expressions have indices based on physical_file_schema,
             // but the stream only contains the columns selected by the ProjectionMask.
-            let projection = if field_id_read_enabled {
+            let projection = if field_id_enabled {
                 projection.try_map_exprs(|expr| {
                     reassign_expr_columns_with_field_ids(
                         expr,
@@ -1080,7 +1080,7 @@ mod test {
         max_predicate_cache_size: Option<usize>,
         reverse_row_groups: bool,
         preserve_order: bool,
-        field_id_read_enabled: bool,
+        field_id_enabled: bool,
     }
 
     impl ParquetOpenerBuilder {
@@ -1107,7 +1107,7 @@ mod test {
                 max_predicate_cache_size: None,
                 reverse_row_groups: false,
                 preserve_order: false,
-                field_id_read_enabled: false,
+                field_id_enabled: false,
             }
         }
 
@@ -1215,7 +1215,7 @@ mod test {
                 encryption_factory: None,
                 max_predicate_cache_size: self.max_predicate_cache_size,
                 reverse_row_groups: self.reverse_row_groups,
-                field_id_read_enabled: self.field_id_read_enabled,
+                field_id_enabled: self.field_id_enabled,
                 preserve_order: self.preserve_order,
             }
         }
