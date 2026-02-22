@@ -1584,3 +1584,14 @@ EXPLAIN SELECT * from ordered ORDER BY a;
 physical_plan
 01)SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
 02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/data/composite_order.csv]]}, projection=[a, b], output_ordering=[a@0 + b@1 ASC NULLS LAST], file_type=csv, has_header=true
+
+# Cleanup
+
+statement ok
+set datafusion.catalog.information_schema = false;
+
+statement ok
+set datafusion.optimizer.repartition_sorts = false;
+
+statement ok
+set datafusion.explain.physical_plan_only = false;

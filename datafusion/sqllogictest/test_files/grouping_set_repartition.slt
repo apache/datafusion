@@ -244,3 +244,6 @@ web nike 700
 
 statement ok
 DROP TABLE sales;
+
+statement ok
+set datafusion.optimizer.repartition_aggregations = false;

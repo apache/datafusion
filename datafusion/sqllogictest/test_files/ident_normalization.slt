@@ -173,3 +173,6 @@ drop table test_pk_constraint;
 # Restore default setting
 statement ok
 set datafusion.sql_parser.enable_ident_normalization = true;
+
+statement ok
+set datafusion.catalog.information_schema = false;

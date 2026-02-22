@@ -306,3 +306,6 @@ logical_plan
 
 statement ok
 DROP TABLE test_data;
+
+statement ok
+set datafusion.explain.logical_plan_only = false;
