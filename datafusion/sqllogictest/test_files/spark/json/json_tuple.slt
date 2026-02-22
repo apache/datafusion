@@ -1,0 +1,154 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Tests for Spark-compatible json_tuple function
+# https://spark.apache.org/docs/latest/api/sql/index.html#json_tuple
+#
+# Test cases derived from Spark JsonExpressionsSuite:
+# https://github.com/apache/spark/blob/master/sql/catalyst/src/test/scala/org/apache/spark/sql/catalyst/expressions/JsonExpressionsSuite.scala
+
+# Scalar: hive key 1
+query ?
+SELECT json_tuple('{"f1":"value1","f2":"value2","f3":3,"f5":5.23}'::STRING, 'f1'::STRING, 'f2'::STRING, 'f3'::STRING, 'f4'::STRING, 'f5'::STRING);
+----
+{c0: value1, c1: value2, c2: 3, c3: NULL, c4: 5.23}
+
+# Scalar: hive key 2
+query ?
+SELECT json_tuple('{"f1":"value12","f3":"value3","f2":2,"f4":4.01}'::STRING, 'f1'::STRING, 'f2'::STRING, 'f3'::STRING, 'f4'::STRING, 'f5'::STRING);
+----
+{c0: value12, c1: 2, c2: value3, c3: 4.01, c4: NULL}
+
+# Scalar: hive key 3
+query ?
+SELECT json_tuple('{"f1":"value13","f4":"value44","f3":"value33","f2":2,"f5":5.01}'::STRING, 'f1'::STRING, 'f2'::STRING, 'f3'::STRING, 'f4'::STRING, 'f5'::STRING);
+----
+{c0: value13, c1: 2, c2: value33, c3: value44, c4: 5.01}
+
+# Scalar: null JSON input
+query ?
+SELECT json_tuple(NULL::STRING, 'f1'::STRING, 'f2'::STRING, 'f3'::STRING, 'f4'::STRING, 'f5'::STRING);
+----
+NULL
+
+# Scalar: null and empty values
+query ?
+SELECT json_tuple('{"f1":"","f5":null}'::STRING, 'f1'::STRING, 'f2'::STRING, 'f3'::STRING, 'f4'::STRING, 'f5'::STRING);
+----
+{c0: , c1: NULL, c2: NULL, c3: NULL, c4: NULL}
+
+# Scalar: invalid JSON (array)
+query ?
+SELECT json_tuple('[invalid JSON string]'::STRING, 'f1'::STRING);
+----
+NULL
+
+# Scalar: invalid JSON (start only)
+query ?
+SELECT json_tuple('{'::STRING, 'f1'::STRING);
+----
+NULL
+
+# Scalar: invalid JSON (no closing brace)
+query ?
+SELECT json_tuple('{"foo":"bar"'::STRING, 'f1'::STRING);
+----
+NULL
+
+# Scalar: invalid JSON (backslash)
+query ?
+SELECT json_tuple('\'::STRING, 'f1'::STRING);
+----
+NULL
+
+# Scalar: invalid JSON (quoted string, not an object)
+query ?
+SELECT json_tuple('"quote'::STRING, '"quote'::STRING);
+----
+NULL
+
+# Scalar: empty JSON object
+query ?
+SELECT json_tuple('{}'::STRING, 'a'::STRING);
+----
+{c0: NULL}
+
+# Array: multi-row test
+query ?
+SELECT json_tuple(col, 'f1'::STRING, 'f2'::STRING) FROM (VALUES
+    ('{"f1":"a","f2":"b"}'::STRING),
+    (NULL::STRING),
+    ('{"f1":"c"}'::STRING),
+    ('invalid'::STRING)
+) AS t(col);
+----
+{c0: a, c1: b}
+NULL
+{c0: c, c1: NULL}
+NULL
+
+# Array: SPARK-21677 null field key
+query ?
+SELECT json_tuple(col1, col2, col3, col4) FROM (VALUES
+    ('{"f1":1,"f2":2}'::STRING, 'f1'::STRING, NULL::STRING, 'f2'::STRING)
+) AS t(col1, col2, col3, col4);
+----
+{c0: 1, c1: NULL, c2: 2}
+
+# Array: SPARK-21804 repeated field
+query ?
+SELECT json_tuple(col1, col2, col3, col4) FROM (VALUES
+    ('{"f1":1,"f2":2}'::STRING, 'f1'::STRING, NULL::STRING, 'f1'::STRING)
+) AS t(col1, col2, col3, col4);
+----
+{c0: 1, c1: NULL, c2: 1}
+
+# Edge case: both json and field key are null
+query ?
+SELECT json_tuple(NULL::STRING, NULL::STRING);
+----
+NULL
+
+# Edge case: empty string json and empty string key
+query ?
+SELECT json_tuple(''::STRING, ''::STRING);
+----
+NULL
+
+# Edge case: mixed upper/lower case keys
+query ?
+SELECT json_tuple('{"Name":"Alice","name":"bob","NAME":"Charlie"}'::STRING, 'Name'::STRING, 'name'::STRING, 'NAME'::STRING);
+----
+{c0: Alice, c1: bob, c2: Charlie}
+
+# Edge case: UTF-8 Chinese characters
+query ?
+SELECT json_tuple('{"姓名":"小明","城市":"台北"}'::STRING, '姓名'::STRING, '城市'::STRING);
+----
+{c0: 小明, c1: 台北}
+
+# Edge case: UTF-8 Cyrillic characters
+query ?
+SELECT json_tuple('{"имя":"Иван","город":"Москва"}'::STRING, 'имя'::STRING, 'город'::STRING);
+----
+{c0: Иван, c1: Москва}
+
+# Verify return type with arrow_typeof
+query T
+SELECT arrow_typeof(json_tuple('{"a":1}'::STRING, 'a'::STRING));
+----
+Struct("c0": Utf8)

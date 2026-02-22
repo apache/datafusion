@@ -15,19 +15,31 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::array::{ArrayRef, Int64Array, ListArray, StringArray};
+use arrow::buffer::OffsetBuffer;
+use arrow::datatypes::{DataType, Field};
 use criterion::{
     criterion_group, criterion_main, {BenchmarkId, Criterion},
 };
-use datafusion_expr::lit;
-use datafusion_functions_nested::expr_fn::{
-    array_has, array_has_all, array_has_any, make_array,
-};
+use datafusion_common::ScalarValue;
+use datafusion_common::config::ConfigOptions;
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
+use datafusion_functions_nested::array_has::{ArrayHas, ArrayHasAll, ArrayHasAny};
+use rand::Rng;
+use rand::SeedableRng;
+use rand::rngs::StdRng;
 use std::hint::black_box;
+use std::sync::Arc;
+
+const NUM_ROWS: usize = 10000;
+const SEED: u64 = 42;
+const NULL_DENSITY: f64 = 0.1;
+const NEEDLE_SIZE: usize = 3;
 
 // If not explicitly stated, `array` and `array_size` refer to the haystack array.
 fn criterion_benchmark(c: &mut Criterion) {
     // Test different array sizes
-    let array_sizes = vec![1, 10, 100, 1000, 10000];
+    let array_sizes = vec![10, 100, 500];
 
     for &size in &array_sizes {
         bench_array_has(c, size);
@@ -39,50 +51,65 @@ fn criterion_benchmark(c: &mut Criterion) {
     bench_array_has_strings(c);
     bench_array_has_all_strings(c);
     bench_array_has_any_strings(c);
-
-    // Edge cases
-    bench_array_has_edge_cases(c);
 }
 
 fn bench_array_has(c: &mut Criterion, array_size: usize) {
     let mut group = c.benchmark_group("array_has_i64");
+    let list_array = create_int64_list_array(NUM_ROWS, array_size, NULL_DENSITY);
+    let config_options = Arc::new(ConfigOptions::default());
+    let return_field: Arc<Field> = Field::new("result", DataType::Boolean, true).into();
+    let arg_fields: Vec<Arc<Field>> = vec![
+        Field::new("arr", list_array.data_type().clone(), false).into(),
+        Field::new("el", DataType::Int64, false).into(),
+    ];
 
-    // Benchmark: element found at beginning
+    // Benchmark: element found
+    let args_found = vec![
+        ColumnarValue::Array(list_array.clone()),
+        ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
+    ];
     group.bench_with_input(
-        BenchmarkId::new("found_at_start", array_size),
+        BenchmarkId::new("found", array_size),
         &array_size,
-        |b, &size| {
-            let array = (0..size).map(|i| lit(i as i64)).collect::<Vec<_>>();
-            let list_array = make_array(array);
-            let needle = lit(0_i64);
-
-            b.iter(|| black_box(array_has(list_array.clone(), needle.clone())))
-        },
-    );
-
-    // Benchmark: element found at end
-    group.bench_with_input(
-        BenchmarkId::new("found_at_end", array_size),
-        &array_size,
-        |b, &size| {
-            let array = (0..size).map(|i| lit(i as i64)).collect::<Vec<_>>();
-            let list_array = make_array(array);
-            let needle = lit((size - 1) as i64);
-
-            b.iter(|| black_box(array_has(list_array.clone(), needle.clone())))
+        |b, _| {
+            let udf = ArrayHas::new();
+            b.iter(|| {
+                black_box(
+                    udf.invoke_with_args(ScalarFunctionArgs {
+                        args: args_found.clone(),
+                        arg_fields: arg_fields.clone(),
+                        number_rows: NUM_ROWS,
+                        return_field: return_field.clone(),
+                        config_options: config_options.clone(),
+                    })
+                    .unwrap(),
+                )
+            })
         },
     );
 
     // Benchmark: element not found
+    let args_not_found = vec![
+        ColumnarValue::Array(list_array.clone()),
+        ColumnarValue::Scalar(ScalarValue::Int64(Some(-999))),
+    ];
     group.bench_with_input(
         BenchmarkId::new("not_found", array_size),
         &array_size,
-        |b, &size| {
-            let array = (0..size).map(|i| lit(i as i64)).collect::<Vec<_>>();
-            let list_array = make_array(array);
-            let needle = lit(-1_i64); // Not in array
-
-            b.iter(|| black_box(array_has(list_array.clone(), needle.clone())))
+        |b, _| {
+            let udf = ArrayHas::new();
+            b.iter(|| {
+                black_box(
+                    udf.invoke_with_args(ScalarFunctionArgs {
+                        args: args_not_found.clone(),
+                        arg_fields: arg_fields.clone(),
+                        number_rows: NUM_ROWS,
+                        return_field: return_field.clone(),
+                        config_options: config_options.clone(),
+                    })
+                    .unwrap(),
+                )
+            })
         },
     );
 
@@ -91,45 +118,65 @@ fn bench_array_has(c: &mut Criterion, array_size: usize) {
 
 fn bench_array_has_all(c: &mut Criterion, array_size: usize) {
     let mut group = c.benchmark_group("array_has_all");
+    let haystack = create_int64_list_array(NUM_ROWS, array_size, NULL_DENSITY);
+    let list_type = haystack.data_type().clone();
+    let config_options = Arc::new(ConfigOptions::default());
+    let return_field: Arc<Field> = Field::new("result", DataType::Boolean, true).into();
+    let arg_fields: Vec<Arc<Field>> = vec![
+        Field::new("haystack", list_type.clone(), false).into(),
+        Field::new("needle", list_type.clone(), false).into(),
+    ];
 
     // Benchmark: all elements found (small needle)
+    let needle_found = create_int64_list_array(NUM_ROWS, NEEDLE_SIZE, 0.0);
+    let args_found = vec![
+        ColumnarValue::Array(haystack.clone()),
+        ColumnarValue::Array(needle_found),
+    ];
     group.bench_with_input(
         BenchmarkId::new("all_found_small_needle", array_size),
         &array_size,
-        |b, &size| {
-            let array = (0..size).map(|i| lit(i as i64)).collect::<Vec<_>>();
-            let list_array = make_array(array);
-            let needle_array = make_array(vec![lit(0_i64), lit(1_i64), lit(2_i64)]);
-
-            b.iter(|| black_box(array_has_all(list_array.clone(), needle_array.clone())))
+        |b, _| {
+            let udf = ArrayHasAll::new();
+            b.iter(|| {
+                black_box(
+                    udf.invoke_with_args(ScalarFunctionArgs {
+                        args: args_found.clone(),
+                        arg_fields: arg_fields.clone(),
+                        number_rows: NUM_ROWS,
+                        return_field: return_field.clone(),
+                        config_options: config_options.clone(),
+                    })
+                    .unwrap(),
+                )
+            })
         },
     );
 
-    // Benchmark: all elements found (medium needle - 10% of haystack)
+    // Benchmark: not all found (needle contains elements outside haystack range)
+    let needle_missing =
+        create_int64_list_array_with_offset(NUM_ROWS, NEEDLE_SIZE, array_size as i64);
+    let args_missing = vec![
+        ColumnarValue::Array(haystack.clone()),
+        ColumnarValue::Array(needle_missing),
+    ];
     group.bench_with_input(
-        BenchmarkId::new("all_found_medium_needle", array_size),
+        BenchmarkId::new("not_all_found", array_size),
         &array_size,
-        |b, &size| {
-            let array = (0..size).map(|i| lit(i as i64)).collect::<Vec<_>>();
-            let list_array = make_array(array);
-            let needle_size = (size / 10).max(1);
-            let needle = (0..needle_size).map(|i| lit(i as i64)).collect::<Vec<_>>();
-            let needle_array = make_array(needle);
-
-            b.iter(|| black_box(array_has_all(list_array.clone(), needle_array.clone())))
-        },
-    );
-
-    // Benchmark: not all found (early exit)
-    group.bench_with_input(
-        BenchmarkId::new("early_exit", array_size),
-        &array_size,
-        |b, &size| {
-            let array = (0..size).map(|i| lit(i as i64)).collect::<Vec<_>>();
-            let list_array = make_array(array);
-            let needle_array = make_array(vec![lit(0_i64), lit(-1_i64)]); // -1 not in array
-
-            b.iter(|| black_box(array_has_all(list_array.clone(), needle_array.clone())))
+        |b, _| {
+            let udf = ArrayHasAll::new();
+            b.iter(|| {
+                black_box(
+                    udf.invoke_with_args(ScalarFunctionArgs {
+                        args: args_missing.clone(),
+                        arg_fields: arg_fields.clone(),
+                        number_rows: NUM_ROWS,
+                        return_field: return_field.clone(),
+                        config_options: config_options.clone(),
+                    })
+                    .unwrap(),
+                )
+            })
         },
     );
 
@@ -138,43 +185,65 @@ fn bench_array_has_all(c: &mut Criterion, array_size: usize) {
 
 fn bench_array_has_any(c: &mut Criterion, array_size: usize) {
     let mut group = c.benchmark_group("array_has_any");
+    let haystack = create_int64_list_array(NUM_ROWS, array_size, NULL_DENSITY);
+    let list_type = haystack.data_type().clone();
+    let config_options = Arc::new(ConfigOptions::default());
+    let return_field: Arc<Field> = Field::new("result", DataType::Boolean, true).into();
+    let arg_fields: Vec<Arc<Field>> = vec![
+        Field::new("haystack", list_type.clone(), false).into(),
+        Field::new("needle", list_type.clone(), false).into(),
+    ];
 
-    // Benchmark: first element matches (best case)
+    // Benchmark: some elements match
+    let needle_match = create_int64_list_array(NUM_ROWS, NEEDLE_SIZE, 0.0);
+    let args_match = vec![
+        ColumnarValue::Array(haystack.clone()),
+        ColumnarValue::Array(needle_match),
+    ];
     group.bench_with_input(
-        BenchmarkId::new("first_match", array_size),
+        BenchmarkId::new("some_match", array_size),
         &array_size,
-        |b, &size| {
-            let array = (0..size).map(|i| lit(i as i64)).collect::<Vec<_>>();
-            let list_array = make_array(array);
-            let needle_array = make_array(vec![lit(0_i64), lit(-1_i64), lit(-2_i64)]);
-
-            b.iter(|| black_box(array_has_any(list_array.clone(), needle_array.clone())))
-        },
-    );
-
-    // Benchmark: last element matches (worst case)
-    group.bench_with_input(
-        BenchmarkId::new("last_match", array_size),
-        &array_size,
-        |b, &size| {
-            let array = (0..size).map(|i| lit(i as i64)).collect::<Vec<_>>();
-            let list_array = make_array(array);
-            let needle_array = make_array(vec![lit(-1_i64), lit(-2_i64), lit(0_i64)]);
-
-            b.iter(|| black_box(array_has_any(list_array.clone(), needle_array.clone())))
+        |b, _| {
+            let udf = ArrayHasAny::new();
+            b.iter(|| {
+                black_box(
+                    udf.invoke_with_args(ScalarFunctionArgs {
+                        args: args_match.clone(),
+                        arg_fields: arg_fields.clone(),
+                        number_rows: NUM_ROWS,
+                        return_field: return_field.clone(),
+                        config_options: config_options.clone(),
+                    })
+                    .unwrap(),
+                )
+            })
         },
     );
 
     // Benchmark: no match
+    let needle_no_match =
+        create_int64_list_array_with_offset(NUM_ROWS, NEEDLE_SIZE, array_size as i64);
+    let args_no_match = vec![
+        ColumnarValue::Array(haystack.clone()),
+        ColumnarValue::Array(needle_no_match),
+    ];
     group.bench_with_input(
         BenchmarkId::new("no_match", array_size),
         &array_size,
-        |b, &size| {
-            let array = (0..size).map(|i| lit(i as i64)).collect::<Vec<_>>();
-            let list_array = make_array(array);
-            let needle_array = make_array(vec![lit(-1_i64), lit(-2_i64), lit(-3_i64)]);
-
-            b.iter(|| black_box(array_has_any(list_array.clone(), needle_array.clone())))
+        |b, _| {
+            let udf = ArrayHasAny::new();
+            b.iter(|| {
+                black_box(
+                    udf.invoke_with_args(ScalarFunctionArgs {
+                        args: args_no_match.clone(),
+                        arg_fields: arg_fields.clone(),
+                        number_rows: NUM_ROWS,
+                        return_field: return_field.clone(),
+                        config_options: config_options.clone(),
+                    })
+                    .unwrap(),
+                )
+            })
         },
     );
 
@@ -183,29 +252,56 @@ fn bench_array_has_any(c: &mut Criterion, array_size: usize) {
 
 fn bench_array_has_strings(c: &mut Criterion) {
     let mut group = c.benchmark_group("array_has_strings");
+    let config_options = Arc::new(ConfigOptions::default());
+    let return_field: Arc<Field> = Field::new("result", DataType::Boolean, true).into();
 
-    // Benchmark with string arrays (common use case for tickers, tags, etc.)
-    let sizes = vec![10, 100, 1000];
+    let sizes = vec![10, 100, 500];
 
     for &size in &sizes {
-        group.bench_with_input(BenchmarkId::new("found", size), &size, |b, &size| {
-            let array = (0..size)
-                .map(|i| lit(format!("TICKER{i:04}")))
-                .collect::<Vec<_>>();
-            let list_array = make_array(array);
-            let needle = lit("TICKER0005");
+        let list_array = create_string_list_array(NUM_ROWS, size, NULL_DENSITY);
+        let arg_fields: Vec<Arc<Field>> = vec![
+            Field::new("arr", list_array.data_type().clone(), false).into(),
+            Field::new("el", DataType::Utf8, false).into(),
+        ];
 
-            b.iter(|| black_box(array_has(list_array.clone(), needle.clone())))
+        let args_found = vec![
+            ColumnarValue::Array(list_array.clone()),
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some("value_1".to_string()))),
+        ];
+        group.bench_with_input(BenchmarkId::new("found", size), &size, |b, _| {
+            let udf = ArrayHas::new();
+            b.iter(|| {
+                black_box(
+                    udf.invoke_with_args(ScalarFunctionArgs {
+                        args: args_found.clone(),
+                        arg_fields: arg_fields.clone(),
+                        number_rows: NUM_ROWS,
+                        return_field: return_field.clone(),
+                        config_options: config_options.clone(),
+                    })
+                    .unwrap(),
+                )
+            })
         });
 
-        group.bench_with_input(BenchmarkId::new("not_found", size), &size, |b, &size| {
-            let array = (0..size)
-                .map(|i| lit(format!("TICKER{i:04}")))
-                .collect::<Vec<_>>();
-            let list_array = make_array(array);
-            let needle = lit("NOTFOUND");
-
-            b.iter(|| black_box(array_has(list_array.clone(), needle.clone())))
+        let args_not_found = vec![
+            ColumnarValue::Array(list_array.clone()),
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some("NOTFOUND".to_string()))),
+        ];
+        group.bench_with_input(BenchmarkId::new("not_found", size), &size, |b, _| {
+            let udf = ArrayHas::new();
+            b.iter(|| {
+                black_box(
+                    udf.invoke_with_args(ScalarFunctionArgs {
+                        args: args_not_found.clone(),
+                        arg_fields: arg_fields.clone(),
+                        number_rows: NUM_ROWS,
+                        return_field: return_field.clone(),
+                        config_options: config_options.clone(),
+                    })
+                    .unwrap(),
+                )
+            })
         });
     }
 
@@ -214,52 +310,61 @@ fn bench_array_has_strings(c: &mut Criterion) {
 
 fn bench_array_has_all_strings(c: &mut Criterion) {
     let mut group = c.benchmark_group("array_has_all_strings");
+    let config_options = Arc::new(ConfigOptions::default());
+    let return_field: Arc<Field> = Field::new("result", DataType::Boolean, true).into();
 
-    // Realistic scenario: checking if a portfolio contains certain tickers
-    let portfolio_size = 100;
-    let check_sizes = vec![1, 3, 5, 10];
+    let sizes = vec![10, 100, 500];
 
-    for &check_size in &check_sizes {
-        group.bench_with_input(
-            BenchmarkId::new("all_found", check_size),
-            &check_size,
-            |b, &check_size| {
-                let portfolio = (0..portfolio_size)
-                    .map(|i| lit(format!("TICKER{i:04}")))
-                    .collect::<Vec<_>>();
-                let list_array = make_array(portfolio);
+    for &size in &sizes {
+        let haystack = create_string_list_array(NUM_ROWS, size, NULL_DENSITY);
+        let list_type = haystack.data_type().clone();
+        let arg_fields: Vec<Arc<Field>> = vec![
+            Field::new("haystack", list_type.clone(), false).into(),
+            Field::new("needle", list_type.clone(), false).into(),
+        ];
 
-                let checking = (0..check_size)
-                    .map(|i| lit(format!("TICKER{i:04}")))
-                    .collect::<Vec<_>>();
-                let needle_array = make_array(checking);
+        let needle_found = create_string_list_array(NUM_ROWS, NEEDLE_SIZE, 0.0);
+        let args_found = vec![
+            ColumnarValue::Array(haystack.clone()),
+            ColumnarValue::Array(needle_found),
+        ];
+        group.bench_with_input(BenchmarkId::new("all_found", size), &size, |b, _| {
+            let udf = ArrayHasAll::new();
+            b.iter(|| {
+                black_box(
+                    udf.invoke_with_args(ScalarFunctionArgs {
+                        args: args_found.clone(),
+                        arg_fields: arg_fields.clone(),
+                        number_rows: NUM_ROWS,
+                        return_field: return_field.clone(),
+                        config_options: config_options.clone(),
+                    })
+                    .unwrap(),
+                )
+            })
+        });
 
-                b.iter(|| {
-                    black_box(array_has_all(list_array.clone(), needle_array.clone()))
-                })
-            },
-        );
-
-        group.bench_with_input(
-            BenchmarkId::new("some_missing", check_size),
-            &check_size,
-            |b, &check_size| {
-                let portfolio = (0..portfolio_size)
-                    .map(|i| lit(format!("TICKER{i:04}")))
-                    .collect::<Vec<_>>();
-                let list_array = make_array(portfolio);
-
-                let mut checking = (0..check_size - 1)
-                    .map(|i| lit(format!("TICKER{i:04}")))
-                    .collect::<Vec<_>>();
-                checking.push(lit("NOTFOUND".to_string()));
-                let needle_array = make_array(checking);
-
-                b.iter(|| {
-                    black_box(array_has_all(list_array.clone(), needle_array.clone()))
-                })
-            },
-        );
+        let needle_missing =
+            create_string_list_array_with_prefix(NUM_ROWS, NEEDLE_SIZE, "missing_");
+        let args_missing = vec![
+            ColumnarValue::Array(haystack.clone()),
+            ColumnarValue::Array(needle_missing),
+        ];
+        group.bench_with_input(BenchmarkId::new("not_all_found", size), &size, |b, _| {
+            let udf = ArrayHasAll::new();
+            b.iter(|| {
+                black_box(
+                    udf.invoke_with_args(ScalarFunctionArgs {
+                        args: args_missing.clone(),
+                        arg_fields: arg_fields.clone(),
+                        number_rows: NUM_ROWS,
+                        return_field: return_field.clone(),
+                        config_options: config_options.clone(),
+                    })
+                    .unwrap(),
+                )
+            })
+        });
     }
 
     group.finish();
@@ -267,109 +372,180 @@ fn bench_array_has_all_strings(c: &mut Criterion) {
 
 fn bench_array_has_any_strings(c: &mut Criterion) {
     let mut group = c.benchmark_group("array_has_any_strings");
+    let config_options = Arc::new(ConfigOptions::default());
+    let return_field: Arc<Field> = Field::new("result", DataType::Boolean, true).into();
 
-    let portfolio_size = 100;
-    let check_sizes = vec![1, 3, 5, 10];
+    let sizes = vec![10, 100, 500];
 
-    for &check_size in &check_sizes {
-        group.bench_with_input(
-            BenchmarkId::new("first_matches", check_size),
-            &check_size,
-            |b, &check_size| {
-                let portfolio = (0..portfolio_size)
-                    .map(|i| lit(format!("TICKER{i:04}")))
-                    .collect::<Vec<_>>();
-                let list_array = make_array(portfolio);
+    for &size in &sizes {
+        let haystack = create_string_list_array(NUM_ROWS, size, NULL_DENSITY);
+        let list_type = haystack.data_type().clone();
+        let arg_fields: Vec<Arc<Field>> = vec![
+            Field::new("haystack", list_type.clone(), false).into(),
+            Field::new("needle", list_type.clone(), false).into(),
+        ];
 
-                let mut checking = vec![lit("TICKER0000".to_string())];
-                checking.extend((1..check_size).map(|_| lit("NOTFOUND".to_string())));
-                let needle_array = make_array(checking);
+        let needle_match = create_string_list_array(NUM_ROWS, NEEDLE_SIZE, 0.0);
+        let args_match = vec![
+            ColumnarValue::Array(haystack.clone()),
+            ColumnarValue::Array(needle_match),
+        ];
+        group.bench_with_input(BenchmarkId::new("some_match", size), &size, |b, _| {
+            let udf = ArrayHasAny::new();
+            b.iter(|| {
+                black_box(
+                    udf.invoke_with_args(ScalarFunctionArgs {
+                        args: args_match.clone(),
+                        arg_fields: arg_fields.clone(),
+                        number_rows: NUM_ROWS,
+                        return_field: return_field.clone(),
+                        config_options: config_options.clone(),
+                    })
+                    .unwrap(),
+                )
+            })
+        });
 
-                b.iter(|| {
-                    black_box(array_has_any(list_array.clone(), needle_array.clone()))
-                })
-            },
-        );
-
-        group.bench_with_input(
-            BenchmarkId::new("none_match", check_size),
-            &check_size,
-            |b, &check_size| {
-                let portfolio = (0..portfolio_size)
-                    .map(|i| lit(format!("TICKER{i:04}")))
-                    .collect::<Vec<_>>();
-                let list_array = make_array(portfolio);
-
-                let checking = (0..check_size)
-                    .map(|i| lit(format!("NOTFOUND{i}")))
-                    .collect::<Vec<_>>();
-                let needle_array = make_array(checking);
-
-                b.iter(|| {
-                    black_box(array_has_any(list_array.clone(), needle_array.clone()))
-                })
-            },
-        );
+        let needle_no_match =
+            create_string_list_array_with_prefix(NUM_ROWS, NEEDLE_SIZE, "missing_");
+        let args_no_match = vec![
+            ColumnarValue::Array(haystack.clone()),
+            ColumnarValue::Array(needle_no_match),
+        ];
+        group.bench_with_input(BenchmarkId::new("no_match", size), &size, |b, _| {
+            let udf = ArrayHasAny::new();
+            b.iter(|| {
+                black_box(
+                    udf.invoke_with_args(ScalarFunctionArgs {
+                        args: args_no_match.clone(),
+                        arg_fields: arg_fields.clone(),
+                        number_rows: NUM_ROWS,
+                        return_field: return_field.clone(),
+                        config_options: config_options.clone(),
+                    })
+                    .unwrap(),
+                )
+            })
+        });
     }
 
     group.finish();
 }
 
-fn bench_array_has_edge_cases(c: &mut Criterion) {
-    let mut group = c.benchmark_group("array_has_edge_cases");
+fn create_int64_list_array(
+    num_rows: usize,
+    array_size: usize,
+    null_density: f64,
+) -> ArrayRef {
+    let mut rng = StdRng::seed_from_u64(SEED);
+    let values = (0..num_rows * array_size)
+        .map(|_| {
+            if rng.random::<f64>() < null_density {
+                None
+            } else {
+                Some(rng.random_range(0..array_size as i64))
+            }
+        })
+        .collect::<Int64Array>();
+    let offsets = (0..=num_rows)
+        .map(|i| (i * array_size) as i32)
+        .collect::<Vec<i32>>();
 
-    // Empty array
-    group.bench_function("empty_array", |b| {
-        let list_array = make_array(vec![]);
-        let needle = lit(1_i64);
+    Arc::new(
+        ListArray::try_new(
+            Arc::new(Field::new("item", DataType::Int64, true)),
+            OffsetBuffer::new(offsets.into()),
+            Arc::new(values),
+            None,
+        )
+        .unwrap(),
+    )
+}
 
-        b.iter(|| black_box(array_has(list_array.clone(), needle.clone())))
-    });
+/// Like `create_int64_list_array` but values are offset so they won't
+/// appear in a standard list array (useful for "not found" benchmarks).
+fn create_int64_list_array_with_offset(
+    num_rows: usize,
+    array_size: usize,
+    offset: i64,
+) -> ArrayRef {
+    let mut rng = StdRng::seed_from_u64(SEED + 1);
+    let values = (0..num_rows * array_size)
+        .map(|_| Some(rng.random_range(0..array_size as i64) + offset))
+        .collect::<Int64Array>();
+    let offsets = (0..=num_rows)
+        .map(|i| (i * array_size) as i32)
+        .collect::<Vec<i32>>();
 
-    // Single element array - found
-    group.bench_function("single_element_found", |b| {
-        let list_array = make_array(vec![lit(1_i64)]);
-        let needle = lit(1_i64);
+    Arc::new(
+        ListArray::try_new(
+            Arc::new(Field::new("item", DataType::Int64, true)),
+            OffsetBuffer::new(offsets.into()),
+            Arc::new(values),
+            None,
+        )
+        .unwrap(),
+    )
+}
 
-        b.iter(|| black_box(array_has(list_array.clone(), needle.clone())))
-    });
+fn create_string_list_array(
+    num_rows: usize,
+    array_size: usize,
+    null_density: f64,
+) -> ArrayRef {
+    let mut rng = StdRng::seed_from_u64(SEED);
+    let values = (0..num_rows * array_size)
+        .map(|_| {
+            if rng.random::<f64>() < null_density {
+                None
+            } else {
+                let idx = rng.random_range(0..array_size);
+                Some(format!("value_{idx}"))
+            }
+        })
+        .collect::<StringArray>();
+    let offsets = (0..=num_rows)
+        .map(|i| (i * array_size) as i32)
+        .collect::<Vec<i32>>();
 
-    // Single element array - not found
-    group.bench_function("single_element_not_found", |b| {
-        let list_array = make_array(vec![lit(1_i64)]);
-        let needle = lit(2_i64);
+    Arc::new(
+        ListArray::try_new(
+            Arc::new(Field::new("item", DataType::Utf8, true)),
+            OffsetBuffer::new(offsets.into()),
+            Arc::new(values),
+            None,
+        )
+        .unwrap(),
+    )
+}
 
-        b.iter(|| black_box(array_has(list_array.clone(), needle.clone())))
-    });
+/// Like `create_string_list_array` but values use a different prefix so
+/// they won't appear in a standard string list array.
+fn create_string_list_array_with_prefix(
+    num_rows: usize,
+    array_size: usize,
+    prefix: &str,
+) -> ArrayRef {
+    let mut rng = StdRng::seed_from_u64(SEED + 1);
+    let values = (0..num_rows * array_size)
+        .map(|_| {
+            let idx = rng.random_range(0..array_size);
+            Some(format!("{prefix}{idx}"))
+        })
+        .collect::<StringArray>();
+    let offsets = (0..=num_rows)
+        .map(|i| (i * array_size) as i32)
+        .collect::<Vec<i32>>();
 
-    // Array with duplicates
-    group.bench_function("array_with_duplicates", |b| {
-        let array = vec![lit(1_i64); 1000];
-        let list_array = make_array(array);
-        let needle = lit(1_i64);
-
-        b.iter(|| black_box(array_has(list_array.clone(), needle.clone())))
-    });
-
-    // array_has_all: empty needle
-    group.bench_function("array_has_all_empty_needle", |b| {
-        let array = (0..1000).map(|i| lit(i as i64)).collect::<Vec<_>>();
-        let list_array = make_array(array);
-        let needle_array = make_array(vec![]);
-
-        b.iter(|| black_box(array_has_all(list_array.clone(), needle_array.clone())))
-    });
-
-    // array_has_any: empty needle
-    group.bench_function("array_has_any_empty_needle", |b| {
-        let array = (0..1000).map(|i| lit(i as i64)).collect::<Vec<_>>();
-        let list_array = make_array(array);
-        let needle_array = make_array(vec![]);
-
-        b.iter(|| black_box(array_has_any(list_array.clone(), needle_array.clone())))
-    });
-
-    group.finish();
+    Arc::new(
+        ListArray::try_new(
+            Arc::new(Field::new("item", DataType::Utf8, true)),
+            OffsetBuffer::new(offsets.into()),
+            Arc::new(values),
+            None,
+        )
+        .unwrap(),
+    )
 }
 
 criterion_group!(benches, criterion_benchmark);
