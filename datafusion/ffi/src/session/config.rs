@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
 use std::ffi::c_void;
 
+use crate::config::FFI_ConfigOptions;
 use abi_stable::StableAbi;
-use abi_stable::std_types::{RHashMap, RString};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::{DataFusionError, Result};
 use datafusion_execution::config::SessionConfig;
 
@@ -37,9 +37,8 @@ use datafusion_execution::config::SessionConfig;
 #[repr(C)]
 #[derive(Debug, StableAbi)]
 pub struct FFI_SessionConfig {
-    /// Return a hash map from key to value of the config options represented
-    /// by string values.
-    pub config_options: unsafe extern "C" fn(config: &Self) -> RHashMap<RString, RString>,
+    /// FFI stable configuration options.
+    pub config_options: FFI_ConfigOptions,
 
     /// Used to create a clone on the provider of the execution plan. This should
     /// only need to be called by the receiver of the plan.
@@ -67,21 +66,6 @@ impl FFI_SessionConfig {
     }
 }
 
-unsafe extern "C" fn config_options_fn_wrapper(
-    config: &FFI_SessionConfig,
-) -> RHashMap<RString, RString> {
-    let config_options = config.inner().options();
-
-    let mut options = RHashMap::default();
-    for config_entry in config_options.entries() {
-        if let Some(value) = config_entry.value {
-            options.insert(config_entry.key.into(), value.into());
-        }
-    }
-
-    options
-}
-
 unsafe extern "C" fn release_fn_wrapper(config: &mut FFI_SessionConfig) {
     unsafe {
         debug_assert!(!config.private_data.is_null());
@@ -100,7 +84,7 @@ unsafe extern "C" fn clone_fn_wrapper(config: &FFI_SessionConfig) -> FFI_Session
         let private_data = Box::new(SessionConfigPrivateData { config: old_config });
 
         FFI_SessionConfig {
-            config_options: config_options_fn_wrapper,
+            config_options: config.config_options.clone(),
             private_data: Box::into_raw(private_data) as *mut c_void,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
@@ -119,8 +103,10 @@ impl From<&SessionConfig> for FFI_SessionConfig {
             config: session.clone(),
         });
 
+        let config_options = FFI_ConfigOptions::from(session.options().as_ref());
+
         Self {
-            config_options: config_options_fn_wrapper,
+            config_options,
             private_data: Box::into_raw(private_data) as *mut c_void,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
@@ -149,14 +135,9 @@ impl TryFrom<&FFI_SessionConfig> for SessionConfig {
             return Ok(config.inner().clone());
         }
 
-        let config_options = unsafe { (config.config_options)(config) };
+        let config_options = ConfigOptions::try_from(config.config_options.clone())?;
 
-        let mut options_map = HashMap::new();
-        config_options.iter().for_each(|kv_pair| {
-            options_map.insert(kv_pair.0.to_string(), kv_pair.1.to_string());
-        });
-
-        SessionConfig::from_string_hash_map(&options_map)
+        Ok(SessionConfig::from(config_options))
     }
 }
 

@@ -36,6 +36,7 @@ use udf_udaf_udwf::{
 
 use crate::catalog_provider::FFI_CatalogProvider;
 use crate::catalog_provider_list::FFI_CatalogProviderList;
+use crate::config::extension_options::FFI_ExtensionOptions;
 use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
 use crate::table_provider::FFI_TableProvider;
 use crate::table_provider_factory::FFI_TableProviderFactory;
@@ -47,6 +48,7 @@ use crate::udwf::FFI_WindowUDF;
 
 mod async_provider;
 pub mod catalog;
+pub mod config;
 mod sync_provider;
 mod table_provider_factory;
 mod udf_udaf_udwf;
@@ -92,6 +94,9 @@ pub struct ForeignLibraryModule {
     pub create_stddev_udaf: extern "C" fn() -> FFI_AggregateUDF,
 
     pub create_rank_udwf: extern "C" fn() -> FFI_WindowUDF,
+
+    /// Create extension options, for either ConfigOptions or TableOptions
+    pub create_extension_options: extern "C" fn() -> FFI_ExtensionOptions,
 
     pub version: extern "C" fn() -> u64,
 }
@@ -156,6 +161,7 @@ pub fn get_foreign_library_module() -> ForeignLibraryModuleRef {
         create_sum_udaf: create_ffi_sum_func,
         create_stddev_udaf: create_ffi_stddev_func,
         create_rank_udwf: create_ffi_rank_func,
+        create_extension_options: config::create_extension_options,
         version: super::version,
     }
     .leak_into_prefix()
