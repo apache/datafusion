@@ -206,6 +206,9 @@ impl FileOpener for ParquetOpener {
             partitioned_file.object_meta.location.as_ref(),
             &self.metrics,
         );
+        let file_name = partitioned_file.object_meta.location.to_string();
+        let file_range = partitioned_file.range.clone();
+        let extensions = partitioned_file.extensions.clone();
 
         let metadata_size_hint = partitioned_file
             .metadata_size_hint
@@ -270,8 +273,16 @@ impl FileOpener for ParquetOpener {
                 &predicate_creation_errors,
             );
 
-            let mut row_groups =
-                RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(num_row_groups));
+            let mut row_groups = RowGroupAccessPlanFilter::new(create_initial_plan(
+                &file_name,
+                extensions,
+                num_row_groups,
+            )?);
+
+            if let Some(range) = file_range.as_ref() {
+                row_groups.prune_by_range(metadata.row_groups(), range);
+            }
+
             if let Some(predicate) = pruning_predicate {
                 row_groups.prune_by_statistics(
                     &physical_file_schema,

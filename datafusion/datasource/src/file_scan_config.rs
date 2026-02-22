@@ -19,6 +19,7 @@
 //! file sources.
 
 use crate::file_groups::FileGroup;
+use crate::file_stream::WorkQueue;
 use crate::{
     PartitionedFile, display::FileGroupsDisplay, file::FileSource,
     file_compression_type::FileCompressionType, file_stream::FileStream,
@@ -53,7 +54,8 @@ use datafusion_physical_plan::{
     metrics::ExecutionPlanMetricsSet,
 };
 use log::{debug, warn};
-use std::sync::{Mutex, Weak};
+use std::sync::atomic::AtomicUsize;
+use std::sync::Mutex;
 use std::{any::Any, fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::Arc};
 
 /// [`FileScanConfig`] represents scanning data from a group of files
@@ -209,9 +211,13 @@ pub struct FileScanConfig {
     /// This means all partitions share a single pool of work.
     pub morsel_driven: bool,
     /// Shared work queue for morsel-driven execution.
-    /// This uses a Weak pointer to allow the queue to be dropped when all execution
-    /// partitions are finished, supporting re-executability of the physical plan.
-    pub(crate) morsel_queue: Arc<Mutex<Weak<crate::file_stream::WorkQueue>>>,
+    pub(crate) morsel_queue: Arc<Mutex<Arc<WorkQueue>>>,
+    /// Number of morsel streams opened in the current execution cycle.
+    pub(crate) morsel_queue_streams_opened: Arc<AtomicUsize>,
+    /// Number of active morsel streams in the current execution cycle.
+    pub(crate) morsel_queue_active_streams: Arc<AtomicUsize>,
+    /// Expected number of streams in a full execution cycle.
+    pub(crate) morsel_queue_expected_streams: usize,
 }
 
 /// A builder for [`FileScanConfig`]'s.
@@ -549,6 +555,12 @@ impl FileScanConfigBuilder {
 
         // If there is an output ordering, we should preserve it.
         let preserve_order = preserve_order || !output_ordering.is_empty();
+        let morsel_queue_expected_streams = file_groups.len();
+
+        let all_files = file_groups
+            .iter()
+            .flat_map(|g| g.files().to_vec())
+            .collect();
 
         FileScanConfig {
             object_store_url,
@@ -564,7 +576,10 @@ impl FileScanConfigBuilder {
             statistics,
             partitioned_by_file_group,
             morsel_driven,
-            morsel_queue: Arc::new(Mutex::new(Weak::new())),
+            morsel_queue: Arc::new(Mutex::new(Arc::new(WorkQueue::new(all_files)))),
+            morsel_queue_streams_opened: Arc::new(AtomicUsize::new(0)),
+            morsel_queue_active_streams: Arc::new(AtomicUsize::new(0)),
+            morsel_queue_expected_streams,
         }
     }
 }
