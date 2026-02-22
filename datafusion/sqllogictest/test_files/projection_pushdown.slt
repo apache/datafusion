@@ -1949,3 +1949,44 @@ ORDER BY simple_struct.id;
 3 3
 4 4
 5 5
+
+# =========================================================================
+# Regression: user-provided __datafusion_extracted aliases must not
+# collide with optimizer-generated ones
+# (https://github.com/apache/datafusion/issues/20430)
+# =========================================================================
+
+statement ok
+COPY ( select {f1: 1, f2: 2} as s
+) TO 'test_files/scratch/projection_pushdown/test.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE t
+STORED AS PARQUET
+LOCATION 'test_files/scratch/projection_pushdown/test.parquet';
+
+# Verify that the user-provided __datafusion_extracted_2 alias is preserved
+# and the optimizer skips to _3 and _4 for its generated aliases.
+query TT
+EXPLAIN SELECT
+    get_field(s, 'f1') AS __datafusion_extracted_2
+FROM t
+WHERE COALESCE(get_field(s, 'f1'), get_field(s, 'f2')) = 1;
+----
+logical_plan
+01)Projection: __datafusion_extracted_2
+02)--Filter: CASE WHEN __datafusion_extracted_3 IS NOT NULL THEN __datafusion_extracted_3 ELSE __datafusion_extracted_4 END = Int64(1)
+03)----Projection: get_field(t.s, Utf8("f1")) AS __datafusion_extracted_3, get_field(t.s, Utf8("f2")) AS __datafusion_extracted_4, get_field(t.s, Utf8("f1")) AS __datafusion_extracted_2
+04)------TableScan: t projection=[s], partial_filters=[CASE WHEN get_field(t.s, Utf8("f1")) IS NOT NULL THEN get_field(t.s, Utf8("f1")) ELSE get_field(t.s, Utf8("f2")) END = Int64(1)]
+physical_plan
+01)FilterExec: CASE WHEN __datafusion_extracted_3@0 IS NOT NULL THEN __datafusion_extracted_3@0 ELSE __datafusion_extracted_4@1 END = 1, projection=[__datafusion_extracted_2@2]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/test.parquet]]}, projection=[get_field(s@0, f1) as __datafusion_extracted_3, get_field(s@0, f2) as __datafusion_extracted_4, get_field(s@0, f1) as __datafusion_extracted_2], file_type=parquet
+
+query I
+SELECT
+    get_field(s, 'f1') AS __datafusion_extracted_2
+FROM t
+WHERE COALESCE(get_field(s, 'f1'), get_field(s, 'f2')) = 1;
+----
+1
