@@ -28,7 +28,7 @@ use crate::datasource::file_format::FileFormatFactory;
 #[cfg(feature = "sql")]
 use crate::datasource::provider_as_source;
 use crate::execution::SessionStateDefaults;
-use crate::execution::context::{EmptySerializerRegistry, FunctionFactory, QueryPlanner};
+use crate::execution::context::{EmptySerializerRegistry, FunctionFactory};
 use crate::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
 use arrow_schema::{DataType, FieldRef};
 use datafusion_catalog::MemoryCatalogProviderList;
@@ -44,7 +44,7 @@ use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{
     DFSchema, DataFusionError, ResolvedTableReference, TableReference, config_err,
-    exec_err, plan_datafusion_err,
+    exec_datafusion_err, exec_err, plan_datafusion_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::config::SessionConfig;
@@ -68,7 +68,7 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion_physical_plan::ExecutionPlan;
-use datafusion_session::Session;
+use datafusion_session::{QueryPlanner, Session};
 #[cfg(feature = "sql")]
 use datafusion_sql::{
     parser::{DFParserBuilder, Statement},
@@ -2115,8 +2115,15 @@ impl QueryPlanner for DefaultQueryPlanner {
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
-        session_state: &SessionState,
+        session: &dyn Session,
     ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+        let session_state =
+            session
+                .as_any()
+                .downcast_ref::<SessionState>()
+                .ok_or_else(|| {
+                    exec_datafusion_err!("Failed to downcast Session to SessionState")
+                })?;
         let planner = DefaultPhysicalPlanner::default();
         planner
             .create_physical_plan(logical_plan, session_state)

@@ -36,6 +36,8 @@
 //! * Runtime environment configuration
 //! * Query state persistence
 
+pub mod planner;
 pub mod session;
 
+pub use crate::planner::QueryPlanner;
 pub use crate::session::{Session, SessionStore};

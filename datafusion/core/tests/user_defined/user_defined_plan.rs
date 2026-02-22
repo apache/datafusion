@@ -91,7 +91,9 @@ use datafusion::{
 };
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{ScalarValue, assert_eq_or_internal_err, assert_or_internal_err};
+use datafusion_common::{
+    ScalarValue, assert_eq_or_internal_err, assert_or_internal_err, exec_datafusion_err,
+};
 use datafusion_expr::{FetchType, InvariantLevel, Projection, SortExpr};
 use datafusion_optimizer::AnalyzerRule;
 use datafusion_optimizer::optimizer::ApplyOrder;
@@ -99,6 +101,7 @@ use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 
 use async_trait::async_trait;
 use datafusion_common::cast::as_string_view_array;
+use datafusion_session::Session;
 use futures::{Stream, StreamExt};
 
 /// Execute the specified sql and return the resulting record batches
@@ -466,8 +469,16 @@ impl QueryPlanner for TopKQueryPlanner {
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
-        session_state: &SessionState,
+        session: &dyn Session,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let session_state =
+            session
+                .as_any()
+                .downcast_ref::<SessionState>()
+                .ok_or_else(|| {
+                    exec_datafusion_err!("Failed to downcast Session to SessionState")
+                })?;
+
         // Teach the default physical planner how to plan TopK nodes.
         let physical_planner =
             DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(

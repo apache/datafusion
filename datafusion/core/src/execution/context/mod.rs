@@ -56,6 +56,7 @@ use crate::{
 
 // backwards compatibility
 pub use crate::execution::session_state::SessionState;
+pub use datafusion_session::QueryPlanner;
 
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
@@ -1970,17 +1971,6 @@ impl From<SessionContext> for SessionStateBuilder {
     }
 }
 
-/// A planner used to add extensions to DataFusion logical and physical plans.
-#[async_trait]
-pub trait QueryPlanner: Debug {
-    /// Given a [`LogicalPlan`], create an [`ExecutionPlan`] suitable for execution
-    async fn create_physical_plan(
-        &self,
-        logical_plan: &LogicalPlan,
-        session_state: &SessionState,
-    ) -> Result<Arc<dyn ExecutionPlan>>;
-}
-
 /// Interface for handling `CREATE FUNCTION` statements and interacting with
 /// [SessionState] to create and register functions ([`ScalarUDF`],
 /// [`AggregateUDF`], [`WindowUDF`], and [`TableFunctionImpl`]) dynamically.
@@ -2162,6 +2152,7 @@ mod tests {
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
     use arrow::datatypes::{DataType, TimeUnit};
     use datafusion_common::DataFusionError;
+    use datafusion_session::Session;
     use std::error::Error;
     use std::path::PathBuf;
 
@@ -2643,8 +2634,14 @@ mod tests {
         async fn create_physical_plan(
             &self,
             logical_plan: &LogicalPlan,
-            session_state: &SessionState,
+            session: &dyn Session,
         ) -> Result<Arc<dyn ExecutionPlan>> {
+            let session_state = session
+                .as_any()
+                .downcast_ref::<SessionState>()
+                .ok_or_else(|| {
+                    exec_datafusion_err!("Failed to downcast Session to SessionState")
+                })?;
             let physical_planner = MyPhysicalPlanner {};
             physical_planner
                 .create_physical_plan(logical_plan, session_state)

@@ -23,6 +23,7 @@ use std::sync::{Arc, RwLock};
 
 use arrow::array::RecordBatch;
 use async_trait::async_trait;
+use datafusion::catalog::Session;
 use datafusion::catalog::memory::MemorySourceConfig;
 use datafusion::common::DFSchemaRef;
 use datafusion::error::Result;
@@ -37,7 +38,7 @@ use datafusion::physical_planner::{
     DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner,
 };
 use datafusion::prelude::*;
-use datafusion_common::HashMap;
+use datafusion_common::{HashMap, exec_datafusion_err};
 use datafusion_examples::utils::{datasets::ExampleDataset, write_csv_to_parquet};
 
 /// This example demonstrates how to leverage [CacheFactory] to implement custom caching strategies for dataframes in DataFusion.
@@ -198,8 +199,16 @@ impl QueryPlanner for CacheNodeQueryPlanner {
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
-        session_state: &SessionState,
+        session: &dyn Session,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let session_state =
+            session
+                .as_any()
+                .downcast_ref::<SessionState>()
+                .ok_or_else(|| {
+                    exec_datafusion_err!("Failed to downcast Session to SessionState")
+                })?;
+
         let physical_planner =
             DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(
                 CacheNodePlanner {
