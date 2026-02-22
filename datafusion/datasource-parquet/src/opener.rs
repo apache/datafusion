@@ -52,12 +52,11 @@ use datafusion_physical_plan::metrics::{
 use datafusion_pruning::{FilePruner, PruningPredicate, build_pruning_predicate};
 
 use crate::sort::reverse_row_selection;
-use futures::future::{BoxFuture, ready};
-use parquet::file::metadata::ParquetMetaData;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_common::config::EncryptionFactoryOptions;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_execution::parquet_encryption::EncryptionFactory;
+use futures::future::{BoxFuture, ready};
 use futures::{Stream, StreamExt, TryStreamExt, ready};
 use log::debug;
 use parquet::arrow::arrow_reader::metrics::ArrowReaderMetrics;
@@ -66,6 +65,7 @@ use parquet::arrow::arrow_reader::{
 };
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
+use parquet::file::metadata::ParquetMetaData;
 use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader, RowGroupMetaData};
 
 /// Implements [`FileOpener`] for a parquet file
@@ -270,7 +270,8 @@ impl FileOpener for ParquetOpener {
                 &predicate_creation_errors,
             );
 
-            let mut row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(num_row_groups));
+            let mut row_groups =
+                RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(num_row_groups));
             if let Some(predicate) = pruning_predicate {
                 row_groups.prune_by_statistics(
                     &physical_file_schema,
@@ -485,7 +486,10 @@ impl FileOpener for ParquetOpener {
                 .as_ref()
                 .and_then(|e| e.downcast_ref::<ParquetMorsel>())
             {
-                ArrowReaderMetadata::try_new(Arc::clone(&morsel.metadata), options.clone())?
+                ArrowReaderMetadata::try_new(
+                    Arc::clone(&morsel.metadata),
+                    options.clone(),
+                )?
             } else {
                 ArrowReaderMetadata::load_async(&mut async_file_reader, options.clone())
                     .await?
