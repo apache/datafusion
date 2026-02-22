@@ -45,7 +45,7 @@ pub fn create_table_provider(
 ) -> Result<Arc<MemTable>> {
     let schema = Arc::new(create_schema());
     let partitions =
-        create_record_batches(schema.clone(), array_len, partitions_len, batch_size);
+        create_record_batches(&schema, array_len, partitions_len, batch_size);
     // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
     MemTable::try_new(schema, partitions).map(Arc::new)
 }
@@ -56,21 +56,19 @@ pub fn create_schema() -> Schema {
         Field::new("utf8", DataType::Utf8, false),
         Field::new("f32", DataType::Float32, false),
         Field::new("f64", DataType::Float64, true),
-        // This field will contain integers randomly selected from a large
-        // range of values, i.e. [0, u64::MAX], such that there are none (or
-        // very few) repeated values.
-        Field::new("u64_wide", DataType::UInt64, true),
-        // This field will contain integers randomly selected from a narrow
-        // range of values such that there are a few distinct values, but they
-        // are repeated often.
+        // Integers randomly selected from a wide range of values, i.e. [0,
+        // u64::MAX], such that there are ~no repeated values.
+        Field::new("u64_wide", DataType::UInt64, false),
+        // Integers randomly selected from a mid-range of values [0, 1000),
+        // providing ~1000 distinct groups.
+        Field::new("u64_mid", DataType::UInt64, false),
+        // Integers randomly selected from a narrow range of values such that
+        // there are a few distinct values, but they are repeated often.
         Field::new("u64_narrow", DataType::UInt64, false),
     ])
 }
 
-fn create_data(size: usize, null_density: f64) -> Vec<Option<f64>> {
-    // use random numbers to avoid spurious compiler optimizations wrt to branching
-    let mut rng = StdRng::seed_from_u64(42);
-
+fn create_data(rng: &mut StdRng, size: usize, null_density: f64) -> Vec<Option<f64>> {
     (0..size)
         .map(|_| {
             if rng.random::<f64>() > null_density {
@@ -82,56 +80,43 @@ fn create_data(size: usize, null_density: f64) -> Vec<Option<f64>> {
         .collect()
 }
 
-fn create_integer_data(
-    rng: &mut StdRng,
-    size: usize,
-    value_density: f64,
-) -> Vec<Option<u64>> {
-    (0..size)
-        .map(|_| {
-            if rng.random::<f64>() > value_density {
-                None
-            } else {
-                Some(rng.random::<u64>())
-            }
-        })
-        .collect()
-}
-
 fn create_record_batch(
     schema: SchemaRef,
     rng: &mut StdRng,
     batch_size: usize,
-    i: usize,
+    batch_index: usize,
 ) -> RecordBatch {
-    // the 4 here is the number of different keys.
-    // a higher number increase sparseness
-    let vs = [0, 1, 2, 3];
-    let keys: Vec<String> = (0..batch_size)
-        .map(
-            // use random numbers to avoid spurious compiler optimizations wrt to branching
-            |_| format!("hi{:?}", vs.choose(rng)),
-        )
-        .collect();
-    let keys: Vec<&str> = keys.iter().map(|e| &**e).collect();
+    // Randomly choose from 4 distinct key values; a higher number increases sparseness.
+    let key_suffixes = [0, 1, 2, 3];
+    let keys = StringArray::from_iter_values(
+        (0..batch_size).map(|_| format!("hi{}", key_suffixes.choose(rng).unwrap())),
+    );
 
-    let values = create_data(batch_size, 0.5);
+    let values = create_data(rng, batch_size, 0.5);
 
     // Integer values between [0, u64::MAX].
-    let integer_values_wide = create_integer_data(rng, batch_size, 9.0);
+    let integer_values_wide = (0..batch_size)
+        .map(|_| rng.random::<u64>())
+        .collect::<Vec<_>>();
 
-    // Integer values between [0, 9].
+    // Integer values between [0, 1000).
+    let integer_values_mid = (0..batch_size)
+        .map(|_| rng.random_range(0..1000))
+        .collect::<Vec<_>>();
+
+    // Integer values between [0, 10).
     let integer_values_narrow = (0..batch_size)
-        .map(|_| rng.random_range(0_u64..10))
+        .map(|_| rng.random_range(0..10))
         .collect::<Vec<_>>();
 
     RecordBatch::try_new(
         schema,
         vec![
-            Arc::new(StringArray::from(keys)),
-            Arc::new(Float32Array::from(vec![i as f32; batch_size])),
+            Arc::new(keys),
+            Arc::new(Float32Array::from(vec![batch_index as f32; batch_size])),
             Arc::new(Float64Array::from(values)),
             Arc::new(UInt64Array::from(integer_values_wide)),
+            Arc::new(UInt64Array::from(integer_values_mid)),
             Arc::new(UInt64Array::from(integer_values_narrow)),
         ],
     )
@@ -140,21 +125,29 @@ fn create_record_batch(
 
 /// Create record batches of `partitions_len` partitions and `batch_size` for each batch,
 /// with a total number of `array_len` records
-#[expect(clippy::needless_pass_by_value)]
 pub fn create_record_batches(
-    schema: SchemaRef,
+    schema: &SchemaRef,
     array_len: usize,
     partitions_len: usize,
     batch_size: usize,
 ) -> Vec<Vec<RecordBatch>> {
     let mut rng = StdRng::seed_from_u64(42);
-    (0..partitions_len)
-        .map(|_| {
-            (0..array_len / batch_size / partitions_len)
-                .map(|i| create_record_batch(schema.clone(), &mut rng, batch_size, i))
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>()
+    let mut partitions = Vec::with_capacity(partitions_len);
+    let batches_per_partition = array_len / batch_size / partitions_len;
+
+    for _ in 0..partitions_len {
+        let mut batches = Vec::with_capacity(batches_per_partition);
+        for batch_index in 0..batches_per_partition {
+            batches.push(create_record_batch(
+                schema.clone(),
+                &mut rng,
+                batch_size,
+                batch_index,
+            ));
+        }
+        partitions.push(batches);
+    }
+    partitions
 }
 
 /// An enum that wraps either a regular StringBuilder or a GenericByteViewBuilder
