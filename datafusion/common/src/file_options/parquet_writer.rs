@@ -198,6 +198,7 @@ impl ParquetOptions {
             skip_metadata: _,
             metadata_size_hint: _,
             pushdown_filters: _,
+            morsel_queue_enabled: _,
             reorder_filters: _,
             force_filter_selections: _, // not used for writer props
             allow_single_file_parallelism: _,
@@ -447,6 +448,7 @@ mod tests {
             skip_metadata: defaults.skip_metadata,
             metadata_size_hint: defaults.metadata_size_hint,
             pushdown_filters: defaults.pushdown_filters,
+            morsel_queue_enabled: defaults.morsel_queue_enabled,
             reorder_filters: defaults.reorder_filters,
             force_filter_selections: defaults.force_filter_selections,
             allow_single_file_parallelism: defaults.allow_single_file_parallelism,
@@ -559,6 +561,8 @@ mod tests {
                 skip_metadata: global_options_defaults.skip_metadata,
                 metadata_size_hint: global_options_defaults.metadata_size_hint,
                 pushdown_filters: global_options_defaults.pushdown_filters,
+                morsel_queue_enabled: global_options_defaults
+                    .morsel_queue_enabled,
                 reorder_filters: global_options_defaults.reorder_filters,
                 force_filter_selections: global_options_defaults.force_filter_selections,
                 allow_single_file_parallelism: global_options_defaults

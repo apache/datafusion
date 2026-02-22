@@ -24,7 +24,7 @@
 use std::collections::VecDeque;
 use std::mem;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
 use crate::PartitionedFile;
@@ -47,6 +47,8 @@ use futures::{FutureExt as _, Stream, StreamExt as _, ready};
 pub struct FileStream {
     /// An iterator over input files.
     file_iter: VecDeque<PartitionedFile>,
+    /// Optional shared queue used for queue-driven scheduling.
+    shared_file_queue: Option<Arc<Mutex<VecDeque<PartitionedFile>>>>,
     /// The stream schema (file schema including partition columns and after
     /// projection).
     projected_schema: SchemaRef,
@@ -79,6 +81,7 @@ impl FileStream {
 
         Ok(Self {
             file_iter: file_group.into_inner().into_iter().collect(),
+            shared_file_queue: config.shared_file_queue.clone(),
             projected_schema,
             remain: config.limit,
             file_opener,
@@ -103,7 +106,15 @@ impl FileStream {
     /// Since file opening is mostly IO (and may involve a
     /// bunch of sequential IO), it can be parallelized with decoding.
     fn start_next_file(&mut self) -> Option<Result<FileOpenFuture>> {
-        let part_file = self.file_iter.pop_front()?;
+        let part_file = if let Some(shared_file_queue) = &self.shared_file_queue {
+            let mut queue = match shared_file_queue.lock() {
+                Ok(queue) => queue,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            queue.pop_front()?
+        } else {
+            self.file_iter.pop_front()?
+        };
         Some(self.file_opener.open(part_file))
     }
 

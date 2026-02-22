@@ -53,7 +53,14 @@ use datafusion_physical_plan::{
     metrics::ExecutionPlanMetricsSet,
 };
 use log::{debug, warn};
-use std::{any::Any, fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::Arc};
+use std::{
+    any::Any,
+    collections::VecDeque,
+    fmt::Debug,
+    fmt::Formatter,
+    fmt::Result as FmtResult,
+    sync::{Arc, Mutex},
+};
 
 /// [`FileScanConfig`] represents scanning data from a group of files
 ///
@@ -204,6 +211,11 @@ pub struct FileScanConfig {
     /// If the number of file partitions > target_partitions, the file partitions will be grouped
     /// in a round-robin fashion such that number of file partitions = target_partitions.
     pub partitioned_by_file_group: bool,
+    /// Optional shared queue of files used for queue-driven scheduling.
+    ///
+    /// When set, each partition worker will pull work from this shared queue
+    /// instead of using only files from its corresponding file group.
+    pub(crate) shared_file_queue: Option<Arc<Mutex<VecDeque<PartitionedFile>>>>,
 }
 
 /// A builder for [`FileScanConfig`]'s.
@@ -546,6 +558,7 @@ impl FileScanConfigBuilder {
             expr_adapter_factory: expr_adapter,
             statistics,
             partitioned_by_file_group,
+            shared_file_queue: None,
         }
     }
 }
@@ -926,6 +939,14 @@ impl DataSource for FileScanConfig {
 }
 
 impl FileScanConfig {
+    /// Set or clear a shared file queue used for queue-driven scheduling.
+    pub fn set_shared_file_queue(
+        &mut self,
+        shared_file_queue: Option<Arc<Mutex<VecDeque<PartitionedFile>>>>,
+    ) {
+        self.shared_file_queue = shared_file_queue;
+    }
+
     /// Returns only the output orderings that are validated against actual
     /// file group statistics.
     ///

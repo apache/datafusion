@@ -709,6 +709,13 @@ config_namespace! {
         /// reduce the number of rows decoded. This optimization is sometimes called "late materialization".
         pub pushdown_filters: bool, default = false
 
+        /// (reading) If true, enables queue-based morsel scheduling for parquet scans.
+        ///
+        /// When enabled and query semantics allow reordering (for example, no
+        /// order-sensitive limits), scan work may be distributed dynamically across
+        /// workers using a shared queue of file morsels.
+        pub morsel_queue_enabled: bool, default = true
+
         /// (reading) If true, filter expressions evaluated during the parquet decoding operation
         /// will be reordered heuristically to minimize the cost of evaluation. If false,
         /// the filters are applied in the same order as written in the query
