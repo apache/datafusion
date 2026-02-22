@@ -281,3 +281,6 @@ SELECT true FROM t0 WHERE (REGEXP_MATCH(t0.v1, t0.v1)) NOT ILIKE [];
 
 statement ok
 DROP TABLE t0;
+
+statement ok
+set datafusion.explain.logical_plan_only = false;

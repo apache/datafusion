@@ -173,6 +173,9 @@ logical_plan
 04)------TableScan: t projection=[a, b, c]
 
 statement ok
+set datafusion.explain.logical_plan_only = false;
+
+statement ok
 drop table t;
 
 # test distinct
@@ -188,6 +191,9 @@ explain select distinct a, b from t;
 logical_plan
 01)Aggregate: groupBy=[[t.a, t.b]], aggr=[[]]
 02)--TableScan: t projection=[a, b]
+
+statement ok
+set datafusion.explain.logical_plan_only = false;
 
 statement ok
 drop table t;

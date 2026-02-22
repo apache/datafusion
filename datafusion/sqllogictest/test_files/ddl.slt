@@ -900,6 +900,9 @@ c1 Utf8View NO
 c2 Utf8View YES
 
 statement ok
+set datafusion.sql_parser.map_string_types_to_utf8view = false;
+
+statement ok
 DROP TABLE t1;
 
 statement ok

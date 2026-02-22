@@ -447,3 +447,6 @@ datafusion.runtime.max_temp_directory_size
 datafusion.runtime.memory_limit
 datafusion.runtime.metadata_cache_limit
 datafusion.runtime.temp_directory
+
+statement ok
+set datafusion.catalog.information_schema = false

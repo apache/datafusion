@@ -734,6 +734,7 @@ select * from t1 right anti join t2 on t1.k = t2.k where t2.k > 3 or t2.v > 20;
 51 NULL
 NULL 41
 
+# Cleanup
 
 statement ok
 set datafusion.explain.logical_plan_only = false;
@@ -743,3 +744,18 @@ drop table t1;
 
 statement ok
 drop table t2;
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = false;
+
+statement ok
+set datafusion.execution.collect_statistics = false;
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = false;
+
+statement ok
+set datafusion.optimizer.enable_dynamic_filter_pushdown = false;
+
+statement ok
+set datafusion.optimizer.enable_aggregate_dynamic_filter_pushdown = false;

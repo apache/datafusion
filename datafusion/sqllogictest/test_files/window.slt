@@ -6081,3 +6081,6 @@ WHERE acctbal > (
 );
 ----
 1
+
+statement ok
+set datafusion.optimizer.prefer_existing_sort = false;
