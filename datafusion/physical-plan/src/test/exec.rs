@@ -347,9 +347,13 @@ impl BarrierExec {
             .start_data_barrier
             .as_ref()
             .expect("Must only be called when having a start barrier");
-        println!("BarrierExec::wait waiting on barrier");
+        if self.log {
+            println!("BarrierExec::wait waiting on barrier");
+        }
         barrier.wait().await;
-        println!("BarrierExec::wait done waiting");
+        if self.log {
+            println!("BarrierExec::wait done waiting");
+        }
     }
 
     pub async fn wait_finish(&self) {
@@ -358,9 +362,13 @@ impl BarrierExec {
             .as_deref()
             .expect("Must only be called when having a finish barrier");
 
-        println!("BarrierExec::wait_finish waiting on barrier");
+        if self.log {
+            println!("BarrierExec::wait_finish waiting on barrier");
+        }
         barrier.wait().await;
-        println!("BarrierExec::wait_finish done waiting");
+        if self.log {
+            println!("BarrierExec::wait_finish done waiting");
+        }
     }
 
     /// Return true if the finish barrier has been reached in all partitions

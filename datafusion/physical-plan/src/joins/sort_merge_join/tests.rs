@@ -54,6 +54,7 @@ use itertools::Itertools;
 use std::sync::Arc;
 use std::task::Poll;
 use arrow_ord::sort::SortColumn;
+use arrow_schema::SchemaRef;
 use datafusion_common_runtime::JoinSet;
 use crate::joins::{HashJoinExec, PartitionMode, SortMergeJoinExec};
 use crate::joins::utils::{ColumnIndex, JoinFilter, JoinOn};
@@ -3132,11 +3133,11 @@ fn test_partition_statistics() -> Result<()> {
     Ok(())
 }
 
-fn build_batched_finish_barrier_table(
+fn build_batches(
     a: (&str, &[Vec<bool>]),
     b: (&str, &[Vec<i32>]),
     c: (&str, &[Vec<i32>]),
-) -> Arc<BarrierExec> {
+) -> (Vec<RecordBatch>, SchemaRef) {
     assert_eq!(a.1.len(), b.1.len());
     let mut batches = vec![];
 
@@ -3160,13 +3161,31 @@ fn build_batched_finish_barrier_table(
         );
     }
     let schema = batches[0].schema();
+    (batches, schema)
+}
 
-    Arc::new(
+fn build_batched_finish_barrier_table(
+    a: (&str, &[Vec<bool>]),
+    b: (&str, &[Vec<i32>]),
+    c: (&str, &[Vec<i32>]),
+) -> (Arc<BarrierExec>, Arc<TestMemoryExec>) {
+    let (batches, schema) = build_batches(a, b, c);
+
+    let memory_exec = TestMemoryExec::try_new_exec(
+        &[batches.clone()],
+        Arc::clone(&schema),
+        None,
+    )
+    .unwrap();
+
+    let barrier_exec = Arc::new(
         BarrierExec::new(vec![batches], schema)
             .with_log(false)
             .without_start_barrier()
             .with_finish_barrier(),
-    )
+    );
+
+    (barrier_exec, memory_exec)
 }
 
 /// Concat and sort batches by all the columns to make sure we can compare them with different join
@@ -3188,6 +3207,8 @@ fn prepare_record_batches_for_cmp(output: Vec<RecordBatch>) -> RecordBatch {
 async fn join_get_stream_and_get_expected(
     left: Arc<dyn ExecutionPlan>,
     right: Arc<dyn ExecutionPlan>,
+    oracle_left: Arc<dyn ExecutionPlan>,
+    oracle_right: Arc<dyn ExecutionPlan>,
     on: JoinOn,
     join_type: JoinType,
     filter: Option<JoinFilter>,
@@ -3202,8 +3223,8 @@ async fn join_get_stream_and_get_expected(
 
     let expected_output = {
         let oracle = HashJoinExec::try_new(
-            Arc::clone(&left),
-            Arc::clone(&right),
+            oracle_left,
+            oracle_right,
             on.clone(),
             filter.clone(),
             &join_type,
@@ -3241,7 +3262,7 @@ fn generate_data_for_emit_early_test(
     batch_size: usize,
     number_of_batches: usize,
     join_type: JoinType,
-) -> (Arc<BarrierExec>, Arc<BarrierExec>) {
+) -> (Arc<BarrierExec>, Arc<BarrierExec>, Arc<TestMemoryExec>, Arc<TestMemoryExec>) {
     let number_of_rows_per_batch = number_of_batches * batch_size;
     // Prepare data
     let left_a1 = (0..number_of_rows_per_batch as i32)
@@ -3279,7 +3300,7 @@ fn generate_data_for_emit_early_test(
         })
         .collect::<Vec<_>>();
 
-    let left = build_batched_finish_barrier_table(
+    let (left, left_memory) = build_batched_finish_barrier_table(
         ("bool_col1", left_bool_col1.as_slice()),
         ("b1", left_b1.as_slice()),
         ("a1", left_a1.as_slice()),
@@ -3320,13 +3341,13 @@ fn generate_data_for_emit_early_test(
         })
         .collect::<Vec<_>>();
 
-    let right = build_batched_finish_barrier_table(
+    let (right, right_memory) = build_batched_finish_barrier_table(
         ("bool_col2", right_bool_col2.as_slice()),
         ("b1", right_b1.as_slice()),
         ("a2", right_a2.as_slice()),
     );
 
-    (left, right)
+    (left, right, left_memory, right_memory)
 }
 
 #[tokio::test]
@@ -3352,7 +3373,7 @@ async fn test_should_emit_early_when_have_enough_data_to_emit() -> Result<()> {
                     (output_batch_size * 100) / BATCH_SIZE
                 };
 
-                let (left, right) = generate_data_for_emit_early_test(
+                let (left, right, left_memory, right_memory) = generate_data_for_emit_early_test(
                     BATCH_SIZE,
                     number_of_batches,
                     join_type,
@@ -3396,6 +3417,8 @@ async fn test_should_emit_early_when_have_enough_data_to_emit() -> Result<()> {
                 let (mut output_stream, expected) = join_get_stream_and_get_expected(
                     Arc::clone(&left) as Arc<dyn ExecutionPlan>,
                     Arc::clone(&right) as Arc<dyn ExecutionPlan>,
+                    left_memory as Arc<dyn ExecutionPlan>,
+                    right_memory as Arc<dyn ExecutionPlan>,
                     on,
                     join_type,
                     join_filter,
@@ -3448,6 +3471,7 @@ async fn consume_stream_until_finish_barrier_reached(
     let mut switch_to_finish_barrier = false;
     let mut output_batched = vec![];
     let mut after_finish_barrier_reached = vec![];
+    let mut background_task = JoinSet::new();
 
     let mut start_time_since_last_ready = datafusion_common::instant::Instant::now();
     loop {
@@ -3484,7 +3508,6 @@ async fn consume_stream_until_finish_barrier_reached(
                     if !switch_to_finish_barrier {
                         switch_to_finish_barrier = true;
 
-                        let mut background_task = JoinSet::new();
                         let right = Arc::clone(&right);
                         background_task.spawn(async move {
                             right.wait_finish().await;
@@ -3493,7 +3516,7 @@ async fn consume_stream_until_finish_barrier_reached(
                         background_task.spawn(async move {
                         left.wait_finish().await;
                         });
-                        tokio::task::yield_now().await;
+                        // tokio::task::yield_now().await;
                     }
                 }
 
