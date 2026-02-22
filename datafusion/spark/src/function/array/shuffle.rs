@@ -105,11 +105,8 @@ impl ScalarUDFImpl for SparkShuffle {
         &self,
         args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        if args.args.is_empty() {
-            return exec_err!("shuffle expects at least 1 argument");
-        }
-        if args.args.len() > 2 {
-            return exec_err!("shuffle expects at most 2 arguments");
+        if args.args.is_empty() || args.args.len() > 2 {
+            return exec_err!("shuffle expects 1 or 2 argument(s)");
         }
 
         // Extract seed from second argument if present
@@ -132,9 +129,12 @@ fn extract_seed(seed_arg: &ColumnarValue) -> Result<Option<u64>> {
             let seed = match scalar {
                 ScalarValue::Int64(Some(v)) => Some(*v as u64),
                 ScalarValue::Null => None,
+                ScalarValue::Int64(None) => {
+                    return exec_err!("shuffle seed must be Int64 type but got 'NULL'");
+                }
                 _ => {
                     return exec_err!(
-                        "shuffle seed must be Int64 type, got '{}'",
+                        "shuffle seed must be Int64 type but got '{}'",
                         scalar.data_type()
                     );
                 }
@@ -164,7 +164,10 @@ fn array_shuffle_with_seed(arg: &[ArrayRef], seed: Option<u64>) -> Result<ArrayR
             fixed_size_array_shuffle(array, field, seed)
         }
         Null => Ok(Arc::clone(input_array)),
-        array_type => exec_err!("shuffle does not support type '{array_type}'."),
+        array_type => exec_err!(
+            "shuffle does not support type '{array_type}'; \
+        expected types: List, LargeList, FixedSizeList or Null."
+        ),
     }
 }
 
@@ -277,7 +280,8 @@ fn fixed_size_array_shuffle(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::Field;
+    use arrow::array::ListArray;
+    use arrow::datatypes::{Field, Int32Type};
     use datafusion_expr::ReturnFieldArgs;
 
     #[test]
@@ -319,5 +323,45 @@ mod tests {
         // The result should be nullable (same as input)
         assert!(result.is_nullable());
         assert_eq!(result.data_type(), nullable_field.data_type());
+    }
+
+    #[test]
+    fn test_spark_shuffle_function_when_seed_is_null() {
+        let arr_ref =
+            ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+                Some(1),
+                Some(2),
+            ])]);
+
+        let input_args = vec![
+            ColumnarValue::Array(Arc::new(arr_ref)),
+            ColumnarValue::Scalar(ScalarValue::Int64(None)),
+        ];
+
+        let args = datafusion_expr::ScalarFunctionArgs {
+            args: input_args.to_owned(),
+            arg_fields: vec![Arc::new(Field::new(
+                "item",
+                LargeList(FieldRef::new(Field::new("", DataType::Int64, true))),
+                false,
+            ))],
+            number_rows: 1,
+            return_field: Arc::new(Field::new(
+                "item",
+                LargeList(FieldRef::new(Field::new("", DataType::Int64, true))),
+                false,
+            )),
+            config_options: Arc::new(Default::default()),
+        };
+
+        let shuffle = SparkShuffle::new();
+        let error = shuffle.invoke_with_args(args).unwrap_err();
+        assert!(
+            error
+                .message()
+                .to_string()
+                .as_str()
+                .contains("shuffle seed must be Int64 type but got 'NULL'")
+        );
     }
 }

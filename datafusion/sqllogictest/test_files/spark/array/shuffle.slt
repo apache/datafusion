@@ -107,6 +107,12 @@ SELECT shuffle([1, 2, 3, 4], CAST('2' AS INT));
 ----
 [1, 4, 2, 3]
 
+query error DataFusion error: Execution error: shuffle seed must be Int64 type but got 'NULL'
+SELECT shuffle([1, 2, 3], NULL);
+
+query error DataFusion error: Execution error: shuffle seed must be Int64 type but got 'NULL'
+SELECT shuffle(shuffle([1, 2, 3], 2), NULL);
+
 # Clean up
 statement ok
 DROP TABLE test_shuffle_list_types;
