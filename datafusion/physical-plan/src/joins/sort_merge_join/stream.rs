@@ -1581,7 +1581,7 @@ fn produce_buffered_null_batch(
     )?))
 }
 
-/// Checks if a `UInt64Array` contains a contiguous ascending range (e.g. [3,4,5,6]).
+/// Checks if a `UInt64Array` contains a contiguous ascending range (e.g. \[3,4,5,6\]).
 /// Returns `Some(start..start+len)` if so, `None` otherwise.
 /// This allows replacing an O(n) `take` with an O(1) `slice`.
 #[inline]
