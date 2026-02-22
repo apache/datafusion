@@ -561,8 +561,7 @@ mod tests {
                 skip_metadata: global_options_defaults.skip_metadata,
                 metadata_size_hint: global_options_defaults.metadata_size_hint,
                 pushdown_filters: global_options_defaults.pushdown_filters,
-                morsel_queue_enabled: global_options_defaults
-                    .morsel_queue_enabled,
+                morsel_queue_enabled: global_options_defaults.morsel_queue_enabled,
                 reorder_filters: global_options_defaults.reorder_filters,
                 force_filter_selections: global_options_defaults.force_filter_selections,
                 allow_single_file_parallelism: global_options_defaults

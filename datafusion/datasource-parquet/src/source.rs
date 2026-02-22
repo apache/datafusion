@@ -36,9 +36,9 @@ use datafusion_datasource::file_stream::FileOpener;
 use arrow::datatypes::TimeUnit;
 use datafusion_common::DataFusionError;
 use datafusion_common::config::TableParquetOptions;
+use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_groups::FileGroupPartitioner;
-use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::{PartitionedFile, TableSchema};
 use datafusion_physical_expr::projection::ProjectionExprs;
@@ -730,9 +730,8 @@ impl FileSource for ParquetSource {
         }
 
         let preserve_order_within_groups = output_ordering.is_some();
-        let queue_enabled =
-            self.table_parquet_options.global.morsel_queue_enabled
-                && !preserve_order_within_groups;
+        let queue_enabled = self.table_parquet_options.global.morsel_queue_enabled
+            && !preserve_order_within_groups;
 
         if queue_enabled {
             // First try row-group morselization from user-provided access plans.
@@ -778,11 +777,10 @@ impl FileSource for ParquetSource {
             .with_preserve_order_within_groups(preserve_order_within_groups)
             .repartition_file_groups(&config.file_groups);
 
-        let (base_file_groups, changed_by_repartition) =
-            match repartitioned_file_groups {
-                Some(file_groups) => (file_groups, true),
-                None => (config.file_groups.clone(), false),
-            };
+        let (base_file_groups, changed_by_repartition) = match repartitioned_file_groups {
+            Some(file_groups) => (file_groups, true),
+            None => (config.file_groups.clone(), false),
+        };
 
         let split_file_groups = split_file_groups_to_row_group_morsels(
             base_file_groups.clone(),
@@ -1130,7 +1128,8 @@ mod tests {
             ]),
         );
 
-        let file = PartitionedFile::new("file.parquet", 1024).with_extensions(Arc::new(plan));
+        let file =
+            PartitionedFile::new("file.parquet", 1024).with_extensions(Arc::new(plan));
 
         let morsels = split_partitioned_file_to_row_group_morsels(&file)
             .expect("expected row-group morsels");
@@ -1182,8 +1181,8 @@ mod tests {
         let source = ParquetSource::new(schema).with_table_parquet_options(options);
 
         let plan = ParquetAccessPlan::new_all(3);
-        let file = PartitionedFile::new("file.parquet", 1024)
-            .with_extensions(Arc::new(plan));
+        let file =
+            PartitionedFile::new("file.parquet", 1024).with_extensions(Arc::new(plan));
 
         let config = FileScanConfigBuilder::new(
             ObjectStoreUrl::local_filesystem(),
