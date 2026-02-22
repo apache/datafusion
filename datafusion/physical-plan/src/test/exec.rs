@@ -300,6 +300,8 @@ pub struct BarrierExec {
     finish_barrier: Option<Arc<(Barrier, AtomicUsize)>>,
 
     cache: PlanProperties,
+
+    log: bool
 }
 
 impl BarrierExec {
@@ -314,7 +316,13 @@ impl BarrierExec {
             start_data_barrier: barrier,
             cache,
             finish_barrier: None,
+            log: true,
         }
+    }
+
+    pub fn with_log(mut self, log: bool) -> Self {
+        self.log = log;
+        self
     }
 
     pub fn without_start_barrier(mut self) -> Self {
@@ -435,20 +443,27 @@ impl ExecutionPlan for BarrierExec {
         let data = self.data[partition].clone();
         let start_barrier = self.start_data_barrier.as_ref().map(Arc::clone);
         let finish_barrier = self.finish_barrier.as_ref().map(Arc::clone);
+        let log = self.log;
         let tx = builder.tx();
         builder.spawn(async move {
             if let Some(barrier) = start_barrier {
-                println!("Partition {partition} waiting on barrier");
+                if log {
+                    println!("Partition {partition} waiting on barrier");
+                }
                 barrier.wait().await;
             }
             for batch in data {
-                println!("Partition {partition} sending batch");
+                if log {
+                    println!("Partition {partition} sending batch");
+                }
                 if let Err(e) = tx.send(Ok(batch)).await {
                     println!("ERROR batch via barrier stream stream: {e}");
                 }
             }
             if let Some((barrier, reached_finish)) = finish_barrier.as_deref() {
-                println!("Partition {partition} waiting on finish barrier");
+                if log {
+                    println!("Partition {partition} waiting on finish barrier");
+                }
                 reached_finish.fetch_add(1, Ordering::Relaxed);
                 barrier.wait().await;
             }

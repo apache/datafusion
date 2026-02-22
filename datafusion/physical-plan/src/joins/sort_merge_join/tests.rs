@@ -3132,27 +3132,27 @@ fn test_partition_statistics() -> Result<()> {
 }
 
 fn build_batched_finish_barrier_table(
-    a: (&str, &[Vec<i32>]),
+    a: (&str, &[Vec<bool>]),
     b: (&str, &[Vec<i32>]),
-    c: (&str, &[Vec<bool>]),
+    c: (&str, &[Vec<i32>]),
 ) -> Arc<BarrierExec> {
     assert_eq!(a.1.len(), b.1.len());
     let mut batches = vec![];
 
     for i in 0..a.1.len() {
         let schema = Schema::new(vec![
-            Field::new(a.0, DataType::Int32, false),
+            Field::new(a.0, DataType::Boolean, false),
             Field::new(b.0, DataType::Int32, false),
-            Field::new(c.0, DataType::Boolean, false),
+            Field::new(c.0, DataType::Int32, false),
         ]);
 
         batches.push(
             RecordBatch::try_new(
                 Arc::new(schema),
                 vec![
-                    Arc::new(Int32Array::from(a.1[i].clone())),
+                    Arc::new(BooleanArray::from(a.1[i].clone())),
                     Arc::new(Int32Array::from(b.1[i].clone())),
-                    Arc::new(BooleanArray::from(c.1[i].clone())),
+                    Arc::new(Int32Array::from(c.1[i].clone())),
                 ],
             )
             .unwrap(),
@@ -3162,6 +3162,7 @@ fn build_batched_finish_barrier_table(
 
     Arc::new(
         BarrierExec::new(vec![batches], schema)
+            .with_log(false)
             .without_start_barrier()
             .with_finish_barrier(),
     )
@@ -3239,9 +3240,9 @@ fn generate_data_for_emit_early_test(
         .collect::<Vec<_>>();
 
     let left = build_batched_finish_barrier_table(
-        ("a1", left_a1.as_slice()),
-        ("b1", left_b1.as_slice()),
         ("bool_col1", left_bool_col1.as_slice()),
+        ("b1", left_b1.as_slice()),
+        ("a1", left_a1.as_slice()),
     );
 
     let right_a2 = (0..number_of_rows_per_batch as i32)
@@ -3280,9 +3281,9 @@ fn generate_data_for_emit_early_test(
         .collect::<Vec<_>>();
 
     let right = build_batched_finish_barrier_table(
-        ("a2", right_a2.as_slice()),
-        ("b1", right_b1.as_slice()),
         ("bool_col2", right_bool_col2.as_slice()),
+        ("b1", right_b1.as_slice()),
+        ("a2", right_a2.as_slice()),
     );
 
     (left, right)
@@ -3325,9 +3326,9 @@ async fn test_should_emit_early_when_have_enough_data_to_emit() -> Result<()> {
                 let join_filter = if with_filtering {
                     let filter = JoinFilter::new(
                         Arc::new(BinaryExpr::new(
-                            Arc::new(Column::new("bool_col1", 2)),
+                            Arc::new(Column::new("bool_col1", 0)),
                             Operator::And,
-                            Arc::new(Column::new("bool_col2", 2)),
+                            Arc::new(Column::new("bool_col2", 1)),
                         )),
                         vec![
                             ColumnIndex {
@@ -3340,8 +3341,8 @@ async fn test_should_emit_early_when_have_enough_data_to_emit() -> Result<()> {
                             },
                         ],
                         Arc::new(Schema::new(vec![
-                            Field::new("bool_col1", DataType::Boolean, false),
-                            Field::new("bool_col2", DataType::Boolean, false),
+                            Field::new("bool_col1", DataType::Boolean, true),
+                            Field::new("bool_col2", DataType::Boolean, true),
                         ])),
                     );
                     Some(filter)
@@ -3356,7 +3357,7 @@ async fn test_should_emit_early_when_have_enough_data_to_emit() -> Result<()> {
                     Arc::clone(&left) as Arc<dyn ExecutionPlan>,
                     Arc::clone(&right) as Arc<dyn ExecutionPlan>,
                     on,
-                    Left,
+                    join_type,
                     join_filter,
                     BATCH_SIZE,
                 )?;
@@ -3399,12 +3400,15 @@ async fn consume_stream_until_finish_barrier_reached(
     let mut output_batched = vec![];
 
     let mut start_time_since_last_ready = datafusion_common::instant::Instant::now();
-
     loop {
+
         let next_item = output_stream.next();
 
         // Manual polling
         let poll_output = futures::poll!(next_item);
+
+        // Wake up the stream to make sure it makes progress
+        tokio::task::yield_now().await;
 
         match poll_output {
             Poll::Ready(Some(Ok(batch))) => {
