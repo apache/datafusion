@@ -3379,6 +3379,8 @@ async fn test_should_emit_early_when_have_enough_data_to_emit() -> Result<()> {
                     MINIMUM_OUTPUT_BATCHES,
                     output_batched.len()
                 );
+
+                // TODO - EMIT FINISH AND COMPARE OUTPUT AGAINST SOME ORACLE (LIKE HASH JOIM)
             }
         }
     }

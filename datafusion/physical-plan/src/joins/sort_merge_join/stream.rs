@@ -646,7 +646,6 @@ impl Stream for SortMergeJoinStream {
                             self.state = SortMergeJoinState::EmitReady {
                                 next_state: Box::new(SortMergeJoinState::Init),
                             };
-                            // self.state = SortMergeJoinState::Init;
                         }
                     } else {
                         self.freeze_all()?;
