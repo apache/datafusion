@@ -49,6 +49,7 @@ mod tests {
     use datafusion_common::config::TableParquetOptions;
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
     use datafusion_common::{Result, ScalarValue, assert_contains};
+    use datafusion_common_runtime::SpawnedTask;
     use datafusion_datasource::file_format::FileFormat;
     use datafusion_datasource::file_scan_config::{
         FileScanConfig, FileScanConfigBuilder,
@@ -2511,7 +2512,7 @@ mod tests {
         let stream0 = exec.execute(0, Arc::clone(&task_ctx))?;
         let stream1 = exec.execute(1, Arc::clone(&task_ctx))?;
 
-        let handle0 = tokio::spawn(async move {
+        let handle0 = SpawnedTask::spawn(async move {
             let mut count = 0;
             let mut s = stream0;
             while let Some(batch) = s.next().await {
@@ -2521,7 +2522,7 @@ mod tests {
             count
         });
 
-        let handle1 = tokio::spawn(async move {
+        let handle1 = SpawnedTask::spawn(async move {
             let mut count = 0;
             let mut s = stream1;
             while let Some(batch) = s.next().await {
