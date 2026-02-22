@@ -426,6 +426,7 @@ mod parquet {
                 max_predicate_cache_size_opt: global_options.global.max_predicate_cache_size.map(|size| {
                     parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(size as u64)
                 }),
+                filter_effectiveness_threshold_opt: Some(parquet_options::FilterEffectivenessThresholdOpt::FilterEffectivenessThreshold(global_options.global.filter_effectiveness_threshold)),
             }),
             column_specific_options: column_specific_options.into_iter().map(|(column_name, options)| {
                 ParquetColumnSpecificOptions {
@@ -525,6 +526,9 @@ mod parquet {
             max_predicate_cache_size: proto.max_predicate_cache_size_opt.as_ref().map(|opt| match opt {
                 parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(size) => *size as usize,
             }),
+            filter_effectiveness_threshold: proto.filter_effectiveness_threshold_opt.as_ref().map(|opt| match opt {
+                parquet_options::FilterEffectivenessThresholdOpt::FilterEffectivenessThreshold(threshold) => *threshold,
+            }).unwrap_or(0.8),
         }
         }
     }

@@ -751,6 +751,16 @@ config_namespace! {
         /// parquet reader setting. 0 means no caching.
         pub max_predicate_cache_size: Option<usize>, default = None
 
+        /// (reading) Minimum filter effectiveness threshold for adaptive filter
+        /// pushdown.
+        /// Only filters that filter out at least this fraction of rows will be
+        /// promoted to row filters during adaptive filter pushdown.
+        /// A value of 1.0 means only filters that filter out all rows will be
+        /// promoted. A value of 0.0 means all filters will be promoted.
+        /// Because there can be a high I/O cost to pushing down ineffective filters,
+        /// recommended values are in the range [0.8, 0.95], depending on random I/0 costs.
+        pub filter_effectiveness_threshold: f64, default = 0.8
+
         // The following options affect writing to parquet files
         // and map to parquet::file::properties::WriterProperties
 
