@@ -53,8 +53,9 @@ use insta::{allow_duplicates, assert_snapshot};
 use itertools::Itertools;
 use std::sync::Arc;
 use std::task::Poll;
-
-use crate::joins::SortMergeJoinExec;
+use arrow_ord::sort::SortColumn;
+use datafusion_common_runtime::JoinSet;
+use crate::joins::{HashJoinExec, PartitionMode, SortMergeJoinExec};
 use crate::joins::utils::{ColumnIndex, JoinFilter, JoinOn};
 use crate::test::TestMemoryExec;
 use crate::test::exec::BarrierExec;
@@ -3168,20 +3169,57 @@ fn build_batched_finish_barrier_table(
     )
 }
 
-fn join_get_stream(
+/// Concat and sort batches by all the columns to make sure we can compare them with different join
+fn prepare_record_batches_for_cmp(output: Vec<RecordBatch>) -> RecordBatch {
+    let output_batch = arrow::compute::concat_batches(output[0].schema_ref(), &output).expect("failed to concat batches");
+
+    // Sort on all columns to make sure we have a deterministic order for the assertion
+    let sort_columns = output_batch.columns().iter().map(|c| SortColumn {
+        values: Arc::clone(c),
+        options: None
+    }).collect::<Vec<_>>();
+
+
+    let sorted_columns = arrow::compute::lexsort(&sort_columns, None).expect("failed to sort");
+
+    RecordBatch::try_new(output_batch.schema(), sorted_columns).expect("failed to create batch")
+}
+
+async fn join_get_stream_and_get_expected(
     left: Arc<dyn ExecutionPlan>,
     right: Arc<dyn ExecutionPlan>,
     on: JoinOn,
     join_type: JoinType,
     filter: Option<JoinFilter>,
     batch_size: usize,
-) -> Result<SendableRecordBatchStream> {
+) -> Result<(SendableRecordBatchStream, RecordBatch)> {
     let sort_options = vec![SortOptions::default(); on.len()];
     let null_equality = NullEquality::NullEqualsNothing;
     let task_ctx = Arc::new(
         TaskContext::default()
             .with_session_config(SessionConfig::default().with_batch_size(batch_size)),
     );
+
+    let expected_output = {
+        let oracle = HashJoinExec::try_new(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on.clone(),
+            filter.clone(),
+            &join_type,
+            None,
+            PartitionMode::Partitioned,
+            null_equality,
+            false
+        )?;
+
+        let stream = oracle.execute(0, task_ctx.clone())?;
+
+        let batches = common::collect(stream).await?;
+
+        prepare_record_batches_for_cmp(batches)
+    };
+
     let join = SortMergeJoinExec::try_new(
         left,
         right,
@@ -3192,10 +3230,12 @@ fn join_get_stream(
         null_equality,
     )?;
 
+
     let stream = join.execute(0, task_ctx)?;
 
-    Ok(stream)
+    Ok((stream, expected_output))
 }
+
 
 fn generate_data_for_emit_early_test(
     batch_size: usize,
@@ -3353,16 +3393,16 @@ async fn test_should_emit_early_when_have_enough_data_to_emit() -> Result<()> {
                 // select *
                 // from t1
                 // right join t2 on t1.b1 = t2.b1 and t1.bool_col1 AND t2.bool_col2
-                let mut output_stream = join_get_stream(
+                let (mut output_stream, expected) = join_get_stream_and_get_expected(
                     Arc::clone(&left) as Arc<dyn ExecutionPlan>,
                     Arc::clone(&right) as Arc<dyn ExecutionPlan>,
                     on,
                     join_type,
                     join_filter,
                     BATCH_SIZE,
-                )?;
+                ).await?;
 
-                let output_batched =
+                let (output_batched, output_batches_after_finish) =
                   consume_stream_until_finish_barrier_reached(left, right, &mut output_stream).await.unwrap_or_else(|e| panic!("Failed to consume stream for join type: '{join_type}' and with filtering '{with_filtering}': {e:?}"));
 
                 // It should emit more than that, but we are being generous
@@ -3380,7 +3420,13 @@ async fn test_should_emit_early_when_have_enough_data_to_emit() -> Result<()> {
                     output_batched.len()
                 );
 
-                // TODO - EMIT FINISH AND COMPARE OUTPUT AGAINST SOME ORACLE (LIKE HASH JOIM)
+                // Just sanity test to make sure we are still producing valid output
+                {
+                    let output = [output_batched, output_batches_after_finish].concat();
+                    let actual_prepared = prepare_record_batches_for_cmp(output);
+
+                    assert_eq!(actual_prepared.columns(), expected.columns());
+                }
             }
         }
     }
@@ -3398,11 +3444,14 @@ async fn consume_stream_until_finish_barrier_reached(
     left: Arc<BarrierExec>,
     right: Arc<BarrierExec>,
     output_stream: &mut SendableRecordBatchStream,
-) -> Result<Vec<RecordBatch>> {
+) -> Result<(Vec<RecordBatch>, Vec<RecordBatch>)> {
+    let mut switch_to_finish_barrier = false;
     let mut output_batched = vec![];
+    let mut after_finish_barrier_reached = vec![];
 
     let mut start_time_since_last_ready = datafusion_common::instant::Instant::now();
     loop {
+
         let next_item = output_stream.next();
 
         // Manual polling
@@ -3416,16 +3465,36 @@ async fn consume_stream_until_finish_barrier_reached(
                 if batch.num_rows() == 0 {
                     return internal_err!("join stream should not emit empty batch");
                 }
-                output_batched.push(batch);
+                if switch_to_finish_barrier {
+                    after_finish_barrier_reached.push(batch);
+                } else {
+                    output_batched.push(batch);
+                }
                 start_time_since_last_ready = datafusion_common::instant::Instant::now();
             }
             Poll::Ready(Some(Err(e))) => return Err(e),
-            Poll::Ready(None) => {
+            Poll::Ready(None) if !switch_to_finish_barrier => {
                 unreachable!("Stream should not end before manually finishing it")
+            }
+            Poll::Ready(None) => {
+                break;
             }
             Poll::Pending => {
                 if right.is_finish_barrier_reached() && left.is_finish_barrier_reached() {
-                    break;
+                    if !switch_to_finish_barrier {
+                        switch_to_finish_barrier = true;
+
+                        let mut background_task = JoinSet::new();
+                        let right = Arc::clone(&right);
+                        background_task.spawn(async move {
+                            right.wait_finish().await;
+                        });
+                        let left = Arc::clone(&left);
+                        background_task.spawn(async move {
+                        left.wait_finish().await;
+                        });
+                        tokio::task::yield_now().await;
+                    }
                 }
 
                 // Make sure the test doesn't run forever
@@ -3441,7 +3510,7 @@ async fn consume_stream_until_finish_barrier_reached(
         }
     }
 
-    Ok(output_batched)
+    Ok((output_batched, after_finish_barrier_reached))
 }
 
 /// Returns the column names on the schema
