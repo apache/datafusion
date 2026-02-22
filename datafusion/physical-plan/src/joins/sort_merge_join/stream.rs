@@ -614,9 +614,6 @@ impl Stream for SortMergeJoinStream {
                         continue;
                     }
 
-                    // TODO - NEED TO CHECK IF WE HAVE ENOUGH DATA TO FILL BATCH
-                    // TODO - WHAT ABOUT
-
                     let maybe_next = next_state.as_ref().clone();
 
                     // For non-filtered joins, only output if we have a completed batch
