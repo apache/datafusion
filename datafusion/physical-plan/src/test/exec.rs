@@ -433,14 +433,8 @@ impl ExecutionPlan for BarrierExec {
 
         // task simply sends data in order after barrier is reached
         let data = self.data[partition].clone();
-        let start_barrier = self
-            .start_data_barrier
-            .as_ref()
-            .map(|barrier| Arc::clone(barrier));
-        let finish_barrier = self
-            .finish_barrier
-            .as_ref()
-            .map(|barrier| Arc::clone(barrier));
+        let start_barrier = self.start_data_barrier.as_ref().map(Arc::clone);
+        let finish_barrier = self.finish_barrier.as_ref().map(Arc::clone);
         let tx = builder.tx();
         builder.spawn(async move {
             if let Some(barrier) = start_barrier {
