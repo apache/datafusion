@@ -17,14 +17,6 @@
 
 use datafusion_expr::JoinType;
 
-// Returns boolean for whether the join is a right existence join
-pub(super) fn is_right_existence_join(join_type: JoinType) -> bool {
-    matches!(
-        join_type,
-        JoinType::RightAnti | JoinType::RightSemi | JoinType::RightMark
-    )
-}
-
 // Returns boolean for whether the join is an existence join
 pub(super) fn is_existence_join(join_type: JoinType) -> bool {
     matches!(
@@ -47,15 +39,5 @@ pub(super) fn need_produce_result_in_final(join_type: JoinType) -> bool {
 // Returns boolean for whether or not we need to build the buffered side
 // bitmap for marking matched rows on the buffered side.
 pub(super) fn build_visited_indices_map(join_type: JoinType) -> bool {
-    matches!(
-        join_type,
-        JoinType::Full
-            | JoinType::Left
-            | JoinType::LeftAnti
-            | JoinType::RightAnti
-            | JoinType::LeftSemi
-            | JoinType::RightSemi
-            | JoinType::LeftMark
-            | JoinType::RightMark
-    )
+    matches!(join_type, JoinType::Full | JoinType::Left)
 }

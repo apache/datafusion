@@ -1400,15 +1400,7 @@ impl DefaultPhysicalPlanner {
                         Arc::new(CrossJoinExec::new(physical_left, physical_right))
                     } else if num_range_filters == 1
                         && total_filters == 1
-                        && !matches!(
-                            join_type,
-                            JoinType::LeftSemi
-                                | JoinType::RightSemi
-                                | JoinType::LeftAnti
-                                | JoinType::RightAnti
-                                | JoinType::LeftMark
-                                | JoinType::RightMark
-                        )
+                        && !matches!(join_type, JoinType::LeftMark | JoinType::RightMark)
                         && session_state
                             .config_options()
                             .optimizer
@@ -1510,7 +1502,6 @@ impl DefaultPhysicalPlanner {
                             (on_left, on_right),
                             op,
                             *join_type,
-                            session_state.config().target_partitions(),
                         )?)
                     } else {
                         // there is no equal join condition, use the nested loop join

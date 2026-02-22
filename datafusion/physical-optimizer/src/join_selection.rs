@@ -35,7 +35,7 @@ use datafusion_physical_plan::execution_plan::EmissionType;
 use datafusion_physical_plan::joins::utils::ColumnIndex;
 use datafusion_physical_plan::joins::{
     CrossJoinExec, HashJoinExec, HashJoinExecBuilder, NestedLoopJoinExec, PartitionMode,
-    StreamJoinPartitionMode, SymmetricHashJoinExec,
+    PiecewiseMergeJoinExec, StreamJoinPartitionMode, SymmetricHashJoinExec,
 };
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use std::sync::Arc;
@@ -257,61 +257,77 @@ fn statistical_join_selection_subrule(
     collect_threshold_byte_size: usize,
     collect_threshold_num_rows: usize,
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
-    let transformed =
-        if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>() {
-            match hash_join.partition_mode() {
-                PartitionMode::Auto => try_collect_left(
-                    hash_join,
-                    false,
-                    collect_threshold_byte_size,
-                    collect_threshold_num_rows,
-                )?
+    let transformed = if let Some(hash_join) =
+        plan.as_any().downcast_ref::<HashJoinExec>()
+    {
+        match hash_join.partition_mode() {
+            PartitionMode::Auto => try_collect_left(
+                hash_join,
+                false,
+                collect_threshold_byte_size,
+                collect_threshold_num_rows,
+            )?
+            .map_or_else(
+                || partitioned_hash_join(hash_join).map(Some),
+                |v| Ok(Some(v)),
+            )?,
+            PartitionMode::CollectLeft => try_collect_left(hash_join, true, 0, 0)?
                 .map_or_else(
                     || partitioned_hash_join(hash_join).map(Some),
                     |v| Ok(Some(v)),
                 )?,
-                PartitionMode::CollectLeft => try_collect_left(hash_join, true, 0, 0)?
-                    .map_or_else(
-                        || partitioned_hash_join(hash_join).map(Some),
-                        |v| Ok(Some(v)),
-                    )?,
-                PartitionMode::Partitioned => {
-                    let left = hash_join.left();
-                    let right = hash_join.right();
-                    // Don't swap null-aware anti joins as they have specific side requirements
-                    if hash_join.join_type().supports_swap()
-                        && !hash_join.null_aware
-                        && should_swap_join_order(&**left, &**right)?
-                    {
-                        hash_join
-                            .swap_inputs(PartitionMode::Partitioned)
-                            .map(Some)?
-                    } else {
-                        None
-                    }
+            PartitionMode::Partitioned => {
+                let left = hash_join.left();
+                let right = hash_join.right();
+                // Don't swap null-aware anti joins as they have specific side requirements
+                if hash_join.join_type().supports_swap()
+                    && !hash_join.null_aware
+                    && should_swap_join_order(&**left, &**right)?
+                {
+                    hash_join
+                        .swap_inputs(PartitionMode::Partitioned)
+                        .map(Some)?
+                } else {
+                    None
                 }
             }
-        } else if let Some(cross_join) = plan.as_any().downcast_ref::<CrossJoinExec>() {
-            let left = cross_join.left();
-            let right = cross_join.right();
-            if should_swap_join_order(&**left, &**right)? {
-                cross_join.swap_inputs().map(Some)?
-            } else {
-                None
-            }
-        } else if let Some(nl_join) = plan.as_any().downcast_ref::<NestedLoopJoinExec>() {
-            let left = nl_join.left();
-            let right = nl_join.right();
-            if nl_join.join_type().supports_swap()
-                && should_swap_join_order(&**left, &**right)?
-            {
-                nl_join.swap_inputs().map(Some)?
-            } else {
-                None
-            }
+        }
+    } else if let Some(cross_join) = plan.as_any().downcast_ref::<CrossJoinExec>() {
+        let left = cross_join.left();
+        let right = cross_join.right();
+        if should_swap_join_order(&**left, &**right)? {
+            cross_join.swap_inputs().map(Some)?
         } else {
             None
-        };
+        }
+    } else if let Some(nl_join) = plan.as_any().downcast_ref::<NestedLoopJoinExec>() {
+        let left = nl_join.left();
+        let right = nl_join.right();
+        if nl_join.join_type().supports_swap()
+            && should_swap_join_order(&**left, &**right)?
+        {
+            nl_join.swap_inputs().map(Some)?
+        } else {
+            None
+        }
+    } else if let Some(pwmj) = plan.as_any().downcast_ref::<PiecewiseMergeJoinExec>() {
+        let left = pwmj.buffered();
+        let right = pwmj.streamed();
+        if pwmj.join_type().supports_swap()
+                // Put ! here because should_swap_join_order returns true if left > right but 
+                // PiecewiseMergeJoin wants the left side to be the larger one, so only swap if 
+                // left < right
+                && (!should_swap_join_order(&**left, &**right)?
+                || matches!(pwmj.join_type(), JoinType::RightSemi | JoinType::RightAnti))
+                && !matches!(pwmj.join_type(), JoinType::LeftSemi | JoinType::LeftAnti)
+        {
+            pwmj.swap_inputs().map(Some)?
+        } else {
+            None
+        }
+    } else {
+        None
+    };
 
     Ok(if let Some(transformed) = transformed {
         Transformed::yes(transformed)
