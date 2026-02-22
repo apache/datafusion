@@ -244,6 +244,9 @@ datafusion.execution.parquet.dictionary_enabled true
 datafusion.execution.parquet.dictionary_page_size_limit 1048576
 datafusion.execution.parquet.enable_page_index true
 datafusion.execution.parquet.encoding NULL
+datafusion.execution.parquet.filter_collecting_byte_ratio_threshold 0.2
+datafusion.execution.parquet.filter_confidence_z 2
+datafusion.execution.parquet.filter_pushdown_min_bytes_per_sec 104857600
 datafusion.execution.parquet.force_filter_selections false
 datafusion.execution.parquet.max_predicate_cache_size NULL
 datafusion.execution.parquet.max_row_group_size 1048576
@@ -252,7 +255,6 @@ datafusion.execution.parquet.maximum_parallel_row_group_writers 1
 datafusion.execution.parquet.metadata_size_hint 524288
 datafusion.execution.parquet.pruning true
 datafusion.execution.parquet.pushdown_filters false
-datafusion.execution.parquet.reorder_filters false
 datafusion.execution.parquet.schema_force_view_types true
 datafusion.execution.parquet.skip_arrow_metadata false
 datafusion.execution.parquet.skip_metadata true
@@ -382,6 +384,9 @@ datafusion.execution.parquet.dictionary_enabled true (writing) Sets if dictionar
 datafusion.execution.parquet.dictionary_page_size_limit 1048576 (writing) Sets best effort maximum dictionary page size, in bytes
 datafusion.execution.parquet.enable_page_index true (reading) If true, reads the Parquet data page level metadata (the Page Index), if present, to reduce the I/O and number of rows decoded.
 datafusion.execution.parquet.encoding NULL (writing)  Sets default encoding for any column. Valid values are: plain, plain_dictionary, rle, bit_packed, delta_binary_packed, delta_length_byte_array, delta_byte_array, rle_dictionary, and byte_stream_split. These values are not case sensitive. If NULL, uses default parquet writer setting
+datafusion.execution.parquet.filter_collecting_byte_ratio_threshold 0.2 (reading) Byte-ratio threshold (filter_bytes / projected_bytes) for placing collecting filters at row-level vs post-scan. Filters whose columns consume a larger fraction than this threshold of the projected bytes are placed post-scan to avoid row-level decode overhead. Default: 0.2. Set to 0.0 to always use row-level, 1.0+ to always post-scan collecting filters. **Interaction with `pushdown_filters`:** Only takes effect when `pushdown_filters = true`.
+datafusion.execution.parquet.filter_confidence_z 2 (reading) Z-score for confidence intervals on filter effectiveness. Controls how much statistical evidence is required before promoting or demoting a filter. Lower values = faster decisions with less confidence. Higher values = more conservative, requiring more data. Default: 2.0 (~95% confidence). **Interaction with `pushdown_filters`:** Only takes effect when `pushdown_filters = true`.
+datafusion.execution.parquet.filter_pushdown_min_bytes_per_sec 104857600 (reading) Minimum bytes/sec throughput for adaptive filter pushdown. Filters that achieve at least this throughput (bytes_saved / eval_time) are promoted to row filters. f64::INFINITY = no filters promoted (feature disabled). 0.0 = all filters pushed as row filters (no adaptive logic). Default: 104857600.0 (100 MB/s) — empirically tuned across TPC-H, TPC-DS, and ClickBench benchmarks on an m4 MacBook Pro. The optimal value for this setting likely depends on the relative cost of CPU vs. IO in your environment, and to some extent the shape of your query. **Interaction with `pushdown_filters`:** This option only takes effect when `pushdown_filters = true`. When pushdown is disabled, all filters run post-scan and this threshold is ignored. During the statistics collection phase (see `filter_confidence_z`), all filters temporarily run post-scan to gather baseline metrics; once collection completes, filters exceeding this throughput threshold are promoted to row filters while the rest remain post-scan.
 datafusion.execution.parquet.force_filter_selections false (reading) Force the use of RowSelections for filter results, when pushdown_filters is enabled. If false, the reader will automatically choose between a RowSelection and a Bitmap based on the number and pattern of selected rows.
 datafusion.execution.parquet.max_predicate_cache_size NULL (reading) The maximum predicate cache size, in bytes. When `pushdown_filters` is enabled, sets the maximum memory used to cache the results of predicate evaluation between filter evaluation and output generation. Decreasing this value will reduce memory usage, but may increase IO and CPU usage. None means use the default parquet reader setting. 0 means no caching.
 datafusion.execution.parquet.max_row_group_size 1048576 (writing) Target maximum number of rows in each row group (defaults to 1M rows). Writing larger row groups requires more memory to write, but can get better compression and be faster to read.
@@ -390,7 +395,6 @@ datafusion.execution.parquet.maximum_parallel_row_group_writers 1 (writing) By d
 datafusion.execution.parquet.metadata_size_hint 524288 (reading) If specified, the parquet reader will try and fetch the last `size_hint` bytes of the parquet file optimistically. If not specified, two reads are required: One read to fetch the 8-byte parquet footer and another to fetch the metadata length encoded in the footer Default setting to 512 KiB, which should be sufficient for most parquet files, it can reduce one I/O operation per parquet file. If the metadata is larger than the hint, two reads will still be performed.
 datafusion.execution.parquet.pruning true (reading) If true, the parquet reader attempts to skip entire row groups based on the predicate in the query and the metadata (min/max values) stored in the parquet file
 datafusion.execution.parquet.pushdown_filters false (reading) If true, filter expressions are be applied during the parquet decoding operation to reduce the number of rows decoded. This optimization is sometimes called "late materialization".
-datafusion.execution.parquet.reorder_filters false (reading) If true, filter expressions evaluated during the parquet decoding operation will be reordered heuristically to minimize the cost of evaluation. If false, the filters are applied in the same order as written in the query
 datafusion.execution.parquet.schema_force_view_types true (reading) If true, parquet reader will read columns of `Utf8/Utf8Large` with `Utf8View`, and `Binary/BinaryLarge` with `BinaryView`.
 datafusion.execution.parquet.skip_arrow_metadata false (writing) Skip encoding the embedded arrow metadata in the KV_meta This is analogous to the `ArrowWriterOptions::with_skip_arrow_metadata`. Refer to <https://docs.rs/parquet/53.3.0/parquet/arrow/arrow_writer/struct.ArrowWriterOptions.html#method.with_skip_arrow_metadata>
 datafusion.execution.parquet.skip_metadata true (reading) If true, the parquet reader skip the optional embedded metadata that may be in the file Schema. This setting can help avoid schema conflicts when querying multiple parquet files with schemas containing compatible types but different metadata

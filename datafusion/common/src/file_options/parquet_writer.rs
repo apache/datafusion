@@ -198,7 +198,7 @@ impl ParquetOptions {
             skip_metadata: _,
             metadata_size_hint: _,
             pushdown_filters: _,
-            reorder_filters: _,
+
             force_filter_selections: _, // not used for writer props
             allow_single_file_parallelism: _,
             maximum_parallel_row_group_writers: _,
@@ -209,6 +209,9 @@ impl ParquetOptions {
             coerce_int96: _,     // not used for writer props
             skip_arrow_metadata: _,
             max_predicate_cache_size: _,
+            filter_pushdown_min_bytes_per_sec: _, // not used for writer props
+            filter_collecting_byte_ratio_threshold: _, // not used for writer props
+            filter_confidence_z: _,               // not used for writer props
         } = self;
 
         let mut builder = WriterProperties::builder()
@@ -447,7 +450,7 @@ mod tests {
             skip_metadata: defaults.skip_metadata,
             metadata_size_hint: defaults.metadata_size_hint,
             pushdown_filters: defaults.pushdown_filters,
-            reorder_filters: defaults.reorder_filters,
+
             force_filter_selections: defaults.force_filter_selections,
             allow_single_file_parallelism: defaults.allow_single_file_parallelism,
             maximum_parallel_row_group_writers: defaults
@@ -460,6 +463,10 @@ mod tests {
             skip_arrow_metadata: defaults.skip_arrow_metadata,
             coerce_int96: None,
             max_predicate_cache_size: defaults.max_predicate_cache_size,
+            filter_pushdown_min_bytes_per_sec: defaults.filter_pushdown_min_bytes_per_sec,
+            filter_collecting_byte_ratio_threshold: defaults
+                .filter_collecting_byte_ratio_threshold,
+            filter_confidence_z: defaults.filter_confidence_z,
         }
     }
 
@@ -559,7 +566,7 @@ mod tests {
                 skip_metadata: global_options_defaults.skip_metadata,
                 metadata_size_hint: global_options_defaults.metadata_size_hint,
                 pushdown_filters: global_options_defaults.pushdown_filters,
-                reorder_filters: global_options_defaults.reorder_filters,
+
                 force_filter_selections: global_options_defaults.force_filter_selections,
                 allow_single_file_parallelism: global_options_defaults
                     .allow_single_file_parallelism,
@@ -574,6 +581,11 @@ mod tests {
                 binary_as_string: global_options_defaults.binary_as_string,
                 skip_arrow_metadata: global_options_defaults.skip_arrow_metadata,
                 coerce_int96: None,
+                filter_pushdown_min_bytes_per_sec: global_options_defaults
+                    .filter_pushdown_min_bytes_per_sec,
+                filter_collecting_byte_ratio_threshold: global_options_defaults
+                    .filter_collecting_byte_ratio_threshold,
+                filter_confidence_z: global_options_defaults.filter_confidence_z,
             },
             column_specific_options,
             key_value_metadata,

@@ -91,6 +91,8 @@ pub struct ParquetFileMetrics {
     /// number of rows that were stored in the cache after evaluating predicates
     /// reused for the output.
     pub predicate_cache_records: Gauge,
+    //// Time spent applying filters
+    pub filter_apply_time: Time,
 }
 
 impl ParquetFileMetrics {
@@ -186,6 +188,10 @@ impl ParquetFileMetrics {
             .with_new_label("filename", filename.to_string())
             .gauge("predicate_cache_records", partition);
 
+        let filter_apply_time = MetricBuilder::new(metrics)
+            .with_new_label("filename", filename.to_string())
+            .subset_time("filter_apply_time", partition);
+
         Self {
             files_ranges_pruned_statistics,
             predicate_evaluation_errors,
@@ -205,6 +211,7 @@ impl ParquetFileMetrics {
             scan_efficiency_ratio,
             predicate_cache_inner_records,
             predicate_cache_records,
+            filter_apply_time,
         }
     }
 }

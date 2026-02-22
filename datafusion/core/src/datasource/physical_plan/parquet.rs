@@ -167,9 +167,11 @@ mod tests {
             }
 
             if self.pushdown_predicate {
+                let mut opts = source.table_parquet_options().clone();
+                opts.global.filter_pushdown_min_bytes_per_sec = 0.0;
                 source = source
-                    .with_pushdown_filters(true)
-                    .with_reorder_filters(true);
+                    .with_table_parquet_options(opts)
+                    .with_pushdown_filters(true);
             } else {
                 source = source.with_pushdown_filters(false);
             }

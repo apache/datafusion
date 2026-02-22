@@ -1,0 +1,217 @@
+=== TPC-H: main-pushdown vs filter-pushdown-dynamic-bytes ===
+┏━━━━━━━━━━━┳━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━┓
+┃ Query     ┃ main-pushdown ┃ filter-pushdown-dynamic-bytes ┃        Change ┃
+┡━━━━━━━━━━━╇━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━┩
+│ QQuery 1  │      54.79 ms │                      44.27 ms │ +1.24x faster │
+│ QQuery 2  │      17.95 ms │                      17.58 ms │     no change │
+│ QQuery 3  │      36.10 ms │                      27.19 ms │ +1.33x faster │
+│ QQuery 4  │      28.00 ms │                      18.82 ms │ +1.49x faster │
+│ QQuery 5  │      65.63 ms │                      61.49 ms │ +1.07x faster │
+│ QQuery 6  │      40.54 ms │                      14.85 ms │ +2.73x faster │
+│ QQuery 7  │      57.25 ms │                      61.81 ms │  1.08x slower │
+│ QQuery 8  │      69.00 ms │                      72.72 ms │  1.05x slower │
+│ QQuery 9  │      90.99 ms │                     122.24 ms │  1.34x slower │
+│ QQuery 10 │      74.09 ms │                      82.37 ms │  1.11x slower │
+│ QQuery 11 │      12.35 ms │                      11.58 ms │ +1.07x faster │
+│ QQuery 12 │      46.43 ms │                      31.01 ms │ +1.50x faster │
+│ QQuery 13 │      28.22 ms │                      27.78 ms │     no change │
+│ QQuery 14 │      31.10 ms │                      54.35 ms │  1.75x slower │
+│ QQuery 15 │      47.56 ms │                      34.69 ms │ +1.37x faster │
+│ QQuery 16 │      18.14 ms │                      14.92 ms │ +1.22x faster │
+│ QQuery 17 │      70.84 ms │                      64.37 ms │ +1.10x faster │
+│ QQuery 18 │     107.97 ms │                      97.67 ms │ +1.11x faster │
+│ QQuery 19 │      40.39 ms │                      40.17 ms │     no change │
+│ QQuery 20 │      38.36 ms │                      63.07 ms │  1.64x slower │
+│ QQuery 21 │      75.73 ms │                      67.89 ms │ +1.12x faster │
+│ QQuery 22 │      25.76 ms │                      22.93 ms │ +1.12x faster │
+└───────────┴───────────────┴───────────────────────────────┴───────────────┘
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━┓
+┃ Benchmark Summary                            ┃           ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━┩
+│ Total Time (main-pushdown)                   │ 1077.18ms │
+│ Total Time (filter-pushdown-dynamic-bytes)   │ 1053.77ms │
+│ Average Time (main-pushdown)                 │   48.96ms │
+│ Average Time (filter-pushdown-dynamic-bytes) │   47.90ms │
+│ Queries Faster                               │        13 │
+│ Queries Slower                               │         6 │
+│ Queries with No Change                       │         3 │
+│ Queries with Failure                         │         0 │
+└──────────────────────────────────────────────┴───────────┘
+
+=== TPC-DS: main-pushdown vs filter-pushdown-dynamic-bytes ===
+┏━━━━━━━━━━━┳━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━┓
+┃ Query     ┃ main-pushdown ┃ filter-pushdown-dynamic-bytes ┃         Change ┃
+┡━━━━━━━━━━━╇━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━┩
+│ QQuery 1  │      38.29 ms │                      34.18 ms │  +1.12x faster │
+│ QQuery 2  │     108.28 ms │                     107.30 ms │      no change │
+│ QQuery 3  │      87.22 ms │                      93.85 ms │   1.08x slower │
+│ QQuery 4  │     769.14 ms │                     788.28 ms │      no change │
+│ QQuery 5  │     136.43 ms │                     134.76 ms │      no change │
+│ QQuery 6  │     174.02 ms │                     162.73 ms │  +1.07x faster │
+│ QQuery 7  │     248.74 ms │                     280.15 ms │   1.13x slower │
+│ QQuery 8  │     107.12 ms │                      97.09 ms │  +1.10x faster │
+│ QQuery 9  │     214.74 ms │                     100.46 ms │  +2.14x faster │
+│ QQuery 10 │      72.06 ms │                      91.48 ms │   1.27x slower │
+│ QQuery 11 │     462.45 ms │                     483.56 ms │      no change │
+│ QQuery 12 │      26.95 ms │                      27.58 ms │      no change │
+│ QQuery 13 │     389.90 ms │                     322.12 ms │  +1.21x faster │
+│ QQuery 14 │     883.54 ms │                     824.16 ms │  +1.07x faster │
+│ QQuery 15 │      12.21 ms │                      12.18 ms │      no change │
+│ QQuery 16 │      28.49 ms │                      29.50 ms │      no change │
+│ QQuery 17 │     132.90 ms │                     224.06 ms │   1.69x slower │
+│ QQuery 18 │     195.93 ms │                     154.91 ms │  +1.26x faster │
+│ QQuery 19 │      98.96 ms │                     126.71 ms │   1.28x slower │
+│ QQuery 20 │      10.35 ms │                       9.45 ms │  +1.10x faster │
+│ QQuery 21 │      16.19 ms │                      12.58 ms │  +1.29x faster │
+│ QQuery 22 │     286.07 ms │                     270.71 ms │  +1.06x faster │
+│ QQuery 23 │     914.77 ms │                     879.63 ms │      no change │
+│ QQuery 24 │      91.25 ms │                     484.65 ms │   5.31x slower │
+│ QQuery 25 │     201.88 ms │                     401.09 ms │   1.99x slower │
+│ QQuery 26 │     103.88 ms │                      63.81 ms │  +1.63x faster │
+│ QQuery 27 │     249.82 ms │                     264.47 ms │   1.06x slower │
+│ QQuery 28 │     174.43 ms │                     118.17 ms │  +1.48x faster │
+│ QQuery 29 │     166.84 ms │                     337.78 ms │   2.02x slower │
+│ QQuery 30 │      37.93 ms │                      34.00 ms │  +1.12x faster │
+│ QQuery 31 │     122.09 ms │                     126.55 ms │      no change │
+│ QQuery 32 │      39.42 ms │                      43.88 ms │   1.11x slower │
+│ QQuery 33 │      94.19 ms │                     106.36 ms │   1.13x slower │
+│ QQuery 34 │      86.74 ms │                      91.43 ms │   1.05x slower │
+│ QQuery 35 │     100.99 ms │                      95.08 ms │  +1.06x faster │
+│ QQuery 36 │     176.81 ms │                     160.50 ms │  +1.10x faster │
+│ QQuery 37 │     424.90 ms │                     146.73 ms │  +2.90x faster │
+│ QQuery 38 │      66.94 ms │                      66.71 ms │      no change │
+│ QQuery 39 │      69.75 ms │                      67.92 ms │      no change │
+│ QQuery 40 │      76.54 ms │                      72.72 ms │      no change │
+│ QQuery 41 │       9.44 ms │                       9.34 ms │      no change │
+│ QQuery 42 │      79.20 ms │                      91.68 ms │   1.16x slower │
+│ QQuery 43 │      77.99 ms │                      68.85 ms │  +1.13x faster │
+│ QQuery 44 │       6.64 ms │                       6.59 ms │      no change │
+│ QQuery 45 │      29.18 ms │                      42.87 ms │   1.47x slower │
+│ QQuery 46 │     160.11 ms │                     173.47 ms │   1.08x slower │
+│ QQuery 47 │     514.78 ms │                     449.98 ms │  +1.14x faster │
+│ QQuery 48 │     325.78 ms │                     231.51 ms │  +1.41x faster │
+│ QQuery 49 │     241.78 ms │                     186.22 ms │  +1.30x faster │
+│ QQuery 50 │     354.38 ms │                     317.68 ms │  +1.12x faster │
+│ QQuery 51 │     141.27 ms │                     129.59 ms │  +1.09x faster │
+│ QQuery 52 │      79.69 ms │                      93.89 ms │   1.18x slower │
+│ QQuery 53 │      97.05 ms │                      95.88 ms │      no change │
+│ QQuery 54 │      86.73 ms │                     112.72 ms │   1.30x slower │
+│ QQuery 55 │      80.34 ms │                      92.17 ms │   1.15x slower │
+│ QQuery 56 │      92.13 ms │                     105.07 ms │   1.14x slower │
+│ QQuery 57 │     119.17 ms │                     114.81 ms │      no change │
+│ QQuery 58 │     239.20 ms │                     282.46 ms │   1.18x slower │
+│ QQuery 59 │     151.16 ms │                     136.13 ms │  +1.11x faster │
+│ QQuery 60 │      94.71 ms │                     106.23 ms │   1.12x slower │
+│ QQuery 61 │     138.58 ms │                     132.97 ms │      no change │
+│ QQuery 62 │     398.81 ms │                     383.67 ms │      no change │
+│ QQuery 63 │      96.61 ms │                      96.24 ms │      no change │
+│ QQuery 64 │   16954.44 ms │                     699.73 ms │ +24.23x faster │
+│ QQuery 65 │     208.29 ms │                     192.70 ms │  +1.08x faster │
+│ QQuery 66 │     129.32 ms │                     112.25 ms │  +1.15x faster │
+│ QQuery 67 │     351.32 ms │                     233.39 ms │  +1.51x faster │
+│ QQuery 68 │     186.26 ms │                     216.71 ms │   1.16x slower │
+│ QQuery 69 │      67.48 ms │                      84.72 ms │   1.26x slower │
+│ QQuery 70 │     295.48 ms │                     260.60 ms │  +1.13x faster │
+│ QQuery 71 │      91.97 ms │                     109.50 ms │   1.19x slower │
+│ QQuery 72 │     727.99 ms │                     609.49 ms │  +1.19x faster │
+│ QQuery 73 │      79.57 ms │                      89.40 ms │   1.12x slower │
+│ QQuery 74 │     326.17 ms │                     318.08 ms │      no change │
+│ QQuery 75 │     195.72 ms │                     205.86 ms │   1.05x slower │
+│ QQuery 76 │     172.95 ms │                     158.56 ms │  +1.09x faster │
+│ QQuery 77 │     155.31 ms │                     149.40 ms │      no change │
+│ QQuery 78 │     282.59 ms │                     273.53 ms │      no change │
+│ QQuery 79 │     180.47 ms │                     190.06 ms │   1.05x slower │
+│ QQuery 80 │     234.48 ms │                     241.49 ms │      no change │
+│ QQuery 81 │      21.00 ms │                      19.98 ms │      no change │
+│ QQuery 82 │     139.31 ms │                     154.69 ms │   1.11x slower │
+│ QQuery 83 │      39.89 ms │                      37.97 ms │      no change │
+│ QQuery 84 │      51.20 ms │                      49.23 ms │      no change │
+│ QQuery 85 │     169.81 ms │                     176.52 ms │      no change │
+│ QQuery 86 │      32.55 ms │                      28.49 ms │  +1.14x faster │
+│ QQuery 87 │      69.86 ms │                      66.46 ms │      no change │
+│ QQuery 88 │      89.73 ms │                      92.54 ms │      no change │
+│ QQuery 89 │     112.62 ms │                     106.27 ms │  +1.06x faster │
+│ QQuery 90 │      16.03 ms │                      16.57 ms │      no change │
+│ QQuery 91 │      59.32 ms │                      59.50 ms │      no change │
+│ QQuery 92 │      37.21 ms │                      43.00 ms │   1.16x slower │
+│ QQuery 93 │     129.00 ms │                     125.03 ms │      no change │
+│ QQuery 94 │      42.99 ms │                      47.90 ms │   1.11x slower │
+│ QQuery 95 │     121.24 ms │                     118.00 ms │      no change │
+│ QQuery 96 │      52.97 ms │                      60.67 ms │   1.15x slower │
+│ QQuery 97 │      96.99 ms │                      88.89 ms │  +1.09x faster │
+│ QQuery 98 │      86.32 ms │                      90.56 ms │      no change │
+│ QQuery 99 │    4162.22 ms │                    4123.98 ms │      no change │
+└───────────┴───────────────┴───────────────────────────────┴────────────────┘
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━┓
+┃ Benchmark Summary                            ┃            ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━┩
+│ Total Time (main-pushdown)                   │ 37483.96ms │
+│ Total Time (filter-pushdown-dynamic-bytes)   │ 21061.00ms │
+│ Average Time (main-pushdown)                 │   378.63ms │
+│ Average Time (filter-pushdown-dynamic-bytes) │   212.74ms │
+│ Queries Faster                               │         33 │
+│ Queries Slower                               │         31 │
+│ Queries with No Change                       │         35 │
+│ Queries with Failure                         │          0 │
+└──────────────────────────────────────────────┴────────────┘
+
+=== ClickBench Partitioned: main-pushdown vs filter-pushdown-dynamic-bytes ===
+┏━━━━━━━━━━━┳━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━┓
+┃ Query     ┃ main-pushdown ┃ filter-pushdown-dynamic-bytes ┃        Change ┃
+┡━━━━━━━━━━━╇━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━┩
+│ QQuery 0  │       0.77 ms │                       0.71 ms │ +1.08x faster │
+│ QQuery 1  │      11.61 ms │                      11.00 ms │ +1.06x faster │
+│ QQuery 2  │      36.41 ms │                      38.74 ms │  1.06x slower │
+│ QQuery 3  │      36.38 ms │                      33.50 ms │ +1.09x faster │
+│ QQuery 4  │     277.68 ms │                     283.27 ms │     no change │
+│ QQuery 5  │     353.36 ms │                     352.75 ms │     no change │
+│ QQuery 6  │       5.18 ms │                       2.39 ms │ +2.16x faster │
+│ QQuery 7  │      15.47 ms │                      12.52 ms │ +1.24x faster │
+│ QQuery 8  │     343.62 ms │                     349.47 ms │     no change │
+│ QQuery 9  │     537.14 ms │                     526.37 ms │     no change │
+│ QQuery 10 │     106.97 ms │                      85.29 ms │ +1.25x faster │
+│ QQuery 11 │     122.38 ms │                      95.34 ms │ +1.28x faster │
+│ QQuery 12 │     349.16 ms │                     333.24 ms │     no change │
+│ QQuery 13 │     522.63 ms │                     484.86 ms │ +1.08x faster │
+│ QQuery 14 │     350.01 ms │                     309.28 ms │ +1.13x faster │
+│ QQuery 15 │     317.71 ms │                     324.25 ms │     no change │
+│ QQuery 16 │     738.42 ms │                     734.29 ms │     no change │
+│ QQuery 17 │     757.17 ms │                     798.73 ms │  1.05x slower │
+│ QQuery 18 │    1679.78 ms │                    1792.66 ms │  1.07x slower │
+│ QQuery 19 │      27.64 ms │                      32.65 ms │  1.18x slower │
+│ QQuery 20 │     724.51 ms │                     762.97 ms │  1.05x slower │
+│ QQuery 21 │     806.88 ms │                     805.13 ms │     no change │
+│ QQuery 22 │    1195.28 ms │                    1371.65 ms │  1.15x slower │
+│ QQuery 23 │     340.62 ms │                    1925.11 ms │  5.65x slower │
+│ QQuery 24 │      83.56 ms │                      68.79 ms │ +1.21x faster │
+│ QQuery 25 │     167.51 ms │                     136.57 ms │ +1.23x faster │
+│ QQuery 26 │     117.83 ms │                      79.29 ms │ +1.49x faster │
+│ QQuery 27 │     929.03 ms │                     801.06 ms │ +1.16x faster │
+│ QQuery 28 │    7520.97 ms │                    7450.82 ms │     no change │
+│ QQuery 29 │     336.13 ms │                     329.89 ms │     no change │
+│ QQuery 30 │     350.31 ms │                     338.92 ms │     no change │
+│ QQuery 31 │     352.15 ms │                     417.54 ms │  1.19x slower │
+│ QQuery 32 │    1688.70 ms │                    1599.95 ms │ +1.06x faster │
+│ QQuery 33 │    1874.19 ms │                    1808.22 ms │     no change │
+│ QQuery 34 │    1919.58 ms │                    1925.74 ms │     no change │
+│ QQuery 35 │     475.76 ms │                     499.61 ms │  1.05x slower │
+│ QQuery 36 │      73.69 ms │                      85.28 ms │  1.16x slower │
+│ QQuery 37 │      37.71 ms │                      34.47 ms │ +1.09x faster │
+│ QQuery 38 │      42.10 ms │                      57.39 ms │  1.36x slower │
+│ QQuery 39 │     125.47 ms │                     156.34 ms │  1.25x slower │
+│ QQuery 40 │      23.35 ms │                      14.19 ms │ +1.65x faster │
+│ QQuery 41 │      19.65 ms │                      12.89 ms │ +1.52x faster │
+│ QQuery 42 │      14.57 ms │                      11.67 ms │ +1.25x faster │
+└───────────┴───────────────┴───────────────────────────────┴───────────────┘
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━┓
+┃ Benchmark Summary                            ┃            ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━┩
+│ Total Time (main-pushdown)                   │ 25809.01ms │
+│ Total Time (filter-pushdown-dynamic-bytes)   │ 27294.80ms │
+│ Average Time (main-pushdown)                 │   600.21ms │
+│ Average Time (filter-pushdown-dynamic-bytes) │   634.76ms │
+│ Queries Faster                               │         18 │
+│ Queries Slower                               │         12 │
+│ Queries with No Change                       │         13 │
+│ Queries with Failure                         │          0 │
+└──────────────────────────────────────────────┴────────────┘

@@ -86,7 +86,9 @@ use datafusion_physical_expr::projection::{ProjectionRef, combine_projections};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 
 use ahash::RandomState;
-use datafusion_physical_expr_common::physical_expr::fmt_sql;
+use datafusion_physical_expr_common::physical_expr::{
+    OptionalFilterPhysicalExpr, fmt_sql,
+};
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::TryStreamExt;
 use parking_lot::Mutex;
@@ -1548,9 +1550,12 @@ impl ExecutionPlan for HashJoinExec {
         if matches!(phase, FilterPushdownPhase::Post)
             && self.allow_join_dynamic_filter_pushdown(config)
         {
-            // Add actual dynamic filter to right side (probe side)
+            // Add actual dynamic filter to right side (probe side),
+            // wrapped as optional so it can be dropped if ineffective.
             let dynamic_filter = Self::create_dynamic_filter(&self.on);
-            right_child = right_child.with_self_filter(dynamic_filter);
+            let wrapped: Arc<dyn PhysicalExpr> =
+                Arc::new(OptionalFilterPhysicalExpr::new(dynamic_filter));
+            right_child = right_child.with_self_filter(wrapped);
         }
 
         Ok(FilterDescription::new()
@@ -1572,8 +1577,13 @@ impl ExecutionPlan for HashJoinExec {
             // Note that we don't check PushdDownPredicate::discrimnant because even if nothing said
             // "yes, I can fully evaluate this filter" things might still use it for statistics -> it's worth updating
             let predicate = Arc::clone(&filter.predicate);
-            if let Ok(dynamic_filter) =
-                Arc::downcast::<DynamicFilterPhysicalExpr>(predicate)
+            // Unwrap OptionalFilterPhysicalExpr if present to get the inner DynamicFilterPhysicalExpr
+            let inner = predicate
+                .as_any()
+                .downcast_ref::<OptionalFilterPhysicalExpr>()
+                .map(|opt| opt.inner())
+                .unwrap_or(predicate);
+            if let Ok(dynamic_filter) = Arc::downcast::<DynamicFilterPhysicalExpr>(inner)
             {
                 // We successfully pushed down our self filter - we need to make a new node with the dynamic filter
                 let new_node = Arc::new(HashJoinExec {

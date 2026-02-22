@@ -57,8 +57,6 @@ pub struct TestParquetFile {
 pub struct ParquetScanOptions {
     /// Enable pushdown filters
     pub pushdown_filters: bool,
-    /// enable reordering filters
-    pub reorder_filters: bool,
     /// enable page index
     pub enable_page_index: bool,
 }
@@ -68,8 +66,9 @@ impl ParquetScanOptions {
     pub fn config(&self) -> SessionConfig {
         let mut config = ConfigOptions::new();
         config.execution.parquet.pushdown_filters = self.pushdown_filters;
-        config.execution.parquet.reorder_filters = self.reorder_filters;
         config.execution.parquet.enable_page_index = self.enable_page_index;
+        // Disable adaptive filter selection for tests that expect deterministic pushdown
+        config.execution.parquet.filter_pushdown_min_bytes_per_sec = 0.0;
         config.into()
     }
 }

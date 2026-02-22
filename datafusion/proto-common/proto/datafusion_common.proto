@@ -535,7 +535,7 @@ message ParquetOptions {
   bool pruning = 2; // default = true
   bool skip_metadata = 3; // default = true
   bool pushdown_filters = 5; // default = false
-  bool reorder_filters = 6; // default = false
+  reserved 6; // was reorder_filters
   bool force_filter_selections = 34; // default = false
   uint64 data_pagesize_limit = 7; // default = 1024 * 1024
   uint64 write_batch_size = 8; // default = 1024
@@ -602,6 +602,21 @@ message ParquetOptions {
 
   oneof max_predicate_cache_size_opt {
     uint64 max_predicate_cache_size = 33;
+  }
+
+  oneof filter_pushdown_min_bytes_per_sec_opt {
+    double filter_pushdown_min_bytes_per_sec = 35;
+  }
+
+  // field 36 removed (filter_correlation_threshold)
+  // fields 37-39 removed (filter_statistics_collection_min_rows, fraction, max_rows)
+
+  oneof filter_collecting_byte_ratio_threshold_opt {
+    double filter_collecting_byte_ratio_threshold = 40;
+  }
+
+  oneof filter_confidence_z_opt {
+    double filter_confidence_z = 41;
   }
 }
 

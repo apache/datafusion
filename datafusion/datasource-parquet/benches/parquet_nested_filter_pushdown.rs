@@ -24,6 +24,7 @@ use arrow::array::{
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
+use datafusion_datasource_parquet::selectivity::SelectivityTracker;
 use datafusion_datasource_parquet::{ParquetFileMetrics, build_row_filter};
 use datafusion_expr::{Expr, col};
 use datafusion_functions_nested::expr_fn::array_has;
@@ -115,10 +116,16 @@ fn scan_with_predicate(
     let file_metrics = ParquetFileMetrics::new(0, &path.display().to_string(), &metrics);
 
     let builder = if pushdown {
-        if let Some(row_filter) =
-            build_row_filter(predicate, file_schema, &metadata, false, &file_metrics)?
-        {
-            builder.with_row_filter(row_filter)
+        let tracker = Arc::new(SelectivityTracker::new());
+        if let Some(result) = build_row_filter(
+            vec![],
+            vec![(0, Arc::clone(predicate))],
+            file_schema,
+            &metadata,
+            &file_metrics,
+            &tracker,
+        )? {
+            builder.with_row_filter(result.row_filter)
         } else {
             builder
         }

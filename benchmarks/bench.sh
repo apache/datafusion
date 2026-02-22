@@ -783,7 +783,7 @@ run_clickbench_partitioned() {
 run_clickbench_pushdown() {
     RESULTS_FILE="${RESULTS_DIR}/clickbench_pushdown.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
-    echo "Running clickbench (partitioned, 100 files) benchmark with pushdown_filters=true, reorder_filters=true..."
+    echo "Running clickbench (partitioned, 100 files) benchmark with pushdown_filters=true..."
     debug_run $CARGO_COMMAND --bin dfbench -- clickbench --pushdown --iterations 5 --path "${DATA_DIR}/hits_partitioned" --queries-path "${SCRIPT_DIR}/queries/clickbench/queries" -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 

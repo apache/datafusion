@@ -15,17 +15,24 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`ParquetOpener`] for opening Parquet files
+//! [`ParquetOpener`] for opening Parquet files.
+//!
+//! Implements the adaptive filter feedback loop: filters partitioned by
+//! [`SelectivityTracker`] are either
+//! pushed as row-level predicates or applied post-scan, and per-batch metrics
+//! are fed back into the tracker for future promotion/demotion decisions.
 
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::row_group_filter::RowGroupAccessPlanFilter;
+use crate::selectivity::{PartitionedFilters, SelectivityTracker};
 use crate::{
     ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
     apply_file_schema_type_coercions, coerce_int96_to_resolution, row_filter,
 };
-use arrow::array::{RecordBatch, RecordBatchOptions};
+use arrow::array::{BooleanArray, RecordBatch, RecordBatchOptions};
 use arrow::datatypes::DataType;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
+use datafusion_physical_expr::conjunction;
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::utils::reassign_expr_columns;
 use datafusion_physical_expr_adapter::replace_columns_with_literals;
@@ -78,8 +85,9 @@ pub(super) struct ParquetOpener {
     pub(crate) limit: Option<usize>,
     /// If should keep the output rows in order
     pub preserve_order: bool,
-    /// Optional predicate to apply during the scan
-    pub predicate: Option<Arc<dyn PhysicalExpr>>,
+    /// Optional predicate conjuncts with stable FilterIds for selectivity tracking
+    pub predicate_conjuncts:
+        Option<Vec<(crate::selectivity::FilterId, Arc<dyn PhysicalExpr>)>>,
     /// Table schema, including partition columns.
     pub table_schema: TableSchema,
     /// Optional hint for how large the initial request to read parquet metadata
@@ -90,10 +98,8 @@ pub(super) struct ParquetOpener {
     /// Factory for instantiating parquet reader
     pub parquet_file_reader_factory: Arc<dyn ParquetFileReaderFactory>,
     /// Should the filters be evaluated during the parquet scan using
-    /// [`DataFusionArrowPredicate`](row_filter::DatafusionArrowPredicate)?
+    /// `DatafusionArrowPredicateWithMetrics`?
     pub pushdown_filters: bool,
-    /// Should the filters be reordered to optimize the scan?
-    pub reorder_filters: bool,
     /// Should we force the reader to use RowSelections for filtering
     pub force_filter_selections: bool,
     /// Should the page index be read from parquet files, if present, to skip
@@ -120,6 +126,9 @@ pub(super) struct ParquetOpener {
     pub max_predicate_cache_size: Option<usize>,
     /// Whether to read row groups in reverse order
     pub reverse_row_groups: bool,
+    /// Shared selectivity tracker for adaptive filter reordering.
+    /// Each opener reads stats and decides which filters to push down.
+    pub selectivity_tracker: Arc<SelectivityTracker>,
 }
 
 /// Represents a prepared access plan with optional row selection
@@ -248,19 +257,27 @@ impl FileOpener for ParquetOpener {
             &logical_file_schema,
         ));
 
-        // Apply literal replacements to projection and predicate
+        // Apply literal replacements to projection and predicate conjuncts
         let mut projection = self.projection.clone();
-        let mut predicate = self.predicate.clone();
+        let mut predicate_conjuncts = self.predicate_conjuncts.clone();
         if !literal_columns.is_empty() {
             projection = projection.try_map_exprs(|expr| {
                 replace_columns_with_literals(Arc::clone(&expr), &literal_columns)
             })?;
-            predicate = predicate
-                .map(|p| replace_columns_with_literals(p, &literal_columns))
-                .transpose()?;
+            if let Some(ref mut conjuncts) = predicate_conjuncts {
+                for (_id, expr) in conjuncts.iter_mut() {
+                    *expr = replace_columns_with_literals(
+                        Arc::clone(expr),
+                        &literal_columns,
+                    )?;
+                }
+            }
         }
+        // Build combined predicate for file-level pruning
+        let predicate: Option<Arc<dyn PhysicalExpr>> = predicate_conjuncts
+            .as_ref()
+            .map(|c| conjunction(c.iter().map(|(_, e)| Arc::clone(e))));
 
-        let reorder_predicates = self.reorder_filters;
         let pushdown_filters = self.pushdown_filters;
         let force_filter_selections = self.force_filter_selections;
         let coerce_int96 = self.coerce_int96;
@@ -280,7 +297,7 @@ impl FileOpener for ParquetOpener {
 
         let reverse_row_groups = self.reverse_row_groups;
         let preserve_order = self.preserve_order;
-
+        let selectivity_tracker = Arc::clone(&self.selectivity_tracker);
         Ok(Box::pin(async move {
             #[cfg(feature = "parquet_encryption")]
             let file_decryption_properties = encryption_context
@@ -414,9 +431,32 @@ impl FileOpener for ParquetOpener {
                 Arc::clone(&physical_file_schema),
             )?;
             let simplifier = PhysicalExprSimplifier::new(&physical_file_schema);
-            predicate = predicate
-                .map(|p| simplifier.simplify(rewriter.rewrite(p)?))
-                .transpose()?;
+
+            // Adapt each conjunct individually, keeping FilterIds.
+            // Filter out conjuncts that simplify to literal true.
+            if let Some(ref mut conjuncts) = predicate_conjuncts {
+                let mut adapted = Vec::with_capacity(conjuncts.len());
+                for (id, expr) in conjuncts.drain(..) {
+                    let rewritten = simplifier.simplify(rewriter.rewrite(expr)?)?;
+                    // Skip conjuncts that simplified to TRUE
+                    if let Some(lit) = rewritten
+                        .as_any()
+                        .downcast_ref::<datafusion_physical_expr::expressions::Literal>(
+                    ) && let ScalarValue::Boolean(Some(true)) = lit.value()
+                    {
+                        continue;
+                    }
+                    adapted.push((id, rewritten));
+                }
+                *conjuncts = adapted;
+            }
+
+            // Build combined adapted predicate for pruning
+            let predicate: Option<Arc<dyn PhysicalExpr>> = predicate_conjuncts
+                .as_ref()
+                .filter(|c| !c.is_empty())
+                .map(|c| conjunction(c.iter().map(|(_, e)| Arc::clone(e))));
+
             // Adapt projections to the physical file schema as well
             projection = projection
                 .try_map_exprs(|p| simplifier.simplify(rewriter.rewrite(p)?))?;
@@ -460,27 +500,7 @@ impl FileOpener for ParquetOpener {
             // ---------------------------------------------------------------------
 
             // Filter pushdown: evaluate predicates during scan
-            if let Some(predicate) = pushdown_filters.then_some(predicate).flatten() {
-                let row_filter = row_filter::build_row_filter(
-                    &predicate,
-                    &physical_file_schema,
-                    builder.metadata(),
-                    reorder_predicates,
-                    &file_metrics,
-                );
-
-                match row_filter {
-                    Ok(Some(filter)) => {
-                        builder = builder.with_row_filter(filter);
-                    }
-                    Ok(None) => {}
-                    Err(e) => {
-                        debug!(
-                            "Ignoring error building row filter for '{predicate:?}': {e}"
-                        );
-                    }
-                };
-            };
+            // First, partition filters based on selectivity tracking
             if force_filter_selections {
                 builder =
                     builder.with_row_selection_policy(RowSelectionPolicy::Selectors);
@@ -493,7 +513,6 @@ impl FileOpener for ParquetOpener {
             // Determine which row groups to actually read. The idea is to skip
             // as many row groups as possible based on the metadata and query
             let file_metadata = Arc::clone(builder.metadata());
-            let predicate = pruning_predicate.as_ref().map(|p| p.as_ref());
             let rg_metadata = file_metadata.row_groups();
             // track which row groups to actually read
             let access_plan =
@@ -505,7 +524,7 @@ impl FileOpener for ParquetOpener {
             }
 
             // If there is a predicate that can be evaluated against the metadata
-            if let Some(predicate) = predicate.as_ref() {
+            if let Some(predicate) = pruning_predicate.as_ref() {
                 if enable_row_group_stats_pruning {
                     row_groups.prune_by_statistics(
                         &physical_file_schema,
@@ -590,9 +609,8 @@ impl FileOpener for ParquetOpener {
             // Apply the prepared plan to the builder
             builder = prepared_plan.apply_to_builder(builder);
 
-            if let Some(limit) = limit {
-                builder = builder.with_limit(limit)
-            }
+            // Note: limit is applied later, after filter partitioning,
+            // because post-scan filters must run before limiting.
 
             if let Some(max_predicate_cache_size) = max_predicate_cache_size {
                 builder = builder.with_max_predicate_cache_size(max_predicate_cache_size);
@@ -601,8 +619,131 @@ impl FileOpener for ParquetOpener {
             // metrics from the arrow reader itself
             let arrow_reader_metrics = ArrowReaderMetrics::enabled();
 
-            let indices = projection.column_indices();
-            let mask = ProjectionMask::roots(builder.parquet_schema(), indices);
+            // Partition filters (lock is internal to SelectivityTracker).
+            let PartitionedFilters {
+                collecting,
+                promoted,
+                mut post_scan,
+            } = if pushdown_filters {
+                if let Some(conjuncts) = predicate_conjuncts.clone() {
+                    if !conjuncts.is_empty() {
+                        selectivity_tracker.partition_filters(conjuncts)
+                    } else {
+                        PartitionedFilters::default()
+                    }
+                } else {
+                    PartitionedFilters::default()
+                }
+            } else {
+                PartitionedFilters::default()
+            };
+
+            // Redistribute collecting filters based on byte ratio heuristic.
+            // Filters whose columns are a large fraction of projected bytes
+            // go to post_scan to avoid row-level decode overhead.
+            let byte_ratio_threshold: f64 =
+                selectivity_tracker.config().byte_ratio_threshold;
+            let collecting = {
+                let projected_bytes = row_filter::total_compressed_bytes(
+                    &projection.column_indices(),
+                    builder.metadata(),
+                );
+                if projected_bytes == 0 {
+                    // No projected bytes (e.g., COUNT(*)) — all collecting go to post_scan
+                    post_scan.extend(collecting);
+                    Vec::new()
+                } else {
+                    let mut keep = Vec::new();
+                    for (id, expr) in collecting {
+                        let filter_bytes = row_filter::filter_required_bytes(
+                            &expr,
+                            &physical_file_schema,
+                            builder.metadata(),
+                        );
+                        let ratio = filter_bytes
+                            .map(|b| b as f64 / projected_bytes as f64)
+                            .unwrap_or(1.0);
+                        if ratio >= byte_ratio_threshold {
+                            post_scan.push((id, expr));
+                        } else {
+                            keep.push((id, expr));
+                        }
+                    }
+                    keep
+                }
+            };
+
+            // Build row filter from collecting + promoted filters.
+            if !collecting.is_empty() || !promoted.is_empty() {
+                let row_filter_result = row_filter::build_row_filter(
+                    collecting,
+                    promoted,
+                    &physical_file_schema,
+                    builder.metadata(),
+                    &file_metrics,
+                    &selectivity_tracker,
+                );
+
+                match row_filter_result {
+                    Ok(Some(result)) => {
+                        builder = builder.with_row_filter(result.row_filter);
+                        // Unbuildable filters must be applied as post-scan
+                        // to preserve correctness.
+                        post_scan.extend(result.unbuildable_filters);
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        debug!("Ignoring error building row filter: {e}");
+                    }
+                };
+            }
+
+            // Split post-scan filters into collecting (need per-filter stats)
+            // and demoted (just apply as conjunction).
+            let mut collecting_post_scan: Vec<(
+                crate::selectivity::FilterId,
+                Arc<dyn PhysicalExpr>,
+            )> = Vec::new();
+            let mut demoted_post_scan: Vec<Arc<dyn PhysicalExpr>> = Vec::new();
+            for (id, expr) in post_scan {
+                if selectivity_tracker.is_collecting(id) {
+                    collecting_post_scan.push((id, expr));
+                } else {
+                    demoted_post_scan.push(expr);
+                }
+            }
+
+            // Include columns needed by all post-scan filters in the projection mask.
+            let mask = {
+                let mut all_indices: Vec<usize> = projection.column_indices();
+                for (_, filter) in &collecting_post_scan {
+                    for col in datafusion_physical_expr::utils::collect_columns(filter) {
+                        let idx = col.index();
+                        if !all_indices.contains(&idx) {
+                            all_indices.push(idx);
+                        }
+                    }
+                }
+                for filter in &demoted_post_scan {
+                    for col in datafusion_physical_expr::utils::collect_columns(filter) {
+                        let idx = col.index();
+                        if !all_indices.contains(&idx) {
+                            all_indices.push(idx);
+                        }
+                    }
+                }
+                ProjectionMask::roots(builder.parquet_schema(), all_indices)
+            };
+
+            let has_post_scan =
+                !collecting_post_scan.is_empty() || !demoted_post_scan.is_empty();
+
+            // Apply limit to the reader only when there are no post-scan filters.
+            // If post-scan filters exist, the limit must be enforced after filtering
+            // (otherwise the reader stops reading before the filter can find matches).
+            if !has_post_scan && let Some(limit) = limit {
+                builder = builder.with_limit(limit);
+            }
 
             let stream = builder
                 .with_projection(mask)
@@ -615,6 +756,7 @@ impl FileOpener for ParquetOpener {
             let predicate_cache_inner_records =
                 file_metrics.predicate_cache_inner_records.clone();
             let predicate_cache_records = file_metrics.predicate_cache_records.clone();
+            let filter_apply_time = file_metrics.filter_apply_time.clone();
 
             let stream_schema = Arc::clone(stream.schema());
             // Check if we need to replace the schema to handle things like differing nullability or metadata.
@@ -627,16 +769,57 @@ impl FileOpener for ParquetOpener {
             let projection = projection
                 .try_map_exprs(|expr| reassign_expr_columns(expr, &stream_schema))?;
 
+            // Rebase collecting post-scan filters to stream schema
+            let collecting_post_scan: Vec<(
+                crate::selectivity::FilterId,
+                Arc<dyn PhysicalExpr>,
+            )> = collecting_post_scan
+                .into_iter()
+                .map(|(id, expr)| {
+                    reassign_expr_columns(expr, &stream_schema).map(|e| (id, e))
+                })
+                .collect::<Result<_>>()?;
+            // Rebase demoted post-scan filters and conjoin
+            let demoted_post_scan_filter = (!demoted_post_scan.is_empty())
+                .then(|| {
+                    let rebased: Vec<Arc<dyn PhysicalExpr>> = demoted_post_scan
+                        .iter()
+                        .map(|f| reassign_expr_columns(Arc::clone(f), &stream_schema))
+                        .collect::<Result<_>>()?;
+                    Ok::<_, DataFusionError>(conjunction(rebased))
+                })
+                .transpose()?;
+            let post_scan_tracker = Arc::clone(&selectivity_tracker);
             let projector = projection.make_projector(&stream_schema)?;
 
             let stream = stream.map_err(DataFusionError::from).map(move |b| {
-                b.and_then(|mut b| {
+                b.and_then(|b| {
                     copy_arrow_reader_metrics(
                         &arrow_reader_metrics,
                         &predicate_cache_inner_records,
                         &predicate_cache_records,
                     );
-                    b = projector.project_batch(&b)?;
+
+                    // Apply post-scan filters BEFORE projection.
+                    let b = if !collecting_post_scan.is_empty()
+                        || demoted_post_scan_filter.is_some()
+                    {
+                        let start = datafusion_common::instant::Instant::now();
+                        let filtered = apply_post_scan_filters_with_stats(
+                            b,
+                            &collecting_post_scan,
+                            demoted_post_scan_filter.as_ref(),
+                            &post_scan_tracker,
+                        )?;
+                        filter_apply_time.add_elapsed(start);
+                        filtered
+                    } else {
+                        b
+                    };
+
+                    // Then project to output columns
+                    let b = projector.project_batch(&b)?;
+
                     if replace_schema {
                         // Ensure the output batch has the expected schema.
                         // This handles things like schema level and field level metadata, which may not be present
@@ -661,9 +844,8 @@ impl FileOpener for ParquetOpener {
                 })
             });
 
-            // ----------------------------------------------------------------------
-            // Step: wrap the stream so a dynamic filter can stop the file scan early
-            // ----------------------------------------------------------------------
+            let stream = stream.boxed();
+
             if let Some(file_pruner) = file_pruner {
                 Ok(EarlyStoppingStream::new(
                     stream,
@@ -672,12 +854,75 @@ impl FileOpener for ParquetOpener {
                 )
                 .boxed())
             } else {
-                Ok(stream.boxed())
+                Ok(stream)
             }
         }))
     }
 }
 
+/// Apply post-scan filters with per-filter stats tracking for collecting filters.
+///
+/// Collecting filters are evaluated individually so their selectivity and
+/// evaluation time can be reported to the [`SelectivityTracker`]. Demoted
+/// filters are applied as a single conjunction (no stats needed).
+fn apply_post_scan_filters_with_stats(
+    batch: RecordBatch,
+    collecting: &[(crate::selectivity::FilterId, Arc<dyn PhysicalExpr>)],
+    demoted_conjunction: Option<&Arc<dyn PhysicalExpr>>,
+    tracker: &SelectivityTracker,
+) -> Result<RecordBatch> {
+    use arrow::array::as_boolean_array;
+    use arrow::compute::{and, filter_record_batch};
+
+    if batch.num_rows() == 0 {
+        return Ok(batch);
+    }
+
+    let batch_bytes = batch.get_array_memory_size() as u64;
+    let input_rows = batch.num_rows() as u64;
+
+    // Start with all-true mask
+    let mut combined_mask: Option<BooleanArray> = None;
+
+    // Evaluate each collecting filter individually and track stats
+    for &(id, ref expr) in collecting {
+        let start = datafusion_common::instant::Instant::now();
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let bool_arr = as_boolean_array(result.as_ref());
+        let nanos = start.elapsed().as_nanos() as u64;
+        let num_matched = bool_arr.true_count() as u64;
+
+        tracker.update(id, num_matched, input_rows, nanos, batch_bytes);
+
+        if num_matched < input_rows {
+            combined_mask = Some(match combined_mask {
+                Some(prev) => and(&prev, bool_arr)?,
+                None => bool_arr.clone(),
+            });
+        }
+    }
+
+    // Apply demoted conjunction
+    if let Some(demoted) = demoted_conjunction {
+        let result = demoted.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let bool_arr = as_boolean_array(result.as_ref());
+        let num_matched = bool_arr.true_count() as u64;
+        if num_matched < input_rows {
+            combined_mask = Some(match combined_mask {
+                Some(prev) => and(&prev, bool_arr)?,
+                None => bool_arr.clone(),
+            });
+        }
+    }
+
+    match combined_mask {
+        Some(mask) => Ok(filter_record_batch(&batch, &mask)?),
+        None => Ok(batch),
+    }
+}
+
+/// Compute the average bytes per row from parquet metadata for the projected columns.
+///
 /// Copies metrics from ArrowReaderMetrics (the metrics collected by the
 /// arrow-rs parquet reader) to the parquet file metrics for DataFusion
 fn copy_arrow_reader_metrics(
@@ -1017,7 +1262,10 @@ mod test {
     use std::sync::Arc;
 
     use super::{ConstantColumns, constant_columns_from_stats};
-    use crate::{DefaultParquetFileReaderFactory, RowGroupAccess, opener::ParquetOpener};
+    use crate::{
+        DefaultParquetFileReaderFactory, RowGroupAccess, opener::ParquetOpener,
+        selectivity::SelectivityTracker,
+    };
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use bytes::{BufMut, BytesMut};
     use datafusion_common::{
@@ -1051,11 +1299,11 @@ mod test {
         projection: Option<ProjectionExprs>,
         batch_size: usize,
         limit: Option<usize>,
-        predicate: Option<Arc<dyn PhysicalExpr>>,
+        predicate_conjuncts:
+            Option<Vec<(crate::selectivity::FilterId, Arc<dyn PhysicalExpr>)>>,
         metadata_size_hint: Option<usize>,
         metrics: ExecutionPlanMetricsSet,
         pushdown_filters: bool,
-        reorder_filters: bool,
         force_filter_selections: bool,
         enable_page_index: bool,
         enable_bloom_filter: bool,
@@ -1077,11 +1325,10 @@ mod test {
                 projection: None,
                 batch_size: 1024,
                 limit: None,
-                predicate: None,
+                predicate_conjuncts: None,
                 metadata_size_hint: None,
                 metrics: ExecutionPlanMetricsSet::new(),
                 pushdown_filters: false,
-                reorder_filters: false,
                 force_filter_selections: false,
                 enable_page_index: false,
                 enable_bloom_filter: false,
@@ -1119,19 +1366,20 @@ mod test {
 
         /// Set the predicate.
         fn with_predicate(mut self, predicate: Arc<dyn PhysicalExpr>) -> Self {
-            self.predicate = Some(predicate);
+            use datafusion_physical_expr::split_conjunction;
+            let conjuncts: Vec<(crate::selectivity::FilterId, Arc<dyn PhysicalExpr>)> =
+                split_conjunction(&predicate)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(id, expr)| (id, Arc::clone(expr)))
+                    .collect();
+            self.predicate_conjuncts = Some(conjuncts);
             self
         }
 
         /// Enable pushdown filters.
         fn with_pushdown_filters(mut self, enable: bool) -> Self {
             self.pushdown_filters = enable;
-            self
-        }
-
-        /// Enable filter reordering.
-        fn with_reorder_filters(mut self, enable: bool) -> Self {
-            self.reorder_filters = enable;
             self
         }
 
@@ -1176,7 +1424,7 @@ mod test {
                 projection,
                 batch_size: self.batch_size,
                 limit: self.limit,
-                predicate: self.predicate,
+                predicate_conjuncts: self.predicate_conjuncts,
                 table_schema,
                 metadata_size_hint: self.metadata_size_hint,
                 metrics: self.metrics,
@@ -1184,7 +1432,6 @@ mod test {
                     DefaultParquetFileReaderFactory::new(store),
                 ),
                 pushdown_filters: self.pushdown_filters,
-                reorder_filters: self.reorder_filters,
                 force_filter_selections: self.force_filter_selections,
                 enable_page_index: self.enable_page_index,
                 enable_bloom_filter: self.enable_bloom_filter,
@@ -1198,6 +1445,11 @@ mod test {
                 max_predicate_cache_size: self.max_predicate_cache_size,
                 reverse_row_groups: self.reverse_row_groups,
                 preserve_order: self.preserve_order,
+                // Tests use 0.0 threshold to push all filters as row filters
+                // (AllPromoted strategy, skipping adaptive logic).
+                selectivity_tracker: Arc::new(
+                    SelectivityTracker::new().with_min_bytes_per_sec(0.0),
+                ),
             }
         }
     }
@@ -1595,7 +1847,6 @@ mod test {
                 .with_projection_indices(&[0])
                 .with_predicate(predicate)
                 .with_pushdown_filters(true) // note that this is true!
-                .with_reorder_filters(true)
                 .build()
         };
 
@@ -1626,7 +1877,10 @@ mod test {
         assert_eq!(num_batches, 1);
         assert_eq!(num_rows, 1);
 
-        // Filter should not match the partition value or the data value
+        // Filter should not match the partition value or the data value.
+        // With adaptive selectivity tracking, unknown filters are pushed down
+        // as row filters initially. The row filter prunes all rows during decoding,
+        // resulting in no batches being returned.
         let expr = col("part").eq(lit(2)).or(col("a").eq(lit(3)));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
