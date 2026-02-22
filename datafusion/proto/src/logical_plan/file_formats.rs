@@ -426,6 +426,7 @@ mod parquet {
                 max_predicate_cache_size_opt: global_options.global.max_predicate_cache_size.map(|size| {
                     parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(size as u64)
                 }),
+                allow_morsel_driven: global_options.global.allow_morsel_driven,
             }),
             column_specific_options: column_specific_options.into_iter().map(|(column_name, options)| {
                 ParquetColumnSpecificOptions {
@@ -525,6 +526,7 @@ mod parquet {
             max_predicate_cache_size: proto.max_predicate_cache_size_opt.as_ref().map(|opt| match opt {
                 parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(size) => *size as usize,
             }),
+            allow_morsel_driven: proto.allow_morsel_driven,
         }
         }
     }
