@@ -1035,7 +1035,7 @@ mod test {
     use datafusion_physical_expr_adapter::{
         DefaultPhysicalExprAdapterFactory, replace_columns_with_literals,
     };
-    use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
+    use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricValue};
     use futures::{Stream, StreamExt};
     use object_store::{ObjectStore, memory::InMemory, path::Path};
     use parquet::arrow::ArrowWriter;
@@ -1421,6 +1421,60 @@ mod test {
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 0);
         assert_eq!(num_rows, 0);
+    }
+
+    #[tokio::test]
+    async fn test_file_pruner_simplifies_literal_predicate() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        let batch = record_batch!(("x", Int32, vec![Some(1), Some(1)])).unwrap();
+        let data_size =
+            write_parquet(Arc::clone(&store), "test.parquet", batch.clone()).await;
+
+        let schema = batch.schema();
+        let mut file = PartitionedFile::new(
+            "test.parquet".to_string(),
+            u64::try_from(data_size).unwrap(),
+        );
+        file.statistics = Some(Arc::new(
+            Statistics::default().add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_min_value(Precision::Exact(ScalarValue::Int32(Some(1))))
+                    .with_max_value(Precision::Exact(ScalarValue::Int32(Some(1))))
+                    .with_null_count(Precision::Exact(0)),
+            ),
+        ));
+
+        // After replacing the column with the literal value from statistics the predicate
+        // becomes `1 IS NULL`, which should be simplified to `false` and prune the file.
+        let predicate = logical2physical(&col("x").is_null(), &schema);
+
+        let opener = ParquetOpenerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_projection_indices(&[0])
+            .with_predicate(predicate)
+            .build();
+
+        let stream = opener.open(file).unwrap().await.unwrap();
+        let (num_batches, num_rows) = count_batches_and_rows(stream).await;
+        assert_eq!(num_batches, 0);
+        assert_eq!(num_rows, 0);
+
+        let metrics = opener.metrics.clone_inner();
+        let pruning_metrics = metrics
+            .sum_by_name("files_ranges_pruned_statistics")
+            .expect("files_ranges_pruned_statistics metric is recorded");
+
+        match pruning_metrics {
+            MetricValue::PruningMetrics {
+                pruning_metrics, ..
+            } => {
+                assert_eq!(pruning_metrics.pruned(), 1);
+                assert_eq!(pruning_metrics.matched(), 0);
+            }
+            other => panic!("unexpected metric type for pruning metrics: {other:?}"),
+        }
     }
 
     #[tokio::test]
