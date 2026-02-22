@@ -19,6 +19,7 @@
 //! low level control of parquet file readers
 
 use crate::ParquetFileMetrics;
+use crate::ParquetAccessPlan;
 use crate::metadata::DFParquetMetadata;
 use bytes::Bytes;
 use datafusion_datasource::PartitionedFile;
@@ -28,14 +29,103 @@ use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use object_store::ObjectStore;
-use parquet::arrow::arrow_reader::ArrowReaderOptions;
+use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 use parquet::arrow::async_reader::{AsyncFileReader, ParquetObjectReader};
 use parquet::file::metadata::ParquetMetaData;
 use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::ops::Range;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+
+#[derive(Debug, Clone)]
+pub struct SharedParquetMetadata(Arc<Mutex<Option<Arc<ParquetMetaData>>>>);
+
+impl SharedParquetMetadata {
+    pub fn new() -> Self {
+        Self(Arc::new(Mutex::new(None)))
+    }
+
+    pub fn get(&self) -> Option<Arc<ParquetMetaData>> {
+        let guard = match self.0.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.clone()
+    }
+
+    pub fn set_if_empty(&self, metadata: Arc<ParquetMetaData>) {
+        let mut guard = match self.0.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        if guard.is_none() {
+            *guard = Some(metadata);
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SharedArrowReaderMetadata(Arc<Mutex<Option<ArrowReaderMetadata>>>);
+
+impl SharedArrowReaderMetadata {
+    pub fn new() -> Self {
+        Self(Arc::new(Mutex::new(None)))
+    }
+
+    pub fn get(&self) -> Option<ArrowReaderMetadata> {
+        let guard = match self.0.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.clone()
+    }
+
+    pub fn set_if_empty(&self, metadata: ArrowReaderMetadata) {
+        let mut guard = match self.0.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        if guard.is_none() {
+            *guard = Some(metadata);
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ParquetFileScanPlan {
+    access_plan: Option<ParquetAccessPlan>,
+    shared_metadata: SharedParquetMetadata,
+    shared_reader_metadata: SharedArrowReaderMetadata,
+}
+
+impl ParquetFileScanPlan {
+    pub fn new(
+        access_plan: Option<ParquetAccessPlan>,
+        shared_metadata: SharedParquetMetadata,
+        shared_reader_metadata: SharedArrowReaderMetadata,
+    ) -> Self {
+        Self {
+            access_plan,
+            shared_metadata,
+            shared_reader_metadata,
+        }
+    }
+
+    pub fn access_plan(&self) -> Option<&ParquetAccessPlan> {
+        self.access_plan.as_ref()
+    }
+
+    pub fn shared_metadata(&self) -> SharedParquetMetadata {
+        self.shared_metadata.clone()
+    }
+
+    pub fn shared_reader_metadata(&self) -> SharedArrowReaderMetadata {
+        self.shared_reader_metadata.clone()
+    }
+}
 
 /// Interface for reading parquet files.
 ///
@@ -98,6 +188,7 @@ pub struct ParquetFileReader {
     pub file_metrics: ParquetFileMetrics,
     pub inner: ParquetObjectReader,
     pub partitioned_file: PartitionedFile,
+    pub shared_metadata: Option<SharedParquetMetadata>,
 }
 
 impl AsyncFileReader for ParquetFileReader {
@@ -126,7 +217,22 @@ impl AsyncFileReader for ParquetFileReader {
         &'a mut self,
         options: Option<&'a ArrowReaderOptions>,
     ) -> BoxFuture<'a, parquet::errors::Result<Arc<ParquetMetaData>>> {
-        self.inner.get_metadata(options)
+        if let Some(shared_metadata) = &self.shared_metadata
+            && let Some(metadata) = shared_metadata.get()
+        {
+            return futures::future::ready(Ok(metadata)).boxed();
+        }
+
+        let shared_metadata = self.shared_metadata.clone();
+        let fut = self.inner.get_metadata(options);
+        async move {
+            let metadata = fut.await?;
+            if let Some(shared_metadata) = shared_metadata {
+                shared_metadata.set_if_empty(Arc::clone(&metadata));
+            }
+            Ok(metadata)
+        }
+        .boxed()
     }
 }
 
@@ -166,10 +272,17 @@ impl ParquetFileReaderFactory for DefaultParquetFileReaderFactory {
             inner = inner.with_footer_size_hint(hint)
         };
 
+        let shared_metadata = partitioned_file
+            .extensions
+            .as_ref()
+            .and_then(|extensions| extensions.downcast_ref::<ParquetFileScanPlan>())
+            .map(|plan| plan.shared_metadata());
+
         Ok(Box::new(ParquetFileReader {
             inner,
             file_metrics,
             partitioned_file,
+            shared_metadata,
         }))
     }
 }

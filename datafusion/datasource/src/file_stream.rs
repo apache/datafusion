@@ -47,8 +47,10 @@ use futures::{FutureExt as _, Stream, StreamExt as _, ready};
 pub struct FileStream {
     /// An iterator over input files.
     file_iter: VecDeque<PartitionedFile>,
-    /// Optional shared queue used for queue-driven scheduling.
-    shared_file_queue: Option<Arc<Mutex<VecDeque<PartitionedFile>>>>,
+    /// Partition index of this stream worker.
+    partition: usize,
+    /// Optional shared local queues for dynamic work stealing.
+    shared_local_file_queues: Option<Arc<Vec<Mutex<VecDeque<PartitionedFile>>>>>,
     /// The stream schema (file schema including partition columns and after
     /// projection).
     projected_schema: SchemaRef,
@@ -78,10 +80,17 @@ impl FileStream {
         let projected_schema = config.projected_schema()?;
 
         let file_group = config.file_groups[partition].clone();
+        let shared_local_file_queues = config.shared_local_file_queues.clone();
+        let file_iter = if shared_local_file_queues.is_some() {
+            VecDeque::new()
+        } else {
+            file_group.into_inner().into_iter().collect()
+        };
 
         Ok(Self {
-            file_iter: file_group.into_inner().into_iter().collect(),
-            shared_file_queue: config.shared_file_queue.clone(),
+            file_iter,
+            partition,
+            shared_local_file_queues,
             projected_schema,
             remain: config.limit,
             file_opener,
@@ -105,16 +114,44 @@ impl FileStream {
     ///
     /// Since file opening is mostly IO (and may involve a
     /// bunch of sequential IO), it can be parallelized with decoding.
-    fn start_next_file(&mut self) -> Option<Result<FileOpenFuture>> {
-        let part_file = if let Some(shared_file_queue) = &self.shared_file_queue {
-            let mut queue = match shared_file_queue.lock() {
-                Ok(queue) => queue,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            queue.pop_front()?
+    fn pop_local_or_steal(&mut self) -> Option<PartitionedFile> {
+        if let Some(shared_local_file_queues) = &self.shared_local_file_queues {
+            let queue_count = shared_local_file_queues.len();
+            if queue_count == 0 {
+                return None;
+            }
+
+            let own_idx = self.partition.min(queue_count - 1);
+
+            {
+                let mut own_queue = match shared_local_file_queues[own_idx].lock() {
+                    Ok(queue) => queue,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+                if let Some(file) = own_queue.pop_front() {
+                    return Some(file);
+                }
+            }
+
+            for offset in 1..queue_count {
+                let steal_idx = (own_idx + offset) % queue_count;
+                let mut queue = match shared_local_file_queues[steal_idx].lock() {
+                    Ok(queue) => queue,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+                if let Some(file) = queue.pop_front() {
+                    return Some(file);
+                }
+            }
+
+            None
         } else {
-            self.file_iter.pop_front()?
-        };
+            self.file_iter.pop_front()
+        }
+    }
+
+    fn start_next_file(&mut self) -> Option<Result<FileOpenFuture>> {
+        let part_file = self.pop_local_or_steal()?;
         Some(self.file_opener.open(part_file))
     }
 
@@ -458,14 +495,17 @@ impl FileStreamMetrics {
 #[cfg(test)]
 mod tests {
     use crate::PartitionedFile;
+    use crate::file_groups::FileGroup;
     use crate::file_scan_config::FileScanConfigBuilder;
     use crate::tests::make_partition;
+    use std::collections::VecDeque;
     use datafusion_common::error::Result;
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
     use futures::{FutureExt as _, StreamExt as _};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
 
     use crate::file_stream::{FileOpenFuture, FileOpener, FileStream, OnError};
     use crate::test_util::MockSource;
@@ -911,6 +951,118 @@ mod tests {
             "| 0 |",
             "+---+",
         ], &batches);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn local_queues_are_consumed_before_stealing() -> Result<()> {
+        #[derive(Default)]
+        struct RecordingOpener {
+            opened: Arc<Mutex<Vec<String>>>,
+        }
+
+        impl FileOpener for RecordingOpener {
+            fn open(&self, partitioned_file: PartitionedFile) -> Result<FileOpenFuture> {
+                let mut opened = self.opened.lock().expect("lock opened files");
+                opened.push(partitioned_file.object_meta.location.to_string());
+                let stream = futures::stream::empty().boxed();
+                Ok(futures::future::ready(Ok(stream)).boxed())
+            }
+        }
+
+        let table_schema = crate::table_schema::TableSchema::new(
+            Arc::new(Schema::empty()),
+            vec![],
+        );
+        let mut config = FileScanConfigBuilder::new(
+            ObjectStoreUrl::parse("test:///").unwrap(),
+            Arc::new(MockSource::new(table_schema)),
+        )
+        .with_file_group(FileGroup::new(vec![PartitionedFile::new(
+            "partition0.parquet",
+            10,
+        )]))
+        .with_file_group(FileGroup::new(vec![PartitionedFile::new(
+            "partition1.parquet",
+            10,
+        )]))
+        .build();
+        config.set_shared_local_file_queues(Some(Arc::new(vec![
+            Mutex::new(VecDeque::from(vec![PartitionedFile::new(
+                "local.parquet",
+                10,
+            )])),
+            Mutex::new(VecDeque::from(vec![PartitionedFile::new(
+                "stolen.parquet",
+                10,
+            )])),
+        ])));
+
+        let opener = RecordingOpener::default();
+        let opened = Arc::clone(&opener.opened);
+        let metrics_set = ExecutionPlanMetricsSet::new();
+        let stream = FileStream::new(&config, 0, Arc::new(opener), &metrics_set)?;
+        let _ = stream.collect::<Vec<_>>().await;
+
+        assert_eq!(
+            opened.lock().expect("lock opened files").as_slice(),
+            ["local.parquet", "stolen.parquet"]
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn steals_from_other_local_queue_when_own_is_empty() -> Result<()> {
+        #[derive(Default)]
+        struct RecordingOpener {
+            opened: Arc<Mutex<Vec<String>>>,
+        }
+
+        impl FileOpener for RecordingOpener {
+            fn open(&self, partitioned_file: PartitionedFile) -> Result<FileOpenFuture> {
+                let mut opened = self.opened.lock().expect("lock opened files");
+                opened.push(partitioned_file.object_meta.location.to_string());
+                let stream = futures::stream::empty().boxed();
+                Ok(futures::future::ready(Ok(stream)).boxed())
+            }
+        }
+
+        let table_schema = crate::table_schema::TableSchema::new(
+            Arc::new(Schema::empty()),
+            vec![],
+        );
+        let mut config = FileScanConfigBuilder::new(
+            ObjectStoreUrl::parse("test:///").unwrap(),
+            Arc::new(MockSource::new(table_schema)),
+        )
+        .with_file_group(FileGroup::new(vec![PartitionedFile::new(
+            "partition0.parquet",
+            10,
+        )]))
+        .with_file_group(FileGroup::new(vec![]))
+        .build();
+
+        let local_queues = vec![
+            Mutex::new(VecDeque::from(vec![PartitionedFile::new(
+                "stolen.parquet",
+                10,
+            )])),
+            Mutex::new(VecDeque::new()),
+        ];
+        config.set_shared_local_file_queues(Some(Arc::new(local_queues)));
+
+        let opener = RecordingOpener::default();
+        let opened = Arc::clone(&opener.opened);
+        let metrics_set = ExecutionPlanMetricsSet::new();
+        let stream = FileStream::new(&config, 1, Arc::new(opener), &metrics_set)?;
+        let _ = stream.collect::<Vec<_>>().await;
+
+        assert_eq!(
+            opened.lock().expect("lock opened files").as_slice(),
+            ["stolen.parquet"]
+        );
 
         Ok(())
     }

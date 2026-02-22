@@ -17,6 +17,7 @@
 
 //! ParquetSource implementation for reading parquet files
 use std::any::Any;
+use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::fmt::Formatter;
@@ -63,7 +64,36 @@ use object_store::ObjectStore;
 #[cfg(feature = "parquet_encryption")]
 use parquet::encryption::decrypt::FileDecryptionProperties;
 
-use crate::{ParquetAccessPlan, RowGroupAccess};
+use crate::{
+    ParquetAccessPlan, ParquetFileScanPlan, RowGroupAccess,
+    SharedArrowReaderMetadata, SharedParquetMetadata,
+};
+
+fn access_plan_from_extensions(
+    extensions: Option<&Arc<dyn Any + Send + Sync>>,
+) -> Option<(
+    ParquetAccessPlan,
+    Option<SharedParquetMetadata>,
+    Option<SharedArrowReaderMetadata>,
+)> {
+    let extensions = extensions?;
+    if let Some(scan_plan) = extensions.downcast_ref::<ParquetFileScanPlan>() {
+        return scan_plan
+            .access_plan()
+            .cloned()
+            .map(|plan| {
+                (
+                    plan,
+                    Some(scan_plan.shared_metadata()),
+                    Some(scan_plan.shared_reader_metadata()),
+                )
+            });
+    }
+
+    extensions
+        .downcast_ref::<ParquetAccessPlan>()
+        .map(|plan| (plan.clone(), None, None))
+}
 
 fn split_partitioned_file_to_row_group_morsels(
     file: &PartitionedFile,
@@ -78,10 +108,8 @@ fn split_partitioned_file_to_row_group_morsels(
         return None;
     }
 
-    let access_plan = file
-        .extensions
-        .as_ref()
-        .and_then(|extensions| extensions.downcast_ref::<ParquetAccessPlan>())?;
+    let (access_plan, shared_metadata, shared_reader_metadata) =
+        access_plan_from_extensions(file.extensions.as_ref())?;
 
     let row_group_indexes = access_plan.row_group_indexes();
     if row_group_indexes.len() <= 1 {
@@ -90,6 +118,9 @@ fn split_partitioned_file_to_row_group_morsels(
 
     let row_group_count = access_plan.len();
     let row_group_accesses = access_plan.inner();
+    let shared_metadata = shared_metadata.unwrap_or_else(SharedParquetMetadata::new);
+    let shared_reader_metadata =
+        shared_reader_metadata.unwrap_or_else(SharedArrowReaderMetadata::new);
 
     let morsels = row_group_indexes
         .into_iter()
@@ -107,7 +138,11 @@ fn split_partitioned_file_to_row_group_morsels(
             }
 
             let mut morsel = file.clone();
-            morsel.extensions = Some(Arc::new(row_group_plan));
+            morsel.extensions = Some(Arc::new(ParquetFileScanPlan::new(
+                Some(row_group_plan),
+                shared_metadata.clone(),
+                shared_reader_metadata.clone(),
+            )));
             morsel
         })
         .collect();
@@ -117,8 +152,6 @@ fn split_partitioned_file_to_row_group_morsels(
 
 fn split_file_groups_to_row_group_morsels(
     file_groups: Vec<FileGroup>,
-    target_partitions: usize,
-    preserve_order_within_groups: bool,
 ) -> Option<Vec<FileGroup>> {
     let mut did_split = false;
 
@@ -142,33 +175,54 @@ fn split_file_groups_to_row_group_morsels(
         return None;
     }
 
-    if preserve_order_within_groups {
-        return Some(groups_with_morsels);
-    }
-
-    let all_morsels = groups_with_morsels
-        .into_iter()
-        .flat_map(|group| group.into_inner())
-        .collect::<Vec<_>>();
-
-    if all_morsels.is_empty() {
-        return Some(Vec::new());
-    }
-
-    let group_count = target_partitions.clamp(1, all_morsels.len());
-    let mut regrouped = (0..group_count)
-        .map(|_| FileGroup::new(Vec::new()))
-        .collect::<Vec<_>>();
-
-    for (idx, morsel) in all_morsels.into_iter().enumerate() {
-        regrouped[idx % group_count].push(morsel);
-    }
-
-    Some(regrouped)
+    Some(groups_with_morsels)
 }
 
-fn queue_worker_count(total_morsels: usize, target_partitions: usize) -> usize {
-    target_partitions.max(1).min(total_morsels.max(1))
+fn attach_shared_metadata_to_file_groups(file_groups: Vec<FileGroup>) -> Vec<FileGroup> {
+    let mut shared_by_file_path: HashMap<
+        String,
+        (SharedParquetMetadata, SharedArrowReaderMetadata),
+    > = HashMap::new();
+
+    file_groups
+        .into_iter()
+        .map(|group| {
+            let files = group
+                .into_inner()
+                .into_iter()
+                .map(|mut file| {
+                    let key = file.object_meta.location.to_string();
+                    let (shared_metadata, shared_reader_metadata) = shared_by_file_path
+                        .entry(key)
+                        .or_insert_with(|| {
+                            (
+                                SharedParquetMetadata::new(),
+                                SharedArrowReaderMetadata::new(),
+                            )
+                        })
+                        .clone();
+
+                    let access_plan = file.extensions.as_ref().and_then(|extensions| {
+                        if let Some(scan_plan) =
+                            extensions.downcast_ref::<ParquetFileScanPlan>()
+                        {
+                            scan_plan.access_plan().cloned()
+                        } else {
+                            extensions.downcast_ref::<ParquetAccessPlan>().cloned()
+                        }
+                    });
+
+                    file.extensions = Some(Arc::new(ParquetFileScanPlan::new(
+                        access_plan,
+                        shared_metadata,
+                        shared_reader_metadata,
+                    )));
+                    file
+                })
+                .collect::<Vec<_>>();
+            FileGroup::new(files)
+        })
+        .collect()
 }
 
 /// Execution plan for reading one or more Parquet files.
@@ -734,40 +788,53 @@ impl FileSource for ParquetSource {
             && !preserve_order_within_groups;
 
         if queue_enabled {
-            // First try row-group morselization from user-provided access plans.
-            // If none are present (the common ClickBench path), fall back to
-            // byte-range morsels so dynamic queue scheduling still has work to distribute.
-            let file_groups = split_file_groups_to_row_group_morsels(
-                config.file_groups.clone(),
-                target_partitions,
-                false,
-            )
-            .unwrap_or_else(|| {
-                FileGroupPartitioner::new()
-                    .with_target_partitions(target_partitions)
-                    .with_repartition_file_min_size(repartition_file_min_size)
-                    .with_preserve_order_within_groups(false)
-                    .repartition_file_groups(&config.file_groups)
-                    .unwrap_or_else(|| config.file_groups.clone())
-            });
+            // Prefer local morsel execution when row-group access plans are present.
+            // Keep the original file-group plan unchanged and place morsels in
+            // per-partition shared local queues for runtime work stealing.
+            if let Some(local_file_groups) =
+                split_file_groups_to_row_group_morsels(config.file_groups.clone())
+            {
+                if local_file_groups.iter().all(FileGroup::is_empty) {
+                    return Ok(None);
+                }
 
-            let queue_files = file_groups
-                .iter()
-                .flat_map(|group| group.iter().cloned())
-                .collect::<Vec<_>>();
+                let local_queues = local_file_groups
+                    .iter()
+                    .map(|group| {
+                        Mutex::new(group.iter().cloned().collect::<VecDeque<_>>())
+                    })
+                    .collect::<Vec<_>>();
 
-            if queue_files.is_empty() {
+                let mut source = config.clone();
+                source.file_groups = config.file_groups.clone();
+                source.set_shared_local_file_queues(Some(Arc::new(local_queues)));
+                return Ok(Some(source));
+            }
+
+            // If there are no local row-group morsels, use repartitioned
+            // byte-range morsels and enable runtime work stealing via shared
+            // local queues.
+            let file_groups = FileGroupPartitioner::new()
+                .with_target_partitions(target_partitions)
+                .with_repartition_file_min_size(repartition_file_min_size)
+                .with_preserve_order_within_groups(false)
+                .repartition_file_groups(&config.file_groups)
+                .unwrap_or_else(|| config.file_groups.clone());
+
+            let file_groups = attach_shared_metadata_to_file_groups(file_groups);
+
+            if file_groups.iter().all(FileGroup::is_empty) {
                 return Ok(None);
             }
 
-            let worker_count = queue_worker_count(queue_files.len(), target_partitions);
+            let local_queues = file_groups
+                .iter()
+                .map(|group| Mutex::new(group.iter().cloned().collect::<VecDeque<_>>()))
+                .collect::<Vec<_>>();
+
             let mut source = config.clone();
-            source.file_groups = (0..worker_count)
-                .map(|_| FileGroup::new(Vec::new()))
-                .collect();
-            source.set_shared_file_queue(Some(Arc::new(Mutex::new(VecDeque::from(
-                queue_files,
-            )))));
+            source.file_groups = file_groups;
+            source.set_shared_local_file_queues(Some(Arc::new(local_queues)));
             return Ok(Some(source));
         }
 
@@ -782,11 +849,8 @@ impl FileSource for ParquetSource {
             None => (config.file_groups.clone(), false),
         };
 
-        let split_file_groups = split_file_groups_to_row_group_morsels(
-            base_file_groups.clone(),
-            target_partitions,
-            preserve_order_within_groups,
-        );
+        let split_file_groups =
+            split_file_groups_to_row_group_morsels(base_file_groups.clone());
         let changed_by_split = split_file_groups.is_some();
         let file_groups = split_file_groups.unwrap_or(base_file_groups);
 
@@ -796,7 +860,7 @@ impl FileSource for ParquetSource {
 
         let mut source = config.clone();
         source.file_groups = file_groups;
-        source.set_shared_file_queue(None);
+        source.set_shared_local_file_queues(None);
         Ok(Some(source))
     }
 
@@ -1140,9 +1204,9 @@ mod tests {
             .map(|m| {
                 m.extensions
                     .as_ref()
-                    .and_then(|e| e.downcast_ref::<ParquetAccessPlan>())
+                    .and_then(|e| e.downcast_ref::<ParquetFileScanPlan>())
+                    .and_then(|plan| plan.access_plan().cloned())
                     .expect("morsel should carry parquet access plan")
-                    .clone()
             })
             .collect::<Vec<_>>();
 
@@ -1164,11 +1228,23 @@ mod tests {
     }
 
     #[test]
-    fn test_queue_worker_count() {
-        assert_eq!(queue_worker_count(0, 0), 1);
-        assert_eq!(queue_worker_count(1, 8), 1);
-        assert_eq!(queue_worker_count(3, 8), 3);
-        assert_eq!(queue_worker_count(8, 3), 3);
+    fn test_split_file_groups_to_row_group_morsels_preserves_group_boundaries() {
+        let file1 = PartitionedFile::new("file1.parquet", 1024)
+            .with_extensions(Arc::new(ParquetAccessPlan::new_all(2)));
+        let file2 = PartitionedFile::new("file2.parquet", 1024)
+            .with_extensions(Arc::new(ParquetAccessPlan::new_all(3)));
+
+        let file_groups = vec![
+            FileGroup::new(vec![file1]),
+            FileGroup::new(vec![file2]),
+        ];
+
+        let split = split_file_groups_to_row_group_morsels(file_groups)
+            .expect("expected row-group morsels");
+
+        assert_eq!(split.len(), 2);
+        assert_eq!(split[0].len(), 2);
+        assert_eq!(split[1].len(), 3);
     }
 
     #[test]
@@ -1196,8 +1272,8 @@ mod tests {
             .expect("repartitioning should not error")
             .expect("queue mode should produce a new config");
 
-        assert_eq!(repartitioned.file_groups.len(), 3);
-        assert!(repartitioned.file_groups.iter().all(|g| g.is_empty()));
+        assert_eq!(repartitioned.file_groups.len(), 1);
+        assert_eq!(repartitioned.file_groups[0].len(), 1);
     }
 
     #[test]
@@ -1224,6 +1300,6 @@ mod tests {
             .expect("queue mode should produce a new config");
 
         assert_eq!(repartitioned.file_groups.len(), 4);
-        assert!(repartitioned.file_groups.iter().all(|g| g.is_empty()));
+        assert!(repartitioned.file_groups.iter().any(|g| !g.is_empty()));
     }
 }

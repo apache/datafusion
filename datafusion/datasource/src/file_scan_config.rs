@@ -211,11 +211,12 @@ pub struct FileScanConfig {
     /// If the number of file partitions > target_partitions, the file partitions will be grouped
     /// in a round-robin fashion such that number of file partitions = target_partitions.
     pub partitioned_by_file_group: bool,
-    /// Optional shared queue of files used for queue-driven scheduling.
+    /// Optional shared local queues for dynamic work stealing.
     ///
-    /// When set, each partition worker will pull work from this shared queue
-    /// instead of using only files from its corresponding file group.
-    pub(crate) shared_file_queue: Option<Arc<Mutex<VecDeque<PartitionedFile>>>>,
+    /// When set, each partition worker first pops from its own queue, then can
+    /// steal work from other partitions' queues if its own queue is exhausted.
+    pub(crate) shared_local_file_queues:
+        Option<Arc<Vec<Mutex<VecDeque<PartitionedFile>>>>>,
 }
 
 /// A builder for [`FileScanConfig`]'s.
@@ -558,7 +559,7 @@ impl FileScanConfigBuilder {
             expr_adapter_factory: expr_adapter,
             statistics,
             partitioned_by_file_group,
-            shared_file_queue: None,
+            shared_local_file_queues: None,
         }
     }
 }
@@ -939,12 +940,12 @@ impl DataSource for FileScanConfig {
 }
 
 impl FileScanConfig {
-    /// Set or clear a shared file queue used for queue-driven scheduling.
-    pub fn set_shared_file_queue(
+    /// Set or clear shared local file queues used for runtime work stealing.
+    pub fn set_shared_local_file_queues(
         &mut self,
-        shared_file_queue: Option<Arc<Mutex<VecDeque<PartitionedFile>>>>,
+        shared_local_file_queues: Option<Arc<Vec<Mutex<VecDeque<PartitionedFile>>>>>,
     ) {
-        self.shared_file_queue = shared_file_queue;
+        self.shared_local_file_queues = shared_local_file_queues;
     }
 
     /// Returns only the output orderings that are validated against actual

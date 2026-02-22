@@ -21,6 +21,7 @@ use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::row_group_filter::RowGroupAccessPlanFilter;
 use crate::{
     ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
+    ParquetFileScanPlan,
     apply_file_schema_type_coercions, coerce_int96_to_resolution, row_filter,
 };
 use arrow::array::{RecordBatch, RecordBatchOptions};
@@ -355,13 +356,35 @@ impl FileOpener for ParquetOpener {
             }
             let mut metadata_timer = file_metrics.metadata_load_time.timer();
 
+            let shared_reader_metadata = extensions
+                .as_ref()
+                .and_then(|extensions| {
+                    extensions.downcast_ref::<ParquetFileScanPlan>()
+                })
+                .map(|scan_plan| scan_plan.shared_reader_metadata());
+
             // Begin by loading the metadata from the underlying reader (note
             // the returned metadata may actually include page indexes as some
             // readers may return page indexes even when not requested -- for
             // example when they are cached)
-            let mut reader_metadata =
-                ArrowReaderMetadata::load_async(&mut async_file_reader, options.clone())
+            let mut reader_metadata = if let Some(shared_reader_metadata) =
+                &shared_reader_metadata
+            {
+                if let Some(reader_metadata) = shared_reader_metadata.get() {
+                    reader_metadata
+                } else {
+                    let reader_metadata = ArrowReaderMetadata::load_async(
+                        &mut async_file_reader,
+                        options.clone(),
+                    )
                     .await?;
+                    shared_reader_metadata.set_if_empty(reader_metadata.clone());
+                    reader_metadata
+                }
+            } else {
+                ArrowReaderMetadata::load_async(&mut async_file_reader, options.clone())
+                    .await?
+            };
 
             // Note about schemas: we are actually dealing with **3 different schemas** here:
             // - The table schema as defined by the TableProvider.
@@ -439,6 +462,10 @@ impl FileOpener for ParquetOpener {
                     options.with_page_index_policy(PageIndexPolicy::Optional),
                 )
                 .await?;
+            }
+
+            if let Some(shared_reader_metadata) = &shared_reader_metadata {
+                shared_reader_metadata.set_if_empty(reader_metadata.clone());
             }
 
             metadata_timer.stop();
@@ -927,6 +954,17 @@ fn create_initial_plan(
 
             // check row group count matches the plan
             return Ok(access_plan.clone());
+        } else if let Some(scan_plan) = extensions.downcast_ref::<ParquetFileScanPlan>() {
+            if let Some(access_plan) = scan_plan.access_plan() {
+                let plan_len = access_plan.len();
+                if plan_len != row_group_count {
+                    return exec_err!(
+                        "Invalid ParquetAccessPlan for {file_name}. Specified {plan_len} row groups, but file has {row_group_count}"
+                    );
+                }
+
+                return Ok(access_plan.clone());
+            }
         } else {
             debug!("DataSourceExec Ignoring unknown extension specified for {file_name}");
         }

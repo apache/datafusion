@@ -1780,6 +1780,7 @@ mod tests {
             inner,
             file_metrics: file_metrics.clone(),
             partitioned_file,
+            shared_metadata: None,
         };
         let mut builder = ParquetRecordBatchStreamBuilder::new(reader).await.unwrap();
 
