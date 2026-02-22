@@ -54,8 +54,8 @@ use datafusion_physical_plan::{
     metrics::ExecutionPlanMetricsSet,
 };
 use log::{debug, warn};
-use std::sync::atomic::AtomicUsize;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicUsize;
 use std::{any::Any, fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::Arc};
 
 /// [`FileScanConfig`] represents scanning data from a group of files
