@@ -154,15 +154,19 @@ mod tests {
 
     use arrow::datatypes::{DataType, Field, Schema};
     use chrono::{DateTime, Utc};
+    use datafusion_common::ScalarValue;
 
     use datafusion_expr::logical_plan::builder::table_scan_with_filters;
     use datafusion_expr::logical_plan::table_scan;
+    use datafusion_expr::{Expr, col, expr_fn::cast};
     use datafusion_expr::*;
     use datafusion_functions_aggregate::expr_fn::{max, min};
 
     use crate::OptimizerContext;
     use crate::assert_optimized_plan_eq_snapshot;
-    use crate::test::{assert_fields_eq, test_table_scan_with_name};
+    use crate::test::{
+        assert_fields_eq, assert_optimized_plan_with_rules, test_table_scan_with_name,
+    };
 
     use super::*;
 
@@ -174,6 +178,14 @@ mod tests {
             Field::new("d", DataType::UInt32, false),
             Field::new("e", DataType::UInt32, true),
         ]);
+        table_scan(Some("test"), &schema, None)
+            .expect("creating scan")
+            .build()
+            .expect("building plan")
+    }
+
+    fn test_date_scan() -> LogicalPlan {
+        let schema = Schema::new(vec![Field::new("event_date", DataType::UInt16, true)]);
         table_scan(Some("test"), &schema, None)
             .expect("creating scan")
             .build()
@@ -296,6 +308,57 @@ mod tests {
             TableScan: test
         "
         )
+    }
+
+    #[test]
+    fn rewrites_date32_comparison_rhs_literal() -> Result<()> {
+        let event_date = cast(cast(col("event_date"), DataType::Int32), DataType::Date32);
+        let predicate =
+            event_date.gt_eq(Expr::Literal(ScalarValue::Date32(Some(15887)), None));
+
+        let plan = LogicalPlanBuilder::from(test_date_scan())
+            .filter(predicate)?
+            .build()?;
+
+                assert_optimized_plan_with_rules(
+                        vec![Arc::new(SimplifyExpressions::new())],
+                        plan,
+                    "Filter: test.event_date >= UInt16(15887)\n  TableScan: test",
+                        true,
+                )
+    }
+
+    #[test]
+    fn rewrites_date32_comparison_lhs_literal() -> Result<()> {
+        let event_date = cast(cast(col("event_date"), DataType::Int32), DataType::Date32);
+        let predicate = Expr::Literal(ScalarValue::Date32(Some(15887)), None).lt_eq(event_date);
+
+        let plan = LogicalPlanBuilder::from(test_date_scan())
+            .filter(predicate)?
+            .build()?;
+
+                assert_optimized_plan_with_rules(
+                        vec![Arc::new(SimplifyExpressions::new())],
+                        plan,
+                    "Filter: test.event_date >= UInt16(15887)\n  TableScan: test",
+                        true,
+                )
+    }
+
+    #[test]
+    fn does_not_rewrite_non_date32_literal() -> Result<()> {
+        let event_date = cast(cast(col("event_date"), DataType::Int32), DataType::Date32);
+        let predicate =
+            event_date.clone().gt_eq(Expr::Literal(ScalarValue::Int32(Some(15887)), None));
+
+        let rewritten =
+            predicate
+                .clone()
+                .transform_up(ExprSimplifier::rewrite_date32_comparison)?
+                .data;
+
+        assert_eq!(rewritten, predicate);
+        Ok(())
     }
 
     #[test]

@@ -232,7 +232,9 @@ impl ExprSimplifier {
                 .transform_data(|expr| {
                     rewrite_with_guarantees_map(expr, &guarantees_map)
                 })?;
-            expr = data;
+            let rewritten = data.transform_up(Self::rewrite_date32_comparison)?;
+            expr = rewritten.data;
+            let transformed = transformed || rewritten.transformed;
             num_cycles += 1;
             // Track if any transformation occurred
             has_transformed = has_transformed || transformed;
@@ -246,6 +248,70 @@ impl ExprSimplifier {
             Transformed::new_transformed(expr, has_transformed),
             num_cycles,
         ))
+    }
+
+    pub(crate) fn rewrite_date32_comparison(
+        expr: Expr,
+    ) -> Result<Transformed<Expr>> {
+        let Expr::BinaryExpr(BinaryExpr { left, op, right }) = expr else {
+            return Ok(Transformed::no(expr));
+        };
+
+        if !matches!(
+            op,
+            Operator::Eq
+                | Operator::NotEq
+                | Operator::Lt
+                | Operator::LtEq
+                | Operator::Gt
+                | Operator::GtEq
+        ) {
+            return Ok(Transformed::no(Expr::BinaryExpr(BinaryExpr::new(
+                left, op, right,
+            ))));
+        }
+
+        match (*left, *right) {
+            (
+                Expr::Cast(Cast {
+                    expr: cast_inner,
+                    data_type: DataType::Date32,
+                }),
+                Expr::Literal(ScalarValue::Date32(Some(days)), metadata),
+            ) if matches!(
+                cast_inner.as_ref(),
+                Expr::Cast(Cast {
+                    data_type: DataType::Int32,
+                    ..
+                })
+            ) => Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr::new(
+                cast_inner,
+                op,
+                Box::new(Expr::Literal(ScalarValue::Int32(Some(days)), metadata)),
+            )))),
+            (
+                Expr::Literal(ScalarValue::Date32(Some(days)), metadata),
+                Expr::Cast(Cast {
+                    expr: cast_inner,
+                    data_type: DataType::Date32,
+                }),
+            ) if matches!(
+                cast_inner.as_ref(),
+                Expr::Cast(Cast {
+                    data_type: DataType::Int32,
+                    ..
+                })
+            ) => Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr::new(
+                Box::new(Expr::Literal(ScalarValue::Int32(Some(days)), metadata)),
+                op,
+                cast_inner,
+            )))),
+            (left, right) => Ok(Transformed::no(Expr::BinaryExpr(BinaryExpr::new(
+                Box::new(left),
+                op,
+                Box::new(right),
+            )))),
+        }
     }
 
     /// Apply type coercion to an [`Expr`] so that it can be
