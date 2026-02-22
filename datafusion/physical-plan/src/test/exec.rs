@@ -301,7 +301,7 @@ pub struct BarrierExec {
 
     cache: PlanProperties,
 
-    log: bool
+    log: bool,
 }
 
 impl BarrierExec {

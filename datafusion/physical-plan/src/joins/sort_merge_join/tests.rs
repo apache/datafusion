@@ -3401,7 +3401,6 @@ async fn consume_stream_until_finish_barrier_reached(
 
     let mut start_time_since_last_ready = datafusion_common::instant::Instant::now();
     loop {
-
         let next_item = output_stream.next();
 
         // Manual polling
