@@ -24,39 +24,39 @@
 //!
 //! Add relevant tests under the specified sections.
 
-use std::sync::Arc;
-
+use crate::{
+    expressions::Column, joins::sort_merge_join::filter::get_corrected_filter_mask,
+    joins::sort_merge_join::stream::JoinedRecordBatches,
+};
 use arrow::array::{
     BinaryArray, BooleanArray, Date32Array, Date64Array, FixedSizeBinaryArray,
     Int32Array, RecordBatch, UInt64Array,
 };
 use arrow::compute::{BatchCoalescer, SortOptions, filter_record_batch};
 use arrow::datatypes::{DataType, Field, Schema};
-
+use arrow_schema::SchemaRef;
 use datafusion_common::JoinType::*;
-use datafusion_common::{
-    JoinSide,
-    test_util::{batches_to_sort_string, batches_to_string},
-};
+use datafusion_common::{JoinSide, test_util::{batches_to_sort_string, batches_to_string}, DataFusionError, internal_err};
 use datafusion_common::{
     JoinType, NullEquality, Result, assert_batches_eq, assert_contains,
 };
-use datafusion_execution::TaskContext;
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::BinaryExpr;
+use futures::{Stream, StreamExt};
 use insta::{allow_duplicates, assert_snapshot};
-
-use crate::{
-    expressions::Column, joins::sort_merge_join::filter::get_corrected_filter_mask,
-    joins::sort_merge_join::stream::JoinedRecordBatches,
-};
+use itertools::Itertools;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use crate::joins::SortMergeJoinExec;
 use crate::joins::utils::{ColumnIndex, JoinFilter, JoinOn};
 use crate::test::TestMemoryExec;
+use crate::test::exec::BarrierExec;
 use crate::test::{build_table_i32, build_table_i32_two_cols};
 use crate::{ExecutionPlan, common};
 
@@ -3128,6 +3128,287 @@ fn test_partition_statistics() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn build_batched_finish_barrier_table(
+    a: (&str, &[Vec<i32>]),
+    b: (&str, &[Vec<i32>]),
+    c: (&str, &[Vec<bool>]),
+) -> Arc<BarrierExec> {
+    assert_eq!(a.1.len(), b.1.len());
+    let mut batches = vec![];
+
+    for i in 0..a.1.len() {
+        let schema = Schema::new(vec![
+            Field::new(a.0, DataType::Int32, false),
+            Field::new(b.0, DataType::Int32, false),
+            Field::new(c.0, DataType::Boolean, false),
+        ]);
+
+        batches.push(RecordBatch::try_new(
+            Arc::new(schema),
+            vec![
+                Arc::new(Int32Array::from(a.1[i].clone())),
+                Arc::new(Int32Array::from(b.1[i].clone())),
+                Arc::new(BooleanArray::from(c.1[i].clone())),
+            ],
+        )
+          .unwrap());
+    }
+    let schema = batches[0].schema();
+
+    Arc::new(
+        BarrierExec::new(vec![batches], schema)
+            .without_start_barrier()
+            .with_finish_barrier(),
+    )
+}
+
+fn join_get_stream(
+    left: Arc<dyn ExecutionPlan>,
+    right: Arc<dyn ExecutionPlan>,
+    on: JoinOn,
+    join_type: JoinType,
+    filter: Option<JoinFilter>,
+    batch_size: usize,
+) -> Result<SendableRecordBatchStream> {
+    let sort_options = vec![SortOptions::default(); on.len()];
+    let null_equality = NullEquality::NullEqualsNothing;
+    let task_ctx = Arc::new(
+        TaskContext::default()
+            .with_session_config(SessionConfig::default().with_batch_size(batch_size)),
+    );
+    let join = SortMergeJoinExec::try_new(
+          left,
+          right,
+          on,
+          filter,
+          join_type,
+          sort_options,
+          null_equality,
+      )?;
+
+    let stream = join.execute(0, task_ctx)?;
+
+    Ok(stream)
+}
+
+fn generate_data_for_emit_early_test(batch_size: usize, number_of_batches: usize, join_type: JoinType) -> (Arc<BarrierExec>, Arc<BarrierExec>) {
+    let number_of_rows_per_batch = (number_of_batches * batch_size);
+    // Prepare data
+    let left_a1 = (0..number_of_rows_per_batch as i32)
+      .chunks(batch_size)
+      .into_iter()
+      .map(|chunk| chunk.collect::<Vec<_>>())
+      .collect::<Vec<_>>();
+    let left_b1 = (0..1000000)
+      .filter(|item| {
+          match join_type {
+              LeftAnti | RightAnti => {
+                  let remainder = item % (batch_size as i32);
+
+                  // Make sure to have one that match and one that don't
+                  remainder == 0 || remainder == 1
+              },
+              // Have at least 1 that is not matching
+              _ => item % batch_size as i32 != 0,
+          }
+      })
+      .take(number_of_rows_per_batch)
+      .chunks(batch_size)
+      .into_iter()
+      .map(|chunk| chunk.collect::<Vec<_>>())
+      .collect::<Vec<_>>();
+
+    let left_bool_col1 = left_a1.clone()
+      .into_iter()
+      .map(|b| b.into_iter()
+        // Mostly true but have some false that not overlap with the right column
+        .map(|a| a % (batch_size as i32) != (batch_size as i32) - 2).collect::<Vec<_>>())
+      .collect::<Vec<_>>();
+
+    let left = build_batched_finish_barrier_table(
+        ("a1", left_a1.as_slice()),
+        ("b1", left_b1.as_slice()),
+        ("bool_col1", left_bool_col1.as_slice()),
+    );
+
+    let right_a2 = (0..number_of_rows_per_batch as i32)
+      .map(|item| item * 11)
+      .chunks(batch_size)
+      .into_iter()
+      .map(|chunk| chunk.collect::<Vec<_>>())
+      .collect::<Vec<_>>();
+    let right_b1 = (0..1000000)
+      .filter(|item| {
+          match join_type {
+              LeftAnti | RightAnti => {
+                  let remainder = item % (batch_size as i32);
+
+                  // Make sure to have one that match and one that don't
+                  remainder == 1 || remainder == 2
+              },
+              // Have at least 1 that is not matching
+              _ => item % batch_size as i32 != 1,
+          }
+      })
+      .take(number_of_rows_per_batch)
+      .chunks(batch_size)
+      .into_iter()
+      .map(|chunk| chunk.collect::<Vec<_>>())
+      .collect::<Vec<_>>();
+    let right_bool_col2 = right_a2.clone()
+      .into_iter()
+      .map(|b| b.into_iter()
+        // Mostly true but have some false that not overlap with the left column
+        .map(|a| a % (batch_size as i32) != (batch_size as i32) - 1).collect::<Vec<_>>())
+      .collect::<Vec<_>>();
+
+    let right = build_batched_finish_barrier_table(
+        ("a2", right_a2.as_slice()),
+        ("b1", right_b1.as_slice()),
+        ("bool_col2", right_bool_col2.as_slice()),
+    );
+
+    (left, right)
+}
+
+#[tokio::test]
+async fn test_should_emit_early_when_have_enough_data_to_emit() -> Result<()> {
+
+    for with_filtering in [false, true] {
+    let join_types = vec![
+        Inner, Left, Right, RightSemi, Full, LeftSemi, LeftAnti, LeftMark, RightMark,
+    ];
+        const BATCH_SIZE: usize = 10;
+        for join_type in join_types {
+            for output_batch_size in [BATCH_SIZE / 3, BATCH_SIZE / 2, BATCH_SIZE, BATCH_SIZE * 2, BATCH_SIZE * 3] {
+
+                // Make sure the number of batches is enough for all join type to emit some output
+                let number_of_batches = if output_batch_size <= BATCH_SIZE {
+                    100
+                } else {
+                    // Have enough batches
+                    (output_batch_size * 100) / BATCH_SIZE
+                };
+
+                let (left, right) = generate_data_for_emit_early_test(BATCH_SIZE, number_of_batches, join_type);
+
+                let on = vec![(
+                    Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+                    Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+                )];
+
+                let join_filter = if with_filtering {
+                    let filter = JoinFilter::new(
+                        Arc::new(BinaryExpr::new(
+                            Arc::new(Column::new("bool_col1", 2)),
+                            Operator::And,
+                            Arc::new(Column::new("bool_col2", 2)),
+                        )),
+                        vec![
+                            ColumnIndex {
+                                index: 0,
+                                side: JoinSide::Left,
+                            },
+                            ColumnIndex {
+                                index: 0,
+                                side: JoinSide::Right,
+                            },
+                        ],
+                        Arc::new(Schema::new(vec![
+                            Field::new("bool_col1", DataType::Boolean, false),
+                            Field::new("bool_col2", DataType::Boolean, false),
+                        ])),
+                    );
+                    Some(filter)
+                } else {
+                    None
+                };
+
+                // select *
+                // from t1
+                // right join t2 on t1.b1 = t2.b1 and t1.bool_col1 AND t2.bool_col2
+                let mut output_stream = join_get_stream(
+                    Arc::clone(&left) as Arc<dyn ExecutionPlan>,
+                    Arc::clone(&right) as Arc<dyn ExecutionPlan>,
+                    on,
+                    Left,
+                    join_filter,
+                    BATCH_SIZE,
+                )?;
+
+                let output_batched =
+                  consume_stream_until_finish_barrier_reached(left, right, &mut output_stream).await.expect(format!("Failed to consume stream for join type: '{join_type}' and with filtering '{with_filtering}'").as_str());
+
+                // It should emit more than that, but we are being generous
+                // and to make sure the test pass for all
+                const MINIMUM_OUTPUT_BATCHES: usize = 5;
+                assert!(MINIMUM_OUTPUT_BATCHES <= number_of_batches / 5, "Make sure that the minimum output batches is realistic");
+                // Test to make sure that we are not waiting for input to be fully consumed to emit some output
+                assert!(
+                    output_batched.len() >= MINIMUM_OUTPUT_BATCHES,
+                    "[Sort Merge Join {join_type}] Stream must have at least emit {} batches, but only got {} batches",
+                    MINIMUM_OUTPUT_BATCHES,
+                    output_batched.len()
+                );
+            }
+
+        }
+    }
+    Ok(())
+}
+
+/// Polls the stream until both barriers are reached,
+/// collecting the emitted batches along the way.
+///
+/// If the stream is pending for too long (5s) without emitting any batches,
+/// it panics to avoid hanging the test indefinitely.
+///
+/// Note: The left and right BarrierExec might be the input of the output stream
+async fn consume_stream_until_finish_barrier_reached(
+    left: Arc<BarrierExec>,
+    right: Arc<BarrierExec>,
+    output_stream: &mut SendableRecordBatchStream,
+) -> Result<Vec<RecordBatch>> {
+    let mut output_batched = vec![];
+
+    let mut start_time_since_last_ready = std::time::Instant::now();
+
+    loop {
+        let next_item = output_stream.next();
+
+        // Manual polling
+        let poll_output = futures::poll!(next_item);
+
+        match poll_output {
+            Poll::Ready(Some(Ok(batch))) => {
+                if batch.num_rows() == 0 {
+                    return internal_err!("join stream should not emit empty batch");
+                }
+                output_batched.push(batch);
+                start_time_since_last_ready = std::time::Instant::now();
+            }
+            Poll::Ready(Some(Err(e))) => return Err(e),
+            Poll::Ready(None) => {
+                unreachable!("Stream should not end before manually finishing it")
+            }
+            Poll::Pending => {
+                if right.is_finish_barrier_reached() && left.is_finish_barrier_reached() {
+                    break;
+                }
+
+                // Make sure the test doesn't run forever
+                if start_time_since_last_ready.elapsed()
+                    > std::time::Duration::from_secs(5)
+                {
+                    return internal_err!("Stream should have emitted data by now, but it's still pending. Output batches so far: {}", output_batched.len());
+                }
+            }
+        }
+    }
+
+    Ok(output_batched)
 }
 
 /// Returns the column names on the schema
