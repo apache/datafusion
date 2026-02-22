@@ -1852,6 +1852,69 @@ async fn roundtrip_generate_series() -> Result<()> {
 }
 
 #[tokio::test]
+#[expect(deprecated)]
+async fn roundtrip_generate_series_legacy_generator_adapter() -> Result<()> {
+    use datafusion_functions_table::generate_series::{
+        GenSeriesArgs, GenerateSeriesPartition, GenerateSeriesTable,
+    };
+    use datafusion_physical_plan::memory::LazyMemoryExec;
+
+    let schema = Arc::new(Schema::new(Fields::from([Arc::new(Field::new(
+        "value",
+        DataType::Int64,
+        false,
+    ))])));
+    let table = GenerateSeriesTable::new(
+        Arc::clone(&schema),
+        GenSeriesArgs::Int64Args {
+            start: 1,
+            end: 10,
+            step: 1,
+            include_end: true,
+            name: "generate_series",
+        },
+    );
+    let generator = table.as_generator(4)?;
+    let plan = Arc::new(LazyMemoryExec::try_new(schema, vec![generator])?);
+
+    let node = PhysicalPlanNode::try_from_physical_plan(
+        plan.clone(),
+        &DefaultPhysicalExtensionCodec {},
+    )?;
+    let Some(protobuf::physical_plan_node::PhysicalPlanType::GenerateSeries(
+        generate_series_node,
+    )) = &node.physical_plan_type
+    else {
+        return internal_err!("Expected GenerateSeries physical plan node");
+    };
+    assert_eq!(generate_series_node.target_batch_size, 4);
+
+    let encoded = node.encode_to_vec();
+    let decoded = PhysicalPlanNode::decode(encoded.as_slice())
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let ctx = SessionContext::new();
+    let restored = decoded
+        .try_into_physical_plan(&ctx.task_ctx(), &DefaultPhysicalExtensionCodec {})?;
+
+    assert_eq!(plan.schema(), restored.schema());
+
+    let Some(lazy_exec) = restored.as_any().downcast_ref::<LazyMemoryExec>() else {
+        return internal_err!("Expected LazyMemoryExec after roundtrip");
+    };
+    assert_eq!(lazy_exec.partitions().len(), 1);
+
+    let Some(partition) = lazy_exec.partitions()[0]
+        .as_any()
+        .downcast_ref::<GenerateSeriesPartition>()
+    else {
+        return internal_err!("Expected GenerateSeriesPartition after roundtrip");
+    };
+    assert_eq!(partition.batch_size(), 4);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn roundtrip_projection_source() -> Result<()> {
     let schema = Arc::new(Schema::new(Fields::from([
         Arc::new(Field::new("a", DataType::Utf8, false)),

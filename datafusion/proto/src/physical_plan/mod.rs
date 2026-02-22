@@ -48,7 +48,7 @@ use datafusion_datasource_parquet::source::ParquetSource;
 use datafusion_execution::{FunctionRegistry, TaskContext};
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 use datafusion_functions_table::generate_series::{
-    Empty, GenSeriesArgs, GenerateSeriesTable, GenericSeriesState, TimestampValue,
+    Empty, GenSeriesArgs, GenerateSeriesPartition, GenericSeriesState, TimestampValue,
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::async_scalar_function::AsyncFuncExpr;
@@ -73,7 +73,7 @@ use datafusion_physical_plan::joins::{
     StreamJoinPartitionMode, SymmetricHashJoinExec,
 };
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-use datafusion_physical_plan::memory::LazyMemoryExec;
+use datafusion_physical_plan::memory::{LazyBatchGeneratorPartition, LazyMemoryExec};
 use datafusion_physical_plan::metrics::MetricType;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
@@ -2153,10 +2153,16 @@ impl protobuf::PhysicalPlanNode {
             None => return internal_err!("Missing args in GenerateSeriesNode"),
         };
 
-        let table = GenerateSeriesTable::new(Arc::clone(&schema), args);
-        let generator = table.as_generator(generate_series.target_batch_size as usize)?;
+        let partition = Arc::new(GenerateSeriesPartition::new(
+            Arc::clone(&schema),
+            args,
+            generate_series.target_batch_size as usize,
+        ));
 
-        Ok(Arc::new(LazyMemoryExec::try_new(schema, vec![generator])?))
+        Ok(Arc::new(LazyMemoryExec::try_new_with_partitions(
+            schema,
+            vec![partition],
+        )?))
     }
 
     fn try_into_cooperative_physical_plan(
@@ -3451,22 +3457,118 @@ impl protobuf::PhysicalPlanNode {
         }
     }
 
-    fn try_from_lazy_memory_exec(exec: &LazyMemoryExec) -> Result<Option<Self>> {
-        let generators = exec.generators();
+    fn serialize_generate_series_args(
+        args: &GenSeriesArgs,
+    ) -> Result<protobuf::generate_series_node::Args> {
+        match args {
+            GenSeriesArgs::ContainsNull { name } => {
+                Ok(protobuf::generate_series_node::Args::ContainsNull(
+                    protobuf::GenerateSeriesArgsContainsNull {
+                        name: Self::str_to_generate_series_name(name)? as i32,
+                    },
+                ))
+            }
+            GenSeriesArgs::Int64Args {
+                start,
+                end,
+                step,
+                include_end,
+                name,
+            } => Ok(protobuf::generate_series_node::Args::Int64Args(
+                protobuf::GenerateSeriesArgsInt64 {
+                    start: *start,
+                    end: *end,
+                    step: *step,
+                    include_end: *include_end,
+                    name: Self::str_to_generate_series_name(name)? as i32,
+                },
+            )),
+            GenSeriesArgs::TimestampArgs {
+                start,
+                end,
+                step,
+                tz,
+                include_end,
+                name,
+            } => Ok(protobuf::generate_series_node::Args::TimestampArgs(
+                protobuf::GenerateSeriesArgsTimestamp {
+                    start: *start,
+                    end: *end,
+                    step: Some(datafusion_proto_common::IntervalMonthDayNanoValue {
+                        months: step.months,
+                        days: step.days,
+                        nanos: step.nanoseconds,
+                    }),
+                    include_end: *include_end,
+                    name: Self::str_to_generate_series_name(name)? as i32,
+                    tz: tz.as_ref().map(ToString::to_string),
+                },
+            )),
+            GenSeriesArgs::DateArgs {
+                start,
+                end,
+                step,
+                include_end,
+                name,
+            } => Ok(protobuf::generate_series_node::Args::DateArgs(
+                protobuf::GenerateSeriesArgsDate {
+                    start: *start,
+                    end: *end,
+                    step: Some(datafusion_proto_common::IntervalMonthDayNanoValue {
+                        months: step.months,
+                        days: step.days,
+                        nanos: step.nanoseconds,
+                    }),
+                    include_end: *include_end,
+                    name: Self::str_to_generate_series_name(name)? as i32,
+                },
+            )),
+        }
+    }
 
-        // ensure we only have one generator
-        let [generator] = generators.as_slice() else {
+    #[allow(deprecated)]
+    fn try_from_lazy_memory_exec(exec: &LazyMemoryExec) -> Result<Option<Self>> {
+        let partitions = exec.partitions();
+
+        // ensure we only have one partition
+        let [partition] = partitions else {
             return Ok(None);
         };
 
-        let generator_guard = generator.read();
+        if let Some(generate_series_partition) =
+            partition.as_any().downcast_ref::<GenerateSeriesPartition>()
+        {
+            let schema = exec.schema();
+            let node = protobuf::GenerateSeriesNode {
+                schema: Some(schema.as_ref().try_into()?),
+                target_batch_size: generate_series_partition.batch_size() as u32,
+                args: Some(Self::serialize_generate_series_args(
+                    generate_series_partition.args(),
+                )?),
+            };
+
+            return Ok(Some(protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::GenerateSeries(node)),
+            }));
+        }
+
+        let Some(adapter) = partition
+            .as_any()
+            .downcast_ref::<LazyBatchGeneratorPartition>()
+        else {
+            return Ok(None);
+        };
+
+        let generator_guard = adapter.generator().read();
 
         // Try to downcast to different generate_series types
         if let Some(empty_gen) = generator_guard.as_any().downcast_ref::<Empty>() {
             let schema = exec.schema();
             let node = protobuf::GenerateSeriesNode {
                 schema: Some(schema.as_ref().try_into()?),
-                target_batch_size: 8192, // Default batch size
+                // Empty generator produces no rows, so batch_size is irrelevant.
+                // The legacy Empty type doesn't expose batch_size(), so use a default.
+                target_batch_size: 8192,
                 args: Some(protobuf::generate_series_node::Args::ContainsNull(
                     protobuf::GenerateSeriesArgsContainsNull {
                         name: Self::str_to_generate_series_name(empty_gen.name())? as i32,
