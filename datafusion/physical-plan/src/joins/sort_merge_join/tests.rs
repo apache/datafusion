@@ -3362,7 +3362,7 @@ async fn test_should_emit_early_when_have_enough_data_to_emit() -> Result<()> {
                 )?;
 
                 let output_batched =
-                  consume_stream_until_finish_barrier_reached(left, right, &mut output_stream).await.unwrap_or_else(|_| panic!("Failed to consume stream for join type: '{join_type}' and with filtering '{with_filtering}'"));
+                  consume_stream_until_finish_barrier_reached(left, right, &mut output_stream).await.unwrap_or_else(|e| panic!("Failed to consume stream for join type: '{join_type}' and with filtering '{with_filtering}': {e:?}"));
 
                 // It should emit more than that, but we are being generous
                 // and to make sure the test pass for all
