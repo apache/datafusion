@@ -184,7 +184,8 @@ impl StreamedBatch {
             // This should always be >= 1 since we only call this when num_output_rows < batch_size.
             debug_assert!(
                 batch_size > self.num_output_rows,
-                "batch_size ({batch_size}) must be > num_output_rows ({})", self.num_output_rows
+                "batch_size ({batch_size}) must be > num_output_rows ({})",
+                self.num_output_rows
             );
             let capacity = batch_size - self.num_output_rows;
             self.output_indices.push(StreamedJoinedChunk {
