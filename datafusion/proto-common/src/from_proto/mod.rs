@@ -1024,7 +1024,7 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
                 })
                 .unwrap_or(None),
             pushdown_filters: value.pushdown_filters,
-            reorder_filters: value.reorder_filters,
+
             force_filter_selections: value.force_filter_selections,
             data_pagesize_limit: value.data_pagesize_limit as usize,
             write_batch_size: value.write_batch_size as usize,
@@ -1090,6 +1090,15 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             max_predicate_cache_size: value.max_predicate_cache_size_opt.map(|opt| match opt {
                 protobuf::parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(v) => Some(v as usize),
             }).unwrap_or(None),
+            filter_pushdown_min_bytes_per_sec: value.filter_pushdown_min_bytes_per_sec_opt.map(|opt| match opt {
+                protobuf::parquet_options::FilterPushdownMinBytesPerSecOpt::FilterPushdownMinBytesPerSec(v) => v,
+            }).unwrap_or(f64::INFINITY),
+            filter_collecting_byte_ratio_threshold: value.filter_collecting_byte_ratio_threshold_opt.map(|opt| match opt {
+                protobuf::parquet_options::FilterCollectingByteRatioThresholdOpt::FilterCollectingByteRatioThreshold(v) => v,
+            }).unwrap_or(0.2),
+            filter_confidence_z: value.filter_confidence_z_opt.map(|opt| match opt {
+                protobuf::parquet_options::FilterConfidenceZOpt::FilterConfidenceZ(v) => v,
+            }).unwrap_or(2.0),
         })
     }
 }

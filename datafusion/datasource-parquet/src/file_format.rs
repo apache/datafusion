@@ -505,6 +505,12 @@ impl FileFormat for ParquetFormat {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let mut metadata_size_hint = None;
 
+        let filter_pushdown_min_bytes_per_sec = state
+            .config_options()
+            .execution
+            .parquet
+            .filter_pushdown_min_bytes_per_sec;
+
         if let Some(metadata) = self.metadata_size_hint() {
             metadata_size_hint = Some(metadata);
         }
@@ -515,7 +521,10 @@ impl FileFormat for ParquetFormat {
             .downcast_ref::<ParquetSource>()
             .cloned()
             .ok_or_else(|| internal_datafusion_err!("Expected ParquetSource"))?;
-        source = source.with_table_parquet_options(self.options.clone());
+        let mut options = self.options.clone();
+        options.global.filter_pushdown_min_bytes_per_sec =
+            filter_pushdown_min_bytes_per_sec;
+        source = source.with_table_parquet_options(options);
 
         // Use the CachedParquetFileReaderFactory
         let metadata_cache = state.runtime_env().cache_manager.get_file_metadata_cache();
