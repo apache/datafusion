@@ -1368,10 +1368,7 @@ impl DisplayAs for FileScanConfig {
         write!(f, "file_groups=")?;
         FileGroupsDisplay(&self.file_groups).fmt_as(t, f)?;
 
-        let schema = self
-            .projected_schema()
-            .map_err(|_| std::fmt::Error)?;
-
+        let schema = self.projected_schema().map_err(|_| std::fmt::Error)?;
         if !schema.fields().is_empty() {
             write!(f, ", projection={}", ProjectSchemaDisplay(&schema))?;
         }
