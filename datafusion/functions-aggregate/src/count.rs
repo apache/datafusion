@@ -30,7 +30,7 @@ use arrow::{
     },
 };
 use datafusion_common::{
-    HashMap, Result, ScalarValue, downcast_value, internal_err, not_impl_err,
+    DataFusionError, HashMap, Result, ScalarValue, downcast_value, internal_err,
     stats::Precision, utils::expr::COUNT_STAR_EXPANSION,
 };
 use datafusion_expr::{
@@ -293,20 +293,37 @@ impl AggregateUDFImpl for Count {
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         if args.is_distinct {
-            let dtype: DataType = match &args.input_fields[0].data_type() {
-                DataType::Dictionary(_, values_type) => (**values_type).clone(),
-                &dtype => dtype.clone(),
-            };
+            if args.input_fields.len() > 1 {
+                Ok(args
+                    .input_fields
+                    .iter()
+                    .map(|field| {
+                        Arc::new(Field::new(
+                            format_state_name(args.name, "count distinct"),
+                            DataType::List(Arc::new(Field::new_list_field(
+                                field.data_type().clone(),
+                                true,
+                            ))),
+                            false,
+                        ))
+                    })
+                    .collect::<Vec<_>>())
+            } else {
+                let dtype: DataType = match &args.input_fields[0].data_type() {
+                    DataType::Dictionary(_, values_type) => (**values_type).clone(),
+                    &dtype => dtype.clone(),
+                };
 
-            Ok(vec![
-                Field::new_list(
-                    format_state_name(args.name, "count distinct"),
-                    // See COMMENTS.md to understand why nullable is set to true
-                    Field::new_list_field(dtype, true),
-                    false,
-                )
-                .into(),
-            ])
+                Ok(vec![
+                    Field::new_list(
+                        format_state_name(args.name, "count distinct"),
+                        // See COMMENTS.md to understand why nullable is set to true
+                        Field::new_list_field(dtype, true),
+                        false,
+                    )
+                    .into(),
+                ])
+            }
         } else {
             Ok(vec![
                 Field::new(
@@ -325,7 +342,14 @@ impl AggregateUDFImpl for Count {
         }
 
         if acc_args.exprs.len() > 1 {
-            return not_impl_err!("COUNT DISTINCT with multiple arguments");
+            let data_types: Vec<DataType> = acc_args
+                .expr_fields
+                .iter()
+                .map(|field| field.data_type().clone())
+                .collect();
+            return Ok(Box::new(MultiColumnDistinctCountAccumulator::new(
+                data_types,
+            )));
         }
 
         let data_type = acc_args.expr_fields[0].data_type();
@@ -841,6 +865,156 @@ impl Accumulator for DistinctCountAccumulator {
     }
 }
 
+#[derive(Debug)]
+struct MultiColumnDistinctCountAccumulator {
+    values: HashSet<Vec<ScalarValue>, RandomState>,
+    state_data_types: Vec<DataType>,
+}
+
+impl MultiColumnDistinctCountAccumulator {
+    fn new(state_data_types: Vec<DataType>) -> Self {
+        Self {
+            values: HashSet::default(),
+            state_data_types,
+        }
+    }
+
+    fn update(&mut self, values: &[ScalarValue]) -> Result<()> {
+        if !values.iter().any(|v| v.is_null()) {
+            self.values.insert(values.to_vec());
+        }
+        Ok(())
+    }
+
+    fn fixed_size(&self) -> usize {
+        std::mem::size_of_val(self)
+            + (std::mem::size_of::<Vec<ScalarValue>>() * self.values.capacity())
+            + self
+                .values
+                .iter()
+                .next()
+                .map(|vals| {
+                    (ScalarValue::size_of_vec(vals) - std::mem::size_of_val(vals))
+                        * self.values.capacity()
+                })
+                .unwrap_or(0)
+            + (std::mem::size_of::<DataType>() * self.state_data_types.capacity())
+    }
+
+    fn full_size(&self) -> usize {
+        std::mem::size_of_val(self)
+            + (std::mem::size_of::<Vec<ScalarValue>>() * self.values.capacity())
+            + self
+                .values
+                .iter()
+                .map(|vals| ScalarValue::size_of_vec(vals) - std::mem::size_of_val(vals))
+                .sum::<usize>()
+            + (std::mem::size_of::<DataType>() * self.state_data_types.capacity())
+            + self
+                .state_data_types
+                .iter()
+                .map(|dt| dt.size() - std::mem::size_of_val(dt))
+                .sum::<usize>()
+    }
+}
+
+impl Accumulator for MultiColumnDistinctCountAccumulator {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        let mut scalar_values: Vec<Vec<ScalarValue>> =
+            vec![Vec::new(); self.state_data_types.len()];
+
+        self.values.iter().for_each(|distinct_values| {
+            distinct_values
+                .iter()
+                .enumerate()
+                .for_each(|(col_index, distinct_value)| {
+                    scalar_values[col_index].push(distinct_value.clone());
+                });
+        });
+
+        let accumulator_state: Vec<ScalarValue> = self
+            .state_data_types
+            .iter()
+            .enumerate()
+            .map(|(column_index, state_data_type)| {
+                ScalarValue::List(ScalarValue::new_list_nullable(
+                    &scalar_values[column_index],
+                    state_data_type,
+                ))
+            })
+            .collect::<Vec<_>>();
+
+        Ok(accumulator_state)
+    }
+
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        if values.is_empty() {
+            return Ok(());
+        }
+
+        let arr = &values[0];
+
+        (0..arr.len()).try_for_each(|index| {
+            let vals = values
+                .iter()
+                .map(|array| ScalarValue::try_from_array(array, index))
+                .collect::<Result<Vec<_>>>()?;
+
+            self.update(&vals)
+        })
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        if states.is_empty() {
+            return Ok(());
+        }
+
+        let arr = &states[0];
+        (0..arr.len()).try_for_each(|index| {
+            let vals = states
+                .iter()
+                .map(|array| ScalarValue::try_from_array(array, index))
+                .collect::<Result<Vec<_>>>()?;
+
+            // The accumulator state does not contain nulls so we use a .values here
+            let col_values = vals
+                .iter()
+                .map(|state| match state {
+                    ScalarValue::List(values) => Ok(values.values()),
+                    _ => Err(DataFusionError::Internal(format!(
+                        "Unexpected accumulator state {state:?}"
+                    ))),
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            (0..col_values[0].len()).try_for_each(|row_index| {
+                let row_values = col_values
+                    .iter()
+                    .map(|col| ScalarValue::try_from_array(col, row_index))
+                    .collect::<Result<Vec<_>>>()?;
+                self.update(&row_values)
+            })
+        })
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        Ok(ScalarValue::Int64(Some(self.values.len() as i64)))
+    }
+
+    fn size(&self) -> usize {
+        let is_fixed_length = self.state_data_types.iter().all(|t| match t {
+            DataType::Boolean | DataType::Null => true,
+            d if d.is_primitive() => true,
+            _ => false,
+        });
+        if is_fixed_length {
+            self.fixed_size()
+        } else {
+            self.full_size()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -1036,6 +1210,84 @@ mod tests {
         merged.merge_batch(&state_arr2)?;
         // Expect distinct {1,2,3} → count = 3
         assert_eq!(merged.evaluate()?, ScalarValue::Int64(Some(3)));
+        Ok(())
+    }
+
+    #[test]
+    fn multi_column_accumulator_basic() -> Result<()> {
+        let mut acc = MultiColumnDistinctCountAccumulator::new(vec![
+            DataType::Int32,
+            DataType::Utf8,
+        ]);
+
+        // (1, a), (1, b), (1, a), (2, b), (3, b)
+        let col1 = Arc::new(Int32Array::from(vec![
+            Some(1),
+            Some(1),
+            Some(1),
+            Some(2),
+            Some(3),
+        ]));
+        let col2 = Arc::new(StringArray::from(vec![
+            Some("a"),
+            Some("b"),
+            Some("a"),
+            Some("b"),
+            Some("b"),
+        ])) as ArrayRef;
+
+        acc.update_batch(&[col1, col2])?;
+        // Expected (1, a), (1, b), (2, b), (3, b)
+        assert_eq!(acc.evaluate()?, ScalarValue::Int64(Some(4)));
+        Ok(())
+    }
+
+    #[test]
+    fn multi_column_accumulator_merge() -> Result<()> {
+        let mut acc1 = MultiColumnDistinctCountAccumulator::new(vec![
+            DataType::Int32,
+            DataType::Utf8,
+        ]);
+
+        // (1, a), (1, b)
+        let col1 = Arc::new(Int32Array::from(vec![Some(1), Some(1)]));
+        let col2 = Arc::new(StringArray::from(vec![Some("a"), Some("b")])) as ArrayRef;
+
+        acc1.update_batch(&[col1, col2])?;
+
+        let mut acc2 = MultiColumnDistinctCountAccumulator::new(vec![
+            DataType::Int32,
+            DataType::Utf8,
+        ]);
+
+        // (1, a), (2, b), (3, b)
+        let col1 = Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3)]));
+        let col2 = Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("b")]))
+            as ArrayRef;
+
+        acc2.update_batch(&[col1, col2])?;
+
+        let state_sv1 = acc1.state()?;
+        let state_sv2 = acc2.state()?;
+        let state_arr1: Vec<ArrayRef> = state_sv1
+            .into_iter()
+            .map(|sv| sv.to_array())
+            .collect::<Result<_>>()?;
+        let state_arr2: Vec<ArrayRef> = state_sv2
+            .into_iter()
+            .map(|sv| sv.to_array())
+            .collect::<Result<_>>()?;
+
+        let mut merged = MultiColumnDistinctCountAccumulator::new(vec![
+            DataType::Int32,
+            DataType::Utf8,
+        ]);
+        merged.merge_batch(&state_arr1)?;
+        merged.merge_batch(&state_arr2)?;
+
+        // Expected (1, a), (1, b), (1, a), (2, b), (3, b)
+        assert_eq!(merged.evaluate()?, ScalarValue::Int64(Some(4)));
+
         Ok(())
     }
 }

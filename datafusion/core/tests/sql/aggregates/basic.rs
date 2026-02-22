@@ -441,3 +441,36 @@ async fn count_distinct_dictionary_mixed_values() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn count_distinct_multiple_exprs() -> Result<()> {
+    let results =
+        execute_with_partition("SELECT count(distinct c1, c2) FROM test", 4).await?;
+    assert_snapshot!(batches_to_sort_string(&results), @r"
+        +---------------------------------+
+        | count(DISTINCT test.c1,test.c2) |
+        +---------------------------------+
+        | 40                              |
+        +---------------------------------+
+        ");
+    Ok(())
+}
+
+#[tokio::test]
+async fn count_distinct_multiple_exprs_with_groups() -> Result<()> {
+    let results = execute_with_partition(
+        "SELECT c3, count(distinct c1, c2) FROM test GROUP BY c3",
+        4,
+    )
+    .await?;
+    assert_snapshot!(batches_to_sort_string(&results), @r"
+        +-------+---------------------------------+
+        | c3    | count(DISTINCT test.c1,test.c2) |
+        +-------+---------------------------------+
+        | false | 20                              |
+        | true  | 20                              |
+        +-------+---------------------------------+
+        ");
+
+    Ok(())
+}
