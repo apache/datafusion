@@ -461,6 +461,7 @@ mod tests {
             skip_arrow_metadata: defaults.skip_arrow_metadata,
             coerce_int96: None,
             max_predicate_cache_size: defaults.max_predicate_cache_size,
+            allow_morsel_driven: defaults.allow_morsel_driven,
         }
     }
 

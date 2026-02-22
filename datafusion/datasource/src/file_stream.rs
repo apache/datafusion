@@ -186,7 +186,9 @@ impl FileStream {
                         }
                     } else {
                         match self.start_next_file().transpose() {
-                            Ok(Some(future)) => self.state = FileStreamState::Open { future },
+                            Ok(Some(future)) => {
+                                self.state = FileStreamState::Open { future }
+                            }
                             Ok(None) => return Poll::Ready(None),
                             Err(e) => {
                                 self.state = FileStreamState::Error;
@@ -211,7 +213,9 @@ impl FileStream {
                                 // No further expansion possible. Proceed to open.
                                 let morsel = morsels.into_iter().next().unwrap();
                                 match self.file_opener.open(morsel) {
-                                    Ok(future) => self.state = FileStreamState::Open { future },
+                                    Ok(future) => {
+                                        self.state = FileStreamState::Open { future }
+                                    }
                                     Err(e) => {
                                         self.file_stream_metrics.time_opening.stop();
                                         self.state = FileStreamState::Error;

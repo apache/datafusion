@@ -1089,7 +1089,6 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             skip_arrow_metadata: value.skip_arrow_metadata,
             max_predicate_cache_size: value.max_predicate_cache_size_opt.map(|opt| match opt {
                 protobuf::parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(v) => Some(v as usize),
-            
             }).unwrap_or(None),
             allow_morsel_driven: value.allow_morsel_driven,
         })

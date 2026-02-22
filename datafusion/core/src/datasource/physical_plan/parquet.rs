@@ -50,7 +50,9 @@ mod tests {
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
     use datafusion_common::{Result, ScalarValue, assert_contains};
     use datafusion_datasource::file_format::FileFormat;
-    use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
+    use datafusion_datasource::file_scan_config::{
+        FileScanConfig, FileScanConfigBuilder,
+    };
     use datafusion_datasource::source::DataSourceExec;
 
     use datafusion_datasource::file::FileSource;
@@ -2470,8 +2472,7 @@ mod tests {
         ctx.register_object_store(store_url.as_ref(), store.clone());
 
         // Create a Parquet file with 100 row groups, each with 10 rows
-        let schema =
-            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
 
         let mut out = Vec::new();
         let props = WriterProperties::builder()
@@ -2498,9 +2499,7 @@ mod tests {
         // Set up DataSourceExec with 2 partitions, but the file is only in partition 0 (skewed)
         let source = Arc::new(ParquetSource::new(schema));
         let config = FileScanConfigBuilder::new(store_url, source)
-            .with_file_group(FileGroup::new(vec![PartitionedFile::new_from_meta(
-                meta,
-            )]))
+            .with_file_group(FileGroup::new(vec![PartitionedFile::new_from_meta(meta)]))
             .with_file_group(FileGroup::new(vec![])) // Partition 1 is empty
             .with_morsel_driven(true)
             .build();
@@ -2557,7 +2556,10 @@ mod tests {
         while let Some(batch) = s1.next().await {
             count += batch.unwrap().num_rows();
         }
-        assert_eq!(count, 1000, "Second execution should also produce 1000 rows");
+        assert_eq!(
+            count, 1000,
+            "Second execution should also produce 1000 rows"
+        );
 
         Ok(())
     }
@@ -2600,7 +2602,10 @@ mod tests {
             .downcast_ref::<FileScanConfig>()
             .expect("Expected FileScanConfig");
 
-        assert!(config.morsel_driven, "morsel_driven should be enabled by default for Parquet");
+        assert!(
+            config.morsel_driven,
+            "morsel_driven should be enabled by default for Parquet"
+        );
 
         Ok(())
     }
