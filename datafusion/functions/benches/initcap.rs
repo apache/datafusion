@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::OffsetSizeTrait;
+use arrow::array::{ArrayRef, OffsetSizeTrait, StringArray, StringViewBuilder};
 use arrow::datatypes::{DataType, Field};
 use arrow::util::bench_util::{
     create_string_array_with_len, create_string_view_array_with_len,
@@ -47,52 +47,124 @@ fn create_args<O: OffsetSizeTrait>(
     }
 }
 
+/// Create a Utf8 array where every value contains non-ASCII Unicode text.
+fn create_unicode_utf8_args(size: usize) -> Vec<ColumnarValue> {
+    let items: Vec<String> = (0..size)
+        .map(|_| "ñAnDÚ ÁrBOL ОлЕГ ÍslENsku".to_string())
+        .collect();
+    let array = Arc::new(StringArray::from(items)) as ArrayRef;
+    vec![ColumnarValue::Array(array)]
+}
+
+/// Create a Utf8View array where every value contains non-ASCII Unicode text.
+fn create_unicode_utf8view_args(size: usize) -> Vec<ColumnarValue> {
+    let mut builder = StringViewBuilder::with_capacity(size);
+    for _ in 0..size {
+        builder.append_value("ñAnDÚ ÁrBOL ОлЕГ ÍslENsku");
+    }
+    let array = Arc::new(builder.finish()) as ArrayRef;
+    vec![ColumnarValue::Array(array)]
+}
+
 fn criterion_benchmark(c: &mut Criterion) {
     let initcap = unicode::initcap();
     let config_options = Arc::new(ConfigOptions::default());
 
-    // Grouped benchmarks for array sizes - to compare with scalar performance
+    // Array benchmarks: vary both row count and string length
     for size in [1024, 4096, 8192] {
-        let mut group = c.benchmark_group(format!("initcap size={size}"));
+        for str_len in [16, 128] {
+            let mut group =
+                c.benchmark_group(format!("initcap size={size} str_len={str_len}"));
+            group.sampling_mode(SamplingMode::Flat);
+            group.sample_size(10);
+            group.measurement_time(Duration::from_secs(10));
+
+            // Utf8
+            let array_args = create_args::<i32>(size, str_len, false);
+            let array_arg_fields = vec![Field::new("arg_0", DataType::Utf8, true).into()];
+
+            group.bench_function("array_utf8", |b| {
+                b.iter(|| {
+                    black_box(initcap.invoke_with_args(ScalarFunctionArgs {
+                        args: array_args.clone(),
+                        arg_fields: array_arg_fields.clone(),
+                        number_rows: size,
+                        return_field: Field::new("f", DataType::Utf8, true).into(),
+                        config_options: Arc::clone(&config_options),
+                    }))
+                })
+            });
+
+            // Utf8View
+            let array_view_args = create_args::<i32>(size, str_len, true);
+            let array_view_arg_fields =
+                vec![Field::new("arg_0", DataType::Utf8View, true).into()];
+
+            group.bench_function("array_utf8view", |b| {
+                b.iter(|| {
+                    black_box(initcap.invoke_with_args(ScalarFunctionArgs {
+                        args: array_view_args.clone(),
+                        arg_fields: array_view_arg_fields.clone(),
+                        number_rows: size,
+                        return_field: Field::new("f", DataType::Utf8View, true).into(),
+                        config_options: Arc::clone(&config_options),
+                    }))
+                })
+            });
+
+            group.finish();
+        }
+    }
+
+    // Unicode array benchmarks
+    for size in [1024, 4096, 8192] {
+        let mut group = c.benchmark_group(format!("initcap unicode size={size}"));
         group.sampling_mode(SamplingMode::Flat);
         group.sample_size(10);
         group.measurement_time(Duration::from_secs(10));
 
-        // Array benchmark - Utf8
-        let array_args = create_args::<i32>(size, 16, false);
-        let array_arg_fields = vec![Field::new("arg_0", DataType::Utf8, true).into()];
-        let batch_len = size;
+        let unicode_args = create_unicode_utf8_args(size);
+        let unicode_arg_fields = vec![Field::new("arg_0", DataType::Utf8, true).into()];
 
         group.bench_function("array_utf8", |b| {
             b.iter(|| {
                 black_box(initcap.invoke_with_args(ScalarFunctionArgs {
-                    args: array_args.clone(),
-                    arg_fields: array_arg_fields.clone(),
-                    number_rows: batch_len,
+                    args: unicode_args.clone(),
+                    arg_fields: unicode_arg_fields.clone(),
+                    number_rows: size,
                     return_field: Field::new("f", DataType::Utf8, true).into(),
                     config_options: Arc::clone(&config_options),
                 }))
             })
         });
 
-        // Array benchmark - Utf8View
-        let array_view_args = create_args::<i32>(size, 16, true);
-        let array_view_arg_fields =
+        let unicode_view_args = create_unicode_utf8view_args(size);
+        let unicode_view_arg_fields =
             vec![Field::new("arg_0", DataType::Utf8View, true).into()];
 
         group.bench_function("array_utf8view", |b| {
             b.iter(|| {
                 black_box(initcap.invoke_with_args(ScalarFunctionArgs {
-                    args: array_view_args.clone(),
-                    arg_fields: array_view_arg_fields.clone(),
-                    number_rows: batch_len,
+                    args: unicode_view_args.clone(),
+                    arg_fields: unicode_view_arg_fields.clone(),
+                    number_rows: size,
                     return_field: Field::new("f", DataType::Utf8View, true).into(),
                     config_options: Arc::clone(&config_options),
                 }))
             })
         });
 
-        // Scalar benchmark - Utf8 (the optimization we added)
+        group.finish();
+    }
+
+    // Scalar benchmarks: independent of array size, run once
+    {
+        let mut group = c.benchmark_group("initcap scalar");
+        group.sampling_mode(SamplingMode::Flat);
+        group.sample_size(10);
+        group.measurement_time(Duration::from_secs(10));
+
+        // Utf8
         let scalar_args = vec![ColumnarValue::Scalar(ScalarValue::Utf8(Some(
             "hello world test string".to_string(),
         )))];
@@ -110,7 +182,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             })
         });
 
-        // Scalar benchmark - Utf8View
+        // Utf8View
         let scalar_view_args = vec![ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
             "hello world test string".to_string(),
         )))];
