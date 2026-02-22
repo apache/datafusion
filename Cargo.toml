@@ -187,7 +187,7 @@ sqlparser = { version = "0.60.0", default-features = false, features = ["std", "
 strum = "0.27.2"
 strum_macros = "0.27.2"
 tempfile = "3"
-testcontainers-modules = { version = "0.14" }
+testcontainers-modules = { version = "0.15" }
 tokio = { version = "1.48", features = ["macros", "rt", "sync"] }
 tokio-stream = "0.1"
 tokio-util = "0.7"

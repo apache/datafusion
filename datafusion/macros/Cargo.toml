@@ -46,4 +46,4 @@ proc-macro = true
 [dependencies]
 datafusion-doc = { workspace = true }
 quote = "1.0.44"
-syn = { version = "2.0.116", features = ["full"] }
+syn = { version = "2.0.117", features = ["full"] }

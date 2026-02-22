@@ -1,0 +1,13 @@
+[project]
+name = "datafusion-docs"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+  "sphinx>=9,<10",
+  "sphinx-reredirects>=1.1,<2",
+  "pydata-sphinx-theme>=0.16,<1",
+  "myst-parser>=5,<6",
+  "maturin>=1.11,<2",
+  "jinja2>=3.1,<4",
+  "setuptools>=82,<83",
+]
