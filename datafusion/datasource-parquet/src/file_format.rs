@@ -283,7 +283,7 @@ impl ParquetFormat {
         self
     }
 
-    /// Get whether field ID reading is enabled from options
+    /// Get whether field ID is enabled from options
     pub fn field_id_enabled(&self) -> bool {
         self.options.global.field_id_enabled
     }
