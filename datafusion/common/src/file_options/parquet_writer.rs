@@ -209,6 +209,7 @@ impl ParquetOptions {
             coerce_int96: _,     // not used for writer props
             skip_arrow_metadata: _,
             max_predicate_cache_size: _,
+            field_id_read_enabled: _, // not used for writer props
         } = self;
 
         let mut builder = WriterProperties::builder()
@@ -460,6 +461,7 @@ mod tests {
             skip_arrow_metadata: defaults.skip_arrow_metadata,
             coerce_int96: None,
             max_predicate_cache_size: defaults.max_predicate_cache_size,
+            field_id_read_enabled: defaults.field_id_read_enabled,
         }
     }
 
@@ -574,6 +576,7 @@ mod tests {
                 binary_as_string: global_options_defaults.binary_as_string,
                 skip_arrow_metadata: global_options_defaults.skip_arrow_metadata,
                 coerce_int96: None,
+                field_id_read_enabled: global_options_defaults.field_id_read_enabled,
             },
             column_specific_options,
             key_value_metadata,

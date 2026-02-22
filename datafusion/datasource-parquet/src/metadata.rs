@@ -68,6 +68,55 @@ pub struct DFParquetMetadata<'a> {
     file_metadata_cache: Option<Arc<dyn FileMetadataCache>>,
     /// timeunit to coerce INT96 timestamps to
     pub coerce_int96: Option<TimeUnit>,
+    /// Whether to extract and use Parquet field IDs for column resolution
+    pub enable_field_ids: bool,
+}
+
+/// Extracts Parquet field IDs and stores them in Arrow field metadata
+/// under the key "PARQUET:field_id"
+///
+/// # Limitations
+///
+/// TODO: Currently only supports flat schemas (top-level primitive fields).
+/// Nested field IDs within structs, lists, and maps are not yet supported.
+/// This requires recursive traversal of the Parquet schema tree to extract
+/// field IDs at all nesting levels. See PARQUET_FIELD_ID_IMPLEMENTATION.md
+/// for details on nested schema support.
+fn add_field_ids_to_arrow_schema(
+    arrow_schema: &Schema,
+    parquet_schema: &SchemaDescriptor,
+) -> Result<Schema> {
+    use arrow::datatypes::Field;
+
+    let fields_with_ids: Vec<Arc<Field>> = arrow_schema
+        .fields()
+        .iter()
+        .enumerate()
+        .map(|(idx, field)| {
+            // Get the corresponding Parquet column descriptor
+            // TODO: This only works for flat schemas - parquet_schema.column(idx)
+            // returns leaf columns only, missing nested struct fields
+            let col_desc = parquet_schema.column(idx);
+
+            // Extract field ID from the schema type
+            // Field IDs are optional in Parquet; if not set, they may be 0 or negative
+            let field_id = col_desc.self_type().get_basic_info().id();
+
+            if field_id > 0 {
+                // Add field ID to field metadata
+                let mut metadata = field.metadata().clone();
+                metadata.insert("PARQUET:field_id".to_string(), field_id.to_string());
+                Arc::new(field.as_ref().clone().with_metadata(metadata))
+            } else {
+                Arc::clone(field)
+            }
+        })
+        .collect();
+
+    Ok(Schema::new_with_metadata(
+        fields_with_ids,
+        arrow_schema.metadata().clone(),
+    ))
 }
 
 impl<'a> DFParquetMetadata<'a> {
@@ -79,6 +128,7 @@ impl<'a> DFParquetMetadata<'a> {
             decryption_properties: None,
             file_metadata_cache: None,
             coerce_int96: None,
+            enable_field_ids: false,
         }
     }
 
@@ -112,6 +162,12 @@ impl<'a> DFParquetMetadata<'a> {
         self
     }
 
+    /// Set whether to extract and use Parquet field IDs for column resolution
+    pub fn with_enable_field_ids(mut self, enable: bool) -> Self {
+        self.enable_field_ids = enable;
+        self
+    }
+
     /// Fetch parquet metadata from the remote object store
     pub async fn fetch_metadata(&self) -> Result<Arc<ParquetMetaData>> {
         let Self {
@@ -121,6 +177,7 @@ impl<'a> DFParquetMetadata<'a> {
             decryption_properties,
             file_metadata_cache,
             coerce_int96: _,
+            enable_field_ids: _,
         } = self;
 
         let fetch = ObjectStoreFetch::new(*store, object_meta);
@@ -180,10 +237,18 @@ impl<'a> DFParquetMetadata<'a> {
         let metadata = self.fetch_metadata().await?;
 
         let file_metadata = metadata.file_metadata();
-        let schema = parquet_to_arrow_schema(
+        let mut schema = parquet_to_arrow_schema(
             file_metadata.schema_descr(),
             file_metadata.key_value_metadata(),
         )?;
+
+        // Add field IDs if requested
+        if self.enable_field_ids {
+            schema =
+                add_field_ids_to_arrow_schema(&schema, file_metadata.schema_descr())?;
+        }
+
+        // Apply INT96 coercion if configured
         let schema = self
             .coerce_int96
             .as_ref()
@@ -195,6 +260,7 @@ impl<'a> DFParquetMetadata<'a> {
                 )
             })
             .unwrap_or(schema);
+
         Ok(schema)
     }
 
@@ -279,9 +345,12 @@ impl<'a> DFParquetMetadata<'a> {
             file_metadata.key_value_metadata(),
         )?;
 
-        if let Some(merged) =
-            apply_file_schema_type_coercions(logical_file_schema, &physical_file_schema)
-        {
+        // Apply type coercions without field ID matching (statistics use name-based matching)
+        if let Some(merged) = apply_file_schema_type_coercions(
+            logical_file_schema,
+            &physical_file_schema,
+            false,
+        ) {
             physical_file_schema = merged;
         }
 

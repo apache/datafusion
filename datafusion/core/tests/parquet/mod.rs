@@ -49,6 +49,7 @@ mod custom_reader;
 mod encryption;
 mod expr_adapter;
 mod external_access_plan;
+mod field_id;
 mod file_statistics;
 mod filter_pushdown;
 mod ordering;

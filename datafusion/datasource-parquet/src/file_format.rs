@@ -633,6 +633,7 @@ impl ParquetFormat {
 pub fn apply_file_schema_type_coercions(
     table_schema: &Schema,
     file_schema: &Schema,
+    enable_field_ids: bool,
 ) -> Option<Schema> {
     let mut needs_view_transform = false;
     let mut needs_string_transform = false;
@@ -660,6 +661,22 @@ pub fn apply_file_schema_type_coercions(
         })
         .collect();
 
+    // Build field ID to field mapping if field IDs are enabled
+    let table_field_by_id: HashMap<i32, &Arc<Field>> = if enable_field_ids {
+        table_schema
+            .fields()
+            .iter()
+            .filter_map(|f| {
+                f.metadata()
+                    .get("PARQUET:field_id")
+                    .and_then(|id_str| id_str.parse::<i32>().ok())
+                    .map(|id| (id, f))
+            })
+            .collect()
+    } else {
+        HashMap::new()
+    };
+
     // Early return if no transformation needed
     if !needs_view_transform && !needs_string_transform {
         return None;
@@ -672,8 +689,23 @@ pub fn apply_file_schema_type_coercions(
             let field_name = field.name();
             let field_type = field.data_type();
 
+            // Try to find matching table field by field ID or name
+            let table_type = if enable_field_ids {
+                // Try field ID matching first
+                field
+                    .metadata()
+                    .get("PARQUET:field_id")
+                    .and_then(|id_str| id_str.parse::<i32>().ok())
+                    .and_then(|id| table_field_by_id.get(&id))
+                    .map(|f| f.data_type())
+                    .or_else(|| table_fields.get(field_name).copied())
+            } else {
+                // Name-based matching only
+                table_fields.get(field_name).copied()
+            };
+
             // Look up the corresponding field type in the table schema
-            if let Some(table_type) = table_fields.get(field_name) {
+            if let Some(table_type) = table_type {
                 match (table_type, field_type) {
                     // table schema uses string type, coerce the file schema to use string type
                     (

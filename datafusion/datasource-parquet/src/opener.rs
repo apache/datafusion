@@ -27,7 +27,9 @@ use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::DataType;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_physical_expr::projection::ProjectionExprs;
-use datafusion_physical_expr::utils::reassign_expr_columns;
+use datafusion_physical_expr::utils::{
+    reassign_expr_columns, reassign_expr_columns_with_field_ids,
+};
 use datafusion_physical_expr_adapter::replace_columns_with_literals;
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -120,6 +122,8 @@ pub(super) struct ParquetOpener {
     pub max_predicate_cache_size: Option<usize>,
     /// Whether to read row groups in reverse order
     pub reverse_row_groups: bool,
+    /// Whether to use Parquet field IDs for column resolution
+    pub field_id_read_enabled: bool,
 }
 
 /// Represents a prepared access plan with optional row selection
@@ -205,6 +209,7 @@ impl FileOpener for ParquetOpener {
             )?;
 
         let batch_size = self.batch_size;
+        let field_id_read_enabled = self.field_id_read_enabled;
 
         // Calculate the output schema from the original projection (before literal replacement)
         // so we get correct field names from column references
@@ -378,6 +383,7 @@ impl FileOpener for ParquetOpener {
             if let Some(merged) = apply_file_schema_type_coercions(
                 &logical_file_schema,
                 &physical_file_schema,
+                field_id_read_enabled,
             ) {
                 physical_file_schema = Arc::new(merged);
                 options = options.with_schema(Arc::clone(&physical_file_schema));
@@ -624,8 +630,18 @@ impl FileOpener for ParquetOpener {
             // Rebase column indices to match the narrowed stream schema.
             // The projection expressions have indices based on physical_file_schema,
             // but the stream only contains the columns selected by the ProjectionMask.
-            let projection = projection
-                .try_map_exprs(|expr| reassign_expr_columns(expr, &stream_schema))?;
+            let projection = if field_id_read_enabled {
+                projection.try_map_exprs(|expr| {
+                    reassign_expr_columns_with_field_ids(
+                        expr,
+                        &physical_file_schema,
+                        &stream_schema,
+                    )
+                })?
+            } else {
+                projection
+                    .try_map_exprs(|expr| reassign_expr_columns(expr, &stream_schema))?
+            };
 
             let projector = projection.make_projector(&stream_schema)?;
 
@@ -1064,6 +1080,7 @@ mod test {
         max_predicate_cache_size: Option<usize>,
         reverse_row_groups: bool,
         preserve_order: bool,
+        field_id_read_enabled: bool,
     }
 
     impl ParquetOpenerBuilder {
@@ -1090,6 +1107,7 @@ mod test {
                 max_predicate_cache_size: None,
                 reverse_row_groups: false,
                 preserve_order: false,
+                field_id_read_enabled: false,
             }
         }
 
@@ -1197,6 +1215,7 @@ mod test {
                 encryption_factory: None,
                 max_predicate_cache_size: self.max_predicate_cache_size,
                 reverse_row_groups: self.reverse_row_groups,
+                field_id_read_enabled: self.field_id_read_enabled,
                 preserve_order: self.preserve_order,
             }
         }

@@ -751,6 +751,11 @@ config_namespace! {
         /// parquet reader setting. 0 means no caching.
         pub max_predicate_cache_size: Option<usize>, default = None
 
+        /// (reading) If true, use Parquet field IDs for column resolution instead of
+        /// column names. This enables schema evolution with renamed/reordered columns.
+        /// When field IDs are unavailable, falls back to name-based matching.
+        pub field_id_read_enabled: bool, default = false
+
         // The following options affect writing to parquet files
         // and map to parquet::file::properties::WriterProperties
 
@@ -3071,22 +3076,22 @@ config_namespace! {
         /// If not specified, the default level for the compression algorithm is used.
         pub compression_level: Option<u32>, default = None
         pub schema_infer_max_rec: Option<usize>, default = None
-       /// The JSON format to use when reading files.
-       ///
-       /// When `true` (default), expects newline-delimited JSON (NDJSON):
-       /// ```text
-       /// {"key1": 1, "key2": "val"}
-       /// {"key1": 2, "key2": "vals"}
-       /// ```
-       ///
-       /// When `false`, expects JSON array format:
-       /// ```text
-       /// [
-       ///   {"key1": 1, "key2": "val"},
-       ///   {"key1": 2, "key2": "vals"}
-       /// ]
-       /// ```
-       pub newline_delimited: bool, default = true
+         /// The JSON format to use when reading files.
+         ///
+         /// When `true` (default), expects newline-delimited JSON (NDJSON):
+         /// ```text
+         /// {"key1": 1, "key2": "val"}
+         /// {"key1": 2, "key2": "vals"}
+         /// ```
+         ///
+         /// When `false`, expects JSON array format:
+         /// ```text
+         /// [
+         ///   {"key1": 1, "key2": "val"},
+         ///   {"key1": 2, "key2": "vals"}
+         /// ]
+         /// ```
+        pub newline_delimited: bool, default = true
     }
 }
 

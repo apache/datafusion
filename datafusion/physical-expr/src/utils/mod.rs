@@ -265,9 +265,95 @@ pub fn reassign_expr_columns(
     .data()
 }
 
+/// Extract Parquet field ID from Arrow field metadata
+fn get_field_id(field: &arrow::datatypes::Field) -> Option<i32> {
+    field
+        .metadata()
+        .get("PARQUET:field_id")
+        .and_then(|s| s.parse::<i32>().ok())
+}
+
+/// Find field index by field ID with fallback to name-based matching
+///
+/// # Limitations
+///
+/// TODO: Currently only supports flat schemas. For nested schemas, this function
+/// would need to accept a field path (e.g., ["address", "city"]) and return
+/// a path of indices. This requires matching nested field IDs at each level
+/// of the schema hierarchy.
+fn find_field_index(
+    column_name: &str,
+    source_schema: &Schema,
+    target_schema: &Schema,
+) -> Result<usize> {
+    // Try to find the field in source schema
+    let source_field = source_schema.field_with_name(column_name)?;
+
+    // Check if field has a field ID
+    if let Some(source_field_id) = get_field_id(source_field) {
+        // Search target schema for matching field ID
+        // TODO: For nested schemas, this needs to recursively match field IDs
+        // through the struct hierarchy
+        for (idx, target_field) in target_schema.fields().iter().enumerate() {
+            if let Some(target_field_id) = get_field_id(target_field)
+                && source_field_id == target_field_id
+            {
+                return Ok(idx);
+            }
+        }
+    }
+
+    // Fallback to name-based matching
+    Ok(target_schema.index_of(column_name)?)
+}
+
+/// Re-assign column indices in expressions using field ID-based matching.
+///
+/// This function traverses the expression tree and updates all `Column` references
+/// to use field IDs for matching between source and target schemas, falling back
+/// to name-based matching when field IDs are unavailable.
+///
+/// # Arguments
+///
+/// * `expr` - The physical expression to update
+/// * `source_schema` - The schema that the expression currently references
+/// * `target_schema` - The schema to map columns to
+///
+/// # Limitations
+///
+/// TODO: Currently only supports flat schemas (top-level columns). Nested field
+/// references (e.g., "address.city") are not yet supported. Supporting nested
+/// fields would require:
+/// - Path-based field ID matching through struct hierarchies
+/// - Recursive traversal of both expression tree and schema tree
+/// - Updates to Column representation to track nested paths
+///
+/// # Errors
+///
+/// This function will return an error if any column in the expression cannot be found
+/// in the target schema by either field ID or name.
+pub fn reassign_expr_columns_with_field_ids(
+    expr: Arc<dyn PhysicalExpr>,
+    source_schema: &Schema,
+    target_schema: &Schema,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    expr.transform_down(|expr| {
+        if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+            let index = find_field_index(column.name(), source_schema, target_schema)?;
+            return Ok(Transformed::yes(Arc::new(Column::new(
+                column.name(),
+                index,
+            ))));
+        }
+        Ok(Transformed::no(expr))
+    })
+    .data()
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use std::any::Any;
+    use std::collections::HashMap;
     use std::fmt::{Display, Formatter};
 
     use super::*;
@@ -560,6 +646,332 @@ pub(crate) mod tests {
         expected.insert(Column::new("col1", 2));
         expected.insert(Column::new("col2", 5));
         assert_eq!(collect_columns(&expr3), expected);
+        Ok(())
+    }
+
+    // ========================================================================
+    // Field ID Tests
+    // ========================================================================
+
+    #[test]
+    fn test_get_field_id_present() {
+        let mut metadata = HashMap::new();
+        metadata.insert("PARQUET:field_id".to_string(), "42".to_string());
+        let field = Field::new("test", DataType::Int64, false).with_metadata(metadata);
+
+        assert_eq!(get_field_id(&field), Some(42));
+    }
+
+    #[test]
+    fn test_get_field_id_absent() {
+        let field = Field::new("test", DataType::Int64, false);
+        assert_eq!(get_field_id(&field), None);
+    }
+
+    #[test]
+    fn test_get_field_id_invalid() {
+        let mut metadata = HashMap::new();
+        metadata.insert("PARQUET:field_id".to_string(), "not_a_number".to_string());
+        let field = Field::new("test", DataType::Int64, false).with_metadata(metadata);
+
+        assert_eq!(get_field_id(&field), None);
+    }
+
+    #[test]
+    fn test_find_field_index_by_field_id() -> Result<()> {
+        // Source schema: field IDs present
+        let mut metadata1 = HashMap::new();
+        metadata1.insert("PARQUET:field_id".to_string(), "1".to_string());
+        let mut metadata2 = HashMap::new();
+        metadata2.insert("PARQUET:field_id".to_string(), "2".to_string());
+
+        let source_schema = Schema::new(vec![
+            Field::new("user_id", DataType::Int64, false)
+                .with_metadata(metadata1.clone()),
+            Field::new("amount", DataType::Float64, false)
+                .with_metadata(metadata2.clone()),
+        ]);
+
+        // Target schema: renamed columns but same field IDs
+        let target_schema = Schema::new(vec![
+            Field::new("customer_id", DataType::Int64, false).with_metadata(metadata1),
+            Field::new("price", DataType::Float64, false).with_metadata(metadata2),
+        ]);
+
+        // Should match by field ID, not name
+        let index = find_field_index("user_id", &source_schema, &target_schema)?;
+        assert_eq!(
+            index, 0,
+            "user_id (field_id=1) should match customer_id at index 0"
+        );
+
+        let index = find_field_index("amount", &source_schema, &target_schema)?;
+        assert_eq!(
+            index, 1,
+            "amount (field_id=2) should match price at index 1"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_find_field_index_by_field_id_reordered() -> Result<()> {
+        // Source schema: columns in order [a, b, c]
+        let mut meta_a = HashMap::new();
+        meta_a.insert("PARQUET:field_id".to_string(), "1".to_string());
+        let mut meta_b = HashMap::new();
+        meta_b.insert("PARQUET:field_id".to_string(), "2".to_string());
+        let mut meta_c = HashMap::new();
+        meta_c.insert("PARQUET:field_id".to_string(), "3".to_string());
+
+        let source_schema = Schema::new(vec![
+            Field::new("a", DataType::Int64, false).with_metadata(meta_a.clone()),
+            Field::new("b", DataType::Int64, false).with_metadata(meta_b.clone()),
+            Field::new("c", DataType::Int64, false).with_metadata(meta_c.clone()),
+        ]);
+
+        // Target schema: columns reordered [c, a, b]
+        let target_schema = Schema::new(vec![
+            Field::new("c", DataType::Int64, false).with_metadata(meta_c),
+            Field::new("a", DataType::Int64, false).with_metadata(meta_a),
+            Field::new("b", DataType::Int64, false).with_metadata(meta_b),
+        ]);
+
+        // Should match by field ID
+        assert_eq!(find_field_index("a", &source_schema, &target_schema)?, 1);
+        assert_eq!(find_field_index("b", &source_schema, &target_schema)?, 2);
+        assert_eq!(find_field_index("c", &source_schema, &target_schema)?, 0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_find_field_index_fallback_to_name() -> Result<()> {
+        // Source schema: no field IDs
+        let source_schema = Schema::new(vec![
+            Field::new("user_id", DataType::Int64, false),
+            Field::new("amount", DataType::Float64, false),
+        ]);
+
+        // Target schema: no field IDs
+        let target_schema = Schema::new(vec![
+            Field::new("user_id", DataType::Int64, false),
+            Field::new("amount", DataType::Float64, false),
+        ]);
+
+        // Should fall back to name-based matching
+        assert_eq!(
+            find_field_index("user_id", &source_schema, &target_schema)?,
+            0
+        );
+        assert_eq!(
+            find_field_index("amount", &source_schema, &target_schema)?,
+            1
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_find_field_index_mixed_field_ids() -> Result<()> {
+        // Source schema: some fields have IDs, some don't
+        let mut metadata1 = HashMap::new();
+        metadata1.insert("PARQUET:field_id".to_string(), "1".to_string());
+
+        let source_schema = Schema::new(vec![
+            Field::new("a", DataType::Int64, false).with_metadata(metadata1.clone()),
+            Field::new("b", DataType::Int64, false), // No field ID
+        ]);
+
+        let target_schema = Schema::new(vec![
+            Field::new("renamed_a", DataType::Int64, false).with_metadata(metadata1),
+            Field::new("b", DataType::Int64, false),
+        ]);
+
+        // Field with ID should match by ID
+        assert_eq!(find_field_index("a", &source_schema, &target_schema)?, 0);
+
+        // Field without ID should match by name
+        assert_eq!(find_field_index("b", &source_schema, &target_schema)?, 1);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_find_field_index_not_found() {
+        let source_schema = Schema::new(vec![Field::new("a", DataType::Int64, false)]);
+
+        let target_schema = Schema::new(vec![Field::new("b", DataType::Int64, false)]);
+
+        // Should fail to find non-existent field
+        let result = find_field_index("a", &source_schema, &target_schema);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_reassign_expr_columns_with_field_ids_simple() -> Result<()> {
+        // Source schema: full file schema
+        let mut meta1 = HashMap::new();
+        meta1.insert("PARQUET:field_id".to_string(), "1".to_string());
+        let mut meta2 = HashMap::new();
+        meta2.insert("PARQUET:field_id".to_string(), "2".to_string());
+        let mut meta3 = HashMap::new();
+        meta3.insert("PARQUET:field_id".to_string(), "3".to_string());
+
+        let source_schema = Schema::new(vec![
+            Field::new("user_id", DataType::Int64, false).with_metadata(meta1.clone()),
+            Field::new("name", DataType::Utf8, false).with_metadata(meta2),
+            Field::new("age", DataType::Int32, false).with_metadata(meta3.clone()),
+        ]);
+
+        // Target schema: projected schema (only user_id and age)
+        let target_schema = Schema::new(vec![
+            Field::new("user_id", DataType::Int64, false).with_metadata(meta1),
+            Field::new("age", DataType::Int32, false).with_metadata(meta3),
+        ]);
+
+        // Expression references age at index 2 in source schema
+        let expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new("age", 2));
+
+        // After transformation, should reference age at index 1 in target schema
+        let result =
+            reassign_expr_columns_with_field_ids(expr, &source_schema, &target_schema)?;
+
+        let column = result.as_any().downcast_ref::<Column>().unwrap();
+        assert_eq!(column.name(), "age");
+        assert_eq!(
+            column.index(),
+            1,
+            "age should be at index 1 in target schema"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_reassign_expr_columns_with_field_ids_complex() -> Result<()> {
+        // Source schema
+        let mut meta1 = HashMap::new();
+        meta1.insert("PARQUET:field_id".to_string(), "1".to_string());
+        let mut meta2 = HashMap::new();
+        meta2.insert("PARQUET:field_id".to_string(), "2".to_string());
+        let mut meta3 = HashMap::new();
+        meta3.insert("PARQUET:field_id".to_string(), "3".to_string());
+
+        let source_schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false).with_metadata(meta1.clone()),
+            Field::new("b", DataType::Int32, false).with_metadata(meta2.clone()),
+            Field::new("c", DataType::Int32, false).with_metadata(meta3.clone()),
+        ]);
+
+        // Target schema: only columns a and c (b excluded)
+        let target_schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false).with_metadata(meta1),
+            Field::new("c", DataType::Int32, false).with_metadata(meta3),
+        ]);
+
+        // Expression: a@0 + c@2
+        let expr = binary(
+            col("a", &source_schema)?,
+            Operator::Plus,
+            col("c", &source_schema)?,
+            &source_schema,
+        )?;
+
+        // After transformation: a@0 + c@1
+        let result =
+            reassign_expr_columns_with_field_ids(expr, &source_schema, &target_schema)?;
+
+        // Verify it's still a binary expression
+        let binary_expr = result.as_any().downcast_ref::<BinaryExpr>().unwrap();
+
+        // Check left side (a)
+        let left_col = binary_expr
+            .left()
+            .as_any()
+            .downcast_ref::<Column>()
+            .unwrap();
+        assert_eq!(left_col.name(), "a");
+        assert_eq!(left_col.index(), 0);
+
+        // Check right side (c)
+        let right_col = binary_expr
+            .right()
+            .as_any()
+            .downcast_ref::<Column>()
+            .unwrap();
+        assert_eq!(right_col.name(), "c");
+        assert_eq!(
+            right_col.index(),
+            1,
+            "c should be remapped from index 2 to 1"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_reassign_expr_columns_with_field_ids_renamed_columns() -> Result<()> {
+        // Source schema (file schema with old names)
+        let mut meta1 = HashMap::new();
+        meta1.insert("PARQUET:field_id".to_string(), "1".to_string());
+        let mut meta2 = HashMap::new();
+        meta2.insert("PARQUET:field_id".to_string(), "2".to_string());
+
+        let source_schema = Schema::new(vec![
+            Field::new("user_id", DataType::Int64, false).with_metadata(meta1.clone()),
+            Field::new("amount", DataType::Float64, false).with_metadata(meta2.clone()),
+        ]);
+
+        // Target schema (query schema with renamed columns)
+        let target_schema = Schema::new(vec![
+            Field::new("customer_id", DataType::Int64, false).with_metadata(meta1),
+            Field::new("price", DataType::Float64, false).with_metadata(meta2),
+        ]);
+
+        // Expression references old names at their source indices
+        let expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new("user_id", 0));
+
+        // After transformation, should still reference by old name but correct index
+        let result =
+            reassign_expr_columns_with_field_ids(expr, &source_schema, &target_schema)?;
+
+        let column = result.as_any().downcast_ref::<Column>().unwrap();
+        assert_eq!(column.name(), "user_id", "Name should remain user_id");
+        assert_eq!(
+            column.index(),
+            0,
+            "Should match customer_id at index 0 via field_id"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_reassign_expr_columns_with_field_ids_no_field_ids() -> Result<()> {
+        // Schemas without field IDs - should fall back to name matching
+        let source_schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+        ]);
+
+        let target_schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+        ]);
+
+        // Expression: c@2
+        let expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new("c", 2));
+
+        // Should fall back to name-based matching
+        let result =
+            reassign_expr_columns_with_field_ids(expr, &source_schema, &target_schema)?;
+
+        let column = result.as_any().downcast_ref::<Column>().unwrap();
+        assert_eq!(column.name(), "c");
+        assert_eq!(column.index(), 1, "c should be found by name at index 1");
+
         Ok(())
     }
 }
