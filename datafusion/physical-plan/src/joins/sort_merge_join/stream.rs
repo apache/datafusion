@@ -62,7 +62,7 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExprRef;
 use futures::{Stream, StreamExt};
 
 /// State of SMJ stream
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub(super) enum SortMergeJoinState {
     /// Init joining with a new streamed row or a new buffered batches
     Init,
@@ -70,6 +70,10 @@ pub(super) enum SortMergeJoinState {
     Polling,
     /// Joining polled data and making output
     JoinOutput,
+    /// Emit ready data if have any
+    EmitReady {
+        next_state: Box<SortMergeJoinState>
+    },
     /// No more output
     Exhausted,
 }
@@ -598,13 +602,53 @@ impl Stream for SortMergeJoinStream {
                     self.current_ordering = self.compare_streamed_buffered()?;
                     self.state = SortMergeJoinState::JoinOutput;
                 }
+                SortMergeJoinState::EmitReady { next_state } => {
+                    // If have data to emit, emit it and if no more, change to next
+
+                    // Verify metadata alignment before checking if we have batches to output
+                    self.joined_record_batches
+                      .filter_metadata
+                      .debug_assert_metadata_aligned();
+
+                    // For filtered joins, skip output and let Init state handle it
+                    if self.needs_deferred_filtering() {
+                        self.state = next_state.as_ref().clone();
+                        continue;
+                    }
+
+                    // TODO - NEED TO CHECK IF WE HAVE ENOUGH DATA TO FILL BATCH
+                    // TODO - WHAT ABOUT
+
+                    let maybe_next = next_state.as_ref().clone();
+
+                    // For non-filtered joins, only output if we have a completed batch
+                    // (opportunistic output when target batch size is reached)
+                    if self
+                      .joined_record_batches
+                      .joined_batches
+                      .has_completed_batch()
+                    {
+                        let record_batch = self
+                          .joined_record_batches
+                          .joined_batches
+                          .next_completed_batch()
+                          .expect("has_completed_batch was true");
+                        (&record_batch)
+                          .record_output(&self.join_metrics.baseline_metrics());
+                        return Poll::Ready(Some(Ok(record_batch)));
+                    }
+                    self.state = maybe_next;
+                }
                 SortMergeJoinState::JoinOutput => {
                     self.join_partial()?;
 
                     if self.num_unfrozen_pairs() < self.batch_size {
                         if self.buffered_data.scanning_finished() {
                             self.buffered_data.scanning_reset();
-                            self.state = SortMergeJoinState::Init;
+                            self.state = SortMergeJoinState::EmitReady {
+                                next_state: Box::new(SortMergeJoinState::Init)
+                            };
+                            // self.state = SortMergeJoinState::Init;
                         }
                     } else {
                         self.freeze_all()?;
