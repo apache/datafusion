@@ -27,6 +27,7 @@ use std::{fmt, vec};
 
 use arrow::array::RecordBatch;
 use arrow::datatypes::{Fields, Schema, SchemaRef, TimeUnit};
+use datafusion_common::parquet_config::PARQUET_FIELD_ID_META_KEY;
 use datafusion_datasource::TableSchema;
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
@@ -281,6 +282,11 @@ impl ParquetFormat {
         self.options.global.coerce_int96 = time_unit;
         self
     }
+
+    /// Get whether field ID reading is enabled from options
+    pub fn field_id_read_enabled(&self) -> bool {
+        self.options.global.field_id_read_enabled
+    }
 }
 
 /// Clears all metadata (Schema level and field level) on an iterator
@@ -385,6 +391,7 @@ impl FileFormat for ParquetFormat {
                     .with_decryption_properties(file_decryption_properties)
                     .with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)))
                     .with_coerce_int96(coerce_int96)
+                    .with_enable_field_ids(self.field_id_read_enabled())
                     .fetch_schema_with_location()
                     .await?;
                 Ok::<_, DataFusionError>(result)
@@ -668,7 +675,7 @@ pub fn apply_file_schema_type_coercions(
             .iter()
             .filter_map(|f| {
                 f.metadata()
-                    .get("PARQUET:field_id")
+                    .get(PARQUET_FIELD_ID_META_KEY)
                     .and_then(|id_str| id_str.parse::<i32>().ok())
                     .map(|id| (id, f))
             })
@@ -694,7 +701,7 @@ pub fn apply_file_schema_type_coercions(
                 // Try field ID matching first
                 field
                     .metadata()
-                    .get("PARQUET:field_id")
+                    .get(PARQUET_FIELD_ID_META_KEY)
                     .and_then(|id_str| id_str.parse::<i32>().ok())
                     .and_then(|id| table_field_by_id.get(&id))
                     .map(|f| f.data_type())

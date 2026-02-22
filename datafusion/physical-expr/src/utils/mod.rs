@@ -33,6 +33,7 @@ use datafusion_common::tree_node::{
 use datafusion_common::{HashMap, HashSet, Result};
 use datafusion_expr::Operator;
 
+use datafusion_common::parquet_config::PARQUET_FIELD_ID_META_KEY;
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::StableGraph;
 
@@ -269,7 +270,7 @@ pub fn reassign_expr_columns(
 fn get_field_id(field: &arrow::datatypes::Field) -> Option<i32> {
     field
         .metadata()
-        .get("PARQUET:field_id")
+        .get(PARQUET_FIELD_ID_META_KEY)
         .and_then(|s| s.parse::<i32>().ok())
 }
 
@@ -367,6 +368,7 @@ pub(crate) mod tests {
         ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
     };
 
+    use datafusion_common::parquet_config::PARQUET_FIELD_ID_META_KEY;
     use petgraph::visit::Bfs;
 
     #[derive(Debug, PartialEq, Eq, Hash)]
@@ -656,7 +658,7 @@ pub(crate) mod tests {
     #[test]
     fn test_get_field_id_present() {
         let mut metadata = HashMap::new();
-        metadata.insert("PARQUET:field_id".to_string(), "42".to_string());
+        metadata.insert(PARQUET_FIELD_ID_META_KEY.to_string(), "42".to_string());
         let field = Field::new("test", DataType::Int64, false).with_metadata(metadata);
 
         assert_eq!(get_field_id(&field), Some(42));
@@ -671,7 +673,10 @@ pub(crate) mod tests {
     #[test]
     fn test_get_field_id_invalid() {
         let mut metadata = HashMap::new();
-        metadata.insert("PARQUET:field_id".to_string(), "not_a_number".to_string());
+        metadata.insert(
+            PARQUET_FIELD_ID_META_KEY.to_string(),
+            "not_a_number".to_string(),
+        );
         let field = Field::new("test", DataType::Int64, false).with_metadata(metadata);
 
         assert_eq!(get_field_id(&field), None);
@@ -681,9 +686,9 @@ pub(crate) mod tests {
     fn test_find_field_index_by_field_id() -> Result<()> {
         // Source schema: field IDs present
         let mut metadata1 = HashMap::new();
-        metadata1.insert("PARQUET:field_id".to_string(), "1".to_string());
+        metadata1.insert(PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string());
         let mut metadata2 = HashMap::new();
-        metadata2.insert("PARQUET:field_id".to_string(), "2".to_string());
+        metadata2.insert(PARQUET_FIELD_ID_META_KEY.to_string(), "2".to_string());
 
         let source_schema = Schema::new(vec![
             Field::new("user_id", DataType::Int64, false)
@@ -718,11 +723,11 @@ pub(crate) mod tests {
     fn test_find_field_index_by_field_id_reordered() -> Result<()> {
         // Source schema: columns in order [a, b, c]
         let mut meta_a = HashMap::new();
-        meta_a.insert("PARQUET:field_id".to_string(), "1".to_string());
+        meta_a.insert(PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string());
         let mut meta_b = HashMap::new();
-        meta_b.insert("PARQUET:field_id".to_string(), "2".to_string());
+        meta_b.insert(PARQUET_FIELD_ID_META_KEY.to_string(), "2".to_string());
         let mut meta_c = HashMap::new();
-        meta_c.insert("PARQUET:field_id".to_string(), "3".to_string());
+        meta_c.insert(PARQUET_FIELD_ID_META_KEY.to_string(), "3".to_string());
 
         let source_schema = Schema::new(vec![
             Field::new("a", DataType::Int64, false).with_metadata(meta_a.clone()),
@@ -776,7 +781,7 @@ pub(crate) mod tests {
     fn test_find_field_index_mixed_field_ids() -> Result<()> {
         // Source schema: some fields have IDs, some don't
         let mut metadata1 = HashMap::new();
-        metadata1.insert("PARQUET:field_id".to_string(), "1".to_string());
+        metadata1.insert(PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string());
 
         let source_schema = Schema::new(vec![
             Field::new("a", DataType::Int64, false).with_metadata(metadata1.clone()),
@@ -812,11 +817,11 @@ pub(crate) mod tests {
     fn test_reassign_expr_columns_with_field_ids_simple() -> Result<()> {
         // Source schema: full file schema
         let mut meta1 = HashMap::new();
-        meta1.insert("PARQUET:field_id".to_string(), "1".to_string());
+        meta1.insert(PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string());
         let mut meta2 = HashMap::new();
-        meta2.insert("PARQUET:field_id".to_string(), "2".to_string());
+        meta2.insert(PARQUET_FIELD_ID_META_KEY.to_string(), "2".to_string());
         let mut meta3 = HashMap::new();
-        meta3.insert("PARQUET:field_id".to_string(), "3".to_string());
+        meta3.insert(PARQUET_FIELD_ID_META_KEY.to_string(), "3".to_string());
 
         let source_schema = Schema::new(vec![
             Field::new("user_id", DataType::Int64, false).with_metadata(meta1.clone()),
@@ -852,11 +857,11 @@ pub(crate) mod tests {
     fn test_reassign_expr_columns_with_field_ids_complex() -> Result<()> {
         // Source schema
         let mut meta1 = HashMap::new();
-        meta1.insert("PARQUET:field_id".to_string(), "1".to_string());
+        meta1.insert(PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string());
         let mut meta2 = HashMap::new();
-        meta2.insert("PARQUET:field_id".to_string(), "2".to_string());
+        meta2.insert(PARQUET_FIELD_ID_META_KEY.to_string(), "2".to_string());
         let mut meta3 = HashMap::new();
-        meta3.insert("PARQUET:field_id".to_string(), "3".to_string());
+        meta3.insert(PARQUET_FIELD_ID_META_KEY.to_string(), "3".to_string());
 
         let source_schema = Schema::new(vec![
             Field::new("a", DataType::Int32, false).with_metadata(meta1.clone()),
@@ -914,9 +919,9 @@ pub(crate) mod tests {
     fn test_reassign_expr_columns_with_field_ids_renamed_columns() -> Result<()> {
         // Source schema (file schema with old names)
         let mut meta1 = HashMap::new();
-        meta1.insert("PARQUET:field_id".to_string(), "1".to_string());
+        meta1.insert(PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string());
         let mut meta2 = HashMap::new();
-        meta2.insert("PARQUET:field_id".to_string(), "2".to_string());
+        meta2.insert(PARQUET_FIELD_ID_META_KEY.to_string(), "2".to_string());
 
         let source_schema = Schema::new(vec![
             Field::new("user_id", DataType::Int64, false).with_metadata(meta1.clone()),

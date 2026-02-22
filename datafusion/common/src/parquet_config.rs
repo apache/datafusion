@@ -21,6 +21,32 @@ use std::str::FromStr;
 use crate::config::{ConfigField, Visit};
 use crate::error::{DataFusionError, Result};
 
+/// Metadata key for storing Parquet field IDs in Arrow field metadata.
+///
+/// Field IDs are stable identifiers for columns in Parquet files that enable
+/// schema evolution with renamed or reordered columns. When `field_id_read_enabled`
+/// is true, DataFusion stores field IDs from Parquet files in Arrow field metadata
+/// using this key, allowing columns to be matched by ID instead of name.
+///
+/// # Example
+/// ```rust
+/// use datafusion_common::parquet_config::PARQUET_FIELD_ID_META_KEY;
+/// use arrow::datatypes::Field;
+/// use std::collections::HashMap;
+///
+/// let mut metadata = HashMap::new();
+/// metadata.insert(PARQUET_FIELD_ID_META_KEY.to_string(), "42".to_string());
+/// let field = Field::new("my_column", arrow::datatypes::DataType::Int32, false)
+///     .with_metadata(metadata);
+///
+/// // Later, retrieve the field ID
+/// let field_id = field.metadata()
+///     .get(PARQUET_FIELD_ID_META_KEY)
+///     .and_then(|s| s.parse::<i32>().ok());
+/// assert_eq!(field_id, Some(42));
+/// ```
+pub const PARQUET_FIELD_ID_META_KEY: &str = "PARQUET:field_id";
+
 /// Parquet writer version options for controlling the Parquet file format version
 ///
 /// This enum validates parquet writer version values at configuration time,

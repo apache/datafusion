@@ -29,7 +29,7 @@ use arrow::datatypes::{DataType, Schema, SchemaRef, TimeUnit};
 use datafusion_common::encryption::FileDecryptionProperties;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    ColumnStatistics, DataFusionError, Result, ScalarValue, Statistics,
+    ColumnStatistics, DataFusionError, Result, ScalarValue, Statistics, not_impl_err,
 };
 use datafusion_execution::cache::cache_manager::{
     CachedFileMetadataEntry, FileMetadata, FileMetadataCache,
@@ -73,20 +73,38 @@ pub struct DFParquetMetadata<'a> {
 }
 
 /// Extracts Parquet field IDs and stores them in Arrow field metadata
-/// under the key "PARQUET:field_id"
+/// under the key `\[PARQUET_FIELD_ID_META_KEY`\]
 ///
 /// # Limitations
 ///
-/// TODO: Currently only supports flat schemas (top-level primitive fields).
-/// Nested field IDs within structs, lists, and maps are not yet supported.
-/// This requires recursive traversal of the Parquet schema tree to extract
-/// field IDs at all nesting levels. See PARQUET_FIELD_ID_IMPLEMENTATION.md
-/// for details on nested schema support.
+/// Currently only supports flat schemas (top-level primitive fields).
+/// Returns an error if the schema contains nested types (structs, lists, maps).
+///
+/// # Errors
+///
+/// Returns an error if `arrow_schema` contains any complex/nested types when field IDs
+/// are enabled, as these are not yet supported.
+/// Nested type support see (<https://github.com/apache/datafusion/issues/20475>)
 fn add_field_ids_to_arrow_schema(
     arrow_schema: &Schema,
     parquet_schema: &SchemaDescriptor,
 ) -> Result<Schema> {
     use arrow::datatypes::Field;
+    use datafusion_common::parquet_config::PARQUET_FIELD_ID_META_KEY;
+
+    // Validate that schema is flat (no nested types)
+    // This prevents incorrect field ID assignment for complex types
+    for (idx, field) in arrow_schema.fields().iter().enumerate() {
+        if is_nested_type(field.data_type()) {
+            return not_impl_err!(
+                "Field ID reading is not yet supported for nested/complex types. \
+                 Field '{}' at index {} has type {:?}.",
+                field.name(),
+                idx,
+                field.data_type()
+            );
+        }
+    }
 
     let fields_with_ids: Vec<Arc<Field>> = arrow_schema
         .fields()
@@ -94,8 +112,6 @@ fn add_field_ids_to_arrow_schema(
         .enumerate()
         .map(|(idx, field)| {
             // Get the corresponding Parquet column descriptor
-            // TODO: This only works for flat schemas - parquet_schema.column(idx)
-            // returns leaf columns only, missing nested struct fields
             let col_desc = parquet_schema.column(idx);
 
             // Extract field ID from the schema type
@@ -105,7 +121,8 @@ fn add_field_ids_to_arrow_schema(
             if field_id > 0 {
                 // Add field ID to field metadata
                 let mut metadata = field.metadata().clone();
-                metadata.insert("PARQUET:field_id".to_string(), field_id.to_string());
+                metadata
+                    .insert(PARQUET_FIELD_ID_META_KEY.to_string(), field_id.to_string());
                 Arc::new(field.as_ref().clone().with_metadata(metadata))
             } else {
                 Arc::clone(field)
@@ -117,6 +134,23 @@ fn add_field_ids_to_arrow_schema(
         fields_with_ids,
         arrow_schema.metadata().clone(),
     ))
+}
+
+/// Helper function to check if a data type is nested/complex
+fn is_nested_type(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::List(_)
+            | DataType::LargeList(_)
+            | DataType::FixedSizeList(_, _)
+            | DataType::Struct(_)
+            | DataType::Union(_, _)
+            | DataType::Map(_, _)
+            | DataType::Dictionary(_, _)
+            | DataType::RunEndEncoded(_, _)
+            | DataType::ListView(_)
+            | DataType::LargeListView(_)
+    )
 }
 
 impl<'a> DFParquetMetadata<'a> {
