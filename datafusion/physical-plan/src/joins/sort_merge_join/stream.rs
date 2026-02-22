@@ -1637,16 +1637,14 @@ fn fetch_right_columns_from_batch_by_idxs(
         }
         // If the batch was spilled to disk, less likely
         BufferedBatchState::Spilled(spill_file) => {
-            let mut buffered_cols: Vec<ArrayRef> =
-                Vec::with_capacity(buffered_indices.len());
-
             let file = BufReader::new(File::open(spill_file.path())?);
             let reader = StreamReader::try_new(file, None)?;
 
+            let mut buffered_cols: Vec<ArrayRef> = Vec::new();
             for batch in reader {
-                batch?.columns().iter().for_each(|column| {
-                    buffered_cols.extend(take(column, &buffered_indices, None))
-                });
+                for column in batch?.columns() {
+                    buffered_cols.push(take(column, buffered_indices, None)?);
+                }
             }
 
             Ok(buffered_cols)
@@ -1806,4 +1804,94 @@ fn is_join_arrays_equal(
         }
     }
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::datatypes::{Field, Schema};
+    use arrow::ipc::writer::StreamWriter;
+    use datafusion_execution::disk_manager::DiskManager;
+
+    /// Creates a `BufferedBatch` with `BufferedBatchState::Spilled` by writing
+    /// the given batch to an IPC temp file.
+    fn make_spilled_batch(batch: &RecordBatch) -> Result<BufferedBatch> {
+        let disk_manager = Arc::new(DiskManager::builder().build()?);
+        let spill_file = disk_manager.create_tmp_file("test_spill")?;
+        {
+            let file = File::create(spill_file.path())?;
+            let mut writer = StreamWriter::try_new(file, &batch.schema())?;
+            writer.write(batch)?;
+            writer.finish()?;
+        }
+        Ok(BufferedBatch {
+            batch: BufferedBatchState::Spilled(spill_file),
+            range: 0..batch.num_rows(),
+            join_arrays: vec![],
+            null_joined: vec![],
+            size_estimation: 0,
+            join_filter_not_matched_map: HashMap::new(),
+            num_rows: batch.num_rows(),
+        })
+    }
+
+    /// Verifies the spill path in `fetch_right_columns_from_batch_by_idxs`
+    /// produces identical results to the in-memory path.
+    ///
+    /// This catches a prior bug where the spill path used
+    /// `vec.extend(take(...))`. Since `Result` implements `IntoIterator`
+    /// (yielding 0 items on `Err`), any `take` error would silently drop
+    /// that column from the output instead of propagating the error.
+    #[test]
+    fn spill_path_matches_in_memory_path() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, true),
+            Field::new("c", DataType::Float64, false),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![10, 20, 30, 40, 50])),
+                Arc::new(StringArray::from(vec![
+                    Some("x"),
+                    None,
+                    Some("z"),
+                    Some("w"),
+                    None,
+                ])),
+                Arc::new(Float64Array::from(vec![1.1, 2.2, 3.3, 4.4, 5.5])),
+            ],
+        )?;
+
+        let in_memory_batch = BufferedBatch::new(batch.clone(), 0..5, &[]);
+        let spilled_batch = make_spilled_batch(&batch)?;
+
+        // Test with non-contiguous indices to avoid the slice fast-path
+        let indices = UInt64Array::from(vec![4, 1, 3]);
+
+        let in_memory_result =
+            fetch_right_columns_from_batch_by_idxs(&in_memory_batch, &indices)?;
+        let spilled_result =
+            fetch_right_columns_from_batch_by_idxs(&spilled_batch, &indices)?;
+
+        assert_eq!(
+            in_memory_result.len(),
+            spilled_result.len(),
+            "spill path should return the same number of columns as in-memory path"
+        );
+
+        for (i, (mem_col, spill_col)) in
+            in_memory_result.iter().zip(&spilled_result).enumerate()
+        {
+            assert_eq!(
+                mem_col.as_ref(),
+                spill_col.as_ref(),
+                "column {i} differs between in-memory and spill paths"
+            );
+        }
+
+        Ok(())
+    }
 }
