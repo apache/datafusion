@@ -2313,6 +2313,8 @@ fn simplify_right_is_one_case(
     }
 }
 
+// trigger CI test
+
 #[cfg(test)]
 mod tests {
     use super::*;
