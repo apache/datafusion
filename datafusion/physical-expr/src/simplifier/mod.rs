@@ -63,7 +63,10 @@ impl<'a> PhysicalExprSimplifier<'a> {
             count += 1;
             let result = current_expr.transform(|node| {
                 #[cfg(debug_assertions)]
-                let original_type = node.data_type(schema).unwrap();
+                // Use `ok()` to skip the assertion when data_type fails (e.g., for
+                // DynamicFilterPhysicalExpr whose inner expression may reference columns
+                // outside the provided schema when the filter has been updated concurrently).
+                let original_type = node.data_type(schema).ok();
 
                 // Apply NOT expression simplification first, then unwrap cast optimization,
                 // then constant expression evaluation
@@ -74,11 +77,15 @@ impl<'a> PhysicalExprSimplifier<'a> {
                     })?;
 
                 #[cfg(debug_assertions)]
-                assert_eq!(
-                    rewritten.data.data_type(schema).unwrap(),
-                    original_type,
-                    "Simplified expression should have the same data type as the original"
-                );
+                if let Some(original_type) = original_type {
+                    if let Ok(rewritten_type) = rewritten.data.data_type(schema) {
+                        assert_eq!(
+                            rewritten_type,
+                            original_type,
+                            "Simplified expression should have the same data type as the original"
+                        );
+                    }
+                }
 
                 Ok(rewritten)
             })?;

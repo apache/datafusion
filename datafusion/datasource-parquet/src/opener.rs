@@ -323,9 +323,28 @@ impl FileOpener for ParquetOpener {
                 Arc::clone(&physical_file_schema),
             )?;
             let simplifier = PhysicalExprSimplifier::new(&physical_file_schema);
+
+            // Replace partition column references with their literal values before rewriting.
+            // This mirrors what `open()` does. Without this, expressions like `val != part`
+            // (where `part` is a partition column) would cause `rewriter.rewrite` to fail
+            // since the partition column is not in the logical file schema.
+            let literal_columns: HashMap<String, ScalarValue> = table_schema
+                .table_partition_cols()
+                .iter()
+                .zip(partitioned_file.partition_values.iter())
+                .map(|(field, value)| (field.name().clone(), value.clone()))
+                .collect();
+
             let adapted_predicate = predicate
                 .as_ref()
-                .map(|p| simplifier.simplify(rewriter.rewrite(Arc::clone(p))?))
+                .map(|p| {
+                    let p = if !literal_columns.is_empty() {
+                        replace_columns_with_literals(Arc::clone(p), &literal_columns)?
+                    } else {
+                        Arc::clone(p)
+                    };
+                    simplifier.simplify(rewriter.rewrite(p)?)
+                })
                 .transpose()?;
 
             let (pruning_predicate, _) = build_pruning_predicates(
