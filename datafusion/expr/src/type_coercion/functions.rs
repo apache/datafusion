@@ -883,7 +883,7 @@ fn coerced_from<'a>(
             Timestamp(TimeUnit::Nanosecond, None),
             Null | Timestamp(_, None) | Date32 | Utf8 | LargeUtf8,
         ) => Some(type_into.clone()),
-        (Interval(_), Utf8 | LargeUtf8) => Some(type_into.clone()),
+        (Interval(_), Null | Utf8 | LargeUtf8) => Some(type_into.clone()),
         // We can go into a Utf8View from a Utf8 or LargeUtf8
         (Utf8View, Utf8 | LargeUtf8 | Null) => Some(type_into.clone()),
         // Any type can be coerced into strings
