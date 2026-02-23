@@ -749,7 +749,6 @@ mod tests {
             eprintln!("{e}");
             return Ok(());
         }
-        let expected_region = "eu-central-1";
         let location = "s3://test-bucket/path/file.parquet";
         // Set it to a non-existent file to avoid reading the default configuration file
         unsafe {
@@ -766,9 +765,10 @@ mod tests {
             get_s3_object_store_builder(table_url.as_ref(), &aws_options, false).await?;
 
         // Verify that the region was auto-detected in test environment
-        assert_eq!(
-            builder.get_config_value(&AmazonS3ConfigKey::Region),
-            Some(expected_region.to_string())
+        assert!(
+            builder
+                .get_config_value(&AmazonS3ConfigKey::Region)
+                .is_some()
         );
 
         Ok(())
