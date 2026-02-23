@@ -564,7 +564,8 @@ impl FileScanConfigBuilder {
         //    the per-partition output is no longer globally sorted. Downstream operators
         //    such as `SortPreservingMergeExec` rely on each partition's stream being
         //    pre-sorted.
-        let morsel_driven = morsel_driven && !partitioned_by_file_group && !preserve_order;
+        let morsel_driven =
+            morsel_driven && !partitioned_by_file_group && !preserve_order;
 
         FileScanConfig {
             object_store_url,
