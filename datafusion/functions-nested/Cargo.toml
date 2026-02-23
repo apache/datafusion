@@ -57,6 +57,7 @@ datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-aggregate-common = { workspace = true }
 datafusion-macros = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
+hashbrown = { workspace = true }
 itertools = { workspace = true, features = ["use_std"] }
 log = { workspace = true }
 paste = { workspace = true }
