@@ -425,7 +425,7 @@ mod tests {
                     let (_, scalar_buf, _) = arr.as_primitive::<Int32Type>().clone().into_parts();
                     let (_, original_scalar_buf, _) = original_arr.as_primitive::<Int32Type>().clone().into_parts();
 
-                    assert!(!scalar_buf.inner().ptr_eq(original_scalar_buf.inner()), "Expected a copy of the data for each chunk, but got a slice that shares the same buffer as the original array");
+                    assert_ne!(scalar_buf.inner().data_ptr(), original_scalar_buf.inner().data_ptr(), "Expected a copy of the data for each chunk, but got a slice that shares the same buffer as the original array");
                 });
 
                 Result::<_, DataFusionError>::Ok(())
