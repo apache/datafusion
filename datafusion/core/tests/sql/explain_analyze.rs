@@ -303,7 +303,7 @@ async fn explain_analyze_parquet_pruning_metrics() {
             collect_plan_with_context(&sql, &ctx, ExplainAnalyzeLevel::Summary).await;
 
         let expected_metrics =
-            format!("row_groups_pruned_statistics={expected_pruning_metrics}");
+            format!("files_ranges_pruned_statistics={expected_pruning_metrics}");
 
         assert_metrics!(&plan, "DataSourceExec", &expected_metrics);
     }
