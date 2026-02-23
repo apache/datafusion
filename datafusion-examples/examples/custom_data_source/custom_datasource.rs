@@ -64,7 +64,7 @@ async fn search_accounts(
 ) -> Result<()> {
     // create local execution context
     let mut config = SessionConfig::new()
-        .set("datafusion.execution.parquet.allow_morsel_driven", "false");
+        .set_bool("datafusion.execution.parquet.allow_morsel_driven", false);
     let ctx = SessionContext::new_with_config(config);
     // create logical plan composed of a single TableScan
     let logical_plan = LogicalPlanBuilder::scan_with_filters(
