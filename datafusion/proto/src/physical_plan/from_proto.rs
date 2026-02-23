@@ -572,9 +572,8 @@ fn cast_options_from_proto<'a>(
     match cast_options {
         Some(opts) => {
             let format_opts = opts.format_options.as_ref().or(format_options);
-            let format_options = format_opts
-                .map(parse_format_options)
-                .unwrap_or_else(FormatOptions::new);
+            let format_options =
+                format_opts.map(parse_format_options).unwrap_or_default();
             Ok(Some(CastOptions {
                 safe: opts.safe,
                 format_options,
@@ -583,9 +582,8 @@ fn cast_options_from_proto<'a>(
         None => {
             // Fallback to deprecated fields for backward compatibility
             if format_options.is_some() || safe {
-                let format_options = format_options
-                    .map(parse_format_options)
-                    .unwrap_or_else(FormatOptions::new);
+                let format_options =
+                    format_options.map(parse_format_options).unwrap_or_default();
                 Ok(Some(CastOptions {
                     safe,
                     format_options,
