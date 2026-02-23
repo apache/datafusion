@@ -1331,7 +1331,7 @@ select
   arrow_typeof(percentile_cont(0.5) within group (order by arrow_cast(col_f32, 'Float16')))
 from median_table;
 ----
-NaN Float16
+2.75 Float16
 
 query RT
 select

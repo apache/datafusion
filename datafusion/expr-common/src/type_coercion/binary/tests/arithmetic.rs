@@ -228,6 +228,53 @@ fn test_type_coercion_arithmetic() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn test_bitwise_coercion_non_integer_types() -> Result<()> {
+    let err = BinaryTypeCoercer::new(
+        &DataType::Float32,
+        &Operator::BitwiseAnd,
+        &DataType::Float32,
+    )
+    .get_input_types()
+    .unwrap_err()
+    .to_string();
+    assert_contains!(
+        &err,
+        "Cannot infer common type for bitwise operation Float32 & Float32"
+    );
+
+    let err = BinaryTypeCoercer::new(
+        &DataType::Float32,
+        &Operator::BitwiseAnd,
+        &DataType::Float64,
+    )
+    .get_input_types()
+    .unwrap_err()
+    .to_string();
+    assert_contains!(
+        &err,
+        "Cannot infer common type for bitwise operation Float32 & Float64"
+    );
+
+    let err = BinaryTypeCoercer::new(
+        &DataType::Decimal128(10, 2),
+        &Operator::BitwiseAnd,
+        &DataType::Decimal128(10, 2),
+    )
+    .get_input_types()
+    .unwrap_err()
+    .to_string();
+    assert_contains!(
+        &err,
+        "Cannot infer common type for bitwise operation Decimal128(10, 2) & Decimal128(10, 2)"
+    );
+
+    let dict_int8 = DataType::Dictionary(DataType::Int8.into(), DataType::Int8.into());
+    test_coercion_binary_rule!(dict_int8, dict_int8, Operator::BitwiseAnd, dict_int8);
+
+    Ok(())
+}
+
 fn test_math_decimal_coercion_rule(
     lhs_type: DataType,
     rhs_type: DataType,
