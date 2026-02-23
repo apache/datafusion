@@ -3183,6 +3183,7 @@ _Alias of [current_date](#current_date)._
 - [array_to_string](#array_to_string)
 - [array_union](#array_union)
 - [arrays_overlap](#arrays_overlap)
+- [arrays_zip](#arrays_zip)
 - [cardinality](#cardinality)
 - [empty](#empty)
 - [flatten](#flatten)
@@ -3228,6 +3229,7 @@ _Alias of [current_date](#current_date)._
 - [list_sort](#list_sort)
 - [list_to_string](#list_to_string)
 - [list_union](#list_union)
+- [list_zip](#list_zip)
 - [make_array](#make_array)
 - [make_list](#make_list)
 - [range](#range)
@@ -4267,6 +4269,41 @@ array_union(array1, array2)
 
 _Alias of [array_has_any](#array_has_any)._
 
+### `arrays_zip`
+
+Returns an array of structs created by combining the elements of each input array at the same index. If the arrays have different lengths, shorter arrays are padded with NULLs.
+
+```sql
+arrays_zip(array1, array2[, ..., array_n])
+```
+
+#### Arguments
+
+- **array1**: First array expression.
+- **array2**: Second array expression.
+- **array_n**: Subsequent array expressions.
+
+#### Example
+
+```sql
+> select arrays_zip([1, 2, 3], ['a', 'b', 'c']);
++---------------------------------------------------+
+| arrays_zip([1, 2, 3], ['a', 'b', 'c'])             |
++---------------------------------------------------+
+| [{c0: 1, c1: a}, {c0: 2, c1: b}, {c0: 3, c1: c}] |
++---------------------------------------------------+
+> select arrays_zip([1, 2], [3, 4, 5]);
++---------------------------------------------------+
+| arrays_zip([1, 2], [3, 4, 5])                       |
++---------------------------------------------------+
+| [{c0: 1, c1: 3}, {c0: 2, c1: 4}, {c0: , c1: 5}]  |
++---------------------------------------------------+
+```
+
+#### Aliases
+
+- list_zip
+
 ### `cardinality`
 
 Returns the total number of elements in the array.
@@ -4535,6 +4572,10 @@ _Alias of [array_to_string](#array_to_string)._
 ### `list_union`
 
 _Alias of [array_union](#array_union)._
+
+### `list_zip`
+
+_Alias of [arrays_zip](#arrays_zip)._
 
 ### `make_array`
 
