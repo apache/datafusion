@@ -21,15 +21,16 @@
 //! and their associated metadata (file name and description), enforcing
 //! a strict ordering and structure to avoid ambiguous documentation.
 
-use std::path::Path;
-use std::{collections::HashSet, fs};
+use std::{collections::HashSet, fs, path::Path};
 
-use datafusion_common::{DataFusionError, Result};
+use datafusion::common::exec_err;
+use datafusion::error::Result;
 use nom::{
-    IResult, Parser,
+    Err, IResult, Parser,
     bytes::complete::{tag, take_until, take_while},
     character::complete::multispace0,
     combinator::all_consuming,
+    error::{Error, ErrorKind},
     sequence::{delimited, preceded},
 };
 
@@ -77,19 +78,13 @@ fn parse_metadata_line(input: &str) -> IResult<&str, (&str, &str)> {
     let content = payload
         .strip_prefix("(")
         .and_then(|s| s.strip_suffix(")"))
-        .ok_or_else(|| {
-            nom::Err::Error(nom::error::Error::new(payload, nom::error::ErrorKind::Tag))
-        })?;
+        .ok_or_else(|| Err::Error(Error::new(payload, ErrorKind::Tag)))?;
 
     let (file, desc) = content
         .strip_prefix("file:")
-        .ok_or_else(|| {
-            nom::Err::Error(nom::error::Error::new(payload, nom::error::ErrorKind::Tag))
-        })?
+        .ok_or_else(|| Err::Error(Error::new(payload, ErrorKind::Tag)))?
         .split_once(", desc:")
-        .ok_or_else(|| {
-            nom::Err::Error(nom::error::Error::new(payload, nom::error::ErrorKind::Tag))
-        })?;
+        .ok_or_else(|| Err::Error(Error::new(payload, ErrorKind::Tag)))?;
 
     Ok((rest, (file.trim(), desc.trim())))
 }
@@ -119,18 +114,16 @@ pub fn parse_main_rs_docs(path: &Path) -> Result<Vec<ExampleEntry>> {
             let subcommand = match state {
                 ParserState::SeenSubcommand(s) => s,
                 ParserState::Idle => {
-                    return Err(DataFusionError::Execution(format!(
+                    return exec_err!(
                         "Metadata without preceding subcommand at {}:{}",
                         path.display(),
                         line_no + 1
-                    )));
+                    );
                 }
             };
 
             if !seen_subcommands.insert(subcommand) {
-                return Err(DataFusionError::Execution(format!(
-                    "Duplicate metadata for subcommand `{subcommand}`"
-                )));
+                return exec_err!("Duplicate metadata for subcommand `{subcommand}`");
             }
 
             entries.push(ExampleEntry {

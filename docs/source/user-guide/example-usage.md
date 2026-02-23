@@ -29,7 +29,7 @@ Find latest available Datafusion version on [DataFusion's
 crates.io] page. Add the dependency to your `Cargo.toml` file:
 
 ```toml
-datafusion = "52.0.0"
+datafusion = "52.1.0"
 tokio = { version = "1.0", features = ["rt-multi-thread"] }
 ```
 

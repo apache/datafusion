@@ -20,7 +20,7 @@
 
 use std::borrow::Cow;
 
-use crate::highlighter::{NoSyntaxHighlighter, SyntaxHighlighter};
+use crate::highlighter::{Color, NoSyntaxHighlighter, SyntaxHighlighter};
 
 use datafusion::sql::parser::{DFParser, Statement};
 use datafusion::sql::sqlparser::dialect::dialect_from_str;
@@ -32,6 +32,9 @@ use rustyline::highlight::{CmdKind, Highlighter};
 use rustyline::hint::Hinter;
 use rustyline::validate::{ValidationContext, ValidationResult, Validator};
 use rustyline::{Context, Helper, Result};
+
+/// Default suggestion shown when the input line is empty.
+const DEFAULT_HINT_SUGGESTION: &str = " \\? for help, \\q to quit";
 
 pub struct CliHelper {
     completer: FilenameCompleter,
@@ -114,6 +117,15 @@ impl Highlighter for CliHelper {
 
 impl Hinter for CliHelper {
     type Hint = String;
+
+    fn hint(&self, line: &str, _pos: usize, _ctx: &Context<'_>) -> Option<String> {
+        if line.trim().is_empty() {
+            let suggestion = Color::gray(DEFAULT_HINT_SUGGESTION);
+            Some(suggestion)
+        } else {
+            None
+        }
+    }
 }
 
 /// returns true if the current position is after the open quote for

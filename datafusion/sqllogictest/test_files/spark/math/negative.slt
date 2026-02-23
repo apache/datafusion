@@ -277,3 +277,55 @@ SELECT negative(column1) FROM interval_test;
 
 statement ok
 DROP TABLE interval_test;
+
+## ANSI mode tests: overflow detection
+statement ok
+set datafusion.execution.enable_ansi_mode = true;
+
+# Test ANSI mode: negative of minimum values should error (overflow)
+query error DataFusion error: Execution error: Int8 overflow on negative\(\-128\)
+SELECT negative((-128)::tinyint);
+
+query error DataFusion error: Execution error: Int16 overflow on negative\(\-32768\)
+SELECT negative((-32768)::smallint);
+
+query error DataFusion error: Execution error: Int32 overflow on negative\(\-2147483648\)
+SELECT negative((-2147483648)::int);
+
+query error DataFusion error: Execution error: Int64 overflow on negative\(\-9223372036854775808\)
+SELECT negative((-9223372036854775808)::bigint);
+
+# Test ANSI mode: negative of (MIN+1) should succeed (boundary test)
+query I
+SELECT negative((-127)::tinyint);
+----
+127
+
+query I
+SELECT negative((-32767)::smallint);
+----
+32767
+
+query I
+SELECT negative((-2147483647)::int);
+----
+2147483647
+
+query I
+SELECT negative((-9223372036854775807)::bigint);
+----
+9223372036854775807
+
+# Test ANSI mode: array with MIN value should error
+statement ok
+CREATE TABLE min_values_ansi AS VALUES (-2147483648);
+
+query error DataFusion error: Execution error: Int32 overflow on negative\(\-2147483648\)
+SELECT negative(column1::int) FROM min_values_ansi;
+
+statement ok
+DROP TABLE min_values_ansi;
+
+# Reset ANSI mode to false
+statement ok
+set datafusion.execution.enable_ansi_mode = false;
