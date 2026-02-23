@@ -550,12 +550,21 @@ impl FileScanConfigBuilder {
         let preserve_order = preserve_order || !output_ordering.is_empty();
 
         // Morsel-driven execution pools all files from all file groups into a shared
-        // work queue that any partition may consume. When `partitioned_by_file_group`
-        // is true the optimizer has declared Hash partitioning based on the assumption
-        // that partition N reads only from file_group[N]. Enabling morsel-driven in
-        // that case would break that guarantee (e.g. for `HashJoinExec: mode=Partitioned`
-        // downstream), so we force it off.
-        let morsel_driven = morsel_driven && !partitioned_by_file_group;
+        // work queue that any partition may consume, allowing partitions to steal work
+        // from each other's file groups. This breaks two guarantees that downstream
+        // operators may rely on:
+        //
+        // 1. `partitioned_by_file_group`: the optimizer has declared Hash partitioning
+        //    assuming partition N reads only from file_group[N] (e.g. Hive-style
+        //    partitioning with `preserve_file_partitions`). Morsel-driven stealing
+        //    would violate this, breaking `HashJoinExec: mode=Partitioned` correctness.
+        //
+        // 2. `preserve_order`: the scan declares a sort order on its output. When a
+        //    partition interleaves morsels from multiple files (from different groups),
+        //    the per-partition output is no longer globally sorted. Downstream operators
+        //    such as `SortPreservingMergeExec` rely on each partition's stream being
+        //    pre-sorted.
+        let morsel_driven = morsel_driven && !partitioned_by_file_group && !preserve_order;
 
         FileScanConfig {
             object_store_url,
