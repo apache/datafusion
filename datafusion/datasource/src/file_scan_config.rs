@@ -19,11 +19,14 @@
 //! file sources.
 
 use crate::file_groups::FileGroup;
-use crate::file_stream::WorkQueue;
 use crate::{
-    PartitionedFile, display::FileGroupsDisplay, file::FileSource,
-    file_compression_type::FileCompressionType, file_stream::FileStream,
-    source::DataSource, statistics::MinMaxStatistics,
+    PartitionedFile,
+    display::FileGroupsDisplay,
+    file::FileSource,
+    file_compression_type::FileCompressionType,
+    file_stream::{FileStream, WorkQueue},
+    source::DataSource,
+    statistics::MinMaxStatistics,
 };
 use arrow::datatypes::FieldRef;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
@@ -54,8 +57,6 @@ use datafusion_physical_plan::{
     metrics::ExecutionPlanMetricsSet,
 };
 use log::{debug, warn};
-use std::sync::Mutex;
-use std::sync::atomic::AtomicUsize;
 use std::{any::Any, fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::Arc};
 
 /// [`FileScanConfig`] represents scanning data from a group of files
@@ -210,14 +211,6 @@ pub struct FileScanConfig {
     /// When true, use morsel-driven execution to avoid data skew.
     /// This means all partitions share a single pool of work.
     pub morsel_driven: bool,
-    /// Shared work queue for morsel-driven execution.
-    pub(crate) morsel_queue: Arc<Mutex<Arc<WorkQueue>>>,
-    /// Number of morsel streams opened in the current execution cycle.
-    pub(crate) morsel_queue_streams_opened: Arc<AtomicUsize>,
-    /// Number of active morsel streams in the current execution cycle.
-    pub(crate) morsel_queue_active_streams: Arc<AtomicUsize>,
-    /// Expected number of streams in a full execution cycle.
-    pub(crate) morsel_queue_expected_streams: usize,
 }
 
 /// A builder for [`FileScanConfig`]'s.
@@ -555,13 +548,6 @@ impl FileScanConfigBuilder {
 
         // If there is an output ordering, we should preserve it.
         let preserve_order = preserve_order || !output_ordering.is_empty();
-        let morsel_queue_expected_streams = file_groups.len();
-
-        let all_files = file_groups
-            .iter()
-            .flat_map(|g| g.files().to_vec())
-            .collect();
-
         FileScanConfig {
             object_store_url,
             file_source,
@@ -576,10 +562,6 @@ impl FileScanConfigBuilder {
             statistics,
             partitioned_by_file_group,
             morsel_driven,
-            morsel_queue: Arc::new(Mutex::new(Arc::new(WorkQueue::new(all_files)))),
-            morsel_queue_streams_opened: Arc::new(AtomicUsize::new(0)),
-            morsel_queue_active_streams: Arc::new(AtomicUsize::new(0)),
-            morsel_queue_expected_streams,
         }
     }
 }
@@ -609,6 +591,7 @@ impl DataSource for FileScanConfig {
         &self,
         partition: usize,
         context: Arc<TaskContext>,
+        shared_morsel_queue: Option<Arc<WorkQueue>>,
     ) -> Result<SendableRecordBatchStream> {
         let object_store = context.runtime_env().object_store(&self.object_store_url)?;
         let batch_size = self
@@ -619,7 +602,13 @@ impl DataSource for FileScanConfig {
 
         let opener = source.create_file_opener(object_store, self, partition)?;
 
-        let stream = FileStream::new(self, partition, opener, source.metrics())?;
+        let stream = FileStream::new(
+            self,
+            partition,
+            opener,
+            source.metrics(),
+            shared_morsel_queue,
+        )?;
         Ok(Box::pin(cooperative(stream)))
     }
 

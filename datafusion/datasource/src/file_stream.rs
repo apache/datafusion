@@ -82,12 +82,6 @@ pub struct FileStream {
     on_error: OnError,
     /// Guard for morselizing state to ensure counter is decremented on drop
     morsel_guard: Option<MorselizingGuard>,
-    /// Number of streams opened in current morsel execution cycle.
-    morsel_streams_opened: Option<Arc<AtomicUsize>>,
-    /// Number of currently active morsel streams.
-    morsel_active_streams: Option<Arc<AtomicUsize>>,
-    /// Expected streams in a full morsel execution cycle.
-    morsel_expected_streams: usize,
 }
 
 impl FileStream {
@@ -97,29 +91,12 @@ impl FileStream {
         partition: usize,
         file_opener: Arc<dyn FileOpener>,
         metrics: &ExecutionPlanMetricsSet,
+        shared_queue: Option<Arc<WorkQueue>>,
     ) -> Result<Self> {
         let projected_schema = config.projected_schema()?;
 
         let (file_iter, shared_queue) = if config.morsel_driven {
-            let opened = config
-                .morsel_queue_streams_opened
-                .fetch_add(1, Ordering::SeqCst);
-            config
-                .morsel_queue_active_streams
-                .fetch_add(1, Ordering::SeqCst);
-
-            if opened == 0 {
-                let all_files = config
-                    .file_groups
-                    .iter()
-                    .flat_map(|g| g.files().to_vec())
-                    .collect();
-                let mut guard = config.morsel_queue.lock().unwrap();
-                *guard = Arc::new(WorkQueue::new(all_files));
-            }
-
-            let queue = Arc::clone(&config.morsel_queue.lock().unwrap());
-            (VecDeque::new(), Some(queue))
+            (VecDeque::new(), shared_queue)
         } else {
             let file_group = config.file_groups[partition].clone();
             (file_group.into_inner().into_iter().collect(), None)
@@ -137,13 +114,6 @@ impl FileStream {
             baseline_metrics: BaselineMetrics::new(metrics, partition),
             on_error: OnError::Fail,
             morsel_guard: None,
-            morsel_streams_opened: config
-                .morsel_driven
-                .then(|| Arc::clone(&config.morsel_queue_streams_opened)),
-            morsel_active_streams: config
-                .morsel_driven
-                .then(|| Arc::clone(&config.morsel_queue_active_streams)),
-            morsel_expected_streams: config.morsel_queue_expected_streams,
         })
     }
 
@@ -400,23 +370,6 @@ impl FileStream {
                     return Poll::Ready(None);
                 }
             }
-        }
-    }
-}
-
-impl Drop for FileStream {
-    fn drop(&mut self) {
-        let (Some(opened), Some(active)) = (
-            self.morsel_streams_opened.as_ref(),
-            self.morsel_active_streams.as_ref(),
-        ) else {
-            return;
-        };
-
-        if active.fetch_sub(1, Ordering::SeqCst) == 1
-            && opened.load(Ordering::SeqCst) == self.morsel_expected_streams
-        {
-            opened.store(0, Ordering::SeqCst);
         }
     }
 }
@@ -854,7 +807,7 @@ mod tests {
             .build();
             let metrics_set = ExecutionPlanMetricsSet::new();
             let file_stream =
-                FileStream::new(&config, 0, Arc::new(self.opener), &metrics_set)
+                FileStream::new(&config, 0, Arc::new(self.opener), &metrics_set, None)
                     .unwrap()
                     .with_on_error(on_error);
 
