@@ -336,7 +336,6 @@ mod tests {
                     Field::new("f2", DataType::Utf8, substring_nullable).into(),
                 ],
                 scalar_arguments: &[None::<&ScalarValue>, None::<&ScalarValue>],
-                lambdas: &[false; 2],
             };
 
             strpos.return_field_from_args(args).unwrap().is_nullable()

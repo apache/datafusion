@@ -116,7 +116,6 @@ fn invoke_pad_with_args(
         number_rows,
         return_field: Field::new("f", DataType::Utf8, true).into(),
         config_options: Arc::clone(&config_options),
-        lambdas: None,
     };
 
     if left_pad {

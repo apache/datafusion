@@ -34,19 +34,19 @@ use std::fmt::{self, Debug, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use crate::expressions::{LambdaExpr, Literal};
+use crate::expressions::Literal;
 use crate::PhysicalExpr;
 
-use arrow::array::{Array, NullArray, RecordBatch};
-use arrow::datatypes::{DataType, Field, FieldRef, Schema};
+use arrow::array::{Array, RecordBatch};
+use arrow::datatypes::{DataType, FieldRef, Schema};
 use datafusion_common::config::{ConfigEntry, ConfigOptions};
-use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
+use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::type_coercion::functions::data_types_with_scalar_udf;
 use datafusion_expr::{
-    expr_vec_fmt, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs,
-    ScalarFunctionLambdaArg, ScalarUDF, ValueOrLambdaParameter, Volatility,
+    expr_vec_fmt, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
+    Volatility,
 };
 
 /// Physical expression of a scalar function
@@ -117,15 +117,9 @@ impl ScalarFunctionExpr {
             })
             .collect::<Vec<_>>();
 
-        let lambdas = args
-            .iter()
-            .map(|e| e.as_any().is::<LambdaExpr>())
-            .collect::<Vec<_>>();
-
         let ret_args = ReturnFieldArgs {
             arg_fields: &arg_fields,
             scalar_arguments: &arguments,
-            lambdas: &lambdas,
         };
 
         let return_field = fun.return_field_from_args(ret_args)?;
@@ -270,10 +264,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
         let args = self
             .args
             .iter()
-            .map(|e| match e.as_any().downcast_ref::<LambdaExpr>() {
-                Some(_) => Ok(ColumnarValue::Scalar(ScalarValue::Null)),
-                None => Ok(e.evaluate(batch)?),
-            })
+            .map(|e| e.evaluate(batch))
             .collect::<Result<Vec<_>>>()?;
 
         let arg_fields = self
@@ -287,89 +278,6 @@ impl PhysicalExpr for ScalarFunctionExpr {
             .iter()
             .all(|arg| matches!(arg, ColumnarValue::Scalar(_)));
 
-        let lambdas = if self.args.iter().any(|arg| arg.as_any().is::<LambdaExpr>()) {
-            let args_metadata = std::iter::zip(&self.args, &arg_fields)
-                .map(
-                    |(expr, field)| match expr.as_any().downcast_ref::<LambdaExpr>() {
-                        Some(_lambda) => ValueOrLambdaParameter::Lambda,
-                        None => ValueOrLambdaParameter::Value(Arc::clone(field)),
-                    },
-                )
-                .collect::<Vec<_>>();
-
-            let params = self.fun().inner().lambdas_parameters(&args_metadata)?;
-
-            let lambdas = std::iter::zip(&self.args, params)
-                .map(|(arg, lambda_params)| {
-                    match (arg.as_any().downcast_ref::<LambdaExpr>(), lambda_params) {
-                        (Some(lambda), Some(lambda_params)) => {
-                            if lambda.params().len() > lambda_params.len() {
-                                return exec_err!(
-                                    "lambda defined {} params but UDF support only {}",
-                                    lambda.params().len(),
-                                    lambda_params.len()
-                                );
-                            }
-
-                            let captures = lambda.captures();
-
-                            let params = std::iter::zip(lambda.params(), lambda_params)
-                                .map(|(name, param)| Arc::new(param.with_name(name)))
-                                .collect();
-
-                            let captures = if !captures.is_empty() {
-                                let (fields, columns): (Vec<_>, _) = std::iter::zip(
-                                    batch.schema_ref().fields(),
-                                    batch.columns(),
-                                )
-                                .enumerate()
-                                .map(|(column_index, (field, column))| {
-                                    if captures.contains(&column_index) {
-                                        (Arc::clone(field), Arc::clone(column))
-                                    } else {
-                                        (
-                                            Arc::new(Field::new(
-                                                field.name(),
-                                                DataType::Null,
-                                                false,
-                                            )),
-                                            Arc::new(NullArray::new(column.len())) as _,
-                                        )
-                                    }
-                                })
-                                .unzip();
-
-                                let schema = Arc::new(Schema::new(fields));
-
-                                Some(RecordBatch::try_new(schema, columns)?)
-                            } else {
-                                None
-                            };
-
-                            Ok(Some(ScalarFunctionLambdaArg {
-                                params,
-                                body: Arc::clone(lambda.body()),
-                                captures,
-                            }))
-                        }
-                        (Some(_lambda), None) => exec_err!(
-                            "{} don't reported the parameters of one of it's lambdas",
-                            self.fun.name()
-                        ),
-                        (None, Some(_lambda_params)) => exec_err!(
-                            "{} reported parameters for an argument that is not a lambda",
-                            self.fun.name()
-                        ),
-                        _ => Ok(None),
-                    }
-                })
-                .collect::<Result<Vec<_>>>()?;
-
-            Some(lambdas)
-        } else {
-            None
-        };
-
         // evaluate the function
         let output = self.fun.invoke_with_args(ScalarFunctionArgs {
             args,
@@ -377,9 +285,9 @@ impl PhysicalExpr for ScalarFunctionExpr {
             number_rows: batch.num_rows(),
             return_field: Arc::clone(&self.return_field),
             config_options: Arc::clone(&self.config_options),
-            lambdas,
         })?;
 
+        
         if let ColumnarValue::Array(array) = &output {
             if array.len() != batch.num_rows() {
                 // If the arguments are a non-empty slice of scalar values, we can assume that

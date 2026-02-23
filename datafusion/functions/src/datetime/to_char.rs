@@ -375,7 +375,6 @@ mod tests {
                 number_rows: batch_len,
                 return_field: Field::new("f", DataType::Utf8, true).into(),
                 config_options: Arc::clone(&Arc::new(ConfigOptions::default())),
-                lambdas: None,
             };
             let result = ToCharFunc::new()
                 .invoke_with_args(args)
@@ -481,7 +480,6 @@ mod tests {
                 number_rows: 1,
                 return_field: Field::new("f", DataType::Utf8, true).into(),
                 config_options: Arc::new(ConfigOptions::default()),
-                lambdas: None,
             };
             let result = ToCharFunc::new()
                 .invoke_with_args(args)
@@ -576,7 +574,6 @@ mod tests {
                 number_rows: batch_len,
                 return_field: Field::new("f", DataType::Utf8, true).into(),
                 config_options: Arc::new(ConfigOptions::default()),
-                lambdas: None,
             };
             let result = ToCharFunc::new()
                 .invoke_with_args(args)
@@ -741,7 +738,6 @@ mod tests {
                 number_rows: batch_len,
                 return_field: Field::new("f", DataType::Utf8, true).into(),
                 config_options: Arc::new(ConfigOptions::default()),
-                lambdas: None,
             };
             let result = ToCharFunc::new()
                 .invoke_with_args(args)
@@ -770,7 +766,6 @@ mod tests {
                 number_rows: batch_len,
                 return_field: Field::new("f", DataType::Utf8, true).into(),
                 config_options: Arc::new(ConfigOptions::default()),
-                lambdas: None,
             };
             let result = ToCharFunc::new()
                 .invoke_with_args(args)
@@ -796,7 +791,6 @@ mod tests {
             number_rows: 1,
             return_field: Field::new("f", DataType::Utf8, true).into(),
             config_options: Arc::new(ConfigOptions::default()),
-            lambdas: None,
         };
         let result = ToCharFunc::new().invoke_with_args(args);
         assert_eq!(
@@ -818,7 +812,6 @@ mod tests {
             number_rows: 1,
             return_field: Field::new("f", DataType::Utf8, true).into(),
             config_options: Arc::new(ConfigOptions::default()),
-            lambdas: None,
         };
         let result = ToCharFunc::new().invoke_with_args(args);
         assert_eq!(

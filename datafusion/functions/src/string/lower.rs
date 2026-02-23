@@ -113,7 +113,6 @@ mod tests {
             arg_fields,
             return_field: Field::new("f", Utf8, true).into(),
             config_options: Arc::new(ConfigOptions::default()),
-            lambdas: None,
         };
 
         let result = match func.invoke_with_args(args)? {

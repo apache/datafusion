@@ -23,13 +23,11 @@ use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
 use crate::sort_properties::{ExprProperties, SortProperties};
 use crate::udf_eq::UdfEq;
 use crate::{ColumnarValue, Documentation, Expr, Signature};
-use arrow::array::RecordBatch;
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{not_impl_err, ExprSchema, Result, ScalarValue};
 use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
 use datafusion_expr_common::interval_arithmetic::Interval;
-use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::any::Any;
 use std::cmp::Ordering;
 use std::fmt::Debug;
@@ -347,14 +345,6 @@ impl ScalarUDF {
     }
 }
 
-#[derive(Clone, Debug)]
-pub enum ValueOrLambdaParameter {
-    /// A columnar value with the given field
-    Value(FieldRef),
-    /// A lambda
-    Lambda,
-}
-
 impl<F> From<F> for ScalarUDF
 where
     F: ScalarUDFImpl + 'static,
@@ -369,7 +359,6 @@ where
 #[derive(Debug, Clone)]
 pub struct ScalarFunctionArgs {
     /// The evaluated arguments to the function
-    /// If it's a lambda, will be `ColumnarValue::Scalar(ScalarValue::Null)`
     pub args: Vec<ColumnarValue>,
     /// Field associated with each arg, if it exists
     pub arg_fields: Vec<FieldRef>,
@@ -381,30 +370,6 @@ pub struct ScalarFunctionArgs {
     pub return_field: FieldRef,
     /// The config options at execution time
     pub config_options: Arc<ConfigOptions>,
-    /// The lambdas passed to the function
-    /// If it's not a lambda it will be `None`
-    pub lambdas: Option<Vec<Option<ScalarFunctionLambdaArg>>>,
-}
-
-/// A lambda argument to a ScalarFunction
-#[derive(Clone, Debug)]
-pub struct ScalarFunctionLambdaArg {
-    /// The parameters defined in this lambda
-    ///
-    /// For example, for `array_transform([2], v -> -v)`,
-    /// this will be `vec![Field::new("v", DataType::Int32, true)]`
-    pub params: Vec<FieldRef>,
-    /// The body of the lambda
-    ///
-    /// For example, for `array_transform([2], v -> -v)`,
-    /// this will be the physical expression of `-v`
-    pub body: Arc<dyn PhysicalExpr>,
-    /// A RecordBatch containing at least the captured columns inside this lambda body, if any
-    /// Note that it may contain additional, non-specified columns, but that's implementation detail
-    ///
-    /// For example, for `array_transform([2], v -> v + a + b)`,
-    /// this will be a `RecordBatch` with two columns, `a` and `b`
-    pub captures: Option<RecordBatch>,
 }
 
 impl ScalarFunctionArgs {
@@ -413,25 +378,6 @@ impl ScalarFunctionArgs {
     pub fn return_type(&self) -> &DataType {
         self.return_field.data_type()
     }
-
-    pub fn to_lambda_args(&self) -> Vec<ValueOrLambda<'_>> {
-        match &self.lambdas {
-            Some(lambdas) => std::iter::zip(&self.args, lambdas)
-                .map(|(arg, lambda)| match lambda {
-                    Some(lambda) => ValueOrLambda::Lambda(lambda),
-                    None => ValueOrLambda::Value(arg),
-                })
-                .collect(),
-            None => self.args.iter().map(ValueOrLambda::Value).collect(),
-        }
-    }
-}
-
-// An argument to a ScalarUDF that supports lambdas
-#[derive(Debug)]
-pub enum ValueOrLambda<'a> {
-    Value(&'a ColumnarValue),
-    Lambda(&'a ScalarFunctionLambdaArg),
 }
 
 /// Information about arguments passed to the function
@@ -444,12 +390,6 @@ pub enum ValueOrLambda<'a> {
 #[derive(Debug)]
 pub struct ReturnFieldArgs<'a> {
     /// The data types of the arguments to the function
-    ///
-    /// If argument `i` to the function is a lambda, it will be the field returned by the
-    /// lambda when executed with the arguments returned from `ScalarUDFImpl::lambdas_parameters`
-    ///
-    /// For example, with `array_transform([1], v -> v == 5)`
-    /// this field will be `[Field::new("", DataType::List(DataType::Int32), false), Field::new("", DataType::Boolean, false)]`
     pub arg_fields: &'a [FieldRef],
     /// Is argument `i` to the function a scalar (constant)?
     ///
@@ -458,36 +398,6 @@ pub struct ReturnFieldArgs<'a> {
     /// For example, if a function is called like `my_function(column_a, 5)`
     /// this field will be `[None, Some(ScalarValue::Int32(Some(5)))]`
     pub scalar_arguments: &'a [Option<&'a ScalarValue>],
-    /// Is argument `i` to the function a lambda?
-    ///
-    /// For example, with `array_transform([1], v -> v == 5)`
-    /// this field will be `[false, true]`
-    pub lambdas: &'a [bool],
-}
-
-/// A tagged Field indicating whether it correspond to a value or a lambda argument
-#[derive(Debug)]
-pub enum ValueOrLambdaField<'a> {
-    /// The Field of a ColumnarValue argument
-    Value(&'a FieldRef),
-    /// The Field of the return of the lambda body when evaluated with the parameters from ScalarUDF::lambda_parameters
-    Lambda(&'a FieldRef),
-}
-
-impl<'a> ReturnFieldArgs<'a> {
-    /// Based on self.lambdas, encodes self.arg_fields to tagged enums
-    /// indicating whether it correspond to a value or a lambda argument
-    pub fn to_lambda_args(&self) -> Vec<ValueOrLambdaField<'a>> {
-        std::iter::zip(self.arg_fields, self.lambdas)
-            .map(|(field, is_lambda)| {
-                if *is_lambda {
-                    ValueOrLambdaField::Lambda(field)
-                } else {
-                    ValueOrLambdaField::Value(field)
-                }
-            })
-            .collect()
-    }
 }
 
 /// Trait for implementing user defined scalar functions.
@@ -931,14 +841,6 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     fn documentation(&self) -> Option<&Documentation> {
         None
     }
-
-    /// Returns the parameters that any lambda supports
-    fn lambdas_parameters(
-        &self,
-        args: &[ValueOrLambdaParameter],
-    ) -> Result<Vec<Option<Vec<Field>>>> {
-        Ok(vec![None; args.len()])
-    }
 }
 
 /// ScalarUDF that adds an alias to the underlying function. It is better to
@@ -1056,13 +958,6 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.inner.documentation()
-    }
-
-    fn lambdas_parameters(
-        &self,
-        args: &[ValueOrLambdaParameter],
-    ) -> Result<Vec<Option<Vec<Field>>>> {
-        self.inner.lambdas_parameters(args)
     }
 }
 

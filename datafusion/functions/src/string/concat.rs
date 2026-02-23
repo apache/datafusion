@@ -487,7 +487,6 @@ mod tests {
             number_rows: 3,
             return_field: Field::new("f", Utf8, true).into(),
             config_options: Arc::new(ConfigOptions::default()),
-            lambdas: None,
         };
 
         let result = ConcatFunc::new().invoke_with_args(args)?;

@@ -217,7 +217,6 @@ mod tests {
             number_rows: 1,
             return_field: Field::new("f", Int64, true).into(),
             config_options: Arc::new(ConfigOptions::default()),
-            lambdas: None,
         };
         let udf = BitmapCount::new();
         let actual = udf.invoke_with_args(args)?;

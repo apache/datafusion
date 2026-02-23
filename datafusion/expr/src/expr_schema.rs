@@ -595,15 +595,9 @@ impl ExprSchemable for Expr {
                     })
                     .collect::<Vec<_>>();
 
-                let lambdas = args
-                    .iter()
-                    .map(|e| matches!(e, Expr::Lambda { .. }))
-                    .collect::<Vec<_>>();
-
                 let args = ReturnFieldArgs {
                     arg_fields: &new_fields,
                     scalar_arguments: &arguments,
-                    lambdas: &lambdas,
                 };
 
                 func.return_field_from_args(args)

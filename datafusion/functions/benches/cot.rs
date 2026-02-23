@@ -54,7 +54,6 @@ fn criterion_benchmark(c: &mut Criterion) {
                             number_rows: size,
                             return_field: Field::new("f", DataType::Float32, true).into(),
                             config_options: Arc::clone(&config_options),
-                            lambdas: None,
                         })
                         .unwrap(),
                 )
@@ -81,7 +80,6 @@ fn criterion_benchmark(c: &mut Criterion) {
                             number_rows: size,
                             return_field: Arc::clone(&return_field),
                             config_options: Arc::clone(&config_options),
-                            lambdas: None,
                         })
                         .unwrap(),
                 )

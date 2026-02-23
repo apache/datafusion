@@ -494,7 +494,6 @@ mod tests {
             number_rows: args.len(),
             return_field: Arc::new(Field::new("f", Int64, true)),
             config_options: Arc::new(ConfigOptions::default()),
-            lambdas: None,
         })
     }
 

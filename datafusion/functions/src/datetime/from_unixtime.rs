@@ -179,7 +179,6 @@ mod test {
             number_rows: 1,
             return_field: Field::new("f", DataType::Timestamp(Second, None), true).into(),
             config_options: Arc::new(ConfigOptions::default()),
-            lambdas: None,
         };
         let result = FromUnixtimeFunc::new().invoke_with_args(args).unwrap();
 
@@ -213,7 +212,6 @@ mod test {
             )
             .into(),
             config_options: Arc::new(ConfigOptions::default()),
-            lambdas: None,
         };
         let result = FromUnixtimeFunc::new().invoke_with_args(args).unwrap();
 

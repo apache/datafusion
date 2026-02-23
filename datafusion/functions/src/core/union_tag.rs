@@ -184,7 +184,6 @@ mod tests {
                 return_field: Field::new("res", return_type, true).into(),
                 arg_fields: vec![],
                 config_options: Arc::new(ConfigOptions::default()),
-                lambdas: None,
             })
             .unwrap();
 
@@ -208,7 +207,6 @@ mod tests {
                 return_field: Field::new("res", return_type, true).into(),
                 arg_fields: vec![],
                 config_options: Arc::new(ConfigOptions::default()),
-                lambdas: None,
             })
             .unwrap();
 

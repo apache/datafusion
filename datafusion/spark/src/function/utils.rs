@@ -61,7 +61,6 @@ pub mod test {
             let return_field = func.return_field_from_args(datafusion_expr::ReturnFieldArgs {
                 arg_fields: &arg_fields,
                 scalar_arguments: &scalar_arguments_refs,
-                lambdas: &vec![false; arg_fields.len()],
             });
 
             match expected {
@@ -75,7 +74,6 @@ pub mod test {
                             return_field,
                             arg_fields: arg_fields.clone(),
                             config_options: $CONFIG_OPTIONS,
-                            lambdas: None,
                         }) {
                             Ok(col_value) => {
                                 match col_value.to_array(cardinality) {
@@ -119,7 +117,6 @@ pub mod test {
                             return_field: value,
                             arg_fields,
                             config_options: $CONFIG_OPTIONS,
-                            lambdas: None,
                         }) {
                             Ok(_) => assert!(false, "expected error"),
                             Err(error) => {

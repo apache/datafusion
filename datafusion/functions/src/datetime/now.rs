@@ -163,7 +163,6 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: &empty_fields,
                 scalar_arguments: &empty_scalars,
-                lambdas: &[],
             })
             .expect("legacy now() return field");
 
@@ -171,7 +170,6 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: &empty_fields,
                 scalar_arguments: &empty_scalars,
-                lambdas: &[],
             })
             .expect("configured now() return field");
 
