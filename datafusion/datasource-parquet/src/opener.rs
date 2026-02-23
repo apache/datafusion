@@ -40,7 +40,7 @@ use datafusion_common::stats::Precision;
 use datafusion_common::{
     ColumnStatistics, DataFusionError, Result, ScalarValue, Statistics, exec_err,
 };
-use datafusion_datasource::{PartitionedFile, TableSchema};
+use datafusion_datasource::{FileRange, PartitionedFile, TableSchema};
 use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::{
@@ -67,6 +67,7 @@ use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
 use parquet::file::metadata::ParquetMetaData;
 use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader, RowGroupMetaData};
+use parquet::schema::types::SchemaDescriptor;
 
 /// Implements [`FileOpener`] for a parquet file
 pub(super) struct ParquetOpener {
@@ -140,6 +141,13 @@ pub(crate) struct PreparedAccessPlan {
     pub(crate) row_selection: Option<parquet::arrow::arrow_reader::RowSelection>,
 }
 
+struct RowGroupStatisticsPruningContext<'a> {
+    physical_file_schema: &'a SchemaRef,
+    parquet_schema: &'a SchemaDescriptor,
+    predicate: &'a PruningPredicate,
+    file_metrics: &'a ParquetFileMetrics,
+}
+
 impl PreparedAccessPlan {
     /// Create a new prepared access plan from a ParquetAccessPlan
     pub(crate) fn from_access_plan(
@@ -184,6 +192,39 @@ impl PreparedAccessPlan {
             builder = builder.with_row_selection(row_selection);
         }
         builder.with_row_groups(self.row_group_indexes)
+    }
+}
+
+impl ParquetOpener {
+    fn build_row_group_access_filter(
+        file_name: &str,
+        extensions: Option<Arc<dyn std::any::Any + Send + Sync>>,
+        row_group_count: usize,
+        row_group_metadata: &[RowGroupMetaData],
+        file_range: Option<&FileRange>,
+        stats_pruning: Option<RowGroupStatisticsPruningContext<'_>>,
+    ) -> Result<RowGroupAccessPlanFilter> {
+        let mut row_groups = RowGroupAccessPlanFilter::new(create_initial_plan(
+            file_name,
+            extensions,
+            row_group_count,
+        )?);
+
+        if let Some(range) = file_range {
+            row_groups.prune_by_range(row_group_metadata, range);
+        }
+
+        if let Some(stats_pruning) = stats_pruning {
+            row_groups.prune_by_statistics(
+                stats_pruning.physical_file_schema.as_ref(),
+                stats_pruning.parquet_schema,
+                row_group_metadata,
+                stats_pruning.predicate,
+                stats_pruning.file_metrics,
+            );
+        }
+
+        Ok(row_groups)
     }
 }
 
@@ -233,6 +274,7 @@ impl FileOpener for ParquetOpener {
         let table_schema = self.table_schema.clone();
         let predicate = self.predicate.clone();
         let metrics = self.metrics.clone();
+        let enable_row_group_stats_pruning = self.enable_row_group_stats_pruning;
 
         Box::pin(async move {
             #[cfg(feature = "parquet_encryption")]
@@ -273,25 +315,23 @@ impl FileOpener for ParquetOpener {
                 &predicate_creation_errors,
             );
 
-            let mut row_groups = RowGroupAccessPlanFilter::new(create_initial_plan(
+            let row_groups = Self::build_row_group_access_filter(
                 &file_name,
                 extensions,
                 num_row_groups,
-            )?);
+                metadata.row_groups(),
+                file_range.as_ref(),
+                pruning_predicate
+                    .as_deref()
+                    .filter(|_| enable_row_group_stats_pruning)
+                    .map(|predicate| RowGroupStatisticsPruningContext {
+                        physical_file_schema: &physical_file_schema,
+                        parquet_schema: reader_metadata.parquet_schema(),
+                        predicate,
+                        file_metrics: &file_metrics,
+                    }),
+            )?;
 
-            if let Some(range) = file_range.as_ref() {
-                row_groups.prune_by_range(metadata.row_groups(), range);
-            }
-
-            if let Some(predicate) = pruning_predicate {
-                row_groups.prune_by_statistics(
-                    &physical_file_schema,
-                    reader_metadata.parquet_schema(),
-                    metadata.row_groups(),
-                    predicate.as_ref(),
-                    &file_metrics,
-                );
-            }
             let access_plan = row_groups.build();
 
             let mut morsels = Vec::with_capacity(access_plan.len());
@@ -412,6 +452,11 @@ impl FileOpener for ParquetOpener {
 
         let reverse_row_groups = self.reverse_row_groups;
         let preserve_order = self.preserve_order;
+        let is_morsel = partitioned_file
+            .extensions
+            .as_ref()
+            .map(|e| e.is::<ParquetMorsel>())
+            .unwrap_or(false);
 
         Ok(Box::pin(async move {
             #[cfg(feature = "parquet_encryption")]
@@ -638,26 +683,25 @@ impl FileOpener for ParquetOpener {
             let file_metadata = Arc::clone(builder.metadata());
             let predicate = pruning_predicate.as_ref().map(|p| p.as_ref());
             let rg_metadata = file_metadata.row_groups();
-            // track which row groups to actually read
-            let access_plan =
-                create_initial_plan(&file_name, extensions, rg_metadata.len())?;
-            let mut row_groups = RowGroupAccessPlanFilter::new(access_plan);
-            // if there is a range restricting what parts of the file to read
-            if let Some(range) = file_range.as_ref() {
-                row_groups.prune_by_range(rg_metadata, range);
-            }
+            let mut row_groups = Self::build_row_group_access_filter(
+                &file_name,
+                extensions,
+                rg_metadata.len(),
+                rg_metadata,
+                file_range.as_ref(),
+                predicate
+                    .filter(|_| enable_row_group_stats_pruning && !is_morsel)
+                    .map(|predicate| RowGroupStatisticsPruningContext {
+                        physical_file_schema: &physical_file_schema,
+                        parquet_schema: builder.parquet_schema(),
+                        predicate,
+                        file_metrics: &file_metrics,
+                    }),
+            )?;
 
             // If there is a predicate that can be evaluated against the metadata
             if let Some(predicate) = predicate.as_ref() {
-                if enable_row_group_stats_pruning {
-                    row_groups.prune_by_statistics(
-                        &physical_file_schema,
-                        builder.parquet_schema(),
-                        rg_metadata,
-                        predicate,
-                        &file_metrics,
-                    );
-                } else {
+                if !enable_row_group_stats_pruning {
                     // Update metrics: statistics unavailable, so all row groups are
                     // matched (not pruned)
                     file_metrics
@@ -1168,7 +1212,10 @@ mod test {
     use std::sync::Arc;
 
     use super::{ConstantColumns, constant_columns_from_stats};
-    use crate::{DefaultParquetFileReaderFactory, RowGroupAccess, opener::ParquetOpener};
+    use crate::{
+        DefaultParquetFileReaderFactory, RowGroupAccess,
+        opener::{ParquetMorsel, ParquetOpener},
+    };
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use bytes::{BufMut, BytesMut};
     use datafusion_common::{
@@ -1186,7 +1233,7 @@ mod test {
     use datafusion_physical_expr_adapter::{
         DefaultPhysicalExprAdapterFactory, replace_columns_with_literals,
     };
-    use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
+    use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricValue};
     use futures::{Stream, StreamExt};
     use object_store::{ObjectStore, memory::InMemory, path::Path};
     use parquet::arrow::ArrowWriter;
@@ -1514,6 +1561,19 @@ mod test {
             expr.children().into_iter().map(Arc::clone).collect(),
             expr,
         ))
+    }
+
+    fn get_pruning_metric(
+        metrics: &ExecutionPlanMetricsSet,
+        metric_name: &str,
+    ) -> (usize, usize) {
+        match metrics.clone_inner().sum_by_name(metric_name) {
+            Some(MetricValue::PruningMetrics {
+                pruning_metrics, ..
+            }) => (pruning_metrics.pruned(), pruning_metrics.matched()),
+            Some(_) => panic!("Metric '{metric_name}' is not a pruning metric"),
+            None => panic!("Metric '{metric_name}' not found"),
+        }
     }
 
     #[tokio::test]
@@ -2154,5 +2214,103 @@ mod test {
             vec![7, 5, 1],
             "Reverse scan with non-contiguous row groups should correctly map RowSelection"
         );
+    }
+
+    #[tokio::test]
+    async fn test_open_and_morselize_are_equivalent_except_for_morsels() {
+        use parquet::file::properties::WriterProperties;
+
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        let batch1 = record_batch!(("a", Int32, vec![Some(1), Some(2)])).unwrap();
+        let batch2 = record_batch!(("a", Int32, vec![Some(10), Some(11)])).unwrap();
+        let batch3 = record_batch!(("a", Int32, vec![Some(20), Some(21)])).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_max_row_group_size(2)
+            .build();
+
+        let data_len = write_parquet_batches(
+            Arc::clone(&store),
+            "test.parquet",
+            vec![batch1.clone(), batch2.clone(), batch3.clone()],
+            Some(props),
+        )
+        .await;
+
+        let schema = batch1.schema();
+        let file = PartitionedFile::new(
+            "test.parquet".to_string(),
+            u64::try_from(data_len).unwrap(),
+        );
+
+        for enable_row_group_stats_pruning in [false, true] {
+            let expr = col("a").gt(lit(5)).and(col("a").lt(lit(20)));
+            let predicate = logical2physical(&expr, &schema);
+
+            let baseline_opener = ParquetOpenerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_schema(Arc::clone(&schema))
+                .with_projection_indices(&[0])
+                .with_predicate(Arc::clone(&predicate))
+                .with_row_group_stats_pruning(enable_row_group_stats_pruning)
+                .build();
+
+            // Baseline: regular open path
+            let stream = baseline_opener.open(file.clone()).unwrap().await.unwrap();
+            let baseline_values = collect_int32_values(stream).await;
+            let baseline_stats_metrics = get_pruning_metric(
+                &baseline_opener.metrics,
+                "row_groups_pruned_statistics",
+            );
+
+            let morsel_opener = ParquetOpenerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_schema(Arc::clone(&schema))
+                .with_projection_indices(&[0])
+                .with_predicate(predicate)
+                .with_row_group_stats_pruning(enable_row_group_stats_pruning)
+                .build();
+
+            // Morsel path: split into morsels and open each morsel
+            let morsels = morsel_opener.morselize(file.clone()).await.unwrap();
+            assert!(
+                !morsels.is_empty(),
+                "Expected at least one morsel for the selected row groups"
+            );
+
+            let mut morsel_values = vec![];
+            for morsel_file in morsels {
+                let morsel = morsel_file
+                    .extensions
+                    .as_ref()
+                    .and_then(|ext| ext.downcast_ref::<ParquetMorsel>())
+                    .expect("morselized file should carry ParquetMorsel extension");
+
+                assert_eq!(
+                    morsel.access_plan.row_group_indexes().len(),
+                    1,
+                    "each morsel should scan exactly one row group"
+                );
+
+                let stream = morsel_opener.open(morsel_file).unwrap().await.unwrap();
+                morsel_values.extend(collect_int32_values(stream).await);
+            }
+
+            let morsel_stats_metrics = get_pruning_metric(
+                &morsel_opener.metrics,
+                "row_groups_pruned_statistics",
+            );
+
+            assert_eq!(
+                baseline_values, morsel_values,
+                "open and morselize paths should scan equivalent data; morselize only changes work granularity"
+            );
+
+            assert_eq!(
+                baseline_stats_metrics, morsel_stats_metrics,
+                "row_groups_pruned_statistics should be equivalent for open vs morselize path (enable_row_group_stats_pruning={enable_row_group_stats_pruning})"
+            );
+        }
     }
 }
