@@ -548,6 +548,15 @@ impl FileScanConfigBuilder {
 
         // If there is an output ordering, we should preserve it.
         let preserve_order = preserve_order || !output_ordering.is_empty();
+
+        // Morsel-driven execution pools all files from all file groups into a shared
+        // work queue that any partition may consume. When `partitioned_by_file_group`
+        // is true the optimizer has declared Hash partitioning based on the assumption
+        // that partition N reads only from file_group[N]. Enabling morsel-driven in
+        // that case would break that guarantee (e.g. for `HashJoinExec: mode=Partitioned`
+        // downstream), so we force it off.
+        let morsel_driven = morsel_driven && !partitioned_by_file_group;
+
         FileScanConfig {
             object_store_url,
             file_source,
