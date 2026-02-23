@@ -1137,6 +1137,11 @@ impl GroupedHashAggregateStream {
 
         let batch_size_ratio = self.batch_size as f32 / emit.num_rows() as f32;
         let batch_memory = get_record_batch_memory_size(&emit);
+        // The maximum worst case for a sort is 2X the original underlying buffers(regardless of slicing)
+        // First we get the underlying buffers' size, then we get the sliced("actual") size of the batch,
+        // and multiply it by the ratio of batch_size to actual size to get the estimated memory needed for sorting the batch.
+        // If something goes wrong in get_sliced_size()(double counting or something),
+        // we fall back to the worst case.
         let sort_memory = (batch_memory
             + (emit.get_sliced_size()? as f32 * batch_size_ratio) as usize)
             .min(batch_memory * 2);
