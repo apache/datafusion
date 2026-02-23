@@ -109,7 +109,9 @@ jobs:
           source $HOME/.cargo/env
           rustup toolchain install
       - name: Install Protobuf Compiler
-        run: sudo apt-get install -y protobuf-compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
       - name: Rust Dependency Cache
         uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5  # v2.8.2
         with:
