@@ -468,7 +468,10 @@ impl DefaultPhysicalExprAdapterRewriter {
         column: Column,
         logical_field: &Field,
     ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
-        let actual_physical_field = self.physical_file_schema.field(column.index());
+        // Look up the column index in the physical schema by name to ensure correctness.
+        let physical_column_index = self.physical_file_schema.index_of(column.name())?;
+        let actual_physical_field =
+            self.physical_file_schema.field(physical_column_index);
 
         // For struct types, use validate_struct_compatibility which handles:
         // - Missing fields in source (filled with nulls)
