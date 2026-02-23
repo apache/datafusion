@@ -26,7 +26,7 @@ For example:
 
 ```toml
 [dependencies]
-datafusion = "52.0.0"
+datafusion = "52.1.0"
 ```
 
 While DataFusion is distributed via [crates.io] as a convenience, the

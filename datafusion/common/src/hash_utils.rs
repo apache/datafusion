@@ -20,10 +20,12 @@
 use ahash::RandomState;
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::*;
+use arrow::compute::take;
 use arrow::datatypes::*;
 #[cfg(not(feature = "force_hash_collisions"))]
 use arrow::{downcast_dictionary_array, downcast_primitive_array};
 use itertools::Itertools;
+use std::collections::HashMap;
 
 #[cfg(not(feature = "force_hash_collisions"))]
 use crate::cast::{
@@ -541,15 +543,29 @@ fn hash_map_array(
     let offsets = array.offsets();
 
     // Create hashes for each entry in each row
-    let mut values_hashes = vec![0u64; array.entries().len()];
-    create_hashes(array.entries().columns(), random_state, &mut values_hashes)?;
+    let first_offset = offsets.first().copied().unwrap_or_default() as usize;
+    let last_offset = offsets.last().copied().unwrap_or_default() as usize;
+    let entries_len = last_offset - first_offset;
+
+    // Only hash the entries that are actually referenced
+    let mut values_hashes = vec![0u64; entries_len];
+    let entries = array.entries();
+    let sliced_columns: Vec<ArrayRef> = entries
+        .columns()
+        .iter()
+        .map(|col| col.slice(first_offset, entries_len))
+        .collect();
+    create_hashes(&sliced_columns, random_state, &mut values_hashes)?;
 
     // Combine the hashes for entries on each row with each other and previous hash for that row
+    // Adjust indices by first_offset since values_hashes is sliced starting from first_offset
     if let Some(nulls) = nulls {
         for (i, (start, stop)) in offsets.iter().zip(offsets.iter().skip(1)).enumerate() {
             if nulls.is_valid(i) {
                 let hash = &mut hashes_buffer[i];
-                for values_hash in &values_hashes[start.as_usize()..stop.as_usize()] {
+                for values_hash in &values_hashes
+                    [start.as_usize() - first_offset..stop.as_usize() - first_offset]
+                {
                     *hash = combine_hashes(*hash, *values_hash);
                 }
             }
@@ -557,7 +573,9 @@ fn hash_map_array(
     } else {
         for (i, (start, stop)) in offsets.iter().zip(offsets.iter().skip(1)).enumerate() {
             let hash = &mut hashes_buffer[i];
-            for values_hash in &values_hashes[start.as_usize()..stop.as_usize()] {
+            for values_hash in &values_hashes
+                [start.as_usize() - first_offset..stop.as_usize() - first_offset]
+            {
                 *hash = combine_hashes(*hash, *values_hash);
             }
         }
@@ -662,14 +680,42 @@ fn hash_union_array(
     random_state: &RandomState,
     hashes_buffer: &mut [u64],
 ) -> Result<()> {
-    use std::collections::HashMap;
-
     let DataType::Union(union_fields, _mode) = array.data_type() else {
         unreachable!()
     };
 
-    let mut child_hashes = HashMap::with_capacity(union_fields.len());
+    if array.is_dense() {
+        // Dense union: children only contain values of their type, so they're already compact.
+        // Use the default hashing approach which is efficient for dense unions.
+        hash_union_array_default(array, union_fields, random_state, hashes_buffer)
+    } else {
+        // Sparse union: each child has the same length as the union array.
+        // Optimization: only hash the elements that are actually referenced by type_ids,
+        // instead of hashing all K*N elements (where K = num types, N = array length).
+        hash_sparse_union_array(array, union_fields, random_state, hashes_buffer)
+    }
+}
 
+/// Default hashing for union arrays - hashes all elements of each child array fully.
+///
+/// This approach works for both dense and sparse union arrays:
+/// - Dense unions: children are compact (each child only contains values of that type)
+/// - Sparse unions: children have the same length as the union array
+///
+/// For sparse unions with 3+ types, the optimized take/scatter approach in
+/// `hash_sparse_union_array` is more efficient, but for 1-2 types or dense unions,
+/// this simpler approach is preferred.
+#[cfg(not(feature = "force_hash_collisions"))]
+fn hash_union_array_default(
+    array: &UnionArray,
+    union_fields: &UnionFields,
+    random_state: &RandomState,
+    hashes_buffer: &mut [u64],
+) -> Result<()> {
+    let mut child_hashes: HashMap<i8, Vec<u64>> =
+        HashMap::with_capacity(union_fields.len());
+
+    // Hash each child array fully
     for (type_id, _field) in union_fields.iter() {
         let child = array.child(type_id);
         let mut child_hash_buffer = vec![0; child.len()];
@@ -678,6 +724,9 @@ fn hash_union_array(
         child_hashes.insert(type_id, child_hash_buffer);
     }
 
+    // Combine hashes for each row using the appropriate child offset
+    // For dense unions: value_offset points to the actual position in the child
+    // For sparse unions: value_offset equals the row index
     #[expect(clippy::needless_range_loop)]
     for i in 0..array.len() {
         let type_id = array.type_id(i);
@@ -685,6 +734,69 @@ fn hash_union_array(
 
         let child_hash = child_hashes.get(&type_id).expect("invalid type_id");
         hashes_buffer[i] = combine_hashes(hashes_buffer[i], child_hash[child_offset]);
+    }
+
+    Ok(())
+}
+
+/// Hash a sparse union array.
+/// Sparse unions have child arrays with the same length as the union array.
+/// For 3+ types, we optimize by only hashing the N elements that are actually used
+/// (via take/scatter), instead of hashing all K*N elements.
+///
+/// For 1-2 types, the overhead of take/scatter outweighs the benefit, so we use
+/// the default approach of hashing all children (same as dense unions).
+#[cfg(not(feature = "force_hash_collisions"))]
+fn hash_sparse_union_array(
+    array: &UnionArray,
+    union_fields: &UnionFields,
+    random_state: &RandomState,
+    hashes_buffer: &mut [u64],
+) -> Result<()> {
+    use std::collections::HashMap;
+
+    // For 1-2 types, the take/scatter overhead isn't worth it.
+    // Fall back to the default approach (same as dense union).
+    if union_fields.len() <= 2 {
+        return hash_union_array_default(
+            array,
+            union_fields,
+            random_state,
+            hashes_buffer,
+        );
+    }
+
+    let type_ids = array.type_ids();
+
+    // Group indices by type_id
+    let mut indices_by_type: HashMap<i8, Vec<u32>> = HashMap::new();
+    for (i, &type_id) in type_ids.iter().enumerate() {
+        indices_by_type.entry(type_id).or_default().push(i as u32);
+    }
+
+    // For each type, extract only the needed elements, hash them, and scatter back
+    for (type_id, _field) in union_fields.iter() {
+        if let Some(indices) = indices_by_type.get(&type_id) {
+            if indices.is_empty() {
+                continue;
+            }
+
+            let child = array.child(type_id);
+            let indices_array = UInt32Array::from(indices.clone());
+
+            // Extract only the elements we need using take()
+            let filtered = take(child.as_ref(), &indices_array, None)?;
+
+            // Hash the filtered array
+            let mut filtered_hashes = vec![0u64; filtered.len()];
+            create_hashes([&filtered], random_state, &mut filtered_hashes)?;
+
+            // Scatter hashes back to correct positions
+            for (hash, &idx) in filtered_hashes.iter().zip(indices.iter()) {
+                hashes_buffer[idx as usize] =
+                    combine_hashes(hashes_buffer[idx as usize], *hash);
+            }
+        }
     }
 
     Ok(())
