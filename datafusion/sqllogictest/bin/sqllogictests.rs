@@ -182,7 +182,7 @@ async fn run_tests() -> Result<()> {
                 currently_running_sql_tracker.clone();
             let file_start = Instant::now();
             SpawnedTask::spawn(async move {
-                let result = match (
+                match (
                     options.postgres_runner,
                     options.complete,
                     options.substrait_round_trip,
@@ -252,7 +252,7 @@ async fn run_tests() -> Result<()> {
                         elapsed.as_secs_f64()
                     );
                 }
-                Ok(result)
+                Ok(())
             })
             .join()
             .map(move |result| (result, relative_path, currently_running_sql_tracker))
@@ -264,7 +264,7 @@ async fn run_tests() -> Result<()> {
             move |_| {
                 let completed = completed_count.fetch_add(1, Ordering::Relaxed) + 1;
                 // In CI (no TTY), print progress every 10% or every 50 files
-                if is_ci && (completed % 50 == 0 || completed == num_tests) {
+                if is_ci && (completed.is_multiple_of(50) || completed == num_tests) {
                     eprintln!(
                         "Progress: {}/{} files completed ({:.0}%)",
                         completed,
