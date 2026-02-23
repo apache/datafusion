@@ -16,10 +16,7 @@
 // under the License.
 
 use arrow::array::{ArrayRef, AsArray, StringArray};
-use arrow::datatypes::{
-    DataType, Field, FieldRef, Float16Type, Float32Type, Float64Type, Int8Type,
-    Int16Type, Int32Type, Int64Type,
-};
+use arrow::datatypes::{DataType, Field, FieldRef, Float16Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, Decimal32Type, Decimal64Type};
 use bigdecimal::ToPrimitive;
 use datafusion::logical_expr::{ColumnarValue, Signature, TypeSignature, Volatility};
 use datafusion_common::types::{NativeType, logical_int64};
@@ -147,6 +144,22 @@ pub fn spark_bin_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
                 .as_primitive::<Float64Type>()
                 .iter()
                 .map(|opt| opt.map(|value| spark_bin(value.to_i64().unwrap())))
+                .collect();
+            Ok(Arc::new(result))
+        }
+        DataType::Decimal32(_, _) => {
+            let result: StringArray = array
+                .as_primitive::<Decimal32Type>()
+                .iter()
+                .map(|opt| opt.map(|value| spark_bin(value.into())))
+                .collect();
+            Ok(Arc::new(result))
+        }
+        DataType::Decimal64(_, _) => {
+            let result: StringArray = array
+                .as_primitive::<Decimal64Type>()
+                .iter()
+                .map(|opt| opt.map(spark_bin))
                 .collect();
             Ok(Arc::new(result))
         }
