@@ -289,6 +289,26 @@ impl FileOpener for ParquetOpener {
                 options
             };
 
+            let predicate_creation_errors = MetricBuilder::new(&metrics)
+                .global_counter("num_predicate_creation_errors");
+
+            // Step: try to prune the file using file-level statistics before loading
+            // parquet metadata. This avoids the I/O cost of reading metadata when
+            // file-level stats (available from the catalog) indicate no rows can match.
+            if let Some(pred) = predicate.as_ref() {
+                let logical_file_schema = Arc::clone(table_schema.file_schema());
+                if let Some(mut file_pruner) = FilePruner::try_new(
+                    Arc::clone(pred),
+                    &logical_file_schema,
+                    &partitioned_file,
+                    predicate_creation_errors.clone(),
+                ) && file_pruner.should_prune()?
+                {
+                    file_metrics.files_ranges_pruned_statistics.add_pruned(1);
+                    return Ok(vec![]);
+                }
+            }
+
             let mut _metadata_timer = file_metrics.metadata_load_time.timer();
             let reader_metadata =
                 ArrowReaderMetadata::load_async(&mut async_file_reader, options).await?;
@@ -307,9 +327,6 @@ impl FileOpener for ParquetOpener {
                 .as_ref()
                 .map(|p| simplifier.simplify(rewriter.rewrite(Arc::clone(p))?))
                 .transpose()?;
-
-            let predicate_creation_errors = MetricBuilder::new(&metrics)
-                .global_counter("num_predicate_creation_errors");
 
             let (pruning_predicate, _) = build_pruning_predicates(
                 adapted_predicate.as_ref(),
