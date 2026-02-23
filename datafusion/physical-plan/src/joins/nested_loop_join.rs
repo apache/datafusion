@@ -611,10 +611,6 @@ impl ExecutionPlan for NestedLoopJoinExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
-    }
-
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         // NestedLoopJoinExec is designed for joins without equijoin keys in the
         // ON clause (e.g., `t1 JOIN t2 ON (t1.v1 + t2.v1) % 2 = 0`). Any join

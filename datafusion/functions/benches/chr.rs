@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-extern crate criterion;
-
 use arrow::{array::PrimitiveArray, datatypes::Int64Type};
 use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;

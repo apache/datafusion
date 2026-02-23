@@ -58,7 +58,7 @@ DataFusion is an extensible query engine written in [Rust] that
 uses [Apache Arrow] as its in-memory format.
 
 This crate provides libraries and binaries for developers building fast and
-feature rich database and analytic systems, customized to particular workloads.
+feature-rich database and analytic systems, customized for particular workloads.
 See [use cases] for examples. The following related subprojects target end users:
 
 - [DataFusion Python](https://github.com/apache/datafusion-python/) offers a Python interface for SQL and DataFrame
@@ -67,7 +67,7 @@ See [use cases] for examples. The following related subprojects target end users
   DataFusion.
 
 "Out of the box,"
-DataFusion offers [SQL](https://datafusion.apache.org/user-guide/sql/index.html) and [Dataframe](https://datafusion.apache.org/user-guide/dataframe.html) APIs, excellent [performance],
+DataFusion offers [SQL](https://datafusion.apache.org/user-guide/sql/index.html) and [DataFrame](https://datafusion.apache.org/user-guide/dataframe.html) APIs, excellent [performance],
 built-in support for CSV, Parquet, JSON, and Avro, extensive customization, and
 a great community.
 
@@ -84,7 +84,7 @@ See the [Architecture] section for more details.
 [performance]: https://benchmark.clickhouse.com/
 [architecture]: https://datafusion.apache.org/contributor-guide/architecture.html
 
-Here are links to some important information
+Here are links to important resources:
 
 - [Project Site](https://datafusion.apache.org/)
 - [Installation](https://datafusion.apache.org/user-guide/cli/installation.html)
@@ -97,8 +97,8 @@ Here are links to some important information
 
 ## What can you do with this crate?
 
-DataFusion is great for building projects such as domain specific query engines, new database platforms and data pipelines, query languages and more.
-It lets you start quickly from a fully working engine, and then customize those features specific to your use. [Click Here](https://datafusion.apache.org/user-guide/introduction.html#known-users) to see a list known users.
+DataFusion is great for building projects such as domain-specific query engines, new database platforms and data pipelines, query languages and more.
+It lets you start quickly from a fully working engine, and then customize those features specific to your needs. See the [list of known users](https://datafusion.apache.org/user-guide/introduction.html#known-users).
 
 ## Contributing to DataFusion
 
@@ -115,15 +115,15 @@ This crate has several [features] which can be specified in your `Cargo.toml`.
 
 Default features:
 
-- `nested_expressions`: functions for working with nested type function such as `array_to_string`
+- `nested_expressions`: functions for working with nested types such as `array_to_string`
 - `compression`: reading files compressed with `xz2`, `bzip2`, `flate2`, and `zstd`
 - `crypto_expressions`: cryptographic functions such as `md5` and `sha256`
 - `datetime_expressions`: date and time functions such as `to_timestamp`
 - `encoding_expressions`: `encode` and `decode` functions
 - `parquet`: support for reading the [Apache Parquet] format
-- `sql`: Support for sql parsing / planning
+- `sql`: support for SQL parsing and planning
 - `regex_expressions`: regular expression functions, such as `regexp_match`
-- `unicode_expressions`: Include unicode aware functions such as `character_length`
+- `unicode_expressions`: include Unicode-aware functions such as `character_length`
 - `unparser`: enables support to reverse LogicalPlans back into SQL
 - `recursive_protection`: uses [recursive](https://docs.rs/recursive/latest/recursive/) for stack overflow protection.
 

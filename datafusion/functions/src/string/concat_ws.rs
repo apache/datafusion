@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{Array, StringArray, as_largestring_array};
+use arrow::array::Array;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -25,7 +25,9 @@ use crate::string::concat;
 use crate::string::concat::simplify_concat;
 use crate::string::concat_ws;
 use crate::strings::{ColumnarValueRef, StringArrayBuilder};
-use datafusion_common::cast::{as_string_array, as_string_view_array};
+use datafusion_common::cast::{
+    as_large_string_array, as_string_array, as_string_view_array,
+};
 use datafusion_common::{Result, ScalarValue, exec_err, internal_err, plan_err};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
@@ -105,7 +107,6 @@ impl ScalarUDFImpl for ConcatWsFunc {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
 
-        // do not accept 0 arguments.
         if args.len() < 2 {
             return exec_err!(
                 "concat_ws was called with {} arguments. It requires at least 2.",
@@ -113,18 +114,14 @@ impl ScalarUDFImpl for ConcatWsFunc {
             );
         }
 
-        let array_len = args
-            .iter()
-            .filter_map(|x| match x {
-                ColumnarValue::Array(array) => Some(array.len()),
-                _ => None,
-            })
-            .next();
+        let array_len = args.iter().find_map(|x| match x {
+            ColumnarValue::Array(array) => Some(array.len()),
+            _ => None,
+        });
 
         // Scalar
         if array_len.is_none() {
             let ColumnarValue::Scalar(scalar) = &args[0] else {
-                // loop above checks for all args being scalar
                 unreachable!()
             };
             let sep = match scalar.try_as_str() {
@@ -139,7 +136,6 @@ impl ScalarUDFImpl for ConcatWsFunc {
             let mut values = Vec::with_capacity(args.len() - 1);
             for arg in &args[1..] {
                 let ColumnarValue::Scalar(scalar) = arg else {
-                    // loop above checks for all args being scalar
                     unreachable!()
                 };
 
@@ -162,23 +158,53 @@ impl ScalarUDFImpl for ConcatWsFunc {
 
         // parse sep
         let sep = match &args[0] {
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some(s))) => {
-                data_size += s.len() * len * (args.len() - 2); // estimate
-                ColumnarValueRef::Scalar(s.as_bytes())
-            }
-            ColumnarValue::Scalar(ScalarValue::Utf8(None)) => {
-                return Ok(ColumnarValue::Array(Arc::new(StringArray::new_null(len))));
-            }
-            ColumnarValue::Array(array) => {
-                let string_array = as_string_array(array)?;
-                data_size += string_array.values().len() * (args.len() - 2); // estimate
-                if array.is_nullable() {
-                    ColumnarValueRef::NullableArray(string_array)
-                } else {
-                    ColumnarValueRef::NonNullableArray(string_array)
+            ColumnarValue::Scalar(scalar) => match scalar.try_as_str() {
+                Some(Some(s)) => {
+                    data_size += s.len() * len * (args.len() - 2); // estimate
+                    ColumnarValueRef::Scalar(s.as_bytes())
                 }
-            }
-            _ => unreachable!("concat ws"),
+                Some(None) => {
+                    return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)));
+                }
+                None => {
+                    return internal_err!("Expected string separator, got {scalar:?}");
+                }
+            },
+            ColumnarValue::Array(array) => match array.data_type() {
+                DataType::Utf8 => {
+                    let string_array = as_string_array(array)?;
+                    data_size += string_array.values().len() * (args.len() - 2);
+                    if array.is_nullable() {
+                        ColumnarValueRef::NullableArray(string_array)
+                    } else {
+                        ColumnarValueRef::NonNullableArray(string_array)
+                    }
+                }
+                DataType::LargeUtf8 => {
+                    let string_array = as_large_string_array(array)?;
+                    data_size += string_array.values().len() * (args.len() - 2);
+                    if array.is_nullable() {
+                        ColumnarValueRef::NullableLargeStringArray(string_array)
+                    } else {
+                        ColumnarValueRef::NonNullableLargeStringArray(string_array)
+                    }
+                }
+                DataType::Utf8View => {
+                    let string_array = as_string_view_array(array)?;
+                    data_size +=
+                        string_array.total_buffer_bytes_used() * (args.len() - 2);
+                    if array.is_nullable() {
+                        ColumnarValueRef::NullableStringViewArray(string_array)
+                    } else {
+                        ColumnarValueRef::NonNullableStringViewArray(string_array)
+                    }
+                }
+                other => {
+                    return plan_err!(
+                        "Input was {other} which is not a supported datatype for concat_ws separator"
+                    );
+                }
+            },
         };
 
         let mut columns = Vec::with_capacity(args.len() - 1);
@@ -206,7 +232,7 @@ impl ScalarUDFImpl for ConcatWsFunc {
                             columns.push(column);
                         }
                         DataType::LargeUtf8 => {
-                            let string_array = as_largestring_array(array);
+                            let string_array = as_large_string_array(array)?;
 
                             data_size += string_array.values().len();
                             let column = if array.is_nullable() {
@@ -221,11 +247,9 @@ impl ScalarUDFImpl for ConcatWsFunc {
                         DataType::Utf8View => {
                             let string_array = as_string_view_array(array)?;
 
-                            data_size += string_array
-                                .data_buffers()
-                                .iter()
-                                .map(|buf| buf.len())
-                                .sum::<usize>();
+                            // This is an estimate; in particular, it will
+                            // undercount arrays of short strings (<= 12 bytes).
+                            data_size += string_array.total_buffer_bytes_used();
                             let column = if array.is_nullable() {
                                 ColumnarValueRef::NullableStringViewArray(string_array)
                             } else {
@@ -251,18 +275,14 @@ impl ScalarUDFImpl for ConcatWsFunc {
                 continue;
             }
 
-            let mut iter = columns.iter();
-            for column in iter.by_ref() {
+            let mut first = true;
+            for column in &columns {
                 if column.is_valid(i) {
+                    if !first {
+                        builder.write::<false>(&sep, i);
+                    }
                     builder.write::<false>(column, i);
-                    break;
-                }
-            }
-
-            for column in iter {
-                if column.is_valid(i) {
-                    builder.write::<false>(&sep, i);
-                    builder.write::<false>(column, i);
+                    first = false;
                 }
             }
 
@@ -542,6 +562,80 @@ mod tests {
                 assert_eq!(&expected, array);
             }
             _ => panic!(),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn concat_ws_utf8view_scalar_separator() -> Result<()> {
+        let c0 = ColumnarValue::Scalar(ScalarValue::Utf8View(Some(",".to_string())));
+        let c1 =
+            ColumnarValue::Array(Arc::new(StringArray::from(vec!["foo", "bar", "baz"])));
+        let c2 = ColumnarValue::Array(Arc::new(StringArray::from(vec![
+            Some("x"),
+            None,
+            Some("z"),
+        ])));
+
+        let arg_fields = vec![
+            Field::new("a", Utf8, true).into(),
+            Field::new("a", Utf8, true).into(),
+            Field::new("a", Utf8, true).into(),
+        ];
+        let args = ScalarFunctionArgs {
+            args: vec![c0, c1, c2],
+            arg_fields,
+            number_rows: 3,
+            return_field: Field::new("f", Utf8, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+
+        let result = ConcatWsFunc::new().invoke_with_args(args)?;
+        let expected =
+            Arc::new(StringArray::from(vec!["foo,x", "bar", "baz,z"])) as ArrayRef;
+        match &result {
+            ColumnarValue::Array(array) => {
+                assert_eq!(&expected, array);
+            }
+            _ => panic!("Expected array result"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn concat_ws_largeutf8_scalar_separator() -> Result<()> {
+        let c0 = ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(",".to_string())));
+        let c1 =
+            ColumnarValue::Array(Arc::new(StringArray::from(vec!["foo", "bar", "baz"])));
+        let c2 = ColumnarValue::Array(Arc::new(StringArray::from(vec![
+            Some("x"),
+            None,
+            Some("z"),
+        ])));
+
+        let arg_fields = vec![
+            Field::new("a", Utf8, true).into(),
+            Field::new("a", Utf8, true).into(),
+            Field::new("a", Utf8, true).into(),
+        ];
+        let args = ScalarFunctionArgs {
+            args: vec![c0, c1, c2],
+            arg_fields,
+            number_rows: 3,
+            return_field: Field::new("f", Utf8, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+
+        let result = ConcatWsFunc::new().invoke_with_args(args)?;
+        let expected =
+            Arc::new(StringArray::from(vec!["foo,x", "bar", "baz,z"])) as ArrayRef;
+        match &result {
+            ColumnarValue::Array(array) => {
+                assert_eq!(&expected, array);
+            }
+            _ => panic!("Expected array result"),
         }
 
         Ok(())

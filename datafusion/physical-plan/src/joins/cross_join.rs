@@ -356,10 +356,6 @@ impl ExecutionPlan for CrossJoinExec {
         }
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
-    }
-
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         // Get the all partitions statistics of the left
         let left_stats = self.left.partition_statistics(None)?;

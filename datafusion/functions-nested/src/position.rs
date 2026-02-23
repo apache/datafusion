@@ -164,7 +164,6 @@ fn general_position_dispatch<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<Ar
     let arr_from = if args.len() == 3 {
         as_int64_array(&args[2])?
             .values()
-            .to_vec()
             .iter()
             .map(|&x| x - 1)
             .collect::<Vec<_>>()

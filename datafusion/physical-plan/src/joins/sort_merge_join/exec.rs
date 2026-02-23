@@ -519,10 +519,6 @@ impl ExecutionPlan for SortMergeJoinExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
-    }
-
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         // SortMergeJoinExec uses symmetric hash partitioning where both left and right
         // inputs are hash-partitioned on the join keys. This means partition `i` of the
