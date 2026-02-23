@@ -90,7 +90,7 @@ pub struct GroupValuesPrimitive<T: ArrowPrimitiveType> {
     /// is obvious in high cardinality group by situation.
     /// More details can see:
     /// <https://github.com/apache/datafusion/issues/15961>
-    map: HashTable<(usize, u64)>,
+    map: HashTable<(u64, u64)>,
     /// The group index of the null value if any
     null_group: Option<u64>,
 
@@ -244,22 +244,22 @@ where
                     // Get block infos and update block,
                     // we need `current block` and `next offset in block`
                     let block_id = self.values.len() as u32 - 1;
+                    // Safety: we have already ensured that the block exists
                     let current_block = self.values.back_mut().unwrap();
                     let block_offset = current_block.len() as u64;
                     current_block.push(Default::default());
 
                     // Get group index and finish actions needed it
                     O::pack_index(block_id, block_offset)
-                }) as usize,
+                }),
                 Some(key) => {
                     let state = &self.random_state;
                     let hash = key.hash(state);
                     let insert = self.map.entry(
                         hash,
-                        |&(g, _)| unsafe {
-                            let packed_index = g as u64;
-                            let block_id = O::get_block_id(packed_index);
-                            let block_offset = O::get_block_offset(packed_index);
+                        |&(idx, _)| unsafe {
+                            let block_id = O::get_block_id(idx);
+                            let block_offset = O::get_block_offset(idx);
                             self.values
                                 .get(block_id as usize)
                                 .unwrap()
@@ -271,8 +271,8 @@ where
 
                     match insert {
                         hashbrown::hash_table::Entry::Occupied(o) => {
-                            let (packed_index, _) = *o.get();
-                            packed_index
+                            let (idx, _) = *o.get();
+                            idx
                         }
                         hashbrown::hash_table::Entry::Vacant(v) => {
                             // Actions before add new group like checking if room is enough
@@ -286,15 +286,14 @@ where
                             current_block.push(key);
 
                             // Get group index and finish actions needed it
-                            let packed_index =
-                                O::pack_index(block_id, block_offset) as usize;
+                            let packed_index = O::pack_index(block_id, block_offset);
                             v.insert((packed_index, hash));
                             packed_index
                         }
                     }
                 }
             };
-            groups.push(packed_index)
+            groups.push(packed_index as usize)
         }
         Ok(())
     }
@@ -335,13 +334,13 @@ where
                 let n = n as u64;
                 // Decrement group index by n in `map`
                 self.map.retain(|entry| {
-                    let packed_index = entry.0 as u64;
+                    let packed_index = entry.0;
                     let blk_offset = O::get_block_offset(packed_index);
                     match blk_offset.checked_sub(n) {
                         // Group index was >= n, shift value down
                         Some(sub) => {
                             let packed_index = O::pack_index(0, sub);
-                            entry.0 = packed_index as usize;
+                            entry.0 = packed_index;
                             true
                         }
                         // Group index was < n, so remove from table
@@ -402,8 +401,7 @@ where
             }
             (blk_size, emit_to) => {
                 return internal_err!(
-                    "invalid emit_to for mode, emit_to:{emit_to:?}, block_size:{:?}",
-                    self.block_size
+                    "invalid emit_to for mode, block_size:{blk_size:?}, emit_to:{emit_to:?}",
                 );
             }
         };
