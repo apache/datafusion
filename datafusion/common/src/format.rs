@@ -161,11 +161,12 @@ impl Default for OwnedFormatOptions {
     }
 }
 
-/// Owned version of Arrow's `CastOptions` with `OwnedFormatOptions` instead of `FormatOptions<'static>`.
+/// Owned version of Arrow's `CastOptions` with `OwnedFormatOptions` instead of `FormatOptions<'a>`.
 ///
-/// Arrow's `CastOptions<'static>` requires `FormatOptions<'static>`, which mandates
-/// `&'static str` references. This struct uses `OwnedFormatOptions` with `String` values,
-/// allowing dynamic cast options to be created without memory leaks.
+/// While Arrow's `CastOptions<'a>` accepts generic lifetimes, the default constants and
+/// public APIs are designed around `'static` strings (e.g., hardcoded format strings).
+/// This struct uses `OwnedFormatOptions` with `String` values, allowing dynamic cast options
+/// to be created and owned at runtime without lifetime constraints.
 ///
 /// # Conversion to Arrow Types
 ///
