@@ -16,7 +16,10 @@
 // under the License.
 
 use arrow::array::{ArrayRef, AsArray, StringArray};
-use arrow::datatypes::{DataType, Field, FieldRef, Float16Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, Decimal32Type, Decimal64Type};
+use arrow::datatypes::{
+    DataType, Decimal32Type, Decimal64Type, Field, FieldRef, Float16Type, Float32Type,
+    Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
+};
 use bigdecimal::ToPrimitive;
 use datafusion::logical_expr::{ColumnarValue, Signature, TypeSignature, Volatility};
 use datafusion_common::types::{NativeType, logical_int64};
