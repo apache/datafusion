@@ -699,7 +699,7 @@ fn increment_time_secs(value: i32, granularity: DateTruncGranularity) -> i32 {
     }
 }
 
-/// Helper to increment a DateTime<Tz> by calendar granularity
+/// Increment a calendar `DateTime<Tz>` (with timezone) by the specified granularity
 fn _increment_calendar_with_tz(
     granularity: DateTruncGranularity,
     dt: DateTime<Tz>,
@@ -722,7 +722,7 @@ fn _increment_calendar_with_tz(
         .ok_or(exec_datafusion_err!("Timestamp overflow"))
 }
 
-/// Helper to increment a NaiveDateTime by calendar granularity
+/// Increment a calendar `NaiveDateTime` (without timezone) by the specified granularity
 fn _increment_calendar_without_tz(
     granularity: DateTruncGranularity,
     dt: NaiveDateTime,
