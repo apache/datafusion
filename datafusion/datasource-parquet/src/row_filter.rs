@@ -553,8 +553,8 @@ fn size_of_columns(columns: &[usize], metadata: &ParquetMetaData) -> Result<usiz
 /// Sorted columns may be queried more efficiently in the presence of
 /// a PageIndex.
 fn columns_sorted(columns: &[usize], metadata: &ParquetMetaData) -> Result<bool> {
-    // Conservative v1: only single-column predicates are considered for
-    // index-accelerated ordering.
+    // Only single-column predicates are considered index-usable, matching
+    // current page-index pruning behavior.
     if columns.len() != 1 {
         return Ok(false);
     }
