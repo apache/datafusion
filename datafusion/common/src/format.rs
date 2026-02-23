@@ -37,9 +37,10 @@ pub const DEFAULT_CAST_OPTIONS: CastOptions<'static> = CastOptions {
 
 /// Owned version of Arrow's `FormatOptions` with all `String` values instead of `&str`.
 ///
-/// Arrow's `FormatOptions<'static>` requires `&'static str` references, which makes it
-/// difficult to work with dynamic format options. This struct uses `String` values,
-/// allowing format options to be created and owned at runtime without lifetime constraints.
+/// While Arrow's `FormatOptions<'a>` accepts generic lifetimes, the default constants and
+/// public APIs are designed around `'static` strings (e.g., hardcoded format strings).
+/// This struct uses `String` values, allowing format options to be created and owned at
+/// runtime without lifetime constraints.
 ///
 /// # Conversion to Arrow Types
 ///
