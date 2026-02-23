@@ -633,6 +633,8 @@ impl ParquetFormat {
 /// # Arguments
 /// * `table_schema` - The table schema containing the desired types
 /// * `file_schema` - The file schema to be transformed
+/// * `enable_field_ids` - If true, matches columns by field ID first, then falls back to name.
+///   If false, matches columns by name only
 ///
 /// # Returns
 /// * `Some(Schema)` - If any transformations were applied, returns the transformed schema

@@ -48,7 +48,34 @@ fn create_parquet_file_with_field_ids(
     Ok(())
 }
 
-/// Helper to create a schema with field IDs in metadata
+/// Creates an Arrow schema with field IDs stored in metadata
+///
+/// # Arguments
+/// * `fields` - Vector of `(name, data_type, field_id)` tuples
+///
+/// # Returns
+/// Arrow `Schema` (in-memory) with field IDs in field metadata.
+/// When written to Parquet, field IDs are transferred to the Parquet schema.
+///
+/// # Example
+/// ```
+/// schema_with_field_ids(vec![
+///     ("id".to_string(), DataType::Int32, 1),
+///     ("name".to_string(), DataType::Utf8, 2),
+/// ]);
+/// ```
+///
+/// Creates Arrow schema (in-memory):
+/// ```
+/// Field("id", Int32, metadata={"PARQUET:field_id": "1"})
+/// Field("name", Utf8, metadata={"PARQUET:field_id": "2"})
+/// ```
+///
+/// When written to Parquet, produces Parquet schema (on-disk):
+/// ```
+/// Column[0]: "id"   (INT32, field_id=1)
+/// Column[1]: "name" (BYTE_ARRAY/UTF8, field_id=2)
+/// ```
 fn schema_with_field_ids(fields: Vec<(String, DataType, i32)>) -> Schema {
     use datafusion_common::parquet_config::PARQUET_FIELD_ID_META_KEY;
 

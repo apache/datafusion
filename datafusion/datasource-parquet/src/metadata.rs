@@ -95,7 +95,7 @@ fn add_field_ids_to_arrow_schema(
     // Validate that schema is flat (no nested types)
     // This prevents incorrect field ID assignment for complex types
     for (idx, field) in arrow_schema.fields().iter().enumerate() {
-        if is_nested_type(field.data_type()) {
+        if field.data_type().is_nested() {
             return not_impl_err!(
                 "Field ID reading is not yet supported for nested/complex types. \
                  Field '{}' at index {} has type {:?}.",
@@ -134,23 +134,6 @@ fn add_field_ids_to_arrow_schema(
         fields_with_ids,
         arrow_schema.metadata().clone(),
     ))
-}
-
-/// Helper function to check if a data type is nested/complex
-fn is_nested_type(data_type: &DataType) -> bool {
-    matches!(
-        data_type,
-        DataType::List(_)
-            | DataType::LargeList(_)
-            | DataType::FixedSizeList(_, _)
-            | DataType::Struct(_)
-            | DataType::Union(_, _)
-            | DataType::Map(_, _)
-            | DataType::Dictionary(_, _)
-            | DataType::RunEndEncoded(_, _)
-            | DataType::ListView(_)
-            | DataType::LargeListView(_)
-    )
 }
 
 impl<'a> DFParquetMetadata<'a> {
@@ -282,7 +265,6 @@ impl<'a> DFParquetMetadata<'a> {
                 add_field_ids_to_arrow_schema(&schema, file_metadata.schema_descr())?;
         }
 
-        // Apply INT96 coercion if configured
         let schema = self
             .coerce_int96
             .as_ref()
@@ -294,7 +276,6 @@ impl<'a> DFParquetMetadata<'a> {
                 )
             })
             .unwrap_or(schema);
-
         Ok(schema)
     }
 
