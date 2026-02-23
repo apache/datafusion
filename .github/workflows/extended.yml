@@ -162,8 +162,8 @@ jobs:
 
   sqllogictest-sqlite:
     name: "Run sqllogictests with the sqlite test suite"
-    runs-on: ${{ github.repository_owner == 'apache' && format('runs-on={0},family=m8a,cpu=48,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion,spot=false', github.run_id) || 'ubuntu-latest' }}
-    # spot=false because the tests are long, https://runs-on.com/configuration/spot-instances/#disable-spot-pricing
+    runs-on: ${{ github.repository_owner == 'apache' && format('runs-on={0},family=c7i,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion,spot=false', github.run_id) || 'ubuntu-latest' }}
+    # c7i (Intel) for better single-thread performance; spot=false because tests are long
     container:
       image: amd64/rust
     steps:
