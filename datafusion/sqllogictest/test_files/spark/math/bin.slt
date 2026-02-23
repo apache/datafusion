@@ -36,7 +36,7 @@ SELECT bin(arrow_cast(13.36, 'Float16'));
 1101
 
 query T
-SELECT bin(arrow_cast(13, 'Decimal16(5,2)'));
+SELECT bin(arrow_cast(13.3, 'Decimal(3,1)'));
 ----
 1101
 
