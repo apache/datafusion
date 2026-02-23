@@ -242,6 +242,9 @@ impl Optimizer {
         // - Adding a new rule here is expensive as it will be applied to all
         //   queries, and will likely increase the optimization time. Please extend
         //   existing rules when possible, rather than adding a new rule.
+        //   If you do add a new rule considering having aggressive no-op paths
+        //   (e.g. if the plan doesn't contain any of the nodes you are looking for
+        //    return `Transformed::no`; only works if you control the traversal).
         let rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![
             Arc::new(RewriteSetComparison::new()),
             Arc::new(OptimizeUnions::new()),
