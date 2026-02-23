@@ -551,12 +551,12 @@ fn parse_duration_format(
     }
 }
 
-fn cast_options_from_proto(
-    cast_options: Option<&protobuf::PhysicalCastOptions>,
+fn cast_options_from_proto<'a>(
+    cast_options: Option<&'a protobuf::PhysicalCastOptions>,
     safe: bool,
-    format_options: Option<&protobuf::FormatOptions>,
-) -> Result<Option<CastOptions<'_>>> {
-    let parse_format_options = |fo: &protobuf::FormatOptions| {
+    format_options: Option<&'a protobuf::FormatOptions>,
+) -> Result<Option<CastOptions<'a>>> {
+    let parse_format_options = |fo: &'a protobuf::FormatOptions| {
         FormatOptions::new()
             .with_null(fo.null.as_str())
             .with_date_format(fo.date_format.as_deref())
