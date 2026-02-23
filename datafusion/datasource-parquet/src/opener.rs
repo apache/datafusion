@@ -431,7 +431,12 @@ impl FileOpener for ParquetOpener {
             // The page index is not stored inline in the parquet footer so the
             // code above may not have read the page index structures yet. If we
             // need them for reading and they aren't yet loaded, we need to load them now.
-            if should_enable_page_index(enable_page_index, &page_pruning_predicate) {
+            if should_enable_page_index(
+                enable_page_index,
+                &page_pruning_predicate,
+                pushdown_filters,
+                reorder_predicates,
+            ) {
                 reader_metadata = load_page_index(
                     reader_metadata,
                     &mut async_file_reader,
@@ -1003,20 +1008,27 @@ async fn load_page_index<T: AsyncFileReader>(
 fn should_enable_page_index(
     enable_page_index: bool,
     page_pruning_predicate: &Option<Arc<PagePruningAccessPlanFilter>>,
+    pushdown_filters: bool,
+    reorder_predicates: bool,
 ) -> bool {
-    enable_page_index
-        && page_pruning_predicate.is_some()
+    let needed_for_page_pruning = page_pruning_predicate.is_some()
         && page_pruning_predicate
             .as_ref()
             .map(|p| p.filter_number() > 0)
-            .unwrap_or(false)
+            .unwrap_or(false);
+
+    // Reordered row filters can consult page-index sortedness metadata when
+    // estimating the best predicate order.
+    let needed_for_row_filter_reordering = pushdown_filters && reorder_predicates;
+
+    enable_page_index && (needed_for_page_pruning || needed_for_row_filter_reordering)
 }
 
 #[cfg(test)]
 mod test {
     use std::sync::Arc;
 
-    use super::{ConstantColumns, constant_columns_from_stats};
+    use super::{ConstantColumns, constant_columns_from_stats, should_enable_page_index};
     use crate::{DefaultParquetFileReaderFactory, RowGroupAccess, opener::ParquetOpener};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use bytes::{BufMut, BytesMut};
@@ -1200,6 +1212,16 @@ mod test {
                 preserve_order: self.preserve_order,
             }
         }
+    }
+
+    #[test]
+    fn should_enable_page_index_for_reordered_row_filters() {
+        assert!(should_enable_page_index(true, &None, true, true));
+    }
+
+    #[test]
+    fn should_not_enable_page_index_when_feature_disabled() {
+        assert!(!should_enable_page_index(false, &None, true, true));
     }
 
     fn constant_int_stats() -> (Statistics, SchemaRef) {
