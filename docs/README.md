@@ -25,19 +25,12 @@ https://datafusion.apache.org/ as part of the release process.
 
 ## Dependencies
 
-It's recommended to install build dependencies and build the documentation
-inside a Python virtualenv.
+Install build dependencies and build the documentation using
+[uv](https://docs.astral.sh/uv/):
 
 ```sh
-python3 -m venv venv
-pip install -r requirements.txt
-```
-
-If using [uv](https://docs.astral.sh/uv/) the script can be run like so without
-needing to create a virtual environment:
-
-```sh
-uv run --with-requirements requirements.txt bash build.sh
+uv sync
+uv run bash build.sh
 ```
 
 The docs build regenerates the workspace dependency graph via

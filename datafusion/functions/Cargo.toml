@@ -194,6 +194,11 @@ required-features = ["math_expressions"]
 
 [[bench]]
 harness = false
+name = "atan2"
+required-features = ["math_expressions"]
+
+[[bench]]
+harness = false
 name = "substr_index"
 required-features = ["unicode_expressions"]
 

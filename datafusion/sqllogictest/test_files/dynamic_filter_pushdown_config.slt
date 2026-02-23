@@ -187,6 +187,197 @@ physical_plan
 statement ok
 SET datafusion.optimizer.enable_join_dynamic_filter_pushdown = true;
 
+# Test 2b: Dynamic filter pushdown for non-inner join types
+# LEFT JOIN: optimizer swaps to physical Right join (build=right_parquet, probe=left_parquet).
+# Dynamic filter is NOT pushed because Right join needs all probe rows in output.
+query TT
+EXPLAIN SELECT l.*, r.info
+FROM left_parquet l
+LEFT JOIN right_parquet r ON l.id = r.id;
+----
+logical_plan
+01)Projection: l.id, l.data, r.info
+02)--Left Join: l.id = r.id
+03)----SubqueryAlias: l
+04)------TableScan: left_parquet projection=[id, data]
+05)----SubqueryAlias: r
+06)------TableScan: right_parquet projection=[id, info]
+physical_plan
+01)ProjectionExec: expr=[id@1 as id, data@2 as data, info@0 as info]
+02)--HashJoinExec: mode=CollectLeft, join_type=Right, on=[(id@0, id@0)], projection=[info@1, id@2, data@3]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id, info], file_type=parquet
+04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet
+
+# LEFT JOIN correctness: all left rows appear, unmatched right rows produce NULLs
+query ITT
+SELECT l.id, l.data, r.info
+FROM left_parquet l
+LEFT JOIN right_parquet r ON l.id = r.id
+ORDER BY l.id;
+----
+1 left1 right1
+2 left2 NULL
+3 left3 right3
+4 left4 NULL
+5 left5 right5
+
+# RIGHT JOIN: optimizer swaps to physical Left join (build=right_parquet, probe=left_parquet).
+# No self-generated dynamic filter (only Inner joins get that), but parent filters
+# on the preserved (build) side can still push down.
+query TT
+EXPLAIN SELECT l.*, r.info
+FROM left_parquet l
+RIGHT JOIN right_parquet r ON l.id = r.id;
+----
+logical_plan
+01)Projection: l.id, l.data, r.info
+02)--Right Join: l.id = r.id
+03)----SubqueryAlias: l
+04)------TableScan: left_parquet projection=[id, data]
+05)----SubqueryAlias: r
+06)------TableScan: right_parquet projection=[id, info]
+physical_plan
+01)ProjectionExec: expr=[id@1 as id, data@2 as data, info@0 as info]
+02)--HashJoinExec: mode=CollectLeft, join_type=Left, on=[(id@0, id@0)], projection=[info@1, id@2, data@3]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id, info], file_type=parquet
+04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet
+
+# RIGHT JOIN correctness: all right rows appear, unmatched left rows produce NULLs
+query ITT
+SELECT l.id, l.data, r.info
+FROM left_parquet l
+RIGHT JOIN right_parquet r ON l.id = r.id
+ORDER BY r.id;
+----
+1 left1 right1
+3 left3 right3
+5 left5 right5
+
+# FULL JOIN: dynamic filter should NOT be pushed (both sides must preserve all rows)
+query TT
+EXPLAIN SELECT l.id, r.id as rid, l.data, r.info
+FROM left_parquet l
+FULL JOIN right_parquet r ON l.id = r.id;
+----
+logical_plan
+01)Projection: l.id, r.id AS rid, l.data, r.info
+02)--Full Join: l.id = r.id
+03)----SubqueryAlias: l
+04)------TableScan: left_parquet projection=[id, data]
+05)----SubqueryAlias: r
+06)------TableScan: right_parquet projection=[id, info]
+physical_plan
+01)ProjectionExec: expr=[id@2 as id, id@0 as rid, data@3 as data, info@1 as info]
+02)--HashJoinExec: mode=CollectLeft, join_type=Full, on=[(id@0, id@0)]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id, info], file_type=parquet
+04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet
+
+# LEFT SEMI JOIN: optimizer swaps to RightSemi (build=right_parquet, probe=left_parquet).
+# No self-generated dynamic filter (only Inner joins), but parent filters on
+# the preserved (probe) side can push down.
+query TT
+EXPLAIN SELECT l.*
+FROM left_parquet l
+WHERE l.id IN (SELECT r.id FROM right_parquet r);
+----
+logical_plan
+01)LeftSemi Join: l.id = __correlated_sq_1.id
+02)--SubqueryAlias: l
+03)----TableScan: left_parquet projection=[id, data]
+04)--SubqueryAlias: __correlated_sq_1
+05)----SubqueryAlias: r
+06)------TableScan: right_parquet projection=[id]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(id@0, id@0)]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id], file_type=parquet
+03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet
+
+# LEFT ANTI JOIN: no self-generated dynamic filter, but parent filters can push
+# to the preserved (left/build) side.
+query TT
+EXPLAIN SELECT l.*
+FROM left_parquet l
+WHERE l.id NOT IN (SELECT r.id FROM right_parquet r);
+----
+logical_plan
+01)LeftAnti Join: l.id = __correlated_sq_1.id
+02)--SubqueryAlias: l
+03)----TableScan: left_parquet projection=[id, data]
+04)--SubqueryAlias: __correlated_sq_1
+05)----SubqueryAlias: r
+06)------TableScan: right_parquet projection=[id]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(id@0, id@0)]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet
+03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id], file_type=parquet
+
+# Test 2c: Parent dynamic filter (from TopK) pushed through semi/anti joins
+# Sort on the join key (id) so the TopK dynamic filter pushes to BOTH sides.
+
+# SEMI JOIN with TopK parent: TopK generates a dynamic filter on `id` (join key)
+# that pushes through the RightSemi join to both the build and probe sides.
+query TT
+EXPLAIN SELECT l.*
+FROM left_parquet l
+WHERE l.id IN (SELECT r.id FROM right_parquet r)
+ORDER BY l.id LIMIT 2;
+----
+logical_plan
+01)Sort: l.id ASC NULLS LAST, fetch=2
+02)--LeftSemi Join: l.id = __correlated_sq_1.id
+03)----SubqueryAlias: l
+04)------TableScan: left_parquet projection=[id, data]
+05)----SubqueryAlias: __correlated_sq_1
+06)------SubqueryAlias: r
+07)--------TableScan: right_parquet projection=[id]
+physical_plan
+01)SortExec: TopK(fetch=2), expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(id@0, id@0)]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id], file_type=parquet, predicate=DynamicFilter [ empty ]
+04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet, predicate=DynamicFilter [ empty ]
+
+# Correctness check
+query IT
+SELECT l.*
+FROM left_parquet l
+WHERE l.id IN (SELECT r.id FROM right_parquet r)
+ORDER BY l.id LIMIT 2;
+----
+1 left1
+3 left3
+
+# ANTI JOIN with TopK parent: TopK generates a dynamic filter on `id` (join key)
+# that pushes through the LeftAnti join to both the preserved and non-preserved sides.
+query TT
+EXPLAIN SELECT l.*
+FROM left_parquet l
+WHERE l.id NOT IN (SELECT r.id FROM right_parquet r)
+ORDER BY l.id LIMIT 2;
+----
+logical_plan
+01)Sort: l.id ASC NULLS LAST, fetch=2
+02)--LeftAnti Join: l.id = __correlated_sq_1.id
+03)----SubqueryAlias: l
+04)------TableScan: left_parquet projection=[id, data]
+05)----SubqueryAlias: __correlated_sq_1
+06)------SubqueryAlias: r
+07)--------TableScan: right_parquet projection=[id]
+physical_plan
+01)SortExec: TopK(fetch=2), expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(id@0, id@0)]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet, predicate=DynamicFilter [ empty ]
+04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id], file_type=parquet, predicate=DynamicFilter [ empty ]
+
+# Correctness check
+query IT
+SELECT l.*
+FROM left_parquet l
+WHERE l.id NOT IN (SELECT r.id FROM right_parquet r)
+ORDER BY l.id LIMIT 2;
+----
+2 left2
+4 left4
+
 # Test 3: Test independent control
 
 # Disable TopK, keep Join enabled
@@ -437,6 +628,97 @@ physical_plan
 02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0)], projection=[info@1, id@2, data@3]
 03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id, info], file_type=parquet
 04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet, predicate=DynamicFilter [ empty ]
+
+# Test 6: Regression test for issue #20213 - dynamic filter applied to wrong table
+# when subquery join has same column names on both sides.
+#
+# The bug: when an outer join pushes a DynamicFilter for column "k" through an
+# inner join where both sides have a column named "k", the name-based routing
+# incorrectly pushed the filter to BOTH sides instead of only the correct one.
+# This caused wrong results (0 rows instead of expected).
+
+# Create tables with same column names (k, v) on both sides
+statement ok
+CREATE TABLE issue_20213_t1(k INT, v INT) AS
+SELECT i as k, i as v FROM generate_series(1, 1000) t(i);
+
+statement ok
+CREATE TABLE issue_20213_t2(k INT, v INT) AS
+SELECT i + 100 as k, i as v FROM generate_series(1, 100) t(i);
+
+# Use small row groups to make statistics-based pruning more likely to manifest the bug
+statement ok
+SET datafusion.execution.parquet.max_row_group_size = 10;
+
+query I
+COPY issue_20213_t1 TO 'test_files/scratch/dynamic_filter_pushdown_config/issue_20213_t1.parquet' STORED AS PARQUET;
+----
+1000
+
+query I
+COPY issue_20213_t2 TO 'test_files/scratch/dynamic_filter_pushdown_config/issue_20213_t2.parquet' STORED AS PARQUET;
+----
+100
+
+# Reset row group size
+statement ok
+SET datafusion.execution.parquet.max_row_group_size = 1000000;
+
+statement ok
+CREATE EXTERNAL TABLE t1_20213(k INT, v INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/dynamic_filter_pushdown_config/issue_20213_t1.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE t2_20213(k INT, v INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/dynamic_filter_pushdown_config/issue_20213_t2.parquet';
+
+# The query from issue #20213: subquery joins t1 and t2 on v, then outer
+# join uses t2's k column. The dynamic filter on k from the outer join
+# must only apply to t2 (k range 101-200), NOT to t1 (k range 1-1000).
+query I
+SELECT count(*) FROM (
+    SELECT t2_20213.k as k, t1_20213.k as k2
+    FROM t1_20213
+    JOIN t2_20213 ON t1_20213.v = t2_20213.v
+) a
+JOIN t2_20213 b ON a.k = b.k
+WHERE b.v < 10;
+----
+9
+
+# Also verify with SELECT * to catch row-level correctness
+query IIII rowsort
+SELECT * FROM (
+    SELECT t2_20213.k as k, t1_20213.k as k2
+    FROM t1_20213
+    JOIN t2_20213 ON t1_20213.v = t2_20213.v
+) a
+JOIN t2_20213 b ON a.k = b.k
+WHERE b.v < 10;
+----
+101 1 101 1
+102 2 102 2
+103 3 103 3
+104 4 104 4
+105 5 105 5
+106 6 106 6
+107 7 107 7
+108 8 108 8
+109 9 109 9
+
+statement ok
+DROP TABLE issue_20213_t1;
+
+statement ok
+DROP TABLE issue_20213_t2;
+
+statement ok
+DROP TABLE t1_20213;
+
+statement ok
+DROP TABLE t2_20213;
 
 # Cleanup
 
