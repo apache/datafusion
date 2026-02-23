@@ -869,7 +869,7 @@ async fn parquet_explain_analyze() {
     );
     assert_contains!(
         &formatted,
-        "row_groups_pruned_statistics=1 total \u{2192} 1 matched"
+        "row_groups_pruned_statistics=2 total \u{2192} 2 matched"
     );
     assert_contains!(&formatted, "scan_efficiency_ratio=14%");
 
