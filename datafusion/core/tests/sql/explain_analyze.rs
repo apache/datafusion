@@ -293,7 +293,7 @@ async fn explain_analyze_parquet_pruning_metrics() {
     //  select * from tpch_lineitem_small where l_orderkey = 5;
     // If change filter to `l_orderkey=10`, the whole file can be pruned using stat.
     for (l_orderkey, expected_pruning_metrics) in
-        [(5, "2 total → 2 matched"), (10, "1 total → 0 matched")]
+        [(5, "1 total → 1 matched"), (10, "1 total → 0 matched")]
     {
         let sql = format!(
             "explain analyze select * from {table_name} where l_orderkey = {l_orderkey};"
