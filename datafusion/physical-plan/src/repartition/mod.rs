@@ -1375,6 +1375,26 @@ impl RepartitionExec {
 
             for res in partitioner.partition_iter(batch)? {
                 let (partition, batch) = res?;
+
+                let batch = {
+                    use arrow::array::{Array, StringViewArray};
+                    let mut new_columns = Vec::with_capacity(batch.num_columns());
+                    let mut mutated = false;
+                    for col in batch.columns() {
+                        if let Some(sv) = col.as_any().downcast_ref::<StringViewArray>() {
+                            new_columns.push(Arc::new(sv.gc()) as Arc<dyn Array>);
+                            mutated = true;
+                        } else {
+                            new_columns.push(Arc::clone(col));
+                        }
+                    }
+                    if mutated {
+                        RecordBatch::try_new(batch.schema(), new_columns)?
+                    } else {
+                        batch
+                    }
+                };
+
                 let size = batch.get_array_memory_size();
 
                 let timer = metrics.send_time[partition].timer();
