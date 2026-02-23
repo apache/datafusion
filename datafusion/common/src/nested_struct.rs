@@ -254,7 +254,9 @@ pub fn validate_struct_compatibility(
     Ok(())
 }
 
-fn validate_field_compatibility(
+/// Validates that a source field can be cast to a target field, including
+/// nullability checks and nested struct compatibility.
+pub fn validate_field_compatibility(
     source_field: &Field,
     target_field: &Field,
 ) -> Result<()> {
