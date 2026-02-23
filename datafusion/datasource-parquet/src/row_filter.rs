@@ -552,9 +552,30 @@ fn size_of_columns(columns: &[usize], metadata: &ParquetMetaData) -> Result<usiz
 ///
 /// Sorted columns may be queried more efficiently in the presence of
 /// a PageIndex.
-fn columns_sorted(_columns: &[usize], _metadata: &ParquetMetaData) -> Result<bool> {
-    // TODO How do we know this?
-    Ok(false)
+fn columns_sorted(columns: &[usize], metadata: &ParquetMetaData) -> Result<bool> {
+    // Conservative v1: only single-column predicates are considered for
+    // index-accelerated ordering.
+    if columns.len() != 1 {
+        return Ok(false);
+    }
+
+    let Some(column_index) = metadata.column_index() else {
+        return Ok(false);
+    };
+
+    let column_idx = columns[0];
+    for row_group in column_index {
+        let Some(index) = row_group.get(column_idx) else {
+            return Ok(false);
+        };
+        if !index.is_sorted() {
+            // If any row group is not sorted we can't assume page-index based
+            // pruning will help this predicate.
+            return Ok(false);
+        }
+    }
+
+    Ok(true)
 }
 
 /// Build a [`RowFilter`] from the given predicate expression if possible.
@@ -612,7 +633,8 @@ pub fn build_row_filter(
 
     if reorder_predicates {
         candidates.sort_unstable_by(|c1, c2| {
-            match c1.can_use_index.cmp(&c2.can_use_index) {
+            // Prefer predicates that can use page index information first.
+            match c2.can_use_index.cmp(&c1.can_use_index) {
                 Ordering::Equal => c1.required_bytes.cmp(&c2.required_bytes),
                 ord => ord,
             }
@@ -675,8 +697,12 @@ mod test {
     use datafusion_physical_plan::metrics::{Count, ExecutionPlanMetricsSet, Time};
 
     use parquet::arrow::ArrowWriter;
-    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    use parquet::arrow::arrow_reader::{
+        ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
+    };
     use parquet::arrow::parquet_to_arrow_schema;
+    use parquet::file::metadata::SortingColumn;
+    use parquet::file::properties::WriterProperties;
     use parquet::file::reader::{FileReader, SerializedFileReader};
     use tempfile::NamedTempFile;
 
@@ -1048,6 +1074,59 @@ mod test {
         let expr = logical2physical(&expr, &table_schema);
 
         assert!(can_expr_be_pushed_down_with_schemas(&expr, &table_schema));
+    }
+
+    #[test]
+    fn columns_sorted_returns_true_for_sorted_single_column_with_page_index() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(arrow::array::Int32Array::from(vec![1, 2, 3, 4]))],
+        )
+        .expect("record batch");
+
+        let file = NamedTempFile::new().expect("temp file");
+        let props = WriterProperties::builder()
+            .set_sorting_columns(Some(vec![SortingColumn {
+                column_idx: 0,
+                descending: false,
+                nulls_first: false,
+            }]))
+            .build();
+
+        let mut writer = ArrowWriter::try_new(
+            file.reopen().expect("reopen file for writer"),
+            Arc::clone(&schema),
+            Some(props),
+        )
+        .expect("writer");
+        writer.write(&batch).expect("write batch");
+        writer.close().expect("close writer");
+
+        let reader = ParquetRecordBatchReaderBuilder::try_new_with_options(
+            file.reopen().expect("reopen file for reader"),
+            ArrowReaderOptions::new().with_page_index(true),
+        )
+        .expect("reader builder");
+
+        let metadata = reader.metadata();
+        assert!(
+            metadata.column_index().is_some(),
+            "test requires page index metadata"
+        );
+        assert!(columns_sorted(&[0], metadata).expect("columns_sorted"));
+    }
+
+    #[test]
+    fn columns_sorted_returns_false_for_multiple_columns() {
+        let testdata = datafusion_common::test_util::parquet_test_data();
+        let file = std::fs::File::open(format!("{testdata}/alltypes_plain.parquet"))
+            .expect("opening file");
+
+        let reader = SerializedFileReader::new(file).expect("creating reader");
+        let metadata = reader.metadata();
+
+        assert!(!columns_sorted(&[0, 1], metadata).expect("columns_sorted"));
     }
 
     #[test]
