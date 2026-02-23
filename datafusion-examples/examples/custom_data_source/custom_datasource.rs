@@ -31,6 +31,7 @@ use datafusion::datasource::{TableProvider, TableType, provider_as_source};
 use datafusion::error::Result;
 use datafusion::execution::context::TaskContext;
 use datafusion::logical_expr::LogicalPlanBuilder;
+use datafusion::optimizer::OptimizerConfig;
 use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::memory::MemoryStream;
@@ -62,8 +63,9 @@ async fn search_accounts(
     expected_result_length: usize,
 ) -> Result<()> {
     // create local execution context
-    let ctx = SessionContext::new();
-
+    let mut config = SessionConfig::new()
+        .set("datafusion.execution.parquet.allow_morsel_driven", "false");
+    let ctx = SessionContext::new_with_config(config);
     // create logical plan composed of a single TableScan
     let logical_plan = LogicalPlanBuilder::scan_with_filters(
         "accounts",

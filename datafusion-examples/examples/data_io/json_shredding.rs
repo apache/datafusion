@@ -93,6 +93,7 @@ pub async fn json_shredding() -> Result<()> {
     // Set up query execution
     let mut cfg = SessionConfig::new();
     cfg.options_mut().execution.parquet.pushdown_filters = true;
+    cfg.options_mut().execution.parquet.allow_morsel_driven = false;
     let ctx = SessionContext::new_with_config(cfg);
     ctx.runtime_env().register_object_store(
         ObjectStoreUrl::parse("memory://")?.as_ref(),
