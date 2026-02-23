@@ -175,12 +175,14 @@ async fn run_tests() -> Result<()> {
             let filters = options.filters.clone();
 
             let relative_path = test_file.relative_path.clone();
+            let relative_path_for_timing = test_file.relative_path.clone();
 
             let currently_running_sql_tracker = CurrentlyExecutingSqlTracker::new();
             let currently_running_sql_tracker_clone =
                 currently_running_sql_tracker.clone();
+            let file_start = Instant::now();
             SpawnedTask::spawn(async move {
-                match (
+                let result = match (
                     options.postgres_runner,
                     options.complete,
                     options.substrait_round_trip,
@@ -240,8 +242,17 @@ async fn run_tests() -> Result<()> {
                         )
                         .await?
                     }
+                };
+                // Log slow files (>30s) for CI debugging
+                let elapsed = file_start.elapsed();
+                if elapsed.as_secs() > 30 {
+                    eprintln!(
+                        "Slow file: {} took {:.1}s",
+                        relative_path_for_timing.display(),
+                        elapsed.as_secs_f64()
+                    );
                 }
-                Ok(()) as Result<()>
+                Ok(result)
             })
             .join()
             .map(move |result| (result, relative_path, currently_running_sql_tracker))
