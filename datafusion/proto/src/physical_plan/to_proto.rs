@@ -503,13 +503,13 @@ pub fn serialize_physical_expr_with_converter(
             let f = &cast_options.format_options;
             protobuf::FormatOptions {
                 safe: false,
-                null: f.null.clone(),
-                date_format: f.date_format.clone(),
-                datetime_format: f.datetime_format.clone(),
-                timestamp_format: f.timestamp_format.clone(),
-                timestamp_tz_format: f.timestamp_tz_format.clone(),
-                time_format: f.time_format.clone(),
-                duration_format: format_duration_for_proto(f.duration_format),
+                null: f.null().to_string(),
+                date_format: f.date_format().map(str::to_owned),
+                datetime_format: f.datetime_format().map(str::to_owned),
+                timestamp_format: f.timestamp_format().map(str::to_owned),
+                timestamp_tz_format: f.timestamp_tz_format().map(str::to_owned),
+                time_format: f.time_format().map(str::to_owned),
+                duration_format: format_duration_for_proto(f.duration_format()),
             }
         };
         Ok(protobuf::PhysicalExprNode {

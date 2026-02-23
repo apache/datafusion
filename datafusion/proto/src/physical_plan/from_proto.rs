@@ -20,11 +20,12 @@
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
+use arrow::compute::CastOptions;
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Field, Schema};
 use arrow::ipc::reader::StreamReader;
+use arrow::util::display::FormatOptions;
 use chrono::{TimeZone, Utc};
-use datafusion_common::format::OwnedCastOptions;
 use datafusion_common::{DataFusionError, Result, internal_datafusion_err, not_impl_err};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_groups::FileGroup;
@@ -554,46 +555,40 @@ fn cast_options_from_proto(
     cast_options: Option<&protobuf::PhysicalCastOptions>,
     safe: bool,
     format_options: Option<&protobuf::FormatOptions>,
-) -> Result<Option<OwnedCastOptions>> {
+) -> Result<Option<CastOptions<'_>>> {
+    let parse_format_options = |fo: &protobuf::FormatOptions| {
+        FormatOptions::new()
+            .with_null(fo.null.as_str())
+            .with_date_format(fo.date_format.as_deref())
+            .with_datetime_format(fo.datetime_format.as_deref())
+            .with_timestamp_format(fo.timestamp_format.as_deref())
+            .with_timestamp_tz_format(fo.timestamp_tz_format.as_deref())
+            .with_time_format(fo.time_format.as_deref())
+            .with_duration_format(parse_duration_format(fo.duration_format.as_deref()))
+            .with_display_error(false)
+            .with_types_info(false)
+    };
+
     match cast_options {
         Some(opts) => {
             let format_opts = opts.format_options.as_ref().or(format_options);
-            let format_options =
-                format_opts.map(|fo| datafusion_common::format::OwnedFormatOptions {
-                    null: fo.null.clone(),
-                    date_format: fo.date_format.clone(),
-                    datetime_format: fo.datetime_format.clone(),
-                    timestamp_format: fo.timestamp_format.clone(),
-                    timestamp_tz_format: fo.timestamp_tz_format.clone(),
-                    time_format: fo.time_format.clone(),
-                    duration_format: parse_duration_format(fo.duration_format.as_deref()),
-                    types_info: false,
-                });
-            Ok(Some(OwnedCastOptions {
+            let format_options = format_opts
+                .map(parse_format_options)
+                .unwrap_or_else(FormatOptions::new);
+            Ok(Some(CastOptions {
                 safe: opts.safe,
-                format_options: format_options.unwrap_or_default(),
+                format_options,
             }))
         }
         None => {
             // Fallback to deprecated fields for backward compatibility
             if format_options.is_some() || safe {
-                let format_options = format_options.map(|fo| {
-                    datafusion_common::format::OwnedFormatOptions {
-                        null: fo.null.clone(),
-                        date_format: fo.date_format.clone(),
-                        datetime_format: fo.datetime_format.clone(),
-                        timestamp_format: fo.timestamp_format.clone(),
-                        timestamp_tz_format: fo.timestamp_tz_format.clone(),
-                        time_format: fo.time_format.clone(),
-                        duration_format: parse_duration_format(
-                            fo.duration_format.as_deref(),
-                        ),
-                        types_info: false,
-                    }
-                });
-                Ok(Some(OwnedCastOptions {
+                let format_options = format_options
+                    .map(parse_format_options)
+                    .unwrap_or_else(FormatOptions::new);
+                Ok(Some(CastOptions {
                     safe,
-                    format_options: format_options.unwrap_or_default(),
+                    format_options,
                 }))
             } else {
                 Ok(None)

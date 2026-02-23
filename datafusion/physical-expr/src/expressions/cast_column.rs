@@ -19,13 +19,13 @@
 
 use crate::{expressions::Column, physical_expr::PhysicalExpr};
 use arrow::{
-    compute::can_cast_types,
+    compute::{CastOptions, can_cast_types},
     datatypes::{DataType, FieldRef, Schema},
     record_batch::RecordBatch,
+    util::display::{DurationFormat, FormatOptions},
 };
 use datafusion_common::{
     Result, ScalarValue,
-    format::OwnedCastOptions,
     nested_struct::{
         cast_column, validate_field_compatibility, validate_struct_compatibility,
     },
@@ -60,7 +60,7 @@ pub struct CastColumnExpr {
     /// The field metadata describing the desired output column.
     target_field: FieldRef,
     /// Options forwarded to [`cast_column`] (owned, allowing dynamic format strings).
-    cast_options: OwnedCastOptions,
+    cast_options: CastOptionsStore,
     /// Schema used to resolve expression data types during construction.
     input_schema: Arc<Schema>,
 }
@@ -85,8 +85,89 @@ impl Hash for CastColumnExpr {
     }
 }
 
-fn normalize_cast_options(cast_options: Option<OwnedCastOptions>) -> OwnedCastOptions {
-    cast_options.unwrap_or_default()
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+struct FormatOptionsStore {
+    null: String,
+    date_format: Option<String>,
+    datetime_format: Option<String>,
+    timestamp_format: Option<String>,
+    timestamp_tz_format: Option<String>,
+    time_format: Option<String>,
+    duration_format: DurationFormat,
+    types_info: bool,
+}
+
+impl Default for FormatOptionsStore {
+    fn default() -> Self {
+        Self {
+            null: "NULL".to_string(),
+            date_format: None,
+            datetime_format: None,
+            timestamp_format: None,
+            timestamp_tz_format: None,
+            time_format: None,
+            duration_format: DurationFormat::Pretty,
+            types_info: false,
+        }
+    }
+}
+
+impl FormatOptionsStore {
+    fn from_arrow_options(options: &FormatOptions<'_>) -> Self {
+        Self {
+            null: options.null().to_string(),
+            date_format: options.date_format().map(str::to_owned),
+            datetime_format: options.datetime_format().map(str::to_owned),
+            timestamp_format: options.timestamp_format().map(str::to_owned),
+            timestamp_tz_format: options.timestamp_tz_format().map(str::to_owned),
+            time_format: options.time_format().map(str::to_owned),
+            duration_format: options.duration_format(),
+            types_info: options.types_info(),
+        }
+    }
+
+    fn as_arrow_options(&self) -> FormatOptions<'_> {
+        FormatOptions::new()
+            .with_null(self.null.as_str())
+            .with_date_format(self.date_format.as_deref())
+            .with_datetime_format(self.datetime_format.as_deref())
+            .with_timestamp_format(self.timestamp_format.as_deref())
+            .with_timestamp_tz_format(self.timestamp_tz_format.as_deref())
+            .with_time_format(self.time_format.as_deref())
+            .with_duration_format(self.duration_format)
+            .with_display_error(false)
+            .with_types_info(self.types_info)
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Default)]
+struct CastOptionsStore {
+    safe: bool,
+    format_options: FormatOptionsStore,
+}
+
+impl CastOptionsStore {
+    fn from_arrow_options(options: &CastOptions<'_>) -> Self {
+        Self {
+            safe: options.safe,
+            format_options: FormatOptionsStore::from_arrow_options(
+                &options.format_options,
+            ),
+        }
+    }
+
+    fn as_arrow_options(&self) -> CastOptions<'_> {
+        CastOptions {
+            safe: self.safe,
+            format_options: self.format_options.as_arrow_options(),
+        }
+    }
+}
+
+fn normalize_cast_options(cast_options: Option<CastOptions<'_>>) -> CastOptionsStore {
+    cast_options
+        .map(|options| CastOptionsStore::from_arrow_options(&options))
+        .unwrap_or_default()
 }
 
 /// Validates that a Column expression matches the input field's data type.
@@ -217,7 +298,7 @@ impl CastColumnExpr {
         expr: Arc<dyn PhysicalExpr>,
         input_field: FieldRef,
         target_field: FieldRef,
-        cast_options: Option<OwnedCastOptions>,
+        cast_options: Option<CastOptions<'_>>,
         input_schema: Arc<Schema>,
     ) -> Result<Self> {
         let cast_options = normalize_cast_options(cast_options);
@@ -245,7 +326,7 @@ impl CastColumnExpr {
         expr: Arc<dyn PhysicalExpr>,
         input_field: FieldRef,
         target_field: FieldRef,
-        cast_options: Option<OwnedCastOptions>,
+        cast_options: Option<CastOptions<'_>>,
     ) -> Result<Self> {
         let input_schema = Arc::new(Schema::new(vec![Arc::unwrap_or_clone(Arc::clone(
             &input_field,
@@ -269,7 +350,7 @@ impl CastColumnExpr {
         expr: Arc<dyn PhysicalExpr>,
         input_field: FieldRef,
         target_field: FieldRef,
-        cast_options: Option<OwnedCastOptions>,
+        cast_options: Option<CastOptions<'_>>,
         input_schema: Arc<Schema>,
     ) -> Result<Self> {
         Self::build(expr, input_field, target_field, cast_options, input_schema)
@@ -291,8 +372,8 @@ impl CastColumnExpr {
     }
 
     /// Casting options forwarded to [`cast_column`].
-    pub fn cast_options(&self) -> &OwnedCastOptions {
-        &self.cast_options
+    pub fn cast_options(&self) -> CastOptions<'_> {
+        self.cast_options.as_arrow_options()
     }
 }
 
@@ -357,7 +438,7 @@ impl PhysicalExpr for CastColumnExpr {
             child,
             Arc::clone(&self.input_field),
             Arc::clone(&self.target_field),
-            Some(self.cast_options.clone()),
+            Some(self.cast_options.as_arrow_options()),
             Arc::clone(&self.input_schema),
         )?))
     }
