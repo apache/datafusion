@@ -19,9 +19,9 @@ use arrow::array::{ArrayRef, AsArray, StringArray};
 use arrow::datatypes::{
     DataType, Field, FieldRef, Int8Type, Int16Type, Int32Type, Int64Type,
 };
-use datafusion::logical_expr::{ColumnarValue, Signature, TypeSignature, Volatility};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, internal_err};
+use datafusion_expr::{ColumnarValue, Signature, TypeSignature, Volatility};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_functions::utils::make_scalar_function;
 use std::any::Any;
@@ -89,7 +89,7 @@ impl ScalarUDFImpl for SparkBin {
     }
 }
 
-pub fn spark_bin_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
+fn spark_bin_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
     let [array] = take_function_args("bin", arg)?;
     match &array.data_type() {
         DataType::Int8 => {

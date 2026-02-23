@@ -16,6 +16,11 @@
 # under the License.
 
 query T
+SELECT bin(arrow_cast(NULL, 'Int8'));
+----
+NULL
+
+query T
 SELECT bin(arrow_cast(0, 'Int8'));
 ----
 0
