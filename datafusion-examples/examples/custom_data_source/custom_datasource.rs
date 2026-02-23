@@ -31,7 +31,6 @@ use datafusion::datasource::{TableProvider, TableType, provider_as_source};
 use datafusion::error::Result;
 use datafusion::execution::context::TaskContext;
 use datafusion::logical_expr::LogicalPlanBuilder;
-use datafusion::optimizer::OptimizerConfig;
 use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::memory::MemoryStream;
