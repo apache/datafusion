@@ -31,7 +31,7 @@ use crate::aggregates::{
 };
 use crate::metrics::{BaselineMetrics, MetricBuilder, RecordOutput};
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
-use crate::spill::spill_manager::SpillManager;
+use crate::spill::spill_manager::{GetSlicedSize, SpillManager};
 use crate::{PhysicalExpr, aggregates, metrics};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 
@@ -1137,8 +1137,9 @@ impl GroupedHashAggregateStream {
 
         let batch_size_ratio = self.batch_size as f32 / emit.num_rows() as f32;
         let batch_memory = get_record_batch_memory_size(&emit);
-        let sort_memory =
-            batch_memory + (batch_memory as f32 * batch_size_ratio) as usize;
+        let sort_memory = (batch_memory
+            + (emit.get_sliced_size()? as f32 * batch_size_ratio) as usize)
+            .min(batch_memory * 2);
 
         // If we can't grow even that, we have no choice but to return an error since we can't spill to disk without sorting the data first.
         self.reservation.try_grow(sort_memory).map_err(|err| {
