@@ -17,12 +17,15 @@
 
 use arrow::array::{ArrayRef, AsArray, StringArray};
 use arrow::datatypes::{
-    DataType, Field, FieldRef, Int8Type, Int16Type, Int32Type, Int64Type,
+    DataType, Field, FieldRef, Float16Type, Float32Type, Float64Type, Int8Type,
+    Int16Type, Int32Type, Int64Type,
 };
+use bigdecimal::ToPrimitive;
+use datafusion::logical_expr::{ColumnarValue, Signature, TypeSignature, Volatility};
+use datafusion_common::types::{NativeType, logical_int64};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, internal_err};
-use datafusion_expr::{ColumnarValue, Signature, TypeSignature, Volatility};
-use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
+use datafusion_expr::{Coercion, ScalarFunctionArgs, ScalarUDFImpl, TypeSignatureClass};
 use datafusion_functions::utils::make_scalar_function;
 use std::any::Any;
 use std::sync::Arc;
@@ -44,12 +47,11 @@ impl SparkBin {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
-                vec![
-                    TypeSignature::Exact(vec![DataType::Int8]),
-                    TypeSignature::Exact(vec![DataType::Int16]),
-                    TypeSignature::Exact(vec![DataType::Int32]),
-                    TypeSignature::Exact(vec![DataType::Int64]),
-                ],
+                vec![TypeSignature::Coercible(vec![Coercion::new_implicit(
+                    TypeSignatureClass::Native(logical_int64()),
+                    vec![TypeSignatureClass::Numeric],
+                    NativeType::Int64,
+                )])],
                 Volatility::Immutable,
             ),
         }
@@ -89,7 +91,7 @@ impl ScalarUDFImpl for SparkBin {
     }
 }
 
-fn spark_bin_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn spark_bin_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
     let [array] = take_function_args("bin", arg)?;
     match &array.data_type() {
         DataType::Int8 => {
@@ -124,12 +126,39 @@ fn spark_bin_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
                 .collect();
             Ok(Arc::new(result))
         }
+        DataType::Float16 => {
+            let result: StringArray = array
+                .as_primitive::<Float16Type>()
+                .iter()
+                .map(|opt| opt.map(|value| spark_bin(value.to_i64().unwrap())))
+                .collect();
+            Ok(Arc::new(result))
+        }
+        DataType::Float32 => {
+            let result: StringArray = array
+                .as_primitive::<Float32Type>()
+                .iter()
+                .map(|opt| opt.map(|value| spark_bin(value.to_i64().unwrap())))
+                .collect();
+            Ok(Arc::new(result))
+        }
+        DataType::Float64 => {
+            let result: StringArray = array
+                .as_primitive::<Float64Type>()
+                .iter()
+                .map(|opt| opt.map(|value| spark_bin(value.to_i64().unwrap())))
+                .collect();
+            Ok(Arc::new(result))
+        }
         data_type => {
-            internal_err!("bin does not support {data_type}")
+            internal_err!("bin does not support: {data_type}")
         }
     }
 }
 
 fn spark_bin(value: i64) -> String {
-    format!("{value:b}")
+    if value == 0 {
+        return "0".to_string();
+    }
+    format!("{:b}", value)
 }
