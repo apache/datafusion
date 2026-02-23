@@ -114,11 +114,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler
-      - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5  # v2.8.2
-        with:
-          save-if: true # TODO: set ${{ github.ref_name == 'main' }}
-          shared-key: "linux-tests-extended"
       # For debugging, test binaries can be large.
       - name: Show available disk space
         run: |
@@ -182,11 +177,6 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5  # v2.8.2
-        with:
-          save-if: true # TODO: set ${{ github.ref_name == 'main' }}
-          shared-key: "sqllogictest-sqlite"
       - name: Run sqllogictest
         run: |
           cargo test --features backtrace,parquet_encryption --profile release-nonlto --test sqllogictests -- --include-sqlite
