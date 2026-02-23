@@ -30,7 +30,6 @@ use crate::aggregates::{
     create_schema, evaluate_group_by, evaluate_many, evaluate_optional,
 };
 use crate::metrics::{BaselineMetrics, MetricBuilder, RecordOutput};
-use crate::sorts::sort::{get_reserved_bytes_for_record_batch, sort_batch_chunked};
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::spill_manager::SpillManager;
 use crate::{PhysicalExpr, aggregates, metrics};
@@ -1136,77 +1135,33 @@ impl GroupedHashAggregateStream {
         self.clear_shrink(0);
         self.update_memory_reservation()?;
 
-        // Our first strategy is to simply sort the batch eagerly, this requires the most peak memory(about 2x of the batch),
-        // but will also mean we can immediately drop the unsorted batch and free its memory.
-        let sort_memory = get_reserved_bytes_for_record_batch(&emit)?;
-        let spillfile = match self.reservation.try_grow(sort_memory) {
-            Ok(_) => {
-                // Sort the batch into chunks and spill each chunk to disk. This ensures we don't have to hold the entire
-                // batch in memory until the end of the spill, and can both drop it and release memory pressure sooner,
-                // as spilling may take time and other things can happen in the background.
-                let sorted = sort_batch_chunked(
-                    &emit,
-                    &self.spill_state.spill_expr,
-                    self.batch_size,
-                )?;
-                drop(emit);
+        let batch_size_ratio = self.batch_size as f32 / emit.num_rows() as f32;
+        let batch_memory = get_record_batch_memory_size(&emit);
+        let sort_memory =
+            batch_memory + (batch_memory as f32 * batch_size_ratio) as usize;
 
-                let new_sort_memory: usize =
-                    sorted.iter().map(get_record_batch_memory_size).sum();
-                let mem_to_free = sort_memory.saturating_sub(new_sort_memory);
-                self.reservation.shrink(mem_to_free); // Mem pool should now only hold the memory for the sorted batches.
+        // If we can't grow even that, we have no choice but to return an error since we can't spill to disk without sorting the data first.
+        self.reservation.try_grow(sort_memory).map_err(|err| {
+            resources_datafusion_err!(
+                "Failed to reserve memory for sort during spill: {err}"
+            )
+        })?;
 
-                // Spill sorted state to disk
-                let spillfile = self
-                    .spill_state
-                    .spill_manager
-                    .spill_record_batch_iter_and_return_max_batch_memory(
-                        sorted.into_iter().map(Ok),
-                        "HashAggSpill",
-                    )?;
+        let sorted_iter = IncrementalSortIterator::new(
+            emit,
+            self.spill_state.spill_expr.clone(),
+            self.batch_size,
+        );
+        let spillfile = self
+            .spill_state
+            .spill_manager
+            .spill_record_batch_iter_and_return_max_batch_memory(
+                sorted_iter,
+                "HashAggSpill",
+            )?;
 
-                // Shrink the remaining memory we allocated
-                self.reservation
-                    .shrink(sort_memory.saturating_sub(mem_to_free));
-
-                spillfile
-            }
-            Err(_) => {
-                // However, if we don't have that peak memory, we can fallback to sorting lazily.
-                // This means we hold the original batch for longer, but we only require reserving the original batch's size,
-                // plus a fraction of it for each batch as we emit it and write it to file.
-                // this is still 2x the batch memory at the *worst case*, but the larger the batch, the smaller the fraction.
-                let batch_size_ratio = self.batch_size as f32 / emit.num_rows() as f32;
-                let batch_memory = get_record_batch_memory_size(&emit);
-                let sort_memory =
-                    batch_memory + (batch_memory as f32 * batch_size_ratio) as usize;
-
-                // If we can't grow even that, we have no choice but to return an error since we can't spill to disk without sorting the data first.
-                self.reservation.try_grow(sort_memory).map_err(|err| {
-                    resources_datafusion_err!(
-                        "Failed to reserve memory for sort during spill: {err}"
-                    )
-                })?;
-
-                let sorted_iter = IncrementalSortIterator::new(
-                    emit,
-                    self.spill_state.spill_expr.clone(),
-                    self.batch_size,
-                );
-                let spillfile = self
-                    .spill_state
-                    .spill_manager
-                    .spill_record_batch_iter_and_return_max_batch_memory(
-                        sorted_iter,
-                        "HashAggSpill",
-                    )?;
-
-                // Shrink the memory we allocated for sorting as the sorting is fully done at this point.
-                self.reservation.shrink(sort_memory);
-
-                spillfile
-            }
-        };
+        // Shrink the memory we allocated for sorting as the sorting is fully done at this point.
+        self.reservation.shrink(sort_memory);
 
         match spillfile {
             Some((spillfile, max_record_batch_memory)) => {

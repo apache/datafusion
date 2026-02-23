@@ -386,8 +386,8 @@ impl FusedIterator for IncrementalSortIterator {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::Int32Array;
-    use arrow::datatypes::{DataType, Field};
+    use arrow::array::{AsArray, Int32Array};
+    use arrow::datatypes::{DataType, Field, Int32Type};
     use datafusion_common::DataFusionError;
     use datafusion_physical_expr::expressions::col;
 
@@ -403,7 +403,7 @@ mod tests {
 
         // Build a batch with a single Int32 column of descending values
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
-        let col_a: Int32Array = (0..original_len as i32).rev().collect();
+        let col_a: Int32Array = Int32Array::from(vec![0; original_len]);
         let batch = RecordBatch::try_new(schema, vec![Arc::new(col_a)])?;
 
         // Sort ascending on column "a"
@@ -414,25 +414,18 @@ mod tests {
         .unwrap();
 
         let mut total_rows = 0;
-        IncrementalSortIterator::new(batch, expressions, batch_size).try_for_each(
+        IncrementalSortIterator::new(batch.clone(), expressions, batch_size).try_for_each(
             |result| {
                 let chunk = result?;
                 total_rows += chunk.num_rows();
 
                 // Every output column must be a fresh allocation whose length
                 // equals the chunk size, NOT the original array length.
-                chunk.columns().iter().for_each(|arr| {
-                    assert_eq!(
-                        arr.len(),
-                        chunk.num_rows(),
-                        "array len should equal chunk row count"
-                    );
-                    assert_ne!(
-                        arr.len(),
-                        original_len,
-                        "array len must differ from original batch length \
-                     (data should be copied, not sliced)"
-                    );
+                chunk.columns().iter().zip(batch.columns()).for_each(|(arr, original_arr)| {
+                    let (_, scalar_buf, _) = arr.as_primitive::<Int32Type>().clone().into_parts();
+                    let (_, original_scalar_buf, _) = original_arr.as_primitive::<Int32Type>().clone().into_parts();
+
+                    assert!(!scalar_buf.inner().ptr_eq(original_scalar_buf.inner()), "Expected a copy of the data for each chunk, but got a slice that shares the same buffer as the original array");
                 });
 
                 Result::<_, DataFusionError>::Ok(())
