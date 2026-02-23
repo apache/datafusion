@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-extern crate criterion;
-
 use arrow::array::{StringArray, StringViewArray};
 use arrow::datatypes::{DataType, Field};
 use criterion::{Criterion, criterion_group, criterion_main};
@@ -29,9 +27,12 @@ use std::hint::black_box;
 use std::str::Chars;
 use std::sync::Arc;
 
-/// gen_arr(4096, 128, 0.1, 0.1, true) will generate a StringViewArray with
-/// 4096 rows, each row containing a string with 128 random characters.
-/// around 10% of the rows are null, around 10% of the rows are non-ASCII.
+/// Returns a `Vec<ColumnarValue>` with two elements: a haystack array and a
+/// needle array. Each haystack is a random string of `str_len_chars`
+/// characters. Each needle is a random contiguous substring of its
+/// corresponding haystack (i.e., the needle is always present in the haystack).
+/// Around `null_density` fraction of rows are null and `utf8_density` fraction
+/// contain non-ASCII characters; the remaining rows are ASCII-only.
 fn gen_string_array(
     n_rows: usize,
     str_len_chars: usize,

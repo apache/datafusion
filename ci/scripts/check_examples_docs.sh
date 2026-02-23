@@ -33,10 +33,13 @@
 set -euo pipefail
 
 ROOT_DIR="$(git rev-parse --show-toplevel)"
+
+# Load centralized tool versions
+source "${ROOT_DIR}/ci/scripts/utils/tool_versions.sh"
+
 EXAMPLES_DIR="$ROOT_DIR/datafusion-examples"
 README="$EXAMPLES_DIR/README.md"
 README_NEW="$EXAMPLES_DIR/README-NEW.md"
-PRETTIER_VERSION="2.7.1"
 
 echo "▶ Generating examples README (Rust generator)…"
 cargo run --quiet \

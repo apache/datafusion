@@ -1176,10 +1176,6 @@ mod tests {
             todo!()
         }
 
-        fn statistics(&self) -> Result<Statistics> {
-            self.partition_statistics(None)
-        }
-
         fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
             if partition.is_some() {
                 return Ok(Statistics::new_unknown(self.schema().as_ref()));

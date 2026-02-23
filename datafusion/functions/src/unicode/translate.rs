@@ -35,8 +35,8 @@ use datafusion_macros::user_doc;
 
 #[user_doc(
     doc_section(label = "String Functions"),
-    description = "Translates characters in a string to specified translation characters.",
-    syntax_example = "translate(str, chars, translation)",
+    description = "Performs character-wise substitution based on a mapping.",
+    syntax_example = "translate(str, from, to)",
     sql_example = r#"```sql
 > select translate('twice', 'wic', 'her');
 +--------------------------------------------------+
@@ -46,10 +46,10 @@ use datafusion_macros::user_doc;
 +--------------------------------------------------+
 ```"#,
     standard_argument(name = "str", prefix = "String"),
-    argument(name = "chars", description = "Characters to translate."),
+    argument(name = "from", description = "The characters to be replaced."),
     argument(
-        name = "translation",
-        description = "Translation characters. Translation characters replace only characters at the same position in the **chars** string."
+        name = "to",
+        description = "The characters to replace them with. Each character in **from** that is found in **str** is replaced by the character at the same index in **to**. Any characters in **from** that don't have a corresponding character in **to** are removed. If a character appears more than once in **from**, the first occurrence determines the mapping."
     )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -71,6 +71,7 @@ impl TranslateFunc {
                 vec![
                     Exact(vec![Utf8View, Utf8, Utf8]),
                     Exact(vec![Utf8, Utf8, Utf8]),
+                    Exact(vec![LargeUtf8, Utf8, Utf8]),
                 ],
                 Volatility::Immutable,
             ),
@@ -99,11 +100,74 @@ impl ScalarUDFImpl for TranslateFunc {
         &self,
         args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
+        // When from and to are scalars, pre-build the translation map once
+        if let (Some(from_str), Some(to_str)) = (
+            try_as_scalar_str(&args.args[1]),
+            try_as_scalar_str(&args.args[2]),
+        ) {
+            let to_graphemes: Vec<&str> = to_str.graphemes(true).collect();
+
+            let mut from_map: HashMap<&str, usize> = HashMap::new();
+            for (index, c) in from_str.graphemes(true).enumerate() {
+                // Ignore characters that already exist in from_map
+                from_map.entry(c).or_insert(index);
+            }
+
+            let ascii_table = build_ascii_translate_table(from_str, to_str);
+
+            let string_array = args.args[0].to_array_of_size(args.number_rows)?;
+
+            let result = match string_array.data_type() {
+                DataType::Utf8View => {
+                    let arr = string_array.as_string_view();
+                    translate_with_map::<i32, _>(
+                        arr,
+                        &from_map,
+                        &to_graphemes,
+                        ascii_table.as_ref(),
+                    )
+                }
+                DataType::Utf8 => {
+                    let arr = string_array.as_string::<i32>();
+                    translate_with_map::<i32, _>(
+                        arr,
+                        &from_map,
+                        &to_graphemes,
+                        ascii_table.as_ref(),
+                    )
+                }
+                DataType::LargeUtf8 => {
+                    let arr = string_array.as_string::<i64>();
+                    translate_with_map::<i64, _>(
+                        arr,
+                        &from_map,
+                        &to_graphemes,
+                        ascii_table.as_ref(),
+                    )
+                }
+                other => {
+                    return exec_err!(
+                        "Unsupported data type {other:?} for function translate"
+                    );
+                }
+            }?;
+
+            return Ok(ColumnarValue::Array(result));
+        }
+
         make_scalar_function(invoke_translate, vec![])(&args.args)
     }
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+}
+
+/// If `cv` is a non-null scalar string, return its value.
+fn try_as_scalar_str(cv: &ColumnarValue) -> Option<&str> {
+    match cv {
+        ColumnarValue::Scalar(s) => s.try_as_str().flatten(),
+        _ => None,
     }
 }
 
@@ -123,8 +187,8 @@ fn invoke_translate(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
         DataType::LargeUtf8 => {
             let string_array = args[0].as_string::<i64>();
-            let from_array = args[1].as_string::<i64>();
-            let to_array = args[2].as_string::<i64>();
+            let from_array = args[1].as_string::<i32>();
+            let to_array = args[2].as_string::<i32>();
             translate::<i64, _, _>(string_array, from_array, to_array)
         }
         other => {
@@ -170,7 +234,7 @@ where
                 // Build from_map using reusable buffer
                 from_graphemes.extend(from.graphemes(true));
                 for (index, c) in from_graphemes.iter().enumerate() {
-                    // Ignore characters that already exist in from_map, else insert
+                    // Ignore characters that already exist in from_map
                     from_map.entry(*c).or_insert(index);
                 }
 
@@ -193,6 +257,97 @@ where
                 Some(result_graphemes.concat())
             }
             _ => None,
+        })
+        .collect::<GenericStringArray<T>>();
+
+    Ok(Arc::new(result) as ArrayRef)
+}
+
+/// Sentinel value in the ASCII translate table indicating the character should
+/// be deleted (the `from` character has no corresponding `to` character).  Any
+/// value > 127 works since valid ASCII is 0–127.
+const ASCII_DELETE: u8 = 0xFF;
+
+/// If `from` and `to` are both ASCII, build a fixed-size lookup table for
+/// translation. Each entry maps an input byte to its replacement byte, or to
+/// [`ASCII_DELETE`] if the character should be removed.  Returns `None` if
+/// either string contains non-ASCII characters.
+fn build_ascii_translate_table(from: &str, to: &str) -> Option<[u8; 128]> {
+    if !from.is_ascii() || !to.is_ascii() {
+        return None;
+    }
+    let mut table = [0u8; 128];
+    for i in 0..128u8 {
+        table[i as usize] = i;
+    }
+    let to_bytes = to.as_bytes();
+    let mut seen = [false; 128];
+    for (i, from_byte) in from.bytes().enumerate() {
+        let idx = from_byte as usize;
+        if !seen[idx] {
+            seen[idx] = true;
+            if i < to_bytes.len() {
+                table[idx] = to_bytes[i];
+            } else {
+                table[idx] = ASCII_DELETE;
+            }
+        }
+    }
+    Some(table)
+}
+
+/// Optimized translate for constant `from` and `to` arguments: uses a pre-built
+/// translation map instead of rebuilding it for every row.  When an ASCII byte
+/// lookup table is provided, ASCII input rows use the lookup table; non-ASCII
+/// inputs fallback to using the map.
+fn translate_with_map<'a, T: OffsetSizeTrait, V>(
+    string_array: V,
+    from_map: &HashMap<&str, usize>,
+    to_graphemes: &[&str],
+    ascii_table: Option<&[u8; 128]>,
+) -> Result<ArrayRef>
+where
+    V: ArrayAccessor<Item = &'a str>,
+{
+    let mut result_graphemes: Vec<&str> = Vec::new();
+    let mut ascii_buf: Vec<u8> = Vec::new();
+
+    let result = ArrayIter::new(string_array)
+        .map(|string| {
+            string.map(|s| {
+                // Fast path: byte-level table lookup for ASCII strings
+                if let Some(table) = ascii_table
+                    && s.is_ascii()
+                {
+                    ascii_buf.clear();
+                    for &b in s.as_bytes() {
+                        let mapped = table[b as usize];
+                        if mapped != ASCII_DELETE {
+                            ascii_buf.push(mapped);
+                        }
+                    }
+                    // SAFETY: all bytes are ASCII, hence valid UTF-8.
+                    return unsafe {
+                        std::str::from_utf8_unchecked(&ascii_buf).to_owned()
+                    };
+                }
+
+                // Slow path: grapheme-based translation
+                result_graphemes.clear();
+
+                for c in s.graphemes(true) {
+                    match from_map.get(c) {
+                        Some(n) => {
+                            if let Some(replacement) = to_graphemes.get(*n) {
+                                result_graphemes.push(*replacement);
+                            }
+                        }
+                        None => result_graphemes.push(c),
+                    }
+                }
+
+                result_graphemes.concat()
+            })
         })
         .collect::<GenericStringArray<T>>();
 
@@ -284,6 +439,21 @@ mod tests {
             Utf8,
             StringArray
         );
+        // Non-ASCII input with ASCII scalar from/to: exercises the
+        // grapheme fallback within translate_with_map.
+        test_function!(
+            TranslateFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::from("café")),
+                ColumnarValue::Scalar(ScalarValue::from("ae")),
+                ColumnarValue::Scalar(ScalarValue::from("AE"))
+            ],
+            Ok(Some("cAfé")),
+            &str,
+            Utf8,
+            StringArray
+        );
+
         #[cfg(not(feature = "unicode_expressions"))]
         test_function!(
             TranslateFunc::new(),

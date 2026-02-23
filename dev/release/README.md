@@ -178,10 +178,10 @@ We maintain a [changelog] so our users know what has been changed between releas
 
 The changelog is generated using a Python script.
 
-To run the script, you will need a GitHub Personal Access Token (described in the prerequisites section) and the `PyGitHub` library. First install the `PyGitHub` dependency via `pip`:
+To run the script, you will need a GitHub Personal Access Token (described in the prerequisites section) and the `PyGitHub` library. First install the dev dependencies via `uv`:
 
 ```shell
-pip3 install PyGitHub
+uv sync
 ```
 
 To generate the changelog, set the `GITHUB_TOKEN` environment variable and then run `./dev/release/generate-changelog.py`
@@ -199,7 +199,7 @@ to generate a change log of all changes between the `50.3.0` tag and `branch-51`
 
 ```shell
 export GITHUB_TOKEN=<your-token-here>
-./dev/release/generate-changelog.py 50.3.0 branch-51 51.0.0 > dev/changelog/51.0.0.md
+uv run ./dev/release/generate-changelog.py 50.3.0 branch-51 51.0.0 > dev/changelog/51.0.0.md
 ```
 
 This script creates a changelog from GitHub PRs based on the labels associated with them as well as looking for

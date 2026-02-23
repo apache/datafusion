@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-extern crate criterion;
-
 use arrow::array::Array;
 use arrow::datatypes::{DataType, Field};
 use arrow::util::bench_util::create_binary_array;

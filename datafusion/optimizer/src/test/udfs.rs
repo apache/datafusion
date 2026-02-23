@@ -21,7 +21,7 @@ use arrow::datatypes::DataType;
 use datafusion_common::Result;
 use datafusion_expr::{
     ColumnarValue, Expr, ExpressionPlacement, ScalarFunctionArgs, ScalarUDF,
-    ScalarUDFImpl, Signature, Volatility,
+    ScalarUDFImpl, Signature, TypeSignature,
 };
 
 /// A configurable test UDF for optimizer tests.
@@ -30,6 +30,7 @@ use datafusion_expr::{
 pub struct PlacementTestUDF {
     signature: Signature,
     placement: ExpressionPlacement,
+    id: usize,
 }
 
 impl Default for PlacementTestUDF {
@@ -41,13 +42,28 @@ impl Default for PlacementTestUDF {
 impl PlacementTestUDF {
     pub fn new() -> Self {
         Self {
-            signature: Signature::exact(vec![DataType::UInt32], Volatility::Immutable),
+            // Accept any one or two arguments and return UInt32 for testing purposes.
+            // The actual types don't matter since this UDF is not intended for execution.
+            signature: Signature::new(
+                TypeSignature::OneOf(vec![TypeSignature::Any(1), TypeSignature::Any(2)]),
+                datafusion_expr::Volatility::Immutable,
+            ),
             placement: ExpressionPlacement::MoveTowardsLeafNodes,
+            id: 0,
         }
     }
 
+    /// Set the expression placement for this UDF, which is used by optimizer rules to determine where in the plan the expression should be placed.
+    /// This also resets the name of the UDF to a default based on the placement.
     pub fn with_placement(mut self, placement: ExpressionPlacement) -> Self {
         self.placement = placement;
+        self
+    }
+
+    /// Set the id of the UDF.
+    /// This is an arbitrary made up field to allow creating multiple distinct UDFs with the same placement.
+    pub fn with_id(mut self, id: usize) -> Self {
+        self.id = id;
         self
     }
 }

@@ -87,6 +87,26 @@ SELECT shuffle(column1, 1) FROM test_shuffle_fixed_size;
 [9, NULL, 8]
 NULL
 
+query ?
+SELECT shuffle(['2001-09-28T01:00:00'::timestamp, '2001-08-28T01:00:00'::timestamp, '2001-07-28T01:00:00'::timestamp, '2001-06-28T01:00:00'::timestamp, '2001-05-28T01:00:00'::timestamp], 1);
+----
+[2001-09-28T01:00:00, 2001-06-28T01:00:00, 2001-07-28T01:00:00, 2001-08-28T01:00:00, 2001-05-28T01:00:00]
+
+query ?
+SELECT shuffle(shuffle([1, 20, NULL, 3, 100, NULL, 98, 99], 1), 1);
+----
+[1, 99, NULL, 98, 100, NULL, 3, 20]
+
+query ?
+SELECT shuffle([' ', NULL, 'abc'], 1);
+----
+[ , NULL, abc]
+
+query ?
+SELECT shuffle([1, 2, 3, 4], CAST('2' AS INT));
+----
+[1, 4, 2, 3]
+
 # Clean up
 statement ok
 DROP TABLE test_shuffle_list_types;
