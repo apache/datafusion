@@ -382,3 +382,64 @@ impl Iterator for IncrementalSortIterator {
 }
 
 impl FusedIterator for IncrementalSortIterator {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::Int32Array;
+    use arrow::datatypes::{DataType, Field};
+    use datafusion_common::DataFusionError;
+    use datafusion_physical_expr::expressions::col;
+
+    /// Verifies that `take_record_batch` in `IncrementalSortIterator` actually
+    /// copies the data into a new allocation rather than returning a zero-copy
+    /// slice of the original batch. If the output arrays were slices, their
+    /// underlying buffer length would match the original array's length; a true
+    /// copy will have a buffer sized to fit only the chunk.
+    #[test]
+    fn incremental_sort_iterator_copies_data() -> Result<()> {
+        let original_len = 10;
+        let batch_size = 3;
+
+        // Build a batch with a single Int32 column of descending values
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let col_a: Int32Array = (0..original_len as i32).rev().collect();
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(col_a)])?;
+
+        // Sort ascending on column "a"
+        let expressions = LexOrdering::new(vec![PhysicalSortExpr::new_default(col(
+            "a",
+            &batch.schema(),
+        )?)])
+        .unwrap();
+
+        let mut total_rows = 0;
+        IncrementalSortIterator::new(batch, expressions, batch_size).try_for_each(
+            |result| {
+                let chunk = result?;
+                total_rows += chunk.num_rows();
+
+                // Every output column must be a fresh allocation whose length
+                // equals the chunk size, NOT the original array length.
+                chunk.columns().iter().for_each(|arr| {
+                    assert_eq!(
+                        arr.len(),
+                        chunk.num_rows(),
+                        "array len should equal chunk row count"
+                    );
+                    assert_ne!(
+                        arr.len(),
+                        original_len,
+                        "array len must differ from original batch length \
+                     (data should be copied, not sliced)"
+                    );
+                });
+
+                Result::<_, DataFusionError>::Ok(())
+            },
+        )?;
+
+        assert_eq!(total_rows, original_len);
+        Ok(())
+    }
+}
