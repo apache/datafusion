@@ -1442,7 +1442,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     return not_impl_err!("TRUNCATE with ON CLUSTER is not supported");
                 }
                 if if_exists {
-                    return not_impl_err!("TRUNCATE .. WITH EXISTS is not supported");
+                    return not_impl_err!("TRUNCATE .. with IF EXISTS is not supported");
                 }
                 let table = self.object_name_to_table_reference(target.name.clone())?;
                 let source = self.context_provider.get_table_source(table.clone())?;
