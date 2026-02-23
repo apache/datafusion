@@ -171,6 +171,7 @@ parquet = { version = "57.3.0", default-features = false, features = [
     "arrow",
     "async",
     "object_store",
+    "simdutf8",
 ] }
 paste = "1.0.15"
 pbjson = { version = "0.9.0" }
