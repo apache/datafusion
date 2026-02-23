@@ -275,6 +275,8 @@ impl FileOpener for ParquetOpener {
         let predicate = self.predicate.clone();
         let metrics = self.metrics.clone();
         let enable_row_group_stats_pruning = self.enable_row_group_stats_pruning;
+        let limit = self.limit;
+        let preserve_order = self.preserve_order;
 
         Box::pin(async move {
             #[cfg(feature = "parquet_encryption")]
@@ -315,7 +317,7 @@ impl FileOpener for ParquetOpener {
                 &predicate_creation_errors,
             );
 
-            let row_groups = Self::build_row_group_access_filter(
+            let mut row_groups = Self::build_row_group_access_filter(
                 &file_name,
                 extensions,
                 num_row_groups,
@@ -331,6 +333,11 @@ impl FileOpener for ParquetOpener {
                         file_metrics: &file_metrics,
                     }),
             )?;
+
+            // Prune by limit if limit is set and order is not sensitive
+            if let (Some(limit), false) = (limit, preserve_order) {
+                row_groups.prune_by_limit(limit, metadata.row_groups(), &file_metrics);
+            }
 
             let access_plan = row_groups.build();
 

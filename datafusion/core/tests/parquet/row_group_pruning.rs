@@ -531,14 +531,18 @@ macro_rules! int_tests {
             #[tokio::test]
             async fn [<prune_int $bits _eq_in_list_2 >]() {
                 // result of sql "SELECT * FROM t where in (1000)", prune all
-                // test whether statistics works
+                // test whether statistics works.
+                // With morsel-driven execution (default), the file is opened in
+                // morselize() to create per-row-group morsels. Row group statistics
+                // pruning prunes all 4 row groups there, so pruning is at row-group
+                // level, not file level.
                 RowGroupPruningTest::new()
                     .with_scenario(Scenario::Int)
                     .with_query(&format!("SELECT * FROM t where i{} in (100)", $bits))
                     .with_expected_errors(Some(0))
                     .with_matched_by_stats(Some(0))
-                    .with_pruned_by_stats(Some(0))
-                    .with_pruned_files(Some(1))
+                    .with_pruned_by_stats(Some(4))
+                    .with_pruned_files(Some(0))
                     .with_matched_by_bloom_filter(Some(0))
                     .with_pruned_by_bloom_filter(Some(0))
                     .with_expected_rows(0)
@@ -1483,14 +1487,16 @@ async fn test_row_group_with_null_values() {
         .test_row_group_prune()
         .await;
 
-    // All row groups will be pruned
+    // All row groups will be pruned.
+    // With morsel-driven execution (default), pruning happens at row-group level
+    // in morselize(), not at file level. All 3 row groups are pruned by statistics.
     RowGroupPruningTest::new()
         .with_scenario(Scenario::WithNullValues)
         .with_query("SELECT * FROM t WHERE \"i32\" > 7")
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(0))
-        .with_pruned_by_stats(Some(0))
-        .with_pruned_files(Some(1))
+        .with_pruned_by_stats(Some(3))
+        .with_pruned_files(Some(0))
         .with_expected_rows(0)
         .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
