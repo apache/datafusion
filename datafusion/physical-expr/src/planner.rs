@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use crate::expressions::{lambda_variable, LambdaExpr};
-use crate::ScalarFunctionExpr;
+use crate::{LambdaFunctionExpr, ScalarFunctionExpr};
 use crate::{
     expressions::{self, binary, like, similar_to, Column, Literal},
     PhysicalExpr,
@@ -33,7 +33,7 @@ use datafusion_common::{
 };
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::{
-    Alias, Cast, InList, Lambda, LambdaVariable, Placeholder, ScalarFunction,
+    Alias, Cast, InList, Lambda, LambdaFunction, LambdaVariable, Placeholder, ScalarFunction
 };
 use datafusion_expr::var_provider::is_system_variables;
 use datafusion_expr::var_provider::VarType;
@@ -318,10 +318,6 @@ pub fn create_physical_expr(
             input_dfschema,
             execution_props,
         )?),
-        Expr::Lambda(Lambda { params, body }) => Ok(Arc::new(LambdaExpr::new(
-            params.clone(),
-            create_physical_expr(body, input_dfschema, execution_props)?,
-        ))),
         Expr::ScalarFunction(ScalarFunction { func, args }) => {
             let physical_args =
                 create_physical_exprs(args, input_dfschema, execution_props)?;
@@ -392,6 +388,26 @@ pub fn create_physical_expr(
         Expr::Placeholder(Placeholder { id, .. }) => {
             exec_err!("Placeholder '{id}' was not provided a value for execution.")
         }
+        Expr::LambdaFunction(LambdaFunction { func, args}) => {
+            let physical_args =
+                create_physical_exprs(args, input_dfschema, execution_props)?;
+
+            let config_options = match execution_props.config_options.as_ref() {
+                Some(config_options) => Arc::clone(config_options),
+                None => Arc::new(ConfigOptions::default()),
+            };
+
+            Ok(Arc::new(LambdaFunctionExpr::try_new(
+                Arc::clone(func),
+                physical_args,
+                input_schema,
+                config_options,
+            )?))
+        }
+        Expr::Lambda(Lambda { params, body }) => Ok(Arc::new(LambdaExpr::new(
+            params.clone(),
+            create_physical_expr(body, input_dfschema, execution_props)?,
+        ))),
         Expr::LambdaVariable(LambdaVariable {
             name,
             field,

@@ -25,6 +25,7 @@ use crate::expr::{FieldMetadata, LambdaVariable};
 use crate::type_coercion::functions::{
     fields_with_aggregate_udf, fields_with_window_udf,
 };
+use crate::udlf::{LambdaReturnFieldArgs, ValueOrLambdaField};
 use crate::{
     type_coercion::functions::data_types_with_scalar_udf, udf::ReturnFieldArgs, utils,
     LogicalPlan, Projection, Subquery, WindowFunctionDefinition,
@@ -234,6 +235,10 @@ impl ExprSchemable for Expr {
                 // Grouping sets do not really have a type and do not appear in projections
                 Ok(DataType::Null)
             }
+            Expr::LambdaFunction(_func) => {
+                let (return_type, _) = self.data_type_and_nullable(schema)?;
+                Ok(return_type)
+            }
             Expr::Lambda(Lambda { params: _, body }) => body.get_type(schema),
             Expr::LambdaVariable(LambdaVariable { name: _, field, .. }) => {
                 Ok(field.data_type().clone())
@@ -355,6 +360,10 @@ impl ExprSchemable for Expr {
                 // Grouping sets do not really have the concept of nullable and do not appear
                 // in projections
                 Ok(true)
+            }
+            Expr::LambdaFunction(_func) => {
+                let (_, nullable) = self.data_type_and_nullable(input_schema)?;
+                Ok(nullable)
             }
             Expr::Lambda(l) => l.body.nullable(input_schema),
             Expr::LambdaVariable(c) => Ok(c.field.is_nullable()),
@@ -625,6 +634,36 @@ impl ExprSchemable for Expr {
                 self.get_type(schema)?,
                 self.nullable(schema)?,
             ))),
+            Expr::LambdaFunction(func) => {
+                let arg_fields = func
+                    .args
+                    .iter()
+                    .map(|arg| {
+                        let field = arg.to_field(schema)?.1;
+                        match arg {
+                            Expr::Lambda(_lambda) => {
+                                Ok(ValueOrLambdaField::Lambda(field))
+                            }
+                            _ => Ok(ValueOrLambdaField::Value(field)),
+                        }
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                let arguments = func.args
+                    .iter()
+                    .map(|e| match e {
+                        Expr::Literal(sv, _) => Some(sv),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+
+                let args = LambdaReturnFieldArgs {
+                    arg_fields: &arg_fields,
+                    scalar_arguments: &arguments,
+                };
+
+                func.func.return_field_from_args(args)
+            }
             Expr::LambdaVariable(c) => Ok(Arc::clone(&c.field)),
         }?;
 

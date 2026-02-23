@@ -19,6 +19,7 @@
 
 use crate::expr_rewriter::FunctionRewrite;
 use crate::planner::ExprPlanner;
+use crate::udlf::LambdaUDF;
 use crate::{AggregateUDF, ScalarUDF, UserDefinedLogicalNode, WindowUDF};
 use datafusion_common::{not_impl_err, plan_datafusion_err, HashMap, Result};
 use std::collections::HashSet;
@@ -30,6 +31,9 @@ pub trait FunctionRegistry {
     /// Returns names of all available scalar user defined functions.
     fn udfs(&self) -> HashSet<String>;
 
+    /// Returns names of all available lambda user defined functions.
+    fn udlfs(&self) -> HashSet<String>;
+
     /// Returns names of all available aggregate user defined functions.
     fn udafs(&self) -> HashSet<String>;
 
@@ -39,6 +43,10 @@ pub trait FunctionRegistry {
     /// Returns a reference to the user defined scalar function (udf) named
     /// `name`.
     fn udf(&self, name: &str) -> Result<Arc<ScalarUDF>>;
+
+    /// Returns a reference to the user defined lambda function (udf) named
+    /// `name`.
+    fn udlf(&self, name: &str) -> Result<Arc<dyn LambdaUDF>>;
 
     /// Returns a reference to the user defined aggregate function (udaf) named
     /// `name`.
@@ -55,6 +63,17 @@ pub trait FunctionRegistry {
     /// for example if the registry is read only.
     fn register_udf(&mut self, _udf: Arc<ScalarUDF>) -> Result<Option<Arc<ScalarUDF>>> {
         not_impl_err!("Registering ScalarUDF")
+    }
+    /// Registers a new [`LambdaUDF`], returning any previously registered
+    /// implementation.
+    ///
+    /// Returns an error (the default) if the function can not be registered,
+    /// for example if the registry is read only.
+    fn register_udlf(
+        &mut self,
+        _udlf: Arc<dyn LambdaUDF>,
+    ) -> Result<Option<Arc<dyn LambdaUDF>>> {
+        not_impl_err!("Registering LambdaUDF")
     }
     /// Registers a new [`AggregateUDF`], returning any previously registered
     /// implementation.
@@ -83,6 +102,15 @@ pub trait FunctionRegistry {
     /// for example if the registry is read only.
     fn deregister_udf(&mut self, _name: &str) -> Result<Option<Arc<ScalarUDF>>> {
         not_impl_err!("Deregistering ScalarUDF")
+    }
+
+    /// Deregisters a [`LambdaUDF`], returning the implementation that was
+    /// deregistered.
+    ///
+    /// Returns an error (the default) if the function can not be deregistered,
+    /// for example if the registry is read only.
+    fn deregister_udlf(&mut self, _name: &str) -> Result<Option<Arc<dyn LambdaUDF>>> {
+        not_impl_err!("Deregistering LambdaUDF")
     }
 
     /// Deregisters a [`AggregateUDF`], returning the implementation that was
@@ -152,6 +180,8 @@ pub trait SerializerRegistry: Debug + Send + Sync {
 pub struct MemoryFunctionRegistry {
     /// Scalar Functions
     udfs: HashMap<String, Arc<ScalarUDF>>,
+    /// Lambda Functions
+    udlfs: HashMap<String, Arc<dyn LambdaUDF>>,
     /// Aggregate Functions
     udafs: HashMap<String, Arc<AggregateUDF>>,
     /// Window Functions
@@ -213,5 +243,23 @@ impl FunctionRegistry for MemoryFunctionRegistry {
 
     fn udwfs(&self) -> HashSet<String> {
         self.udwfs.keys().cloned().collect()
+    }
+
+    fn udlfs(&self) -> HashSet<String> {
+        self.udlfs.keys().cloned().collect()
+    }
+
+    fn udlf(&self, name: &str) -> Result<Arc<dyn LambdaUDF>> {
+        self.udlfs
+            .get(name)
+            .cloned()
+            .ok_or_else(|| plan_datafusion_err!("Lambda Function {name} not found"))
+    }
+
+    fn register_udlf(
+        &mut self,
+        udlf: Arc<dyn LambdaUDF>,
+    ) -> Result<Option<Arc<dyn LambdaUDF>>> {
+        Ok(self.udlfs.insert(udlf.name().into(), udlf))
     }
 }

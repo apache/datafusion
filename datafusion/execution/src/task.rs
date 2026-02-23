@@ -21,7 +21,7 @@ use crate::{
 };
 use datafusion_common::{internal_datafusion_err, plan_datafusion_err, Result};
 use datafusion_expr::planner::ExprPlanner;
-use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
+use datafusion_expr::{AggregateUDF, ScalarUDF, LambdaUDF, WindowUDF};
 use std::collections::HashSet;
 use std::{collections::HashMap, sync::Arc};
 
@@ -42,6 +42,8 @@ pub struct TaskContext {
     session_config: SessionConfig,
     /// Scalar functions associated with this task context
     scalar_functions: HashMap<String, Arc<ScalarUDF>>,
+    /// Lambda functions associated with this task context
+    lambda_functions: HashMap<String, Arc<dyn LambdaUDF>>,
     /// Aggregate functions associated with this task context
     aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
     /// Window functions associated with this task context
@@ -60,6 +62,7 @@ impl Default for TaskContext {
             task_id: None,
             session_config: SessionConfig::new(),
             scalar_functions: HashMap::new(),
+            lambda_functions: HashMap::new(),
             aggregate_functions: HashMap::new(),
             window_functions: HashMap::new(),
             runtime,
@@ -73,11 +76,13 @@ impl TaskContext {
     /// Most users will use [`SessionContext::task_ctx`] to create [`TaskContext`]s
     ///
     /// [`SessionContext::task_ctx`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.task_ctx
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         task_id: Option<String>,
         session_id: String,
         session_config: SessionConfig,
         scalar_functions: HashMap<String, Arc<ScalarUDF>>,
+        lambda_functions: HashMap<String, Arc<dyn LambdaUDF>>,
         aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
         window_functions: HashMap<String, Arc<WindowUDF>>,
         runtime: Arc<RuntimeEnv>,
@@ -87,6 +92,7 @@ impl TaskContext {
             session_id,
             session_config,
             scalar_functions,
+            lambda_functions,
             aggregate_functions,
             window_functions,
             runtime,
@@ -198,6 +204,37 @@ impl FunctionRegistry for TaskContext {
         Ok(self.scalar_functions.insert(udf.name().into(), udf))
     }
 
+    fn udlfs(&self) -> HashSet<String> {
+        self.lambda_functions.keys().cloned().collect()
+    }
+
+    fn udlf(&self, name: &str) -> Result<Arc<dyn LambdaUDF>> {
+        self.lambda_functions
+            .get(name)
+            .cloned()
+            .ok_or_else(|| plan_datafusion_err!("Lambda Function {name} not found"))
+    }
+
+    fn register_udlf(
+        &mut self,
+        udlf: Arc<dyn LambdaUDF>,
+    ) -> Result<Option<Arc<dyn LambdaUDF>>> {
+        Ok(self.lambda_functions.insert(udlf.name().into(), udlf))
+    }
+
+    fn deregister_udlf(
+        &mut self,
+        name: &str,
+    ) -> Result<Option<Arc<dyn LambdaUDF>>> {
+        let udlf = self.lambda_functions.remove(name);
+        if let Some(udlf) = &udlf {
+            for alias in udlf.aliases() {
+                self.lambda_functions.remove(alias);
+            }
+        }
+        Ok(udlf)
+    }
+
     fn expr_planners(&self) -> Vec<Arc<dyn ExprPlanner>> {
         vec![]
     }
@@ -248,6 +285,7 @@ mod tests {
             HashMap::default(),
             HashMap::default(),
             HashMap::default(),
+            HashMap::default(),
             runtime,
         );
 
@@ -277,6 +315,7 @@ mod tests {
             Some("task_id".to_string()),
             "session_id".to_string(),
             session_config,
+            HashMap::default(),
             HashMap::default(),
             HashMap::default(),
             HashMap::default(),

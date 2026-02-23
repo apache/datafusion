@@ -36,6 +36,7 @@ use datafusion_common::{
     exec_datafusion_err, internal_err, DFSchema, DataFusionError, Result,
     ScalarValue,
 };
+use datafusion_expr::expr::LambdaFunction;
 use datafusion_expr::{
     and, binary::BinaryTypeCoercer, lit, or, BinaryExpr, Case, ColumnarValue, Expr, Like,
     Operator, Volatility,
@@ -657,6 +658,9 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::Placeholder(_)
             | Expr::LambdaVariable(_) => false,
             Expr::ScalarFunction(ScalarFunction { func, .. }) => {
+                Self::volatility_ok(func.signature().volatility)
+            }
+            Expr::LambdaFunction(LambdaFunction { func, .. }) => {
                 Self::volatility_ok(func.signature().volatility)
             }
             Expr::Literal(_, _)

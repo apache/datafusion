@@ -18,8 +18,7 @@
 use datafusion::execution::SessionStateDefaults;
 use datafusion_common::{not_impl_err, HashSet, Result};
 use datafusion_expr::{
-    aggregate_doc_sections, scalar_doc_sections, window_doc_sections, AggregateUDF,
-    DocSection, Documentation, ScalarUDF, WindowUDF,
+    AggregateUDF, DocSection, Documentation, LambdaUDF, ScalarUDF, WindowUDF, aggregate_doc_sections, scalar_doc_sections, window_doc_sections
 };
 use itertools::Itertools;
 use std::env::args;
@@ -292,6 +291,18 @@ impl DocProvider for ScalarUDF {
 }
 
 impl DocProvider for WindowUDF {
+    fn get_name(&self) -> String {
+        self.name().to_string()
+    }
+    fn get_aliases(&self) -> Vec<String> {
+        self.aliases().iter().map(|a| a.to_string()).collect()
+    }
+    fn get_documentation(&self) -> Option<&Documentation> {
+        self.documentation()
+    }
+}
+
+impl DocProvider for dyn LambdaUDF {
     fn get_name(&self) -> String {
         self.name().to_string()
     }

@@ -63,7 +63,7 @@ use datafusion_expr::{
     Statement, WindowUDF,
 };
 use datafusion_expr::{
-    AggregateUDF, DmlStatement, FetchType, RecursiveQuery, SkipType, TableSource, Unnest,
+    AggregateUDF, DmlStatement, FetchType, LambdaUDF, RecursiveQuery, SkipType, TableSource, Unnest
 };
 
 use self::to_proto::{serialize_expr, serialize_exprs};
@@ -151,6 +151,14 @@ pub trait LogicalExtensionCodec: Debug + Send + Sync {
     }
 
     fn try_encode_udf(&self, _node: &ScalarUDF, _buf: &mut Vec<u8>) -> Result<()> {
+        Ok(())
+    }
+    
+    fn try_decode_udlf(&self, name: &str, _buf: &[u8]) -> Result<Arc<dyn LambdaUDF>> {
+        not_impl_err!("LogicalExtensionCodec is not provided for lambda function {name}")
+    }
+
+    fn try_encode_udlf(&self, _node: &dyn LambdaUDF, _buf: &mut Vec<u8>) -> Result<()> {
         Ok(())
     }
 

@@ -27,6 +27,7 @@ use std::sync::Arc;
 use crate::expr_fn::binary_expr;
 use crate::function::WindowFunctionSimplification;
 use crate::logical_plan::Subquery;
+use crate::udlf::LambdaUDF;
 use crate::{AggregateUDF, Volatility};
 use crate::{ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
 
@@ -398,9 +399,39 @@ pub enum Expr {
     OuterReferenceColumn(FieldRef, Column),
     /// Unnest expression
     Unnest(Unnest),
+    LambdaFunction(LambdaFunction),
     /// Lambda expression
     Lambda(Lambda),
     LambdaVariable(LambdaVariable),
+}
+
+#[derive(Clone, Eq, PartialOrd, Debug)]
+pub struct LambdaFunction {
+    pub func: Arc<dyn LambdaUDF>,
+    pub args: Vec<Expr>,
+}
+
+impl LambdaFunction {
+    pub fn new(func: Arc<dyn LambdaUDF>, args: Vec<Expr>) -> Self {
+        Self { func, args }
+    }
+
+    pub fn name(&self) -> &str {
+        self.func.name()
+    }
+}
+
+impl Hash for LambdaFunction {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.func.hash(state);
+        self.args.hash(state);
+    }
+}
+
+impl PartialEq for LambdaFunction {
+    fn eq(&self, other: &Self) -> bool {
+        self.func.as_ref() == other.func.as_ref() && self.args == other.args
+    }
 }
 
 #[derive(Clone, PartialEq, PartialOrd, Eq, Debug, Hash)]
@@ -1566,6 +1597,7 @@ impl Expr {
             #[expect(deprecated)]
             Expr::Wildcard { .. } => "Wildcard",
             Expr::Unnest { .. } => "Unnest",
+            Expr::LambdaFunction { .. } => "LambdaFunction",
             Expr::Lambda { .. } => "Lambda",
             Expr::LambdaVariable { .. } => "LambdaVariable",
         }
@@ -2083,6 +2115,7 @@ impl Expr {
     pub fn short_circuits(&self) -> bool {
         match self {
             Expr::ScalarFunction(ScalarFunction { func, .. }) => func.short_circuits(),
+            Expr::LambdaFunction(LambdaFunction { func, .. }) => func.short_circuits(),
             Expr::BinaryExpr(BinaryExpr { op, .. }) => {
                 matches!(op, Operator::And | Operator::Or)
             }
@@ -2719,6 +2752,9 @@ impl HashNode for Expr {
                 column.hash(state);
             }
             Expr::Unnest(Unnest { expr: _expr }) => {}
+            Expr::LambdaFunction(LambdaFunction { func, args: _args }) => {
+                func.hash(state);
+            }
             Expr::Lambda(Lambda { params, body: _ }) => {
                 params.hash(state);
             }
@@ -3040,6 +3076,16 @@ impl Display for SchemaDisplay<'_> {
                         };
 
                         write!(f, " {window_frame}")
+                    }
+                }
+            }
+            Expr::LambdaFunction(LambdaFunction { func, args }) => {
+                match func.schema_name(args) {
+                    Ok(name) => {
+                        write!(f, "{name}")
+                    }
+                    Err(e) => {
+                        write!(f, "got error from schema_name {e}")
                     }
                 }
             }
@@ -3538,6 +3584,9 @@ impl Display for Expr {
             Expr::Placeholder(Placeholder { id, .. }) => write!(f, "{id}"),
             Expr::Unnest(Unnest { expr }) => {
                 write!(f, "{UNNEST_COLUMN_PREFIX}({expr})")
+            }
+            Expr::LambdaFunction(fun) => {
+                fmt_function(f, fun.name(), false, &fun.args, true)
             }
             Expr::Lambda(Lambda { params, body }) => {
                 write!(f, "({}) -> {body}", params.join(", "))

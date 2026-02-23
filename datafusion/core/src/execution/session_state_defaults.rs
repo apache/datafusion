@@ -36,7 +36,8 @@ use datafusion_execution::config::SessionConfig;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_expr::planner::ExprPlanner;
-use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
+use datafusion_expr::{AggregateUDF, LambdaUDF, ScalarUDF, WindowUDF};
+use datafusion_functions_nested::array_transform::ArrayTransform;
 use std::collections::HashMap;
 use std::sync::Arc;
 use url::Url;
@@ -110,6 +111,11 @@ impl SessionStateDefaults {
         functions.append(&mut functions_nested::all_default_nested_functions());
 
         functions
+    }
+
+    /// returns the list of default [`LambdaUDF`]s
+    pub fn default_lambda_functions() -> Vec<Arc<dyn LambdaUDF>> {
+        vec![Arc::new(ArrayTransform::new())]        
     }
 
     /// returns the list of default [`AggregateUDF`]s

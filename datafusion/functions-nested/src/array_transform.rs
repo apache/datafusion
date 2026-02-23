@@ -26,24 +26,29 @@ use arrow::{
     datatypes::{DataType, Field, FieldRef, Schema},
 };
 use datafusion_common::{
-    HashMap, Result, exec_err, internal_err, tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter}, utils::{elements_indices, list_indices, list_values, take_function_args}
+    exec_err,
+    tree_node::{
+        Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
+    },
+    utils::{elements_indices, list_indices, list_values, take_function_args},
+    HashMap, Result,
 };
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    ColumnarValue, Documentation, LambdaFunctionArgs, LambdaUDF, Signature,
     ValueOrLambda, ValueOrLambdaField, ValueOrLambdaParameter, Volatility,
 };
 use datafusion_macros::user_doc;
-use datafusion_physical_expr::expressions::{LambdaVariable, LambdaExpr};
+use datafusion_physical_expr::expressions::{LambdaExpr, LambdaVariable};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::{any::Any, sync::Arc};
 
-make_udf_expr_and_func!(
-    ArrayTransform,
-    array_transform,
-    array lambda,
-    "transforms the values of a array",
-    array_transform_udf
-);
+//make_udf_expr_and_func!(
+//    ArrayTransform,
+//    array_transform,
+//    array lambda,
+//    "transforms the values of a array",
+//    array_transform_udf
+//);
 
 #[user_doc(
     doc_section(label = "Array Functions"),
@@ -84,7 +89,7 @@ impl ArrayTransform {
     }
 }
 
-impl ScalarUDFImpl for ArrayTransform {
+impl LambdaUDF for ArrayTransform {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -101,18 +106,12 @@ impl ScalarUDFImpl for ArrayTransform {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!("return_type called instead of return_field_from_args")
-    }
-
     fn return_field_from_args(
         &self,
-        args: datafusion_expr::ReturnFieldArgs,
+        args: datafusion_expr::LambdaReturnFieldArgs,
     ) -> Result<Arc<Field>> {
-        let args = args.to_lambda_args();
-
         let [ValueOrLambdaField::Value(list), ValueOrLambdaField::Lambda(lambda)] =
-            take_function_args(self.name(), &args)?
+            take_function_args(self.name(), args.arg_fields)?
         else {
             return exec_err!(
                 "{} expects a value follewed by a lambda, got {:?}",
@@ -141,10 +140,8 @@ impl ScalarUDFImpl for ArrayTransform {
         Ok(Arc::new(Field::new("", return_type, list.is_nullable())))
     }
 
-    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        // args.lambda_args allows the convenient match below, instead of inspecting both args.args and args.lambdas
-        let lambda_args = args.to_lambda_args();
-        let [list_value, lambda] = take_function_args(self.name(), &lambda_args)?;
+    fn invoke_with_args(&self, args: LambdaFunctionArgs) -> Result<ColumnarValue> {
+        let [list_value, lambda] = take_function_args(self.name(), &args.args)?;
 
         let (ValueOrLambda::Value(list_value), ValueOrLambda::Lambda(lambda)) =
             (list_value, lambda)
@@ -152,7 +149,7 @@ impl ScalarUDFImpl for ArrayTransform {
             return exec_err!(
                 "{} expects a value followed by a lambda, got {:?}",
                 self.name(),
-                &lambda_args
+                &args.args
             );
         };
 
@@ -243,8 +240,7 @@ impl ScalarUDFImpl for ArrayTransform {
         &self,
         args: &[ValueOrLambdaParameter],
     ) -> Result<Vec<Option<Vec<Field>>>> {
-        let [ValueOrLambdaParameter::Value(list), ValueOrLambdaParameter::Lambda] =
-            args
+        let [ValueOrLambdaParameter::Value(list), ValueOrLambdaParameter::Lambda] = args
         else {
             return exec_err!(
                 "{} expects a value follewed by a lambda, got {:?}",
@@ -305,7 +301,7 @@ impl TreeNodeRewriter for BindLambdaVariable<'_> {
             if let Some((value, shadows)) = self.columns.get(lambda_variable.name()) {
                 if *shadows == 0 {
                     return Ok(Transformed::yes(Arc::new(
-                        lambda_variable.clone().with_value(value.clone()),
+                        lambda_variable.clone().with_value(Arc::clone(value)),
                     )));
                 }
             }
@@ -317,7 +313,7 @@ impl TreeNodeRewriter for BindLambdaVariable<'_> {
             }
 
             if self.columns.values().all(|(_value, shadows)| *shadows > 0) {
-                return Ok(Transformed::new(node, false, TreeNodeRecursion::Jump))
+                return Ok(Transformed::new(node, false, TreeNodeRecursion::Jump));
             }
         }
 

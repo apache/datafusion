@@ -1207,7 +1207,7 @@ mod tests {
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::TableReference;
     use datafusion_expr::logical_plan::builder::LogicalTableSource;
-    use datafusion_expr::{AggregateUDF, ScalarUDF, TableSource, WindowUDF};
+    use datafusion_expr::{AggregateUDF, LambdaUDF, ScalarUDF, TableSource, WindowUDF};
 
     use super::*;
 
@@ -1244,6 +1244,10 @@ mod tests {
         }
 
         fn get_function_meta(&self, _name: &str) -> Option<Arc<ScalarUDF>> {
+            None
+        }
+
+        fn get_lambda_meta(&self, _name: &str) -> Option<Arc<dyn LambdaUDF>> {
             None
         }
 

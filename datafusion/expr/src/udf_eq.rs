@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{AggregateUDFImpl, ScalarUDFImpl, WindowUDFImpl};
+use crate::{AggregateUDFImpl, LambdaUDF, ScalarUDFImpl, WindowUDFImpl};
 use std::fmt::Debug;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ops::Deref;
@@ -83,6 +83,18 @@ trait UdfPointer: Deref {
 
 impl UdfPointer for Arc<dyn ScalarUDFImpl + '_> {
     fn equals(&self, other: &(dyn ScalarUDFImpl + '_)) -> bool {
+        self.as_ref().dyn_eq(other.as_any())
+    }
+
+    fn hash_value(&self) -> u64 {
+        let hasher = &mut DefaultHasher::new();
+        self.as_ref().dyn_hash(hasher);
+        hasher.finish()
+    }
+}
+
+impl UdfPointer for Arc<dyn LambdaUDF + '_> {
+    fn equals(&self, other: &Self::Target) -> bool {
         self.as_ref().dyn_eq(other.as_any())
     }
 

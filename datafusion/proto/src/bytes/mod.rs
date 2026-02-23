@@ -24,11 +24,11 @@ use crate::physical_plan::{
     AsExecutionPlan, DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
 };
 use crate::protobuf;
-use datafusion_common::{plan_datafusion_err, Result};
+use datafusion_common::{not_impl_err, plan_datafusion_err, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::{
-    create_udaf, create_udf, create_udwf, AggregateUDF, Expr, LogicalPlan, Volatility,
-    WindowUDF,
+    create_udaf, create_udf, create_udwf, AggregateUDF, Expr, LambdaUDF, LogicalPlan,
+    Signature, Volatility, WindowUDF,
 };
 use prost::{
     bytes::{Bytes, BytesMut},
@@ -167,6 +167,15 @@ impl Serializeable for Expr {
                 )
             }
 
+            fn register_udlf(
+                &mut self,
+                _udlf: Arc<dyn datafusion_expr::LambdaUDF>,
+            ) -> Result<Option<Arc<dyn datafusion_expr::LambdaUDF>>> {
+                datafusion_common::internal_err!(
+                    "register_udlf called in Placeholder Registry!"
+                )
+            }
+
             fn expr_planners(&self) -> Vec<Arc<dyn ExprPlanner>> {
                 vec![]
             }
@@ -177,6 +186,51 @@ impl Serializeable for Expr {
 
             fn udwfs(&self) -> std::collections::HashSet<String> {
                 std::collections::HashSet::default()
+            }
+
+            fn udlfs(&self) -> std::collections::HashSet<String> {
+                std::collections::HashSet::default()
+            }
+
+            fn udlf(&self, name: &str) -> Result<Arc<dyn datafusion_expr::LambdaUDF>> {
+                #[derive(Debug, PartialEq, Eq, Hash)]
+                struct MockLambdaUDF {
+                    name: String,
+                    signature: Signature,
+                }
+
+                impl LambdaUDF for MockLambdaUDF {
+                    fn as_any(&self) -> &dyn std::any::Any {
+                        self
+                    }
+
+                    fn name(&self) -> &str {
+                        &self.name
+                    }
+
+                    fn signature(&self) -> &Signature {
+                        &self.signature
+                    }
+
+                    fn return_field_from_args(
+                        &self,
+                        _args: datafusion_expr::LambdaReturnFieldArgs,
+                    ) -> Result<arrow::datatypes::FieldRef> {
+                        not_impl_err!("mock LambdaUDF")
+                    }
+
+                    fn invoke_with_args(
+                        &self,
+                        _args: datafusion_expr::LambdaFunctionArgs,
+                    ) -> Result<datafusion_expr::ColumnarValue> {
+                        not_impl_err!("mock LambdaUDF")
+                    }
+                }
+
+                Ok(Arc::new(MockLambdaUDF {
+                    name: name.to_string(),
+                    signature: Signature::variadic_any(Volatility::Immutable),
+                }))
             }
         }
         Expr::from_bytes_with_registry(&bytes, &PlaceHolderRegistry)?;

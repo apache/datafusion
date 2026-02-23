@@ -100,6 +100,16 @@ pub fn expr_applicable_for_cols(col_names: &[&str], expr: &Expr) -> bool {
                 }
             }
         }
+        Expr::LambdaFunction(lambda_function) => {
+            match lambda_function.func.signature().volatility {
+                Volatility::Immutable => Ok(TreeNodeRecursion::Continue),
+                // TODO: Stable functions could be `applicable`, but that would require access to the context
+                Volatility::Stable | Volatility::Volatile => {
+                    is_applicable = false;
+                    Ok(TreeNodeRecursion::Stop)
+                }
+            }
+        }
 
         // TODO other expressions are not handled yet:
         // - AGGREGATE and WINDOW should not end up in filter conditions, except maybe in some edge cases
@@ -555,7 +565,7 @@ mod tests {
 
     use super::*;
     use datafusion_expr::{
-        case, col, lit, AggregateUDF, Expr, LogicalPlan, ScalarUDF, WindowUDF,
+        case, col, lit, AggregateUDF, Expr, LambdaUDF, LogicalPlan, ScalarUDF, WindowUDF,
     };
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_plan::ExecutionPlan;
@@ -1063,6 +1073,12 @@ mod tests {
         }
 
         fn scalar_functions(&self) -> &std::collections::HashMap<String, Arc<ScalarUDF>> {
+            unimplemented!()
+        }
+
+        fn lambda_functions(
+            &self,
+        ) -> &std::collections::HashMap<String, Arc<dyn LambdaUDF>> {
             unimplemented!()
         }
 

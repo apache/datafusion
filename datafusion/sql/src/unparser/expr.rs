@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_expr::expr::{AggregateFunctionParams, WindowFunctionParams};
+use datafusion_expr::expr::{AggregateFunctionParams, LambdaFunction, WindowFunctionParams};
 use datafusion_expr::expr::{Lambda, Unnest};
 use sqlparser::ast::Value::SingleQuotedString;
 use sqlparser::ast::{
     self, Array, BinaryOperator, Expr as AstExpr, Function, Ident, Interval,
-    LambdaFunction, ObjectName, Subscript, TimezoneInfo, UnaryOperator,
+    ObjectName, Subscript, TimezoneInfo, UnaryOperator,
 };
 use sqlparser::ast::{CaseWhen, DuplicateTreatment, OrderByOptions, ValueWithSpan};
 use std::sync::Arc;
@@ -528,8 +528,20 @@ impl Unparser<'_> {
             }
             Expr::OuterReferenceColumn(_, col) => self.col_to_sql(col),
             Expr::Unnest(unnest) => self.unnest_to_sql(unnest),
+            Expr::LambdaFunction(LambdaFunction { func, args }) => {
+                let func_name = func.name();
+
+                if let Some(expr) = self
+                    .dialect
+                    .scalar_function_to_sql_overrides(self, func_name, args)?
+                {
+                    return Ok(expr);
+                }
+
+                self.scalar_function_to_sql(func_name, args)
+            }
             Expr::Lambda(Lambda { params, body }) => {
-                Ok(ast::Expr::Lambda(LambdaFunction {
+                Ok(ast::Expr::Lambda(ast::LambdaFunction {
                     params: ast::OneOrManyWithParens::Many(
                         params.iter().map(|param| param.as_str().into()).collect(),
                     ),

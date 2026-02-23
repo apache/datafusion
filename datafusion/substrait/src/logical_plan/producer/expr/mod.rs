@@ -152,8 +152,9 @@ pub fn to_substrait_rex(
             not_impl_err!("Cannot convert {expr:?} to Substrait")
         }
         Expr::Unnest(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
-        Expr::Lambda(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"), // https://github.com/substrait-io/substrait/issues/349
-        Expr::LambdaVariable(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"), // https://github.com/substrait-io/substrait/issues/349
+        Expr::LambdaFunction(expr) => producer.handle_lambda_function(expr, schema),
+        Expr::Lambda(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"), // not yet implemented in substrait-rs
+        Expr::LambdaVariable(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"), // not yet implemented in substrait-rs
     }
 }
 

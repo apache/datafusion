@@ -42,6 +42,7 @@ mod partition_evaluator;
 mod table_source;
 mod udaf;
 mod udf;
+mod udlf;
 mod udwf;
 
 pub mod arguments;
@@ -117,9 +118,10 @@ pub use udaf::{
     udaf_default_window_function_schema_name, AggregateUDF, AggregateUDFImpl,
     ReversedUDAF, SetMonotonicity, StatisticsArgs,
 };
-pub use udf::{
-    ReturnFieldArgs, ScalarFunctionArgs, ScalarFunctionLambdaArg, ScalarUDF,
-    ScalarUDFImpl, ValueOrLambda, ValueOrLambdaField, ValueOrLambdaParameter,
+pub use udf::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl};
+pub use udlf::{
+    LambdaFunctionArgs, LambdaFunctionLambdaArg, LambdaReturnFieldArgs, LambdaUDF,
+    ValueOrLambda, ValueOrLambdaField, ValueOrLambdaParameter,
 };
 pub use udwf::{LimitEffect, ReversedUDWF, WindowUDF, WindowUDFImpl};
 pub use window_frame::{WindowFrame, WindowFrameBound, WindowFrameUnits};

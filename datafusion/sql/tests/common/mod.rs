@@ -26,7 +26,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{plan_err, DFSchema, GetExt, Result, TableReference};
 use datafusion_expr::planner::{ExprPlanner, PlannerResult, TypePlanner};
-use datafusion_expr::{AggregateUDF, Expr, ScalarUDF, TableSource, WindowUDF};
+use datafusion_expr::{AggregateUDF, Expr, LambdaUDF, ScalarUDF, TableSource, WindowUDF};
 use datafusion_functions_nested::expr_fn::make_array;
 use datafusion_sql::planner::ContextProvider;
 
@@ -53,6 +53,7 @@ impl Display for MockCsvType {
 #[derive(Default)]
 pub(crate) struct MockSessionState {
     scalar_functions: HashMap<String, Arc<ScalarUDF>>,
+    lambda_functions: HashMap<String, Arc<dyn LambdaUDF>>,
     aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
     expr_planners: Vec<Arc<dyn ExprPlanner>>,
     type_planner: Option<Arc<dyn TypePlanner>>,
@@ -238,6 +239,10 @@ impl ContextProvider for MockContextProvider {
 
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>> {
         self.state.scalar_functions.get(name).cloned()
+    }
+
+    fn get_lambda_meta(&self, name: &str) -> Option<Arc<dyn LambdaUDF>> {
+        self.state.lambda_functions.get(name).cloned()
     }
 
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {

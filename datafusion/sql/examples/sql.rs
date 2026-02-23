@@ -22,7 +22,7 @@ use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{plan_err, Result, TableReference};
 use datafusion_expr::planner::ExprPlanner;
-use datafusion_expr::WindowUDF;
+use datafusion_expr::{LambdaUDF, WindowUDF};
 use datafusion_expr::{
     logical_plan::builder::LogicalTableSource, AggregateUDF, ScalarUDF, TableSource,
 };
@@ -135,6 +135,10 @@ impl ContextProvider for MyContextProvider {
     }
 
     fn get_function_meta(&self, _name: &str) -> Option<Arc<ScalarUDF>> {
+        None
+    }
+
+    fn get_lambda_meta(&self, _name: &str) -> Option<Arc<dyn LambdaUDF>> {
         None
     }
 

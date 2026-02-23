@@ -67,4 +67,14 @@ impl FunctionRegistry for NoRegistry {
     fn udwfs(&self) -> HashSet<String> {
         HashSet::new()
     }
+    
+    fn udlfs(&self) -> HashSet<String> {
+        HashSet::new()
+    }
+    
+    fn udlf(&self, name: &str) -> Result<Arc<dyn datafusion_expr::LambdaUDF>> {
+        plan_err!("No function registry provided to deserialize, so can not deserialize User Defined Lambda Function '{name}'")
+    }
+
+    
 }

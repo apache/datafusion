@@ -22,8 +22,7 @@ use std::sync::Arc;
 
 use crate::expr::NullTreatment;
 use crate::{
-    AggregateUDF, Expr, GetFieldAccess, ScalarUDF, SortExpr, TableSource, WindowFrame,
-    WindowFunctionDefinition, WindowUDF,
+    AggregateUDF, Expr, GetFieldAccess, LambdaUDF, ScalarUDF, SortExpr, TableSource, WindowFrame, WindowFunctionDefinition, WindowUDF
 };
 use arrow::datatypes::{DataType, Field, SchemaRef};
 use datafusion_common::{
@@ -91,6 +90,9 @@ pub trait ContextProvider {
 
     /// Return the scalar function with a given name, if any
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>>;
+    
+    /// Return the lambda function with a given name, if any
+    fn get_lambda_meta(&self, name: &str) -> Option<Arc<dyn LambdaUDF>>;
 
     /// Return the aggregate function with a given name, if any
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>>;

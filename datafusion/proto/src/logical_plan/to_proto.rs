@@ -622,6 +622,17 @@ pub fn serialize_expr(
                     .unwrap_or(HashMap::new()),
             })),
         },
+        Expr::LambdaFunction(func) => {
+            let mut buf = Vec::new();
+            let _ = codec.try_encode_udlf(func.func.as_ref(), &mut buf);
+            protobuf::LogicalExprNode {
+                expr_type: Some(ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode {
+                    fun_name: func.name().to_string(),
+                    fun_definition: (!buf.is_empty()).then_some(buf),
+                    args: serialize_exprs(&func.args, codec)?,
+                })),
+            }
+        }
         Expr::Lambda(_) | Expr::LambdaVariable(_) => {
             return Err(Error::General(
                 "Proto serialization error: Lambda not implemented".to_string(),
