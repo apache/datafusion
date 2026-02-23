@@ -573,8 +573,28 @@ Commenting on the PR will remove the <code class="docutils literal notranslate">
 </section>
 <section id="ci-runners">
 <h3>CI Runners<a class="headerlink" href="#ci-runners" title="Link to this heading">#</a></h3>
-<p>We use <a class="reference external" href="https://runs-on.com/">Runs-On</a> for some actions in the main repository, which run in the ASF AWS account to speed up CI time. In forks, these actions run on the default GitHub runners since forks do not have access to ASF infrastructure.</p>
+<section id="runs-on">
+<h4>Runs-On<a class="headerlink" href="#runs-on" title="Link to this heading">#</a></h4>
+<p>We use <a class="reference external" href="https://runs-on.com/">Runs-On</a> for some actions in the main repository, which run in the ASF AWS account to speed up CI. In forks, these actions run on the default GitHub runners since forks do not have access to ASF infrastructure.</p>
+<p>To configure them, we use the following format:</p>
+<p><code class="docutils literal notranslate"><span class="pre">runs-on:</span> <span class="pre">${{</span> <span class="pre">github.repository_owner</span> <span class="pre">==</span> <span class="pre">'apache'</span> <span class="pre">&amp;&amp;</span> <span class="pre">format('runs-on={0},family=m8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion',</span> <span class="pre">github.run_id)</span> <span class="pre">||</span> <span class="pre">'ubuntu-latest'</span> <span class="pre">}}</span></code></p>
+<p>This is a conditional expression that uses Runs-On custom runners for the main repository and falls back to the standard GitHub runners for forks. Runs-On configuration follows the <a class="reference external" href="https://runs-on.com/configuration/job-labels/">Runs-On pattern</a>.</p>
+<p>For those actions we also use the <a class="reference external" href="https://runs-on.com/caching/magic-cache/#how-to-use">Runs-On action</a>, which adds support for external caching and reports job metrics:</p>
+<p><code class="docutils literal notranslate"><span class="pre">-</span> <span class="pre">uses:</span> <span class="pre">runs-on/action&#64;cd2b598b0515d39d78c38a02d529db87d2196d1e</span></code></p>
+<p>For the standard GitHub runners, this action will do nothing.</p>
+<section id="spot-instances">
+<h5>Spot Instances<a class="headerlink" href="#spot-instances" title="Link to this heading">#</a></h5>
+<p>By default, Runs-On actions run as <a class="reference external" href="https://runs-on.com/configuration/spot-instances/">spot instances</a>, which means they might occasionally be interrupted. In the CI you would see:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">Error</span><span class="p">:</span> <span class="n">The</span> <span class="n">operation</span> <span class="n">was</span> <span class="n">canceled</span><span class="o">.</span>
+</pre></div>
+</div>
+<p>According to Runs-On, spot instance termination is extremely rare for instances running for less than 1h. Those actions will be restarted automatically.</p>
+</section>
+</section>
+<section id="github-runners">
+<h4>GitHub Runners<a class="headerlink" href="#github-runners" title="Link to this heading">#</a></h4>
 <p>We also use standard GitHub runners for some actions in the main repository; these are also runnable in forks.</p>
+</section>
 </section>
 </section>
 </section>
@@ -645,7 +665,14 @@ Commenting on the PR will remove the <code class="docutils literal notranslate">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#ai-assisted-contributions">AI-Assisted contributions</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#why-fully-ai-generated-prs-without-understanding-are-not-helpful">Why fully AI-generated PRs without understanding are not helpful</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#better-ways-to-contribute-than-an-ai-dump">Better ways to contribute than an “AI dump”</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#ci-runners">CI Runners</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#ci-runners">CI Runners</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#runs-on">Runs-On</a><ul class="nav section-nav flex-column">
+<li class="toc-h5 nav-item toc-entry"><a class="reference internal nav-link" href="#spot-instances">Spot Instances</a></li>
+</ul>
+</li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#github-runners">GitHub Runners</a></li>
+</ul>
+</li>
 </ul>
 </li>
 </ul>
