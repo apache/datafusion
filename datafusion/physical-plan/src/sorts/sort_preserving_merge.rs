@@ -284,10 +284,11 @@ impl ExecutionPlan for SortPreservingMergeExec {
         &self,
         f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
+        let mut tnr = TreeNodeRecursion::Continue;
         for sort_expr in &self.expr {
-            f(sort_expr.expr.as_ref())?;
+            tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
         }
-        Ok(TreeNodeRecursion::Continue)
+        Ok(tnr)
     }
 
     fn with_new_children(

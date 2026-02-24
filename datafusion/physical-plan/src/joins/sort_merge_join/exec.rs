@@ -442,15 +442,16 @@ impl ExecutionPlan for SortMergeJoinExec {
         f: &mut dyn FnMut(&dyn crate::PhysicalExpr) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         // Apply to join keys from both sides
+        let mut tnr = TreeNodeRecursion::Continue;
         for (left, right) in &self.on {
-            f(left.as_ref())?;
-            f(right.as_ref())?;
+            tnr = tnr.visit_sibling(|| f(left.as_ref()))?;
+            tnr = tnr.visit_sibling(|| f(right.as_ref()))?;
         }
         // Apply to join filter expressions if present
         if let Some(filter) = &self.filter {
-            f(filter.expression().as_ref())?;
+            tnr = tnr.visit_sibling(|| f(filter.expression().as_ref()))?;
         }
-        Ok(TreeNodeRecursion::Continue)
+        Ok(tnr)
     }
 
     fn with_new_children(

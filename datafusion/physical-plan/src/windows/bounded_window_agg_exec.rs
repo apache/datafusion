@@ -317,12 +317,13 @@ impl ExecutionPlan for BoundedWindowAggExec {
         &self,
         f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
+        let mut tnr = TreeNodeRecursion::Continue;
         for window_expr in &self.window_expr {
             for expr in window_expr.expressions() {
-                f(expr.as_ref())?;
+                tnr = tnr.visit_sibling(|| f(expr.as_ref()))?;
             }
         }
-        Ok(TreeNodeRecursion::Continue)
+        Ok(tnr)
     }
 
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {

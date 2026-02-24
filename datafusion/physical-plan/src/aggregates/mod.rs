@@ -1377,28 +1377,29 @@ impl ExecutionPlan for AggregateExec {
         f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         // Apply to group by expressions
+        let mut tnr = TreeNodeRecursion::Continue;
         for expr in self.group_by.input_exprs() {
-            f(expr.as_ref())?;
+            tnr = tnr.visit_sibling(|| f(expr.as_ref()))?;
         }
 
         // Apply to aggregate expressions
         for aggr in self.aggr_expr.iter() {
             for expr in aggr.expressions() {
-                f(expr.as_ref())?;
+                tnr = tnr.visit_sibling(|| f(expr.as_ref()))?;
             }
         }
 
         // Apply to filter expressions (FILTER WHERE clauses)
         for filter in self.filter_expr.iter().flatten() {
-            f(filter.as_ref())?;
+            tnr = tnr.visit_sibling(|| f(filter.as_ref()))?;
         }
 
         // Apply to dynamic filter expression if present
         if let Some(dyn_filter) = &self.dynamic_filter {
-            f(dyn_filter.filter.as_ref())?;
+            tnr = tnr.visit_sibling(|| f(dyn_filter.filter.as_ref()))?;
         }
 
-        Ok(TreeNodeRecursion::Continue)
+        Ok(tnr)
     }
 
     fn with_new_children(

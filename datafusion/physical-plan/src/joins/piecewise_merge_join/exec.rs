@@ -491,9 +491,7 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
         f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         // Apply to the two expressions being compared in the range predicate
-        f(self.on.0.as_ref())?;
-        f(self.on.1.as_ref())?;
-        Ok(TreeNodeRecursion::Continue)
+        f(self.on.0.as_ref())?.visit_sibling(|| f(self.on.1.as_ref()))
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {

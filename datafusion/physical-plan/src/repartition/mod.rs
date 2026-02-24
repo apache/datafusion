@@ -906,9 +906,11 @@ impl ExecutionPlan for RepartitionExec {
     ) -> Result<TreeNodeRecursion> {
         // Apply to hash partition expressions if this is a hash repartition
         if let Partitioning::Hash(exprs, _) = self.partitioning() {
+            let mut tnr = TreeNodeRecursion::Continue;
             for expr in exprs {
-                f(expr.as_ref())?;
+                tnr = tnr.visit_sibling(|| f(expr.as_ref()))?;
             }
+            return Ok(tnr);
         }
         Ok(TreeNodeRecursion::Continue)
     }

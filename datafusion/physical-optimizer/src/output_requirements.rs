@@ -306,6 +306,7 @@ impl ExecutionPlan for OutputRequirementExec {
         ) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         // Visit expressions in order_requirement
+        let mut tnr = TreeNodeRecursion::Continue;
         if let Some(order_reqs) = &self.order_requirement {
             let lexes = match order_reqs {
                 OrderingRequirements::Hard(alternatives) => alternatives,
@@ -313,7 +314,7 @@ impl ExecutionPlan for OutputRequirementExec {
             };
             for lex in lexes {
                 for sort_expr in lex {
-                    f(sort_expr.expr.as_ref())?;
+                    tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
                 }
             }
         }
@@ -321,11 +322,11 @@ impl ExecutionPlan for OutputRequirementExec {
         // Visit expressions in dist_requirement if it's HashPartitioned
         if let Distribution::HashPartitioned(exprs) = &self.dist_requirement {
             for expr in exprs {
-                f(expr.as_ref())?;
+                tnr = tnr.visit_sibling(|| f(expr.as_ref()))?;
             }
         }
 
-        Ok(TreeNodeRecursion::Continue)
+        Ok(tnr)
     }
 }
 

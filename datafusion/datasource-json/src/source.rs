@@ -245,10 +245,11 @@ impl FileSource for JsonSource {
         ) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         // Visit projection expressions
+        let mut tnr = TreeNodeRecursion::Continue;
         for proj_expr in &self.projection.source {
-            f(proj_expr.expr.as_ref())?;
+            tnr = tnr.visit_sibling(|| f(proj_expr.expr.as_ref()))?;
         }
-        Ok(TreeNodeRecursion::Continue)
+        Ok(tnr)
     }
 }
 

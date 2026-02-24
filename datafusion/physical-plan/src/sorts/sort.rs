@@ -1231,17 +1231,18 @@ impl ExecutionPlan for SortExec {
         f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         // Apply to sort expressions
+        let mut tnr = TreeNodeRecursion::Continue;
         for sort_expr in &self.expr {
-            f(sort_expr.expr.as_ref())?;
+            tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
         }
 
         // Apply to dynamic filter expression if present (when fetch is Some, TopK mode)
         if let Some(filter) = &self.filter {
             let filter_guard = filter.read();
-            f(filter_guard.expr().as_ref())?;
+            tnr = tnr.visit_sibling(|| f(filter_guard.expr().as_ref()))?;
         }
 
-        Ok(TreeNodeRecursion::Continue)
+        Ok(tnr)
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {

@@ -825,16 +825,17 @@ impl FileSource for ParquetSource {
         ) -> datafusion_common::Result<TreeNodeRecursion>,
     ) -> datafusion_common::Result<TreeNodeRecursion> {
         // Visit predicate (filter) expression if present
+        let mut tnr = TreeNodeRecursion::Continue;
         if let Some(predicate) = &self.predicate {
-            f(predicate.as_ref())?;
+            tnr = tnr.visit_sibling(|| f(predicate.as_ref()))?;
         }
 
         // Visit projection expressions
         for proj_expr in &self.projection {
-            f(proj_expr.expr.as_ref())?;
+            tnr = tnr.visit_sibling(|| f(proj_expr.expr.as_ref()))?;
         }
 
-        Ok(TreeNodeRecursion::Continue)
+        Ok(tnr)
     }
 }
 
