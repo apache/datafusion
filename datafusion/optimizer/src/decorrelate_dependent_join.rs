@@ -44,6 +44,8 @@ use itertools::Itertools;
 
 #[derive(Clone, Debug)]
 pub struct DependentJoinDecorrelator {
+    // mostly table scan or subquery alias
+    delim_scan_nodes: IndexMap<usize, LogicalPlan>,
     // immutable, defined when this object is constructed
     domains: IndexSet<CorrelatedColumnInfo>,
     // for each domain column, the corresponding column in delim_get
@@ -114,7 +116,7 @@ fn natural_join(
 }
 
 impl DependentJoinDecorrelator {
-    fn new_root() -> Self {
+    fn new_root(delim_scan_nodes: IndexMap<usize, LogicalPlan>) -> Self {
         Self {
             domains: IndexSet::new(),
             correlated_map: IndexMap::new(),
@@ -124,6 +126,7 @@ impl DependentJoinDecorrelator {
             any_join: true,
             delim_scan_id: 0,
             dscan_cols: vec![],
+            delim_scan_nodes,
         }
     }
 
@@ -132,6 +135,7 @@ impl DependentJoinDecorrelator {
         correlated_columns_from_parent: &Vec<CorrelatedColumnInfo>,
         is_initial: bool,
         any_join: bool,
+        delim_scan_nodes: IndexMap<usize, LogicalPlan>,
         delim_scan_id: usize,
         depth: usize,
     ) -> Self {
@@ -166,6 +170,7 @@ impl DependentJoinDecorrelator {
         merged_correlated_columns.extend_from_slice(&node.correlated_columns);
 
         Self {
+            delim_scan_nodes,
             domains,
             correlated_map: IndexMap::new(),
             is_initial,
@@ -178,7 +183,7 @@ impl DependentJoinDecorrelator {
     }
 
     fn decorrelate_independent(&mut self, plan: &LogicalPlan) -> Result<LogicalPlan> {
-        let mut decorrelator = DependentJoinDecorrelator::new_root();
+        let mut decorrelator = DependentJoinDecorrelator::new_root(self.delim_scan_nodes.clone());
 
         decorrelator.decorrelate(plan, true, 0)
     }
@@ -235,6 +240,7 @@ impl DependentJoinDecorrelator {
                 &self.correlated_columns,
                 false,
                 self.any_join,
+                self.delim_scan_nodes.clone(),
                 self.delim_scan_id,
                 djoin.subquery_depth,
             );
@@ -1513,14 +1519,13 @@ impl OptimizerRule for DecorrelateDependentJoin {
                 Ok(transformed) => transformed,
             };
 
-        // Only print debug info if PLAN_DEBUG env var is exactly "1"
 
         if rewrite_result.transformed {
             debug_println!(
                 "dependent join plan\n{}",
                 rewrite_result.data.display_indent()
             );
-            let mut decorrelator = DependentJoinDecorrelator::new_root();
+            let mut decorrelator = DependentJoinDecorrelator::new_root(transformer.delim_scan_nodes.clone());
             let ret = decorrelator.decorrelate(&rewrite_result.data, true, 0)?;
 
             debug_println!("decorrelated plan\n{}", ret.display_indent(),);

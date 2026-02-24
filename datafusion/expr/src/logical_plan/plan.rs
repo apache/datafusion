@@ -303,6 +303,9 @@ pub struct CorrelatedColumnInfo {
     // TODO: is data_type necessary?
     pub field: FieldRef,
     pub depth: usize,
+    // the reference to the delim scan node map
+    // this is usedful to construct delim scan operator later
+    pub delim_scan_node_id: usize,
 }
 
 impl CorrelatedColumnInfo {

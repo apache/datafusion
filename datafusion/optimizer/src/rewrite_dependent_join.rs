@@ -33,7 +33,7 @@ use datafusion_common::{
 };
 use datafusion_expr::{
     col, lit, Aggregate, CorrelatedColumnInfo, Expr, Filter, Join, LogicalPlan,
-    LogicalPlanBuilder, Projection,
+    LogicalPlanBuilder, Projection, SubqueryAlias,
 };
 
 use indexmap::map::Entry;
@@ -48,21 +48,37 @@ pub struct DependentJoinRewriter {
     nodes: IndexMap<usize, Node>,
     // all the node ids from root to the current node
     // this is mutated duri traversal
-    stack: Vec<usize>,
+    stack: Vec<StackItem>,
     // track for each column, the nodes/logical plan that reference to its within the tree
     all_outer_ref_columns: IndexMap<Column, Vec<ColumnAccess>>,
     alias_generator: Arc<AliasGenerator>,
+    // this is used to decorrelation optimizor later
+    // to construct delim scan node
+    // table providers can be
+    // subquery alias of a really complex logical plan
+    // that can even be a correlated subquery (unsupported for now)
+    // or an alias of a uncorrelated subquery
+    pub delim_scan_nodes: IndexMap<usize, LogicalPlan>,
 }
 
 #[derive(Debug, Hash, PartialEq, PartialOrd, Eq, Clone)]
+struct StackItem {
+    node_id: usize,
+    // is set if the node is an alias node
+    alias: Option<SubqueryAlias>,
+}
+#[derive(Debug, Hash, PartialEq, PartialOrd, Eq, Clone)]
 struct ColumnAccess {
     // node ids from root to the node that is referencing the column
-    stack: Vec<usize>,
+    stack: Vec<StackItem>,
     // the node referencing the column
     node_id: usize,
     col: Column,
     field: FieldRef,
     subquery_depth: usize,
+    // the reference to the delim scan node map
+    // this is usedful to construct delim scan operator later
+    delim_scan_node_id: usize,
 }
 
 impl DependentJoinRewriter {
@@ -142,6 +158,7 @@ impl DependentJoinRewriter {
                     col: ac.col.clone(),
                     field: ac.field.clone(),
                     depth: ac.subquery_depth,
+                    delim_scan_node_id: ac.delim_scan_node_id,
                 })
                 .unique()
                 .collect();
@@ -329,6 +346,7 @@ impl DependentJoinRewriter {
                 col: ac.col.clone(),
                 field: ac.field.clone(),
                 depth: ac.subquery_depth,
+                delim_scan_node_id: ac.delim_scan_node_id,
             })
             .unique()
             .collect();
@@ -420,65 +438,96 @@ impl DependentJoinRewriter {
     // this function is called with 2 args a:[1,2,3] and [1,2,5,6,7]
     // it then returns the id of the dependent join node (2)
     // and the id of the subquery node (5)
+    /*
+    Edge case
+     n1
+     |
+     n2 filter where outer.column = exists(subquery)
+     ----------------------
+     |                    \
+     |                    n5: subquery
+     |                        |
+     n3 alias outer   n6 filter outer.column=inner.column
+     |                        |
+     |                    n7 scan table inner
+     |
+     n8 join ----> n9 scan table "outer"
+            |
+            -----> n10 scan table "some table"
+
+    According to the traversal order, n9 will be visited first,
+    and accessed for column "outer.column" will include [n1,n2,n5,n6]
+
+    If this function is called on n9 (stacked n1,n2,n3,n8,n9)
+    it has to do a check that  from (n2,n3,n8,n9) there exists an alias node
+    that invalidate the providing function of n9, and thus return None
+         */
     fn dependent_join_and_subquery_node_ids(
-        stack_with_table_provider: &[usize],
-        stack_with_subquery: &[usize],
-    ) -> (usize, usize) {
+        stack_with_table_provider: &[StackItem],
+        stack_with_subquery: &[StackItem],
+    ) -> Option<(usize, usize)> {
         let mut lowest_common_ancestor = 0;
         let mut subquery_node_id = 0;
 
         let min_len = stack_with_table_provider
             .len()
             .min(stack_with_subquery.len());
-
+        let mut cursor = 0;
         for i in 0..min_len {
-            let right_id = stack_with_subquery[i];
-            let left_id = stack_with_table_provider[i];
+            cursor = i;
+            let right_node = &stack_with_subquery[i];
+            let left_node = &stack_with_table_provider[i];
 
-
-            if right_id == left_id {
+            if right_node.node_id == left_node.node_id {
                 // common parent
-                lowest_common_ancestor = right_id;
-                subquery_node_id = stack_with_subquery[i + 1];
+                lowest_common_ancestor = right_node.node_id;
+                subquery_node_id = stack_with_subquery[i + 1].node_id;
             } else {
                 break;
             }
         }
+        // check if from the cursor to the end of the table_provider there exist
+        // if so, return the node_id of the alias node
+        for i in cursor + 1..stack_with_table_provider.len() {
+            let node = &stack_with_table_provider[i];
+            // This table provider cannot provide the given column
+            if let Some(_) = node.alias {
+                return None;
+            }
+        }
 
-        (lowest_common_ancestor, subquery_node_id)
+        Some((lowest_common_ancestor, subquery_node_id))
     }
 
     // because the column providers are visited after column-accessor
     // (function visit_with_subqueries always visit the subquery before visiting the other children)
     // we can always infer the LCA inside this function, by getting the deepest common parent
-    fn conclude_lowest_dependent_join_node_if_any(
-        &mut self,
-        child_id: usize,
-        col: &Column,
-    ) -> Result<()> {
+    fn conclude_lowest_dependent_join_node_if_any(&mut self, col: &Column,delim_scan_node_id: usize) -> Result<()> {
         if let Some(accesses) = self.all_outer_ref_columns.get(col) {
             for access in accesses.iter() {
-                let mut cur_stack = self.stack.clone();
+                let cur_stack = self.stack.clone();
 
-                cur_stack.push(child_id);
-                let (dependent_join_node_id, subquery_node_id) =
-                    Self::dependent_join_and_subquery_node_ids(&cur_stack, &access.stack);
-                let node = self.nodes.get_mut(&dependent_join_node_id).ok_or(
-                    internal_datafusion_err!(
+                if let Some((dependent_join_node_id, subquery_node_id)) =
+                    Self::dependent_join_and_subquery_node_ids(&cur_stack, &access.stack)
+                {
+                    let node = self.nodes.get_mut(&dependent_join_node_id).ok_or(
+                        internal_datafusion_err!(
                         "dependent join node with id {dependent_join_node_id} not found"
                     ),
-                )?;
-                let accesses = node
-                    .columns_accesses_by_subquery_id
-                    .entry(subquery_node_id)
-                    .or_default();
-                accesses.push(ColumnAccess {
-                    col: col.clone(),
-                    node_id: access.node_id,
-                    stack: access.stack.clone(),
-                    field: access.field.clone(),
-                    subquery_depth: access.subquery_depth,
-                });
+                    )?;
+                    let accesses = node
+                        .columns_accesses_by_subquery_id
+                        .entry(subquery_node_id)
+                        .or_default();
+                    accesses.push(ColumnAccess {
+                        col: col.clone(),
+                        node_id: access.node_id,
+                        stack: access.stack.clone(),
+                        field: access.field.clone(),
+                        subquery_depth: access.subquery_depth,
+                        delim_scan_node_id,
+                    });
+                }
             }
         }
         Ok(())
@@ -501,6 +550,7 @@ impl DependentJoinRewriter {
                 col: col.clone(),
                 field: field.clone(),
                 subquery_depth: self.subquery_depth,
+                delim_scan_node_id: 0,
             });
     }
 
@@ -521,6 +571,7 @@ impl DependentJoinRewriter {
             stack: vec![],
             all_outer_ref_columns: IndexMap::new(),
             subquery_depth: 0,
+            delim_scan_nodes: IndexMap::new(),
         }
     }
 }
@@ -662,7 +713,7 @@ impl TreeNodeRewriter for DependentJoinRewriter {
         // for each node, find which column it is accessing, which column it is providing
         // Set of columns current node access
         let mut subquery_types = VecDeque::new();
-        let mut stop = false;
+        // let mut stop = false;
         match &node {
             LogicalPlan::Filter(f) => {
                 collect_subquery_types(
@@ -700,10 +751,9 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                     "subquery node cannot be at the beginning of the query plan"
                 ))?;
 
-                let parent_node = self
-                    .nodes
-                    .get_mut(parent)
-                    .ok_or(internal_datafusion_err!("node {parent} not found"))?;
+                let parent_node = self.nodes.get_mut(&parent.node_id).ok_or(
+                    internal_datafusion_err!("node {} not found", parent.node_id),
+                )?;
                 // the inserting sequence matter here
                 // when a parent has multiple children subquery at the same time
                 // we rely on the order in which subquery children are visited
@@ -767,7 +817,10 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                         }
                     }
                     self.subquery_depth += 1;
-                    self.stack.push(new_id);
+                    self.stack.push(StackItem {
+                        node_id: new_id,
+                        alias: None,
+                    });
                     self.nodes.insert(
                         new_id,
                         Node {
@@ -840,21 +893,22 @@ impl TreeNodeRewriter for DependentJoinRewriter {
             // TODO: maybe there are more logical plan that provides columns
             // aside from TableScan
             LogicalPlan::TableScan(tbl_scan) => {
+                self.delim_scan_nodes.insert(new_id,node.clone());
                 tbl_scan
                     .projected_schema
                     .columns()
                     .iter()
                     .try_for_each(|col| {
-                        self.conclude_lowest_dependent_join_node_if_any(new_id, col)
+                        self.conclude_lowest_dependent_join_node_if_any(col,new_id)
                     })?;
             }
             // Similar to TableScan, this node may provide column names which
             // is referenced inside some subqueries
             LogicalPlan::SubqueryAlias(alias) => {
+                self.delim_scan_nodes.insert(new_id,node.clone());
                 alias.schema.columns().iter().try_for_each(|col| {
-                    self.conclude_lowest_dependent_join_node_if_any(new_id, col)
+                    self.conclude_lowest_dependent_join_node_if_any(col,new_id)
                 })?;
-                stop = true;
             }
             _ => {}
         };
@@ -862,7 +916,13 @@ impl TreeNodeRewriter for DependentJoinRewriter {
         if is_dependent_join_node {
             self.subquery_depth += 1
         }
-        self.stack.push(new_id);
+        self.stack.push(StackItem {
+            node_id: new_id,
+            alias: match &node {
+                LogicalPlan::SubqueryAlias(alias) => Some(alias.clone()),
+                _ => None,
+            },
+        });
         self.nodes.insert(
             new_id,
             Node {
@@ -874,9 +934,9 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                 is_lateral_join: false,
             },
         );
-        if stop{
-            return Ok(Transformed::new(node, false, TreeNodeRecursion::Jump));
-        }
+        // if stop{
+        //     return Ok(Transformed::new(node, false, TreeNodeRecursion::Jump));
+        // }
 
         Ok(Transformed::no(node))
     }
@@ -889,11 +949,12 @@ impl TreeNodeRewriter for DependentJoinRewriter {
         // if the node in the f_up meet any node in the stack, it means that node itself
         // is a dependent join node,transformation by
         // build a join based on
-        let current_node_id = self.stack.pop().ok_or(internal_datafusion_err!(
+        let current_node = self.stack.pop().ok_or(internal_datafusion_err!(
             "stack cannot be empty during upward traversal"
         ))?;
         let is_top_node = self.stack.len() == 0;
-        let node_info = if let Entry::Occupied(e) = self.nodes.entry(current_node_id) {
+        let node_info = if let Entry::Occupied(e) = self.nodes.entry(current_node.node_id)
+        {
             let node_info = e.get();
             if !node_info.is_dependent_join_node {
                 return Ok(Transformed::no(node));
