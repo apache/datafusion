@@ -3433,7 +3433,7 @@ async fn test_should_emit_early_when_have_enough_data_to_emit() -> Result<()> {
                     on,
                     join_type,
                     join_filter,
-                    BATCH_SIZE,
+                    output_batch_size,
                 )
                 .await?;
 
