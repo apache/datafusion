@@ -275,6 +275,7 @@ impl FileOpener for ParquetOpener {
         let predicate = self.predicate.clone();
         let metrics = self.metrics.clone();
         let enable_row_group_stats_pruning = self.enable_row_group_stats_pruning;
+        let enable_bloom_filter = self.enable_bloom_filter;
         let limit = self.limit;
         let preserve_order = self.preserve_order;
 
@@ -312,7 +313,7 @@ impl FileOpener for ParquetOpener {
             let mut _metadata_timer = file_metrics.metadata_load_time.timer();
             let reader_metadata =
                 ArrowReaderMetadata::load_async(&mut async_file_reader, options).await?;
-            let metadata = reader_metadata.metadata();
+            let metadata = Arc::clone(reader_metadata.metadata());
             let num_row_groups = metadata.num_row_groups();
 
             // Adapt the physical schema to the file schema for pruning
@@ -375,6 +376,33 @@ impl FileOpener for ParquetOpener {
                 row_groups.prune_by_limit(limit, metadata.row_groups(), &file_metrics);
             }
 
+            // Bloom filter pruning: done once per file here in morselize(), so that
+            // open() does not repeat it for each morsel (which would cause inflated metrics
+            // and unnecessary work).
+            if let Some(predicate) = pruning_predicate.as_deref() {
+                if enable_bloom_filter && !row_groups.is_empty() {
+                    // Build a stream builder to access bloom filter data.
+                    // This consumes `async_file_reader` and `reader_metadata`, which are
+                    // no longer needed after this point.
+                    let mut builder = ParquetRecordBatchStreamBuilder::new_with_metadata(
+                        async_file_reader,
+                        reader_metadata,
+                    );
+                    row_groups
+                        .prune_by_bloom_filters(
+                            &physical_file_schema,
+                            &mut builder,
+                            predicate,
+                            &file_metrics,
+                        )
+                        .await;
+                } else {
+                    file_metrics
+                        .row_groups_pruned_bloom_filter
+                        .add_matched(row_groups.remaining_row_group_count());
+                }
+            }
+
             let access_plan = row_groups.build();
 
             let mut morsels = Vec::with_capacity(access_plan.len());
@@ -385,7 +413,7 @@ impl FileOpener for ParquetOpener {
                 let mut morsel_access_plan = ParquetAccessPlan::new_none(num_row_groups);
                 morsel_access_plan.scan(i);
                 let morsel = ParquetMorsel {
-                    metadata: Arc::clone(metadata),
+                    metadata: Arc::clone(&metadata),
                     access_plan: morsel_access_plan,
                 };
                 let mut f = partitioned_file.clone();
@@ -752,21 +780,31 @@ impl FileOpener for ParquetOpener {
                         .add_matched(row_groups.remaining_row_group_count());
                 }
 
-                if enable_bloom_filter && !row_groups.is_empty() {
-                    row_groups
-                        .prune_by_bloom_filters(
-                            &physical_file_schema,
-                            &mut builder,
-                            predicate,
-                            &file_metrics,
-                        )
-                        .await;
-                } else {
-                    // Update metrics: bloom filter unavailable, so all row groups are
-                    // matched (not pruned)
-                    file_metrics
-                        .row_groups_pruned_bloom_filter
-                        .add_matched(row_groups.remaining_row_group_count());
+                // Prune by limit before bloom filter: no point reading bloom filter data
+                // for row groups that will be skipped by the limit anyway.
+                if let (Some(limit), false) = (limit, preserve_order) {
+                    row_groups.prune_by_limit(limit, rg_metadata, &file_metrics);
+                }
+
+                // For morsels, bloom filter was already applied once in morselize().
+                // Skip it here to avoid double-counting metrics and redundant I/O.
+                if !is_morsel {
+                    if enable_bloom_filter && !row_groups.is_empty() {
+                        row_groups
+                            .prune_by_bloom_filters(
+                                &physical_file_schema,
+                                &mut builder,
+                                predicate,
+                                &file_metrics,
+                            )
+                            .await;
+                    } else {
+                        // Update metrics: bloom filter unavailable, so all row groups are
+                        // matched (not pruned)
+                        file_metrics
+                            .row_groups_pruned_bloom_filter
+                            .add_matched(row_groups.remaining_row_group_count());
+                    }
                 }
             } else {
                 // Update metrics: no predicate, so all row groups are matched (not pruned)
@@ -777,11 +815,6 @@ impl FileOpener for ParquetOpener {
                 file_metrics
                     .row_groups_pruned_bloom_filter
                     .add_matched(n_remaining_row_groups);
-            }
-
-            // Prune by limit if limit is set and limit order is not sensitive
-            if let (Some(limit), false) = (limit, preserve_order) {
-                row_groups.prune_by_limit(limit, rg_metadata, &file_metrics);
             }
 
             // --------------------------------------------------------
@@ -2306,6 +2339,10 @@ mod test {
                 &baseline_opener.metrics,
                 "row_groups_pruned_statistics",
             );
+            let baseline_bloom_metrics = get_pruning_metric(
+                &baseline_opener.metrics,
+                "row_groups_pruned_bloom_filter",
+            );
 
             let morsel_opener = ParquetOpenerBuilder::new()
                 .with_store(Arc::clone(&store))
@@ -2344,6 +2381,10 @@ mod test {
                 &morsel_opener.metrics,
                 "row_groups_pruned_statistics",
             );
+            let morsel_bloom_metrics = get_pruning_metric(
+                &morsel_opener.metrics,
+                "row_groups_pruned_bloom_filter",
+            );
 
             assert_eq!(
                 baseline_values, morsel_values,
@@ -2353,6 +2394,11 @@ mod test {
             assert_eq!(
                 baseline_stats_metrics, morsel_stats_metrics,
                 "row_groups_pruned_statistics should be equivalent for open vs morselize path (enable_row_group_stats_pruning={enable_row_group_stats_pruning})"
+            );
+
+            assert_eq!(
+                baseline_bloom_metrics, morsel_bloom_metrics,
+                "row_groups_pruned_bloom_filter should be equivalent for open vs morselize path (enable_row_group_stats_pruning={enable_row_group_stats_pruning})"
             );
         }
     }
