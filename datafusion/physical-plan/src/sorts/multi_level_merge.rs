@@ -259,9 +259,10 @@ impl MultiLevelMergeBuilder {
                 // as we are not holding the memory for them
                 let mut sorted_streams = mem::take(&mut self.sorted_streams);
 
-                let (sorted_spill_files, buffer_size) = self
+                let (sorted_spill_files, _) = self
                     .get_sorted_spill_files_to_merge(
-                        2,
+                        // No read-ahead buffering needed, reserve memory for 1 batch per file
+                        1,
                         // we must have at least 2 streams to merge
                         2_usize.saturating_sub(sorted_streams.len()),
                         &mut memory_reservation,
@@ -273,7 +274,6 @@ impl MultiLevelMergeBuilder {
                     let stream = self
                         .spill_manager
                         .clone()
-                        .with_batch_read_buffer_capacity(buffer_size)
                         .read_spill_as_stream(
                             spill.file,
                             Some(spill.max_record_batch_memory),

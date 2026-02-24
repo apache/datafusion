@@ -28,7 +28,7 @@ use std::sync::Arc;
 
 use super::{SpillReaderStream, in_progress_spill_file::InProgressSpillFile};
 use crate::coop::cooperative;
-use crate::{common::spawn_buffered, metrics::SpillMetrics};
+use crate::metrics::SpillMetrics;
 
 /// The `SpillManager` is responsible for the following tasks:
 /// - Reading and writing `RecordBatch`es to raw files based on the provided configurations.
@@ -41,8 +41,6 @@ pub struct SpillManager {
     env: Arc<RuntimeEnv>,
     pub(crate) metrics: SpillMetrics,
     schema: SchemaRef,
-    /// Number of batches to buffer in memory during disk reads
-    batch_read_buffer_capacity: usize,
     /// general-purpose compression options
     pub(crate) compression: SpillCompression,
 }
@@ -53,18 +51,10 @@ impl SpillManager {
             env,
             metrics,
             schema,
-            batch_read_buffer_capacity: 2,
             compression: SpillCompression::default(),
         }
     }
 
-    pub fn with_batch_read_buffer_capacity(
-        mut self,
-        batch_read_buffer_capacity: usize,
-    ) -> Self {
-        self.batch_read_buffer_capacity = batch_read_buffer_capacity;
-        self
-    }
 
     pub fn with_compression_type(mut self, spill_compression: SpillCompression) -> Self {
         self.compression = spill_compression;
@@ -186,7 +176,7 @@ impl SpillManager {
             max_record_batch_memory,
         )));
 
-        Ok(spawn_buffered(stream, self.batch_read_buffer_capacity))
+        Ok(stream)
     }
 
     /// Same as `read_spill_as_stream`, but without buffering.
