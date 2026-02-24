@@ -504,6 +504,25 @@ abc
 statement ok
 drop table foo
 
+# concat_ws with a Utf8View column as separator
+statement ok
+create table test_concat_ws_sep (sep varchar, val1 varchar, val2 varchar) as values (',', 'foo', 'bar'), ('|', 'a', 'b');
+
+query T
+SELECT concat_ws(arrow_cast(sep, 'Utf8View'), val1, val2) FROM test_concat_ws_sep ORDER BY val1
+----
+a|b
+foo,bar
+
+query T
+SELECT concat_ws(arrow_cast(sep, 'LargeUtf8'), val1, val2) FROM test_concat_ws_sep ORDER BY val1
+----
+a|b
+foo,bar
+
+statement ok
+drop table test_concat_ws_sep
+
 query T
 SELECT initcap('')
 ----

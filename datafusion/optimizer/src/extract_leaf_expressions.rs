@@ -43,6 +43,20 @@ use crate::{OptimizerConfig, OptimizerRule};
 /// in user queries.
 const EXTRACTED_EXPR_PREFIX: &str = "__datafusion_extracted";
 
+/// Returns `true` if any sub-expression in `exprs` has
+/// [`ExpressionPlacement::MoveTowardsLeafNodes`] placement.
+///
+/// This is a lightweight pre-check that short-circuits as soon as one
+/// extractable expression is found, avoiding the expensive allocations
+/// (column HashSets, extractors, expression rewrites) that the full
+/// extraction pipeline requires.
+fn has_extractable_expr(exprs: &[Expr]) -> bool {
+    exprs.iter().any(|expr| {
+        expr.exists(|e| Ok(e.placement() == ExpressionPlacement::MoveTowardsLeafNodes))
+            .unwrap_or(false)
+    })
+}
+
 /// Extracts `MoveTowardsLeafNodes` sub-expressions from non-projection nodes
 /// into **extraction projections** (pass 1 of 2).
 ///
@@ -109,6 +123,9 @@ impl OptimizerRule for ExtractLeafExpressions {
         plan: LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
+        if !config.options().optimizer.enable_leaf_expression_pushdown {
+            return Ok(Transformed::no(plan));
+        }
         let alias_generator = config.alias_generator();
         extract_from_plan(plan, alias_generator)
     }
@@ -141,6 +158,11 @@ fn extract_from_plan(
 
     let inputs = plan.inputs();
     if inputs.is_empty() {
+        return Ok(Transformed::no(plan));
+    }
+
+    // Fast pre-check: skip all allocations if no extractable expressions exist
+    if !has_extractable_expr(&plan.expressions()) {
         return Ok(Transformed::no(plan));
     }
 
@@ -693,6 +715,9 @@ impl OptimizerRule for PushDownLeafProjections {
         plan: LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
+        if !config.options().optimizer.enable_leaf_expression_pushdown {
+            return Ok(Transformed::no(plan));
+        }
         let alias_generator = config.alias_generator();
         match try_push_input(&plan, alias_generator)? {
             Some(new_plan) => Ok(Transformed::yes(new_plan)),
@@ -750,6 +775,15 @@ fn split_and_push_projection(
     proj: &Projection,
     alias_generator: &Arc<AliasGenerator>,
 ) -> Result<Option<LogicalPlan>> {
+    // Fast pre-check: skip if there are no pre-existing extracted aliases
+    // and no new extractable expressions.
+    let has_existing_extracted = proj.expr.iter().any(|e| {
+        matches!(e, Expr::Alias(alias) if alias.name.starts_with(EXTRACTED_EXPR_PREFIX))
+    });
+    if !has_existing_extracted && !has_extractable_expr(&proj.expr) {
+        return Ok(None);
+    }
+
     let input = &proj.input;
     let input_schema = input.schema();
 
