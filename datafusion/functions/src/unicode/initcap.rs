@@ -22,7 +22,7 @@ use arrow::array::{
     Array, ArrayRef, GenericStringArray, GenericStringBuilder, OffsetSizeTrait,
     StringViewBuilder,
 };
-use arrow::buffer::Buffer;
+use arrow::buffer::{Buffer, OffsetBuffer};
 use arrow::datatypes::DataType;
 
 use crate::utils::{make_scalar_function, utf8_to_str_type};
@@ -161,7 +161,7 @@ impl ScalarUDFImpl for InitcapFunc {
 fn initcap<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let string_array = as_generic_string_array::<T>(&args[0])?;
 
-    if string_array.value_data().is_ascii() {
+    if string_array.is_ascii() {
         return Ok(initcap_ascii_array(string_array));
     }
 
@@ -182,10 +182,8 @@ fn initcap<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(Arc::new(builder.finish()) as ArrayRef)
 }
 
-/// Fast path for initcap of `Utf8` or `LargeUtf8` arrays that are
-/// ASCII-only. We can operate on the entire buffer in a single pass, and
-/// operate on bytes directly. Since ASCII case conversion preserves byte
-/// length, the original offsets and nulls also don't need to be recomputed.
+/// Fast path for `Utf8` or `LargeUtf8` arrays that are ASCII-only. We can use a
+/// single pass over the buffer and operate directly on bytes.
 fn initcap_ascii_array<T: OffsetSizeTrait>(
     string_array: &GenericStringArray<T>,
 ) -> ArrayRef {
@@ -193,10 +191,10 @@ fn initcap_ascii_array<T: OffsetSizeTrait>(
     let src = string_array.value_data();
     let first_offset = offsets.first().unwrap().as_usize();
     let last_offset = offsets.last().unwrap().as_usize();
-    let mut out = Vec::with_capacity(src.len());
 
-    // Preserve bytes before the first offset unchanged.
-    out.extend_from_slice(&src[..first_offset]);
+    // For sliced arrays, only convert the visible bytes, not the entire input
+    // buffer.
+    let mut out = Vec::with_capacity(last_offset - first_offset);
 
     for window in offsets.windows(2) {
         let start = window[0].as_usize();
@@ -214,15 +212,26 @@ fn initcap_ascii_array<T: OffsetSizeTrait>(
         }
     }
 
-    // Preserve bytes after the last offset unchanged.
-    out.extend_from_slice(&src[last_offset..]);
-
     let values = Buffer::from_vec(out);
+    let out_offsets = if first_offset == 0 {
+        offsets.clone()
+    } else {
+        // For sliced arrays, we need to rebase the offsets to reflect that the
+        // output only contains the bytes in the visible slice.
+        let rebased_offsets = offsets
+            .iter()
+            .map(|offset| T::usize_as(offset.as_usize() - first_offset))
+            .collect::<Vec<_>>();
+        OffsetBuffer::<T>::new(rebased_offsets.into())
+    };
+
     // SAFETY: ASCII case conversion preserves byte length, so the original
-    // offsets and nulls remain valid.
+    // string boundaries are preserved. `out_offsets` is either identical to
+    // the input offsets or a rebased version relative to the compacted values
+    // buffer.
     Arc::new(unsafe {
         GenericStringArray::<T>::new_unchecked(
-            offsets.clone(),
+            out_offsets,
             values,
             string_array.nulls().cloned(),
         )
@@ -457,6 +466,13 @@ mod tests {
         assert_eq!(result.len(), 2);
         assert_eq!(result.value(0), "Foo Bar");
         assert_eq!(result.value(1), "Baz Qux");
+
+        // The output values buffer should be compact
+        assert_eq!(*result.offsets().first().unwrap(), 0);
+        assert_eq!(
+            result.value_data().len(),
+            *result.offsets().last().unwrap() as usize
+        );
         Ok(())
     }
 
@@ -479,6 +495,13 @@ mod tests {
         assert_eq!(result.len(), 2);
         assert_eq!(result.value(0), "Foo Bar");
         assert_eq!(result.value(1), "Baz Qux");
+
+        // The output values buffer should be compact
+        assert_eq!(*result.offsets().first().unwrap(), 0);
+        assert_eq!(
+            result.value_data().len(),
+            *result.offsets().last().unwrap() as usize
+        );
         Ok(())
     }
 }

@@ -49,10 +49,10 @@ fn create_args<O: OffsetSizeTrait>(
 
 /// Create a Utf8 array where every value contains non-ASCII Unicode text.
 fn create_unicode_utf8_args(size: usize) -> Vec<ColumnarValue> {
-    let items: Vec<String> = (0..size)
-        .map(|_| "ñAnDÚ ÁrBOL ОлЕГ ÍslENsku".to_string())
-        .collect();
-    let array = Arc::new(StringArray::from(items)) as ArrayRef;
+    let array = Arc::new(StringArray::from_iter_values(std::iter::repeat_n(
+        "ñAnDÚ ÁrBOL ОлЕГ ÍslENsku",
+        size,
+    ))) as ArrayRef;
     vec![ColumnarValue::Array(array)]
 }
 
