@@ -500,12 +500,13 @@ impl ExecutionPlan for RequirementsTestExec {
         f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         // Visit expressions in required_input_ordering if present
+        let mut tnr = TreeNodeRecursion::Continue;
         if let Some(ordering) = &self.required_input_ordering {
             for sort_expr in ordering {
-                f(sort_expr.expr.as_ref())?;
+                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
             }
         }
-        Ok(TreeNodeRecursion::Continue)
+        Ok(tnr)
     }
 }
 
@@ -984,20 +985,21 @@ impl ExecutionPlan for TestScan {
         f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         // Visit expressions in output_ordering
+        let mut tnr = TreeNodeRecursion::Continue;
         for ordering in &self.output_ordering {
             for sort_expr in ordering {
-                f(sort_expr.expr.as_ref())?;
+                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
             }
         }
 
         // Visit expressions in requested_ordering if present
         if let Some(ordering) = &self.requested_ordering {
             for sort_expr in ordering {
-                f(sort_expr.expr.as_ref())?;
+                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
             }
         }
 
-        Ok(TreeNodeRecursion::Continue)
+        Ok(tnr)
     }
 }
 

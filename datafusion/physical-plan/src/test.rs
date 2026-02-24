@@ -150,12 +150,13 @@ impl ExecutionPlan for TestMemoryExec {
         f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         // Apply to all sort information orderings
+        let mut tnr = TreeNodeRecursion::Continue;
         for ordering in &self.sort_information {
             for sort_expr in ordering {
-                f(sort_expr.expr.as_ref())?;
+                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
             }
         }
-        Ok(TreeNodeRecursion::Continue)
+        Ok(tnr)
     }
 
     fn with_new_children(

@@ -292,11 +292,12 @@ impl ExecutionPlan for CustomExec {
         ) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         // Visit expressions in the output ordering from equivalence properties
+        let mut tnr = TreeNodeRecursion::Continue;
         if let Some(ordering) = self.cache.output_ordering() {
             for sort_expr in ordering {
-                f(sort_expr.expr.as_ref())?;
+                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
             }
         }
-        Ok(TreeNodeRecursion::Continue)
+        Ok(tnr)
     }
 }

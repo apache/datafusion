@@ -184,12 +184,13 @@ impl ExecutionPlan for GlobalLimitExec {
         f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         // Apply to required ordering expressions if present
+        let mut tnr = TreeNodeRecursion::Continue;
         if let Some(ordering) = &self.required_ordering {
             for sort_expr in ordering {
-                f(sort_expr.expr.as_ref())?;
+                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
             }
         }
-        Ok(TreeNodeRecursion::Continue)
+        Ok(tnr)
     }
 
     fn with_new_children(
@@ -372,12 +373,13 @@ impl ExecutionPlan for LocalLimitExec {
         f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         // Apply to required ordering expressions if present
+        let mut tnr = TreeNodeRecursion::Continue;
         if let Some(ordering) = &self.required_ordering {
             for sort_expr in ordering {
-                f(sort_expr.expr.as_ref())?;
+                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
             }
         }
-        Ok(TreeNodeRecursion::Continue)
+        Ok(tnr)
     }
 
     fn with_new_children(
