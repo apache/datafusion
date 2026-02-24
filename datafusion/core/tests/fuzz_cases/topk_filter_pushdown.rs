@@ -227,8 +227,64 @@ impl RunQueryResult {
         format!("{}", pretty_format_batches(&self.result).unwrap())
     }
 
+    /// Extract ORDER BY column names from the query.
+    /// The query format is always:
+    ///   `SELECT * FROM test_table ORDER BY <col> <dir> <nulls>, ... LIMIT <n>`
+    fn sort_columns(&self) -> Vec<String> {
+        let order_by_start = self.query.find("ORDER BY").unwrap() + "ORDER BY".len();
+        let limit_start = self.query.rfind(" LIMIT").unwrap();
+        self.query[order_by_start..limit_start]
+            .trim()
+            .split(',')
+            .map(|part| {
+                part.trim()
+                    .split_whitespace()
+                    .next()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect()
+    }
+
+    /// Project `batches` to only include the named columns.
+    fn project_columns(batches: &[RecordBatch], cols: &[String]) -> Vec<RecordBatch> {
+        batches
+            .iter()
+            .map(|b| {
+                let schema = b.schema();
+                let indices: Vec<usize> = cols
+                    .iter()
+                    .filter_map(|c| schema.index_of(c).ok())
+                    .collect();
+                let columns: Vec<_> =
+                    indices.iter().map(|&i| Arc::clone(b.column(i))).collect();
+                let fields: Vec<_> =
+                    indices.iter().map(|&i| schema.field(i).clone()).collect();
+                let new_schema = Arc::new(Schema::new(fields));
+                RecordBatch::try_new(new_schema, columns).unwrap()
+            })
+            .collect()
+    }
+
     fn is_ok(&self) -> bool {
-        self.expected_formatted() == self.result_formatted()
+        if self.expected_formatted() == self.result_formatted() {
+            return true;
+        }
+        // If the full results differ, compare only the ORDER BY column values.
+        //
+        // For queries with ORDER BY <col> LIMIT k, multiple rows may tie on the
+        // sort key (e.g. two rows with id=27 for ORDER BY id DESC LIMIT 1).
+        // SQL permits returning any of the tied rows, so with vs without dynamic
+        // filter pushdown may legitimately return different tied rows.
+        //
+        // The dynamic filter must not change the *sort-key values* of the top-k
+        // result. We verify correctness by projecting both results down to only
+        // the ORDER BY columns and comparing those.
+        let sort_cols = self.sort_columns();
+        let expected_keys = Self::project_columns(&self.expected, &sort_cols);
+        let result_keys = Self::project_columns(&self.result, &sort_cols);
+        format!("{}", pretty_format_batches(&expected_keys).unwrap())
+            == format!("{}", pretty_format_batches(&result_keys).unwrap())
     }
 }
 
