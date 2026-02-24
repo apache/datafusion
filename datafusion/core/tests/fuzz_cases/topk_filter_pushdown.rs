@@ -236,13 +236,7 @@ impl RunQueryResult {
         self.query[order_by_start..limit_start]
             .trim()
             .split(',')
-            .map(|part| {
-                part.trim()
-                    .split_whitespace()
-                    .next()
-                    .unwrap()
-                    .to_string()
-            })
+            .map(|part| part.trim().split_whitespace().next().unwrap().to_string())
             .collect()
     }
 
