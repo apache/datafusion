@@ -392,7 +392,7 @@ mod tests {
             vec![Arc::new(UInt32Array::from(vec![1, 2, 3, 4, 5, 6]))],
         )?;
 
-        let batches: Vec<RecordBatch> = (0..50).map(|_| batch.clone()).collect();
+        let batches: Vec<RecordBatch> = std::iter::repeat_n(batch, 50).collect();
 
         let session_config = SessionConfig::new().with_batch_size(200);
         let task_ctx = TaskContext::default().with_session_config(session_config);
