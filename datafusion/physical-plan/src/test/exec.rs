@@ -125,7 +125,7 @@ pub struct MockExec {
     /// if true (the default), sends data using a separate task to ensure the
     /// batches are not available without this stream yielding first
     use_task: bool,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl MockExec {
@@ -142,7 +142,7 @@ impl MockExec {
             data,
             schema,
             use_task: true,
-            cache,
+            cache: Arc::new(cache),
         }
     }
 
@@ -192,7 +192,7 @@ impl ExecutionPlan for MockExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -299,7 +299,7 @@ pub struct BarrierExec {
     /// the stream wait for this to return Poll::Ready(None)
     finish_barrier: Option<Arc<(Barrier, AtomicUsize)>>,
 
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 
     log: bool,
 }
@@ -314,7 +314,7 @@ impl BarrierExec {
             data,
             schema,
             start_data_barrier: barrier,
-            cache,
+            cache: Arc::new(cache),
             finish_barrier: None,
             log: true,
         }
@@ -422,7 +422,7 @@ impl ExecutionPlan for BarrierExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -498,7 +498,7 @@ impl ExecutionPlan for BarrierExec {
 /// A mock execution plan that errors on a call to execute
 #[derive(Debug)]
 pub struct ErrorExec {
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl Default for ErrorExec {
@@ -515,7 +515,9 @@ impl ErrorExec {
             true,
         )]));
         let cache = Self::compute_properties(schema);
-        Self { cache }
+        Self {
+            cache: Arc::new(cache),
+        }
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
@@ -556,7 +558,7 @@ impl ExecutionPlan for ErrorExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -586,7 +588,7 @@ impl ExecutionPlan for ErrorExec {
 pub struct StatisticsExec {
     stats: Statistics,
     schema: Arc<Schema>,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 impl StatisticsExec {
     pub fn new(stats: Statistics, schema: Schema) -> Self {
@@ -599,7 +601,7 @@ impl StatisticsExec {
         Self {
             stats,
             schema: Arc::new(schema),
-            cache,
+            cache: Arc::new(cache),
         }
     }
 
@@ -646,7 +648,7 @@ impl ExecutionPlan for StatisticsExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -688,7 +690,7 @@ pub struct BlockingExec {
 
     /// Ref-counting helper to check if the plan and the produced stream are still in memory.
     refs: Arc<()>,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl BlockingExec {
@@ -698,7 +700,7 @@ impl BlockingExec {
         Self {
             schema,
             refs: Default::default(),
-            cache,
+            cache: Arc::new(cache),
         }
     }
 
@@ -749,7 +751,7 @@ impl ExecutionPlan for BlockingExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -831,7 +833,7 @@ pub struct PanicExec {
     /// Number of output partitions. Each partition will produce this
     /// many empty output record batches prior to panicking
     batches_until_panics: Vec<usize>,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl PanicExec {
@@ -843,7 +845,7 @@ impl PanicExec {
         Self {
             schema,
             batches_until_panics,
-            cache,
+            cache: Arc::new(cache),
         }
     }
 
@@ -895,7 +897,7 @@ impl ExecutionPlan for PanicExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 

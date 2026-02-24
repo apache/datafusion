@@ -27,6 +27,7 @@ use super::{DisplayAs, ExecutionPlanProperties, PlanProperties, Statistics};
 use crate::projection::ProjectionExec;
 use crate::{
     DisplayFormatType, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
+    check_if_same_properties,
 };
 
 use arrow::datatypes::SchemaRef;
@@ -71,7 +72,7 @@ pub struct CoalesceBatchesExec {
     fetch: Option<usize>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 #[expect(deprecated)]
@@ -84,7 +85,7 @@ impl CoalesceBatchesExec {
             target_batch_size,
             fetch: None,
             metrics: ExecutionPlanMetricsSet::new(),
-            cache,
+            cache: Arc::new(cache),
         }
     }
 
@@ -114,6 +115,17 @@ impl CoalesceBatchesExec {
             input.pipeline_behavior(),
             input.boundedness(),
         )
+    }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(self)
+        }
     }
 }
 
@@ -159,7 +171,7 @@ impl ExecutionPlan for CoalesceBatchesExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -177,10 +189,11 @@ impl ExecutionPlan for CoalesceBatchesExec {
 
     fn with_new_children(
         self: Arc<Self>,
-        children: Vec<Arc<dyn ExecutionPlan>>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        check_if_same_properties!(self, children);
         Ok(Arc::new(
-            CoalesceBatchesExec::new(Arc::clone(&children[0]), self.target_batch_size)
+            CoalesceBatchesExec::new(children.swap_remove(0), self.target_batch_size)
                 .with_fetch(self.fetch),
         ))
     }
@@ -218,7 +231,7 @@ impl ExecutionPlan for CoalesceBatchesExec {
             target_batch_size: self.target_batch_size,
             fetch: limit,
             metrics: self.metrics.clone(),
-            cache: self.cache.clone(),
+            cache: Arc::clone(&self.cache),
         }))
     }
 

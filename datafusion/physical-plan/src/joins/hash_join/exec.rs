@@ -23,7 +23,7 @@ use std::sync::{Arc, OnceLock};
 use std::{any::Any, vec};
 
 use crate::ExecutionPlanProperties;
-use crate::execution_plan::{EmissionType, STUB_PROPERTIES, boundedness_from_children};
+use crate::execution_plan::{EmissionType, boundedness_from_children, stub_properties};
 use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
@@ -291,7 +291,7 @@ impl HashJoinExecBuilder {
                 null_aware: false,
                 dynamic_filter: None,
                 // Will be computed at when plan will be built.
-                cache: STUB_PROPERTIES.clone(),
+                cache: stub_properties(),
                 join_schema: Arc::new(Schema::empty()),
             },
             // As `exec` is initialized with stub properties,
@@ -480,7 +480,7 @@ impl HashJoinExecBuilder {
             column_indices,
             null_equality,
             null_aware,
-            cache,
+            cache: Arc::new(cache),
             dynamic_filter,
             fetch,
         })
@@ -510,7 +510,7 @@ impl From<&HashJoinExec> for HashJoinExecBuilder {
                 column_indices: exec.column_indices.clone(),
                 null_equality: exec.null_equality,
                 null_aware: exec.null_aware,
-                cache: exec.cache.clone(),
+                cache: Arc::clone(&exec.cache),
                 dynamic_filter: exec.dynamic_filter.clone(),
                 fetch: exec.fetch,
             },
@@ -747,7 +747,7 @@ pub struct HashJoinExec {
     /// Flag to indicate if this is a null-aware anti join
     pub null_aware: bool,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
     /// Dynamic filter for pushing down to the probe side
     /// Set when dynamic filter pushdown is detected in handle_child_pushdown_result.
     /// HashJoinExec also needs to keep a shared bounds accumulator for coordinating updates.
@@ -1180,7 +1180,7 @@ impl ExecutionPlan for HashJoinExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 

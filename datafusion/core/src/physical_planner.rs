@@ -3711,13 +3711,15 @@ mod tests {
 
     #[derive(Debug)]
     struct NoOpExecutionPlan {
-        cache: PlanProperties,
+        cache: Arc<PlanProperties>,
     }
 
     impl NoOpExecutionPlan {
         fn new(schema: SchemaRef) -> Self {
             let cache = Self::compute_properties(schema);
-            Self { cache }
+            Self {
+                cache: Arc::new(cache),
+            }
         }
 
         /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
@@ -3755,7 +3757,7 @@ mod tests {
             self
         }
 
-        fn properties(&self) -> &PlanProperties {
+        fn properties(&self) -> &Arc<PlanProperties> {
             &self.cache
         }
 
@@ -3909,7 +3911,7 @@ digraph {
         fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
             self.0.iter().collect::<Vec<_>>()
         }
-        fn properties(&self) -> &PlanProperties {
+        fn properties(&self) -> &Arc<PlanProperties> {
             unimplemented!()
         }
         fn execute(
@@ -3958,7 +3960,7 @@ digraph {
         fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
             unimplemented!()
         }
-        fn properties(&self) -> &PlanProperties {
+        fn properties(&self) -> &Arc<PlanProperties> {
             unimplemented!()
         }
         fn execute(
@@ -4079,7 +4081,7 @@ digraph {
         fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
             vec![]
         }
-        fn properties(&self) -> &PlanProperties {
+        fn properties(&self) -> &Arc<PlanProperties> {
             unimplemented!()
         }
         fn execute(
