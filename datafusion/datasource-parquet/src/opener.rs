@@ -41,6 +41,7 @@ use datafusion_common::{
     ColumnStatistics, DataFusionError, Result, ScalarValue, Statistics, exec_err,
 };
 use datafusion_datasource::{PartitionedFile, TableSchema};
+use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
 use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::{
@@ -260,6 +261,18 @@ impl FileOpener for ParquetOpener {
                 .transpose()?;
         }
 
+        // Bind partition-local dynamic filters for this opener partition.
+        // For partition-index dynamic filters this binds probe partition `i` to
+        // build-side filter `i`.
+        predicate = predicate
+            .map(|p| {
+                DynamicFilterPhysicalExpr::bind_for_partition_in_expr_tree(
+                    p,
+                    self.partition_index,
+                )
+            })
+            .transpose()?;
+
         let reorder_predicates = self.reorder_filters;
         let pushdown_filters = self.pushdown_filters;
         let force_filter_selections = self.force_filter_selections;
@@ -417,6 +430,7 @@ impl FileOpener for ParquetOpener {
             predicate = predicate
                 .map(|p| simplifier.simplify(rewriter.rewrite(p)?))
                 .transpose()?;
+
             // Adapt projections to the physical file schema as well
             projection = projection
                 .try_map_exprs(|p| simplifier.simplify(rewriter.rewrite(p)?))?;
@@ -1028,7 +1042,9 @@ mod test {
     use datafusion_expr::{col, lit};
     use datafusion_physical_expr::{
         PhysicalExpr,
-        expressions::{Column, DynamicFilterPhysicalExpr, Literal},
+        expressions::{
+            BinaryExpr, Column, DynamicFilterPhysicalExpr, DynamicFilterUpdate, Literal,
+        },
         planner::logical2physical,
         projection::ProjectionExprs,
     };
@@ -1132,6 +1148,12 @@ mod test {
         /// Enable filter reordering.
         fn with_reorder_filters(mut self, enable: bool) -> Self {
             self.reorder_filters = enable;
+            self
+        }
+
+        /// Set the partition index.
+        fn with_partition_index(mut self, index: usize) -> Self {
+            self.partition_index = index;
             self
         }
 
@@ -2002,6 +2024,135 @@ mod test {
             reverse_values,
             vec![7, 5, 1],
             "Reverse scan with non-contiguous row groups should correctly map RowSelection"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_partition_bind_in_opener() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        let batch = record_batch!(("a", Int32, vec![Some(1), Some(2), Some(3)])).unwrap();
+        let data_size =
+            write_parquet(Arc::clone(&store), "test.parquet", batch.clone()).await;
+
+        let schema = batch.schema();
+        let file = PartitionedFile::new(
+            "test.parquet".to_string(),
+            u64::try_from(data_size).unwrap(),
+        );
+
+        let col_a = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
+
+        let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::clone(&col_a)],
+            datafusion_physical_expr::expressions::lit(true) as Arc<dyn PhysicalExpr>,
+        ));
+
+        // Creates a DynamicFilterPhysicalExpr with per-partition bounds:
+        // - Partition 0: a >= 1 AND a <= 2 (tests row group with min=1, max=3 matches)
+        // - Partition 1: a >= 10 AND a <= 20 (tests row group pruning, no overlap)
+        // - Partition 2: a >= 3 AND a <= 3 (tests row group with min=3, max=3 matches)
+        let p0_filter = Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                Arc::clone(&col_a),
+                datafusion_expr::Operator::GtEq,
+                datafusion_physical_expr::expressions::lit(1i32) as Arc<dyn PhysicalExpr>,
+            )) as Arc<dyn PhysicalExpr>,
+            datafusion_expr::Operator::And,
+            Arc::new(BinaryExpr::new(
+                Arc::clone(&col_a),
+                datafusion_expr::Operator::LtEq,
+                datafusion_physical_expr::expressions::lit(2i32) as Arc<dyn PhysicalExpr>,
+            )) as Arc<dyn PhysicalExpr>,
+        )) as Arc<dyn PhysicalExpr>;
+
+        let p1_filter = Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                Arc::clone(&col_a),
+                datafusion_expr::Operator::GtEq,
+                datafusion_physical_expr::expressions::lit(10i32)
+                    as Arc<dyn PhysicalExpr>,
+            )) as Arc<dyn PhysicalExpr>,
+            datafusion_expr::Operator::And,
+            Arc::new(BinaryExpr::new(
+                Arc::clone(&col_a),
+                datafusion_expr::Operator::LtEq,
+                datafusion_physical_expr::expressions::lit(20i32)
+                    as Arc<dyn PhysicalExpr>,
+            )) as Arc<dyn PhysicalExpr>,
+        )) as Arc<dyn PhysicalExpr>;
+
+        let p2_filter = Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                Arc::clone(&col_a),
+                datafusion_expr::Operator::GtEq,
+                datafusion_physical_expr::expressions::lit(3i32) as Arc<dyn PhysicalExpr>,
+            )) as Arc<dyn PhysicalExpr>,
+            datafusion_expr::Operator::And,
+            Arc::new(BinaryExpr::new(
+                Arc::clone(&col_a),
+                datafusion_expr::Operator::LtEq,
+                datafusion_physical_expr::expressions::lit(3i32) as Arc<dyn PhysicalExpr>,
+            )) as Arc<dyn PhysicalExpr>,
+        )) as Arc<dyn PhysicalExpr>;
+
+        dynamic_filter
+            .update(DynamicFilterUpdate::Partitioned(vec![
+                Some(p0_filter),
+                Some(p1_filter),
+                Some(p2_filter),
+            ]))
+            .unwrap();
+
+        // Partition 0: row group [1,3] overlaps with filter [1,1], so reads all 3 rows
+        let opener_p0 = ParquetOpenerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_projection_indices(&[0])
+            .with_predicate(Arc::clone(&dynamic_filter) as Arc<dyn PhysicalExpr>)
+            .with_partition_index(0)
+            .with_row_group_stats_pruning(true)
+            .build();
+
+        let stream = opener_p0.open(file.clone()).unwrap().await.unwrap();
+        let (_, num_rows) = count_batches_and_rows(stream).await;
+        assert_eq!(
+            num_rows, 3,
+            "Partition 0 should read all 3 rows (row group stats [1,3] overlap with filter [1,1])"
+        );
+
+        // Partition 1: should read 0 rows (a >= 10 AND a <= 20 excludes all)
+        let opener_p1 = ParquetOpenerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_projection_indices(&[0])
+            .with_predicate(Arc::clone(&dynamic_filter) as Arc<dyn PhysicalExpr>)
+            .with_partition_index(1)
+            .with_row_group_stats_pruning(true)
+            .build();
+
+        let stream = opener_p1.open(file.clone()).unwrap().await.unwrap();
+        let (_, num_rows) = count_batches_and_rows(stream).await;
+        assert_eq!(
+            num_rows, 0,
+            "Partition 1 should read 0 rows (filter a >= 10 AND a <= 20 excludes all data)"
+        );
+
+        // Partition 2: row group [1,3] overlaps with filter [3,3], so reads all 3 rows
+        let opener_p2 = ParquetOpenerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_projection_indices(&[0])
+            .with_predicate(Arc::clone(&dynamic_filter) as Arc<dyn PhysicalExpr>)
+            .with_partition_index(2)
+            .with_row_group_stats_pruning(true)
+            .build();
+
+        let stream = opener_p2.open(file).unwrap().await.unwrap();
+        let (_, num_rows) = count_batches_and_rows(stream).await;
+        assert_eq!(
+            num_rows, 3,
+            "Partition 2 should read all 3 rows (row group stats [1,3] overlap with filter [3,3])"
         );
     }
 }

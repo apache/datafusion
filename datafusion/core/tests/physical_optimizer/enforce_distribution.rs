@@ -37,10 +37,10 @@ use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{CsvSource, ParquetSource};
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::prelude::{SessionConfig, SessionContext};
-use datafusion_common::ScalarValue;
 use datafusion_common::config::CsvOptions;
 use datafusion_common::error::Result;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::{NullEquality, ScalarValue};
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_expr::{JoinType, Operator};
@@ -61,13 +61,18 @@ use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::execution_plan::ExecutionPlan;
 use datafusion_physical_plan::expressions::col;
 use datafusion_physical_plan::filter::FilterExec;
-use datafusion_physical_plan::joins::utils::JoinOn;
+use datafusion_physical_plan::joins::{
+    DynamicFilterRoutingMode, HashJoinExec, HashJoinExecBuilder, PartitionMode,
+    utils::JoinOn,
+};
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
+use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlanProperties, PlanProperties, displayable,
+    DisplayAs, DisplayFormatType, ExecutionPlanProperties, Partitioning, PlanProperties,
+    displayable,
 };
 use insta::Settings;
 
@@ -361,6 +366,66 @@ fn hash_join_exec(
     .unwrap()
 }
 
+// Build a partitioned hash join for 2 given inputs
+fn partitioned_hash_join_exec(
+    left: Arc<dyn ExecutionPlan>,
+    right: Arc<dyn ExecutionPlan>,
+    join_on: &JoinOn,
+    join_type: &JoinType,
+) -> Arc<dyn ExecutionPlan> {
+    Arc::new(
+        HashJoinExecBuilder::new(left, right, join_on.clone(), *join_type)
+            .with_partition_mode(PartitionMode::Partitioned)
+            .with_null_equality(NullEquality::NullEqualsNothing)
+            .build()
+            .unwrap(),
+    )
+}
+
+// Traversing down the plan and returning the first hash join with the count of how many of its
+// direct children are hash RepartitionExec nodes
+fn first_hash_join_and_direct_hash_repartition_children(
+    plan: &Arc<dyn ExecutionPlan>,
+) -> Option<(&HashJoinExec, usize)> {
+    if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>() {
+        let direct_hash_repartition_children = hash_join
+            .children()
+            .into_iter()
+            .filter(|child| {
+                child
+                    .as_any()
+                    .downcast_ref::<RepartitionExec>()
+                    .is_some_and(|repartition| {
+                        matches!(repartition.partitioning(), Partitioning::Hash(_, _))
+                    })
+            })
+            .count();
+        return Some((hash_join, direct_hash_repartition_children));
+    }
+
+    for child in plan.children() {
+        if let Some(result) = first_hash_join_and_direct_hash_repartition_children(child)
+        {
+            return Some(result);
+        }
+    }
+    None
+}
+
+// Add RepartitionExec for the given input
+fn add_repartition(
+    input: Arc<dyn ExecutionPlan>,
+    column_name: &str,
+    partition_count: usize,
+) -> Arc<dyn ExecutionPlan> {
+    let expr = Arc::new(Column::new_with_schema(column_name, &input.schema()).unwrap())
+        as Arc<dyn PhysicalExpr>;
+    Arc::new(
+        RepartitionExec::try_new(input, Partitioning::Hash(vec![expr], partition_count))
+            .unwrap(),
+    )
+}
+
 fn filter_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
     let predicate = Arc::new(BinaryExpr::new(
         col("c", &schema()).unwrap(),
@@ -398,6 +463,28 @@ fn ensure_distribution_helper(
     config.optimizer.repartition_file_min_size = 1024;
     config.optimizer.prefer_existing_sort = prefer_existing_sort;
     ensure_distribution(distribution_context, &config).map(|item| item.data.plan)
+}
+
+/// Like [`ensure_distribution_helper`] but uses bottom-up `transform_up`.
+///
+/// Transforms the plan by traversing bottom-up and applying distribution rules.
+fn ensure_distribution_helper_transform_up(
+    plan: Arc<dyn ExecutionPlan>,
+    target_partitions: usize,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let distribution_context = DistributionContext::new_default(plan);
+    let mut config = ConfigOptions::new();
+    config.execution.target_partitions = target_partitions;
+    // Disable round-robin repartition to focus on hash repartitioning detection.
+    // Used by tests that verify dynamic filter routing mode selection based on whether hash
+    // repartitioning is present in the plan.
+    config.optimizer.enable_round_robin_repartition = false;
+    config.optimizer.repartition_file_scans = false;
+    config.optimizer.repartition_file_min_size = 1024;
+    config.optimizer.prefer_existing_sort = false;
+    distribution_context
+        .transform_up(|node| ensure_distribution(node, &config))
+        .map(|item| item.data.plan)
 }
 
 fn test_suite_default_config_options() -> ConfigOptions {
@@ -728,6 +815,243 @@ fn multi_hash_joins() -> Result<()> {
                 });
             }
     }
+
+    Ok(())
+}
+
+// Verify that if the join's inputs are not explicitly direct/indirect hash repartitioned,
+// its `dynamic_filter_routing_mode` must be `DynamicFilterRoutingMode::PartitionIndex`.
+#[test]
+fn enforce_distribution_switches_to_partition_index_without_hash_repartition()
+-> Result<()> {
+    let left = parquet_exec();
+    let right = parquet_exec();
+
+    let join_on = vec![(
+        Arc::new(Column::new_with_schema("a", &left.schema()).unwrap())
+            as Arc<dyn PhysicalExpr>,
+        Arc::new(Column::new_with_schema("a", &right.schema()).unwrap())
+            as Arc<dyn PhysicalExpr>,
+    )];
+
+    let join = partitioned_hash_join_exec(left, right, &join_on, &JoinType::Inner);
+
+    let optimized = ensure_distribution_helper_transform_up(join, 1)?;
+    assert_plan!(optimized, @r"
+    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0)]
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+    ");
+    let (hash_join, direct_hash_repartition_children) =
+        first_hash_join_and_direct_hash_repartition_children(&optimized)
+            .expect("expected HashJoinExec");
+
+    assert_eq!(
+        hash_join.dynamic_filter_routing_mode,
+        DynamicFilterRoutingMode::PartitionIndex,
+    );
+    assert_eq!(direct_hash_repartition_children, 0);
+
+    Ok(())
+}
+
+#[test]
+fn enforce_distribution_rejects_misaligned_left_repartitioned() -> Result<()> {
+    let left = parquet_exec_multiple();
+    let right = parquet_exec();
+
+    let join_on = vec![(
+        Arc::new(Column::new_with_schema("a", &left.schema()).unwrap())
+            as Arc<dyn PhysicalExpr>,
+        Arc::new(Column::new_with_schema("a", &right.schema()).unwrap())
+            as Arc<dyn PhysicalExpr>,
+    )];
+
+    // 1. Initial plan:
+    //    HashJoin(Partitioned)
+    //      DataSource [4 file groups] -> multiple partitions
+    //      DataSource [1 file group]  -> single partition
+    //
+    // 2. EnforceDistribution detects target_partitions=1 and left has 4 partitions
+    //    Inserts RepartitionExec on left to reduce to 1 partition
+    //
+    // 3. Resulting plan:
+    //    HashJoin(Partitioned)
+    //      RepartitionExec: Hash(...) -> hash-repartitioned
+    //      DataSource [1 file group]  -> file-grouped
+    //
+    // 4. Partitioning schemes are now misaligned:
+    //    - Left: hash-repartitioned (breaks value-based alignment)
+    //    - Right: file-grouped (preserves value-based alignment)
+    //    This would cause incorrect results, so an error is thrown.
+    let join = partitioned_hash_join_exec(left, right, &join_on, &JoinType::Inner);
+
+    let result = ensure_distribution_helper_transform_up(join, 1);
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("incompatible partitioning schemes"),
+        "Expected error about incompatible partitioning, got: {err}",
+    );
+
+    Ok(())
+}
+
+#[test]
+fn enforce_distribution_rejects_misaligned_right_repartitioned() -> Result<()> {
+    let left = parquet_exec();
+    let right = parquet_exec_multiple();
+
+    let join_on = vec![(
+        Arc::new(Column::new_with_schema("a", &left.schema()).unwrap())
+            as Arc<dyn PhysicalExpr>,
+        Arc::new(Column::new_with_schema("a", &right.schema()).unwrap())
+            as Arc<dyn PhysicalExpr>,
+    )];
+
+    // Example flow:
+    // 1. Initial plan:
+    //    HashJoin(Partitioned)
+    //      DataSource [1 file group]  -> single partition
+    //      DataSource [4 file groups] -> multiple partitions
+    //
+    // 2. EnforceDistribution detects target_partitions=1 and right has 4 partitions
+    //    Inserts RepartitionExec on right to reduce to 1 partition
+    //
+    // 3. Resulting plan:
+    //    HashJoin(Partitioned)
+    //      DataSource [1 file group]  -> file-grouped
+    //      RepartitionExec: Hash(...) -> hash-repartitioned
+    //
+    // 4. Partitioning schemes are now misaligned:
+    //    - Left: file-grouped (preserves value-based alignment)
+    //    - Right: hash-repartitioned (breaks value-based alignment)
+    //    This would cause incorrect results, so an error is thrown.
+
+    let join = partitioned_hash_join_exec(left, right, &join_on, &JoinType::Inner);
+
+    let result = ensure_distribution_helper_transform_up(join, 1);
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("incompatible partitioning schemes"),
+        "Expected error about incompatible partitioning, got: {err}",
+    );
+
+    Ok(())
+}
+
+// Verify that if the join inputs are direct/indirect hash repartitioned,
+// its `dynamic_filter_routing_mode` must be `DynamicFilterRoutingMode::CaseHash`
+#[test]
+fn enforce_distribution_uses_case_hash_with_indirect_repartition() -> Result<()> {
+    let left = projection_exec_with_alias(
+        add_repartition(parquet_exec(), "a", 4),
+        vec![("a".to_string(), "a".to_string())],
+    );
+
+    let right = aggregate_exec_with_alias(
+        add_repartition(parquet_exec(), "a", 4),
+        vec![("a".to_string(), "a".to_string())],
+    );
+
+    let join_on = vec![(
+        Arc::new(Column::new_with_schema("a", &left.schema()).unwrap())
+            as Arc<dyn PhysicalExpr>,
+        Arc::new(Column::new_with_schema("a", &right.schema()).unwrap())
+            as Arc<dyn PhysicalExpr>,
+    )];
+
+    // Both sides are already hash repartitioned, but the hash repartitions are below other
+    // operators not directly under the join. EnforceDistribution should detect both sides are
+    // repartitioned and set CaseHash routing mode.
+    let join = partitioned_hash_join_exec(left, right, &join_on, &JoinType::Inner);
+
+    let optimized = ensure_distribution_helper_transform_up(join, 4)?;
+    assert_plan!(optimized, @r"
+    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0)]
+      RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1
+        ProjectionExec: expr=[a@0 as a]
+          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+      AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
+        RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1
+          AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]
+            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+    ");
+    let (hash_join, direct_hash_repartition_children) =
+        first_hash_join_and_direct_hash_repartition_children(&optimized)
+            .expect("expected HashJoinExec");
+
+    assert_eq!(
+        hash_join.dynamic_filter_routing_mode,
+        DynamicFilterRoutingMode::CaseHash,
+    );
+    assert_eq!(direct_hash_repartition_children, 1);
+
+    Ok(())
+}
+
+// Verify dynamic_filter_routing_mode works correctly with alias
+#[test]
+fn enforce_distribution_ignores_hash_repartition_off_dynamic_filter_path() -> Result<()> {
+    // Create alias `a2` for column `a`
+    // This hash repartition is in the probe subtree but off the dynamic filter pushdown path
+    // because the top filter references `a` while this branch only exposes `a2`.
+    let lower_left = projection_exec_with_alias(
+        add_repartition(parquet_exec(), "a", 4),
+        vec![("a".to_string(), "a2".to_string())],
+    );
+    let lower_right: Arc<dyn ExecutionPlan> = parquet_exec();
+
+    let lower_join_on = vec![(
+        Arc::new(Column::new_with_schema("a2", &lower_left.schema()).unwrap())
+            as Arc<dyn PhysicalExpr>,
+        Arc::new(Column::new_with_schema("a", &lower_right.schema()).unwrap())
+            as Arc<dyn PhysicalExpr>,
+    )];
+
+    let lower_join: Arc<dyn ExecutionPlan> = Arc::new(
+        HashJoinExecBuilder::new(
+            lower_left.clone(),
+            lower_right.clone(),
+            lower_join_on,
+            JoinType::Inner,
+        )
+        .with_partition_mode(PartitionMode::CollectLeft)
+        .with_null_equality(NullEquality::NullEqualsNothing)
+        .build()
+        .unwrap(),
+    );
+
+    let left = parquet_exec();
+    let join_on = vec![(
+        Arc::new(Column::new_with_schema("a", &left.schema()).unwrap())
+            as Arc<dyn PhysicalExpr>,
+        Arc::new(Column::new_with_schema("a", &lower_join.schema()).unwrap())
+            as Arc<dyn PhysicalExpr>,
+    )];
+
+    // EnforceDistribution should detect no repartition on either side and switch to PartitionIndex.
+    let join = partitioned_hash_join_exec(left, lower_join, &join_on, &JoinType::Inner);
+
+    let optimized = ensure_distribution_helper_transform_up(join, 1)?;
+    assert_plan!(optimized, @r"
+    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@1)]
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a2@0, a@0)]
+        ProjectionExec: expr=[a@0 as a2]
+          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+    ");
+    let (hash_join, _) = first_hash_join_and_direct_hash_repartition_children(&optimized)
+        .expect("expected HashJoinExec");
+
+    assert_eq!(
+        hash_join.dynamic_filter_routing_mode,
+        DynamicFilterRoutingMode::PartitionIndex
+    );
 
     Ok(())
 }
@@ -3642,8 +3966,15 @@ fn test_replace_order_preserving_variants_with_fetch() -> Result<()> {
     // Create distribution context
     let dist_context = DistributionContext::new(
         spm_exec,
-        true,
-        vec![DistributionContext::new(parquet_exec, false, vec![])],
+        DistFlags {
+            dist_changing: true,
+            ..Default::default()
+        },
+        vec![DistributionContext::new(
+            parquet_exec,
+            DistFlags::default(),
+            vec![],
+        )],
     );
 
     // Apply the function

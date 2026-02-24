@@ -1159,7 +1159,8 @@ mod tests {
 
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{
-        BinaryExpr, Column, DynamicFilterPhysicalExpr, Literal, binary, col, lit,
+        BinaryExpr, Column, DynamicFilterPhysicalExpr, DynamicFilterUpdate, Literal,
+        binary, col, lit,
     };
 
     #[test]
@@ -1762,7 +1763,7 @@ mod tests {
         // Update to a > 5 (after projection, b is now called a)
         let new_expr =
             Arc::new(BinaryExpr::new(Arc::clone(&col_a), Operator::Gt, lit(5i32)));
-        dynamic_filter.update(new_expr)?;
+        dynamic_filter.update(DynamicFilterUpdate::Global(new_expr))?;
 
         // Now it should be a > 5
         let current = dynamic_filter.current()?;

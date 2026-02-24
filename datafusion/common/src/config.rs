@@ -996,6 +996,39 @@ config_namespace! {
         ///
         /// Note: This may reduce parallelism, rooting from the I/O level, if the number of distinct
         /// partitions is less than the target_partitions.
+        ///
+        /// Note for partitioned hash join dynamic filtering:
+        /// preserving file partitions can allow partition-index routing (`i -> i`) instead of
+        /// CASE-hash routing, but this assumes build/probe partition indices stay aligned for
+        /// partition hash join / dynamic filter consumers.
+        ///
+        /// Misaligned Partitioned Hash Join Example:
+        /// ```text
+        ///                 ┌───────────────────────────┐
+        ///                 │       HashJoinExec        │
+        ///                 │     mode=Partitioned      │
+        ///                 │┌───────┐┌───────┐┌───────┐│
+        ///                 ││ Hash  ││ Hash  ││ Hash  ││
+        ///                 ││Table 1││Table 2││Table 3││
+        ///                 ││       ││       ││       ││
+        ///                 ││ key=A ││ key=B ││ key=C ││
+        ///                 │└───▲───┘└───▲───┘└───▲───┘│
+        ///                 └────┴────────┼────────┼────┘
+        ///                     ...   Misaligned! Misaligned!
+        ///                               │        │
+        ///    ...                ┌───────┼────────┴───────────────┐
+        ///              ┌────────┼───────┴───────────────┐        │
+        ///     │        │        │             │         │        │
+        ///┌────┴────────┴────────┴────┐    ┌───┴─────────┴────────┴────┐
+        ///│      DataSourceExec       │    │      DataSourceExec       │
+        ///│┌───────┐┌───────┐┌───────┐│    │┌───────┐┌───────┐┌───────┐│
+        ///││ File  ││ File  ││ File  ││    ││ File  ││ File  ││ File  ││
+        ///││Group 1││Group 2││Group 3││    ││Group 1││Group 2││Group 3││
+        ///││       ││       ││       ││    ││       ││       ││       ││
+        ///││ key=A ││ key=B ││ key=C ││    ││ key=A ││ key=C ││ key=B ││
+        ///│└───────┘└───────┘└───────┘│    │└───────┘└───────┘└───────┘│
+        ///└───────────────────────────┘    └───────────────────────────┘
+        ///```
         pub preserve_file_partitions: usize, default = 0
 
         /// Should DataFusion repartition data using the partitions keys to execute window
