@@ -1736,7 +1736,7 @@ mod tests {
             self
         }
 
-        fn properties(&self) -> &PlanProperties {
+        fn properties(&self) -> &std::sync::Arc<PlanProperties> {
             unimplemented!()
         }
 
