@@ -276,6 +276,7 @@ impl FileOpener for ParquetOpener {
         let metrics = self.metrics.clone();
         let enable_row_group_stats_pruning = self.enable_row_group_stats_pruning;
         let enable_bloom_filter = self.enable_bloom_filter;
+        let enable_page_index = self.enable_page_index;
         let limit = self.limit;
         let preserve_order = self.preserve_order;
 
@@ -311,10 +312,10 @@ impl FileOpener for ParquetOpener {
             }
 
             let mut _metadata_timer = file_metrics.metadata_load_time.timer();
-            let reader_metadata =
-                ArrowReaderMetadata::load_async(&mut async_file_reader, options).await?;
-            let metadata = Arc::clone(reader_metadata.metadata());
-            let num_row_groups = metadata.num_row_groups();
+            let mut reader_metadata =
+                ArrowReaderMetadata::load_async(&mut async_file_reader, options.clone())
+                    .await?;
+            let num_row_groups = reader_metadata.metadata().num_row_groups();
 
             // Adapt the physical schema to the file schema for pruning
             let physical_file_schema = Arc::clone(reader_metadata.schema());
@@ -348,7 +349,7 @@ impl FileOpener for ParquetOpener {
                 })
                 .transpose()?;
 
-            let (pruning_predicate, _) = build_pruning_predicates(
+            let (pruning_predicate, page_pruning_predicate) = build_pruning_predicates(
                 adapted_predicate.as_ref(),
                 &physical_file_schema,
                 &predicate_creation_errors,
@@ -358,7 +359,7 @@ impl FileOpener for ParquetOpener {
                 &file_name,
                 extensions,
                 num_row_groups,
-                metadata.row_groups(),
+                reader_metadata.metadata().row_groups(),
                 file_range.as_ref(),
                 pruning_predicate
                     .as_deref()
@@ -373,8 +374,30 @@ impl FileOpener for ParquetOpener {
 
             // Prune by limit if limit is set and order is not sensitive
             if let (Some(limit), false) = (limit, preserve_order) {
-                row_groups.prune_by_limit(limit, metadata.row_groups(), &file_metrics);
+                row_groups.prune_by_limit(
+                    limit,
+                    reader_metadata.metadata().row_groups(),
+                    &file_metrics,
+                );
             }
+
+            // Load page index after stats/limit pruning but before bloom filters.
+            // This avoids the I/O if all row groups are already pruned, and is still
+            // possible here because async_file_reader hasn't been consumed yet.
+            if should_enable_page_index(enable_page_index, &page_pruning_predicate)
+                && !row_groups.is_empty()
+            {
+                reader_metadata = load_page_index(
+                    reader_metadata,
+                    &mut async_file_reader,
+                    options.with_page_index_policy(PageIndexPolicy::Optional),
+                )
+                .await?;
+            }
+
+            // Extract metadata after potentially loading the page index, so the cached
+            // metadata in each morsel includes the page index if it was loaded.
+            let metadata = Arc::clone(reader_metadata.metadata());
 
             // Bloom filter pruning: done once per file here in morselize(), so that
             // open() does not repeat it for each morsel (which would cause inflated metrics
@@ -403,7 +426,22 @@ impl FileOpener for ParquetOpener {
                 }
             }
 
-            let access_plan = row_groups.build();
+            let mut access_plan = row_groups.build();
+
+            // Page pruning: done once per file here in morselize(), so that open()
+            // does not repeat it for each morsel.
+            if enable_page_index
+                && !access_plan.is_empty()
+                && let Some(p) = page_pruning_predicate
+            {
+                access_plan = p.prune_plan_with_page_index(
+                    access_plan,
+                    &physical_file_schema,
+                    metadata.file_metadata().schema_descr(),
+                    metadata.as_ref(),
+                    &file_metrics,
+                );
+            }
 
             let mut morsels = Vec::with_capacity(access_plan.len());
             for i in 0..num_row_groups {
@@ -411,7 +449,8 @@ impl FileOpener for ParquetOpener {
                     continue;
                 }
                 let mut morsel_access_plan = ParquetAccessPlan::new_none(num_row_groups);
-                morsel_access_plan.scan(i);
+                // Transfer the page-pruned access (Scan or Selection) for this row group
+                morsel_access_plan.set(i, access_plan.inner()[i].clone());
                 let morsel = ParquetMorsel {
                     metadata: Arc::clone(&metadata),
                     access_plan: morsel_access_plan,
@@ -690,7 +729,11 @@ impl FileOpener for ParquetOpener {
             // The page index is not stored inline in the parquet footer so the
             // code above may not have read the page index structures yet. If we
             // need them for reading and they aren't yet loaded, we need to load them now.
-            if should_enable_page_index(enable_page_index, &page_pruning_predicate) {
+            // For morsels, the page index was already loaded (if needed) in morselize().
+            // Skip it here to avoid redundant I/O.
+            if should_enable_page_index(enable_page_index, &page_pruning_predicate)
+                && !is_morsel
+            {
                 reader_metadata = load_page_index(
                     reader_metadata,
                     &mut async_file_reader,
@@ -825,8 +868,11 @@ impl FileOpener for ParquetOpener {
             // be ruled using page metadata, rows from other columns
             // with that range can be skipped as well
             // --------------------------------------------------------
+            // For morsels, page pruning was already applied once in morselize().
+            // Skip it here to avoid double-counting metrics and redundant work.
             if enable_page_index
                 && !access_plan.is_empty()
+                && !is_morsel
                 && let Some(p) = page_pruning_predicate
             {
                 access_plan = p.prune_plan_with_page_index(
