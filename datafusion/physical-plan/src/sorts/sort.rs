@@ -1411,7 +1411,7 @@ impl ExecutionPlan for SortExec {
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         config: &datafusion_common::config::ConfigOptions,
     ) -> Result<FilterDescription> {
-        if !matches!(phase, FilterPushdownPhase::Post) {
+        if phase != FilterPushdownPhase::Post {
             return FilterDescription::from_children(parent_filters, &self.children());
         }
 

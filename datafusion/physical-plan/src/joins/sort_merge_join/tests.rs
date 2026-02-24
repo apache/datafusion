@@ -3103,7 +3103,7 @@ fn test_partition_statistics() -> Result<()> {
         );
         // Verify that aggregate statistics have a meaningful num_rows (not Absent)
         assert!(
-            !matches!(stats.num_rows, Precision::Absent),
+            stats.num_rows != Precision::Absent,
             "Aggregate stats should have meaningful num_rows for {join_type:?}, got {:?}",
             stats.num_rows
         );
@@ -3121,7 +3121,7 @@ fn test_partition_statistics() -> Result<()> {
         );
         // When children return unknown stats, the join's partition stats will be Absent
         assert!(
-            matches!(partition_stats.num_rows, Precision::Absent),
+            partition_stats.num_rows == Precision::Absent,
             "Partition stats should have Absent num_rows when children return unknown for {join_type:?}, got {:?}",
             partition_stats.num_rows
         );

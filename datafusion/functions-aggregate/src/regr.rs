@@ -455,7 +455,7 @@ impl AggregateUDFImpl for Regr {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        if matches!(self.regr_type, RegrType::Count) {
+        if self.regr_type == RegrType::Count {
             Ok(DataType::UInt64)
         } else {
             Ok(DataType::Float64)
