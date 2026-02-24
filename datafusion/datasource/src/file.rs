@@ -39,16 +39,17 @@ use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use object_store::ObjectStore;
 
-/// Helper function to convert any type implementing FileSource to Arc&lt;dyn FileSource&gt;
+/// Helper function to convert any type implementing [`FileSource`] to `Arc<dyn FileSource>`
 pub fn as_file_source<T: FileSource + 'static>(source: T) -> Arc<dyn FileSource> {
     Arc::new(source)
 }
 
-/// file format specific behaviors for elements in [`DataSource`]
+/// File format specific behaviors for [`DataSource`]
 ///
 /// # Schema information
 /// There are two important schemas for a [`FileSource`]:
-/// 1. [`Self::table_schema`] -- the schema for the overall "table"
+/// 1. [`Self::table_schema`] -- the schema for the overall table
+///    (file data plus partition columns)
 /// 2. The logical output schema, comprised of [`Self::table_schema`] with
 ///    [`Self::projection`] applied
 ///
@@ -71,13 +72,16 @@ pub trait FileSource: Send + Sync {
     /// Any
     fn as_any(&self) -> &dyn Any;
 
-    /// Returns the table schema for this file source.
+    /// Returns the table schema for the overall table (including partition columns, if any)
     ///
-    /// This always returns the unprojected schema (the full schema of the data)
+    /// This method returns the unprojected schema: the full schema of the data
     /// without [`Self::projection`] applied.
     ///
     /// The output schema of this `FileSource` is this TableSchema
     /// with [`Self::projection`] applied.
+    ///
+    /// Use [`ProjectionExprs::project_schema`] to get the projected schema
+    /// after applying the projection.
     fn table_schema(&self) -> &crate::table_schema::TableSchema;
 
     /// Initialize new type with batch size configuration
@@ -92,6 +96,9 @@ pub trait FileSource: Send + Sync {
 
     /// Return the projection that will be applied to the output stream on top
     /// of [`Self::table_schema`].
+    ///
+    /// Note you can use [`ProjectionExprs::project_schema`] on the table
+    /// schema to get the effective output schema of this source.
     fn projection(&self) -> Option<&ProjectionExprs> {
         None
     }

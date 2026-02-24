@@ -43,6 +43,13 @@ fi
 version=$1
 rc=$2
 
+read -r -p "Proceed to release tarball for ${version}-rc${rc}? [y/N]: " answer
+answer=${answer:-no}
+if [ "${answer}" != "y" ]; then
+  echo "Cancelled tarball release!"
+  exit 1
+fi
+
 tmp_dir=tmp-apache-datafusion-dist
 
 echo "Recreate temporary directory: ${tmp_dir}"

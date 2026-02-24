@@ -751,6 +751,7 @@ message PhysicalPlanNode {
     MemoryScanExecNode memory_scan = 35;
     AsyncFuncExecNode async_func = 36;
     BufferExecNode buffer = 37;
+    ArrowScanExecNode arrow_scan = 38;
   }
 }
 
@@ -1103,6 +1104,10 @@ message JsonScanExecNode {
 }
 
 message AvroScanExecNode {
+  FileScanExecConf base_conf = 1;
+}
+
+message ArrowScanExecNode {
   FileScanExecConf base_conf = 1;
 }
 

@@ -15,20 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-extern crate arrow;
-#[macro_use]
-extern crate criterion;
-extern crate datafusion;
-
 mod data_utils;
 
-use crate::criterion::Criterion;
 use arrow::array::PrimitiveArray;
 use arrow::array::{ArrayRef, RecordBatch};
 use arrow::datatypes::ArrowNativeTypeOp;
 use arrow::datatypes::ArrowPrimitiveType;
 use arrow::datatypes::{DataType, Field, Fields, Schema};
 use criterion::Bencher;
+use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::SessionContext;
 use datafusion_common::{ScalarValue, config::Dialect};

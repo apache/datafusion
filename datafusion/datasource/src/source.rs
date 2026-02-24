@@ -158,16 +158,6 @@ pub trait DataSource: Send + Sync + Debug {
     /// across all partitions if `partition` is `None`.
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics>;
 
-    /// Returns aggregate statistics across all partitions.
-    ///
-    /// # Deprecated
-    /// Use [`Self::partition_statistics`] instead, which provides more fine-grained
-    /// control over statistics retrieval (per-partition or aggregate).
-    #[deprecated(since = "51.0.0", note = "Use partition_statistics instead")]
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
-    }
-
     /// Return a copy of this DataSource with a new fetch limit
     fn with_fetch(&self, _limit: Option<usize>) -> Option<Arc<dyn DataSource>>;
     fn fetch(&self) -> Option<usize>;

@@ -28,7 +28,7 @@ use datafusion::datasource::file_format::json::{JsonFormat, JsonFormatFactory};
 use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
-use datafusion::execution::options::ArrowReadOptions;
+use datafusion::execution::options::{ArrowReadOptions, JsonReadOptions};
 use datafusion::optimizer::Optimizer;
 use datafusion::optimizer::optimize_unions::OptimizeUnions;
 use datafusion_common::parquet_config::DFParquetWriterVersion;
@@ -755,7 +755,7 @@ async fn create_json_scan(ctx: &SessionContext) -> Result<LogicalPlan, DataFusio
     ctx.register_json(
         "t1",
         "../core/tests/data/1.json",
-        NdJsonReadOptions::default(),
+        JsonReadOptions::default(),
     )
     .await?;
 

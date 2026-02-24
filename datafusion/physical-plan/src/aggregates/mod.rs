@@ -1147,7 +1147,7 @@ impl AggregateExec {
             } else if fun_name.eq_ignore_ascii_case("max") {
                 DynamicFilterAggregateType::Max
             } else {
-                continue;
+                return;
             };
 
             // 2. arg should be only 1 column reference
@@ -1403,10 +1403,6 @@ impl ExecutionPlan for AggregateExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
-    }
-
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         let child_statistics = self.input().partition_statistics(partition)?;
         self.statistics_inner(&child_statistics)
@@ -1519,7 +1515,9 @@ impl ExecutionPlan for AggregateExec {
 
         // If this node tried to pushdown some dynamic filter before, now we check
         // if the child accept the filter
-        if matches!(phase, FilterPushdownPhase::Post) && self.dynamic_filter.is_some() {
+        if matches!(phase, FilterPushdownPhase::Post)
+            && let Some(dyn_filter) = &self.dynamic_filter
+        {
             // let child_accepts_dyn_filter = child_pushdown_result
             //     .self_filters
             //     .first()
@@ -1540,7 +1538,6 @@ impl ExecutionPlan for AggregateExec {
             // So here, we try to use ref count to determine if the dynamic filter
             // has actually be pushed down.
             // Issue: <https://github.com/apache/datafusion/issues/18856>
-            let dyn_filter = self.dynamic_filter.as_ref().unwrap();
             let child_accepts_dyn_filter = Arc::strong_count(dyn_filter) > 1;
 
             if !child_accepts_dyn_filter {
@@ -2485,10 +2482,6 @@ mod tests {
             };
 
             Ok(Box::pin(stream))
-        }
-
-        fn statistics(&self) -> Result<Statistics> {
-            self.partition_statistics(None)
         }
 
         fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {

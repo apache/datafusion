@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-extern crate criterion;
-
 use arrow::datatypes::DataType;
 use arrow::{
     datatypes::{Field, Float32Type, Float64Type},
