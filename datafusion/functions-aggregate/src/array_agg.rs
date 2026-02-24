@@ -523,7 +523,7 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
         let mut offsets = Vec::<i32>::with_capacity(num_groups + 1);
         offsets.push(0);
         let mut nulls_builder = NullBufferBuilder::new(num_groups);
-        let mut cur_offset = 0i32;
+        let mut cur_offset = 0usize;
 
         // Build ListArray offsets and nulls: groups with no elements
         // are null, others occupy offsets[i]..offsets[i+1] in the
@@ -538,11 +538,14 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
                 nulls_builder.append_non_null();
             }
 
-            cur_offset += total_len as i32;
-            offsets.push(cur_offset);
+            cur_offset += total_len;
+            if i32::try_from(cur_offset).is_err() {
+                return exec_err!("array_agg: cumulative offset exceeds i32::MAX");
+            }
+            offsets.push(cur_offset as i32);
         }
 
-        let total_rows = cur_offset as usize;
+        let total_rows = cur_offset;
 
         // Build the flat values array for the output ListArray using
         // `interleave`. `interleave` takes a list of source arrays and a list
@@ -696,7 +699,7 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
     fn size(&self) -> usize {
         self.batches
             .iter()
-            .map(|arr| arr.get_array_memory_size())
+            .map(|arr| arr.to_data().get_slice_memory_size().unwrap_or_default())
             .sum::<usize>()
             + self.batches.capacity() * size_of::<ArrayRef>()
             + self.batch_refcounts.capacity() * size_of::<u32>()
