@@ -77,14 +77,13 @@ impl<'a> PhysicalExprSimplifier<'a> {
                     })?;
 
                 #[cfg(debug_assertions)]
-                if let Some(original_type) = original_type {
-                    if let Ok(rewritten_type) = rewritten.data.data_type(schema) {
-                        assert_eq!(
-                            rewritten_type,
-                            original_type,
-                            "Simplified expression should have the same data type as the original"
-                        );
-                    }
+                if let Some(original_type) = original_type
+                 && let Ok(rewritten_type) = rewritten.data.data_type(schema) {
+                    assert_eq!(
+                        rewritten_type,
+                        original_type,
+                        "Simplified expression should have the same data type as the original"
+                    );
                 }
 
                 Ok(rewritten)
