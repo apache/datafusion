@@ -263,10 +263,11 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///     &self,
     ///     f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
     /// ) -> Result<TreeNodeRecursion> {
+    ///     let mut tnr = TreeNodeRecursion::Continue;
     ///     for expr in &self.expressions {
-    ///         f(expr.as_ref())?;
+    ///         tnr = tnr.visit_sibling(|| f(expr.as_ref()))?;
     ///     }
-    ///     Ok(TreeNodeRecursion::Continue)
+    ///     Ok(tnr)
     /// }
     /// ```
     fn apply_expressions(
@@ -1647,6 +1648,110 @@ mod tests {
         fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
             unimplemented!()
         }
+    }
+
+    /// A test node that holds a fixed list of expressions, used to test
+    /// `apply_expressions` behavior.
+    #[derive(Debug)]
+    struct MultiExprExec {
+        exprs: Vec<Arc<dyn PhysicalExpr>>,
+    }
+
+    impl DisplayAs for MultiExprExec {
+        fn fmt_as(
+            &self,
+            _t: DisplayFormatType,
+            _f: &mut std::fmt::Formatter,
+        ) -> std::fmt::Result {
+            unimplemented!()
+        }
+    }
+
+    impl ExecutionPlan for MultiExprExec {
+        fn name(&self) -> &'static str {
+            "MultiExprExec"
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn properties(&self) -> &PlanProperties {
+            unimplemented!()
+        }
+
+        fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+            vec![]
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            _: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            unimplemented!()
+        }
+
+        fn apply_expressions(
+            &self,
+            f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            let mut tnr = TreeNodeRecursion::Continue;
+            for expr in &self.exprs {
+                tnr = tnr.visit_sibling(|| f(expr.as_ref()))?;
+            }
+            Ok(tnr)
+        }
+
+        fn execute(
+            &self,
+            _partition: usize,
+            _context: Arc<TaskContext>,
+        ) -> Result<SendableRecordBatchStream> {
+            unimplemented!()
+        }
+
+        fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
+            unimplemented!()
+        }
+    }
+
+    /// Returns a simple literal `Arc<dyn PhysicalExpr>` for use in tests.
+    fn lit_expr(val: i64) -> Arc<dyn PhysicalExpr> {
+        use datafusion_physical_expr::expressions::Literal;
+        Arc::new(Literal::new(datafusion_common::ScalarValue::Int64(Some(
+            val,
+        ))))
+    }
+
+    /// `apply_expressions` visits all expressions when `f` always returns `Continue`.
+    #[test]
+    fn test_apply_expressions_continue_visits_all() -> Result<()> {
+        let plan = MultiExprExec {
+            exprs: vec![lit_expr(1), lit_expr(2), lit_expr(3)],
+        };
+        let mut visited = 0usize;
+        plan.apply_expressions(&mut |_expr| {
+            visited += 1;
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        assert_eq!(visited, 3);
+        Ok(())
+    }
+
+    #[test]
+    fn test_apply_expressions_stop_halts_early() -> Result<()> {
+        let plan = MultiExprExec {
+            exprs: vec![lit_expr(1), lit_expr(2), lit_expr(3)],
+        };
+        let mut visited = 0usize;
+        let tnr = plan.apply_expressions(&mut |_expr| {
+            visited += 1;
+            Ok(TreeNodeRecursion::Stop)
+        })?;
+        // Only the first expression is visited; the rest are skipped.
+        assert_eq!(visited, 1);
+        assert_eq!(tnr, TreeNodeRecursion::Stop);
+        Ok(())
     }
 
     #[test]
