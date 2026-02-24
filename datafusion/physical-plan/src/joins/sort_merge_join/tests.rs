@@ -3141,16 +3141,16 @@ fn build_batches(
     assert_eq!(a.1.len(), b.1.len());
     let mut batches = vec![];
 
-    for i in 0..a.1.len() {
-        let schema = Schema::new(vec![
-            Field::new(a.0, DataType::Boolean, false),
-            Field::new(b.0, DataType::Int32, false),
-            Field::new(c.0, DataType::Int32, false),
-        ]);
+    let schema = Arc::new(Schema::new(vec![
+        Field::new(a.0, DataType::Boolean, false),
+        Field::new(b.0, DataType::Int32, false),
+        Field::new(c.0, DataType::Int32, false),
+    ]));
 
+    for i in 0..a.1.len() {
         batches.push(
             RecordBatch::try_new(
-                Arc::new(schema),
+                Arc::clone(&schema),
                 vec![
                     Arc::new(BooleanArray::from(a.1[i].clone())),
                     Arc::new(Int32Array::from(b.1[i].clone())),

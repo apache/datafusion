@@ -62,7 +62,7 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExprRef;
 use futures::{Stream, StreamExt};
 
 /// State of SMJ stream
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq)]
 pub(super) enum SortMergeJoinState {
     /// Init joining with a new streamed row or a new buffered batches
     Init,
@@ -70,8 +70,8 @@ pub(super) enum SortMergeJoinState {
     Polling,
     /// Joining polled data and making output
     JoinOutput,
-    /// Emit ready data if have any
-    EmitReady { next_state: Box<SortMergeJoinState> },
+    /// Emit ready data if have any and then go back to [`Self::Init`] state
+    EmitReadyThenInit,
     /// No more output
     Exhausted,
 }
@@ -600,7 +600,7 @@ impl Stream for SortMergeJoinStream {
                     self.current_ordering = self.compare_streamed_buffered()?;
                     self.state = SortMergeJoinState::JoinOutput;
                 }
-                SortMergeJoinState::EmitReady { next_state } => {
+                SortMergeJoinState::EmitReadyThenInit => {
                     // If have data to emit, emit it and if no more, change to next
 
                     // Verify metadata alignment before checking if we have batches to output
@@ -610,11 +610,9 @@ impl Stream for SortMergeJoinStream {
 
                     // For filtered joins, skip output and let Init state handle it
                     if needs_deferred_filtering(&self.filter, self.join_type) {
-                        self.state = next_state.as_ref().clone();
+                        self.state = SortMergeJoinState::Init;
                         continue;
                     }
-
-                    let maybe_next = next_state.as_ref().clone();
 
                     // For non-filtered joins, only output if we have a completed batch
                     // (opportunistic output when target batch size is reached)
@@ -632,7 +630,7 @@ impl Stream for SortMergeJoinStream {
                             .record_output(&self.join_metrics.baseline_metrics());
                         return Poll::Ready(Some(Ok(record_batch)));
                     }
-                    self.state = maybe_next;
+                    self.state = SortMergeJoinState::Init;
                 }
                 SortMergeJoinState::JoinOutput => {
                     self.join_partial()?;
@@ -640,9 +638,7 @@ impl Stream for SortMergeJoinStream {
                     if self.num_unfrozen_pairs() < self.batch_size {
                         if self.buffered_data.scanning_finished() {
                             self.buffered_data.scanning_reset();
-                            self.state = SortMergeJoinState::EmitReady {
-                                next_state: Box::new(SortMergeJoinState::Init),
-                            };
+                            self.state = SortMergeJoinState::EmitReadyThenInit;
                         }
                     } else {
                         self.freeze_all()?;
