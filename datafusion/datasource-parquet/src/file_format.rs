@@ -391,7 +391,7 @@ impl FileFormat for ParquetFormat {
             })
             .boxed() // Workaround https://github.com/rust-lang/rust/issues/64552
             // fetch schemas concurrently, if requested
-            .buffered(state.config_options().execution.meta_fetch_concurrency)
+            .buffer_unordered(state.config_options().execution.meta_fetch_concurrency)
             .try_collect()
             .await?;
 
@@ -401,12 +401,10 @@ impl FileFormat for ParquetFormat {
         // is not deterministic. Thus, to ensure deterministic schema inference
         // sort the files first.
         // https://github.com/apache/datafusion/pull/6629
-        schemas.sort_by(|(location1, _), (location2, _)| location1.cmp(location2));
+        schemas
+            .sort_unstable_by(|(location1, _), (location2, _)| location1.cmp(location2));
 
-        let schemas = schemas
-            .into_iter()
-            .map(|(_, schema)| schema)
-            .collect::<Vec<_>>();
+        let schemas = schemas.into_iter().map(|(_, schema)| schema);
 
         let schema = if self.skip_metadata() {
             Schema::try_merge(clear_metadata(schemas))
