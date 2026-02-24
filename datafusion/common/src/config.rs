@@ -1352,6 +1352,8 @@ impl ConfigField for ConfigOptions {
     }
 }
 
+/// This namespace is reserved for interacting with Foreign Function Interface
+/// (FFI) based configuration extensions.
 pub const DATAFUSION_FFI_CONFIG_NAMESPACE: &str = "datafusion_ffi";
 
 impl ConfigOptions {
