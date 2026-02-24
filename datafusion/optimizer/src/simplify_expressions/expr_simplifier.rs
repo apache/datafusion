@@ -2312,7 +2312,7 @@ fn simplify_right_is_one_case(
         Err(_) => Ok(Transformed::yes(*left)),
     }
 }
-
+/// trigger ci extended tests
 #[cfg(test)]
 mod tests {
     use super::*;
