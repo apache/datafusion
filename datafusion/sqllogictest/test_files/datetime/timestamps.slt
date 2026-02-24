@@ -777,6 +777,12 @@ SELECT date_bin(NULL, TIMESTAMP '2023-01-01 12:30:00', TIMESTAMP '2023-01-01 12:
 ----
 NULL
 
+# NULL stride should return NULL, not a planning error
+query P
+SELECT date_bin(NULL, TIMESTAMP '2023-01-01 12:30:00')
+----
+NULL
+
 # invalid second arg type
 query error
 SELECT DATE_BIN(INTERVAL '0 second', 25, TIMESTAMP '1970-01-01T00:00:00Z')

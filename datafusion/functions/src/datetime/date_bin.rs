@@ -392,8 +392,7 @@ fn date_bin_impl(
     origin: &ColumnarValue,
 ) -> Result<ColumnarValue> {
     let stride = match stride {
-        ColumnarValue::Scalar(ScalarValue::IntervalDayTime(None))
-        | ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(None)) => {
+        ColumnarValue::Scalar(s) if s.is_null() => {
             // NULL stride -> NULL result (standard SQL NULL propagation)
             return Ok(ColumnarValue::Scalar(ScalarValue::try_from(
                 array.data_type(),
