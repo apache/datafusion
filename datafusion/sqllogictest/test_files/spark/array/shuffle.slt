@@ -107,11 +107,15 @@ SELECT shuffle([1, 2, 3, 4], CAST('2' AS INT));
 ----
 [1, 4, 2, 3]
 
-query error DataFusion error: Execution error: shuffle seed must be Int64 type but got 'NULL'
-SELECT shuffle([1, 2, 3], NULL);
+query ?
+SELECT shuffle(['ab'], NULL);
+----
+[ab]
 
-query error DataFusion error: Execution error: shuffle seed must be Int64 type but got 'NULL'
-SELECT shuffle(shuffle([1, 2, 3], 2), NULL);
+query ?
+SELECT shuffle(shuffle([3, 3], NULL), NULL);
+----
+[3, 3]
 
 # Clean up
 statement ok

@@ -128,10 +128,7 @@ fn extract_seed(seed_arg: &ColumnarValue) -> Result<Option<u64>> {
         ColumnarValue::Scalar(scalar) => {
             let seed = match scalar {
                 ScalarValue::Int64(Some(v)) => Some(*v as u64),
-                ScalarValue::Null => None,
-                ScalarValue::Int64(None) => {
-                    return exec_err!("shuffle seed must be Int64 type but got 'NULL'");
-                }
+                ScalarValue::Null | ScalarValue::Int64(None) => None,
                 _ => {
                     return exec_err!(
                         "shuffle seed must be Int64 type but got '{}'",
@@ -355,13 +352,8 @@ mod tests {
         };
 
         let shuffle = SparkShuffle::new();
-        let error = shuffle.invoke_with_args(args).unwrap_err();
-        assert!(
-            error
-                .message()
-                .to_string()
-                .as_str()
-                .contains("shuffle seed must be Int64 type but got 'NULL'")
-        );
+        let result = shuffle.invoke_with_args(args).unwrap();
+        let arr = result.into_array(2).unwrap();
+        assert!(!arr.is_empty(), "shuffle result should be non-empty array");
     }
 }
