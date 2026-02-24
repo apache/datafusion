@@ -115,8 +115,13 @@ pub trait OptimizerRule: Debug {
     /// registered `sum` function has different semantics (for example, the
     /// `sum` function from the `datafusion-spark` crate).
     ///
+    /// There are still several cases that rely on function name checking in
+    /// the rules included with DataFusion. Please see [#18643] for more details
+    /// and to help remove these cases.
+    ///
     /// [`ScalarUDFImpl`]: datafusion_expr::ScalarUDFImpl
     /// [`AggregateUDFImpl`]: datafusion_expr::ScalarUDFImpl
+    /// [#18643]: https://github.com/apache/datafusion/issues/18643
     fn rewrite(
         &self,
         _plan: LogicalPlan,
