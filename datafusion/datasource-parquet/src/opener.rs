@@ -275,6 +275,7 @@ impl FileOpener for ParquetOpener {
         let predicate = self.predicate.clone();
         let metrics = self.metrics.clone();
         let enable_row_group_stats_pruning = self.enable_row_group_stats_pruning;
+        let enable_page_index = self.enable_page_index;
         let limit = self.limit;
         let preserve_order = self.preserve_order;
 
@@ -310,8 +311,9 @@ impl FileOpener for ParquetOpener {
             }
 
             let mut _metadata_timer = file_metrics.metadata_load_time.timer();
-            let reader_metadata =
-                ArrowReaderMetadata::load_async(&mut async_file_reader, options).await?;
+            let mut reader_metadata =
+                ArrowReaderMetadata::load_async(&mut async_file_reader, options.clone())
+                    .await?;
             let metadata = reader_metadata.metadata();
             let num_row_groups = metadata.num_row_groups();
 
@@ -347,7 +349,7 @@ impl FileOpener for ParquetOpener {
                 })
                 .transpose()?;
 
-            let (pruning_predicate, _) = build_pruning_predicates(
+            let (pruning_predicate, page_pruning_predicate) = build_pruning_predicates(
                 adapted_predicate.as_ref(),
                 &physical_file_schema,
                 &predicate_creation_errors,
@@ -377,13 +379,45 @@ impl FileOpener for ParquetOpener {
 
             let access_plan = row_groups.build();
 
+            // Load the page index once for this file and apply page-level pruning before
+            // splitting into per-row-group morsels. Storing the enriched metadata (with
+            // page index data) in every morsel lets open() reuse it for row-selection
+            // without issuing additional I/O per morsel.
+            if should_enable_page_index(enable_page_index, &page_pruning_predicate) {
+                reader_metadata = load_page_index(
+                    reader_metadata,
+                    &mut async_file_reader,
+                    options.with_page_index_policy(PageIndexPolicy::Optional),
+                )
+                .await?;
+            }
+            let access_plan = if enable_page_index
+                && !access_plan.is_empty()
+                && let Some(ref p) = page_pruning_predicate
+            {
+                p.prune_plan_with_page_index(
+                    access_plan,
+                    &physical_file_schema,
+                    reader_metadata.parquet_schema(),
+                    reader_metadata.metadata().as_ref(),
+                    &file_metrics,
+                )
+            } else {
+                access_plan
+            };
+            // Rebind metadata after the potential page index load so morsels carry
+            // the enriched Arc<ParquetMetaData> (including column/offset indexes).
+            let metadata = reader_metadata.metadata();
+
             let mut morsels = Vec::with_capacity(access_plan.len());
             for i in 0..num_row_groups {
-                if !access_plan.should_scan(i) {
+                let rg_access = &access_plan.inner()[i];
+                if !rg_access.should_scan() {
                     continue;
                 }
                 let mut morsel_access_plan = ParquetAccessPlan::new_none(num_row_groups);
-                morsel_access_plan.scan(i);
+                // Preserve Selection if page-level pruning narrowed this row group.
+                morsel_access_plan.set(i, rg_access.clone());
                 let morsel = ParquetMorsel {
                     metadata: Arc::clone(metadata),
                     access_plan: morsel_access_plan,
@@ -792,7 +826,11 @@ impl FileOpener for ParquetOpener {
             // be ruled using page metadata, rows from other columns
             // with that range can be skipped as well
             // --------------------------------------------------------
+            // For morsels, page index pruning was already applied in morselize() and
+            // the results are encoded in the morsel's access plan (RowGroupAccess::Selection).
+            // Skipping it here avoids double-counting metrics and redundant work.
             if enable_page_index
+                && !is_morsel
                 && !access_plan.is_empty()
                 && let Some(p) = page_pruning_predicate
             {
