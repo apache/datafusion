@@ -1116,7 +1116,7 @@ impl AggregateExec {
     /// - If yes, init one inside `AggregateExec`'s `dynamic_filter` field.
     /// - If not supported, `self.dynamic_filter` should be kept `None`
     fn init_dynamic_filter(&mut self) {
-        if (!self.group_by.is_empty()) || (!matches!(self.mode, AggregateMode::Partial)) {
+        if (!self.group_by.is_empty()) || (self.mode != AggregateMode::Partial) {
             debug_assert!(
                 self.dynamic_filter.is_none(),
                 "The current operator node does not support dynamic filter"
@@ -1492,7 +1492,7 @@ impl ExecutionPlan for AggregateExec {
         );
 
         // Include self dynamic filter when it's possible
-        if matches!(phase, FilterPushdownPhase::Post)
+        if phase == FilterPushdownPhase::Post
             && config.optimizer.enable_aggregate_dynamic_filter_pushdown
             && let Some(self_dyn_filter) = &self.dynamic_filter
         {
@@ -1515,7 +1515,7 @@ impl ExecutionPlan for AggregateExec {
 
         // If this node tried to pushdown some dynamic filter before, now we check
         // if the child accept the filter
-        if matches!(phase, FilterPushdownPhase::Post)
+        if phase == FilterPushdownPhase::Post
             && let Some(dyn_filter) = &self.dynamic_filter
         {
             // let child_accepts_dyn_filter = child_pushdown_result

@@ -475,10 +475,9 @@ mod tests {
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![Some("a"); row_size]));
         let c: ArrayRef = Arc::new(Int64Array::from_iter(vec![0; row_size]));
         let rb = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)])?;
-
-        let rbs = (0..1024).map(|_| rb.clone()).collect::<Vec<_>>();
-
         let schema = rb.schema();
+
+        let rbs = std::iter::repeat_n(rb, 1024).collect::<Vec<_>>();
         let sort = [
             PhysicalSortExpr {
                 expr: col("b", &schema)?,

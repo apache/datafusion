@@ -432,7 +432,7 @@ impl JoinedRecordBatches {
     /// Maintains invariant: N rows → N metadata entries (nulls)
     fn push_batch_with_null_metadata(&mut self, batch: RecordBatch, join_type: JoinType) {
         debug_assert!(
-            matches!(join_type, JoinType::Full),
+            join_type == JoinType::Full,
             "push_batch_with_null_metadata should only be called for Full joins"
         );
 
@@ -1081,7 +1081,7 @@ impl SortMergeJoinStream {
                 }
             }
             Ordering::Greater => {
-                if matches!(self.join_type, JoinType::Full) {
+                if self.join_type == JoinType::Full {
                     join_buffered = !self.buffered_joined;
                 };
             }
@@ -1181,7 +1181,7 @@ impl SortMergeJoinStream {
     // Applicable only in case of Full join.
     //
     fn freeze_buffered(&mut self, batch_count: usize) -> Result<()> {
-        if !matches!(self.join_type, JoinType::Full) {
+        if self.join_type != JoinType::Full {
             return Ok(());
         }
         for buffered_batch in self.buffered_data.batches.range_mut(..batch_count) {
@@ -1206,7 +1206,7 @@ impl SortMergeJoinStream {
         &mut self,
         buffered_batch: &mut BufferedBatch,
     ) -> Result<()> {
-        if !matches!(self.join_type, JoinType::Full) {
+        if self.join_type != JoinType::Full {
             return Ok(());
         }
 
@@ -1294,7 +1294,7 @@ impl SortMergeJoinStream {
             let filter_columns = if let Some(buffered_batch_idx) =
                 chunk.buffered_batch_idx
             {
-                if !matches!(self.join_type, JoinType::Right) {
+                if self.join_type != JoinType::Right {
                     if matches!(
                         self.join_type,
                         JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark
@@ -1329,7 +1329,7 @@ impl SortMergeJoinStream {
                 vec![]
             };
 
-            let columns = if !matches!(self.join_type, JoinType::Right) {
+            let columns = if self.join_type != JoinType::Right {
                 left_columns.extend(right_columns);
                 left_columns
             } else {
@@ -1382,7 +1382,7 @@ impl SortMergeJoinStream {
 
                     if needs_deferred_filtering {
                         // Outer/semi/anti/mark joins: push unfiltered batch with metadata for deferred filtering
-                        let mask_to_use = if !matches!(self.join_type, JoinType::Full) {
+                        let mask_to_use = if self.join_type != JoinType::Full {
                             &mask
                         } else {
                             pre_mask
@@ -1406,7 +1406,7 @@ impl SortMergeJoinStream {
                     // all joined rows are failed on the join filter.
                     // I.e., if all rows joined from a streamed row are failed with the join filter,
                     // we need to join it with nulls as buffered side.
-                    if matches!(self.join_type, JoinType::Full) {
+                    if self.join_type == JoinType::Full {
                         let buffered_batch = &mut self.buffered_data.batches
                             [chunk.buffered_batch_idx.unwrap()];
 

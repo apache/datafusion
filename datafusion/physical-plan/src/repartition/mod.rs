@@ -2483,7 +2483,7 @@ mod tests {
     /// Create vector batches
     fn create_vec_batches(n: usize) -> Vec<RecordBatch> {
         let batch = create_batch();
-        (0..n).map(|_| batch.clone()).collect()
+        std::iter::repeat_n(batch, n).collect()
     }
 
     /// Create batch

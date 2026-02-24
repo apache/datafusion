@@ -383,7 +383,7 @@ impl ExecutionPlan for UnionExec {
         // children with FilterExec and reporting all filters as handled.
         // Post phase: use default behavior to let the filter creator decide how to handle
         // filters that weren't fully pushed down.
-        if !matches!(phase, FilterPushdownPhase::Pre) {
+        if phase != FilterPushdownPhase::Pre {
             return Ok(FilterPushdownPropagation::if_all(child_pushdown_result));
         }
 
