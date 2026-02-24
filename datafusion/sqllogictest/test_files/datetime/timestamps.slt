@@ -5328,3 +5328,33 @@ drop table ts_data_secs
 
 statement ok
 drop table ts_data_micros_kolkata
+
+##########
+## Test to_timestamp with scalar float inputs
+##########
+
+statement ok
+create table test_to_timestamp_scalar(id int, name varchar) as values
+  (1, 'foo'),
+  (2, 'bar');
+
+query P
+SELECT to_timestamp(123.5, name) FROM test_to_timestamp_scalar ORDER BY id;
+----
+1970-01-01T00:02:03.500
+1970-01-01T00:02:03.500
+
+query P
+SELECT to_timestamp(456.789::float, name) FROM test_to_timestamp_scalar ORDER BY id;
+----
+1970-01-01T00:07:36.789001464
+1970-01-01T00:07:36.789001464
+
+query P
+SELECT to_timestamp(arrow_cast(100.5, 'Float16'), name) FROM test_to_timestamp_scalar ORDER BY id;
+----
+1970-01-01T00:01:40.500
+1970-01-01T00:01:40.500
+
+statement ok
+drop table test_to_timestamp_scalar

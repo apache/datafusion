@@ -611,10 +611,6 @@ impl ExecutionPlan for NestedLoopJoinExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
-    }
-
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         // NestedLoopJoinExec is designed for joins without equijoin keys in the
         // ON clause (e.g., `t1 JOIN t2 ON (t1.v1 + t2.v1) % 2 = 0`). Any join
@@ -2015,9 +2011,10 @@ fn build_row_join_batch(
             // Broadcast the single build-side row to match the filtered
             // probe-side batch length
             let original_left_array = build_side_batch.column(column_index.index);
-            // Avoid using `ScalarValue::to_array_of_size()` for `List(Utf8View)` to avoid
-            // deep copies for buffers inside `Utf8View` array. See below for details.
-            // https://github.com/apache/datafusion/issues/18159
+
+            // Use `arrow::compute::take` directly for `List(Utf8View)` rather
+            // than going through `ScalarValue::to_array_of_size()`, which
+            // avoids some intermediate allocations.
             //
             // In other cases, `to_array_of_size()` is faster.
             match original_left_array.data_type() {

@@ -498,7 +498,7 @@ pub fn reorder_aggregate_keys(
         && !physical_exprs_equal(&output_exprs, parent_required)
         && let Some(positions) = expected_expr_positions(&output_exprs, parent_required)
         && let Some(agg_exec) = agg_exec.input().as_any().downcast_ref::<AggregateExec>()
-        && matches!(agg_exec.mode(), &AggregateMode::Partial)
+        && *agg_exec.mode() == AggregateMode::Partial
     {
         let group_exprs = agg_exec.group_expr().expr();
         let new_group_exprs = positions
@@ -625,7 +625,7 @@ pub fn reorder_join_keys_to_inputs(
         ..
     }) = plan_any.downcast_ref::<HashJoinExec>()
     {
-        if matches!(mode, PartitionMode::Partitioned) {
+        if *mode == PartitionMode::Partitioned {
             let (join_keys, positions) = reorder_current_join_keys(
                 extract_join_keys(on),
                 Some(left.output_partitioning()),
@@ -1264,7 +1264,7 @@ pub fn ensure_distribution(
     let is_partitioned_join = plan
         .as_any()
         .downcast_ref::<HashJoinExec>()
-        .is_some_and(|join| matches!(join.mode, PartitionMode::Partitioned))
+        .is_some_and(|join| join.mode == PartitionMode::Partitioned)
         || plan.as_any().is::<SortMergeJoinExec>();
 
     let repartition_status_flags =

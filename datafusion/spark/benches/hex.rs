@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-extern crate criterion;
-
 use arrow::array::*;
 use arrow::datatypes::*;
 use criterion::{Criterion, criterion_group, criterion_main};

@@ -156,10 +156,6 @@ impl ExecutionPlan for EmptyExec {
         )?))
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
-    }
-
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         if let Some(partition) = partition {
             assert_or_internal_err!(

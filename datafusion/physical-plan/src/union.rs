@@ -310,10 +310,6 @@ impl ExecutionPlan for UnionExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
-    }
-
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         if let Some(partition_idx) = partition {
             // For a specific partition, find which input it belongs to
@@ -387,7 +383,7 @@ impl ExecutionPlan for UnionExec {
         // children with FilterExec and reporting all filters as handled.
         // Post phase: use default behavior to let the filter creator decide how to handle
         // filters that weren't fully pushed down.
-        if !matches!(phase, FilterPushdownPhase::Pre) {
+        if phase != FilterPushdownPhase::Pre {
             return Ok(FilterPushdownPropagation::if_all(child_pushdown_result));
         }
 
@@ -626,10 +622,6 @@ impl ExecutionPlan for InterleaveExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {

@@ -1395,7 +1395,7 @@ impl DefaultPhysicalPlanner {
 
                 // TODO: Allow PWMJ to deal with residual equijoin conditions
                 let join: Arc<dyn ExecutionPlan> = if join_on.is_empty() {
-                    if join_filter.is_none() && matches!(join_type, JoinType::Inner) {
+                    if join_filter.is_none() && *join_type == JoinType::Inner {
                         // cross join if there is no join conditions and no join filter set
                         Arc::new(CrossJoinExec::new(physical_left, physical_right))
                     } else if num_range_filters == 1
@@ -1470,9 +1470,7 @@ impl DefaultPhysicalPlanner {
 
                         let left_side = side_of(lhs_logical)?;
                         let right_side = side_of(rhs_logical)?;
-                        if matches!(left_side, Side::Both)
-                            || matches!(right_side, Side::Both)
-                        {
+                        if left_side == Side::Both || right_side == Side::Both {
                             return Ok(Arc::new(NestedLoopJoinExec::try_new(
                                 physical_left,
                                 physical_right,
@@ -3553,12 +3551,12 @@ mod tests {
             assert!(
                 stringified_plans
                     .iter()
-                    .any(|p| matches!(p.plan_type, PlanType::FinalLogicalPlan))
+                    .any(|p| p.plan_type == PlanType::FinalLogicalPlan)
             );
             assert!(
                 stringified_plans
                     .iter()
-                    .any(|p| matches!(p.plan_type, PlanType::InitialPhysicalPlan))
+                    .any(|p| p.plan_type == PlanType::InitialPhysicalPlan)
             );
             assert!(
                 stringified_plans.iter().any(|p| matches!(
@@ -3569,7 +3567,7 @@ mod tests {
             assert!(
                 stringified_plans
                     .iter()
-                    .any(|p| matches!(p.plan_type, PlanType::FinalPhysicalPlan))
+                    .any(|p| p.plan_type == PlanType::FinalPhysicalPlan)
             );
         } else {
             panic!(
