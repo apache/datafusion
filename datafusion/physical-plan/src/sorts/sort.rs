@@ -416,10 +416,9 @@ impl ExternalSorter {
             })?;
 
         for batch in batches_to_spill {
-            in_progress_file.append_batch(&batch)?;
+            let gc_sliced_size = in_progress_file.append_batch(&batch)?;
 
-            *max_record_batch_size =
-                (*max_record_batch_size).max(batch.get_sliced_size()?);
+            *max_record_batch_size = (*max_record_batch_size).max(gc_sliced_size);
         }
 
         assert_or_internal_err!(

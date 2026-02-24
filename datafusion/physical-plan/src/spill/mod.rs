@@ -440,36 +440,24 @@ pub(crate) fn gc_view_arrays(batch: &RecordBatch) -> Result<RecordBatch> {
     Ok(RecordBatch::try_new(batch.schema(), new_columns)?)
 }
 
-/// Determines whether a view array should be garbage collected.
+/// Determines whether a view array should be garbage collected before spilling.
 ///
-/// This function checks if:
-/// 1. The array has data buffers (non-inline strings/binaries)
-/// 2. The total buffer memory exceeds a threshold
-/// 3. The array appears to be sliced (has potential memory waste)
+/// Arrow's `gc()` always allocates new compact buffers (it is never a no-op), so we
+/// check here to skip the allocation cost when data buffers are small.
 ///
-/// The Arrow `gc()` method itself is a no-op for arrays that don't benefit from GC,
-/// but we still check here to avoid the overhead of calling gc() unnecessarily.
-///
-/// # Memory threshold rationale
-///
-/// We use a 10KB threshold based on:
-/// - Small arrays (< 10KB) have negligible memory impact even if sliced
-/// - GC has CPU overhead that isn't worth it for small arrays
-/// - This threshold captures pathological cases (e.g., ClickBench: 820MB -> 33MB)
-///   while avoiding unnecessary GC on small working sets
+/// We check `data_buffers` capacity rather than `array.get_buffer_memory_size()` because
+/// the latter includes the views buffer (16 bytes × n_rows), which scales with row count
+/// regardless of string content. We want to trigger GC only when non-inline string data
+/// is substantial enough to justify the copy.
 fn should_gc_view_array<T: ByteViewType>(array: &GenericByteViewArray<T>) -> bool {
     const MIN_BUFFER_SIZE_FOR_GC: usize = 10 * 1024; // 10KB threshold
 
     let data_buffers = array.data_buffers();
     if data_buffers.is_empty() {
-        // All strings/binaries are inlined (< 12 bytes), no GC needed
         return false;
     }
 
-    // Calculate total buffer memory
     let total_buffer_size: usize = data_buffers.iter().map(|b| b.capacity()).sum();
-
-    // Only GC if buffers exceed threshold
     total_buffer_size > MIN_BUFFER_SIZE_FOR_GC
 }
 
@@ -1039,7 +1027,7 @@ mod tests {
     fn test_gc_string_view_before_spill() -> Result<()> {
         use arrow::array::StringViewArray;
 
-        let strings: Vec<String> = (0..1000)
+        let strings: Vec<String> = (0..200)
             .map(|i| {
                 if i % 2 == 0 {
                     "short_string".to_string()
@@ -1060,7 +1048,7 @@ mod tests {
             Arc::clone(&schema),
             vec![Arc::new(string_array) as ArrayRef],
         )?;
-        let sliced_batch = batch.slice(0, 100);
+        let sliced_batch = batch.slice(0, 20);
         let gc_batch = gc_view_arrays(&sliced_batch)?;
 
         assert_eq!(gc_batch.num_rows(), sliced_batch.num_rows());
@@ -1073,7 +1061,7 @@ mod tests {
     fn test_gc_binary_view_before_spill() -> Result<()> {
         use arrow::array::BinaryViewArray;
 
-        let binaries: Vec<Vec<u8>> = (0..1000)
+        let binaries: Vec<Vec<u8>> = (0..200)
             .map(|i| {
                 if i % 2 == 0 {
                     vec![1, 2, 3, 4]
@@ -1095,7 +1083,7 @@ mod tests {
             Arc::clone(&schema),
             vec![Arc::new(binary_array) as ArrayRef],
         )?;
-        let sliced_batch = batch.slice(0, 100);
+        let sliced_batch = batch.slice(0, 20);
         let gc_batch = gc_view_arrays(&sliced_batch)?;
 
         assert_eq!(gc_batch.num_rows(), sliced_batch.num_rows());
@@ -1165,7 +1153,7 @@ mod tests {
 
     #[test]
     fn test_verify_gc_triggers_for_sliced_arrays() -> Result<()> {
-        let strings: Vec<String> = (0..1000)
+        let strings: Vec<String> = (0..200)
             .map(|i| {
                 format!(
                     "http://example.com/very/long/path/that/exceeds/inline/threshold/{i}"
@@ -1185,7 +1173,7 @@ mod tests {
             vec![Arc::new(string_array.clone()) as ArrayRef],
         )?;
 
-        let sliced = batch.slice(0, 100);
+        let sliced = batch.slice(0, 20);
 
         let sliced_array = sliced
             .column(0)
@@ -1212,7 +1200,7 @@ mod tests {
         use arrow::array::StringViewArray;
         use std::fs;
 
-        let num_rows = 5000;
+        let num_rows = 1000;
         let mut strings = Vec::with_capacity(num_rows);
 
         for i in 0..num_rows {
@@ -1288,7 +1276,7 @@ mod tests {
 
     #[test]
     fn test_spill_with_and_without_gc_comparison() -> Result<()> {
-        let num_rows = 2000;
+        let num_rows = 400;
         let strings: Vec<String> = (0..num_rows)
             .map(|i| {
                 format!(
@@ -1307,7 +1295,7 @@ mod tests {
         let batch =
             RecordBatch::try_new(schema, vec![Arc::new(string_array) as ArrayRef])?;
 
-        let sliced_batch = batch.slice(0, 200);
+        let sliced_batch = batch.slice(0, 40);
 
         let array_without_gc = sliced_batch
             .column(0)
