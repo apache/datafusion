@@ -259,6 +259,11 @@ impl FFI_SchemaProvider {
         runtime: Option<Handle>,
         logical_codec: FFI_LogicalExtensionCodec,
     ) -> Self {
+        if let Some(provider) = provider.as_any().downcast_ref::<ForeignSchemaProvider>()
+        {
+            return provider.0.clone();
+        }
+
         let owner_name = provider.owner_name().map(|s| s.into()).into();
         let private_data = Box::new(ProviderPrivateData { provider, runtime });
 

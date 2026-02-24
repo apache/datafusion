@@ -371,6 +371,10 @@ impl Clone for FFI_AggregateUDF {
 
 impl From<Arc<AggregateUDF>> for FFI_AggregateUDF {
     fn from(udaf: Arc<AggregateUDF>) -> Self {
+        if let Some(udaf) = udaf.inner().as_any().downcast_ref::<ForeignAggregateUDF>() {
+            return udaf.udaf.clone();
+        }
+
         let name = udaf.name().into();
         let aliases = udaf.aliases().iter().map(|a| a.to_owned().into()).collect();
         let is_nullable = udaf.is_nullable();

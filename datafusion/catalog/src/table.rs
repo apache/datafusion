@@ -486,7 +486,7 @@ pub trait TableProviderFactory: Debug + Sync + Send {
 }
 
 /// A trait for table function implementations
-pub trait TableFunctionImpl: Debug + Sync + Send {
+pub trait TableFunctionImpl: Debug + Sync + Send + Any {
     /// Create a table provider
     fn call(&self, args: &[Expr]) -> Result<Arc<dyn TableProvider>>;
 }
