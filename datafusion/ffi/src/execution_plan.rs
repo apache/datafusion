@@ -151,7 +151,7 @@ unsafe extern "C" fn execute_fn_wrapper(
     let runtime = plan.runtime();
     let plan = plan.inner();
 
-    let _guard = runtime.as_ref().map(|rt| rt.enter());
+    let _runtime_guard = runtime.as_ref().map(|rt| rt.enter());
 
     rresult!(
         plan.execute(partition, ctx)
