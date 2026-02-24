@@ -795,6 +795,31 @@ fn roundtrip_filter_with_not_and_in_list() -> Result<()> {
 }
 
 #[test]
+fn roundtrip_filter_with_deep_boolean_chain() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
+    let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+
+    let mut filter = binary(
+        col("a", &schema)?,
+        Operator::Eq,
+        lit(ScalarValue::Int64(Some(0))),
+        &schema,
+    )?;
+
+    for value in 1..256 {
+        let next = binary(
+            col("a", &schema)?,
+            Operator::Eq,
+            lit(ScalarValue::Int64(Some(value))),
+            &schema,
+        )?;
+        filter = binary(filter, Operator::Or, next, &schema)?;
+    }
+
+    roundtrip_test(Arc::new(FilterExec::try_new(filter, input)?))
+}
+
+#[test]
 fn roundtrip_sort() -> Result<()> {
     let field_a = Field::new("a", DataType::Boolean, false);
     let field_b = Field::new("b", DataType::Int64, false);
