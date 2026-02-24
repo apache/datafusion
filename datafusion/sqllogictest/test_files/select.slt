@@ -820,7 +820,7 @@ SELECT ALL c1 FROM aggregate_simple order by c1
 0.00005
 0.00005
 
-# select distinct
+# SELECT DISTINCT
 query RRB rowsort
 SELECT DISTINCT * FROM aggregate_simple
 ----
@@ -829,6 +829,31 @@ SELECT DISTINCT * FROM aggregate_simple
 0.00003 0.000000000003 true
 0.00004 0.000000000004 false
 0.00005 0.000000000005 true
+
+# select ALL (inverse of distinct)
+query RRB rowsort
+SELECT ALL * FROM aggregate_simple;
+----
+0.00001 0.000000000001 true
+0.00002 0.000000000002 false
+0.00002 0.000000000002 false
+0.00003 0.000000000003 true
+0.00003 0.000000000003 true
+0.00003 0.000000000003 true
+0.00004 0.000000000004 false
+0.00004 0.000000000004 false
+0.00004 0.000000000004 false
+0.00004 0.000000000004 false
+0.00005 0.000000000005 true
+0.00005 0.000000000005 true
+0.00005 0.000000000005 true
+0.00005 0.000000000005 true
+0.00005 0.000000000005 true
+
+
+# select distinct all (
+query error DataFusion error: SQL error: ParserError\("Cannot specify DISTINCT then ALL at Line: 1, Column: 8"\)
+SELECT DISTINCT ALL * FROM aggregate_simple
 
 # select distinct with projection and order by
 query R

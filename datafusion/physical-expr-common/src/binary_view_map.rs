@@ -275,7 +275,7 @@ where
             let hash = self.hashes_buffer[i];
 
             // handle null value via validity bitmap check
-            if !values.is_valid(i) {
+            if values.is_null(i) {
                 let payload = if let Some(&(payload, _offset)) = self.null.as_ref() {
                     payload
                 } else {

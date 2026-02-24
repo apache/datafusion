@@ -354,7 +354,7 @@ impl DisplayAs for SortMergeJoinExec {
                     .collect::<Vec<String>>()
                     .join(", ");
                 let display_null_equality =
-                    if matches!(self.null_equality(), NullEquality::NullEqualsNull) {
+                    if self.null_equality() == NullEquality::NullEqualsNull {
                         ", NullsEqual: true"
                     } else {
                         ""
@@ -387,7 +387,7 @@ impl DisplayAs for SortMergeJoinExec {
                 }
                 writeln!(f, "on={on}")?;
 
-                if matches!(self.null_equality(), NullEquality::NullEqualsNull) {
+                if self.null_equality() == NullEquality::NullEqualsNull {
                     writeln!(f, "NullsEqual: true")?;
                 }
 
