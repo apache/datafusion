@@ -401,7 +401,7 @@ impl HashJoinExecBuilder {
         // Validate null_aware flag
         if exec.null_aware {
             let join_type = exec.join_type();
-            if !matches!(exec.join_type(), JoinType::LeftAnti) {
+            if !matches!(join_type, JoinType::LeftAnti) {
                 return plan_err!(
                     "null_aware can only be true for LeftAnti joins, got {join_type}"
                 );
@@ -1111,7 +1111,7 @@ impl DisplayAs for HashJoinExec {
                     "".to_string()
                 };
                 let display_null_equality =
-                    if matches!(self.null_equality(), NullEquality::NullEqualsNull) {
+                    if self.null_equality() == NullEquality::NullEqualsNull {
                         ", NullsEqual: true"
                     } else {
                         ""
@@ -1153,7 +1153,7 @@ impl DisplayAs for HashJoinExec {
 
                 writeln!(f, "on={on}")?;
 
-                if matches!(self.null_equality(), NullEquality::NullEqualsNull) {
+                if self.null_equality() == NullEquality::NullEqualsNull {
                     writeln!(f, "NullsEqual: true")?;
                 }
 
@@ -1588,7 +1588,7 @@ impl ExecutionPlan for HashJoinExec {
         };
 
         // Add dynamic filters in Post phase if enabled
-        if matches!(phase, FilterPushdownPhase::Post)
+        if phase == FilterPushdownPhase::Post
             && self.allow_join_dynamic_filter_pushdown(config)
         {
             // Add actual dynamic filter to right side (probe side)

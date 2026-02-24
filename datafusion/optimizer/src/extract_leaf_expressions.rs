@@ -114,10 +114,6 @@ impl OptimizerRule for ExtractLeafExpressions {
         "extract_leaf_expressions"
     }
 
-    fn apply_order(&self) -> Option<ApplyOrder> {
-        Some(ApplyOrder::TopDown)
-    }
-
     fn rewrite(
         &self,
         plan: LogicalPlan,
@@ -127,8 +123,43 @@ impl OptimizerRule for ExtractLeafExpressions {
             return Ok(Transformed::no(plan));
         }
         let alias_generator = config.alias_generator();
-        extract_from_plan(plan, alias_generator)
+
+        // Advance the alias generator past any user-provided __datafusion_extracted_N
+        // aliases to prevent collisions when generating new extraction aliases.
+        advance_generator_past_existing(&plan, alias_generator)?;
+
+        plan.transform_down_with_subqueries(|plan| {
+            extract_from_plan(plan, alias_generator)
+        })
     }
+}
+
+/// Scans the current plan node's expressions for pre-existing
+/// `__datafusion_extracted_N` aliases and advances the generator
+/// counter past them to avoid collisions with user-provided aliases.
+fn advance_generator_past_existing(
+    plan: &LogicalPlan,
+    alias_generator: &AliasGenerator,
+) -> Result<()> {
+    plan.apply(|plan| {
+        plan.expressions().iter().try_for_each(|expr| {
+            expr.apply(|e| {
+                if let Expr::Alias(alias) = e
+                    && let Some(id) = alias
+                        .name
+                        .strip_prefix(EXTRACTED_EXPR_PREFIX)
+                        .and_then(|s| s.strip_prefix('_'))
+                        .and_then(|s| s.parse().ok())
+                {
+                    alias_generator.update_min_id(id);
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })?;
+            Ok::<(), datafusion_common::error::DataFusionError>(())
+        })?;
+        Ok(TreeNodeRecursion::Continue)
+    })
+    .map(|_| ())
 }
 
 /// Extracts `MoveTowardsLeafNodes` sub-expressions from a plan node.

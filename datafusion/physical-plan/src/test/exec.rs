@@ -17,13 +17,6 @@
 
 //! Simple iterator over batches for use in testing
 
-use std::{
-    any::Any,
-    pin::Pin,
-    sync::{Arc, Weak},
-    task::{Context, Poll},
-};
-
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
     RecordBatchStream, SendableRecordBatchStream, Statistics, common,
@@ -32,6 +25,13 @@ use crate::{
 use crate::{
     execution_plan::EmissionType,
     stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter},
+};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::{
+    any::Any,
+    pin::Pin,
+    sync::{Arc, Weak},
+    task::{Context, Poll},
 };
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -294,29 +294,91 @@ pub struct BarrierExec {
     schema: SchemaRef,
 
     /// all streams wait on this barrier to produce
-    barrier: Arc<Barrier>,
+    start_data_barrier: Option<Arc<Barrier>>,
+
+    /// the stream wait for this to return Poll::Ready(None)
+    finish_barrier: Option<Arc<(Barrier, AtomicUsize)>>,
+
     cache: PlanProperties,
+
+    log: bool,
 }
 
 impl BarrierExec {
     /// Create a new exec with some number of partitions.
     pub fn new(data: Vec<Vec<RecordBatch>>, schema: SchemaRef) -> Self {
         // wait for all streams and the input
-        let barrier = Arc::new(Barrier::new(data.len() + 1));
+        let barrier = Some(Arc::new(Barrier::new(data.len() + 1)));
         let cache = Self::compute_properties(Arc::clone(&schema), &data);
         Self {
             data,
             schema,
-            barrier,
+            start_data_barrier: barrier,
             cache,
+            finish_barrier: None,
+            log: true,
         }
+    }
+
+    pub fn with_log(mut self, log: bool) -> Self {
+        self.log = log;
+        self
+    }
+
+    pub fn without_start_barrier(mut self) -> Self {
+        self.start_data_barrier = None;
+        self
+    }
+
+    pub fn with_finish_barrier(mut self) -> Self {
+        let barrier = Arc::new((
+            // wait for all streams and the input
+            Barrier::new(self.data.len() + 1),
+            AtomicUsize::new(0),
+        ));
+
+        self.finish_barrier = Some(barrier);
+        self
     }
 
     /// wait until all the input streams and this function is ready
     pub async fn wait(&self) {
-        println!("BarrierExec::wait waiting on barrier");
-        self.barrier.wait().await;
-        println!("BarrierExec::wait done waiting");
+        let barrier = &self
+            .start_data_barrier
+            .as_ref()
+            .expect("Must only be called when having a start barrier");
+        if self.log {
+            println!("BarrierExec::wait waiting on barrier");
+        }
+        barrier.wait().await;
+        if self.log {
+            println!("BarrierExec::wait done waiting");
+        }
+    }
+
+    pub async fn wait_finish(&self) {
+        let (barrier, _) = &self
+            .finish_barrier
+            .as_deref()
+            .expect("Must only be called when having a finish barrier");
+
+        if self.log {
+            println!("BarrierExec::wait_finish waiting on barrier");
+        }
+        barrier.wait().await;
+        if self.log {
+            println!("BarrierExec::wait_finish done waiting");
+        }
+    }
+
+    /// Return true if the finish barrier has been reached in all partitions
+    pub fn is_finish_barrier_reached(&self) -> bool {
+        let (_, reached_finish) = self
+            .finish_barrier
+            .as_deref()
+            .expect("Must only be called when having finish barrier");
+
+        reached_finish.load(Ordering::Relaxed) == self.data.len()
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
@@ -387,16 +449,31 @@ impl ExecutionPlan for BarrierExec {
 
         // task simply sends data in order after barrier is reached
         let data = self.data[partition].clone();
-        let b = Arc::clone(&self.barrier);
+        let start_barrier = self.start_data_barrier.as_ref().map(Arc::clone);
+        let finish_barrier = self.finish_barrier.as_ref().map(Arc::clone);
+        let log = self.log;
         let tx = builder.tx();
         builder.spawn(async move {
-            println!("Partition {partition} waiting on barrier");
-            b.wait().await;
+            if let Some(barrier) = start_barrier {
+                if log {
+                    println!("Partition {partition} waiting on barrier");
+                }
+                barrier.wait().await;
+            }
             for batch in data {
-                println!("Partition {partition} sending batch");
+                if log {
+                    println!("Partition {partition} sending batch");
+                }
                 if let Err(e) = tx.send(Ok(batch)).await {
                     println!("ERROR batch via barrier stream stream: {e}");
                 }
+            }
+            if let Some((barrier, reached_finish)) = finish_barrier.as_deref() {
+                if log {
+                    println!("Partition {partition} waiting on finish barrier");
+                }
+                reached_finish.fetch_add(1, Ordering::Relaxed);
+                barrier.wait().await;
             }
 
             Ok(())

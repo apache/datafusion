@@ -585,7 +585,7 @@ impl ExecutionPlan for FilterExec {
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
-        if !matches!(phase, FilterPushdownPhase::Pre) {
+        if phase != FilterPushdownPhase::Pre {
             let child =
                 ChildFilterDescription::from_child(&parent_filters, self.input())?;
             return Ok(FilterDescription::new().with_child(child));
@@ -608,7 +608,7 @@ impl ExecutionPlan for FilterExec {
         child_pushdown_result: ChildPushdownResult,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
-        if !matches!(phase, FilterPushdownPhase::Pre) {
+        if phase != FilterPushdownPhase::Pre {
             return Ok(FilterPushdownPropagation::if_all(child_pushdown_result));
         }
         // We absorb any parent filters that were not handled by our children
