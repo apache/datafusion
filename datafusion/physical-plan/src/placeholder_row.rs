@@ -169,10 +169,6 @@ impl ExecutionPlan for PlaceholderRowExec {
         Ok(Box::pin(cooperative(ms)))
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
-    }
-
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         let batches = self
             .data()

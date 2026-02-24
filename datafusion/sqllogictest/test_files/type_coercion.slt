@@ -254,3 +254,30 @@ DROP TABLE orders;
 ########################################
 ## Test type coercion with UNIONs end ##
 ########################################
+
+# https://github.com/apache/datafusion/issues/15661
+# LIKE is a string pattern matching operator and is not supported for nested types.
+
+statement ok
+CREATE TABLE t0(v0 BIGINT, v1 STRING, v2 BOOLEAN);
+
+statement ok
+INSERT INTO t0(v0, v2) VALUES (123, true);
+
+query error There isn't a common type to coerce .* in .* expression
+SELECT true FROM t0 WHERE ((REGEXP_MATCH(t0.v1, t0.v1)) NOT LIKE (REGEXP_MATCH(t0.v1, t0.v1, 'jH')));
+
+query error There isn't a common type to coerce .* in .* expression
+SELECT true FROM t0 WHERE (REGEXP_MATCH(t0.v1, t0.v1)) NOT LIKE [];
+
+query error There isn't a common type to coerce .* in .* expression
+SELECT true FROM t0 WHERE (REGEXP_MATCH(t0.v1, t0.v1)) LIKE [];
+
+query error There isn't a common type to coerce .* in .* expression
+SELECT true FROM t0 WHERE (REGEXP_MATCH(t0.v1, t0.v1)) ILIKE [];
+
+query error There isn't a common type to coerce .* in .* expression
+SELECT true FROM t0 WHERE (REGEXP_MATCH(t0.v1, t0.v1)) NOT ILIKE [];
+
+statement ok
+DROP TABLE t0;

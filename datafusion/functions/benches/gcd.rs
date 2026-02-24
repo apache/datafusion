@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-extern crate criterion;
-
 use arrow::datatypes::Field;
 use arrow::{
     array::{ArrayRef, Int64Array},

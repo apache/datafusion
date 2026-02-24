@@ -158,16 +158,6 @@ pub trait DataSource: Send + Sync + Debug {
     /// across all partitions if `partition` is `None`.
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics>;
 
-    /// Returns aggregate statistics across all partitions.
-    ///
-    /// # Deprecated
-    /// Use [`Self::partition_statistics`] instead, which provides more fine-grained
-    /// control over statistics retrieval (per-partition or aggregate).
-    #[deprecated(since = "51.0.0", note = "Use partition_statistics instead")]
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
-    }
-
     /// Return a copy of this DataSource with a new fetch limit
     fn with_fetch(&self, _limit: Option<usize>) -> Option<Arc<dyn DataSource>>;
     fn fetch(&self) -> Option<usize>;
@@ -178,7 +168,13 @@ pub trait DataSource: Send + Sync + Debug {
         &self,
         _projection: &ProjectionExprs,
     ) -> Result<Option<Arc<dyn DataSource>>>;
+
     /// Try to push down filters into this DataSource.
+    ///
+    /// These filters are in terms of the output schema of this DataSource (e.g.
+    /// [`Self::eq_properties`] and output of any projections pushed into the
+    /// source), not the original table schema.
+    ///
     /// See [`ExecutionPlan::handle_child_pushdown_result`] for more details.
     ///
     /// [`ExecutionPlan::handle_child_pushdown_result`]: datafusion_physical_plan::ExecutionPlan::handle_child_pushdown_result

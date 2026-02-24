@@ -1142,6 +1142,12 @@ config_namespace! {
         ///
         /// Default: true
         pub enable_sort_pushdown: bool, default = true
+
+        /// When set to true, the optimizer will extract leaf expressions
+        /// (such as `get_field`) from filter/sort/join nodes into projections
+        /// closer to the leaf table scans, and push those projections down
+        /// towards the leaf nodes.
+        pub enable_leaf_expression_pushdown: bool, default = true
     }
 }
 
@@ -1250,7 +1256,7 @@ impl<'a> TryInto<arrow::util::display::FormatOptions<'a>> for &'a FormatOptions 
 }
 
 /// A key value pair, with a corresponding description
-#[derive(Debug, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct ConfigEntry {
     /// A unique string to identify this config value
     pub key: String,
@@ -1346,6 +1352,10 @@ impl ConfigField for ConfigOptions {
     }
 }
 
+/// This namespace is reserved for interacting with Foreign Function Interface
+/// (FFI) based configuration extensions.
+pub const DATAFUSION_FFI_CONFIG_NAMESPACE: &str = "datafusion_ffi";
+
 impl ConfigOptions {
     /// Creates a new [`ConfigOptions`] with default values
     pub fn new() -> Self {
@@ -1360,12 +1370,12 @@ impl ConfigOptions {
 
     /// Set a configuration option
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
-        let Some((prefix, key)) = key.split_once('.') else {
+        let Some((mut prefix, mut inner_key)) = key.split_once('.') else {
             return _config_err!("could not find config namespace for key \"{key}\"");
         };
 
         if prefix == "datafusion" {
-            if key == "optimizer.enable_dynamic_filter_pushdown" {
+            if inner_key == "optimizer.enable_dynamic_filter_pushdown" {
                 let bool_value = value.parse::<bool>().map_err(|e| {
                     DataFusionError::Configuration(format!(
                         "Failed to parse '{value}' as bool: {e}",
@@ -1380,13 +1390,23 @@ impl ConfigOptions {
                 }
                 return Ok(());
             }
-            return ConfigField::set(self, key, value);
+            return ConfigField::set(self, inner_key, value);
+        }
+
+        if !self.extensions.0.contains_key(prefix)
+            && self
+                .extensions
+                .0
+                .contains_key(DATAFUSION_FFI_CONFIG_NAMESPACE)
+        {
+            inner_key = key;
+            prefix = DATAFUSION_FFI_CONFIG_NAMESPACE;
         }
 
         let Some(e) = self.extensions.0.get_mut(prefix) else {
             return _config_err!("Could not find config namespace \"{prefix}\"");
         };
-        e.0.set(key, value)
+        e.0.set(inner_key, value)
     }
 
     /// Create new [`ConfigOptions`], taking values from environment variables
@@ -2151,7 +2171,7 @@ impl TableOptions {
     ///
     /// A result indicating success or failure in setting the configuration option.
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
-        let Some((prefix, _)) = key.split_once('.') else {
+        let Some((mut prefix, _)) = key.split_once('.') else {
             return _config_err!("could not find config namespace for key \"{key}\"");
         };
 
@@ -2161,6 +2181,15 @@ impl TableOptions {
 
         if prefix == "execution" {
             return Ok(());
+        }
+
+        if !self.extensions.0.contains_key(prefix)
+            && self
+                .extensions
+                .0
+                .contains_key(DATAFUSION_FFI_CONFIG_NAMESPACE)
+        {
+            prefix = DATAFUSION_FFI_CONFIG_NAMESPACE;
         }
 
         let Some(e) = self.extensions.0.get_mut(prefix) else {
@@ -3065,6 +3094,22 @@ config_namespace! {
         /// If not specified, the default level for the compression algorithm is used.
         pub compression_level: Option<u32>, default = None
         pub schema_infer_max_rec: Option<usize>, default = None
+       /// The JSON format to use when reading files.
+       ///
+       /// When `true` (default), expects newline-delimited JSON (NDJSON):
+       /// ```text
+       /// {"key1": 1, "key2": "val"}
+       /// {"key1": 2, "key2": "vals"}
+       /// ```
+       ///
+       /// When `false`, expects JSON array format:
+       /// ```text
+       /// [
+       ///   {"key1": 1, "key2": "val"},
+       ///   {"key1": 2, "key2": "vals"}
+       /// ]
+       /// ```
+       pub newline_delimited: bool, default = true
     }
 }
 

@@ -84,7 +84,7 @@ use datafusion::{
     physical_expr::EquivalenceProperties,
     physical_plan::{
         DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
-        PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
+        PlanProperties, RecordBatchStream, SendableRecordBatchStream,
     },
     physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner},
     prelude::{SessionConfig, SessionContext},
@@ -741,12 +741,6 @@ impl ExecutionPlan for TopKExec {
             done: false,
             state: BTreeMap::new(),
         }))
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        // to improve the optimizability of this plan
-        // better statistics inference could be provided
-        Ok(Statistics::new_unknown(&self.schema()))
     }
 }
 

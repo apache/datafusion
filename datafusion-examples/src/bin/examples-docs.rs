@@ -34,7 +34,9 @@
 //! cargo run --bin examples-docs -- dataframe
 //! ```
 
-use datafusion_examples::utils::examples_docs::{RepoLayout, generate_examples_readme};
+use datafusion_examples::utils::example_metadata::{
+    RepoLayout, generate_examples_readme,
+};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let layout = RepoLayout::detect()?;
