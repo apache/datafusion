@@ -382,13 +382,9 @@ async fn prune_disabled() {
     .await;
     println!("{}", output.description());
 
-    // Row group stats pruning is disabled, so 0 row groups are pruned by statistics.
-    // However, page index pruning is still active (controlled by a separate
-    // enable_page_index setting, which defaults to true). Page index correctly prunes
-    // 1 row group whose pages all lie outside the filter range, leaving 3 for bloom
-    // filter evaluation. The query result is still correct.
+    // This should not prune any
     assert_eq!(output.predicate_evaluation_errors(), Some(0));
-    assert_eq!(output.row_groups_matched(), Some(3));
+    assert_eq!(output.row_groups_matched(), Some(4));
     assert_eq!(output.row_groups_pruned(), Some(0));
     assert_eq!(
         output.result_rows,
