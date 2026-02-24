@@ -186,7 +186,7 @@ macro_rules! get_row_value {
 ///
 /// Floating numbers are rounded to have a consistent representation with the Postgres runner.
 pub fn cell_to_string(col: &ArrayRef, row: usize, is_spark_path: bool) -> Result<String> {
-    if !col.is_valid(row) {
+    if col.is_null(row) {
         // represent any null value with the string "NULL"
         Ok(NULL_STR.to_string())
     } else {

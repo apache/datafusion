@@ -22,7 +22,6 @@ use arrow::array::{
     Array, ArrayRef, GenericListArray, OffsetSizeTrait, new_empty_array, new_null_array,
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer};
-use arrow::compute;
 use arrow::datatypes::DataType::{LargeList, List, Null};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use arrow::row::{RowConverter, SortField};
@@ -35,7 +34,6 @@ use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
-use itertools::Itertools;
 use std::any::Any;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
@@ -264,7 +262,7 @@ impl ScalarUDFImpl for ArrayIntersect {
     )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub(super) struct ArrayDistinct {
+pub struct ArrayDistinct {
     signature: Signature,
     aliases: Vec<String>,
 }
@@ -275,6 +273,12 @@ impl ArrayDistinct {
             signature: Signature::array(Volatility::Immutable),
             aliases: vec!["list_distinct".to_string()],
         }
+    }
+}
+
+impl Default for ArrayDistinct {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -527,42 +531,52 @@ fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
     if array.is_empty() {
         return Ok(Arc::new(array.clone()) as ArrayRef);
     }
+    let value_offsets = array.value_offsets();
     let dt = array.value_type();
-    let mut offsets = Vec::with_capacity(array.len());
+    let mut offsets = Vec::with_capacity(array.len() + 1);
     offsets.push(OffsetSize::usize_as(0));
-    let mut new_arrays = Vec::with_capacity(array.len());
-    let converter = RowConverter::new(vec![SortField::new(dt)])?;
-    // distinct for each list in ListArray
-    for arr in array.iter() {
-        let last_offset: OffsetSize = offsets.last().copied().unwrap();
-        let Some(arr) = arr else {
-            // Add same offset for null
+
+    // Convert all values to row format in a single batch for performance
+    let converter = RowConverter::new(vec![SortField::new(dt.clone())])?;
+    let rows = converter.convert_columns(&[Arc::clone(array.values())])?;
+    let mut final_rows = Vec::with_capacity(rows.num_rows());
+    let mut seen = HashSet::new();
+    for i in 0..array.len() {
+        let last_offset = *offsets.last().unwrap();
+
+        // Null list entries produce no output; just carry forward the offset.
+        if array.is_null(i) {
             offsets.push(last_offset);
             continue;
-        };
-        let values = converter.convert_columns(&[arr])?;
-        // sort elements in list and remove duplicates
-        let rows = values.iter().sorted().dedup().collect::<Vec<_>>();
-        offsets.push(last_offset + OffsetSize::usize_as(rows.len()));
-        let arrays = converter.convert_rows(rows)?;
-        let array = match arrays.first() {
-            Some(array) => Arc::clone(array),
-            None => {
-                return internal_err!("array_distinct: failed to get array from rows");
+        }
+
+        let start = value_offsets[i].as_usize();
+        let end = value_offsets[i + 1].as_usize();
+        seen.clear();
+        seen.reserve(end - start);
+
+        // Walk the sub-array and keep only the first occurrence of each value.
+        for idx in start..end {
+            let row = rows.row(idx);
+            if seen.insert(row) {
+                final_rows.push(row);
             }
-        };
-        new_arrays.push(array);
+        }
+        offsets.push(last_offset + OffsetSize::usize_as(seen.len()));
     }
-    if new_arrays.is_empty() {
-        return Ok(Arc::new(array.clone()) as ArrayRef);
-    }
-    let offsets = OffsetBuffer::new(offsets.into());
-    let new_arrays_ref = new_arrays.iter().map(|v| v.as_ref()).collect::<Vec<_>>();
-    let values = compute::concat(&new_arrays_ref)?;
+
+    // Convert all collected distinct rows back
+    let final_values = if final_rows.is_empty() {
+        new_empty_array(&dt)
+    } else {
+        let arrays = converter.convert_rows(final_rows)?;
+        Arc::clone(&arrays[0])
+    };
+
     Ok(Arc::new(GenericListArray::<OffsetSize>::try_new(
         Arc::clone(field),
-        offsets,
-        values,
+        OffsetBuffer::new(offsets.into()),
+        final_values,
         // Keep the list nulls
         array.nulls().cloned(),
     )?))
