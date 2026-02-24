@@ -427,6 +427,63 @@
 *in this section pertains to features and changes that have already been merged
 *to the main branch and are awaiting release in this version. See <a class="reference external" href="https://github.com/apache/datafusion/issues/19692">#19692</a> for
 *more details.</p>
+<section id="executionplan-properties-now-returns-arc-planproperties">
+<h3><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::properties</span></code> now returns <code class="docutils literal notranslate"><span class="pre">&amp;Arc&lt;PlanProperties&gt;</span></code><a class="headerlink" href="#executionplan-properties-now-returns-arc-planproperties" title="Link to this heading">#</a></h3>
+<p>Now <code class="docutils literal notranslate"><span class="pre">ExecutionPlan::properties()</span></code> returns <code class="docutils literal notranslate"><span class="pre">&amp;Arc&lt;PlanProperties&gt;</span></code> instead of a
+reference. This make it possible to cheaply clone properties and reuse them across multiple
+<code class="docutils literal notranslate"><span class="pre">ExecutionPlans</span></code>. It also makes it possible to optimize [<code class="docutils literal notranslate"><span class="pre">ExecutionPlan::with_new_children</span></code>]
+to reuse properties when the children plans have not changed, which can significantly reduce
+planning time for complex queries.</p>
+<p><a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html#tymethod.with_new_children"><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::with_new_children</span></code></a></p>
+<p>To migrate, in all <code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code> implementations, you will likely need to wrap
+stored <code class="docutils literal notranslate"><span class="pre">PlanProperties</span></code> in an <code class="docutils literal notranslate"><span class="pre">Arc</span></code>:</p>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span><span class="gd">-    cache: PlanProperties,</span>
+<span class="gi">+    cache: Arc&lt;PlanProperties&gt;,</span>
+
+...
+
+<span class="gd">-    fn properties(&amp;self) -&gt; &amp;PlanProperties {</span>
+<span class="gi">+    fn properties(&amp;self) -&gt; &amp;Arc&lt;PlanProperties&gt; {</span>
+<span class="w"> </span>        &amp;self.cache
+<span class="w"> </span>    }
+</pre></div>
+</div>
+<p>To improve performance of <code class="docutils literal notranslate"><span class="pre">with_new_children</span></code> for custom <code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code>
+implementations, you can use the new macro: <code class="docutils literal notranslate"><span class="pre">check_if_same_properties</span></code>. For it
+to work, you need to implement the function:
+<code class="docutils literal notranslate"><span class="pre">with_new_children_and_same_properties</span></code> with semantics identical to
+<code class="docutils literal notranslate"><span class="pre">with_new_children</span></code>, but operating under the assumption that the properties of
+the children plans have not changed.</p>
+<p>An example of supporting this optimization for <code class="docutils literal notranslate"><span class="pre">ProjectionExec</span></code>:</p>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span><span class="w"> </span>    impl ProjectionExec {
+<span class="gi">+       fn with_new_children_and_same_properties(</span>
+<span class="gi">+           &amp;self,</span>
+<span class="gi">+           mut children: Vec&lt;Arc&lt;dyn ExecutionPlan&gt;&gt;,</span>
+<span class="gi">+       ) -&gt; Self {</span>
+<span class="gi">+           Self {</span>
+<span class="gi">+               input: children.swap_remove(0),</span>
+<span class="gi">+               metrics: ExecutionPlanMetricsSet::new(),</span>
+<span class="gi">+               ..Self::clone(self)</span>
+<span class="gi">+           }</span>
+<span class="gi">+       }</span>
+<span class="w"> </span>   }
+
+<span class="w"> </span>   impl ExecutionPlan for ProjectionExec {
+<span class="w"> </span>       fn with_new_children(
+<span class="w"> </span>           self: Arc&lt;Self&gt;,
+<span class="w"> </span>           mut children: Vec&lt;Arc&lt;dyn ExecutionPlan&gt;&gt;,
+<span class="w"> </span>       ) -&gt; Result&lt;Arc&lt;dyn ExecutionPlan&gt;&gt; {
+<span class="gi">+           check_if_same_properties!(self, children);</span>
+<span class="w"> </span>           ProjectionExec::try_new(
+<span class="w"> </span>               self.projector.projection().into_iter().cloned(),
+<span class="w"> </span>               children.swap_remove(0),
+<span class="w"> </span>           )
+<span class="w"> </span>           .map(|p| Arc::new(p) as _)
+<span class="w"> </span>       }
+<span class="w"> </span>   }
+</pre></div>
+</div>
+</section>
 <section id="plannercontext-outer-query-schema-api-now-uses-a-stack">
 <h3><code class="docutils literal notranslate"><span class="pre">PlannerContext</span></code> outer query schema API now uses a stack<a class="headerlink" href="#plannercontext-outer-query-schema-api-now-uses-a-stack" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">PlannerContext</span></code> no longer stores a single <code class="docutils literal notranslate"><span class="pre">outer_query_schema</span></code>. It now tracks a
@@ -780,6 +837,7 @@ This behavior is consistent with systems like PostgreSQL.</p>
   <nav class="bd-toc-nav page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-53-0-0">DataFusion 53.0.0</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#executionplan-properties-now-returns-arc-planproperties"><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::properties</span></code> now returns <code class="docutils literal notranslate"><span class="pre">&amp;Arc&lt;PlanProperties&gt;</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#plannercontext-outer-query-schema-api-now-uses-a-stack"><code class="docutils literal notranslate"><span class="pre">PlannerContext</span></code> outer query schema API now uses a stack</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#filesinkconfig-adds-file-output-mode"><code class="docutils literal notranslate"><span class="pre">FileSinkConfig</span></code> adds <code class="docutils literal notranslate"><span class="pre">file_output_mode</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#simplifyinfo-trait-removed-simplifycontext-now-uses-builder-style-api"><code class="docutils literal notranslate"><span class="pre">SimplifyInfo</span></code> trait removed, <code class="docutils literal notranslate"><span class="pre">SimplifyContext</span></code> now uses builder-style API</a></li>
