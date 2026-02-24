@@ -23,7 +23,7 @@ use arrow::array::new_null_array;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, internal_datafusion_err};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 
 use crate::PhysicalExpr;
@@ -53,7 +53,7 @@ pub fn simplify_const_expr(
     }
 
     // Evaluate the expression
-    match expr.evaluate(&batch) {
+    match expr.evaluate(batch) {
         Ok(ColumnarValue::Scalar(scalar)) => {
             Ok(Transformed::yes(Arc::new(Literal::new(scalar))))
         }
@@ -146,11 +146,23 @@ pub(crate) fn simplify_const_expr_immediate(
 /// that only contain literals, the batch content is irrelevant.
 ///
 /// This is the same approach used in the logical expression `ConstEvaluator`.
-pub(crate) fn create_dummy_batch() -> Result<RecordBatch> {
-    // RecordBatch requires at least one column
-    let dummy_schema = Arc::new(Schema::new(vec![Field::new("_", DataType::Null, true)]));
-    let col = new_null_array(&DataType::Null, 1);
-    Ok(RecordBatch::try_new(dummy_schema, vec![col])?)
+pub(crate) fn create_dummy_batch() -> Result<&'static RecordBatch> {
+    static DUMMY_BATCH: std::sync::OnceLock<Result<RecordBatch>> =
+        std::sync::OnceLock::new();
+    DUMMY_BATCH
+        .get_or_init(|| {
+            // RecordBatch requires at least one column
+            let dummy_schema =
+                Arc::new(Schema::new(vec![Field::new("_", DataType::Null, true)]));
+            let col = new_null_array(&DataType::Null, 1);
+            Ok(RecordBatch::try_new(dummy_schema, vec![col])?)
+        })
+        .as_ref()
+        .map_err(|e| {
+            internal_datafusion_err!(
+                "Failed to create dummy batch for constant expression evaluation: {e}"
+            )
+        })
 }
 
 fn can_evaluate_as_constant(expr: &Arc<dyn PhysicalExpr>) -> bool {
