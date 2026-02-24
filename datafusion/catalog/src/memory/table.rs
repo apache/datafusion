@@ -547,7 +547,7 @@ fn evaluate_filters_to_mask(
 struct DmlResultExec {
     rows_affected: u64,
     schema: SchemaRef,
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
 }
 
 impl DmlResultExec {
@@ -568,7 +568,7 @@ impl DmlResultExec {
         Self {
             rows_affected,
             schema,
-            properties,
+            properties: Arc::new(properties),
         }
     }
 }
@@ -602,7 +602,7 @@ impl ExecutionPlan for DmlResultExec {
         Arc::clone(&self.schema)
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 

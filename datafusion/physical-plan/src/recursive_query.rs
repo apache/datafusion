@@ -76,7 +76,7 @@ pub struct RecursiveQueryExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl RecursiveQueryExec {
@@ -99,7 +99,7 @@ impl RecursiveQueryExec {
             is_distinct,
             work_table,
             metrics: ExecutionPlanMetricsSet::new(),
-            cache,
+            cache: Arc::new(cache),
         })
     }
 
@@ -145,7 +145,7 @@ impl ExecutionPlan for RecursiveQueryExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 

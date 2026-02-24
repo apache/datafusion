@@ -109,7 +109,7 @@ impl ExecutionPlan for CustomExec {
     }
 
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         unreachable!()
     }
 
@@ -240,7 +240,7 @@ The `scan` method of the `TableProvider` returns a `Result<Arc<dyn ExecutionPlan
 #     }
 #
 #
-#     fn properties(&self) -> &PlanProperties {
+#     fn properties(&self) -> &Arc<PlanProperties> {
 #         unreachable!()
 #     }
 #
@@ -440,7 +440,7 @@ This will allow you to use the custom table provider in DataFusion. For example,
 #     }
 #
 #
-#     fn properties(&self) -> &PlanProperties {
+#     fn properties(&self) -> &Arc<PlanProperties> {
 #         unreachable!()
 #     }
 #

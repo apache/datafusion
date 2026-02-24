@@ -282,7 +282,7 @@ mod tests {
             input: Arc<dyn ExecutionPlan>,
             scheduling_type: SchedulingType,
             evaluation_type: EvaluationType,
-            properties: PlanProperties,
+            properties: Arc<PlanProperties>,
         }
 
         impl DummyExec {
@@ -306,7 +306,7 @@ mod tests {
                     input,
                     scheduling_type,
                     evaluation_type,
-                    properties,
+                    properties: Arc::new(properties),
                 }
             }
         }
@@ -328,7 +328,7 @@ mod tests {
             fn as_any(&self) -> &dyn Any {
                 self
             }
-            fn properties(&self) -> &PlanProperties {
+            fn properties(&self) -> &Arc<PlanProperties> {
                 &self.properties
             }
             fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {

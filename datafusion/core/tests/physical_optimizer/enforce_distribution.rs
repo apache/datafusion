@@ -121,7 +121,7 @@ macro_rules! assert_plan {
 struct SortRequiredExec {
     input: Arc<dyn ExecutionPlan>,
     expr: LexOrdering,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl SortRequiredExec {
@@ -133,7 +133,7 @@ impl SortRequiredExec {
         Self {
             input,
             expr: requirement,
-            cache,
+            cache: Arc::new(cache),
         }
     }
 
@@ -175,7 +175,7 @@ impl ExecutionPlan for SortRequiredExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 

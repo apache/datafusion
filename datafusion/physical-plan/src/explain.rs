@@ -45,7 +45,7 @@ pub struct ExplainExec {
     stringified_plans: Vec<StringifiedPlan>,
     /// control which plans to print
     verbose: bool,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl ExplainExec {
@@ -60,7 +60,7 @@ impl ExplainExec {
             schema,
             stringified_plans,
             verbose,
-            cache,
+            cache: Arc::new(cache),
         }
     }
 
@@ -113,7 +113,7 @@ impl ExecutionPlan for ExplainExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 

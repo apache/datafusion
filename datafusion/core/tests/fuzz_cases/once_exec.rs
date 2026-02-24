@@ -33,7 +33,7 @@ use std::sync::{Arc, Mutex};
 pub struct OnceExec {
     /// the results to send back
     stream: Mutex<Option<SendableRecordBatchStream>>,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl Debug for OnceExec {
@@ -47,7 +47,7 @@ impl OnceExec {
         let cache = Self::compute_properties(stream.schema());
         Self {
             stream: Mutex::new(Some(stream)),
-            cache,
+            cache: Arc::new(cache),
         }
     }
 
@@ -84,7 +84,7 @@ impl ExecutionPlan for OnceExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 

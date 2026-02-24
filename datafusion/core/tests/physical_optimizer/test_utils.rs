@@ -456,7 +456,7 @@ impl ExecutionPlan for RequirementsTestExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         self.input.properties()
     }
 
@@ -840,7 +840,7 @@ pub fn sort_expr_named(name: &str, index: usize) -> PhysicalSortExpr {
 pub struct TestScan {
     schema: SchemaRef,
     output_ordering: Vec<LexOrdering>,
-    plan_properties: PlanProperties,
+    plan_properties: Arc<PlanProperties>,
     // Store the requested ordering for display
     requested_ordering: Option<LexOrdering>,
 }
@@ -874,7 +874,7 @@ impl TestScan {
         Self {
             schema,
             output_ordering,
-            plan_properties,
+            plan_properties: Arc::new(plan_properties),
             requested_ordering: None,
         }
     }
@@ -930,7 +930,7 @@ impl ExecutionPlan for TestScan {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.plan_properties
     }
 

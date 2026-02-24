@@ -980,7 +980,7 @@ impl RecordBatchStream for UnboundedStream {
 pub struct UnboundedExec {
     batch_produce: Option<usize>,
     batch: RecordBatch,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl UnboundedExec {
@@ -996,7 +996,7 @@ impl UnboundedExec {
         Self {
             batch_produce,
             batch,
-            cache,
+            cache: Arc::new(cache),
         }
     }
 
@@ -1053,7 +1053,7 @@ impl ExecutionPlan for UnboundedExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -1105,7 +1105,7 @@ pub enum SourceType {
 pub struct StatisticsExec {
     stats: Statistics,
     schema: Arc<Schema>,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl StatisticsExec {
@@ -1119,7 +1119,7 @@ impl StatisticsExec {
         Self {
             stats,
             schema: Arc::new(schema),
-            cache,
+            cache: Arc::new(cache),
         }
     }
 
@@ -1167,7 +1167,7 @@ impl ExecutionPlan for StatisticsExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 

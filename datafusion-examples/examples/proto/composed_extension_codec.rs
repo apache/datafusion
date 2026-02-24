@@ -107,7 +107,7 @@ impl ExecutionPlan for ParentExec {
         self
     }
 
-    fn properties(&self) -> &datafusion::physical_plan::PlanProperties {
+    fn properties(&self) -> &Arc<datafusion::physical_plan::PlanProperties> {
         unreachable!()
     }
 
@@ -192,7 +192,7 @@ impl ExecutionPlan for ChildExec {
         self
     }
 
-    fn properties(&self) -> &datafusion::physical_plan::PlanProperties {
+    fn properties(&self) -> &Arc<datafusion::physical_plan::PlanProperties> {
         unreachable!()
     }
 

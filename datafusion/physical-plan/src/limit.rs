@@ -28,7 +28,10 @@ use super::{
     SendableRecordBatchStream, Statistics,
 };
 use crate::execution_plan::{Boundedness, CardinalityEffect};
-use crate::{DisplayFormatType, Distribution, ExecutionPlan, Partitioning};
+use crate::{
+    DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
+    check_if_same_properties,
+};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -52,10 +55,10 @@ pub struct GlobalLimitExec {
     fetch: Option<usize>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    cache: PlanProperties,
     /// Does the limit have to preserve the order of its input, and if so what is it?
     /// Some optimizations may reorder the input if no particular sort is required
     required_ordering: Option<LexOrdering>,
+    cache: Arc<PlanProperties>,
 }
 
 impl GlobalLimitExec {
@@ -67,8 +70,8 @@ impl GlobalLimitExec {
             skip,
             fetch,
             metrics: ExecutionPlanMetricsSet::new(),
-            cache,
             required_ordering: None,
+            cache: Arc::new(cache),
         }
     }
 
@@ -106,6 +109,17 @@ impl GlobalLimitExec {
     /// Set the required ordering for limit
     pub fn set_required_ordering(&mut self, required_ordering: Option<LexOrdering>) {
         self.required_ordering = required_ordering;
+    }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(self)
+        }
     }
 }
 
@@ -145,7 +159,7 @@ impl ExecutionPlan for GlobalLimitExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -180,10 +194,11 @@ impl ExecutionPlan for GlobalLimitExec {
 
     fn with_new_children(
         self: Arc<Self>,
-        children: Vec<Arc<dyn ExecutionPlan>>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        check_if_same_properties!(self, children);
         Ok(Arc::new(GlobalLimitExec::new(
-            Arc::clone(&children[0]),
+            children.swap_remove(0),
             self.skip,
             self.fetch,
         )))
@@ -239,7 +254,7 @@ impl ExecutionPlan for GlobalLimitExec {
 }
 
 /// LocalLimitExec applies a limit to a single partition
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LocalLimitExec {
     /// Input execution plan
     input: Arc<dyn ExecutionPlan>,
@@ -247,10 +262,10 @@ pub struct LocalLimitExec {
     fetch: usize,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    cache: PlanProperties,
     /// If the child plan is a sort node, after the sort node is removed during
     /// physical optimization, we should add the required ordering to the limit node
     required_ordering: Option<LexOrdering>,
+    cache: Arc<PlanProperties>,
 }
 
 impl LocalLimitExec {
@@ -261,8 +276,8 @@ impl LocalLimitExec {
             input,
             fetch,
             metrics: ExecutionPlanMetricsSet::new(),
-            cache,
             required_ordering: None,
+            cache: Arc::new(cache),
         }
     }
 
@@ -296,6 +311,17 @@ impl LocalLimitExec {
     pub fn set_required_ordering(&mut self, required_ordering: Option<LexOrdering>) {
         self.required_ordering = required_ordering;
     }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(self)
+        }
+    }
 }
 
 impl DisplayAs for LocalLimitExec {
@@ -325,7 +351,7 @@ impl ExecutionPlan for LocalLimitExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -358,6 +384,7 @@ impl ExecutionPlan for LocalLimitExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        check_if_same_properties!(self, children);
         match children.len() {
             1 => Ok(Arc::new(LocalLimitExec::new(
                 Arc::clone(&children[0]),

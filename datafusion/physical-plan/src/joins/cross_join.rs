@@ -34,7 +34,7 @@ use crate::projection::{
 use crate::{
     ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
     ExecutionPlanProperties, PlanProperties, RecordBatchStream,
-    SendableRecordBatchStream, Statistics, handle_state,
+    SendableRecordBatchStream, Statistics, check_if_same_properties, handle_state,
 };
 
 use arrow::array::{RecordBatch, RecordBatchOptions};
@@ -96,7 +96,7 @@ pub struct CrossJoinExec {
     /// Execution plan metrics
     metrics: ExecutionPlanMetricsSet,
     /// Properties such as schema, equivalence properties, ordering, partitioning, etc.
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl CrossJoinExec {
@@ -127,7 +127,7 @@ impl CrossJoinExec {
             schema,
             left_fut: Default::default(),
             metrics: ExecutionPlanMetricsSet::default(),
-            cache,
+            cache: Arc::new(cache),
         }
     }
 
@@ -194,6 +194,23 @@ impl CrossJoinExec {
             &self.right.schema(),
         )
     }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        let left = children.swap_remove(0);
+        let right = children.swap_remove(0);
+
+        Self {
+            left,
+            right,
+            metrics: ExecutionPlanMetricsSet::new(),
+            left_fut: Default::default(),
+            cache: Arc::clone(&self.cache),
+            schema: Arc::clone(&self.schema),
+        }
+    }
 }
 
 /// Asynchronously collect the result of the left child
@@ -258,7 +275,7 @@ impl ExecutionPlan for CrossJoinExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -282,6 +299,7 @@ impl ExecutionPlan for CrossJoinExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        check_if_same_properties!(self, children);
         Ok(Arc::new(CrossJoinExec::new(
             Arc::clone(&children[0]),
             Arc::clone(&children[1]),
@@ -295,7 +313,7 @@ impl ExecutionPlan for CrossJoinExec {
             schema: Arc::clone(&self.schema),
             left_fut: Default::default(), // reset the build side!
             metrics: ExecutionPlanMetricsSet::default(),
-            cache: self.cache.clone(),
+            cache: Arc::clone(&self.cache),
         };
         Ok(Arc::new(new_exec))
     }

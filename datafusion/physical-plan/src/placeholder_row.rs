@@ -45,7 +45,7 @@ pub struct PlaceholderRowExec {
     schema: SchemaRef,
     /// Number of partitions
     partitions: usize,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl PlaceholderRowExec {
@@ -56,7 +56,7 @@ impl PlaceholderRowExec {
         PlaceholderRowExec {
             schema,
             partitions,
-            cache,
+            cache: Arc::new(cache),
         }
     }
 
@@ -65,7 +65,7 @@ impl PlaceholderRowExec {
         self.partitions = partitions;
         // Update output partitioning when updating partitions:
         let output_partitioning = Self::output_partitioning_helper(self.partitions);
-        self.cache = self.cache.with_partitioning(output_partitioning);
+        Arc::make_mut(&mut self.cache).partitioning = output_partitioning;
         self
     }
 
@@ -134,7 +134,7 @@ impl ExecutionPlan for PlaceholderRowExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 

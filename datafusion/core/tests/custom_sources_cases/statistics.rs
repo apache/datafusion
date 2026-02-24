@@ -46,7 +46,7 @@ use async_trait::async_trait;
 struct StatisticsValidation {
     stats: Statistics,
     schema: Arc<Schema>,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl StatisticsValidation {
@@ -60,7 +60,7 @@ impl StatisticsValidation {
         Self {
             stats,
             schema,
-            cache,
+            cache: Arc::new(cache),
         }
     }
 
@@ -159,7 +159,7 @@ impl ExecutionPlan for StatisticsValidation {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
