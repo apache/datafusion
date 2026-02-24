@@ -24,9 +24,7 @@ use datafusion_expr::{
 };
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
-use std::any::Any;
-use std::ffi::c_void;
-use std::sync::Arc;
+use std::{any::Any, ffi::c_void, sync::Arc};
 use tokio::runtime::Handle;
 
 use crate::execution::FFI_TaskContextProvider;
