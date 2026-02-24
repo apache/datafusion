@@ -140,7 +140,8 @@ SELECT parse_url('notaurl', 'host');
 ----
 NULL
 
-# Schemeless URLs: PATH and FILE return the input string (Spark java.net.URI behavior)
+# Schemeless URLs: Spark java.net.URI behavior
+# Simple schemeless string
 query T
 SELECT parse_url('notaurl', 'PATH');
 ----
@@ -160,6 +161,74 @@ query T
 SELECT parse_url('notaurl', 'QUERY');
 ----
 NULL
+
+# Schemeless URL with query string
+query T
+SELECT parse_url('notaurl?key=value', 'PATH');
+----
+notaurl
+
+query T
+SELECT parse_url('notaurl?key=value', 'FILE');
+----
+notaurl?key=value
+
+query T
+SELECT parse_url('notaurl?key=value', 'QUERY');
+----
+key=value
+
+query T
+SELECT parse_url('notaurl?key=value', 'QUERY', 'key');
+----
+value
+
+query T
+SELECT parse_url('notaurl?key=value', 'HOST');
+----
+NULL
+
+# Schemeless URL with fragment
+query T
+SELECT parse_url('notaurl#reference', 'REF');
+----
+reference
+
+query T
+SELECT parse_url('notaurl#reference', 'PATH');
+----
+notaurl
+
+query T
+SELECT parse_url('notaurl#reference', 'FILE');
+----
+notaurl
+
+# Schemeless URL with both query and fragment
+query T
+SELECT parse_url('notaurl?a=1&b=2#frag', 'PATH');
+----
+notaurl
+
+query T
+SELECT parse_url('notaurl?a=1&b=2#frag', 'QUERY');
+----
+a=1&b=2
+
+query T
+SELECT parse_url('notaurl?a=1&b=2#frag', 'QUERY', 'b');
+----
+2
+
+query T
+SELECT parse_url('notaurl?a=1&b=2#frag', 'REF');
+----
+frag
+
+query T
+SELECT parse_url('notaurl?a=1&b=2#frag', 'FILE');
+----
+notaurl?a=1&b=2
 
 query T
 SELECT parse_url('https://example.com', 'PATH');

@@ -84,8 +84,33 @@ impl ParseUrl {
         let url: std::result::Result<Url, ParseError> = Url::parse(value);
         if let Err(ParseError::RelativeUrlWithoutBase) = url {
             return if !value.contains("://") {
+                // Schemeless URLs are treated as relative URIs (like java.net.URI).
+                // Manually parse path, query, and fragment components.
+                let (without_fragment, fragment) = match value.split_once('#') {
+                    Some((before, frag)) => (before, Some(frag)),
+                    None => (value, None),
+                };
+                let (path, query) = match without_fragment.split_once('?') {
+                    Some((p, q)) => (p, Some(q)),
+                    None => (without_fragment, None),
+                };
                 Ok(match part {
-                    "PATH" | "FILE" => Some(value.to_string()),
+                    "PATH" => Some(path.to_string()),
+                    "QUERY" => match key {
+                        None => query.map(String::from),
+                        Some(key) => query.and_then(|q| {
+                            q.split('&')
+                                .filter_map(|pair| pair.split_once('='))
+                                .find(|(k, _)| *k == key)
+                                .map(|(_, v)| v.to_string())
+                        }),
+                    },
+                    "REF" => fragment.map(String::from),
+                    "FILE" => {
+                        // FILE = path + query (without fragment)
+                        Some(without_fragment.to_string())
+                    }
+                    // HOST, PROTOCOL, AUTHORITY, USERINFO → NULL
                     _ => None,
                 })
             } else {
@@ -361,8 +386,8 @@ mod tests {
 
     #[test]
     fn test_parse_schemeless_url() -> Result<()> {
-        // Spark's java.net.URI treats schemeless strings as relative URIs
-        // where the entire input becomes the path component
+        // Spark's java.net.URI treats schemeless strings as relative URIs.
+        // Simple schemeless string: no query, no fragment.
         assert_eq!(
             ParseUrl::parse("notaurl", "PATH", None)?,
             Some("notaurl".to_string())
@@ -377,6 +402,69 @@ mod tests {
         assert_eq!(ParseUrl::parse("notaurl", "REF", None)?, None);
         assert_eq!(ParseUrl::parse("notaurl", "AUTHORITY", None)?, None);
         assert_eq!(ParseUrl::parse("notaurl", "USERINFO", None)?, None);
+
+        // Schemeless URL with query string
+        assert_eq!(
+            ParseUrl::parse("notaurl?key=value", "PATH", None)?,
+            Some("notaurl".to_string())
+        );
+        assert_eq!(
+            ParseUrl::parse("notaurl?key=value", "FILE", None)?,
+            Some("notaurl?key=value".to_string())
+        );
+        assert_eq!(
+            ParseUrl::parse("notaurl?key=value", "QUERY", None)?,
+            Some("key=value".to_string())
+        );
+        assert_eq!(
+            ParseUrl::parse("notaurl?key=value", "QUERY", Some("key"))?,
+            Some("value".to_string())
+        );
+        assert_eq!(
+            ParseUrl::parse("notaurl?key=value", "QUERY", Some("missing"))?,
+            None
+        );
+        assert_eq!(ParseUrl::parse("notaurl?key=value", "HOST", None)?, None);
+        assert_eq!(
+            ParseUrl::parse("notaurl?key=value", "PROTOCOL", None)?,
+            None
+        );
+
+        // Schemeless URL with fragment
+        assert_eq!(
+            ParseUrl::parse("notaurl#reference", "REF", None)?,
+            Some("reference".to_string())
+        );
+        assert_eq!(
+            ParseUrl::parse("notaurl#reference", "PATH", None)?,
+            Some("notaurl".to_string())
+        );
+        assert_eq!(
+            ParseUrl::parse("notaurl#reference", "FILE", None)?,
+            Some("notaurl".to_string())
+        );
+
+        // Schemeless URL with both query and fragment
+        assert_eq!(
+            ParseUrl::parse("notaurl?a=1&b=2#frag", "PATH", None)?,
+            Some("notaurl".to_string())
+        );
+        assert_eq!(
+            ParseUrl::parse("notaurl?a=1&b=2#frag", "QUERY", None)?,
+            Some("a=1&b=2".to_string())
+        );
+        assert_eq!(
+            ParseUrl::parse("notaurl?a=1&b=2#frag", "QUERY", Some("b"))?,
+            Some("2".to_string())
+        );
+        assert_eq!(
+            ParseUrl::parse("notaurl?a=1&b=2#frag", "REF", None)?,
+            Some("frag".to_string())
+        );
+        assert_eq!(
+            ParseUrl::parse("notaurl?a=1&b=2#frag", "FILE", None)?,
+            Some("notaurl?a=1&b=2".to_string())
+        );
         Ok(())
     }
 
