@@ -1436,7 +1436,7 @@ pub fn has_same_children_properties(
         old_children.len(),
         "Wrong number of children"
     );
-    for (lhs, rhs) in plan.children().iter().zip(children.iter()) {
+    for (lhs, rhs) in old_children.iter().zip(children.iter()) {
         if !Arc::ptr_eq(lhs.properties(), rhs.properties()) {
             return Ok(false);
         }
