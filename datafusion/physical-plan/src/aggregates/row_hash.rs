@@ -1030,16 +1030,18 @@ impl GroupedHashAggregateStream {
             OutOfMemoryMode::EmitEarly if self.group_values.len() > 1 => {
                 // Clamp to the sort boundary when using partial group ordering,
                 // otherwise remove_groups panics (#20445).
-                if let Some(emit_to) = self.emit_target_for_oom() {
-                    if let Some(batch) = self.emit(EmitTo::First(n), false)? {
-                        return Ok(Some(ExecutionState::ProducingOutput(batch)));
-                    }
+                if let Some(emit_to) = self.emit_target_for_oom()
+                    && let Some(batch) = self.emit(emit_to, false)?
+                {
+                    return Ok(Some(ExecutionState::ProducingOutput(batch)));
                 }
                 Err(oom)
             }
+            OutOfMemoryMode::EmitEarly
+            | OutOfMemoryMode::Spill
+            | OutOfMemoryMode::ReportError => Err(oom),
         }
     }
-
 
     /// Returns how many groups to try and emit in order to avoid an out-of-memory
     /// condition.
@@ -1063,15 +1065,14 @@ impl GroupedHashAggregateStream {
             return Some(EmitTo::First(n));
         };
 
-        self.group_ordering.emit_to()
-            .map(|emit_to| match emit_to {
-                // If the ordering allows emitting some groups,
-                // emit as many as we can to try to resolve the OOM,
-                EmitTo::First(max)=> EmitTo::First(n.min(max)),
-                // if the ordering allows emitting all groups, we can emit n
-                // groups to try to resolve the OOM
-                EmitTo::All => EmitTo::First(n),
-            })
+        self.group_ordering.emit_to().map(|emit_to| match emit_to {
+            // If the ordering allows emitting some groups,
+            // emit as many as we can to try to resolve the OOM,
+            EmitTo::First(max) => EmitTo::First(n.min(max)),
+            // if the ordering allows emitting all groups, we can emit n
+            // groups to try to resolve the OOM
+            EmitTo::All => EmitTo::First(n),
+        })
     }
 
     fn update_memory_reservation(&mut self) -> Result<()> {
