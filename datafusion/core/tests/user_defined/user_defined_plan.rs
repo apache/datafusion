@@ -653,13 +653,17 @@ struct TopKExec {
     input: Arc<dyn ExecutionPlan>,
     /// The maximum number of values
     k: usize,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl TopKExec {
     fn new(input: Arc<dyn ExecutionPlan>, k: usize) -> Self {
         let cache = Self::compute_properties(input.schema());
-        Self { input, k, cache }
+        Self {
+            input,
+            k,
+            cache: Arc::new(cache),
+        }
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
@@ -704,7 +708,7 @@ impl ExecutionPlan for TopKExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 

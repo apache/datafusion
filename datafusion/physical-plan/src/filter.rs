@@ -27,6 +27,7 @@ use super::{
     ColumnStatistics, DisplayAs, ExecutionPlanProperties, PlanProperties,
     RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
+use crate::check_if_same_properties;
 use crate::coalesce::{LimitedBatchCoalescer, PushBatchStatus};
 use crate::common::can_project;
 use crate::execution_plan::CardinalityEffect;
@@ -84,7 +85,7 @@ pub struct FilterExec {
     /// Selectivity for statistics. 0 = no rows, 100 = all rows
     default_selectivity: u8,
     /// Properties equivalence properties, partitioning, etc.
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
     /// The projection indices of the columns in the output schema of join
     projection: Option<ProjectionRef>,
     /// Target batch size for output batches
@@ -206,7 +207,7 @@ impl FilterExecBuilder {
             input: self.input,
             metrics: ExecutionPlanMetricsSet::new(),
             default_selectivity: self.default_selectivity,
-            cache,
+            cache: Arc::new(cache),
             projection: self.projection,
             batch_size: self.batch_size,
             fetch: self.fetch,
@@ -279,7 +280,7 @@ impl FilterExec {
             input: Arc::clone(&self.input),
             metrics: self.metrics.clone(),
             default_selectivity: self.default_selectivity,
-            cache: self.cache.clone(),
+            cache: Arc::clone(&self.cache),
             projection: self.projection.clone(),
             batch_size,
             fetch: self.fetch,
@@ -432,6 +433,17 @@ impl FilterExec {
             input.boundedness(),
         ))
     }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(self)
+        }
+    }
 }
 
 impl DisplayAs for FilterExec {
@@ -486,7 +498,7 @@ impl ExecutionPlan for FilterExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -503,6 +515,7 @@ impl ExecutionPlan for FilterExec {
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        check_if_same_properties!(self, children);
         let new_input = children.swap_remove(0);
         FilterExecBuilder::from(&*self)
             .with_input(new_input)
@@ -585,7 +598,7 @@ impl ExecutionPlan for FilterExec {
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
-        if !matches!(phase, FilterPushdownPhase::Pre) {
+        if phase != FilterPushdownPhase::Pre {
             let child =
                 ChildFilterDescription::from_child(&parent_filters, self.input())?;
             return Ok(FilterDescription::new().with_child(child));
@@ -608,7 +621,7 @@ impl ExecutionPlan for FilterExec {
         child_pushdown_result: ChildPushdownResult,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
-        if !matches!(phase, FilterPushdownPhase::Pre) {
+        if phase != FilterPushdownPhase::Pre {
             return Ok(FilterPushdownPropagation::if_all(child_pushdown_result));
         }
         // We absorb any parent filters that were not handled by our children
@@ -685,12 +698,12 @@ impl ExecutionPlan for FilterExec {
                 input: Arc::clone(&filter_input),
                 metrics: self.metrics.clone(),
                 default_selectivity: self.default_selectivity,
-                cache: Self::compute_properties(
+                cache: Arc::new(Self::compute_properties(
                     &filter_input,
                     &new_predicate,
                     self.default_selectivity,
                     self.projection.as_deref(),
-                )?,
+                )?),
                 projection: self.projection.clone(),
                 batch_size: self.batch_size,
                 fetch: self.fetch,
@@ -710,7 +723,7 @@ impl ExecutionPlan for FilterExec {
             input: Arc::clone(&self.input),
             metrics: self.metrics.clone(),
             default_selectivity: self.default_selectivity,
-            cache: self.cache.clone(),
+            cache: Arc::clone(&self.cache),
             projection: self.projection.clone(),
             batch_size: self.batch_size,
             fetch,

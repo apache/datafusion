@@ -65,7 +65,7 @@ object_store = { workspace = true }
 # needs to be compiled
 tokio = { workspace = true }
 url = { workspace = true }
-wasm-bindgen-test = "0.3.61"
+wasm-bindgen-test = "0.3.62"
 
 [package.metadata.cargo-machete]
 ignored = ["chrono", "getrandom"]

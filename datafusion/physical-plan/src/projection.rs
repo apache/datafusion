@@ -33,7 +33,7 @@ use crate::filter_pushdown::{
     FilterPushdownPropagation, FilterRemapper, PushedDownPredicate,
 };
 use crate::joins::utils::{ColumnIndex, JoinFilter, JoinOn, JoinOnRef};
-use crate::{DisplayFormatType, ExecutionPlan, PhysicalExpr};
+use crate::{DisplayFormatType, ExecutionPlan, PhysicalExpr, check_if_same_properties};
 use std::any::Any;
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -79,7 +79,7 @@ pub struct ProjectionExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl ProjectionExec {
@@ -160,7 +160,7 @@ impl ProjectionExec {
             projector,
             input,
             metrics: ExecutionPlanMetricsSet::new(),
-            cache,
+            cache: Arc::new(cache),
         })
     }
 
@@ -223,6 +223,17 @@ impl ProjectionExec {
         }
         Ok(alias_map)
     }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(self)
+        }
+    }
 }
 
 impl DisplayAs for ProjectionExec {
@@ -276,7 +287,7 @@ impl ExecutionPlan for ProjectionExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -311,6 +322,7 @@ impl ExecutionPlan for ProjectionExec {
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        check_if_same_properties!(self, children);
         ProjectionExec::try_from_projector(
             self.projector.clone(),
             children.swap_remove(0),

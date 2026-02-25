@@ -75,8 +75,8 @@ use datafusion_physical_plan::filter_pushdown::{
 /// ```text
 ///                       ┌─────────────────────┐                              -----► execute path
 ///                       │                     │                              ┄┄┄┄┄► init path
-///                       │   DataSourceExec    │  
-///                       │                     │    
+///                       │   DataSourceExec    │
+///                       │                     │
 ///                       └───────▲─────────────┘
 ///                               ┊  │
 ///                               ┊  │
@@ -232,7 +232,7 @@ pub struct DataSourceExec {
     /// The source of the data -- for example, `FileScanConfig` or `MemorySourceConfig`
     data_source: Arc<dyn DataSource>,
     /// Cached plan properties such as sort order
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
     /// Shared morsel queue for current execution lifecycle.
     morsel_state: Arc<Mutex<MorselState>>,
 }
@@ -265,7 +265,7 @@ impl ExecutionPlan for DataSourceExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -374,7 +374,7 @@ impl ExecutionPlan for DataSourceExec {
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
         let data_source = self.data_source.with_fetch(limit)?;
-        let cache = self.cache.clone();
+        let cache = Arc::clone(&self.cache);
 
         Some(Arc::new(Self {
             data_source,
@@ -422,7 +422,8 @@ impl ExecutionPlan for DataSourceExec {
                 let mut new_node = self.clone();
                 new_node.data_source = data_source;
                 // Re-compute properties since we have new filters which will impact equivalence info
-                new_node.cache = Self::compute_properties(&new_node.data_source);
+                new_node.cache =
+                    Arc::new(Self::compute_properties(&new_node.data_source));
 
                 Ok(FilterPushdownPropagation {
                     filters: res.filters,
@@ -472,7 +473,7 @@ impl DataSourceExec {
         let cache = Self::compute_properties(&data_source);
         Self {
             data_source,
-            cache,
+            cache: Arc::new(cache),
             morsel_state: Arc::new(Mutex::new(MorselState::default())),
         }
     }
@@ -483,7 +484,7 @@ impl DataSourceExec {
     }
 
     pub fn with_data_source(mut self, data_source: Arc<dyn DataSource>) -> Self {
-        self.cache = Self::compute_properties(&data_source);
+        self.cache = Arc::new(Self::compute_properties(&data_source));
         self.data_source = data_source;
         self.morsel_state = Arc::new(Mutex::new(MorselState::default()));
         self
@@ -491,13 +492,13 @@ impl DataSourceExec {
 
     /// Assign constraints
     pub fn with_constraints(mut self, constraints: Constraints) -> Self {
-        self.cache = self.cache.with_constraints(constraints);
+        Arc::make_mut(&mut self.cache).set_constraints(constraints);
         self
     }
 
     /// Assign output partitioning
     pub fn with_partitioning(mut self, partitioning: Partitioning) -> Self {
-        self.cache = self.cache.with_partitioning(partitioning);
+        Arc::make_mut(&mut self.cache).partitioning = partitioning;
         self
     }
 
