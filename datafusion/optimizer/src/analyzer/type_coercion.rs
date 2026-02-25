@@ -142,7 +142,8 @@ fn analyze_internal(
         expr.rewrite(&mut expr_rewrite)
             .map(|transformed| transformed.update_data(|e| original_name.restore(e)))
     })?;
-    // `coerce_plan` does not mutate projections, so recompute is only needed when expression rewriting changed projection expressions.
+    // `coerce_plan` does not mutate projections, so recompute is only needed when expression rewriting
+    // changed projection expressions (tracked by the transformed flag).
     let skip_projection_recompute =
         matches!(&mapped.data, LogicalPlan::Projection(_)) && !mapped.transformed;
 
@@ -1385,6 +1386,8 @@ mod test {
 
         let analyzed = analyze_type_coercion(plan)?;
         assert_eq!(analyzed.schema().as_ref(), original_schema.as_ref());
+        // Fast path invariant: no-op projection rewrite should skip schema recompute.
+        assert!(Arc::ptr_eq(&original_schema, analyzed.schema()));
         assert!(matches!(analyzed, LogicalPlan::Projection(_)));
 
         Ok(())
@@ -1397,10 +1400,12 @@ mod test {
             vec![expr],
             empty_with_type(DataType::Float64),
         )?);
+        let original_schema = Arc::clone(plan.schema());
 
         let analyzed = analyze_type_coercion(plan)?;
         assert!(matches!(analyzed, LogicalPlan::Projection(_)));
         assert_eq!(analyzed.schema().field(0).data_type(), &DataType::Boolean);
+        assert!(!Arc::ptr_eq(&original_schema, analyzed.schema()));
 
         Ok(())
     }
