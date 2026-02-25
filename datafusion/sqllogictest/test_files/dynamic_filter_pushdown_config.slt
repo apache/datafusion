@@ -720,6 +720,117 @@ DROP TABLE t1_20213;
 statement ok
 DROP TABLE t2_20213;
 
+# Test 7: SortMergeJoin dynamic filter pushdown
+# When prefer_hash_join is false, the planner uses SortMergeJoinExec.
+# Dynamic filters (from TopK) should pass through SMJ to reach scan nodes.
+
+statement ok
+SET datafusion.optimizer.prefer_hash_join = false;
+
+# TopK dynamic filter should propagate through SortMergeJoinExec to the probe side scan.
+query TT
+EXPLAIN SELECT l.*, r.info
+FROM left_parquet l
+INNER JOIN right_parquet r ON l.id = r.id
+ORDER BY l.id LIMIT 2;
+----
+logical_plan
+01)Sort: l.id ASC NULLS LAST, fetch=2
+02)--Projection: l.id, l.data, r.info
+03)----Inner Join: l.id = r.id
+04)------SubqueryAlias: l
+05)--------TableScan: left_parquet projection=[id, data]
+06)------SubqueryAlias: r
+07)--------TableScan: right_parquet projection=[id, info]
+physical_plan
+01)SortExec: TopK(fetch=2), expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[id@0 as id, data@1 as data, info@3 as info]
+03)----SortMergeJoinExec: join_type=Inner, on=[(id@0, id@0)]
+04)------SortExec: expr=[id@0 ASC], preserve_partitioning=[false]
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet, predicate=DynamicFilter [ empty ]
+06)------SortExec: expr=[id@0 ASC], preserve_partitioning=[false]
+07)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id, info], file_type=parquet
+
+# Correctness check: same results regardless of join strategy
+query ITT
+SELECT l.*, r.info
+FROM left_parquet l
+INNER JOIN right_parquet r ON l.id = r.id
+ORDER BY l.id LIMIT 2;
+----
+1 left1 right1
+3 left3 right3
+
+# TopK on a non-key column: dynamic filter on right-side column pushed through SMJ
+query TT
+EXPLAIN SELECT l.id, l.data, r.info
+FROM left_parquet l
+INNER JOIN right_parquet r ON l.id = r.id
+ORDER BY r.info LIMIT 2;
+----
+logical_plan
+01)Sort: r.info ASC NULLS LAST, fetch=2
+02)--Projection: l.id, l.data, r.info
+03)----Inner Join: l.id = r.id
+04)------SubqueryAlias: l
+05)--------TableScan: left_parquet projection=[id, data]
+06)------SubqueryAlias: r
+07)--------TableScan: right_parquet projection=[id, info]
+physical_plan
+01)SortExec: TopK(fetch=2), expr=[info@2 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[id@0 as id, data@1 as data, info@3 as info]
+03)----SortMergeJoinExec: join_type=Inner, on=[(id@0, id@0)]
+04)------SortExec: expr=[id@0 ASC], preserve_partitioning=[false]
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet
+06)------SortExec: expr=[id@0 ASC], preserve_partitioning=[false]
+07)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id, info], file_type=parquet, predicate=DynamicFilter [ empty ]
+
+query ITT
+SELECT l.id, l.data, r.info
+FROM left_parquet l
+INNER JOIN right_parquet r ON l.id = r.id
+ORDER BY r.info LIMIT 2;
+----
+1 left1 right1
+3 left3 right3
+
+# Non-inner joins: no dynamic filter pushdown through SMJ (conservative)
+query TT
+EXPLAIN SELECT l.*, r.info
+FROM left_parquet l
+LEFT JOIN right_parquet r ON l.id = r.id
+ORDER BY l.id LIMIT 2;
+----
+logical_plan
+01)Sort: l.id ASC NULLS LAST, fetch=2
+02)--Projection: l.id, l.data, r.info
+03)----Left Join: l.id = r.id
+04)------SubqueryAlias: l
+05)--------TableScan: left_parquet projection=[id, data]
+06)------SubqueryAlias: r
+07)--------TableScan: right_parquet projection=[id, info]
+physical_plan
+01)SortExec: TopK(fetch=2), expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[id@0 as id, data@1 as data, info@3 as info]
+03)----SortMergeJoinExec: join_type=Left, on=[(id@0, id@0)]
+04)------SortExec: expr=[id@0 ASC], preserve_partitioning=[false]
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet
+06)------SortExec: expr=[id@0 ASC], preserve_partitioning=[false]
+07)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id, info], file_type=parquet
+
+# LEFT JOIN correctness
+query ITT
+SELECT l.*, r.info
+FROM left_parquet l
+LEFT JOIN right_parquet r ON l.id = r.id
+ORDER BY l.id LIMIT 2;
+----
+1 left1 right1
+2 left2 NULL
+
+statement ok
+SET datafusion.optimizer.prefer_hash_join = true;
+
 # Cleanup
 
 statement ok
