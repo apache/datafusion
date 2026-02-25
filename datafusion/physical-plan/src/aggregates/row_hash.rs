@@ -1043,13 +1043,13 @@ impl GroupedHashAggregateStream {
         }
     }
 
-    /// Returns how many groups to try and emit in order to avoid an out-of-memory
-    /// condition.
+    /// Returns the number of groups groups that can be emitted to avoid an
+    /// out-of-memory condition.
     ///
     /// Returns `None` if emitting is not possible.
     ///
-    /// Returns Some(EmitTo) with the number of groups to emit if it is possible
-    /// to emit some groups to free memory
+    /// Returns `Some(EmitTo)` with the number of groups to emit if it is possible
+    /// to emit some groups to free memory.
     fn emit_target_for_oom(&self) -> Option<EmitTo> {
         let n = if self.group_values.len() >= self.batch_size {
             // Try to emit an integer multiple of batch size if possible
@@ -1065,6 +1065,10 @@ impl GroupedHashAggregateStream {
             return Some(EmitTo::First(n));
         };
 
+        // For the case of GroupOrdering::Partial or GroupOrdering::Full, use
+        // the ordering's emit_to() method to determine how many groups can be
+        // emitted while respecting the ordering guarantees, clamped to the
+        // batch size.
         self.group_ordering.emit_to().map(|emit_to| match emit_to {
             // If the ordering allows emitting some groups,
             // emit as many as we can to try to resolve the OOM,
