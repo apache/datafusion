@@ -1028,34 +1028,50 @@ impl GroupedHashAggregateStream {
                 Ok(None)
             }
             OutOfMemoryMode::EmitEarly if self.group_values.len() > 1 => {
-                let n = if self.group_values.len() >= self.batch_size {
-                    // Try to emit an integer multiple of batch size if possible
-                    self.group_values.len() / self.batch_size * self.batch_size
-                } else {
-                    // Otherwise emit whatever we can
-                    self.group_values.len()
-                };
-
                 // Clamp to the sort boundary when using partial group ordering,
                 // otherwise remove_groups panics (#20445).
-                let n = match &self.group_ordering {
-                    GroupOrdering::None => n,
-                    _ => match self.group_ordering.emit_to() {
-                        Some(EmitTo::First(max)) => n.min(max),
-                        _ => 0,
-                    },
-                };
-
-                if n > 0
-                    && let Some(batch) = self.emit(EmitTo::First(n), false)?
-                {
-                    Ok(Some(ExecutionState::ProducingOutput(batch)))
-                } else {
-                    Err(oom)
+                if let Some(emit_to) = self.emit_target_for_oom() {
+                    if let Some(batch) = self.emit(EmitTo::First(n), false)? {
+                        return Ok(Some(ExecutionState::ProducingOutput(batch)));
+                    }
                 }
+                Err(oom)
             }
-            _ => Err(oom),
         }
+    }
+
+
+    /// Returns how many groups to try and emit in order to avoid an out-of-memory
+    /// condition.
+    ///
+    /// Returns `None` if emitting is not possible.
+    ///
+    /// Returns Some(EmitTo) with the number of groups to emit if it is possible
+    /// to emit some groups to free memory
+    fn emit_target_for_oom(&self) -> Option<EmitTo> {
+        let n = if self.group_values.len() >= self.batch_size {
+            // Try to emit an integer multiple of batch size if possible
+            self.group_values.len() / self.batch_size * self.batch_size
+        } else {
+            // Otherwise emit whatever we can
+            self.group_values.len()
+        };
+
+        // Special case for GroupOrdering::None since emit_to() returns None for
+        // that case, but we can still emit some groups to try to resolve the OOM
+        if matches!(&self.group_ordering, GroupOrdering::None) {
+            return Some(EmitTo::First(n));
+        };
+
+        self.group_ordering.emit_to()
+            .map(|emit_to| match emit_to {
+                // If the ordering allows emitting some groups,
+                // emit as many as we can to try to resolve the OOM,
+                EmitTo::First(max)=> EmitTo::First(n.min(max)),
+                // if the ordering allows emitting all groups, we can emit n
+                // groups to try to resolve the OOM
+                EmitTo::All => EmitTo::First(n),
+            })
     }
 
     fn update_memory_reservation(&mut self) -> Result<()> {
