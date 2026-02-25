@@ -428,31 +428,41 @@ mod tests {
 
     #[test]
     fn test_ceil_preimage_valid_cases() {
+        // For ceil(x) = N, preimage is (N-1, N] mathematically
+        // For floats: use next_up() to get [next_up(N-1), next_up(N)) as a half-open interval
+        // For integers: the interval is simply [N, N+1)
+
+        // ceil(x) = 100.0: preimage is (99, 100] → [next_up(99), next_up(100))
         assert_preimage_range(
             ScalarValue::Float64(Some(100.0)),
             ScalarValue::Float64(Some(next_up(99.0))),
             ScalarValue::Float64(Some(next_up(100.0))),
         );
+        // ceil(x) = 50.0: preimage is (49, 50] → [next_up(49), next_up(50))
         assert_preimage_range(
             ScalarValue::Float32(Some(50.0)),
             ScalarValue::Float32(Some(next_up(49.0))),
             ScalarValue::Float32(Some(next_up(50.0))),
         );
+        // ceil(x) = 42: preimage is (41, 42] → [42, 43) for integers
         assert_preimage_range(
             ScalarValue::Int64(Some(42)),
             ScalarValue::Int64(Some(42)),
             ScalarValue::Int64(Some(43)),
         );
+        // ceil(x) = 100: preimage is (99, 100] → [100, 101) for integers
         assert_preimage_range(
             ScalarValue::Int32(Some(100)),
             ScalarValue::Int32(Some(100)),
             ScalarValue::Int32(Some(101)),
         );
+        // ceil(x) = -5.0: preimage is (-6, -5] → [next_up(-6), next_up(-5))
         assert_preimage_range(
             ScalarValue::Float64(Some(-5.0)),
             ScalarValue::Float64(Some(next_up(-6.0))),
             ScalarValue::Float64(Some(next_up(-5.0))),
         );
+        // ceil(x) = 0.0: preimage is (-1, 0] → [next_up(-1), next_up(0))
         assert_preimage_range(
             ScalarValue::Float64(Some(0.0)),
             ScalarValue::Float64(Some(next_up(-1.0))),
