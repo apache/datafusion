@@ -87,7 +87,7 @@ impl ScalarUDFImpl for SparkBin {
     }
 }
 
-pub fn spark_bin_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
+fn spark_bin_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
     let [array] = take_function_args("bin", arg)?;
     match &array.data_type() {
         DataType::Int64 => {
