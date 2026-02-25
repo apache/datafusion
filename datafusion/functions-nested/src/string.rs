@@ -29,6 +29,7 @@ use datafusion_common::utils::ListCoercion;
 use datafusion_common::{DataFusionError, Result, not_impl_err};
 
 use std::any::Any;
+use std::fmt::Write;
 
 use crate::utils::make_scalar_function;
 use arrow::array::{
@@ -456,8 +457,11 @@ fn compute_array_to_string(
                         null_string,
                         first,
                         |buf, x| {
-                            let mut ryu_buf = ryu::Buffer::new();
-                            buf.push_str(ryu_buf.format(x));
+                            // TODO: Consider switching to a more efficient
+                            // floating point display library (e.g., ryu). This
+                            // might result in some differences in the output
+                            // format, however.
+                            write!(buf, "{}", x).unwrap();
                         },
                     )
                 };
