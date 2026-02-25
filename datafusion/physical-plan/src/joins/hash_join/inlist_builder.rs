@@ -20,6 +20,7 @@
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, StructArray};
+use arrow::compute::cast;
 use arrow::datatypes::{Field, FieldRef, Fields};
 use arrow::downcast_dictionary_array;
 use arrow_schema::DataType;
@@ -35,13 +36,15 @@ pub(super) fn build_struct_fields(data_types: &[DataType]) -> Result<Fields> {
 
 /// Flattens dictionary-encoded arrays to their underlying value arrays.
 /// Non-dictionary arrays are returned as-is.
-fn flatten_dictionary_array(array: &ArrayRef) -> ArrayRef {
+fn flatten_dictionary_array(array: &ArrayRef) -> Result<ArrayRef> {
     downcast_dictionary_array! {
         array => {
+            let value_type = array.values().data_type().clone();
+            let flat = cast(array, &value_type)?;
             // Recursively flatten in case of nested dictionaries
-            flatten_dictionary_array(array.values())
+            flatten_dictionary_array(&flat)
         }
-        _ => Arc::clone(array)
+        _ => Ok(Arc::clone(array))
     }
 }
 
@@ -67,8 +70,8 @@ pub(super) fn build_struct_inlist_values(
     // Flatten any dictionary-encoded arrays
     let flattened_arrays: Vec<ArrayRef> = join_key_arrays
         .iter()
-        .map(flatten_dictionary_array)
-        .collect();
+        .map(|a| flatten_dictionary_array(a))
+        .collect::<Result<Vec<_>>>()?;
 
     // Build the source array/struct
     let source_array: ArrayRef = if flattened_arrays.len() == 1 {
