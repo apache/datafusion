@@ -1055,7 +1055,6 @@ ORDER BY 2 * x ASC;
 1 60
 2 150
 
-# Cleanup
 statement ok
 DROP TABLE timestamp_data;
 
