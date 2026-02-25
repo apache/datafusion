@@ -701,6 +701,26 @@ SELECT split_part('abc~@~def~@~ghi', '~@~', -100)
 ----
 (empty)
 
+query T
+SELECT split_part('a,b', '', 1)
+----
+a,b
+
+query T
+SELECT split_part('a,b', '', -1)
+----
+a,b
+
+query T
+SELECT split_part('a,b', '', 2)
+----
+(empty)
+
+query T
+SELECT split_part('a,b', '', -2)
+----
+(empty)
+
 statement error DataFusion error: Execution error: field position must not be zero
 SELECT split_part('abc~@~def~@~ghi', '~@~', 0)
 
