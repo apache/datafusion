@@ -5184,6 +5184,11 @@ select cardinality(make_array()), cardinality(make_array(make_array()))
 0 0
 
 query II
+select cardinality([]), cardinality([]::int[]) as with_cast
+----
+0 0
+
+query II
 select cardinality(arrow_cast(make_array(), 'LargeList(Int64)')), cardinality(arrow_cast(make_array(make_array()), 'LargeList(List(Int64))'))
 ----
 0 0
