@@ -479,19 +479,19 @@ impl DependentJoinDecorrelator {
         self.dscan_cols.clear();
 
         // Collect all correlated columns of different outer table.
-        let mut domains_by_table: IndexMap<String, Vec<CorrelatedColumnInfo>> =
+        let mut domains_by_delim_scan_node_id: IndexMap<usize, Vec<CorrelatedColumnInfo>> =
             IndexMap::new();
 
         for domain in &self.domains {
-            let table_ref = domain
-                .col
-                .relation
-                .clone()
-                .ok_or(internal_datafusion_err!(
-                    "TableRef should exists in correlatd column"
-                ))?
-                .clone();
-            let domains = domains_by_table.entry(table_ref.to_string()).or_default();
+            // let table_ref = domain
+            //     .col
+            //     .relation
+            //     .clone()
+            //     .ok_or(internal_datafusion_err!(
+            //         "TableRef should exists in correlatd column"
+            //     ))?
+            //     .clone();
+            let domains = domains_by_delim_scan_node_id.entry(domain.delim_scan_node_id).or_default();
             if !domains.iter().any(|existing| {
                 (&existing.col == &domain.col) && (&existing.field == &domain.field)
             }) {
@@ -501,10 +501,18 @@ impl DependentJoinDecorrelator {
 
         // Collect all D from different tables.
         let mut delim_scans = vec![];
-        for (table_ref, table_domains) in domains_by_table {
+        for (delim_scan_node_id, table_domains) in domains_by_delim_scan_node_id {
             self.delim_scan_id += 1;
+            let node = self.delim_scan_nodes.get(&delim_scan_node_id).ok_or(internal_datafusion_err!("delim scan node with id {delim_scan_node_id} not found"))?;
+            let delim_name = match node{
+                LogicalPlan::TableScan(table_scan) => table_scan.table_name.clone(),
+                LogicalPlan::SubqueryAlias(subquery_alias) => subquery_alias.alias.clone(),
+                _ => {
+                    return internal_err!("delim scan node with id {delim_scan_node_id} is not a table scan or subquery alias");
+                }
+            };
             let delim_scan_name =
-                format!("{0}_dscan_{1}", table_ref.clone(), self.delim_scan_id);
+                format!("{0}_dscan_{1}", delim_name, self.delim_scan_id);
 
             let mut projection_exprs = vec![];
             table_domains.iter().for_each(|c| {
@@ -526,7 +534,7 @@ impl DependentJoinDecorrelator {
 
             // Apply projection to rename columns and then alias the entire plan.
             delim_scans.push(
-                LogicalPlanBuilder::delim_get(&table_domains)?
+                LogicalPlanBuilder::delim_get(delim_name, &node, &table_domains)?
                     .project(projection_exprs)?
                     .build()?,
             );

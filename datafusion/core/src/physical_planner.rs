@@ -64,11 +64,11 @@ use datafusion_catalog::ScanArgs;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::format::ExplainAnalyzeLevel;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
-use datafusion_common::TableReference;
 use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema,
     ScalarValue,
 };
+use datafusion_common::{Column as CommonColumn, TableReference};
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_expr::dml::{CopyTo, InsertOp};
@@ -78,11 +78,12 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
+use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::utils::split_conjunction;
 use datafusion_expr::{
     Analyze, BinaryExpr, DelimGet, DescribeTable, DmlStatement, Explain, ExplainFormat,
-    Extension, FetchType, Filter, JoinType, Operator, RecursiveQuery, SkipType,
-    StringifiedPlan, WindowFrame, WindowFrameBound, WriteOp,
+    Extension, FetchType, Filter, JoinType, LogicalPlanBuilder, Operator, RecursiveQuery,
+    SkipType, StringifiedPlan, WindowFrame, WindowFrameBound, WriteOp,
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::{Column, Literal};
@@ -333,7 +334,8 @@ impl DefaultPhysicalPlanner {
         // Can never spawn more tasks than leaves in the tree, as these tasks must
         // all converge down to the root node, which can only be processed by a
         // single task.
-        let max_concurrency = planning_concurrency.min(flat_tree_leaf_indices.len());
+        let max_concurrency = 1;
+        // planning_concurrency.min(flat_tree_leaf_indices.len());
 
         // Spawning tasks which will traverse leaf up to the root.
         let tasks = flat_tree_leaf_indices
@@ -1521,55 +1523,91 @@ impl DefaultPhysicalPlanner {
                 )
             }
             LogicalPlan::DelimGet(DelimGet {
-                table_name,
+                delim_scan_name,
+                delim_scan_node,
                 projected_schema,
                 ..
             }) => {
-                let resolved = session_state.resolve_table_ref(table_name.clone());
-                if let Ok(schema) = session_state.schema_for_ref(resolved.clone()) {
-                    if let Some(table) = schema.table(&resolved.table).await? {
-                        let mut proj = vec![];
-                        for (i, field) in table.schema().fields().iter().enumerate() {
-                            for iter in projected_schema.as_ref().iter() {
-                                if iter.1 == field {
-                                    proj.push(i);
+                match delim_scan_node.as_ref() {
+                    LogicalPlan::TableScan(_) => {
+                        let resolved =
+                            session_state.resolve_table_ref(delim_scan_name.clone());
+                        if let Ok(schema) = session_state.schema_for_ref(resolved.clone())
+                        {
+                            if let Some(table) = schema.table(&resolved.table).await? {
+                                let mut proj = vec![];
+                                for (i, field) in
+                                    table.schema().fields().iter().enumerate()
+                                {
+                                    for iter in projected_schema.as_ref().iter() {
+                                        if iter.1 == field {
+                                            proj.push(i);
+                                        }
+                                    }
                                 }
+
+                                // First create the scan execution plan.
+                                let scan_plan = table
+                                    .scan(session_state, Some(&proj), &[], None)
+                                    .await?;
+
+                                // Now add aggregation to eliminate duplicated rows.
+                                // Create a PhysicalGroupBy with empty expressions, which means we're grouping by all columns
+                                let schema = &scan_plan.schema();
+                                let group_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> =
+                                    (0..schema.fields().len())
+                                        .map(|i| {
+                                            let name = schema.field(i).name().to_string();
+                                            let expr = Arc::new(Column::new(&name, i))
+                                                as Arc<dyn PhysicalExpr>;
+                                            (expr, name)
+                                        })
+                                        .collect();
+
+                                let group_by = PhysicalGroupBy::new_single(group_exprs);
+
+                                // Create the AggregateExec with no aggregate expressions to deduplicate the rows
+                                Arc::new(AggregateExec::try_new(
+                                    AggregateMode::Final,
+                                    group_by,
+                                    vec![], // No aggregate expressions, just grouping to deduplicate
+                                    vec![], // No filters
+                                    scan_plan.clone(),
+                                    scan_plan.schema(),
+                                )?)
+                            } else {
+                                return internal_err!("no table provider");
                             }
+                        } else {
+                            return internal_err!("empty schema");
                         }
-
-                        // First create the scan execution plan.
-                        let scan_plan =
-                            table.scan(session_state, Some(&proj), &[], None).await?;
-
-                        // Now add aggregation to eliminate duplicated rows.
-                        // Create a PhysicalGroupBy with empty expressions, which means we're grouping by all columns
-                        let schema = &scan_plan.schema();
-                        let group_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = (0
-                            ..schema.fields().len())
-                            .map(|i| {
-                                let name = schema.field(i).name().to_string();
-                                let expr = Arc::new(Column::new(&name, i))
-                                    as Arc<dyn PhysicalExpr>;
-                                (expr, name)
-                            })
-                            .collect();
-
-                        let group_by = PhysicalGroupBy::new_single(group_exprs);
-
-                        // Create the AggregateExec with no aggregate expressions to deduplicate the rows
-                        Arc::new(AggregateExec::try_new(
-                            AggregateMode::Final,
-                            group_by,
-                            vec![], // No aggregate expressions, just grouping to deduplicate
-                            vec![], // No filters
-                            scan_plan.clone(),
-                            scan_plan.schema(),
-                        )?)
-                    } else {
-                        return internal_err!("no table provider");
                     }
-                } else {
-                    return internal_err!("empty schema");
+                    LogicalPlan::SubqueryAlias(_) => {
+                        // TODO: this is a workaround to support delim_scan from a subquery alias
+                        // Add distinct operator on all the columns (for true delimination)
+                        let delim_scan =
+                            LogicalPlanBuilder::new(delim_scan_node.as_ref().clone())
+                                .project(projected_schema.as_ref().iter().map(
+                                    |(_, field)| {
+                                        SelectExpr::Expression(Expr::Column(
+                                            CommonColumn::new(
+                                                Some(delim_scan_name.clone()),
+                                                field.name(),
+                                            ),
+                                        ))
+                                    },
+                                ))?
+                                .build()?;
+
+                        Box::pin(self.create_initial_plan(&delim_scan, session_state))
+                            .await?
+                    }
+                    _ => {
+                        return internal_err!(
+                            "Unsupported delim scan node: {:?}",
+                            delim_scan_node.as_ref()
+                        );
+                    }
                 }
             }
         };

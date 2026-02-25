@@ -64,7 +64,7 @@ use datafusion_common::{
     FunctionalDependencies, NullEquality, ParamValues, Result, ScalarValue, Spans,
     TableReference, UnnestOptions,
 };
-use indexmap::IndexSet;
+use indexmap::{IndexMap, IndexSet};
 
 // backwards compatibility
 use crate::display::PgJsonVisitor;
@@ -308,16 +308,6 @@ pub struct CorrelatedColumnInfo {
     pub delim_scan_node_id: usize,
 }
 
-impl CorrelatedColumnInfo {
-    // pub fn new(col: Column) -> Self {
-    //     Self {
-    //         col,
-    //         data_type: DataType::Null,
-    //         depth: 0,
-    //     }
-    // }
-}
-
 impl PartialEq for CorrelatedColumnInfo {
     fn eq(&self, other: &Self) -> bool {
         self.col == other.col
@@ -327,7 +317,8 @@ impl PartialEq for CorrelatedColumnInfo {
 #[derive(Debug, Clone, Eq)]
 pub struct DelimGet {
     // TODO: is it necessary to alias?
-    pub table_name: TableReference,
+    pub delim_scan_name: TableReference,
+    pub delim_scan_node: Arc<LogicalPlan>,
     pub columns: Vec<Column>,
     /// The schema description of the output
     pub projected_schema: DFSchemaRef,
@@ -335,39 +326,46 @@ pub struct DelimGet {
 }
 
 impl DelimGet {
-    pub fn try_new(correlated_columns: &Vec<CorrelatedColumnInfo>) -> Result<Self> {
+    pub fn try_new(
+        delim_scan_name: TableReference,
+        delim_scan_node: &LogicalPlan,
+        correlated_columns: &Vec<CorrelatedColumnInfo>,
+    ) -> Result<Self> {
         if correlated_columns.is_empty() {
-            // return plan_err!("failed to construct DelimGet: empty correlated columns");
-            // TODO: revisit if dummy dependent join is nesessary.
-            return Ok(Self {
-                table_name: TableReference::bare("empty scan"),
-                columns: vec![],
-                projected_schema: Arc::new(DFSchema::empty()),
-            });
+            return internal_err!(
+                "failed to construct DelimGet: empty correlated columns"
+            );
+            //     // return plan_err!("failed to construct DelimGet: empty correlated columns");
+            //     // TODO: revisit if dummy dependent join is nesessary.
+            //     return Ok(Self {
+            //         table_name: TableReference::bare("empty scan"),
+            //         columns: vec![],
+            //         projected_schema: Arc::new(DFSchema::empty()),
+            //     });
         }
 
         // Extract the first table reference to validate all columns come from the same table
-        let first_table_ref = correlated_columns[0].col.relation.clone();
+        // let first_table_ref = correlated_columns[0].col.relation.clone();
 
         // Validate all columns come from the same table
         for column_info in correlated_columns.into_iter() {
-            if column_info.col.relation != first_table_ref {
+            if column_info.col.relation.as_ref().unwrap() != &delim_scan_name {
                 return internal_err!(
                 "DelimGet requires all columns to be from the same table, found mixed table references");
             }
         }
 
-        let table_name = first_table_ref.ok_or_else(|| {
-            DataFusionError::Plan(
-                "DelimGet requires all columns to have a table reference".to_string(),
-            )
-        })?;
+        // let table_name = first_table_ref.ok_or_else(|| {
+        //     DataFusionError::Plan(
+        //         "DelimGet requires all columns to have a table reference".to_string(),
+        //     )
+        // })?;
 
         // Collect both table references and fields together
         let qualified_fields: Vec<(Option<TableReference>, Arc<Field>)> =
             correlated_columns
                 .iter()
-                .map(|c| (Some(table_name.clone()), c.field.clone()))
+                .map(|c| (Some(delim_scan_name.clone()), c.field.clone()))
                 .collect();
 
         let columns: Vec<Column> =
@@ -376,7 +374,8 @@ impl DelimGet {
         let schema = DFSchema::new_with_metadata(qualified_fields, HashMap::new())?;
 
         Ok(DelimGet {
-            table_name,
+            delim_scan_name,
+            delim_scan_node: Arc::new(delim_scan_node.clone()),
             columns,
             projected_schema: Arc::new(schema),
         })
@@ -385,20 +384,22 @@ impl DelimGet {
 
 impl PartialEq for DelimGet {
     fn eq(&self, other: &Self) -> bool {
-        self.table_name == other.table_name && self.columns == other.columns
+        self.delim_scan_name == other.delim_scan_name && self.columns == other.columns
     }
 }
 
 impl Hash for DelimGet {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.table_name.hash(state);
+        self.delim_scan_name.hash(state);
         self.columns.hash(state);
+        self.delim_scan_node.hash(state);
+        self.projected_schema.hash(state);
     }
 }
 
 impl PartialOrd for DelimGet {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match self.table_name.partial_cmp(&other.table_name) {
+        match self.delim_scan_name.partial_cmp(&other.delim_scan_name) {
             Some(Ordering::Equal) => self.columns.partial_cmp(&other.columns),
             cmp => cmp,
         }
