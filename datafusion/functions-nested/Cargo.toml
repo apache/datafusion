@@ -62,6 +62,7 @@ itertools = { workspace = true, features = ["use_std"] }
 itoa = { workspace = true }
 log = { workspace = true }
 paste = { workspace = true }
+ryu = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true, features = ["async_tokio"] }

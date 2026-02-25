@@ -442,13 +442,28 @@ fn compute_array_to_string(
                     )
                 };
             }
+            macro_rules! float_leaf {
+                ($ARRAY_TYPE:ident) => {
+                    write_leaf_to_string(
+                        buf,
+                        downcast_arg!(arr, $ARRAY_TYPE),
+                        delimiter,
+                        null_string,
+                        first,
+                        |buf, x| {
+                            let mut ryu_buf = ryu::Buffer::new();
+                            buf.push_str(ryu_buf.format(x));
+                        },
+                    )
+                };
+            }
             match data_type {
                 Utf8 => str_leaf!(StringArray),
                 Utf8View => str_leaf!(StringViewArray),
                 LargeUtf8 => str_leaf!(LargeStringArray),
                 DataType::Boolean => leaf!(BooleanArray),
-                DataType::Float32 => leaf!(Float32Array),
-                DataType::Float64 => leaf!(Float64Array),
+                DataType::Float32 => float_leaf!(Float32Array),
+                DataType::Float64 => float_leaf!(Float64Array),
                 DataType::Int8 => int_leaf!(Int8Array),
                 DataType::Int16 => int_leaf!(Int16Array),
                 DataType::Int32 => int_leaf!(Int32Array),
