@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, Int64Array, ListArray, StringArray};
+use arrow::array::{ArrayRef, Float64Array, Int64Array, ListArray, StringArray};
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Field};
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
@@ -36,6 +36,7 @@ const NULL_DENSITY: f64 = 0.1;
 
 fn criterion_benchmark(c: &mut Criterion) {
     bench_array_to_string(c, "array_to_string_int64", create_int64_list_array);
+    bench_array_to_string(c, "array_to_string_float64", create_float64_list_array);
     bench_array_to_string(c, "array_to_string_string", create_string_list_array);
     bench_array_to_string(
         c,
@@ -125,6 +126,32 @@ fn create_nested_int64_list_array(array_size: usize) -> ArrayRef {
             Arc::new(Field::new("item", inner.data_type().clone(), true)),
             OffsetBuffer::new(offsets.into()),
             inner,
+            None,
+        )
+        .unwrap(),
+    )
+}
+
+fn create_float64_list_array(array_size: usize) -> ArrayRef {
+    let mut rng = StdRng::seed_from_u64(SEED);
+    let values = (0..NUM_ROWS * array_size)
+        .map(|_| {
+            if rng.random::<f64>() < NULL_DENSITY {
+                None
+            } else {
+                Some(rng.random_range(-1000.0..1000.0))
+            }
+        })
+        .collect::<Float64Array>();
+    let offsets = (0..=NUM_ROWS)
+        .map(|i| (i * array_size) as i32)
+        .collect::<Vec<i32>>();
+
+    Arc::new(
+        ListArray::try_new(
+            Arc::new(Field::new("item", DataType::Float64, true)),
+            OffsetBuffer::new(offsets.into()),
+            Arc::new(values),
             None,
         )
         .unwrap(),
