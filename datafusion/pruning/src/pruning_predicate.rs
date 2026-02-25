@@ -1273,7 +1273,7 @@ fn build_single_column_expr(
 ) -> Option<Arc<dyn PhysicalExpr>> {
     let field = schema.field_with_name(column.name()).ok()?;
 
-    if matches!(field.data_type(), &DataType::Boolean) {
+    if *field.data_type() == DataType::Boolean {
         let col_ref = Arc::new(column.clone()) as _;
 
         let min = required_columns

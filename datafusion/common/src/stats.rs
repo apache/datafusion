@@ -1265,7 +1265,7 @@ mod tests {
             col_stats.min_value,
             Precision::Inexact(ScalarValue::Int32(Some(-10)))
         );
-        assert!(matches!(col_stats.sum_value, Precision::Absent));
+        assert_eq!(col_stats.sum_value, Precision::Absent);
     }
 
     #[test]

@@ -23,7 +23,7 @@ use criterion::{
 };
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
-use datafusion_functions_nested::set_ops::{ArrayIntersect, ArrayUnion};
+use datafusion_functions_nested::set_ops::{ArrayDistinct, ArrayIntersect, ArrayUnion};
 use rand::SeedableRng;
 use rand::prelude::SliceRandom;
 use rand::rngs::StdRng;
@@ -38,6 +38,7 @@ const SEED: u64 = 42;
 fn criterion_benchmark(c: &mut Criterion) {
     bench_array_union(c);
     bench_array_intersect(c);
+    bench_array_distinct(c);
 }
 
 fn invoke_udf(udf: &impl ScalarUDFImpl, array1: &ArrayRef, array2: &ArrayRef) {
@@ -90,6 +91,48 @@ fn bench_array_intersect(c: &mut Criterion) {
                 BenchmarkId::new(*overlap_label, array_size),
                 &array_size,
                 |b, _| b.iter(|| invoke_udf(&udf, &array1, &array2)),
+            );
+        }
+    }
+
+    group.finish();
+}
+
+fn bench_array_distinct(c: &mut Criterion) {
+    let mut group = c.benchmark_group("array_distinct");
+    let udf = ArrayDistinct::new();
+
+    for (duplicate_label, duplicate_ratio) in
+        &[("high_duplicate", 0.8), ("low_duplicate", 0.2)]
+    {
+        for &array_size in ARRAY_SIZES {
+            let array =
+                create_array_with_duplicates(NUM_ROWS, array_size, *duplicate_ratio);
+            group.bench_with_input(
+                BenchmarkId::new(*duplicate_label, array_size),
+                &array_size,
+                |b, _| {
+                    b.iter(|| {
+                        black_box(
+                            udf.invoke_with_args(ScalarFunctionArgs {
+                                args: vec![ColumnarValue::Array(array.clone())],
+                                arg_fields: vec![
+                                    Field::new("arr", array.data_type().clone(), false)
+                                        .into(),
+                                ],
+                                number_rows: NUM_ROWS,
+                                return_field: Field::new(
+                                    "result",
+                                    array.data_type().clone(),
+                                    false,
+                                )
+                                .into(),
+                                config_options: Arc::new(ConfigOptions::default()),
+                            })
+                            .unwrap(),
+                        )
+                    })
+                },
             );
         }
     }
@@ -162,6 +205,54 @@ fn create_arrays_with_overlap(
     );
 
     (array1, array2)
+}
+
+fn create_array_with_duplicates(
+    num_rows: usize,
+    array_size: usize,
+    duplicate_ratio: f64,
+) -> ArrayRef {
+    assert!((0.0..=1.0).contains(&duplicate_ratio));
+    let unique_count = ((array_size as f64) * (1.0 - duplicate_ratio)).round() as usize;
+    let duplicate_count = array_size - unique_count;
+
+    let mut rng = StdRng::seed_from_u64(SEED);
+    let mut values = Vec::with_capacity(num_rows * array_size);
+
+    for row in 0..num_rows {
+        let base = (row as i64) * (array_size as i64) * 2;
+
+        // Add unique values first
+        for i in 0..unique_count {
+            values.push(base + i as i64);
+        }
+
+        // Fill the rest with duplicates randomly picked from the unique values
+        let mut unique_indices: Vec<i64> =
+            (0..unique_count).map(|i| base + i as i64).collect();
+        unique_indices.shuffle(&mut rng);
+
+        for i in 0..duplicate_count {
+            values.push(unique_indices[i % unique_count]);
+        }
+    }
+
+    let values = Int64Array::from(values);
+    let field = Arc::new(Field::new("item", DataType::Int64, true));
+
+    let offsets = (0..=num_rows)
+        .map(|i| (i * array_size) as i32)
+        .collect::<Vec<i32>>();
+
+    Arc::new(
+        ListArray::try_new(
+            field,
+            OffsetBuffer::new(offsets.into()),
+            Arc::new(values),
+            None,
+        )
+        .unwrap(),
+    )
 }
 
 criterion_group!(benches, criterion_benchmark);

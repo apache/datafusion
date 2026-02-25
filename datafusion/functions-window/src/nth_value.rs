@@ -269,7 +269,7 @@ impl WindowUDFImpl for NthValue {
             kind: self.kind,
         };
 
-        if !matches!(self.kind, NthValueKind::Nth) {
+        if self.kind != NthValueKind::Nth {
             return Ok(Box::new(NthValueEvaluator {
                 state,
                 ignore_nulls: partition_evaluator_args.ignore_nulls(),

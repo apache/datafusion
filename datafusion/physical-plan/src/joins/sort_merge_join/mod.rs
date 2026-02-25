@@ -20,6 +20,7 @@
 pub use exec::SortMergeJoinExec;
 
 mod exec;
+mod filter;
 mod metrics;
 mod stream;
 
