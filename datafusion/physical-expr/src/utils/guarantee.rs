@@ -438,9 +438,7 @@ impl<'a> ColOpLit<'a> {
 /// Extracts a [`Column`](crate::expressions::Column) reference from a physical
 /// expression, looking through [`CastColumnExpr`](crate::expressions::CastColumnExpr)
 /// wrappers.
-fn extract_column(
-    expr: &Arc<dyn PhysicalExpr>,
-) -> Option<&crate::expressions::Column> {
+fn extract_column(expr: &Arc<dyn PhysicalExpr>) -> Option<&crate::expressions::Column> {
     if let Some(col) = expr.as_any().downcast_ref::<crate::expressions::Column>() {
         return Some(col);
     }
