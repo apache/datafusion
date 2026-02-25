@@ -213,7 +213,6 @@ fn build_test_data_frame(ctx: &SessionContext, rt: &Runtime) -> DataFrame {
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    env_logger::try_init().ok();
     let ctx = SessionContext::new();
     let rt = Runtime::new().unwrap();
 
@@ -221,23 +220,6 @@ fn criterion_benchmark(c: &mut Criterion) {
     // https://github.com/apache/datafusion/issues/17261
 
     let df = build_test_data_frame(&ctx, &rt);
-
-    // let unoptimized = df.clone().into_unoptimized_plan();
-    // let optimized = df.clone().into_optimized_plan().unwrap();
-    // let plan_output_dir = "target/bench-plans";
-    // fs::create_dir_all(plan_output_dir).unwrap();
-    // fs::write(
-    //     format!("{plan_output_dir}/sql_planner_extended_unoptimized.txt"),
-    //     format!("{}", unoptimized.display_indent_schema()),
-    // )
-    // .unwrap();
-    // fs::write(
-    //     format!("{plan_output_dir}/sql_planner_extended_optimized.txt"),
-    //     format!("{}", optimized.display_indent_schema()),
-    // )
-    // .unwrap();
-
-    // println!("Wrote logical plans to {plan_output_dir}/");
 
     c.bench_function("logical_plan_optimize", |b| {
         b.iter(|| {

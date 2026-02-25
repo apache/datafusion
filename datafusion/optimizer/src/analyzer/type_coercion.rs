@@ -20,10 +20,7 @@
 use arrow::compute::can_cast_types;
 use datafusion_expr::binary::BinaryTypeCoercer;
 use itertools::{Itertools as _, izip};
-use log::info;
-use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::sync::OnceLock;
 
 use crate::analyzer::AnalyzerRule;
 use crate::utils::NamePreserver;
@@ -93,100 +90,14 @@ impl AnalyzerRule for TypeCoercion {
 
     fn analyze(&self, plan: LogicalPlan, config: &ConfigOptions) -> Result<LogicalPlan> {
         let empty_schema = DFSchema::empty();
-        let trace_type_coercion = trace_type_coercion_enabled();
-        let trace_type_coercion_min_ms = if trace_type_coercion {
-            trace_type_coercion_min_ms()
-        } else {
-            0
-        };
-        // Only collect aggregate stats when tracing is enabled.
-        let mut stats = trace_type_coercion.then(TypeCoercionStats::default);
 
         // recurse
-        let recurse_start = std::time::Instant::now();
         let transformed_plan = plan
-            .transform_up_with_subqueries(|plan| {
-                analyze_internal_with_stats(
-                    &empty_schema,
-                    plan,
-                    trace_type_coercion,
-                    stats.as_mut(),
-                )
-            })?
+            .transform_up_with_subqueries(|plan| analyze_internal(&empty_schema, plan))?
             .data;
-        let recurse_ms = recurse_start.elapsed().as_millis();
 
         // finish
-        let output_start = std::time::Instant::now();
-        let result = coerce_output(transformed_plan, config);
-        let output_ms = output_start.elapsed().as_millis();
-        if trace_type_coercion && recurse_ms + output_ms >= trace_type_coercion_min_ms {
-            let stats = stats
-                .as_ref()
-                .expect("type coercion stats should be available when tracing is enabled");
-            info!(
-                "type_coercion total took {} ms (recurse={} ms, output={} ms)",
-                recurse_ms + output_ms,
-                recurse_ms,
-                output_ms
-            );
-            info!(
-                "type_coercion aggregate: nodes={} total={} ms (schema={} ms, filter={} ms, map_expr={} ms, coerce_plan={} ms, recompute_schema={} ms)",
-                stats.nodes,
-                stats.total_us / 1000,
-                stats.schema_us / 1000,
-                stats.filter_us / 1000,
-                stats.map_expr_us / 1000,
-                stats.coerce_plan_us / 1000,
-                stats.recompute_schema_us / 1000
-            );
-            info!(
-                "type_coercion projection recompute breakdown: changed_nodes={} changed_recompute={} ms (avg={} us), unchanged_nodes={} unchanged_recompute={} ms (avg={} us)",
-                stats.projection_changed_nodes,
-                stats.projection_changed_recompute_schema_us / 1000,
-                if stats.projection_changed_nodes > 0 {
-                    stats.projection_changed_recompute_schema_us
-                        / stats.projection_changed_nodes as u128
-                } else {
-                    0
-                },
-                stats.projection_unchanged_nodes,
-                stats.projection_unchanged_recompute_schema_us / 1000,
-                if stats.projection_unchanged_nodes > 0 {
-                    stats.projection_unchanged_recompute_schema_us
-                        / stats.projection_unchanged_nodes as u128
-                } else {
-                    0
-                }
-            );
-            let total_projection_nodes =
-                stats.projection_recompute_skipped_nodes + stats.projection_recompute_executed_nodes;
-            let projection_skip_ratio = if total_projection_nodes > 0 {
-                stats.projection_recompute_skipped_nodes as f64 * 100.0
-                    / total_projection_nodes as f64
-            } else {
-                0.0
-            };
-            info!(
-                "type_coercion projection recompute skips: skipped_nodes={} executed_nodes={} skip_ratio={projection_skip_ratio:.2}%",
-                stats.projection_recompute_skipped_nodes,
-                stats.projection_recompute_executed_nodes,
-            );
-            for (kind, kind_stats) in &stats.by_kind {
-                info!(
-                    "type_coercion aggregate by_kind: kind={} nodes={} total={} ms (schema={} ms, filter={} ms, map_expr={} ms, coerce_plan={} ms, recompute_schema={} ms)",
-                    kind,
-                    kind_stats.nodes,
-                    kind_stats.total_us / 1000,
-                    kind_stats.schema_us / 1000,
-                    kind_stats.filter_us / 1000,
-                    kind_stats.map_expr_us / 1000,
-                    kind_stats.coerce_plan_us / 1000,
-                    kind_stats.recompute_schema_us / 1000
-                );
-            }
-        }
-        result
+        coerce_output(transformed_plan, config)
     }
 }
 
@@ -197,26 +108,8 @@ fn analyze_internal(
     external_schema: &DFSchema,
     plan: LogicalPlan,
 ) -> Result<Transformed<LogicalPlan>> {
-    analyze_internal_with_stats(external_schema, plan, false, None)
-}
-
-fn analyze_internal_with_stats(
-    external_schema: &DFSchema,
-    plan: LogicalPlan,
-    trace_type_coercion: bool,
-    stats: Option<&mut TypeCoercionStats>,
-) -> Result<Transformed<LogicalPlan>> {
-    let trace_type_coercion_min_ms = if trace_type_coercion {
-        trace_type_coercion_min_ms()
-    } else {
-        0
-    };
-    let total_start = std::time::Instant::now();
-    let plan_kind = logical_plan_kind(&plan);
-
     // get schema representing all available input fields. This is used for data type
     // resolution only, so order does not matter here
-    let schema_start = std::time::Instant::now();
     let mut schema = merge_schema(&plan.inputs());
 
     if let LogicalPlan::TableScan(ts) = &plan {
@@ -231,41 +124,33 @@ fn analyze_internal_with_stats(
     // like case:
     // select t2.c2 from t1 where t1.c1 in (select t2.c1 from t2 where t2.c2=t1.c3)
     schema.merge(external_schema);
-    let schema_us = schema_start.elapsed().as_micros();
 
     // Coerce filter predicates to boolean (handles `WHERE NULL`)
-    let filter_start = std::time::Instant::now();
     let plan = if let LogicalPlan::Filter(mut filter) = plan {
         filter.predicate = filter.predicate.cast_to(&DataType::Boolean, &schema)?;
         LogicalPlan::Filter(filter)
     } else {
         plan
     };
-    let filter_us = filter_start.elapsed().as_micros();
 
     let mut expr_rewrite = TypeCoercionRewriter::new(&schema);
 
     let name_preserver = NamePreserver::new(&plan);
     // apply coercion rewrite all expressions in the plan individually
-    let map_start = std::time::Instant::now();
     let mapped = plan.map_expressions(|expr| {
         let original_name = name_preserver.save(&expr);
         expr.rewrite(&mut expr_rewrite)
             .map(|transformed| transformed.update_data(|e| original_name.restore(e)))
     })?;
-    let map_us = map_start.elapsed().as_micros();
     let mapped_transformed = mapped.transformed;
 
     // some plans need extra coercion after their expressions are coerced
-    let plan_start = std::time::Instant::now();
     let coerced = mapped.map_data(|plan| expr_rewrite.coerce_plan(plan))?;
-    let plan_us = plan_start.elapsed().as_micros();
-    let log_expr_count = trace_type_coercion.then(|| coerced.data.expressions().len());
-    let log_input_count = trace_type_coercion.then(|| coerced.data.inputs().len());
     let skip_projection_recompute =
         matches!(&coerced.data, LogicalPlan::Projection(_)) && !mapped_transformed;
 
-    // recompute the schema after the expressions have been rewritten as the types may have changed
+    // For unchanged projections, schema must already be valid.
+    // Keep a debug assertion during rollout to validate this assumption.
     #[cfg(debug_assertions)]
     if skip_projection_recompute {
         let recomputed_projection = coerced.data.clone().recompute_schema()?;
@@ -275,153 +160,12 @@ fn analyze_internal_with_stats(
             "Skipping recompute_schema changed projection schema unexpectedly"
         );
     }
-    let (recomputed, schema_recompute_us) = if skip_projection_recompute {
-        (Ok(coerced), 0)
+
+    if skip_projection_recompute {
+        Ok(coerced)
     } else {
-        let schema_recompute_start = std::time::Instant::now();
-        let recomputed = coerced.map_data(|plan| plan.recompute_schema());
-        let schema_recompute_us = schema_recompute_start.elapsed().as_micros();
-        (recomputed, schema_recompute_us)
-    };
-
-    let total_us = total_start.elapsed().as_micros();
-    if let Some(stats) = stats {
-        stats.record(
-            plan_kind,
-            total_us,
-            schema_us,
-            filter_us,
-            map_us,
-            plan_us,
-            schema_recompute_us,
-            mapped_transformed,
-            skip_projection_recompute,
-        );
-    }
-    let total_ms = total_us / 1000;
-    if trace_type_coercion && total_ms >= trace_type_coercion_min_ms {
-        let expr_count = log_expr_count
-            .expect("expression count should be available when tracing is enabled");
-        let input_count =
-            log_input_count.expect("input count should be available when tracing is enabled");
-        info!(
-            "type_coercion node={} exprs={} inputs={} total={} ms (schema={} ms, filter={} ms, map_expr={} ms, coerce_plan={} ms, recompute_schema={} ms)",
-            plan_kind,
-            expr_count,
-            input_count,
-            total_ms,
-            schema_us / 1000,
-            filter_us / 1000,
-            map_us / 1000,
-            plan_us / 1000,
-            schema_recompute_us / 1000
-        );
-    }
-
-    recomputed
-}
-
-#[derive(Default)]
-struct TypeCoercionStats {
-    nodes: usize,
-    total_us: u128,
-    schema_us: u128,
-    filter_us: u128,
-    map_expr_us: u128,
-    coerce_plan_us: u128,
-    recompute_schema_us: u128,
-    projection_changed_nodes: usize,
-    projection_changed_recompute_schema_us: u128,
-    projection_unchanged_nodes: usize,
-    projection_unchanged_recompute_schema_us: u128,
-    projection_recompute_skipped_nodes: usize,
-    projection_recompute_executed_nodes: usize,
-    by_kind: BTreeMap<&'static str, TypeCoercionKindStats>,
-}
-
-#[derive(Default)]
-struct TypeCoercionKindStats {
-    nodes: usize,
-    total_us: u128,
-    schema_us: u128,
-    filter_us: u128,
-    map_expr_us: u128,
-    coerce_plan_us: u128,
-    recompute_schema_us: u128,
-}
-
-impl TypeCoercionStats {
-    fn record(
-        &mut self,
-        kind: &'static str,
-        total_us: u128,
-        schema_us: u128,
-        filter_us: u128,
-        map_expr_us: u128,
-        coerce_plan_us: u128,
-        recompute_schema_us: u128,
-        mapped_transformed: bool,
-        projection_recompute_skipped: bool,
-    ) {
-        self.nodes += 1;
-        self.total_us += total_us;
-        self.schema_us += schema_us;
-        self.filter_us += filter_us;
-        self.map_expr_us += map_expr_us;
-        self.coerce_plan_us += coerce_plan_us;
-        self.recompute_schema_us += recompute_schema_us;
-        if kind == "Projection" {
-            if projection_recompute_skipped {
-                self.projection_recompute_skipped_nodes += 1;
-            } else {
-                self.projection_recompute_executed_nodes += 1;
-            }
-            if mapped_transformed {
-                self.projection_changed_nodes += 1;
-                self.projection_changed_recompute_schema_us += recompute_schema_us;
-            } else {
-                self.projection_unchanged_nodes += 1;
-                self.projection_unchanged_recompute_schema_us += recompute_schema_us;
-            }
-        }
-        let entry = self.by_kind.entry(kind).or_default();
-        entry.nodes += 1;
-        entry.total_us += total_us;
-        entry.schema_us += schema_us;
-        entry.filter_us += filter_us;
-        entry.map_expr_us += map_expr_us;
-        entry.coerce_plan_us += coerce_plan_us;
-        entry.recompute_schema_us += recompute_schema_us;
-    }
-}
-
-fn trace_type_coercion_enabled() -> bool {
-    static TRACE_ENABLED: OnceLock<bool> = OnceLock::new();
-    *TRACE_ENABLED.get_or_init(|| std::env::var_os("DF_TRACE_TYPE_COERCION").is_some())
-}
-
-fn trace_type_coercion_min_ms() -> u128 {
-    static TRACE_MIN_MS: OnceLock<u128> = OnceLock::new();
-    *TRACE_MIN_MS.get_or_init(|| {
-        std::env::var("DF_TRACE_TYPE_COERCION_MIN_MS")
-            .ok()
-            .and_then(|v| v.parse::<u128>().ok())
-            .unwrap_or(0)
-    })
-}
-
-fn logical_plan_kind(plan: &LogicalPlan) -> &'static str {
-    match plan {
-        LogicalPlan::Projection(_) => "Projection",
-        LogicalPlan::Filter(_) => "Filter",
-        LogicalPlan::Join(_) => "Join",
-        LogicalPlan::Union(_) => "Union",
-        LogicalPlan::Sort(_) => "Sort",
-        LogicalPlan::Aggregate(_) => "Aggregate",
-        LogicalPlan::Subquery(_) => "Subquery",
-        LogicalPlan::TableScan(_) => "TableScan",
-        LogicalPlan::Limit(_) => "Limit",
-        _ => "Other",
+        // recompute the schema after the expressions have been rewritten as the types may have changed
+        coerced.map_data(|plan| plan.recompute_schema())
     }
 }
 

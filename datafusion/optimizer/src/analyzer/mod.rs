@@ -20,7 +20,7 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use log::{debug, info};
+use log::debug;
 
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
@@ -130,11 +130,6 @@ impl Analyzer {
 
         let start_time = Instant::now();
         let mut new_plan = plan;
-        let trace_rule_timing = std::env::var_os("DF_TRACE_RULE_TIMING").is_some();
-        let trace_rule_timing_min_ms = std::env::var("DF_TRACE_RULE_TIMING_MIN_MS")
-            .ok()
-            .and_then(|v| v.parse::<u128>().ok())
-            .unwrap_or(0);
 
         // Create an analyzer pass that rewrites `Expr`s to function_calls, as
         // appropriate.
@@ -154,14 +149,9 @@ impl Analyzer {
 
         // TODO add common rule executor for Analyzer and Optimizer
         for rule in rules {
-            let rule_start = Instant::now();
             new_plan = rule
                 .analyze(new_plan, config)
                 .map_err(|e| e.context(rule.name()))?;
-            let elapsed_ms = rule_start.elapsed().as_millis();
-            if trace_rule_timing && elapsed_ms >= trace_rule_timing_min_ms {
-                info!("Analyzer rule {} took {} ms", rule.name(), elapsed_ms);
-            }
             log_plan(rule.name(), &new_plan);
             observer(&new_plan, rule.as_ref());
         }
