@@ -5160,6 +5160,12 @@ MISSING,5,MISSING
 statement ok
 DROP TABLE test_null_str_col;
 
+# array_to_string with decimal values
+query T
+select array_to_string(arrow_cast(make_array(1.5, NULL, 3.14), 'List(Decimal128(10, 2))'), ',', 'N');
+----
+1.50,N,3.14
+
 ## cardinality
 
 # cardinality scalar function
