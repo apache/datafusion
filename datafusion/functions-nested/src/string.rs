@@ -29,7 +29,6 @@ use datafusion_common::utils::ListCoercion;
 use datafusion_common::{DataFusionError, Result, not_impl_err};
 
 use std::any::Any;
-use std::fmt::Write;
 
 use crate::utils::make_scalar_function;
 use arrow::array::{
@@ -403,18 +402,6 @@ fn compute_array_to_string(
         }
         Null => Ok(()),
         data_type => {
-            macro_rules! leaf {
-                ($ARRAY_TYPE:ident) => {
-                    write_leaf_to_string(
-                        buf,
-                        downcast_arg!(arr, $ARRAY_TYPE),
-                        delimiter,
-                        null_string,
-                        first,
-                        |buf, x| write!(buf, "{}", x).unwrap(),
-                    )
-                };
-            }
             macro_rules! str_leaf {
                 ($ARRAY_TYPE:ident) => {
                     write_leaf_to_string(
@@ -424,6 +411,24 @@ fn compute_array_to_string(
                         null_string,
                         first,
                         |buf, x: &str| buf.push_str(x),
+                    )
+                };
+            }
+            macro_rules! bool_leaf {
+                ($ARRAY_TYPE:ident) => {
+                    write_leaf_to_string(
+                        buf,
+                        downcast_arg!(arr, $ARRAY_TYPE),
+                        delimiter,
+                        null_string,
+                        first,
+                        |buf, x: bool| {
+                            if x {
+                                buf.push_str("true");
+                            } else {
+                                buf.push_str("false");
+                            }
+                        },
                     )
                 };
             }
@@ -461,7 +466,7 @@ fn compute_array_to_string(
                 Utf8 => str_leaf!(StringArray),
                 Utf8View => str_leaf!(StringViewArray),
                 LargeUtf8 => str_leaf!(LargeStringArray),
-                DataType::Boolean => leaf!(BooleanArray),
+                DataType::Boolean => bool_leaf!(BooleanArray),
                 DataType::Float32 => float_leaf!(Float32Array),
                 DataType::Float64 => float_leaf!(Float64Array),
                 DataType::Int8 => int_leaf!(Int8Array),
