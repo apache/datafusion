@@ -161,6 +161,7 @@ hex = { version = "0.4.3" }
 indexmap = "2.13.0"
 insta = { version = "1.46.3", features = ["glob", "filters"] }
 itertools = "0.14"
+itoa = "1.0"
 liblzma = { version = "0.4.6", features = ["static"] }
 log = "^0.4"
 memchr = "2.8.0"

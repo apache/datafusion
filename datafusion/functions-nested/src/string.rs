@@ -427,6 +427,21 @@ fn compute_array_to_string(
                     )
                 };
             }
+            macro_rules! int_leaf {
+                ($ARRAY_TYPE:ident) => {
+                    write_leaf_to_string(
+                        buf,
+                        downcast_arg!(arr, $ARRAY_TYPE),
+                        delimiter,
+                        null_string,
+                        first,
+                        |buf, x| {
+                            let mut itoa_buf = itoa::Buffer::new();
+                            buf.push_str(itoa_buf.format(x));
+                        },
+                    )
+                };
+            }
             match data_type {
                 Utf8 => str_leaf!(StringArray),
                 Utf8View => str_leaf!(StringViewArray),
@@ -434,14 +449,14 @@ fn compute_array_to_string(
                 DataType::Boolean => leaf!(BooleanArray),
                 DataType::Float32 => leaf!(Float32Array),
                 DataType::Float64 => leaf!(Float64Array),
-                DataType::Int8 => leaf!(Int8Array),
-                DataType::Int16 => leaf!(Int16Array),
-                DataType::Int32 => leaf!(Int32Array),
-                DataType::Int64 => leaf!(Int64Array),
-                DataType::UInt8 => leaf!(UInt8Array),
-                DataType::UInt16 => leaf!(UInt16Array),
-                DataType::UInt32 => leaf!(UInt32Array),
-                DataType::UInt64 => leaf!(UInt64Array),
+                DataType::Int8 => int_leaf!(Int8Array),
+                DataType::Int16 => int_leaf!(Int16Array),
+                DataType::Int32 => int_leaf!(Int32Array),
+                DataType::Int64 => int_leaf!(Int64Array),
+                DataType::UInt8 => int_leaf!(UInt8Array),
+                DataType::UInt16 => int_leaf!(UInt16Array),
+                DataType::UInt32 => int_leaf!(UInt32Array),
+                DataType::UInt64 => int_leaf!(UInt64Array),
                 DataType::Decimal128(_, _) | DataType::Decimal256(_, _) => {
                     // Decimal arrays iterate over raw integers, so we need to
                     // cast to Utf8 to ensure the right display formatting.
