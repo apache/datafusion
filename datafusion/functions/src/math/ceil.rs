@@ -251,7 +251,6 @@ impl ScalarUDFImpl for CeilFunc {
         lit_expr: &Expr,
         _info: &SimplifyContext,
     ) -> Result<PreimageResult> {
-        // ceil takes exactly one argument and we do not expect to reach here with multiple arguments.
         debug_assert!(args.len() == 1, "ceil() takes exactly one argument");
 
         let arg = args[0].clone();
