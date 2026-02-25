@@ -522,58 +522,68 @@ mod tests {
 
     #[test]
     fn test_ceil_preimage_decimal_valid_cases() {
+        // Decimal format: raw_value / 10^scale
+        // For ceil(x) = N, preimage is (N-1, N] → [N-1+step, N+step) where step = 10^(-scale)
+
+        // ceil(x) = 100.00: preimage is (99, 100] → [99.01, 100.01)
         assert_preimage_range(
-            ScalarValue::Decimal32(Some(10000), 9, 2),
-            ScalarValue::Decimal32(Some(9901), 9, 2),
-            ScalarValue::Decimal32(Some(10001), 9, 2),
+            ScalarValue::Decimal32(Some(10000), 9, 2), // 100.00
+            ScalarValue::Decimal32(Some(9901), 9, 2),  // 99.01
+            ScalarValue::Decimal32(Some(10001), 9, 2), // 100.01
         );
+        // ceil(x) = -5.00: preimage is (-6, -5] → [-5.99, -4.99)
         assert_preimage_range(
-            ScalarValue::Decimal32(Some(-500), 9, 2),
-            ScalarValue::Decimal32(Some(-599), 9, 2),
-            ScalarValue::Decimal32(Some(-499), 9, 2),
+            ScalarValue::Decimal32(Some(-500), 9, 2), // -5.00
+            ScalarValue::Decimal32(Some(-599), 9, 2), // -5.99
+            ScalarValue::Decimal32(Some(-499), 9, 2), // -4.99
         );
+        // ceil(x) = 0.00: preimage is (-1, 0] → [-0.99, 0.01)
         assert_preimage_range(
-            ScalarValue::Decimal32(Some(0), 9, 2),
-            ScalarValue::Decimal32(Some(-99), 9, 2),
-            ScalarValue::Decimal32(Some(1), 9, 2),
+            ScalarValue::Decimal32(Some(0), 9, 2),   // 0.00
+            ScalarValue::Decimal32(Some(-99), 9, 2), // -0.99
+            ScalarValue::Decimal32(Some(1), 9, 2),   // 0.01
         );
+        // ceil(x) = 42 (scale 0 means integer): preimage is (41, 42] → [42, 43)
         assert_preimage_range(
-            ScalarValue::Decimal32(Some(42), 9, 0),
-            ScalarValue::Decimal32(Some(42), 9, 0),
-            ScalarValue::Decimal32(Some(43), 9, 0),
+            ScalarValue::Decimal32(Some(42), 9, 0), // 42
+            ScalarValue::Decimal32(Some(42), 9, 0), // 42
+            ScalarValue::Decimal32(Some(43), 9, 0), // 43
         );
 
+        // Decimal64 tests: same logic with wider precision
         assert_preimage_range(
-            ScalarValue::Decimal64(Some(10000), 18, 2),
-            ScalarValue::Decimal64(Some(9901), 18, 2),
-            ScalarValue::Decimal64(Some(10001), 18, 2),
+            ScalarValue::Decimal64(Some(10000), 18, 2), // 100.00
+            ScalarValue::Decimal64(Some(9901), 18, 2),  // 99.01
+            ScalarValue::Decimal64(Some(10001), 18, 2), // 100.01
         );
         assert_preimage_range(
-            ScalarValue::Decimal64(Some(-500), 18, 2),
-            ScalarValue::Decimal64(Some(-599), 18, 2),
-            ScalarValue::Decimal64(Some(-499), 18, 2),
-        );
-
-        assert_preimage_range(
-            ScalarValue::Decimal128(Some(10000), 38, 2),
-            ScalarValue::Decimal128(Some(9901), 38, 2),
-            ScalarValue::Decimal128(Some(10001), 38, 2),
-        );
-        assert_preimage_range(
-            ScalarValue::Decimal128(Some(-500), 38, 2),
-            ScalarValue::Decimal128(Some(-599), 38, 2),
-            ScalarValue::Decimal128(Some(-499), 38, 2),
+            ScalarValue::Decimal64(Some(-500), 18, 2), // -5.00
+            ScalarValue::Decimal64(Some(-599), 18, 2), // -5.99
+            ScalarValue::Decimal64(Some(-499), 18, 2), // -4.99
         );
 
+        // Decimal128 tests: same logic with even wider precision
         assert_preimage_range(
-            ScalarValue::Decimal256(Some(i256::from(10000)), 76, 2),
-            ScalarValue::Decimal256(Some(i256::from(9901)), 76, 2),
-            ScalarValue::Decimal256(Some(i256::from(10001)), 76, 2),
+            ScalarValue::Decimal128(Some(10000), 38, 2), // 100.00
+            ScalarValue::Decimal128(Some(9901), 38, 2),  // 99.01
+            ScalarValue::Decimal128(Some(10001), 38, 2), // 100.01
         );
         assert_preimage_range(
-            ScalarValue::Decimal256(Some(i256::from(-500)), 76, 2),
-            ScalarValue::Decimal256(Some(i256::from(-599)), 76, 2),
-            ScalarValue::Decimal256(Some(i256::from(-499)), 76, 2),
+            ScalarValue::Decimal128(Some(-500), 38, 2), // -5.00
+            ScalarValue::Decimal128(Some(-599), 38, 2), // -5.99
+            ScalarValue::Decimal128(Some(-499), 38, 2), // -4.99
+        );
+
+        // Decimal256 tests: same logic with widest precision
+        assert_preimage_range(
+            ScalarValue::Decimal256(Some(i256::from(10000)), 76, 2), // 100.00
+            ScalarValue::Decimal256(Some(i256::from(9901)), 76, 2),  // 99.01
+            ScalarValue::Decimal256(Some(i256::from(10001)), 76, 2), // 100.01
+        );
+        assert_preimage_range(
+            ScalarValue::Decimal256(Some(i256::from(-500)), 76, 2), // -5.00
+            ScalarValue::Decimal256(Some(i256::from(-599)), 76, 2), // -5.99
+            ScalarValue::Decimal256(Some(i256::from(-499)), 76, 2), // -4.99
         );
     }
 
