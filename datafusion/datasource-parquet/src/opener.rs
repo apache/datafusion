@@ -279,6 +279,8 @@ impl FileOpener for ParquetOpener {
         let enable_page_index = self.enable_page_index;
         let limit = self.limit;
         let preserve_order = self.preserve_order;
+        let parquet_file_reader_factory = Arc::clone(&self.parquet_file_reader_factory);
+        let partition_index = self.partition_index;
 
         Box::pin(async move {
             #[cfg(feature = "parquet_encryption")]
@@ -381,35 +383,20 @@ impl FileOpener for ParquetOpener {
                 );
             }
 
-            // Load page index after stats/limit pruning but before bloom filters.
-            // This avoids the I/O if all row groups are already pruned, and is still
-            // possible here because async_file_reader hasn't been consumed yet.
-            if should_enable_page_index(enable_page_index, &page_pruning_predicate)
-                && !row_groups.is_empty()
-            {
-                reader_metadata = load_page_index(
-                    reader_metadata,
-                    &mut async_file_reader,
-                    options.with_page_index_policy(PageIndexPolicy::Optional),
-                )
-                .await?;
-            }
-
-            // Extract metadata after potentially loading the page index, so the cached
-            // metadata in each morsel includes the page index if it was loaded.
-            let metadata = Arc::clone(reader_metadata.metadata());
-
             // Bloom filter pruning: done once per file here in morselize(), so that
             // open() does not repeat it for each morsel (which would cause inflated metrics
             // and unnecessary work).
+            //
+            // Note: the bloom filter builder takes ownership of `async_file_reader`.
+            // Page index loading happens afterward using a fresh reader so that we only
+            // pay for the page index I/O on the row groups that survive bloom filter pruning.
             if let Some(predicate) = pruning_predicate.as_deref() {
                 if enable_bloom_filter && !row_groups.is_empty() {
-                    // Build a stream builder to access bloom filter data.
-                    // This consumes `async_file_reader` and `reader_metadata`, which are
-                    // no longer needed after this point.
+                    // Clone reader_metadata so it remains available for page
+                    // index loading after this builder is dropped.
                     let mut builder = ParquetRecordBatchStreamBuilder::new_with_metadata(
                         async_file_reader,
-                        reader_metadata,
+                        reader_metadata.clone(),
                     );
                     row_groups
                         .prune_by_bloom_filters(
@@ -425,6 +412,31 @@ impl FileOpener for ParquetOpener {
                         .add_matched(row_groups.remaining_row_group_count());
                 }
             }
+
+            // Load page index after bloom filter pruning so we skip it entirely if no
+            // row groups remain. Bloom filter building consumed `async_file_reader`, so
+            // we create a fresh reader here — reader creation is cheap (no I/O yet).
+            if should_enable_page_index(enable_page_index, &page_pruning_predicate)
+                && !row_groups.is_empty()
+            {
+                let mut fresh_reader: Box<dyn AsyncFileReader> =
+                    parquet_file_reader_factory.create_reader(
+                        partition_index,
+                        partitioned_file.clone(),
+                        metadata_size_hint,
+                        &metrics,
+                    )?;
+                reader_metadata = load_page_index(
+                    reader_metadata,
+                    &mut fresh_reader,
+                    options.with_page_index_policy(PageIndexPolicy::Optional),
+                )
+                .await?;
+            }
+
+            // Extract metadata after potentially loading the page index, so the cached
+            // metadata in each morsel includes the page index if it was loaded.
+            let metadata = Arc::clone(reader_metadata.metadata());
 
             let mut access_plan = row_groups.build();
 
