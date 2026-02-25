@@ -137,9 +137,8 @@ impl FileStream {
     /// Morselizing path).
     fn start_next_file(&mut self) -> Option<Result<FileOpenFuture>> {
         if self.morsel_driven {
-            let queue = Arc::clone(self.shared_queue.as_ref()?);
-            let morsel_file = queue.pull_if(|f| self.file_opener.is_leaf_morsel(f))?;
-            return Some(self.file_opener.open(morsel_file));
+            // In morsel-driven don't "prefetch"
+            return None;
         }
         let part_file = self.file_iter.pop_front()?;
         Some(self.file_opener.open(part_file))
