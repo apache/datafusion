@@ -296,29 +296,8 @@ impl DataFrame {
 
     /// Create a physical plan from this DataFrame.
     ///
-    /// After calling this method, the original `DataFrame` is still accessible,
-    /// which means you can inspect the physical plan (e.g. for logging or explain)
-    /// and then separately call [`DataFrame::write_parquet`], [`DataFrame::collect`],
-    /// or other execution methods on the same `DataFrame`.
-    ///
-    /// # Example
-    /// ```
-    /// # use datafusion::prelude::*;
-    /// # use datafusion::error::Result;
-    /// # #[tokio::main]
-    /// # async fn main() -> Result<()> {
-    /// let ctx = SessionContext::new();
-    /// let df = ctx
-    ///     .read_csv("tests/data/example.csv", CsvReadOptions::new())
-    ///     .await?;
-    /// // Inspect the physical plan without consuming the DataFrame
-    /// let physical_plan = df.create_physical_plan().await?;
-    /// println!("{physical_plan:?}");
-    /// // df is still usable: collect results, write parquet, etc.
-    /// let batches = df.collect().await?;
-    /// # Ok(())
-    /// # }
-    /// ```
+    /// The `DataFrame` remains accessible after this call, so you can inspect
+    /// the plan and still call [`DataFrame::collect`] or other execution methods.
     pub async fn create_physical_plan(&self) -> Result<Arc<dyn ExecutionPlan>> {
         self.session_state.create_physical_plan(&self.plan).await
     }
