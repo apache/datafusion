@@ -583,6 +583,10 @@ impl FileSource for ParquetSource {
         self.predicate.clone()
     }
 
+    fn with_filter(&self, filter: Arc<dyn PhysicalExpr>) -> Option<Arc<dyn FileSource>> {
+        Some(Arc::new(self.with_predicate(filter)))
+    }
+
     fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
         let mut conf = self.clone();
         conf.batch_size = Some(batch_size);

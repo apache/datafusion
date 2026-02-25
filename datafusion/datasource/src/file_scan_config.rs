@@ -501,6 +501,29 @@ impl From<FileScanConfig> for FileScanConfigBuilder {
     }
 }
 
+use crate::dynamic_filter::wrap_partitioned_dynamic_filters;
+
+fn apply_partitioned_dynamic_filters(
+    source: Arc<dyn FileSource>,
+    partition: usize,
+) -> Result<Arc<dyn FileSource>> {
+    let Some(filter) = source.filter() else {
+        return Ok(source);
+    };
+    let transformed = wrap_partitioned_dynamic_filters(filter, partition)?;
+    if !transformed.transformed {
+        return Ok(source);
+    }
+    if let Some(updated) = source.with_filter(transformed.data) {
+        return Ok(updated);
+    }
+    debug!(
+        "File source {} does not support updating filters; partition-aware dynamic filters will be applied globally",
+        source.file_type()
+    );
+    Ok(source)
+}
+
 impl DataSource for FileScanConfig {
     fn open(
         &self,
@@ -513,6 +536,7 @@ impl DataSource for FileScanConfig {
             .unwrap_or_else(|| context.session_config().batch_size());
 
         let source = self.file_source.with_batch_size(batch_size);
+        let source = apply_partitioned_dynamic_filters(source, partition)?;
 
         let opener = source.create_file_opener(object_store, self, partition)?;
 
@@ -1343,6 +1367,7 @@ mod tests {
 
     use super::*;
     use crate::TableSchema;
+    use crate::dynamic_filter::PartitionedDynamicFilterExpr;
     use crate::test_util::col;
     use crate::{
         generate_test_files, test_util::MockSource, tests::aggr_test_schema,
@@ -1350,11 +1375,14 @@ mod tests {
     };
 
     use arrow::datatypes::Field;
+    use arrow::record_batch::RecordBatch;
     use datafusion_common::stats::Precision;
-    use datafusion_common::{ColumnStatistics, internal_err};
+    use datafusion_common::{ColumnStatistics, ScalarValue, internal_err};
     use datafusion_expr::{Operator, SortExpr};
     use datafusion_physical_expr::create_physical_sort_expr;
-    use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
+    use datafusion_physical_expr::expressions::{
+        BinaryExpr, Column, DynamicFilterPhysicalExpr, Literal,
+    };
     use datafusion_physical_expr::projection::ProjectionExpr;
     use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
@@ -1700,6 +1728,114 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_apply_partitioned_dynamic_filters_wraps_filters_and_updates() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let column = col("a", &schema)?;
+        let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::clone(&column)],
+            Arc::new(Literal::new(ScalarValue::Boolean(Some(true)))),
+        ));
+
+        let expr_p0: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::clone(&column),
+            Operator::Eq,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+        ));
+        let expr_p1: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::clone(&column),
+            Operator::Eq,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(2)))),
+        ));
+
+        let dynamic_filter_expr: Arc<dyn PhysicalExpr> = dynamic_filter.clone();
+        let source = Arc::new(
+            MockSource::new(TableSchema::new(Arc::new(schema), vec![]))
+                .with_filter(dynamic_filter_expr),
+        );
+        let source = apply_partitioned_dynamic_filters(source, 1)?;
+        let updated = source.as_any().downcast_ref::<MockSource>().unwrap();
+        let filter = updated.filter().unwrap();
+        let wrapped = filter
+            .as_any()
+            .downcast_ref::<PartitionedDynamicFilterExpr>()
+            .expect("expected partitioned dynamic filter wrapper");
+
+        dynamic_filter.update_partitioned(
+            Arc::clone(&expr_p0),
+            vec![Some(expr_p0), Some(expr_p1)],
+        )?;
+
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)])),
+            vec![Arc::new(arrow::array::Int32Array::from(vec![
+                Some(1),
+                Some(2),
+            ]))],
+        )?;
+        let snapshot = wrapped.snapshot()?.unwrap();
+        let result = snapshot.evaluate(&batch)?;
+        let result = match result {
+            datafusion_expr::ColumnarValue::Array(array) => array,
+            datafusion_expr::ColumnarValue::Scalar(_) => {
+                return internal_err!("unexpected scalar result");
+            }
+        };
+        let result = result
+            .as_any()
+            .downcast_ref::<arrow::array::BooleanArray>()
+            .expect("expected boolean array");
+        assert_eq!(result.value(0), false);
+        assert_eq!(result.value(1), true);
+        Ok(())
+    }
+
+    #[test]
+    fn test_apply_partitioned_dynamic_filters_wraps_without_partitions() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let column = col("a", &schema)?;
+        let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::clone(&column)],
+            Arc::new(Literal::new(ScalarValue::Boolean(Some(true)))),
+        ));
+
+        let dynamic_filter_expr: Arc<dyn PhysicalExpr> = dynamic_filter.clone();
+        let source = Arc::new(
+            MockSource::new(TableSchema::new(Arc::new(schema), vec![]))
+                .with_filter(dynamic_filter_expr),
+        );
+        let source = apply_partitioned_dynamic_filters(source, 0)?;
+        let updated = source.as_any().downcast_ref::<MockSource>().unwrap();
+        let filter = updated.filter().unwrap();
+        let wrapped = filter
+            .as_any()
+            .downcast_ref::<PartitionedDynamicFilterExpr>()
+            .expect("expected partitioned dynamic filter wrapper");
+        let snapshot = wrapped.snapshot()?.unwrap();
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)])),
+            vec![Arc::new(arrow::array::Int32Array::from(vec![
+                Some(1),
+                Some(2),
+            ]))],
+        )?;
+        let result = snapshot.evaluate(&batch)?;
+        match result {
+            datafusion_expr::ColumnarValue::Array(array) => {
+                let result = array
+                    .as_any()
+                    .downcast_ref::<arrow::array::BooleanArray>()
+                    .expect("expected boolean array");
+                assert_eq!(result.value(0), true);
+                assert_eq!(result.value(1), true);
+            }
+            datafusion_expr::ColumnarValue::Scalar(scalar) => {
+                assert_eq!(scalar, ScalarValue::Boolean(Some(true)));
+            }
+        }
+        Ok(())
     }
 
     // sets default for configs that play no role in projections

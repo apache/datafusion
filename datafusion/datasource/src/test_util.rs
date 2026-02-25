@@ -84,6 +84,12 @@ impl FileSource for MockSource {
         self.filter.clone()
     }
 
+    fn with_filter(&self, filter: Arc<dyn PhysicalExpr>) -> Option<Arc<dyn FileSource>> {
+        let mut source = self.clone();
+        source.filter = Some(filter);
+        Some(Arc::new(source))
+    }
+
     fn with_batch_size(&self, _batch_size: usize) -> Arc<dyn FileSource> {
         Arc::new(Self { ..self.clone() })
     }

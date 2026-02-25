@@ -74,6 +74,10 @@ pub trait FileSource: Send + Sync {
     fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
         None
     }
+    /// Return a new [`FileSource`] with the specified filter, if supported.
+    fn with_filter(&self, _filter: Arc<dyn PhysicalExpr>) -> Option<Arc<dyn FileSource>> {
+        None
+    }
     /// Return the projection that will be applied to the output stream on top of the table schema.
     fn projection(&self) -> Option<&ProjectionExprs> {
         None

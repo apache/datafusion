@@ -31,6 +31,7 @@
 
 pub mod decoder;
 pub mod display;
+mod dynamic_filter;
 pub mod file;
 pub mod file_compression_type;
 pub mod file_format;

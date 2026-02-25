@@ -78,6 +78,10 @@ struct Inner {
     /// This is used for [`PhysicalExpr::snapshot_generation`] to have a cheap check for changes.
     generation: u64,
     expr: Arc<dyn PhysicalExpr>,
+    /// Optional per-partition expressions for partition-aware dynamic filters.
+    /// When present, `current_for_partition` will return these expressions
+    /// instead of the global `expr`.
+    partitioned_exprs: Option<Vec<Option<Arc<dyn PhysicalExpr>>>>,
     /// Flag for quick synchronous check if filter is complete.
     /// This is redundant with the watch channel state, but allows us to return immediately
     /// from `wait_complete()` without subscribing if already complete.
@@ -91,6 +95,7 @@ impl Inner {
             // This is not currently used anywhere but it seems useful to have this simple distinction.
             generation: 1,
             expr,
+            partitioned_exprs: None,
             is_complete: false,
         }
     }
@@ -218,6 +223,32 @@ impl DynamicFilterPhysicalExpr {
         Self::remap_children(&self.children, self.remapped_children.as_ref(), expr)
     }
 
+    /// Return the current expression for the given partition, if available.
+    ///
+    /// If no partition-specific expression is available, this falls back to [`Self::current`].
+    pub fn current_for_partition(
+        &self,
+        partition: usize,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        let inner = self.inner.read();
+        if let Some(partitioned_exprs) = &inner.partitioned_exprs {
+            if let Some(Some(expr)) = partitioned_exprs.get(partition) {
+                return Self::remap_children(
+                    &self.children,
+                    self.remapped_children.as_ref(),
+                    Arc::clone(expr),
+                );
+            }
+        }
+        let expr = Arc::clone(inner.expr());
+        Self::remap_children(&self.children, self.remapped_children.as_ref(), expr)
+    }
+
+    /// Returns true if this dynamic filter has partition-specific expressions.
+    pub fn has_partitioned_filters(&self) -> bool {
+        self.inner.read().partitioned_exprs.is_some()
+    }
+
     /// Update the current expression and notify all waiters.
     /// Any children of this expression must be a subset of the original children
     /// passed to the constructor.
@@ -241,11 +272,56 @@ impl DynamicFilterPhysicalExpr {
         *current = Inner {
             generation: new_generation,
             expr: new_expr,
+            partitioned_exprs: None,
             is_complete: current.is_complete,
         };
         drop(current); // Release the lock before broadcasting
 
         // Broadcast the new state to all waiters
+        let _ = self.state_watch.send(FilterState::InProgress {
+            generation: new_generation,
+        });
+        Ok(())
+    }
+
+    /// Update the current expression and attach partition-specific expressions.
+    ///
+    /// This is used when dynamic filters need to be applied per-partition without
+    /// hash routing.
+    pub fn update_partitioned(
+        &self,
+        new_expr: Arc<dyn PhysicalExpr>,
+        partitioned_exprs: Vec<Option<Arc<dyn PhysicalExpr>>>,
+    ) -> Result<()> {
+        let new_expr = Self::remap_children(
+            &self.children,
+            self.remapped_children.as_ref(),
+            new_expr,
+        )?;
+
+        let mut remapped_partitioned = Vec::with_capacity(partitioned_exprs.len());
+        for expr in partitioned_exprs {
+            let expr = match expr {
+                Some(expr) => Some(Self::remap_children(
+                    &self.children,
+                    self.remapped_children.as_ref(),
+                    expr,
+                )?),
+                None => None,
+            };
+            remapped_partitioned.push(expr);
+        }
+
+        let mut current = self.inner.write();
+        let new_generation = current.generation + 1;
+        *current = Inner {
+            generation: new_generation,
+            expr: new_expr,
+            partitioned_exprs: Some(remapped_partitioned),
+            is_complete: current.is_complete,
+        };
+        drop(current);
+
         let _ = self.state_watch.send(FilterState::InProgress {
             generation: new_generation,
         });
