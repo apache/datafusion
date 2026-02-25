@@ -294,8 +294,32 @@ impl DataFrame {
         self.session_state.create_logical_expr(sql, df_schema)
     }
 
-    /// Consume the DataFrame and produce a physical plan
-    pub async fn create_physical_plan(self) -> Result<Arc<dyn ExecutionPlan>> {
+    /// Create a physical plan from this DataFrame.
+    ///
+    /// After calling this method, the original `DataFrame` is still accessible,
+    /// which means you can inspect the physical plan (e.g. for logging or explain)
+    /// and then separately call [`DataFrame::write_parquet`], [`DataFrame::collect`],
+    /// or other execution methods on the same `DataFrame`.
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let ctx = SessionContext::new();
+    /// let df = ctx
+    ///     .read_csv("tests/data/example.csv", CsvReadOptions::new())
+    ///     .await?;
+    /// // Inspect the physical plan without consuming the DataFrame
+    /// let physical_plan = df.create_physical_plan().await?;
+    /// println!("{physical_plan:?}");
+    /// // df is still usable: collect results, write parquet, etc.
+    /// let batches = df.collect().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn create_physical_plan(&self) -> Result<Arc<dyn ExecutionPlan>> {
         self.session_state.create_physical_plan(&self.plan).await
     }
 
@@ -2392,7 +2416,7 @@ impl DataFrame {
         } else {
             let context = SessionContext::new_with_state((*self.session_state).clone());
             // The schema is consistent with the output
-            let plan = self.clone().create_physical_plan().await?;
+            let plan = self.create_physical_plan().await?;
             let schema = plan.schema();
             let task_ctx = Arc::new(self.task_ctx());
             let partitions = collect_partitioned(plan, task_ctx).await?;
