@@ -100,6 +100,7 @@ pub(super) fn build_struct_inlist_values(
 mod tests {
     use super::*;
     use arrow::array::{Int32Array, StringArray};
+    use arrow::compute::cast;
     use arrow_schema::DataType;
     use std::sync::Arc;
 
@@ -129,5 +130,66 @@ mod tests {
                 build_struct_fields(&[DataType::Int32, DataType::Utf8]).unwrap()
             )
         );
+    }
+
+    /// Reproducer for a bug where `flatten_dictionary_array` returned the
+    /// dictionary value pool (unique entries) instead of the expanded logical
+    /// array.  After `concat_batches` deduplicates a dictionary, values.len()
+    /// can be smaller than keys.len().  When combined with a non-dictionary
+    /// column in a multi-column join key the length mismatch causes
+    /// `StructArray::new` to panic.
+    #[test]
+    fn test_build_struct_inlist_values_with_dictionary() {
+        // Simulate a post-concat dictionary column: 4 rows, 3 unique values.
+        // keys=[0,1,0,2], values=["a","b","c"]  →  logical: ["a","b","a","c"]
+        let string_array =
+            Arc::new(StringArray::from(vec!["a", "b", "a", "c"])) as ArrayRef;
+        let dict_type = DataType::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(DataType::Utf8),
+        );
+        let dict_array = cast(&string_array, &dict_type).unwrap();
+        // dict_array has keys.len()=4, but values().len()=3 (deduplicated)
+
+        let int_array = Arc::new(Int32Array::from(vec![10, 20, 30, 40])) as ArrayRef;
+        // int_array.len()=4
+
+        // Before the fix this panics because flatten_dictionary_array returns
+        // the 3-element value pool while int_array has 4 elements.
+        let result = build_struct_inlist_values(&[dict_array, int_array])
+            .unwrap()
+            .unwrap();
+
+        // The result should be a struct with 4 rows.
+        assert_eq!(result.len(), 4);
+        assert_eq!(
+            *result.data_type(),
+            DataType::Struct(
+                build_struct_fields(&[DataType::Utf8, DataType::Int32]).unwrap()
+            )
+        );
+    }
+
+    /// Verify that a single dictionary column is also correctly expanded.
+    #[test]
+    fn test_build_single_column_inlist_with_dictionary() {
+        let string_array =
+            Arc::new(StringArray::from(vec!["x", "y", "x", "z"])) as ArrayRef;
+        let dict_type = DataType::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(DataType::Utf8),
+        );
+        let dict_array = cast(&string_array, &dict_type).unwrap();
+
+        let result =
+            build_struct_inlist_values(std::slice::from_ref(&dict_array))
+                .unwrap()
+                .unwrap();
+
+        // Should have 4 rows (one per key), not 3 (the unique value count).
+        assert_eq!(result.len(), 4);
+        assert_eq!(*result.data_type(), DataType::Utf8);
+        // Values should match the logical array, not the deduplicated pool.
+        assert!(result.eq(&string_array));
     }
 }
