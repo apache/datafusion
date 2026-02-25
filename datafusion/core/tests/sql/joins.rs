@@ -299,3 +299,111 @@ async fn unparse_cross_join() -> Result<()> {
 
     Ok(())
 }
+
+/// Reproducer for a bug where `flatten_dictionary_array` in the hash join
+/// InList pushdown code returned the dictionary value pool (unique entries)
+/// instead of the expanded logical array.  When the build side spans
+/// multiple batches, `concat_batches` deduplicates the dictionary, making
+/// `values().len() < keys().len()`.  Combined with a second (non-dictionary)
+/// join key column, this caused a length mismatch panic in
+/// `StructArray::new`.
+///
+/// This test exercises the full SQL → physical plan → execution path.
+#[tokio::test]
+async fn test_hash_join_dictionary_column_inlist_pushdown() -> Result<()> {
+    use arrow::compute::cast;
+
+    let dict_type =
+        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+
+    // --- Build side: two batches with overlapping dictionary values ---
+    // After concat_batches the dictionary deduplicates: values=["a","b","c"],
+    // keys=[0,1,0,2] → values().len()=3, keys().len()=4.
+    let build_schema = Arc::new(Schema::new(vec![
+        Field::new("key_str", dict_type.clone(), false),
+        Field::new("key_int", DataType::Int32, false),
+    ]));
+
+    let batch1 = RecordBatch::try_new(
+        Arc::clone(&build_schema),
+        vec![
+            cast(
+                &StringArray::from(vec!["a", "b"]),
+                &dict_type,
+            )?,
+            Arc::new(Int32Array::from(vec![1, 2])),
+        ],
+    )?;
+    let batch2 = RecordBatch::try_new(
+        Arc::clone(&build_schema),
+        vec![
+            cast(
+                &StringArray::from(vec!["a", "c"]),
+                &dict_type,
+            )?,
+            Arc::new(Int32Array::from(vec![3, 4])),
+        ],
+    )?;
+
+    let build_table =
+        MemTable::try_new(Arc::clone(&build_schema), vec![vec![batch1, batch2]])?;
+
+    // --- Probe side: a larger table so the optimizer picks a hash join ---
+    let probe_schema = Arc::new(Schema::new(vec![
+        Field::new("key_str", dict_type.clone(), false),
+        Field::new("key_int", DataType::Int32, false),
+        Field::new("val", DataType::Int32, false),
+    ]));
+
+    let probe_batch = RecordBatch::try_new(
+        Arc::clone(&probe_schema),
+        vec![
+            cast(
+                &StringArray::from(vec!["a", "b", "a", "c", "d", "a"]),
+                &dict_type,
+            )?,
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6])),
+            Arc::new(Int32Array::from(vec![10, 20, 30, 40, 50, 60])),
+        ],
+    )?;
+
+    let probe_table =
+        MemTable::try_new(Arc::clone(&probe_schema), vec![vec![probe_batch]])?;
+
+    // Use a single-partition, small-batch config so that the build side
+    // is collected (CollectLeft) and InList pushdown is attempted.
+    let config = SessionConfig::new()
+        .with_target_partitions(1)
+        .with_batch_size(2);
+    let ctx = SessionContext::new_with_config(config);
+
+    ctx.register_table("build_side", Arc::new(build_table))?;
+    ctx.register_table("probe_side", Arc::new(probe_table))?;
+
+    // Multi-column join: triggers the StructArray path in
+    // build_struct_inlist_values that panicked before the fix.
+    let sql = "\
+        SELECT p.key_str, p.key_int, p.val \
+        FROM probe_side p \
+        INNER JOIN build_side b \
+          ON p.key_str = b.key_str AND p.key_int = b.key_int \
+        ORDER BY p.val";
+
+    let batches = ctx.sql(sql).await?.collect().await?;
+
+    assert_batches_eq!(
+        [
+            "+---------+---------+-----+",
+            "| key_str | key_int | val |",
+            "+---------+---------+-----+",
+            "| a       | 1       | 10  |",
+            "| b       | 2       | 20  |",
+            "| a       | 3       | 30  |",
+            "| c       | 4       | 40  |",
+            "+---------+---------+-----+",
+        ],
+        &batches
+    );
+
+    Ok(())
+}

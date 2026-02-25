@@ -70,7 +70,7 @@ pub(super) fn build_struct_inlist_values(
     // Flatten any dictionary-encoded arrays
     let flattened_arrays: Vec<ArrayRef> = join_key_arrays
         .iter()
-        .map(|a| flatten_dictionary_array(a))
+        .map(flatten_dictionary_array)
         .collect::<Result<Vec<_>>>()?;
 
     // Build the source array/struct
