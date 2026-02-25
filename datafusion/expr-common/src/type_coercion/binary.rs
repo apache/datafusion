@@ -526,7 +526,7 @@ impl From<&DataType> for TypeCategory {
                     return TypeCategory::Numeric;
                 }
 
-                if matches!(data_type, DataType::Boolean) {
+                if *data_type == DataType::Boolean {
                     return TypeCategory::Boolean;
                 }
 

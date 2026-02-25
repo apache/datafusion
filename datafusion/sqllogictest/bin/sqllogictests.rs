@@ -44,9 +44,11 @@ use datafusion::common::runtime::SpawnedTask;
 use futures::FutureExt;
 use std::ffi::OsStr;
 use std::fs;
-use std::io::{IsTerminal, stdout};
+use std::io::{IsTerminal, stderr, stdout};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[cfg(feature = "postgres")]
 mod postgres_container;
@@ -110,6 +112,13 @@ async fn run_tests() -> Result<()> {
 
     options.warn_on_ignored();
 
+    // Print parallelism info for debugging CI performance
+    eprintln!(
+        "Running with {} test threads (available parallelism: {})",
+        options.test_threads,
+        get_available_parallelism()
+    );
+
     #[cfg(feature = "postgres")]
     initialize_postgres_container(&options).await?;
 
@@ -147,6 +156,10 @@ async fn run_tests() -> Result<()> {
     }
 
     let num_tests = test_files.len();
+    // For CI environments without TTY, print progress periodically
+    let is_ci = !stderr().is_terminal();
+    let completed_count = Arc::new(AtomicUsize::new(0));
+
     let errors: Vec<_> = futures::stream::iter(test_files)
         .map(|test_file| {
             let validator = if options.include_sqlite
@@ -162,10 +175,12 @@ async fn run_tests() -> Result<()> {
             let filters = options.filters.clone();
 
             let relative_path = test_file.relative_path.clone();
+            let relative_path_for_timing = test_file.relative_path.clone();
 
             let currently_running_sql_tracker = CurrentlyExecutingSqlTracker::new();
             let currently_running_sql_tracker_clone =
                 currently_running_sql_tracker.clone();
+            let file_start = Instant::now();
             SpawnedTask::spawn(async move {
                 match (
                     options.postgres_runner,
@@ -227,14 +242,38 @@ async fn run_tests() -> Result<()> {
                         )
                         .await?
                     }
+                };
+                // Log slow files (>30s) for CI debugging
+                let elapsed = file_start.elapsed();
+                if elapsed.as_secs() > 30 {
+                    eprintln!(
+                        "Slow file: {} took {:.1}s",
+                        relative_path_for_timing.display(),
+                        elapsed.as_secs_f64()
+                    );
                 }
-                Ok(()) as Result<()>
+                Ok(())
             })
             .join()
             .map(move |result| (result, relative_path, currently_running_sql_tracker))
         })
         // run up to num_cpus streams in parallel
         .buffer_unordered(options.test_threads)
+        .inspect({
+            let completed_count = Arc::clone(&completed_count);
+            move |_| {
+                let completed = completed_count.fetch_add(1, Ordering::Relaxed) + 1;
+                // In CI (no TTY), print progress every 10% or every 50 files
+                if is_ci && (completed.is_multiple_of(50) || completed == num_tests) {
+                    eprintln!(
+                        "Progress: {}/{} files completed ({:.0}%)",
+                        completed,
+                        num_tests,
+                        (completed as f64 / num_tests as f64) * 100.0
+                    );
+                }
+            }
+        })
         .flat_map(|(result, test_file_path, current_sql)| {
             // Filter out any Ok() leaving only the DataFusionErrors
             futures::stream::iter(match result {

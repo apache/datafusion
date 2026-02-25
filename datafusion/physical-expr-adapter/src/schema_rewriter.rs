@@ -468,7 +468,10 @@ impl DefaultPhysicalExprAdapterRewriter {
         column: Column,
         logical_field: &Field,
     ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
-        let actual_physical_field = self.physical_file_schema.field(column.index());
+        // Look up the column index in the physical schema by name to ensure correctness.
+        let physical_column_index = self.physical_file_schema.index_of(column.name())?;
+        let actual_physical_field =
+            self.physical_file_schema.field(physical_column_index);
 
         // For struct types, use validate_struct_compatibility which handles:
         // - Missing fields in source (filled with nulls)
@@ -1491,5 +1494,43 @@ mod tests {
             cast_expr.data_type(&Schema::empty()).unwrap(),
             DataType::Int64
         );
+    }
+
+    #[test]
+    fn test_create_cast_column_expr_uses_name_lookup_not_column_index() {
+        // Physical schema has column `a` at index 1; index 0 is an incompatible type.
+        let physical_schema = Arc::new(Schema::new(vec![
+            Field::new("b", DataType::Binary, true),
+            Field::new("a", DataType::Int32, false),
+        ]));
+
+        let logical_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Binary, true),
+        ]));
+
+        let rewriter = DefaultPhysicalExprAdapterRewriter {
+            logical_file_schema: Arc::clone(&logical_schema),
+            physical_file_schema: Arc::clone(&physical_schema),
+        };
+
+        // Deliberately provide the wrong index for column `a`.
+        // Regression: this must still resolve against physical field `a` by name.
+        let transformed = rewriter
+            .create_cast_column_expr(
+                Column::new("a", 0),
+                logical_schema.field_with_name("a").unwrap(),
+            )
+            .unwrap();
+
+        let cast_expr = transformed
+            .data
+            .as_any()
+            .downcast_ref::<CastColumnExpr>()
+            .expect("Expected CastColumnExpr");
+
+        assert_eq!(cast_expr.input_field().name(), "a");
+        assert_eq!(cast_expr.input_field().data_type(), &DataType::Int32);
+        assert_eq!(cast_expr.target_field().data_type(), &DataType::Int64);
     }
 }

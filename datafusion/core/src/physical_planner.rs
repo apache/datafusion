@@ -1395,7 +1395,7 @@ impl DefaultPhysicalPlanner {
 
                 // TODO: Allow PWMJ to deal with residual equijoin conditions
                 let join: Arc<dyn ExecutionPlan> = if join_on.is_empty() {
-                    if join_filter.is_none() && matches!(join_type, JoinType::Inner) {
+                    if join_filter.is_none() && *join_type == JoinType::Inner {
                         // cross join if there is no join conditions and no join filter set
                         Arc::new(CrossJoinExec::new(physical_left, physical_right))
                     } else if num_range_filters == 1
@@ -1470,9 +1470,7 @@ impl DefaultPhysicalPlanner {
 
                         let left_side = side_of(lhs_logical)?;
                         let right_side = side_of(rhs_logical)?;
-                        if matches!(left_side, Side::Both)
-                            || matches!(right_side, Side::Both)
-                        {
+                        if left_side == Side::Both || right_side == Side::Both {
                             return Ok(Arc::new(NestedLoopJoinExec::try_new(
                                 physical_left,
                                 physical_right,
@@ -3553,12 +3551,12 @@ mod tests {
             assert!(
                 stringified_plans
                     .iter()
-                    .any(|p| matches!(p.plan_type, PlanType::FinalLogicalPlan))
+                    .any(|p| p.plan_type == PlanType::FinalLogicalPlan)
             );
             assert!(
                 stringified_plans
                     .iter()
-                    .any(|p| matches!(p.plan_type, PlanType::InitialPhysicalPlan))
+                    .any(|p| p.plan_type == PlanType::InitialPhysicalPlan)
             );
             assert!(
                 stringified_plans.iter().any(|p| matches!(
@@ -3569,7 +3567,7 @@ mod tests {
             assert!(
                 stringified_plans
                     .iter()
-                    .any(|p| matches!(p.plan_type, PlanType::FinalPhysicalPlan))
+                    .any(|p| p.plan_type == PlanType::FinalPhysicalPlan)
             );
         } else {
             panic!(
@@ -3713,13 +3711,15 @@ mod tests {
 
     #[derive(Debug)]
     struct NoOpExecutionPlan {
-        cache: PlanProperties,
+        cache: Arc<PlanProperties>,
     }
 
     impl NoOpExecutionPlan {
         fn new(schema: SchemaRef) -> Self {
             let cache = Self::compute_properties(schema);
-            Self { cache }
+            Self {
+                cache: Arc::new(cache),
+            }
         }
 
         /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
@@ -3757,7 +3757,7 @@ mod tests {
             self
         }
 
-        fn properties(&self) -> &PlanProperties {
+        fn properties(&self) -> &Arc<PlanProperties> {
             &self.cache
         }
 
@@ -3911,7 +3911,7 @@ digraph {
         fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
             self.0.iter().collect::<Vec<_>>()
         }
-        fn properties(&self) -> &PlanProperties {
+        fn properties(&self) -> &Arc<PlanProperties> {
             unimplemented!()
         }
         fn execute(
@@ -3960,7 +3960,7 @@ digraph {
         fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
             unimplemented!()
         }
-        fn properties(&self) -> &PlanProperties {
+        fn properties(&self) -> &Arc<PlanProperties> {
             unimplemented!()
         }
         fn execute(
@@ -4081,7 +4081,7 @@ digraph {
         fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
             vec![]
         }
-        fn properties(&self) -> &PlanProperties {
+        fn properties(&self) -> &Arc<PlanProperties> {
             unimplemented!()
         }
         fn execute(
