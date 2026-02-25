@@ -159,6 +159,19 @@ impl AnalyzerRule for TypeCoercion {
                     0
                 }
             );
+            let total_projection_nodes =
+                stats.projection_recompute_skipped_nodes + stats.projection_recompute_executed_nodes;
+            let projection_skip_ratio = if total_projection_nodes > 0 {
+                stats.projection_recompute_skipped_nodes as f64 * 100.0
+                    / total_projection_nodes as f64
+            } else {
+                0.0
+            };
+            info!(
+                "type_coercion projection recompute skips: skipped_nodes={} executed_nodes={} skip_ratio={projection_skip_ratio:.2}%",
+                stats.projection_recompute_skipped_nodes,
+                stats.projection_recompute_executed_nodes,
+            );
             for (kind, kind_stats) in &stats.by_kind {
                 info!(
                     "type_coercion aggregate by_kind: kind={} nodes={} total={} ms (schema={} ms, filter={} ms, map_expr={} ms, coerce_plan={} ms, recompute_schema={} ms)",
@@ -249,11 +262,27 @@ fn analyze_internal_with_stats(
     let plan_us = plan_start.elapsed().as_micros();
     let log_expr_count = trace_type_coercion.then(|| coerced.data.expressions().len());
     let log_input_count = trace_type_coercion.then(|| coerced.data.inputs().len());
+    let skip_projection_recompute =
+        matches!(&coerced.data, LogicalPlan::Projection(_)) && !mapped_transformed;
 
     // recompute the schema after the expressions have been rewritten as the types may have changed
-    let schema_recompute_start = std::time::Instant::now();
-    let recomputed = coerced.map_data(|plan| plan.recompute_schema());
-    let schema_recompute_us = schema_recompute_start.elapsed().as_micros();
+    #[cfg(debug_assertions)]
+    if skip_projection_recompute {
+        let recomputed_projection = coerced.data.clone().recompute_schema()?;
+        debug_assert_eq!(
+            coerced.data.schema(),
+            recomputed_projection.schema(),
+            "Skipping recompute_schema changed projection schema unexpectedly"
+        );
+    }
+    let (recomputed, schema_recompute_us) = if skip_projection_recompute {
+        (Ok(coerced), 0)
+    } else {
+        let schema_recompute_start = std::time::Instant::now();
+        let recomputed = coerced.map_data(|plan| plan.recompute_schema());
+        let schema_recompute_us = schema_recompute_start.elapsed().as_micros();
+        (recomputed, schema_recompute_us)
+    };
 
     let total_us = total_start.elapsed().as_micros();
     if let Some(stats) = stats {
@@ -266,6 +295,7 @@ fn analyze_internal_with_stats(
             plan_us,
             schema_recompute_us,
             mapped_transformed,
+            skip_projection_recompute,
         );
     }
     let total_ms = total_us / 1000;
@@ -304,6 +334,8 @@ struct TypeCoercionStats {
     projection_changed_recompute_schema_us: u128,
     projection_unchanged_nodes: usize,
     projection_unchanged_recompute_schema_us: u128,
+    projection_recompute_skipped_nodes: usize,
+    projection_recompute_executed_nodes: usize,
     by_kind: BTreeMap<&'static str, TypeCoercionKindStats>,
 }
 
@@ -329,6 +361,7 @@ impl TypeCoercionStats {
         coerce_plan_us: u128,
         recompute_schema_us: u128,
         mapped_transformed: bool,
+        projection_recompute_skipped: bool,
     ) {
         self.nodes += 1;
         self.total_us += total_us;
@@ -338,6 +371,11 @@ impl TypeCoercionStats {
         self.coerce_plan_us += coerce_plan_us;
         self.recompute_schema_us += recompute_schema_us;
         if kind == "Projection" {
+            if projection_recompute_skipped {
+                self.projection_recompute_skipped_nodes += 1;
+            } else {
+                self.projection_recompute_executed_nodes += 1;
+            }
             if mapped_transformed {
                 self.projection_changed_nodes += 1;
                 self.projection_changed_recompute_schema_us += recompute_schema_us;
@@ -1593,6 +1631,80 @@ mod test {
                 );
             }
         }
+
+        Ok(())
+    }
+
+    fn analyze_type_coercion(plan: LogicalPlan) -> Result<LogicalPlan> {
+        let options = ConfigOptions::default();
+        Analyzer::with_rules(vec![Arc::new(TypeCoercion::new())])
+            .execute_and_check(plan, &options, |_, _| {})
+    }
+
+    #[test]
+    fn projection_schema_unchanged_when_rewrite_is_noop() -> Result<()> {
+        let plan = LogicalPlan::Projection(Projection::try_new(
+            vec![col("a")],
+            empty_with_type(DataType::Int64),
+        )?);
+        let original_schema = Arc::clone(plan.schema());
+
+        let analyzed = analyze_type_coercion(plan)?;
+        assert_eq!(analyzed.schema().as_ref(), original_schema.as_ref());
+        assert!(matches!(analyzed, LogicalPlan::Projection(_)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn projection_schema_updates_when_rewrite_changes_expression() -> Result<()> {
+        let expr = col("a").lt(lit(2_u32));
+        let plan = LogicalPlan::Projection(Projection::try_new(
+            vec![expr],
+            empty_with_type(DataType::Float64),
+        )?);
+
+        let analyzed = analyze_type_coercion(plan)?;
+        assert!(matches!(analyzed, LogicalPlan::Projection(_)));
+        assert_eq!(analyzed.schema().field(0).data_type(), &DataType::Boolean);
+
+        Ok(())
+    }
+
+    #[test]
+    fn projection_schema_unchanged_inside_subquery() -> Result<()> {
+        let subquery_plan = Arc::new(LogicalPlan::Projection(Projection::try_new(
+            vec![col("a")],
+            empty_with_type(DataType::Int64),
+        )?));
+        let in_subquery_expr = Expr::InSubquery(InSubquery::new(
+            Box::new(col("a")),
+            Subquery {
+                subquery: subquery_plan,
+                outer_ref_columns: vec![],
+                spans: Spans::new(),
+            },
+            false,
+        ));
+        let plan = LogicalPlan::Filter(Filter::try_new(
+            in_subquery_expr,
+            empty_with_type(DataType::Int64),
+        )?);
+
+        let analyzed = analyze_type_coercion(plan)?;
+        let LogicalPlan::Filter(Filter { predicate, .. }) = analyzed else {
+            panic!("Expected analyzed plan to be Filter");
+        };
+        let Expr::InSubquery(InSubquery { subquery, .. }) = predicate else {
+            panic!("Expected filter predicate to be InSubquery");
+        };
+        let LogicalPlan::Projection(_) = subquery.subquery.as_ref() else {
+            panic!("Expected subquery plan to remain Projection");
+        };
+        assert_eq!(
+            subquery.subquery.schema().field(0).data_type(),
+            &DataType::Int64
+        );
 
         Ok(())
     }
