@@ -142,31 +142,21 @@ fn analyze_internal(
         expr.rewrite(&mut expr_rewrite)
             .map(|transformed| transformed.update_data(|e| original_name.restore(e)))
     })?;
-    let mapped_transformed = mapped.transformed;
+    // `coerce_plan` does not mutate projections, so recompute is only needed when expression rewriting changed projection expressions.
+    let skip_projection_recompute =
+        matches!(&mapped.data, LogicalPlan::Projection(_)) && !mapped.transformed;
 
     // some plans need extra coercion after their expressions are coerced
-    let coerced = mapped.map_data(|plan| expr_rewrite.coerce_plan(plan))?;
-    let skip_projection_recompute =
-        matches!(&coerced.data, LogicalPlan::Projection(_)) && !mapped_transformed;
-
-    // For unchanged projections, schema must already be valid.
-    // Keep a debug assertion during rollout to validate this assumption.
-    #[cfg(debug_assertions)]
-    if skip_projection_recompute {
-        let recomputed_projection = coerced.data.clone().recompute_schema()?;
-        debug_assert_eq!(
-            coerced.data.schema(),
-            recomputed_projection.schema(),
-            "Skipping recompute_schema changed projection schema unexpectedly"
-        );
-    }
-
-    if skip_projection_recompute {
-        Ok(coerced)
-    } else {
+    mapped
+        .map_data(|plan| expr_rewrite.coerce_plan(plan))?
         // recompute the schema after the expressions have been rewritten as the types may have changed
-        coerced.map_data(|plan| plan.recompute_schema())
-    }
+        .map_data(|plan| {
+            if !skip_projection_recompute {
+                plan.recompute_schema()
+            } else {
+                Ok(plan)
+            }
+        })
 }
 
 /// Rewrite expressions to apply type coercion.
