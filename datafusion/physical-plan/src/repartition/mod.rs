@@ -611,11 +611,25 @@ impl BatchPartitioner {
                             let columns =
                                 take_arrays(batch.columns(), &indices_array, None)?;
 
+                            let new_columns = columns
+                                .into_iter()
+                                .map(|col| {
+                                    use arrow::array::{Array, StringViewArray};
+                                    if let Some(sv) =
+                                        col.as_any().downcast_ref::<StringViewArray>()
+                                    {
+                                        Arc::new(sv.gc()) as Arc<dyn Array>
+                                    } else {
+                                        col
+                                    }
+                                })
+                                .collect();
+
                             let mut options = RecordBatchOptions::new();
                             options = options.with_row_count(Some(indices_array.len()));
                             let batch = RecordBatch::try_new_with_options(
                                 batch.schema(),
-                                columns,
+                                new_columns,
                                 &options,
                             )
                             .unwrap();
@@ -1375,26 +1389,6 @@ impl RepartitionExec {
 
             for res in partitioner.partition_iter(batch)? {
                 let (partition, batch) = res?;
-
-                let batch = {
-                    use arrow::array::{Array, StringViewArray};
-                    let mut new_columns = Vec::with_capacity(batch.num_columns());
-                    let mut mutated = false;
-                    for col in batch.columns() {
-                        if let Some(sv) = col.as_any().downcast_ref::<StringViewArray>() {
-                            new_columns.push(Arc::new(sv.gc()) as Arc<dyn Array>);
-                            mutated = true;
-                        } else {
-                            new_columns.push(Arc::clone(col));
-                        }
-                    }
-                    if mutated {
-                        RecordBatch::try_new(batch.schema(), new_columns)?
-                    } else {
-                        batch
-                    }
-                };
-
                 let size = batch.get_array_memory_size();
 
                 let timer = metrics.send_time[partition].timer();
