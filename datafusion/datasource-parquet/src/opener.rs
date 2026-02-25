@@ -229,6 +229,13 @@ impl ParquetOpener {
 }
 
 impl FileOpener for ParquetOpener {
+    fn is_leaf_morsel(&self, file: &PartitionedFile) -> bool {
+        file.extensions
+            .as_ref()
+            .map(|e| e.is::<ParquetMorsel>())
+            .unwrap_or(false)
+    }
+
     fn morselize(
         &self,
         partitioned_file: PartitionedFile,
