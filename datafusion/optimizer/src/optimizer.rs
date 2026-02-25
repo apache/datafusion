@@ -23,7 +23,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use datafusion_expr::registry::FunctionRegistry;
 use datafusion_expr::{InvariantLevel, assert_expected_schema};
-use log::{debug, warn};
+use log::{debug, info, warn};
 
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::ConfigOptions;
@@ -344,6 +344,11 @@ impl Optimizer {
         let start_time = Instant::now();
         let options = config.options();
         let mut new_plan = plan;
+        let trace_rule_timing = std::env::var_os("DF_TRACE_RULE_TIMING").is_some();
+        let trace_rule_timing_min_ms = std::env::var("DF_TRACE_RULE_TIMING_MIN_MS")
+            .ok()
+            .and_then(|v| v.parse::<u128>().ok())
+            .unwrap_or(0);
 
         let mut previous_plans = HashSet::with_capacity(16);
         previous_plans.insert(LogicalPlanSignature::new(&new_plan));
@@ -355,6 +360,7 @@ impl Optimizer {
             log_plan(&format!("Optimizer input (pass {i})"), &new_plan);
 
             for rule in &self.rules {
+                let rule_start = Instant::now();
                 // If skipping failed rules, copy plan before attempting to rewrite
                 // as rewriting is destructive
                 let prev_plan = options
@@ -386,6 +392,15 @@ impl Optimizer {
 
                     Ok(tnr)
                 });
+                let elapsed_ms = rule_start.elapsed().as_millis();
+                if trace_rule_timing && elapsed_ms >= trace_rule_timing_min_ms {
+                    info!(
+                        "Optimization rule {} took {} ms (pass {})",
+                        rule.name(),
+                        elapsed_ms,
+                        i
+                    );
+                }
 
                 // Handle results
                 match (result, prev_plan) {
