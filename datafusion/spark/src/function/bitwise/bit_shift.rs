@@ -25,11 +25,11 @@ use arrow::datatypes::{
     UInt64Type,
 };
 use datafusion_common::types::{
-    logical_int16, logical_int32, logical_int64, logical_int8, logical_uint16,
-    logical_uint32, logical_uint64, logical_uint8, NativeType,
+    NativeType, logical_int8, logical_int16, logical_int32, logical_int64, logical_uint8,
+    logical_uint16, logical_uint32, logical_uint64,
 };
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::{
     Coercion, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
     Signature, TypeSignature, TypeSignatureClass, Volatility,

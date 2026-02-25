@@ -19,7 +19,6 @@ use crate::aggregates::group_values::GroupValues;
 
 use arrow::array::{
     ArrayRef, AsArray as _, BooleanArray, BooleanBufferBuilder, NullBufferBuilder,
-    RecordBatch,
 };
 use datafusion_common::Result;
 use datafusion_expr::EmitTo;
@@ -146,7 +145,7 @@ impl GroupValues for GroupValuesBoolean {
         Ok(vec![Arc::new(BooleanArray::new(values, nulls)) as _])
     }
 
-    fn clear_shrink(&mut self, _batch: &RecordBatch) {
+    fn clear_shrink(&mut self, _num_rows: usize) {
         self.false_group = None;
         self.true_group = None;
         self.null_group = None;

@@ -40,7 +40,8 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Constraints, Result, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_plan::SortOrderPushdownResult;
 use datafusion_physical_plan::filter_pushdown::{
     ChildPushdownResult, FilterPushdownPhase, FilterPushdownPropagation, PushedDown,
 };
@@ -73,8 +74,8 @@ use datafusion_physical_plan::filter_pushdown::{
 /// ```text
 ///                       ┌─────────────────────┐                              -----► execute path
 ///                       │                     │                              ┄┄┄┄┄► init path
-///                       │   DataSourceExec    │  
-///                       │                     │    
+///                       │   DataSourceExec    │
+///                       │                     │
 ///                       └───────▲─────────────┘
 ///                               ┊  │
 ///                               ┊  │
@@ -157,16 +158,6 @@ pub trait DataSource: Send + Sync + Debug {
     /// across all partitions if `partition` is `None`.
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics>;
 
-    /// Returns aggregate statistics across all partitions.
-    ///
-    /// # Deprecated
-    /// Use [`Self::partition_statistics`] instead, which provides more fine-grained
-    /// control over statistics retrieval (per-partition or aggregate).
-    #[deprecated(since = "51.0.0", note = "Use partition_statistics instead")]
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
-    }
-
     /// Return a copy of this DataSource with a new fetch limit
     fn with_fetch(&self, _limit: Option<usize>) -> Option<Arc<dyn DataSource>>;
     fn fetch(&self) -> Option<usize>;
@@ -177,7 +168,13 @@ pub trait DataSource: Send + Sync + Debug {
         &self,
         _projection: &ProjectionExprs,
     ) -> Result<Option<Arc<dyn DataSource>>>;
+
     /// Try to push down filters into this DataSource.
+    ///
+    /// These filters are in terms of the output schema of this DataSource (e.g.
+    /// [`Self::eq_properties`] and output of any projections pushed into the
+    /// source), not the original table schema.
+    ///
     /// See [`ExecutionPlan::handle_child_pushdown_result`] for more details.
     ///
     /// [`ExecutionPlan::handle_child_pushdown_result`]: datafusion_physical_plan::ExecutionPlan::handle_child_pushdown_result
@@ -189,6 +186,30 @@ pub trait DataSource: Send + Sync + Debug {
         Ok(FilterPushdownPropagation::with_parent_pushdown_result(
             vec![PushedDown::No; filters.len()],
         ))
+    }
+
+    /// Try to create a new DataSource that produces data in the specified sort order.
+    ///
+    /// # Arguments
+    /// * `order` - The desired output ordering
+    ///
+    /// # Returns
+    /// * `Ok(SortOrderPushdownResult::Exact { .. })` - Created a source that guarantees exact ordering
+    /// * `Ok(SortOrderPushdownResult::Inexact { .. })` - Created a source optimized for the ordering
+    /// * `Ok(SortOrderPushdownResult::Unsupported)` - Cannot optimize for this ordering
+    /// * `Err(e)` - Error occurred
+    ///
+    /// Default implementation returns `Unsupported`.
+    fn try_pushdown_sort(
+        &self,
+        _order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn DataSource>>> {
+        Ok(SortOrderPushdownResult::Unsupported)
+    }
+
+    /// Returns a variant of this `DataSource` that is aware of order-sensitivity.
+    fn with_preserve_order(&self, _preserve_order: bool) -> Option<Arc<dyn DataSource>> {
+        None
     }
 }
 
@@ -209,7 +230,7 @@ pub struct DataSourceExec {
     /// The source of the data -- for example, `FileScanConfig` or `MemorySourceConfig`
     data_source: Arc<dyn DataSource>,
     /// Cached plan properties such as sort order
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl DisplayAs for DataSourceExec {
@@ -233,7 +254,7 @@ impl ExecutionPlan for DataSourceExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -303,7 +324,7 @@ impl ExecutionPlan for DataSourceExec {
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
         let data_source = self.data_source.with_fetch(limit)?;
-        let cache = self.cache.clone();
+        let cache = Arc::clone(&self.cache);
 
         Some(Arc::new(Self { data_source, cache }))
     }
@@ -347,7 +368,8 @@ impl ExecutionPlan for DataSourceExec {
                 let mut new_node = self.clone();
                 new_node.data_source = data_source;
                 // Re-compute properties since we have new filters which will impact equivalence info
-                new_node.cache = Self::compute_properties(&new_node.data_source);
+                new_node.cache =
+                    Arc::new(Self::compute_properties(&new_node.data_source));
 
                 Ok(FilterPushdownPropagation {
                     filters: res.filters,
@@ -360,6 +382,31 @@ impl ExecutionPlan for DataSourceExec {
             }),
         }
     }
+
+    fn try_pushdown_sort(
+        &self,
+        order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+        // Delegate to the data source and wrap result with DataSourceExec
+        self.data_source
+            .try_pushdown_sort(order)?
+            .try_map(|new_data_source| {
+                let new_exec = self.clone().with_data_source(new_data_source);
+                Ok(Arc::new(new_exec) as Arc<dyn ExecutionPlan>)
+            })
+    }
+
+    fn with_preserve_order(
+        &self,
+        preserve_order: bool,
+    ) -> Option<Arc<dyn ExecutionPlan>> {
+        self.data_source
+            .with_preserve_order(preserve_order)
+            .map(|new_data_source| {
+                Arc::new(self.clone().with_data_source(new_data_source))
+                    as Arc<dyn ExecutionPlan>
+            })
+    }
 }
 
 impl DataSourceExec {
@@ -370,7 +417,10 @@ impl DataSourceExec {
     // Default constructor for `DataSourceExec`, setting the `cooperative` flag to `true`.
     pub fn new(data_source: Arc<dyn DataSource>) -> Self {
         let cache = Self::compute_properties(&data_source);
-        Self { data_source, cache }
+        Self {
+            data_source,
+            cache: Arc::new(cache),
+        }
     }
 
     /// Return the source object
@@ -379,20 +429,20 @@ impl DataSourceExec {
     }
 
     pub fn with_data_source(mut self, data_source: Arc<dyn DataSource>) -> Self {
-        self.cache = Self::compute_properties(&data_source);
+        self.cache = Arc::new(Self::compute_properties(&data_source));
         self.data_source = data_source;
         self
     }
 
     /// Assign constraints
     pub fn with_constraints(mut self, constraints: Constraints) -> Self {
-        self.cache = self.cache.with_constraints(constraints);
+        Arc::make_mut(&mut self.cache).set_constraints(constraints);
         self
     }
 
     /// Assign output partitioning
     pub fn with_partitioning(mut self, partitioning: Partitioning) -> Self {
-        self.cache = self.cache.with_partitioning(partitioning);
+        Arc::make_mut(&mut self.cache).partitioning = partitioning;
         self
     }
 

@@ -18,7 +18,7 @@
 use arrow::array::RecordBatch;
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
-use datafusion_physical_expr::{expressions::col, PhysicalSortExpr};
+use datafusion_physical_expr::{PhysicalSortExpr, expressions::col};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::sorts::sort::sort_batch;
 use test_utils::stagger_batch;
@@ -209,8 +209,8 @@ mod test {
             sort_keys_set: vec![vec!["b".to_string()]],
         };
 
-        let mut gen = DatasetGenerator::new(config);
-        let datasets = gen.generate().unwrap();
+        let mut data_gen = DatasetGenerator::new(config);
+        let datasets = data_gen.generate().unwrap();
 
         // Should Generate 2 datasets
         assert_eq!(datasets.len(), 2);

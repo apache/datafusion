@@ -61,6 +61,10 @@ pub mod interval_arithmetic {
     pub use datafusion_expr_common::interval_arithmetic::*;
 }
 pub mod logical_plan;
+pub mod dml {
+    //! DML (Data Manipulation Language) types for DELETE, UPDATE operations.
+    pub use crate::logical_plan::dml::*;
+}
 pub mod planner;
 pub mod registry;
 pub mod simplify;
@@ -72,6 +76,7 @@ pub mod statistics {
     pub use datafusion_expr_common::statistics::*;
 }
 mod predicate_bounds;
+pub mod preimage;
 pub mod ptr_eq;
 pub mod test;
 pub mod tree_node;
@@ -90,6 +95,7 @@ pub use datafusion_expr_common::accumulator::Accumulator;
 pub use datafusion_expr_common::columnar_value::ColumnarValue;
 pub use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 pub use datafusion_expr_common::operator::Operator;
+pub use datafusion_expr_common::placement::ExpressionPlacement;
 pub use datafusion_expr_common::signature::{
     ArrayFunctionArgument, ArrayFunctionSignature, Coercion, Signature,
     TIMEZONE_WILDCARD, TypeSignature, TypeSignatureClass, Volatility,

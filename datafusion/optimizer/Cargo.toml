@@ -21,7 +21,7 @@ description = "DataFusion Query Optimizer"
 keywords = ["datafusion", "query", "optimizer"]
 readme = "README.md"
 version = { workspace = true }
-edition = "2024"
+edition = { workspace = true }
 homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
@@ -55,7 +55,7 @@ itertools = { workspace = true }
 log = { workspace = true }
 recursive = { workspace = true, optional = true }
 regex = { workspace = true }
-regex-syntax = "0.8.6"
+regex-syntax = "0.8.9"
 
 [dev-dependencies]
 async-trait = { workspace = true }

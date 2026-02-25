@@ -21,7 +21,7 @@ description = "Utility functions for implementing aggregate functions for the Da
 keywords = ["datafusion", "logical", "plan", "expressions"]
 readme = "README.md"
 version = { workspace = true }
-edition = "2024"
+edition = { workspace = true }
 homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }

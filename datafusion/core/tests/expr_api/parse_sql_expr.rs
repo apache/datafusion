@@ -19,9 +19,9 @@ use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::prelude::{CsvReadOptions, SessionContext};
 use datafusion_common::DFSchema;
 use datafusion_common::{DFSchemaRef, Result, ToDFSchema};
+use datafusion_expr::Expr;
 use datafusion_expr::col;
 use datafusion_expr::lit;
-use datafusion_expr::Expr;
 use datafusion_sql::unparser::Unparser;
 /// A schema like:
 ///

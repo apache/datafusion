@@ -28,7 +28,7 @@ use super::metrics::{
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
 use crate::{
     DisplayFormatType, Distribution, ExecutionPlan, RecordBatchStream,
-    SendableRecordBatchStream,
+    SendableRecordBatchStream, check_if_same_properties,
 };
 
 use arrow::array::{
@@ -74,7 +74,7 @@ pub struct UnnestExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl UnnestExec {
@@ -100,7 +100,7 @@ impl UnnestExec {
             struct_column_indices,
             options,
             metrics: Default::default(),
-            cache,
+            cache: Arc::new(cache),
         })
     }
 
@@ -193,6 +193,17 @@ impl UnnestExec {
     pub fn options(&self) -> &UnnestOptions {
         &self.options
     }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(self)
+        }
+    }
 }
 
 impl DisplayAs for UnnestExec {
@@ -221,7 +232,7 @@ impl ExecutionPlan for UnnestExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -231,10 +242,11 @@ impl ExecutionPlan for UnnestExec {
 
     fn with_new_children(
         self: Arc<Self>,
-        children: Vec<Arc<dyn ExecutionPlan>>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        check_if_same_properties!(self, children);
         Ok(Arc::new(UnnestExec::new(
-            Arc::clone(&children[0]),
+            children.swap_remove(0),
             self.list_column_indices.clone(),
             self.struct_column_indices.clone(),
             Arc::clone(&self.schema),
@@ -1199,32 +1211,32 @@ mod tests {
         .unwrap();
 
         assert_snapshot!(batches_to_string(&[ret]),
-        @r###"
-+---------------------------------+---------------------------------+---------------------------------+
-| col1_unnest_placeholder_depth_1 | col1_unnest_placeholder_depth_2 | col2_unnest_placeholder_depth_1 |
-+---------------------------------+---------------------------------+---------------------------------+
-| [1, 2, 3]                       | 1                               | a                               |
-|                                 | 2                               | b                               |
-| [4, 5]                          | 3                               |                                 |
-| [1, 2, 3]                       |                                 | a                               |
-|                                 |                                 | b                               |
-| [4, 5]                          |                                 |                                 |
-| [1, 2, 3]                       | 4                               | a                               |
-|                                 | 5                               | b                               |
-| [4, 5]                          |                                 |                                 |
-| [7, 8, 9, 10]                   | 7                               | c                               |
-|                                 | 8                               | d                               |
-| [11, 12, 13]                    | 9                               |                                 |
-|                                 | 10                              |                                 |
-| [7, 8, 9, 10]                   |                                 | c                               |
-|                                 |                                 | d                               |
-| [11, 12, 13]                    |                                 |                                 |
-| [7, 8, 9, 10]                   | 11                              | c                               |
-|                                 | 12                              | d                               |
-| [11, 12, 13]                    | 13                              |                                 |
-|                                 |                                 | e                               |
-+---------------------------------+---------------------------------+---------------------------------+
-        "###);
+        @r"
+        +---------------------------------+---------------------------------+---------------------------------+
+        | col1_unnest_placeholder_depth_1 | col1_unnest_placeholder_depth_2 | col2_unnest_placeholder_depth_1 |
+        +---------------------------------+---------------------------------+---------------------------------+
+        | [1, 2, 3]                       | 1                               | a                               |
+        |                                 | 2                               | b                               |
+        | [4, 5]                          | 3                               |                                 |
+        | [1, 2, 3]                       |                                 | a                               |
+        |                                 |                                 | b                               |
+        | [4, 5]                          |                                 |                                 |
+        | [1, 2, 3]                       | 4                               | a                               |
+        |                                 | 5                               | b                               |
+        | [4, 5]                          |                                 |                                 |
+        | [7, 8, 9, 10]                   | 7                               | c                               |
+        |                                 | 8                               | d                               |
+        | [11, 12, 13]                    | 9                               |                                 |
+        |                                 | 10                              |                                 |
+        | [7, 8, 9, 10]                   |                                 | c                               |
+        |                                 |                                 | d                               |
+        | [11, 12, 13]                    |                                 |                                 |
+        | [7, 8, 9, 10]                   | 11                              | c                               |
+        |                                 | 12                              | d                               |
+        | [11, 12, 13]                    | 13                              |                                 |
+        |                                 |                                 | e                               |
+        +---------------------------------+---------------------------------+---------------------------------+
+        ");
         Ok(())
     }
 

@@ -76,6 +76,8 @@ impl DataFrame {
 
         let file_type = format_as_file_type(format);
 
+        let copy_options = options.build_sink_options();
+
         let plan = if options.sort_by.is_empty() {
             self.plan
         } else {
@@ -88,7 +90,7 @@ impl DataFrame {
             plan,
             path.into(),
             file_type,
-            Default::default(),
+            copy_options,
             options.partition_by,
         )?
         .build()?;
@@ -321,6 +323,158 @@ mod tests {
 
         let num_rows_selected = selected.count().await?;
         assert_eq!(num_rows_selected, 14);
+
+        Ok(())
+    }
+
+    /// Test FileOutputMode::SingleFile - explicitly request single file output
+    /// for paths WITHOUT file extensions. This verifies the fix for the regression
+    /// where extension heuristics ignored the explicit with_single_file_output(true).
+    #[tokio::test]
+    async fn test_file_output_mode_single_file() -> Result<()> {
+        use arrow::array::Int32Array;
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+
+        let ctx = SessionContext::new();
+        let tmp_dir = TempDir::new()?;
+
+        // Path WITHOUT .parquet extension - this is the key scenario
+        let output_path = tmp_dir.path().join("data_no_ext");
+        let output_path_str = output_path.to_str().unwrap();
+
+        let df = ctx.read_batch(RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)])),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+        )?)?;
+
+        // Explicitly request single file output
+        df.write_parquet(
+            output_path_str,
+            DataFrameWriteOptions::new().with_single_file_output(true),
+            None,
+        )
+        .await?;
+
+        // Verify: output should be a FILE, not a directory
+        assert!(
+            output_path.is_file(),
+            "Expected single file at {:?}, but got is_file={}, is_dir={}",
+            output_path,
+            output_path.is_file(),
+            output_path.is_dir()
+        );
+
+        // Verify the file is readable as parquet
+        let file = std::fs::File::open(&output_path)?;
+        let reader = parquet::file::reader::SerializedFileReader::new(file)?;
+        let metadata = reader.metadata();
+        assert_eq!(metadata.num_row_groups(), 1);
+        assert_eq!(metadata.file_metadata().num_rows(), 3);
+
+        Ok(())
+    }
+
+    /// Test FileOutputMode::Automatic - uses extension heuristic.
+    /// Path WITH extension -> single file; path WITHOUT extension -> directory.
+    #[tokio::test]
+    async fn test_file_output_mode_automatic() -> Result<()> {
+        use arrow::array::Int32Array;
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+
+        let ctx = SessionContext::new();
+        let tmp_dir = TempDir::new()?;
+
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+        )?;
+
+        // Case 1: Path WITH extension -> should create single file (Automatic mode)
+        let output_with_ext = tmp_dir.path().join("data.parquet");
+        let df = ctx.read_batch(batch.clone())?;
+        df.write_parquet(
+            output_with_ext.to_str().unwrap(),
+            DataFrameWriteOptions::new(), // Automatic mode (default)
+            None,
+        )
+        .await?;
+
+        assert!(
+            output_with_ext.is_file(),
+            "Path with extension should be a single file, got is_file={}, is_dir={}",
+            output_with_ext.is_file(),
+            output_with_ext.is_dir()
+        );
+
+        // Case 2: Path WITHOUT extension -> should create directory (Automatic mode)
+        let output_no_ext = tmp_dir.path().join("data_dir");
+        let df = ctx.read_batch(batch)?;
+        df.write_parquet(
+            output_no_ext.to_str().unwrap(),
+            DataFrameWriteOptions::new(), // Automatic mode (default)
+            None,
+        )
+        .await?;
+
+        assert!(
+            output_no_ext.is_dir(),
+            "Path without extension should be a directory, got is_file={}, is_dir={}",
+            output_no_ext.is_file(),
+            output_no_ext.is_dir()
+        );
+
+        Ok(())
+    }
+
+    /// Test FileOutputMode::Directory - explicitly request directory output
+    /// even for paths WITH file extensions.
+    #[tokio::test]
+    async fn test_file_output_mode_directory() -> Result<()> {
+        use arrow::array::Int32Array;
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+
+        let ctx = SessionContext::new();
+        let tmp_dir = TempDir::new()?;
+
+        // Path WITH .parquet extension but explicitly requesting directory output
+        let output_path = tmp_dir.path().join("output.parquet");
+        let output_path_str = output_path.to_str().unwrap();
+
+        let df = ctx.read_batch(RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)])),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+        )?)?;
+
+        // Explicitly request directory output (single_file_output = false)
+        df.write_parquet(
+            output_path_str,
+            DataFrameWriteOptions::new().with_single_file_output(false),
+            None,
+        )
+        .await?;
+
+        // Verify: output should be a DIRECTORY, not a single file
+        assert!(
+            output_path.is_dir(),
+            "Expected directory at {:?}, but got is_file={}, is_dir={}",
+            output_path,
+            output_path.is_file(),
+            output_path.is_dir()
+        );
+
+        // Verify the directory contains parquet file(s)
+        let entries: Vec<_> = std::fs::read_dir(&output_path)?
+            .filter_map(|e| e.ok())
+            .collect();
+        assert!(
+            !entries.is_empty(),
+            "Directory should contain at least one file"
+        );
 
         Ok(())
     }

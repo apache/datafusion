@@ -28,11 +28,11 @@ use arrow::datatypes::{
 };
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::TransformedResult;
-use datafusion_common::{plan_err, DFSchema, Result, ScalarValue, TableReference};
+use datafusion_common::{DFSchema, Result, ScalarValue, TableReference, plan_err};
 use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
 use datafusion_expr::{
-    col, lit, AggregateUDF, BinaryExpr, Expr, ExprSchemable, LogicalPlan, Operator,
-    ScalarUDF, TableSource, WindowUDF,
+    AggregateUDF, BinaryExpr, Expr, ExprSchemable, LogicalPlan, Operator, ScalarUDF,
+    TableSource, WindowUDF, col, lit,
 };
 use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_optimizer::analyzer::Analyzer;

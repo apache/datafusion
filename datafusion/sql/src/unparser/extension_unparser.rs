@@ -64,7 +64,7 @@ pub enum UnparseWithinStatementResult {
 }
 
 /// The result of unparsing a custom logical node to a statement.
-#[allow(clippy::large_enum_variant)]
+#[expect(clippy::large_enum_variant)]
 pub enum UnparseToStatementResult {
     /// If the custom logical node was successfully unparsed to a statement.
     Modified(Statement),

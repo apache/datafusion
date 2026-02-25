@@ -180,8 +180,10 @@ pub(crate) mod tests {
 
         let returned_err_r_result = wrap_result(err_result);
         assert!(returned_err_r_result.is_err());
-        assert!(returned_err_r_result
-            .unwrap_err()
-            .starts_with(format!("FFI error: {ERROR_VALUE}").as_str()));
+        assert!(
+            returned_err_r_result
+                .unwrap_err()
+                .starts_with(format!("FFI error: {ERROR_VALUE}").as_str())
+        );
     }
 }

@@ -16,12 +16,12 @@
 // under the License.
 
 use abi_stable::{
-    declare_root_module_statics,
+    StableAbi, declare_root_module_statics,
     library::{LibraryError, RootModule},
     package_version_strings,
     sabi_types::VersionStrings,
-    StableAbi,
 };
+use datafusion_ffi::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
 use datafusion_ffi::table_provider::FFI_TableProvider;
 
 #[repr(C)]
@@ -34,7 +34,8 @@ use datafusion_ffi::table_provider::FFI_TableProvider;
 /// how a user may wish to separate these concerns.
 pub struct TableProviderModule {
     /// Constructs the table provider
-    pub create_table: extern "C" fn() -> FFI_TableProvider,
+    pub create_table:
+        extern "C" fn(codec: FFI_LogicalExtensionCodec) -> FFI_TableProvider,
 }
 
 impl RootModule for TableProviderModuleRef {

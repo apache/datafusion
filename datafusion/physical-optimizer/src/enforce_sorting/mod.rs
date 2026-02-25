@@ -40,23 +40,23 @@ pub mod sort_pushdown;
 
 use std::sync::Arc;
 
+use crate::PhysicalOptimizerRule;
 use crate::enforce_sorting::replace_with_order_preserving_variants::{
-    replace_with_order_preserving_variants, OrderPreservationContext,
+    OrderPreservationContext, replace_with_order_preserving_variants,
 };
 use crate::enforce_sorting::sort_pushdown::{
-    assign_initial_requirements, pushdown_sorts, SortPushDown,
+    SortPushDown, assign_initial_requirements, pushdown_sorts,
 };
 use crate::output_requirements::OutputRequirementExec;
 use crate::utils::{
     add_sort_above, add_sort_above_with_check, is_coalesce_partitions, is_limit,
     is_repartition, is_sort, is_sort_preserving_merge, is_window,
 };
-use crate::PhysicalOptimizerRule;
 
+use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::plan_err;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::Result;
 use datafusion_physical_expr::{Distribution, Partitioning};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -67,7 +67,7 @@ use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::windows::{
-    get_best_fitting_window, BoundedWindowAggExec, WindowAggExec,
+    BoundedWindowAggExec, WindowAggExec, get_best_fitting_window,
 };
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties, InputOrderMode};
 
@@ -581,11 +581,17 @@ fn analyze_immediate_sort_removal(
         // Remove the sort:
         node.children = node.children.swap_remove(0).children;
         if let Some(fetch) = sort_exec.fetch() {
+            let required_ordering = sort_exec.properties().output_ordering().cloned();
             // If the sort has a fetch, we need to add a limit:
             if properties.output_partitioning().partition_count() == 1 {
-                Arc::new(GlobalLimitExec::new(Arc::clone(sort_input), 0, Some(fetch)))
+                let mut global_limit =
+                    GlobalLimitExec::new(Arc::clone(sort_input), 0, Some(fetch));
+                global_limit.set_required_ordering(required_ordering);
+                Arc::new(global_limit)
             } else {
-                Arc::new(LocalLimitExec::new(Arc::clone(sort_input), fetch))
+                let mut local_limit = LocalLimitExec::new(Arc::clone(sort_input), fetch);
+                local_limit.set_required_ordering(required_ordering);
+                Arc::new(local_limit)
             }
         } else {
             Arc::clone(sort_input)

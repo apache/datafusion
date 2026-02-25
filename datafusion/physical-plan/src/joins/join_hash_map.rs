@@ -22,6 +22,8 @@
 use std::fmt::{self, Debug};
 use std::ops::Sub;
 
+use arrow::array::BooleanArray;
+use arrow::buffer::BooleanBuffer;
 use arrow::datatypes::ArrowNativeType;
 use hashbrown::HashTable;
 use hashbrown::hash_table::Entry::{Occupied, Vacant};
@@ -94,6 +96,12 @@ use hashbrown::hash_table::Entry::{Occupied, Vacant};
 ///
 /// At runtime we choose between using `JoinHashMapU32` and `JoinHashMapU64` which oth implement
 /// `JoinHashMapType`.
+///
+/// ## Note on use of this trait as a public API
+/// This is currently a public trait but is mainly intended for internal use within DataFusion.
+/// For example, we may compare references to `JoinHashMapType` implementations by pointer equality
+/// rather than deep equality of contents, as deep equality would be expensive and in our usage
+/// patterns it is impossible for two different hash maps to have identical contents in a practical sense.
 pub trait JoinHashMapType: Send + Sync {
     fn extend_zero(&mut self, len: usize);
 
@@ -113,10 +121,13 @@ pub trait JoinHashMapType: Send + Sync {
         &self,
         hash_values: &[u64],
         limit: usize,
-        offset: JoinHashMapOffset,
+        offset: MapOffset,
         input_indices: &mut Vec<u32>,
         match_indices: &mut Vec<u64>,
-    ) -> Option<JoinHashMapOffset>;
+    ) -> Option<MapOffset>;
+
+    /// Returns a BooleanArray indicating which of the provided hashes exist in the map.
+    fn contain_hashes(&self, hash_values: &[u64]) -> BooleanArray;
 
     /// Returns `true` if the join hash map contains no entries.
     fn is_empty(&self) -> bool;
@@ -175,10 +186,10 @@ impl JoinHashMapType for JoinHashMapU32 {
         &self,
         hash_values: &[u64],
         limit: usize,
-        offset: JoinHashMapOffset,
+        offset: MapOffset,
         input_indices: &mut Vec<u32>,
         match_indices: &mut Vec<u64>,
-    ) -> Option<JoinHashMapOffset> {
+    ) -> Option<MapOffset> {
         get_matched_indices_with_limit_offset::<u32>(
             &self.map,
             &self.next,
@@ -188,6 +199,10 @@ impl JoinHashMapType for JoinHashMapU32 {
             input_indices,
             match_indices,
         )
+    }
+
+    fn contain_hashes(&self, hash_values: &[u64]) -> BooleanArray {
+        contain_hashes(&self.map, hash_values)
     }
 
     fn is_empty(&self) -> bool {
@@ -249,10 +264,10 @@ impl JoinHashMapType for JoinHashMapU64 {
         &self,
         hash_values: &[u64],
         limit: usize,
-        offset: JoinHashMapOffset,
+        offset: MapOffset,
         input_indices: &mut Vec<u32>,
         match_indices: &mut Vec<u64>,
-    ) -> Option<JoinHashMapOffset> {
+    ) -> Option<MapOffset> {
         get_matched_indices_with_limit_offset::<u64>(
             &self.map,
             &self.next,
@@ -264,6 +279,10 @@ impl JoinHashMapType for JoinHashMapU64 {
         )
     }
 
+    fn contain_hashes(&self, hash_values: &[u64]) -> BooleanArray {
+        contain_hashes(&self.map, hash_values)
+    }
+
     fn is_empty(&self) -> bool {
         self.map.is_empty()
     }
@@ -273,54 +292,8 @@ impl JoinHashMapType for JoinHashMapU64 {
     }
 }
 
-// Type of offsets for obtaining indices from JoinHashMap.
-pub(crate) type JoinHashMapOffset = (usize, Option<u64>);
-
-/// Traverses the chain of matching indices, collecting results up to the remaining limit.
-/// Returns `Some(offset)` if the limit was reached and there are more results to process,
-/// or `None` if the chain was fully traversed.
-#[inline(always)]
-fn traverse_chain<T>(
-    next_chain: &[T],
-    input_idx: usize,
-    start_chain_idx: T,
-    remaining: &mut usize,
-    input_indices: &mut Vec<u32>,
-    match_indices: &mut Vec<u64>,
-    is_last_input: bool,
-) -> Option<JoinHashMapOffset>
-where
-    T: Copy + TryFrom<usize> + PartialOrd + Into<u64> + Sub<Output = T>,
-    <T as TryFrom<usize>>::Error: Debug,
-    T: ArrowNativeType,
-{
-    let zero = T::usize_as(0);
-    let one = T::usize_as(1);
-    let mut match_row_idx = start_chain_idx - one;
-
-    loop {
-        match_indices.push(match_row_idx.into());
-        input_indices.push(input_idx as u32);
-        *remaining -= 1;
-
-        let next = next_chain[match_row_idx.into() as usize];
-
-        if *remaining == 0 {
-            // Limit reached - return offset for next call
-            return if is_last_input && next == zero {
-                // Finished processing the last input row
-                None
-            } else {
-                Some((input_idx, Some(next.into())))
-            };
-        }
-        if next == zero {
-            // End of chain
-            return None;
-        }
-        match_row_idx = next - one;
-    }
-}
+use crate::joins::MapOffset;
+use crate::joins::chain::traverse_chain;
 
 pub fn update_from_iter<'a, T>(
     map: &mut HashTable<(u64, T)>,
@@ -408,10 +381,10 @@ pub fn get_matched_indices_with_limit_offset<T>(
     next_chain: &[T],
     hash_values: &[u64],
     limit: usize,
-    offset: JoinHashMapOffset,
+    offset: MapOffset,
     input_indices: &mut Vec<u32>,
     match_indices: &mut Vec<u64>,
-) -> Option<JoinHashMapOffset>
+) -> Option<MapOffset>
 where
     T: Copy + TryFrom<usize> + PartialOrd + Into<u64> + Sub<Output = T>,
     <T as TryFrom<usize>>::Error: Debug,
@@ -489,4 +462,36 @@ where
         }
     }
     None
+}
+
+pub fn contain_hashes<T>(map: &HashTable<(u64, T)>, hash_values: &[u64]) -> BooleanArray {
+    let buffer = BooleanBuffer::collect_bool(hash_values.len(), |i| {
+        let hash = hash_values[i];
+        map.find(hash, |(h, _)| hash == *h).is_some()
+    });
+    BooleanArray::new(buffer, None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_contain_hashes() {
+        let mut hash_map = JoinHashMapU32::with_capacity(10);
+        hash_map.update_from_iter(Box::new([10u64, 20u64, 30u64].iter().enumerate()), 0);
+
+        let probe_hashes = vec![10, 11, 20, 21, 30, 31];
+        let array = hash_map.contain_hashes(&probe_hashes);
+
+        assert_eq!(array.len(), probe_hashes.len());
+
+        for (i, &hash) in probe_hashes.iter().enumerate() {
+            if matches!(hash, 10 | 20 | 30) {
+                assert!(array.value(i), "Hash {hash} should exist in the map");
+            } else {
+                assert!(!array.value(i), "Hash {hash} should NOT exist in the map");
+            }
+        }
+    }
 }

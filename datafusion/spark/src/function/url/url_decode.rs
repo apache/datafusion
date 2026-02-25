@@ -24,7 +24,7 @@ use arrow::datatypes::DataType;
 use datafusion_common::cast::{
     as_large_string_array, as_string_array, as_string_view_array,
 };
-use datafusion_common::{exec_datafusion_err, exec_err, plan_err, Result};
+use datafusion_common::{Result, exec_datafusion_err, exec_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -252,7 +252,9 @@ mod tests {
         ]));
 
         let result = spark_url_decode(&[input]);
-        assert!(result.is_err_and(|e| e.to_string().contains("Invalid percent-encoding")));
+        assert!(
+            result.is_err_and(|e| e.to_string().contains("Invalid percent-encoding"))
+        );
 
         Ok(())
     }

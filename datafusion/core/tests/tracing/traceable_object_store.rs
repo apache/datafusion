@@ -20,8 +20,8 @@
 use crate::tracing::asserting_tracer::assert_traceability;
 use futures::stream::BoxStream;
 use object_store::{
-    path::Path, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
-    ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult,
+    GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
+    PutMultipartOptions, PutOptions, PutPayload, PutResult, path::Path,
 };
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;

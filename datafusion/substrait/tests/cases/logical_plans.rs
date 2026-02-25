@@ -20,6 +20,9 @@
 #[cfg(test)]
 mod tests {
     use crate::utils::test::{add_plan_schemas_to_ctx, read_json};
+    use datafusion::common::test_util::format_batches;
+    use std::collections::HashSet;
+
     use datafusion::common::Result;
     use datafusion::dataframe::DataFrame;
     use datafusion::prelude::SessionContext;
@@ -43,10 +46,10 @@ mod tests {
 
         assert_snapshot!(
         plan,
-        @r#"
-            Projection: NOT DATA.D AS EXPR$0
-              TableScan: DATA
-            "#
+        @r"
+        Projection: NOT DATA.D AS EXPR$0
+          TableScan: DATA
+        "
                 );
 
         // Trigger execution to ensure plan validity
@@ -74,11 +77,11 @@ mod tests {
 
         assert_snapshot!(
         plan,
-        @r#"
-            Projection: sum(DATA.D) PARTITION BY [DATA.PART] ORDER BY [DATA.ORD ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING AS LEAD_EXPR
-              WindowAggr: windowExpr=[[sum(DATA.D) PARTITION BY [DATA.PART] ORDER BY [DATA.ORD ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING]]
-                TableScan: DATA
-            "#
+        @r"
+        Projection: sum(DATA.D) PARTITION BY [DATA.PART] ORDER BY [DATA.ORD ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING AS LEAD_EXPR
+          WindowAggr: windowExpr=[[sum(DATA.D) PARTITION BY [DATA.PART] ORDER BY [DATA.ORD ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING]]
+            TableScan: DATA
+        "
                 );
 
         // Trigger execution to ensure plan validity
@@ -101,11 +104,11 @@ mod tests {
 
         assert_snapshot!(
         plan,
-        @r#"
-            Projection: row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS EXPR$0, row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW__temp__0 AS ALIASED
-              WindowAggr: windowExpr=[[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
-                TableScan: DATA
-            "#
+        @r"
+        Projection: row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS EXPR$0, row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW__temp__0 AS ALIASED
+          WindowAggr: windowExpr=[[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+            TableScan: DATA
+        "
                 );
 
         // Trigger execution to ensure plan validity
@@ -130,12 +133,12 @@ mod tests {
 
         assert_snapshot!(
         plan,
-        @r#"
-            Projection: row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS EXPR$0, row_number() PARTITION BY [DATA.A] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS EXPR$1
-              WindowAggr: windowExpr=[[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
-                WindowAggr: windowExpr=[[row_number() PARTITION BY [DATA.A] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
-                  TableScan: DATA
-            "#
+        @r"
+        Projection: row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS EXPR$0, row_number() PARTITION BY [DATA.A] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS EXPR$1
+          WindowAggr: windowExpr=[[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+            WindowAggr: windowExpr=[[row_number() PARTITION BY [DATA.A] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+              TableScan: DATA
+        "
                 );
 
         // Trigger execution to ensure plan validity
@@ -151,33 +154,27 @@ mod tests {
 
         // File generated with substrait-java's Isthmus:
         // ./isthmus-cli/build/graal/isthmus --create "create table A (a int); create table B (a int, c int); create table C (a int, d int)" "select t.*, C.d, CAST(NULL AS VARCHAR) as e from (select a, CAST(NULL AS VARCHAR) as c from A UNION ALL select a, c from B) t LEFT JOIN C ON t.a = C.a"
-        let proto_plan =
-            read_json("tests/testdata/test_plans/disambiguate_literals_with_same_name.substrait.json");
+        let proto_plan = read_json(
+            "tests/testdata/test_plans/disambiguate_literals_with_same_name.substrait.json",
+        );
         let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
-        let mut settings = insta::Settings::clone_current();
-        settings.add_filter(
-            r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
-            "[UUID]",
+        assert_snapshot!(
+            plan,
+            @r"
+        Projection: left.A, left.Utf8(NULL) AS C, right.D, Utf8(NULL) AS Utf8(NULL)__temp__0 AS E
+          Left Join: left.A = right.A
+            SubqueryAlias: left
+              Union
+                Projection: A.A, Utf8(NULL)
+                  TableScan: A
+                Projection: B.A, CAST(B.C AS Utf8)
+                  TableScan: B
+            SubqueryAlias: right
+              TableScan: C
+        "
         );
-        settings.bind(|| {
-            assert_snapshot!(
-                plan,
-                @r#"
-            Projection: left.A, left.[UUID] AS C, right.D, Utf8(NULL) AS [UUID] AS E
-              Left Join: left.A = right.A
-                SubqueryAlias: left
-                  Union
-                    Projection: A.A, Utf8(NULL) AS [UUID]
-                      TableScan: A
-                    Projection: B.A, CAST(B.C AS Utf8)
-                      TableScan: B
-                SubqueryAlias: right
-                  TableScan: C
-            "#
-            );
-        });
 
         // Trigger execution to ensure plan validity
         DataFrame::new(ctx.state(), plan).show().await?;
@@ -197,9 +194,7 @@ mod tests {
 
         assert_snapshot!(
                 &plan,
-            @r#"
-        Values: (List([1, 2]))
-        "#
+            @"Values: (List([1, 2]))"
         );
 
         // Trigger execution to ensure plan validity
@@ -217,16 +212,61 @@ mod tests {
 
         assert_snapshot!(
         plan,
-        @r#"
-            Projection: lower(sales.product) AS lower(product), sum(count(sales.product)) AS product_count
-              Aggregate: groupBy=[[sales.product]], aggr=[[sum(count(sales.product))]]
-                Aggregate: groupBy=[[sales.product]], aggr=[[count(sales.product)]]
-                  TableScan: sales
-            "#
+        @r"
+        Projection: lower(sales.product) AS lower(product), sum(count(sales.product)) AS product_count
+          Aggregate: groupBy=[[sales.product]], aggr=[[sum(count(sales.product))]]
+            Aggregate: groupBy=[[sales.product]], aggr=[[count(sales.product)]]
+              TableScan: sales
+        "
                 );
 
         // Trigger execution to ensure plan validity
         DataFrame::new(ctx.state(), plan).show().await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn duplicate_name_in_union() -> Result<()> {
+        let proto_plan =
+            read_json("tests/testdata/test_plans/duplicate_name_in_union.substrait.json");
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
+
+        assert_snapshot!(
+        plan,
+        @r"
+        Projection: foo AS col1, bar AS col2
+          Union
+            Projection: foo, bar
+              Values: (Int64(100), Int64(200))
+            Projection: x, foo
+              Values: (Int32(300), Int64(400))
+        "
+                );
+
+        // Trigger execution to ensure plan validity
+        let results = DataFrame::new(ctx.state(), plan).collect().await?;
+
+        assert_snapshot!(
+            format_batches(&results)?,
+            @r"
+        +------+------+
+        | col1 | col2 |
+        +------+------+
+        | 100  | 200  |
+        | 300  | 400  |
+        +------+------+
+        ",
+        );
+
+        // also verify that the output schema has unique field names
+        let schema = results[0].schema();
+        for batch in &results {
+            assert_eq!(schema, batch.schema());
+        }
+        let field_names: HashSet<_> = schema.fields().iter().map(|f| f.name()).collect();
+        assert_eq!(field_names.len(), schema.fields().len());
 
         Ok(())
     }

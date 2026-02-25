@@ -103,9 +103,7 @@ fn test_prepare_statement_to_plan_panic_param_format() {
 
     assert_snapshot!(
         logical_plan(sql).unwrap_err().strip_backtrace(),
-        @r###"
-        Error during planning: Unknown placeholder: $foo
-        "###
+        @"Error during planning: Unknown placeholder: $foo"
     );
 }
 
@@ -117,9 +115,7 @@ fn test_prepare_statement_to_plan_panic_param_zero() {
 
     assert_snapshot!(
         logical_plan(sql).unwrap_err().strip_backtrace(),
-        @r###"
-        Error during planning: Invalid placeholder, zero is not a valid index: $0
-        "###
+        @"Error during planning: Invalid placeholder, zero is not a valid index: $0"
     );
 }
 
@@ -143,7 +139,7 @@ fn test_prepare_statement_to_plan_panic_no_relation_and_constant_param() {
     let plan = logical_plan(sql).unwrap_err().strip_backtrace();
     assert_snapshot!(
         plan,
-        @r"Schema error: No field named id."
+        @"Schema error: No field named id."
     );
 }
 
@@ -196,7 +192,7 @@ fn test_prepare_statement_to_plan_no_param() {
           TableScan: person
     "#
     );
-    assert_snapshot!(dt, @r#"Int32"#);
+    assert_snapshot!(dt, @"Int32");
 
     ///////////////////
     // replace params with values
@@ -224,7 +220,7 @@ fn test_prepare_statement_to_plan_no_param() {
           TableScan: person
     "#
     );
-    assert_snapshot!(dt, @r#""#);
+    assert_snapshot!(dt, @"");
 
     ///////////////////
     // replace params with values
@@ -252,9 +248,7 @@ fn test_prepare_statement_to_plan_one_param_no_value_panic() {
         plan.with_param_values(param_values)
         .unwrap_err()
         .strip_backtrace(),
-        @r###"
-        Error during planning: Expected 1 parameters, got 0
-        "###);
+        @"Error during planning: Expected 1 parameters, got 0");
 }
 
 #[test]
@@ -269,9 +263,7 @@ fn test_prepare_statement_to_plan_one_param_one_value_different_type_panic() {
         plan.with_param_values(param_values)
             .unwrap_err()
             .strip_backtrace(),
-        @r###"
-        Error during planning: Expected parameter of type Int32, got Float64 at index 0
-        "###
+        @"Error during planning: Expected parameter of type Int32, got Float64 at index 0"
     );
 }
 
@@ -287,9 +279,7 @@ fn test_prepare_statement_to_plan_no_param_on_value_panic() {
         plan.with_param_values(param_values)
             .unwrap_err()
             .strip_backtrace(),
-        @r###"
-        Error during planning: Expected 0 parameters, got 1
-        "###
+        @"Error during planning: Expected 0 parameters, got 1"
     );
 }
 
@@ -305,7 +295,7 @@ fn test_prepare_statement_to_plan_params_as_constants() {
         EmptyRelation: rows=1
     "#
     );
-    assert_snapshot!(dt, @r#"Int32"#);
+    assert_snapshot!(dt, @"Int32");
 
     ///////////////////
     // replace params with values
@@ -330,7 +320,7 @@ fn test_prepare_statement_to_plan_params_as_constants() {
         EmptyRelation: rows=1
     "#
     );
-    assert_snapshot!(dt, @r#"Int32"#);
+    assert_snapshot!(dt, @"Int32");
 
     ///////////////////
     // replace params with values
@@ -355,7 +345,7 @@ fn test_prepare_statement_to_plan_params_as_constants() {
         EmptyRelation: rows=1
     "#
     );
-    assert_snapshot!(dt, @r#"Int32, Float64"#);
+    assert_snapshot!(dt, @"Int32, Float64");
 
     ///////////////////
     // replace params with values
@@ -721,7 +711,7 @@ fn test_prepare_statement_to_plan_one_param() {
           TableScan: person
     "#
     );
-    assert_snapshot!(dt, @r#"Int32"#);
+    assert_snapshot!(dt, @"Int32");
 
     ///////////////////
     // replace params with values
@@ -895,7 +885,7 @@ fn test_prepare_statement_to_plan_data_type() {
           TableScan: person
     "#
     );
-    assert_snapshot!(dt, @r#"Float64"#);
+    assert_snapshot!(dt, @"Float64");
 
     ///////////////////
     // replace params with values still succeed and use Float64
@@ -928,7 +918,7 @@ fn test_prepare_statement_to_plan_multi_params() {
           TableScan: person
     "#
     );
-    assert_snapshot!(dt, @r#"Int32, Utf8View, Float64, Int32, Float64, Utf8View"#);
+    assert_snapshot!(dt, @"Int32, Utf8View, Float64, Int32, Float64, Utf8View");
 
     ///////////////////
     // replace params with values
@@ -973,7 +963,7 @@ fn test_prepare_statement_to_plan_having() {
               TableScan: person
     "#
     );
-    assert_snapshot!(dt, @r#"Int32, Float64, Float64, Float64"#);
+    assert_snapshot!(dt, @"Int32, Float64, Float64, Float64");
 
     ///////////////////
     // replace params with values
@@ -987,13 +977,13 @@ fn test_prepare_statement_to_plan_having() {
     let plan_with_params = plan.with_param_values(param_values).unwrap();
     assert_snapshot!(
         plan_with_params,
-        @r#"
+        @r"
     Projection: person.id, sum(person.age)
       Filter: sum(person.age) < Int32(10) AND sum(person.age) > Int64(10) OR sum(person.age) IN ([Float64(200), Float64(300)])
         Aggregate: groupBy=[[person.id]], aggr=[[sum(person.age)]]
           Filter: person.salary > Float64(100)
             TableScan: person
-    "#
+    "
     );
 }
 
@@ -1012,18 +1002,18 @@ fn test_prepare_statement_to_plan_limit() {
           TableScan: person
     "#
     );
-    assert_snapshot!(dt, @r#"Int64, Int64"#);
+    assert_snapshot!(dt, @"Int64, Int64");
 
     // replace params with values
     let param_values = vec![ScalarValue::Int64(Some(10)), ScalarValue::Int64(Some(200))];
     let plan_with_params = plan.with_param_values(param_values).unwrap();
     assert_snapshot!(
         plan_with_params,
-        @r#"
+        @r"
     Limit: skip=10, fetch=200
       Projection: person.id
         TableScan: person
-    "#
+    "
     );
 }
 

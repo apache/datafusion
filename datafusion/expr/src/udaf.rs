@@ -668,7 +668,7 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     ///
     /// Or, a closure with two arguments:
     /// * 'aggregate_function': [AggregateFunction] for which simplified has been invoked
-    /// * 'info': [crate::simplify::SimplifyInfo]
+    /// * 'info': [crate::simplify::SimplifyContext]
     ///
     /// closure returns simplified [Expr] or an error.
     ///

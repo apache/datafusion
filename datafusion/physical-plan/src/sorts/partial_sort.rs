@@ -62,6 +62,7 @@ use crate::sorts::sort::sort_batch;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     Partitioning, PlanProperties, SendableRecordBatchStream, Statistics,
+    check_if_same_properties,
 };
 
 use arrow::compute::concat_batches;
@@ -93,7 +94,7 @@ pub struct PartialSortExec {
     /// Fetch highest/lowest n results
     fetch: Option<usize>,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl PartialSortExec {
@@ -114,7 +115,7 @@ impl PartialSortExec {
             metrics_set: ExecutionPlanMetricsSet::new(),
             preserve_partitioning,
             fetch: None,
-            cache,
+            cache: Arc::new(cache),
         }
     }
 
@@ -132,12 +133,8 @@ impl PartialSortExec {
     /// input partitions producing a single, sorted partition.
     pub fn with_preserve_partitioning(mut self, preserve_partitioning: bool) -> Self {
         self.preserve_partitioning = preserve_partitioning;
-        self.cache = self
-            .cache
-            .with_partitioning(Self::output_partitioning_helper(
-                &self.input,
-                self.preserve_partitioning,
-            ));
+        Arc::make_mut(&mut self.cache).partitioning =
+            Self::output_partitioning_helper(&self.input, self.preserve_partitioning);
         self
     }
 
@@ -207,6 +204,17 @@ impl PartialSortExec {
             input.boundedness(),
         ))
     }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        Self {
+            input: children.swap_remove(0),
+            metrics_set: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(self)
+        }
+    }
 }
 
 impl DisplayAs for PartialSortExec {
@@ -255,7 +263,7 @@ impl ExecutionPlan for PartialSortExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -283,6 +291,7 @@ impl ExecutionPlan for PartialSortExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        check_if_same_properties!(self, children);
         let new_partial_sort = PartialSortExec::new(
             self.expr.clone(),
             Arc::clone(&children[0]),
@@ -327,10 +336,6 @@ impl ExecutionPlan for PartialSortExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics_set.clone_inner())
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        self.input.partition_statistics(None)
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
@@ -549,18 +554,18 @@ mod tests {
 
         assert_eq!(2, result.len());
         allow_duplicates! {
-            assert_snapshot!(batches_to_string(&result), @r#"
-                +---+---+---+
-                | a | b | c |
-                +---+---+---+
-                | 0 | 1 | 0 |
-                | 0 | 1 | 1 |
-                | 0 | 2 | 5 |
-                | 1 | 2 | 4 |
-                | 1 | 3 | 2 |
-                | 1 | 3 | 3 |
-                +---+---+---+
-                "#);
+            assert_snapshot!(batches_to_string(&result), @r"
+            +---+---+---+
+            | a | b | c |
+            +---+---+---+
+            | 0 | 1 | 0 |
+            | 0 | 1 | 1 |
+            | 0 | 2 | 5 |
+            | 1 | 2 | 4 |
+            | 1 | 3 | 2 |
+            | 1 | 3 | 3 |
+            +---+---+---+
+            ");
         }
         assert_eq!(
             task_ctx.runtime_env().memory_pool.reserved(),
@@ -617,16 +622,16 @@ mod tests {
 
             assert_eq!(2, result.len());
             allow_duplicates! {
-                assert_snapshot!(batches_to_string(&result), @r#"
-                    +---+---+---+
-                    | a | b | c |
-                    +---+---+---+
-                    | 0 | 1 | 4 |
-                    | 0 | 2 | 3 |
-                    | 1 | 2 | 2 |
-                    | 1 | 3 | 0 |
-                    +---+---+---+
-                    "#);
+                assert_snapshot!(batches_to_string(&result), @r"
+                +---+---+---+
+                | a | b | c |
+                +---+---+---+
+                | 0 | 1 | 4 |
+                | 0 | 2 | 3 |
+                | 1 | 2 | 2 |
+                | 1 | 3 | 0 |
+                +---+---+---+
+                ");
             }
             assert_eq!(
                 task_ctx.runtime_env().memory_pool.reserved(),
@@ -693,20 +698,20 @@ mod tests {
                 "The sort should have returned all memory used back to the memory manager"
             );
             allow_duplicates! {
-                assert_snapshot!(batches_to_string(&result), @r#"
-                    +---+---+---+
-                    | a | b | c |
-                    +---+---+---+
-                    | 0 | 1 | 6 |
-                    | 0 | 1 | 7 |
-                    | 0 | 3 | 4 |
-                    | 0 | 3 | 5 |
-                    | 1 | 2 | 0 |
-                    | 1 | 2 | 1 |
-                    | 1 | 4 | 2 |
-                    | 1 | 4 | 3 |
-                    +---+---+---+
-                    "#);
+                assert_snapshot!(batches_to_string(&result), @r"
+                +---+---+---+
+                | a | b | c |
+                +---+---+---+
+                | 0 | 1 | 6 |
+                | 0 | 1 | 7 |
+                | 0 | 3 | 4 |
+                | 0 | 3 | 5 |
+                | 1 | 2 | 0 |
+                | 1 | 2 | 1 |
+                | 1 | 4 | 2 |
+                | 1 | 4 | 3 |
+                +---+---+---+
+                ");
             }
         }
         Ok(())
@@ -1051,20 +1056,20 @@ mod tests {
             task_ctx,
         )
         .await?;
-        assert_snapshot!(batches_to_string(&result), @r#"
-            +-----+------+-------+
-            | a   | b    | c     |
-            +-----+------+-------+
-            | 1.0 | 20.0 | 20.0  |
-            | 1.0 | 20.0 | 10.0  |
-            | 1.0 | 40.0 | 10.0  |
-            | 2.0 | 40.0 | 100.0 |
-            | 2.0 | NaN  | NaN   |
-            | 3.0 |      |       |
-            | 3.0 |      | 100.0 |
-            | 3.0 | NaN  | NaN   |
-            +-----+------+-------+
-            "#);
+        assert_snapshot!(batches_to_string(&result), @r"
+        +-----+------+-------+
+        | a   | b    | c     |
+        +-----+------+-------+
+        | 1.0 | 20.0 | 20.0  |
+        | 1.0 | 20.0 | 10.0  |
+        | 1.0 | 40.0 | 10.0  |
+        | 2.0 | 40.0 | 100.0 |
+        | 2.0 | NaN  | NaN   |
+        | 3.0 |      |       |
+        | 3.0 |      | 100.0 |
+        | 3.0 | NaN  | NaN   |
+        +-----+------+-------+
+        ");
         assert_eq!(result.len(), 2);
         let metrics = partial_sort_exec.metrics().unwrap();
         assert!(metrics.elapsed_compute().unwrap() > 0);
@@ -1177,21 +1182,21 @@ mod tests {
         assert_eq!(result.len(), 3,);
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_string(&result), @r#"
-                +---+---+---+
-                | a | b | c |
-                +---+---+---+
-                | 1 | 1 | 1 |
-                | 1 | 1 | 2 |
-                | 1 | 1 | 3 |
-                | 2 | 2 | 4 |
-                | 2 | 2 | 4 |
-                | 2 | 2 | 6 |
-                | 3 | 3 | 7 |
-                | 3 | 3 | 8 |
-                | 3 | 3 | 9 |
-                +---+---+---+
-                "#);
+            assert_snapshot!(batches_to_string(&result), @r"
+            +---+---+---+
+            | a | b | c |
+            +---+---+---+
+            | 1 | 1 | 1 |
+            | 1 | 1 | 2 |
+            | 1 | 1 | 3 |
+            | 2 | 2 | 4 |
+            | 2 | 2 | 4 |
+            | 2 | 2 | 6 |
+            | 3 | 3 | 7 |
+            | 3 | 3 | 8 |
+            | 3 | 3 | 9 |
+            +---+---+---+
+            ");
         }
 
         assert_eq!(task_ctx.runtime_env().memory_pool.reserved(), 0,);

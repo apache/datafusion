@@ -16,15 +16,15 @@
 // under the License.
 
 use arrow::array::{
+    Array, ArrayRef, ArrowNativeTypeOp, ArrowNumericType, Int64Array, PrimitiveArray,
     builder::PrimitiveBuilder,
     cast::AsArray,
     types::{Float64Type, Int64Type},
-    Array, ArrayRef, ArrowNativeTypeOp, ArrowNumericType, Int64Array, PrimitiveArray,
 };
 use arrow::compute::sum;
 use arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::types::{logical_float64, NativeType};
-use datafusion_common::{not_impl_err, Result, ScalarValue};
+use datafusion_common::types::{NativeType, logical_float64};
+use datafusion_common::{Result, ScalarValue, not_impl_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{

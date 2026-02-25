@@ -30,7 +30,9 @@ use super::{
 use crate::execution_plan::{CardinalityEffect, EvaluationType, SchedulingType};
 use crate::filter_pushdown::{FilterDescription, FilterPushdownPhase};
 use crate::projection::{ProjectionExec, make_with_child};
-use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
+use crate::sort_pushdown::SortOrderPushdownResult;
+use crate::{DisplayFormatType, ExecutionPlan, Partitioning, check_if_same_properties};
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Result, assert_eq_or_internal_err, internal_err};
@@ -45,7 +47,7 @@ pub struct CoalescePartitionsExec {
     input: Arc<dyn ExecutionPlan>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
     /// Optional number of rows to fetch. Stops producing rows after this fetch
     pub(crate) fetch: Option<usize>,
 }
@@ -57,7 +59,7 @@ impl CoalescePartitionsExec {
         CoalescePartitionsExec {
             input,
             metrics: ExecutionPlanMetricsSet::new(),
-            cache,
+            cache: Arc::new(cache),
             fetch: None,
         }
     }
@@ -98,6 +100,17 @@ impl CoalescePartitionsExec {
         .with_evaluation_type(drive)
         .with_scheduling_type(scheduling)
     }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(self)
+        }
+    }
 }
 
 impl DisplayAs for CoalescePartitionsExec {
@@ -133,7 +146,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -147,9 +160,10 @@ impl ExecutionPlan for CoalescePartitionsExec {
 
     fn with_new_children(
         self: Arc<Self>,
-        children: Vec<Arc<dyn ExecutionPlan>>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let mut plan = CoalescePartitionsExec::new(Arc::clone(&children[0]));
+        check_if_same_properties!(self, children);
+        let mut plan = CoalescePartitionsExec::new(children.swap_remove(0));
         plan.fetch = self.fetch;
         Ok(Arc::new(plan))
     }
@@ -222,10 +236,6 @@ impl ExecutionPlan for CoalescePartitionsExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
-    }
-
     fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
         self.input
             .partition_statistics(None)?
@@ -272,8 +282,21 @@ impl ExecutionPlan for CoalescePartitionsExec {
             input: Arc::clone(&self.input),
             fetch: limit,
             metrics: self.metrics.clone(),
-            cache: self.cache.clone(),
+            cache: Arc::clone(&self.cache),
         }))
+    }
+
+    fn with_preserve_order(
+        &self,
+        preserve_order: bool,
+    ) -> Option<Arc<dyn ExecutionPlan>> {
+        self.input
+            .with_preserve_order(preserve_order)
+            .and_then(|new_input| {
+                Arc::new(self.clone())
+                    .with_new_children(vec![new_input])
+                    .ok()
+            })
     }
 
     fn gather_filters_for_pushdown(
@@ -283,6 +306,42 @@ impl ExecutionPlan for CoalescePartitionsExec {
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
         FilterDescription::from_children(parent_filters, &self.children())
+    }
+
+    fn try_pushdown_sort(
+        &self,
+        order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+        // CoalescePartitionsExec merges multiple partitions into one, which loses
+        // global ordering. However, we can still push the sort requirement down
+        // to optimize individual partitions - the Sort operator above will handle
+        // the global ordering.
+        //
+        // Note: The result will always be at most Inexact (never Exact) when there
+        // are multiple partitions, because merging destroys global ordering.
+        let result = self.input.try_pushdown_sort(order)?;
+
+        // If we have multiple partitions, we can't return Exact even if the
+        // underlying source claims Exact - merging destroys global ordering
+        let has_multiple_partitions =
+            self.input.output_partitioning().partition_count() > 1;
+
+        result
+            .try_map(|new_input| {
+                Ok(
+                    Arc::new(
+                        CoalescePartitionsExec::new(new_input).with_fetch(self.fetch),
+                    ) as Arc<dyn ExecutionPlan>,
+                )
+            })
+            .map(|r| {
+                if has_multiple_partitions {
+                    // Downgrade Exact to Inexact when merging multiple partitions
+                    r.into_inexact()
+                } else {
+                    r
+                }
+            })
     }
 }
 

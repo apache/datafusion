@@ -152,43 +152,34 @@ impl StringViewArrayBuilder {
             }
             ColumnarValueRef::NullableArray(array) => {
                 if !CHECK_VALID || array.is_valid(i) {
-                    self.block.push_str(
-                        std::str::from_utf8(array.value(i).as_bytes()).unwrap(),
-                    );
+                    self.block.push_str(array.value(i));
                 }
             }
             ColumnarValueRef::NullableLargeStringArray(array) => {
                 if !CHECK_VALID || array.is_valid(i) {
-                    self.block.push_str(
-                        std::str::from_utf8(array.value(i).as_bytes()).unwrap(),
-                    );
+                    self.block.push_str(array.value(i));
                 }
             }
             ColumnarValueRef::NullableStringViewArray(array) => {
                 if !CHECK_VALID || array.is_valid(i) {
-                    self.block.push_str(
-                        std::str::from_utf8(array.value(i).as_bytes()).unwrap(),
-                    );
+                    self.block.push_str(array.value(i));
                 }
             }
             ColumnarValueRef::NonNullableArray(array) => {
-                self.block
-                    .push_str(std::str::from_utf8(array.value(i).as_bytes()).unwrap());
+                self.block.push_str(array.value(i));
             }
             ColumnarValueRef::NonNullableLargeStringArray(array) => {
-                self.block
-                    .push_str(std::str::from_utf8(array.value(i).as_bytes()).unwrap());
+                self.block.push_str(array.value(i));
             }
             ColumnarValueRef::NonNullableStringViewArray(array) => {
-                self.block
-                    .push_str(std::str::from_utf8(array.value(i).as_bytes()).unwrap());
+                self.block.push_str(array.value(i));
             }
         }
     }
 
     pub fn append_offset(&mut self) {
         self.builder.append_value(&self.block);
-        self.block = String::new();
+        self.block.clear();
     }
 
     pub fn finish(mut self) -> StringViewArray {

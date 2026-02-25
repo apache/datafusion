@@ -32,4 +32,4 @@ mod table;
 
 pub use config::{ListingTableConfig, SchemaSource};
 pub use options::ListingOptions;
-pub use table::ListingTable;
+pub use table::{ListFilesResult, ListingTable};

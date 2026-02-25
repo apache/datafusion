@@ -53,6 +53,7 @@ use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumu
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::filtered_null_mask;
 use datafusion_functions_aggregate_common::utils::GenericDistinctBuffer;
 use datafusion_macros::user_doc;
+use std::collections::HashMap;
 
 make_udaf_expr_and_func!(
     Median,
@@ -84,18 +85,9 @@ make_udaf_expr_and_func!(
 /// If using the distinct variation, the memory usage will be similarly high if the
 /// cardinality is high as it stores all distinct values in memory before computing the
 /// result, but if cardinality is low then memory usage will also be lower.
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash, Debug)]
 pub struct Median {
     signature: Signature,
-}
-
-impl Debug for Median {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        f.debug_struct("Median")
-            .field("name", &self.name())
-            .field("signature", &self.signature)
-            .finish()
-    }
 }
 
 impl Default for Median {
@@ -289,13 +281,50 @@ impl<T: ArrowNumericType> Accumulator for MedianAccumulator<T> {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let d = std::mem::take(&mut self.all_values);
-        let median = calculate_median::<T>(d);
+        let median = calculate_median::<T>(&mut self.all_values);
         ScalarValue::new_primitive::<T>(median, &self.data_type)
     }
 
     fn size(&self) -> usize {
         size_of_val(self) + self.all_values.capacity() * size_of::<T::Native>()
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let mut to_remove: HashMap<ScalarValue, usize> = HashMap::new();
+
+        let arr = &values[0];
+        for i in 0..arr.len() {
+            let v = ScalarValue::try_from_array(arr, i)?;
+            if !v.is_null() {
+                *to_remove.entry(v).or_default() += 1;
+            }
+        }
+
+        let mut i = 0;
+        while i < self.all_values.len() {
+            let k = ScalarValue::new_primitive::<T>(
+                Some(self.all_values[i]),
+                &self.data_type,
+            )?;
+            if let Some(count) = to_remove.get_mut(&k)
+                && *count > 0
+            {
+                self.all_values.swap_remove(i);
+                *count -= 1;
+                if *count == 0 {
+                    to_remove.remove(&k);
+                    if to_remove.is_empty() {
+                        break;
+                    }
+                }
+            }
+            i += 1;
+        }
+        Ok(())
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
     }
 }
 
@@ -443,8 +472,8 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for MedianGroupsAccumulator<T
         // Calculate median for each group
         let mut evaluate_result_builder =
             PrimitiveBuilder::<T>::new().with_data_type(self.data_type.clone());
-        for values in emit_group_values {
-            let median = calculate_median::<T>(values);
+        for mut values in emit_group_values {
+            let median = calculate_median::<T>(&mut values);
             evaluate_result_builder.append_option(median);
         }
 
@@ -528,11 +557,9 @@ impl<T: ArrowNumericType + Debug> Accumulator for DistinctMedianAccumulator<T> {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let d = std::mem::take(&mut self.distinct_values.values)
-            .into_iter()
-            .map(|v| v.0)
-            .collect::<Vec<_>>();
-        let median = calculate_median::<T>(d);
+        let mut d: Vec<T::Native> =
+            self.distinct_values.values.iter().map(|v| v.0).collect();
+        let median = calculate_median::<T>(&mut d);
         ScalarValue::new_primitive::<T>(median, &self.data_type)
     }
 
@@ -556,9 +583,7 @@ where
         .unwrap()
 }
 
-fn calculate_median<T: ArrowNumericType>(
-    mut values: Vec<T::Native>,
-) -> Option<T::Native> {
+fn calculate_median<T: ArrowNumericType>(values: &mut [T::Native]) -> Option<T::Native> {
     let cmp = |x: &T::Native, y: &T::Native| x.compare(*y);
 
     let len = values.len();
@@ -568,9 +593,25 @@ fn calculate_median<T: ArrowNumericType>(
         let (low, high, _) = values.select_nth_unstable_by(len / 2, cmp);
         // Get the maximum of the low (left side after bi-partitioning)
         let left_max = slice_max::<T>(low);
-        let median = left_max
-            .add_wrapping(*high)
-            .div_wrapping(T::Native::usize_as(2));
+        // Calculate median as the average of the two middle values.
+        // Use checked arithmetic to detect overflow and fall back to safe formula.
+        let two = T::Native::usize_as(2);
+        let median = match left_max.add_checked(*high) {
+            Ok(sum) => sum.div_wrapping(two),
+            Err(_) => {
+                // Overflow detected - use safe midpoint formula:
+                // a/2 + b/2 + ((a%2 + b%2) / 2)
+                // This avoids overflow by dividing before adding.
+                let half_left = left_max.div_wrapping(two);
+                let half_right = (*high).div_wrapping(two);
+                let rem_left = left_max.mod_wrapping(two);
+                let rem_right = (*high).mod_wrapping(two);
+                // The sum of remainders (0, 1, or 2 for unsigned; -2 to 2 for signed)
+                // divided by 2 gives the correction factor (0 or 1 for unsigned; -1, 0, or 1 for signed)
+                let correction = rem_left.add_wrapping(rem_right).div_wrapping(two);
+                half_left.add_wrapping(half_right).add_wrapping(correction)
+            }
+        };
         Some(median)
     } else {
         let (_, median, _) = values.select_nth_unstable_by(len / 2, cmp);

@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::common::{plan_err, DataFusionError, HashMap};
+use datafusion::common::{DataFusionError, HashMap, plan_err};
+use substrait::proto::extensions::SimpleExtensionDeclaration;
 use substrait::proto::extensions::simple_extension_declaration::{
     ExtensionFunction, ExtensionType, ExtensionTypeVariation, MappingType,
 };
-use substrait::proto::extensions::SimpleExtensionDeclaration;
 
 /// Substrait uses [SimpleExtensions](https://substrait.io/extensions/#simple-extensions) to define
 /// behavior of plans in addition to what's supported directly by the protobuf definitions.
@@ -115,7 +115,7 @@ impl TryFrom<&Vec<SimpleExtensionDeclaration>> for Extensions {
 impl From<Extensions> for Vec<SimpleExtensionDeclaration> {
     // Silence deprecation warnings for `extension_uri_reference` during the uri -> urn migration
     // See: https://github.com/substrait-io/substrait/issues/856
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     fn from(val: Extensions) -> Vec<SimpleExtensionDeclaration> {
         let mut extensions = vec![];
         for (f_anchor, f_name) in val.functions {

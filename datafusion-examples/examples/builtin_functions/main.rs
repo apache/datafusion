@@ -26,9 +26,15 @@
 //!
 //! Each subcommand runs a corresponding example:
 //! - `all` — run all examples included in this module
-//! - `date_time` — examples of date-time related functions and queries
-//! - `function_factory` — register `CREATE FUNCTION` handler to implement SQL macros
-//! - `regexp` — examples of using regular expression functions
+//!
+//! - `date_time`
+//!   (file: date_time.rs, desc: Examples of date-time related functions and queries)
+//!
+//! - `function_factory`  
+//!   (file: function_factory.rs, desc: Register `CREATE FUNCTION` handler to implement SQL macros)
+//!
+//! - `regexp`
+//!   (file: regexp.rs, desc: Examples of using regular expression functions)
 
 mod date_time;
 mod function_factory;
@@ -80,7 +86,7 @@ async fn main() -> Result<()> {
 
     let example: ExampleKind = std::env::args()
         .nth(1)
-        .ok_or_else(|| DataFusionError::Execution(format!("Missing argument. {usage}")))?
+        .unwrap_or_else(|| ExampleKind::All.to_string())
         .parse()
         .map_err(|_| DataFusionError::Execution(format!("Unknown example. {usage}")))?;
 

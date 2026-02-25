@@ -16,11 +16,11 @@
 // under the License.
 
 use crate::logical_plan::consumer::SubstraitConsumer;
-use datafusion::common::{not_impl_err, Column, DFSchema};
+use datafusion::common::{Column, DFSchema, not_impl_err};
 use datafusion::logical_expr::Expr;
+use substrait::proto::expression::FieldReference;
 use substrait::proto::expression::field_reference::ReferenceType::DirectReference;
 use substrait::proto::expression::reference_segment::ReferenceType::StructField;
-use substrait::proto::expression::FieldReference;
 
 pub async fn from_field_reference(
     _consumer: &impl SubstraitConsumer,

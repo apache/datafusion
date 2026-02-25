@@ -22,12 +22,14 @@ use arrow::array::{
     Array, ArrayRef, AsArray, DurationMicrosecondBuilder, PrimitiveArray,
 };
 use arrow::datatypes::TimeUnit::Microsecond;
-use arrow::datatypes::{DataType, Float64Type, Int32Type};
-use datafusion_common::types::{logical_float64, logical_int32, NativeType};
-use datafusion_common::{plan_datafusion_err, DataFusionError, Result, ScalarValue};
+use arrow::datatypes::{DataType, Field, FieldRef, Float64Type, Int32Type};
+use datafusion_common::types::{NativeType, logical_float64, logical_int32};
+use datafusion_common::{
+    DataFusionError, Result, ScalarValue, internal_err, plan_datafusion_err,
+};
 use datafusion_expr::{
-    Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
-    TypeSignatureClass, Volatility,
+    Coercion, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, TypeSignature, TypeSignatureClass, Volatility,
 };
 use datafusion_functions::utils::make_scalar_function;
 
@@ -99,7 +101,28 @@ impl ScalarUDFImpl for SparkMakeDtInterval {
     ///
     /// [Sail compatibility doc]: https://github.com/lakehq/sail/blob/dc5368daa24d40a7758a299e1ba8fc985cb29108/docs/guide/dataframe/data-types/compatibility.md?plain=1#L260
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Duration(Microsecond))
+        internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let has_non_finite_secs = args
+            .scalar_arguments
+            .get(3)
+            .and_then(|arg| {
+                arg.map(|scalar| match scalar {
+                    ScalarValue::Float64(Some(v)) => !v.is_finite(),
+                    ScalarValue::Float32(Some(v)) => !v.is_finite(),
+                    _ => false,
+                })
+            })
+            .unwrap_or(false);
+        let nullable =
+            has_non_finite_secs || args.arg_fields.iter().any(|f| f.is_nullable());
+        Ok(Arc::new(Field::new(
+            self.name(),
+            DataType::Duration(Microsecond),
+            nullable,
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -225,10 +248,9 @@ mod tests {
 
     use arrow::array::{DurationMicrosecondArray, Float64Array, Int32Array};
     use arrow::datatypes::DataType::Duration;
-    use arrow::datatypes::Field;
-    use arrow::datatypes::TimeUnit::Microsecond;
-    use datafusion_common::{internal_datafusion_err, DataFusionError, Result};
-    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
+    use arrow::datatypes::{DataType, Field, TimeUnit::Microsecond};
+    use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
+    use datafusion_expr::{ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs};
 
     use super::*;
 
@@ -289,6 +311,59 @@ mod tests {
         for i in 0..out.len() {
             assert!(out.is_null(i), "row {i} should be NULL");
         }
+        Ok(())
+    }
+
+    #[test]
+    fn return_field_respects_nullability() -> Result<()> {
+        let udf = SparkMakeDtInterval::new();
+
+        // All nullable inputs -> nullable output
+        let arg_fields = vec![
+            Arc::new(Field::new("days", DataType::Int32, true)),
+            Arc::new(Field::new("hours", DataType::Int32, true)),
+            Arc::new(Field::new("mins", DataType::Int32, true)),
+            Arc::new(Field::new("secs", DataType::Float64, true)),
+        ];
+
+        let out = udf.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &[None, None, None, None],
+        })?;
+        assert!(out.is_nullable());
+        assert_eq!(out.data_type(), &Duration(Microsecond));
+
+        // Non-nullable inputs -> non-nullable output
+        let non_nullable_arg_fields = vec![
+            Arc::new(Field::new("days", DataType::Int32, false)),
+            Arc::new(Field::new("hours", DataType::Int32, false)),
+            Arc::new(Field::new("mins", DataType::Int32, false)),
+            Arc::new(Field::new("secs", DataType::Float64, false)),
+        ];
+
+        let out = udf.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &non_nullable_arg_fields,
+            scalar_arguments: &[None, None, None, None],
+        })?;
+        assert!(!out.is_nullable());
+
+        // Non-finite secs scalar should force nullable even if fields are non-nullable
+        let scalar_values =
+            [None, None, None, Some(ScalarValue::Float64(Some(f64::NAN)))];
+        let scalar_refs = scalar_values.iter().map(|v| v.as_ref()).collect::<Vec<_>>();
+        let out = udf.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &non_nullable_arg_fields,
+            scalar_arguments: &scalar_refs,
+        })?;
+        assert!(out.is_nullable());
+
+        // Zero-arg call (defaults) should also be non-nullable
+        let out = udf.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &[],
+            scalar_arguments: &[],
+        })?;
+        assert!(!out.is_nullable());
+
         Ok(())
     }
 

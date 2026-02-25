@@ -21,8 +21,8 @@ use std::env;
 use std::sync::Arc;
 
 use datafusion::dataframe::DataFrameWriteOptions;
-use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
+use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingOptions;
 use datafusion::error::Result;
 use datafusion::prelude::*;

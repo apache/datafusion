@@ -25,12 +25,12 @@ use datafusion::{
 };
 use datafusion_catalog::{Session, TableProvider};
 use datafusion_common::config::Dialect;
-use datafusion_expr::{dml::InsertOp, Expr, TableType};
+use datafusion_expr::{Expr, TableType, dml::InsertOp};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion_physical_plan::execution_plan::SchedulingType;
 use datafusion_physical_plan::{
-    execution_plan::{Boundedness, EmissionType},
     DisplayAs, ExecutionPlan, PlanProperties,
+    execution_plan::{Boundedness, EmissionType},
 };
 
 #[tokio::test]
@@ -122,20 +122,22 @@ impl TableProvider for TestInsertTableProvider {
 #[derive(Debug)]
 struct TestInsertExec {
     op: InsertOp,
-    plan_properties: PlanProperties,
+    plan_properties: Arc<PlanProperties>,
 }
 
 impl TestInsertExec {
     fn new(op: InsertOp) -> Self {
         Self {
             op,
-            plan_properties: PlanProperties::new(
-                EquivalenceProperties::new(make_count_schema()),
-                Partitioning::UnknownPartitioning(1),
-                EmissionType::Incremental,
-                Boundedness::Bounded,
-            )
-            .with_scheduling_type(SchedulingType::Cooperative),
+            plan_properties: Arc::new(
+                PlanProperties::new(
+                    EquivalenceProperties::new(make_count_schema()),
+                    Partitioning::UnknownPartitioning(1),
+                    EmissionType::Incremental,
+                    Boundedness::Bounded,
+                )
+                .with_scheduling_type(SchedulingType::Cooperative),
+            ),
         }
     }
 }
@@ -159,7 +161,7 @@ impl ExecutionPlan for TestInsertExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.plan_properties
     }
 

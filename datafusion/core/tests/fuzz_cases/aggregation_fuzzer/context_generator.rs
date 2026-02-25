@@ -25,7 +25,7 @@ use datafusion_catalog::TableProvider;
 use datafusion_common::ScalarValue;
 use datafusion_common::{error::Result, utils::get_available_parallelism};
 use datafusion_expr::col;
-use rand::{rng, Rng};
+use rand::{Rng, rng};
 
 use crate::fuzz_cases::aggregation_fuzzer::data_generator::Dataset;
 
@@ -214,7 +214,7 @@ impl GeneratedSessionContextBuilder {
 
 /// The generated params for [`SessionContext`]
 #[derive(Debug)]
-#[allow(dead_code)]
+#[expect(dead_code)]
 pub struct SessionContextParams {
     batch_size: usize,
     target_partitions: usize,

@@ -17,10 +17,10 @@
 
 use crate::logical_plan::producer::SubstraitProducer;
 use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
-use datafusion::common::{plan_err, DFSchemaRef};
+use datafusion::common::{DFSchemaRef, plan_err};
 use datafusion::logical_expr::SortExpr;
-use substrait::proto::sort_field::{SortDirection, SortKind};
 use substrait::proto::SortField;
+use substrait::proto::sort_field::{SortDirection, SortKind};
 
 // Substrait wants a list of all field names, including nested fields from structs,
 // also from within e.g. lists and maps. However, it does not want the list and map field names

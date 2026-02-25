@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
@@ -20,13 +20,15 @@
 
 set -e
 
-SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "${SOURCE_DIR}/../" && pwd
+ROOT_DIR="$(git rev-parse --show-toplevel)"
+cd "${ROOT_DIR}"
+
+# Load centralized tool versions
+source "${ROOT_DIR}/ci/scripts/utils/tool_versions.sh"
 
 TARGET_FILE="docs/source/user-guide/configs.md"
 PRINT_CONFIG_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --bin print_config_docs"
 PRINT_RUNTIME_CONFIG_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --bin print_runtime_config_docs"
-
 
 echo "Inserting header"
 cat <<'EOF' > "$TARGET_FILE"
@@ -238,7 +240,7 @@ Enables the experimental Piecewise Merge Join algorithm.
 EOF
 
 
-echo "Running prettier"
-npx prettier@2.3.2 --write "$TARGET_FILE"
+echo "Running prettier ${PRETTIER_VERSION}"
+npx "prettier@${PRETTIER_VERSION}" --write "$TARGET_FILE"
 
 echo "'$TARGET_FILE' successfully updated!"

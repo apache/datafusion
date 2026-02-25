@@ -77,11 +77,11 @@ use arrow::record_batch::RecordBatch;
 use datafusion::prelude::*;
 use datafusion_common::{DFSchemaRef, Result};
 use datafusion_expr::{
+    Expr, UserDefinedLogicalNode,
     logical_plan::{Extension, InvariantLevel, LogicalPlan},
     planner::{
         PlannedRelation, RelationPlanner, RelationPlannerContext, RelationPlanning,
     },
-    Expr, UserDefinedLogicalNode,
 };
 use datafusion_sql::sqlparser::ast::TableFactor;
 use insta::assert_snapshot;
@@ -362,7 +362,7 @@ impl RelationPlanner for MatchRecognizePlanner {
             ..
         } = relation
         else {
-            return Ok(RelationPlanning::Original(relation));
+            return Ok(RelationPlanning::Original(Box::new(relation)));
         };
 
         // Plan the input table
@@ -401,6 +401,8 @@ impl RelationPlanner for MatchRecognizePlanner {
             node: Arc::new(node),
         });
 
-        Ok(RelationPlanning::Planned(PlannedRelation::new(plan, alias)))
+        Ok(RelationPlanning::Planned(Box::new(PlannedRelation::new(
+            plan, alias,
+        ))))
     }
 }

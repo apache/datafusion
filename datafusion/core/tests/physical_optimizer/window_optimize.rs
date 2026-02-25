@@ -26,10 +26,10 @@ mod test {
     use datafusion_expr::WindowFrame;
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
-    use datafusion_physical_expr::expressions::{col, Column};
+    use datafusion_physical_expr::expressions::{Column, col};
     use datafusion_physical_expr::window::PlainAggregateWindowExpr;
     use datafusion_physical_plan::windows::BoundedWindowAggExec;
-    use datafusion_physical_plan::{common, ExecutionPlan, InputOrderMode};
+    use datafusion_physical_plan::{ExecutionPlan, InputOrderMode, common};
     use std::sync::Arc;
 
     /// Test case for <https://github.com/apache/datafusion/issues/16308>

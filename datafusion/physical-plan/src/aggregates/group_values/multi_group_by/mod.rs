@@ -30,7 +30,7 @@ use crate::aggregates::group_values::multi_group_by::{
     bytes_view::ByteViewGroupValueBuilder, primitive::PrimitiveGroupValueBuilder,
 };
 use ahash::RandomState;
-use arrow::array::{Array, ArrayRef, RecordBatch};
+use arrow::array::{Array, ArrayRef};
 use arrow::compute::cast;
 use arrow::datatypes::{
     BinaryViewType, DataType, Date32Type, Date64Type, Decimal128Type, Float32Type,
@@ -540,14 +540,13 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
                 // into `vectorized_equal_to_row_indices` and `vectorized_equal_to_group_indices`.
                 let list_offset = group_index_view.value() as usize;
                 let group_index_list = &self.group_index_lists[list_offset];
-                for &group_index in group_index_list {
-                    self.vectorized_operation_buffers
-                        .equal_to_row_indices
-                        .push(row);
-                    self.vectorized_operation_buffers
-                        .equal_to_group_indices
-                        .push(group_index);
-                }
+
+                self.vectorized_operation_buffers
+                    .equal_to_group_indices
+                    .extend_from_slice(group_index_list);
+                self.vectorized_operation_buffers
+                    .equal_to_row_indices
+                    .extend(std::iter::repeat_n(row, group_index_list.len()));
             } else {
                 let group_index = group_index_view.value() as usize;
                 self.vectorized_operation_buffers
@@ -1181,14 +1180,13 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
         Ok(output)
     }
 
-    fn clear_shrink(&mut self, batch: &RecordBatch) {
-        let count = batch.num_rows();
+    fn clear_shrink(&mut self, num_rows: usize) {
         self.group_values.clear();
         self.map.clear();
-        self.map.shrink_to(count, |_| 0); // hasher does not matter since the map is cleared
+        self.map.shrink_to(num_rows, |_| 0); // hasher does not matter since the map is cleared
         self.map_size = self.map.capacity() * size_of::<(u64, usize)>();
         self.hashes_buffer.clear();
-        self.hashes_buffer.shrink_to(count);
+        self.hashes_buffer.shrink_to(num_rows);
 
         // Such structures are only used in `non-streaming` case
         if !STREAMING {

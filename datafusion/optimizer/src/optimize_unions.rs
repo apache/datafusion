@@ -32,7 +32,7 @@ use std::sync::Arc;
 pub struct OptimizeUnions;
 
 impl OptimizeUnions {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
@@ -497,9 +497,7 @@ mod tests {
             OptimizerContext::new().with_max_passes(1),
             vec![Arc::new(OptimizeUnions::new())],
             plan,
-            @r"
-        TableScan: table
-        "
+            @"TableScan: table"
         )
     }
 }

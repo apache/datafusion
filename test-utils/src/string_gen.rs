@@ -19,7 +19,7 @@ use crate::array_gen::StringArrayGenerator;
 use crate::stagger_batch;
 use arrow::record_batch::RecordBatch;
 use rand::rngs::StdRng;
-use rand::{rng, Rng, SeedableRng};
+use rand::{Rng, SeedableRng, rng};
 
 /// Randomly generate strings
 pub struct StringBatchGenerator(StringArrayGenerator);

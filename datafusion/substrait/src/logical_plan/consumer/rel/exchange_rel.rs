@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::logical_plan::consumer::from_substrait_field_reference;
 use crate::logical_plan::consumer::SubstraitConsumer;
+use crate::logical_plan::consumer::from_substrait_field_reference;
 use datafusion::common::{not_impl_err, substrait_err};
 use datafusion::logical_expr::{LogicalPlan, Partitioning, Repartition};
 use std::sync::Arc;
-use substrait::proto::exchange_rel::ExchangeKind;
 use substrait::proto::ExchangeRel;
+use substrait::proto::exchange_rel::ExchangeKind;
 
 pub async fn from_exchange_rel(
     consumer: &impl SubstraitConsumer,

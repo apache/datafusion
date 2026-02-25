@@ -18,7 +18,7 @@
 use arrow::array::{ArrayRef, RecordBatch};
 use arrow_schema::DataType;
 use arrow_schema::TimeUnit::Nanosecond;
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion::prelude::{DataFrame, SessionContext};
 use datafusion_catalog::MemTable;
 use datafusion_common::ScalarValue;

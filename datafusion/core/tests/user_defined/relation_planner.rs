@@ -25,11 +25,11 @@ use datafusion::catalog::memory::MemTable;
 use datafusion::common::test_util::batches_to_string;
 use datafusion::prelude::*;
 use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::Expr;
 use datafusion_expr::logical_plan::builder::LogicalPlanBuilder;
 use datafusion_expr::planner::{
     PlannedRelation, RelationPlanner, RelationPlannerContext, RelationPlanning,
 };
-use datafusion_expr::Expr;
 use datafusion_sql::sqlparser::ast::TableFactor;
 use insta::assert_snapshot;
 
@@ -68,9 +68,11 @@ fn plan_static_values_table(
                 .project(vec![col("column1").alias(column_name)])?
                 .build()?;
 
-            Ok(RelationPlanning::Planned(PlannedRelation::new(plan, alias)))
+            Ok(RelationPlanning::Planned(Box::new(PlannedRelation::new(
+                plan, alias,
+            ))))
         }
-        other => Ok(RelationPlanning::Original(other)),
+        other => Ok(RelationPlanning::Original(Box::new(other))),
     }
 }
 
@@ -176,9 +178,11 @@ impl RelationPlanner for SamplingJoinPlanner {
                     .cross_join(right_sampled)?
                     .build()?;
 
-                Ok(RelationPlanning::Planned(PlannedRelation::new(plan, alias)))
+                Ok(RelationPlanning::Planned(Box::new(PlannedRelation::new(
+                    plan, alias,
+                ))))
             }
-            other => Ok(RelationPlanning::Original(other)),
+            other => Ok(RelationPlanning::Original(Box::new(other))),
         }
     }
 }
@@ -195,7 +199,7 @@ impl RelationPlanner for PassThroughPlanner {
         _context: &mut dyn RelationPlannerContext,
     ) -> Result<RelationPlanning> {
         // Never handles anything - always delegates
-        Ok(RelationPlanning::Original(relation))
+        Ok(RelationPlanning::Original(Box::new(relation)))
     }
 }
 
@@ -217,7 +221,7 @@ impl RelationPlanner for PremiumFeaturePlanner {
                      to unlock advanced array operations."
                     .to_string(),
             )),
-            other => Ok(RelationPlanning::Original(other)),
+            other => Ok(RelationPlanning::Original(Box::new(other))),
         }
     }
 }
@@ -349,7 +353,8 @@ mod tests {
         | 1      |
         | 2      |
         | 3      |
-        +--------+");
+        +--------+
+        ");
     }
 
     // Virtual table supports standard SQL operations (projection, filter, aggregation).
@@ -369,7 +374,8 @@ mod tests {
         +--------+
         | 20     |
         | 30     |
-        +--------+");
+        +--------+
+        ");
 
         let aggregated = execute_sql_to_string(
             &ctx,
@@ -383,7 +389,8 @@ mod tests {
         | count | total | average |
         +-------+-------+---------+
         | 3     | 6     | 2.0     |
-        +-------+-------+---------+");
+        +-------+-------+---------+
+        ");
     }
 
     // Multiple planners can coexist and each handles its own virtual table.
@@ -401,7 +408,8 @@ mod tests {
         | 1      |
         | 2      |
         | 3      |
-        +--------+");
+        +--------+
+        ");
 
         let result2 = execute_sql_to_string(&ctx, "SELECT * FROM colors").await;
         assert_snapshot!(result2, @r"
@@ -411,7 +419,8 @@ mod tests {
         | red   |
         | green |
         | blue  |
-        +-------+");
+        +-------+
+        ");
     }
 
     // Last registered planner for the same table name takes precedence (LIFO).
@@ -431,7 +440,8 @@ mod tests {
         | 1      |
         | 2      |
         | 3      |
-        +--------+");
+        +--------+
+        ");
     }
 
     // Pass-through planner delegates to the catalog without changing behavior.
@@ -447,7 +457,8 @@ mod tests {
         | value |
         +-------+
         | 42    |
-        +-------+");
+        +-------+
+        ");
     }
 
     // Catalog is used when no planner claims the relation.
@@ -465,7 +476,8 @@ mod tests {
         +----+-------+
         | 1  | Alice |
         | 2  | Bob   |
-        +----+-------+");
+        +----+-------+
+        ");
     }
 
     // Planners can block specific constructs and surface custom error messages.
@@ -513,6 +525,7 @@ mod tests {
         | 1      | green |
         | 2      | red   |
         | 2      | green |
-        +--------+-------+");
+        +--------+-------+
+        ");
     }
 }

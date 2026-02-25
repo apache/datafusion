@@ -21,28 +21,28 @@ use std::sync::Arc;
 
 use crate::protobuf::logical_plan_node::LogicalPlanType::CustomScan;
 use crate::protobuf::{
-    dml_node, ColumnUnnestListItem, ColumnUnnestListRecursion, CteWorkTableScanNode,
-    CustomTableScanNode, DmlNode, SortExprNodeCollection,
+    ColumnUnnestListItem, ColumnUnnestListRecursion, CteWorkTableScanNode,
+    CustomTableScanNode, DmlNode, SortExprNodeCollection, dml_node,
 };
 use crate::{
     convert_required, into_required,
     protobuf::{
-        self, listing_table_scan_node::FileFormatType,
-        logical_plan_node::LogicalPlanType, LogicalExtensionNode, LogicalPlanNode,
+        self, LogicalExtensionNode, LogicalPlanNode,
+        listing_table_scan_node::FileFormatType, logical_plan_node::LogicalPlanType,
     },
 };
 
-use crate::protobuf::{proto_error, ToProtoError};
+use crate::protobuf::{ToProtoError, proto_error};
 use arrow::datatypes::{DataType, Field, Schema, SchemaBuilder, SchemaRef};
 use datafusion_catalog::cte_worktable::CteWorkTable;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{
-    assert_or_internal_err, context, internal_datafusion_err, internal_err, not_impl_err,
-    plan_err, Result, TableReference, ToDFSchema,
+    Result, TableReference, ToDFSchema, assert_or_internal_err, context,
+    internal_datafusion_err, internal_err, not_impl_err, plan_err,
 };
 use datafusion_datasource::file_format::FileFormat;
 use datafusion_datasource::file_format::{
-    file_type_to_format, format_as_file_type, FileFormatFactory,
+    FileFormatFactory, file_type_to_format, format_as_file_type,
 };
 use datafusion_datasource_arrow::file_format::ArrowFormat;
 #[cfg(feature = "avro")]
@@ -52,30 +52,29 @@ use datafusion_datasource_json::file_format::JsonFormat as OtherNdJsonFormat;
 #[cfg(feature = "parquet")]
 use datafusion_datasource_parquet::file_format::ParquetFormat;
 use datafusion_expr::{
-    dml,
-    logical_plan::{
-        builder::project, Aggregate, CreateCatalog, CreateCatalogSchema,
-        CreateExternalTable, CreateView, DdlStatement, Distinct, EmptyRelation,
-        Extension, Join, JoinConstraint, Prepare, Projection, Repartition, Sort,
-        SubqueryAlias, TableScan, Values, Window,
-    },
-    DistinctOn, DropView, Expr, LogicalPlan, LogicalPlanBuilder, ScalarUDF, SortExpr,
-    Statement, WindowUDF,
+    AggregateUDF, DmlStatement, FetchType, RecursiveQuery, SkipType, TableSource, Unnest,
 };
 use datafusion_expr::{
-    AggregateUDF, DmlStatement, FetchType, RecursiveQuery, SkipType, TableSource, Unnest,
+    DistinctOn, DropView, Expr, LogicalPlan, LogicalPlanBuilder, ScalarUDF, SortExpr,
+    Statement, WindowUDF, dml,
+    logical_plan::{
+        Aggregate, CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateView,
+        DdlStatement, Distinct, EmptyRelation, Extension, Join, JoinConstraint, Prepare,
+        Projection, Repartition, Sort, SubqueryAlias, TableScan, Values, Window,
+        builder::project,
+    },
 };
 
 use self::to_proto::{serialize_expr, serialize_exprs};
 use crate::logical_plan::to_proto::serialize_sorts;
+use datafusion_catalog::TableProvider;
 use datafusion_catalog::default_table_source::{provider_as_source, source_as_provider};
 use datafusion_catalog::view::ViewTable;
-use datafusion_catalog::TableProvider;
 use datafusion_catalog_listing::{ListingOptions, ListingTable, ListingTableConfig};
 use datafusion_datasource::ListingTableUrl;
 use datafusion_execution::TaskContext;
-use prost::bytes::BufMut;
 use prost::Message;
+use prost::bytes::BufMut;
 
 pub mod file_formats;
 pub mod from_proto;
@@ -423,14 +422,17 @@ impl AsLogicalPlan for LogicalPlanNode {
                             }
                             Arc::new(json)
                         }
-                        #[cfg_attr(not(feature = "avro"), allow(unused_variables))]
                         FileFormatType::Avro(..) => {
                             #[cfg(feature = "avro")]
                             {
                                 Arc::new(AvroFormat)
                             }
                             #[cfg(not(feature = "avro"))]
-                            panic!("Unable to process avro file since `avro` feature is not enabled");
+                            {
+                                panic!(
+                                    "Unable to process avro file since `avro` feature is not enabled"
+                                );
+                            }
                         }
                         FileFormatType::Arrow(..) => {
                             Arc::new(ArrowFormat)
@@ -1449,7 +1451,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         PartitionMethod::RoundRobin(*partition_count as u64)
                     }
                     Partitioning::DistributeBy(_) => {
-                        return not_impl_err!("DistributeBy")
+                        return not_impl_err!("DistributeBy");
                     }
                 };
 

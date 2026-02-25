@@ -17,7 +17,7 @@
   under the License.
 -->
 
-# DataFusion Query Optimizer
+# Query Optimizer
 
 [DataFusion][df] is an extensible query execution framework, written in Rust, that uses Apache Arrow as its in-memory
 format.
@@ -25,8 +25,21 @@ format.
 DataFusion has modular design, allowing individual crates to be re-used in other projects.
 
 This crate is a submodule of DataFusion that provides a query optimizer for logical plans, and
-contains an extensive set of OptimizerRules that may rewrite the plan and/or its expressions so
+contains an extensive set of [`OptimizerRule`]s and [`PhysicalOptimizerRule`]s that may rewrite the plan and/or its expressions so
 they execute more quickly while still computing the same result.
+
+For a deeper background on optimizer architecture and rule types and predicates, see
+[Optimizing SQL (and DataFrames) in DataFusion, Part 1], [Part 2],
+[Using Ordering for Better Plans in Apache DataFusion], and
+[Dynamic Filters: Passing Information Between Operators During Execution for 25x Faster Queries].
+
+[`optimizerrule`]: https://docs.rs/datafusion/latest/datafusion/optimizer/trait.OptimizerRule.html
+[`physicaloptimizerrule`]: https://docs.rs/datafusion/latest/datafusion/physical_optimizer/trait.PhysicalOptimizerRule.html
+[optimizing sql (and dataframes) in datafusion, part 1]: https://datafusion.apache.org/blog/2025/06/15/optimizing-sql-dataframes-part-one
+[part 2]: https://datafusion.apache.org/blog/2025/06/15/optimizing-sql-dataframes-part-two
+[using ordering for better plans in apache datafusion]: https://datafusion.apache.org/blog/2025/03/11/ordering-analysis
+[dynamic filters: passing information between operators during execution for 25x faster queries]: https://datafusion.apache.org/blog/2025/09/10/dynamic-filters
+[`logicalplan`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/enum.LogicalPlan.html
 
 ## Running the Optimizer
 
@@ -72,7 +85,7 @@ Please refer to the
 example to learn more about the general approach to writing optimizer rules and
 then move onto studying the existing rules.
 
-`OptimizerRule` transforms one ['LogicalPlan'] into another which
+`OptimizerRule` transforms one [`LogicalPlan`] into another which
 computes the same results, but in a potentially more efficient
 way. If there are no suitable transformations for the input plan,
 the optimizer can simply return it as is.
@@ -501,3 +514,5 @@ fn analyze_filter_example() -> Result<()> {
     Ok(())
 }
 ```
+
+[treenode api]: https://docs.rs/datafusion/latest/datafusion/common/tree_node/trait.TreeNode.html

@@ -26,27 +26,27 @@ use std::{
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{stats::Precision, ColumnStatistics, JoinType, ScalarValue};
+use datafusion_common::{ColumnStatistics, JoinType, ScalarValue, stats::Precision};
 use datafusion_common::{JoinSide, NullEquality};
 use datafusion_common::{Result, Statistics};
 use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
 use datafusion_expr::Operator;
+use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, NegativeExpr};
 use datafusion_physical_expr::intervals::utils::check_support;
-use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
-use datafusion_physical_optimizer::join_selection::JoinSelection;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::join_selection::JoinSelection;
+use datafusion_physical_plan::ExecutionPlanProperties;
 use datafusion_physical_plan::displayable;
 use datafusion_physical_plan::joins::utils::ColumnIndex;
 use datafusion_physical_plan::joins::utils::JoinFilter;
 use datafusion_physical_plan::joins::{HashJoinExec, NestedLoopJoinExec, PartitionMode};
 use datafusion_physical_plan::projection::ProjectionExec;
-use datafusion_physical_plan::ExecutionPlanProperties;
 use datafusion_physical_plan::{
-    execution_plan::{Boundedness, EmissionType},
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
+    execution_plan::{Boundedness, EmissionType},
 };
 
 use futures::Stream;
@@ -222,6 +222,7 @@ async fn test_join_with_swap() {
             None,
             PartitionMode::CollectLeft,
             NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -284,6 +285,7 @@ async fn test_left_join_no_swap() {
             None,
             PartitionMode::CollectLeft,
             NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -333,6 +335,7 @@ async fn test_join_with_swap_semi() {
             None,
             PartitionMode::Partitioned,
             NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap();
 
@@ -388,6 +391,7 @@ async fn test_join_with_swap_mark() {
             None,
             PartitionMode::Partitioned,
             NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap();
 
@@ -461,6 +465,7 @@ async fn test_nested_join_swap() {
         None,
         PartitionMode::CollectLeft,
         NullEquality::NullEqualsNothing,
+        false,
     )
     .unwrap();
     let child_schema = child_join.schema();
@@ -478,6 +483,7 @@ async fn test_nested_join_swap() {
         None,
         PartitionMode::CollectLeft,
         NullEquality::NullEqualsNothing,
+        false,
     )
     .unwrap();
 
@@ -518,6 +524,7 @@ async fn test_join_no_swap() {
             None,
             PartitionMode::CollectLeft,
             NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -745,6 +752,7 @@ async fn test_hash_join_swap_on_joins_with_projections(
         Some(projection),
         PartitionMode::Partitioned,
         NullEquality::NullEqualsNothing,
+        false,
     )?);
 
     let swapped = join
@@ -754,7 +762,7 @@ async fn test_hash_join_swap_on_joins_with_projections(
             "ProjectionExec won't be added above if HashJoinExec contains embedded projection",
         );
 
-    assert_eq!(swapped_join.projection, Some(vec![0_usize]));
+    assert_eq!(swapped_join.projection.as_deref().unwrap(), &[0_usize]);
     assert_eq!(swapped.schema().fields.len(), 1);
     assert_eq!(swapped.schema().fields[0].name(), "small_col");
     Ok(())
@@ -906,6 +914,7 @@ fn check_join_partition_mode(
             None,
             PartitionMode::Auto,
             NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -949,10 +958,10 @@ impl Stream for UnboundedStream {
         mut self: Pin<&mut Self>,
         _cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        if let Some(val) = self.batch_produce {
-            if val <= self.count {
-                return Poll::Ready(None);
-            }
+        if let Some(val) = self.batch_produce
+            && val <= self.count
+        {
+            return Poll::Ready(None);
         }
         self.count += 1;
         Poll::Ready(Some(Ok(self.batch.clone())))
@@ -970,7 +979,7 @@ impl RecordBatchStream for UnboundedStream {
 pub struct UnboundedExec {
     batch_produce: Option<usize>,
     batch: RecordBatch,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl UnboundedExec {
@@ -986,7 +995,7 @@ impl UnboundedExec {
         Self {
             batch_produce,
             batch,
-            cache,
+            cache: Arc::new(cache),
         }
     }
 
@@ -1043,7 +1052,7 @@ impl ExecutionPlan for UnboundedExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -1082,20 +1091,21 @@ pub enum SourceType {
 pub struct StatisticsExec {
     stats: Statistics,
     schema: Arc<Schema>,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl StatisticsExec {
     pub fn new(stats: Statistics, schema: Schema) -> Self {
         assert_eq!(
-                stats.column_statistics.len(), schema.fields().len(),
-                "if defined, the column statistics vector length should be the number of fields"
-            );
+            stats.column_statistics.len(),
+            schema.fields().len(),
+            "if defined, the column statistics vector length should be the number of fields"
+        );
         let cache = Self::compute_properties(Arc::new(schema.clone()));
         Self {
             stats,
             schema: Arc::new(schema),
-            cache,
+            cache: Arc::new(cache),
         }
     }
 
@@ -1143,7 +1153,7 @@ impl ExecutionPlan for StatisticsExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -1164,10 +1174,6 @@ impl ExecutionPlan for StatisticsExec {
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         unimplemented!("This plan only serves for testing statistics")
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        Ok(self.stats.clone())
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
@@ -1553,6 +1559,7 @@ async fn test_join_with_maybe_swap_unbounded_case(t: TestCase) -> Result<()> {
         None,
         t.initial_mode,
         NullEquality::NullEqualsNothing,
+        false,
     )?) as _;
 
     let optimized_join_plan =

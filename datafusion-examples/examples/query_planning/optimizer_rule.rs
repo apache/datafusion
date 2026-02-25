@@ -20,7 +20,7 @@
 use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
 use arrow::datatypes::DataType;
 use datafusion::common::tree_node::{Transformed, TreeNode};
-use datafusion::common::{assert_batches_eq, Result, ScalarValue};
+use datafusion::common::{Result, ScalarValue, assert_batches_eq};
 use datafusion::logical_expr::{
     BinaryExpr, ColumnarValue, Expr, LogicalPlan, Operator, ScalarFunctionArgs,
     ScalarUDF, ScalarUDFImpl, Signature, Volatility,

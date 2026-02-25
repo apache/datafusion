@@ -309,30 +309,6 @@ pub fn ceil_order(input: &[ExprProperties]) -> Result<SortProperties> {
     Ok(input[0].sort_properties)
 }
 
-static DOCUMENTATION_CEIL: LazyLock<Documentation> = LazyLock::new(|| {
-    Documentation::builder(
-        DOC_SECTION_MATH,
-        "Returns the nearest integer greater than or equal to a number.",
-        "ceil(numeric_expression)",
-    )
-    .with_standard_argument("numeric_expression", Some("Numeric"))
-    .with_sql_example(
-        r#"```sql
-    > SELECT ceil(3.14);
-+------------+
-| ceil(3.14) |
-+------------+
-| 4.0        |
-+------------+
-```"#,
-    )
-    .build()
-});
-
-pub fn get_ceil_doc() -> &'static Documentation {
-    &DOCUMENTATION_CEIL
-}
-
 /// Non-increasing on \[0, π\] and then non-decreasing on \[π, 2π\].
 /// This pattern repeats periodically with a period of 2π.
 // TODO: Implement ordering rule of the ATAN2 function.
@@ -465,30 +441,6 @@ pub fn get_exp_doc() -> &'static Documentation {
 /// Non-decreasing for all real numbers.
 pub fn floor_order(input: &[ExprProperties]) -> Result<SortProperties> {
     Ok(input[0].sort_properties)
-}
-
-static DOCUMENTATION_FLOOR: LazyLock<Documentation> = LazyLock::new(|| {
-    Documentation::builder(
-        DOC_SECTION_MATH,
-        "Returns the nearest integer less than or equal to a number.",
-        "floor(numeric_expression)",
-    )
-    .with_standard_argument("numeric_expression", Some("Numeric"))
-    .with_sql_example(
-        r#"```sql
-> SELECT floor(3.14);
-+-------------+
-| floor(3.14) |
-+-------------+
-| 3.0         |
-+-------------+
-```"#,
-    )
-    .build()
-});
-
-pub fn get_floor_doc() -> &'static Documentation {
-    &DOCUMENTATION_FLOOR
 }
 
 /// Non-decreasing for x ≥ 0, undefined otherwise.

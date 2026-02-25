@@ -46,7 +46,7 @@ use crate::{
 };
 use datafusion_common::tree_node::TreeNodeRefContainer;
 
-use crate::expr::{Exists, InSubquery};
+use crate::expr::{Exists, InSubquery, SetComparison};
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeContainer, TreeNodeIterator, TreeNodeRecursion,
     TreeNodeRewriter, TreeNodeVisitor,
@@ -133,6 +133,7 @@ impl TreeNode for LogicalPlan {
                 join_constraint,
                 schema,
                 null_equality,
+                null_aware,
             }) => (left, right).map_elements(f)?.update_data(|(left, right)| {
                 LogicalPlan::Join(Join {
                     left,
@@ -143,6 +144,7 @@ impl TreeNode for LogicalPlan {
                     join_constraint,
                     schema,
                     null_equality,
+                    null_aware,
                 })
             }),
             LogicalPlan::Limit(Limit { skip, fetch, input }) => input
@@ -564,6 +566,7 @@ impl LogicalPlan {
                 join_constraint,
                 schema,
                 null_equality,
+                null_aware,
             }) => (on, filter).map_elements(f)?.update_data(|(on, filter)| {
                 LogicalPlan::Join(Join {
                     left,
@@ -574,6 +577,7 @@ impl LogicalPlan {
                     join_constraint,
                     schema,
                     null_equality,
+                    null_aware,
                 })
             }),
             LogicalPlan::Sort(Sort { expr, input, fetch }) => expr
@@ -815,6 +819,7 @@ impl LogicalPlan {
             expr.apply(|expr| match expr {
                 Expr::Exists(Exists { subquery, .. })
                 | Expr::InSubquery(InSubquery { subquery, .. })
+                | Expr::SetComparison(SetComparison { subquery, .. })
                 | Expr::ScalarSubquery(subquery) => {
                     // use a synthetic plan so the collector sees a
                     // LogicalPlan::Subquery (even though it is
@@ -854,6 +859,22 @@ impl LogicalPlan {
                         subquery,
                         negated,
                     })),
+                    _ => internal_err!("Transformation should return Subquery"),
+                }),
+                Expr::SetComparison(SetComparison {
+                    expr,
+                    subquery,
+                    op,
+                    quantifier,
+                }) => f(LogicalPlan::Subquery(subquery))?.map_data(|s| match s {
+                    LogicalPlan::Subquery(subquery) => {
+                        Ok(Expr::SetComparison(SetComparison {
+                            expr,
+                            subquery,
+                            op,
+                            quantifier,
+                        }))
+                    }
                     _ => internal_err!("Transformation should return Subquery"),
                 }),
                 Expr::ScalarSubquery(subquery) => f(LogicalPlan::Subquery(subquery))?

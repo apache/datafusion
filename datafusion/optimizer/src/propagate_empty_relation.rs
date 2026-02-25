@@ -33,7 +33,7 @@ use crate::{OptimizerConfig, OptimizerRule};
 pub struct PropagateEmptyRelation;
 
 impl PropagateEmptyRelation {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }

@@ -18,7 +18,6 @@
 //! Execution plan for reading CSV files
 
 use datafusion_datasource::projection::{ProjectionOpener, SplitProjection};
-use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion_physical_plan::projection::ProjectionExprs;
 use std::any::Any;
 use std::fmt;
@@ -26,12 +25,12 @@ use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
 use std::task::Poll;
 
-use datafusion_datasource::decoder::{deserialize_stream, DecoderDeserializer};
+use datafusion_datasource::decoder::{DecoderDeserializer, deserialize_stream};
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::{
-    as_file_source, calculate_range, FileRange, ListingTableUrl, PartitionedFile,
-    RangeCalculation, TableSchema,
+    FileRange, ListingTableUrl, PartitionedFile, RangeCalculation, TableSchema,
+    as_file_source, calculate_range,
 };
 
 use arrow::csv;
@@ -72,6 +71,7 @@ use tokio::io::AsyncWriteExt;
 ///     has_header: Some(true),
 ///     delimiter: b',',
 ///     quote: b'"',
+///     newlines_in_values: Some(true), // The file contains newlines in values
 ///     ..Default::default()
 /// };
 /// let source = Arc::new(CsvSource::new(file_schema.clone())
@@ -81,7 +81,6 @@ use tokio::io::AsyncWriteExt;
 /// // Create a DataSourceExec for reading the first 100MB of `file1.csv`
 /// let config = FileScanConfigBuilder::new(object_store_url, source)
 ///     .with_file(PartitionedFile::new("file1.csv", 100*1024*1024))
-///     .with_newlines_in_values(true) // The file contains newlines in values;
 ///     .build();
 /// let exec = (DataSourceExec::from_data_source(config));
 /// ```
@@ -92,7 +91,6 @@ pub struct CsvSource {
     table_schema: TableSchema,
     projection: SplitProjection,
     metrics: ExecutionPlanMetricsSet,
-    schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
 
 impl CsvSource {
@@ -105,7 +103,6 @@ impl CsvSource {
             table_schema,
             batch_size: None,
             metrics: ExecutionPlanMetricsSet::new(),
-            schema_adapter_factory: None,
         }
     }
 
@@ -175,6 +172,11 @@ impl CsvSource {
         let mut conf = self.clone();
         conf.options.truncated_rows = Some(truncate_rows);
         conf
+    }
+
+    /// Whether values may contain newline characters
+    pub fn newlines_in_values(&self) -> bool {
+        self.options.newlines_in_values.unwrap_or(false)
     }
 }
 
@@ -297,6 +299,13 @@ impl FileSource for CsvSource {
     fn file_type(&self) -> &str {
         "csv"
     }
+
+    fn supports_repartitioning(&self) -> bool {
+        // Cannot repartition if values may contain newlines, as record
+        // boundaries cannot be determined by byte offset alone
+        !self.options.newlines_in_values.unwrap_or(false)
+    }
+
     fn fmt_extra(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
@@ -304,20 +313,6 @@ impl FileSource for CsvSource {
             }
             DisplayFormatType::TreeRender => Ok(()),
         }
-    }
-
-    fn with_schema_adapter_factory(
-        &self,
-        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
-    ) -> Result<Arc<dyn FileSource>> {
-        Ok(Arc::new(Self {
-            schema_adapter_factory: Some(schema_adapter_factory),
-            ..self.clone()
-        }))
-    }
-
-    fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
-        self.schema_adapter_factory.clone()
     }
 }
 
@@ -350,10 +345,10 @@ impl FileOpener for CsvOpener {
         // If the .csv file is read in parallel and this `CsvOpener` is only reading some middle
         // partition, then don't skip first line
         let mut csv_has_header = self.config.has_header();
-        if let Some(FileRange { start, .. }) = partitioned_file.range {
-            if start != 0 {
-                csv_has_header = false;
-            }
+        if let Some(FileRange { start, .. }) = partitioned_file.range
+            && start != 0
+        {
+            csv_has_header = false;
         }
 
         let mut config = (*self.config).clone();
@@ -387,7 +382,7 @@ impl FileOpener for CsvOpener {
                 RangeCalculation::TerminateEarly => {
                     return Ok(
                         futures::stream::poll_fn(move |_| Poll::Ready(None)).boxed()
-                    )
+                    );
                 }
             };
 

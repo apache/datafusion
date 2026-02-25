@@ -28,8 +28,8 @@ use crate::print_format::PrintFormat;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion::common::instant::Instant;
 use datafusion::common::DataFusionError;
+use datafusion::common::instant::Instant;
 use datafusion::error::Result;
 use datafusion::physical_plan::RecordBatchStream;
 
@@ -55,8 +55,10 @@ impl FromStr for MaxRows {
             Ok(Self::Unlimited)
         } else {
             match maxrows.parse::<usize>() {
-                Ok(nrows)  => Ok(Self::Limited(nrows)),
-                _ => Err(format!("Invalid maxrows {maxrows}. Valid inputs are natural numbers or \'none\', \'inf\', or \'infinite\' for no limit.")),
+                Ok(nrows) => Ok(Self::Limited(nrows)),
+                _ => Err(format!(
+                    "Invalid maxrows {maxrows}. Valid inputs are natural numbers or \'none\', \'inf\', or \'infinite\' for no limit."
+                )),
             }
         }
     }

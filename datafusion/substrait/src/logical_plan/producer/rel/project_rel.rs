@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::logical_plan::producer::{substrait_field_ref, SubstraitProducer};
+use crate::logical_plan::producer::{SubstraitProducer, substrait_field_ref};
 use datafusion::logical_expr::{Projection, Window};
 use substrait::proto::rel::RelType;
 use substrait::proto::rel_common::EmitKind;
 use substrait::proto::rel_common::EmitKind::Emit;
-use substrait::proto::{rel_common, ProjectRel, Rel, RelCommon};
+use substrait::proto::{ProjectRel, Rel, RelCommon, rel_common};
 
 pub fn from_projection(
     producer: &mut impl SubstraitProducer,

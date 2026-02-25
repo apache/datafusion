@@ -18,7 +18,7 @@
 use std::sync::Arc;
 use std::{path::PathBuf, time::Duration};
 
-use super::{error::Result, normalize, DFSqlLogicTestError};
+use super::{DFSqlLogicTestError, error::Result, normalize};
 use crate::engines::currently_executed_sql::CurrentlyExecutingSqlTracker;
 use crate::engines::output::{DFColumnType, DFOutput};
 use crate::is_spark_path;

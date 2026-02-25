@@ -39,7 +39,7 @@ use crate::projection::{
 };
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
-    PlanProperties, SendableRecordBatchStream, Statistics,
+    PlanProperties, SendableRecordBatchStream, Statistics, check_if_same_properties,
 };
 
 use arrow::compute::SortOptions;
@@ -127,7 +127,7 @@ pub struct SortMergeJoinExec {
     /// Defines the null equality for the join.
     pub null_equality: NullEquality,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl SortMergeJoinExec {
@@ -198,7 +198,7 @@ impl SortMergeJoinExec {
             right_sort_exprs,
             sort_options,
             null_equality,
-            cache,
+            cache: Arc::new(cache),
         })
     }
 
@@ -340,6 +340,20 @@ impl SortMergeJoinExec {
             reorder_output_after_swap(Arc::new(new_join), &left.schema(), &right.schema())
         }
     }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        let left = children.swap_remove(0);
+        let right = children.swap_remove(0);
+        Self {
+            left,
+            right,
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(self)
+        }
+    }
 }
 
 impl DisplayAs for SortMergeJoinExec {
@@ -353,14 +367,15 @@ impl DisplayAs for SortMergeJoinExec {
                     .collect::<Vec<String>>()
                     .join(", ");
                 let display_null_equality =
-                    if matches!(self.null_equality(), NullEquality::NullEqualsNull) {
+                    if self.null_equality() == NullEquality::NullEqualsNull {
                         ", NullsEqual: true"
                     } else {
                         ""
                     };
                 write!(
                     f,
-                    "SortMergeJoin: join_type={:?}, on=[{}]{}{}",
+                    "{}: join_type={:?}, on=[{}]{}{}",
+                    Self::static_name(),
                     self.join_type,
                     on,
                     self.filter.as_ref().map_or_else(
@@ -385,7 +400,7 @@ impl DisplayAs for SortMergeJoinExec {
                 }
                 writeln!(f, "on={on}")?;
 
-                if matches!(self.null_equality(), NullEquality::NullEqualsNull) {
+                if self.null_equality() == NullEquality::NullEqualsNull {
                     writeln!(f, "NullsEqual: true")?;
                 }
 
@@ -404,7 +419,7 @@ impl ExecutionPlan for SortMergeJoinExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -439,6 +454,7 @@ impl ExecutionPlan for SortMergeJoinExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        check_if_same_properties!(self, children);
         match &children[..] {
             [left, right] => Ok(Arc::new(SortMergeJoinExec::try_new(
                 Arc::clone(left),
@@ -518,20 +534,21 @@ impl ExecutionPlan for SortMergeJoinExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
-    }
-
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        if partition.is_some() {
-            return Ok(Statistics::new_unknown(&self.schema()));
-        }
+        // SortMergeJoinExec uses symmetric hash partitioning where both left and right
+        // inputs are hash-partitioned on the join keys. This means partition `i` of the
+        // left input is joined with partition `i` of the right input.
+        //
+        // Therefore, partition-specific statistics can be computed by getting the
+        // partition-specific statistics from both children and combining them via
+        // `estimate_join_statistics`.
+        //
         // TODO stats: it is not possible in general to know the output size of joins
         // There are some special cases though, for example:
         // - `A LEFT JOIN B ON A.col=B.col` with `COUNT_DISTINCT(B.col)=COUNT(B.col)`
         estimate_join_statistics(
-            self.left.partition_statistics(None)?,
-            self.right.partition_statistics(None)?,
+            self.left.partition_statistics(partition)?,
+            self.right.partition_statistics(partition)?,
             &self.on,
             &self.join_type,
             &self.schema,

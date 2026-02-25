@@ -18,16 +18,16 @@
 use std::sync::Arc;
 
 use arrow::array::{
-    types::Int32Type, ArrayRef, DictionaryArray, Float32Array, Int64Array, RecordBatch,
-    StringArray,
+    ArrayRef, DictionaryArray, Float32Array, Int64Array, RecordBatch, StringArray,
+    types::Int32Type,
 };
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::physical_plan::collect;
 use datafusion::prelude::SessionContext;
 use datafusion::test::object_store::local_unpartitioned_file;
-use datafusion_common::test_util::batches_to_sort_string;
 use datafusion_common::Result;
+use datafusion_common::test_util::batches_to_sort_string;
 use datafusion_execution::object_store::ObjectStoreUrl;
 
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;

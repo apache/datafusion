@@ -22,8 +22,8 @@ use arrow::array::{Array, ArrayRef, IntervalMonthDayNanoBuilder, PrimitiveArray}
 use arrow::datatypes::DataType::Interval;
 use arrow::datatypes::IntervalUnit::MonthDayNano;
 use arrow::datatypes::{DataType, IntervalMonthDayNano};
-use datafusion_common::types::{logical_float64, logical_int32, NativeType};
-use datafusion_common::{plan_datafusion_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::types::{NativeType, logical_float64, logical_int32};
+use datafusion_common::{DataFusionError, Result, ScalarValue, plan_datafusion_err};
 use datafusion_expr::{
     Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
     TypeSignatureClass, Volatility,
@@ -274,7 +274,7 @@ mod tests {
     use arrow::datatypes::Field;
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::{
-        assert_eq_or_internal_err, internal_datafusion_err, internal_err, Result,
+        Result, assert_eq_or_internal_err, internal_datafusion_err, internal_err,
     };
 
     use super::*;

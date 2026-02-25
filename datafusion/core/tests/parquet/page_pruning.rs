@@ -20,26 +20,29 @@ use std::sync::Arc;
 use crate::parquet::Unit::Page;
 use crate::parquet::{ContextWithParquet, Scenario};
 
-use arrow::array::RecordBatch;
-use datafusion::datasource::file_format::parquet::ParquetFormat;
+use arrow::array::{Int32Array, RecordBatch};
+use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::datasource::file_format::FileFormat;
+use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::context::SessionState;
-use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion::prelude::SessionContext;
+use datafusion::physical_plan::metrics::MetricValue;
+use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::{ScalarValue, ToDFSchema};
 use datafusion_expr::execution_props::ExecutionProps;
-use datafusion_expr::{col, lit, Expr};
+use datafusion_expr::{Expr, col, lit};
 use datafusion_physical_expr::create_physical_expr;
 
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use futures::StreamExt;
-use object_store::path::Path;
 use object_store::ObjectMeta;
+use object_store::path::Path;
+use parquet::arrow::ArrowWriter;
+use parquet::file::properties::WriterProperties;
 
 async fn get_parquet_exec(
     state: &SessionState,
@@ -67,14 +70,7 @@ async fn get_parquet_exec(
         .await
         .unwrap();
 
-    let partitioned_file = PartitionedFile {
-        object_meta: meta,
-        partition_values: vec![],
-        range: None,
-        statistics: None,
-        extensions: None,
-        metadata_size_hint: None,
-    };
+    let partitioned_file = PartitionedFile::new_from_meta(meta);
 
     let df_schema = schema.clone().to_dfschema().unwrap();
     let execution_props = ExecutionProps::new();
@@ -967,4 +963,57 @@ fn cast_count_metric(metric: MetricValue) -> Option<usize> {
         MetricValue::Count { count, .. } => Some(count.value()),
         _ => None,
     }
+}
+
+#[tokio::test]
+async fn test_parquet_opener_without_page_index() {
+    // Defines a simple schema and batch
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+    )
+    .unwrap();
+
+    // Create a temp file
+    let file = tempfile::Builder::new()
+        .suffix(".parquet")
+        .tempfile()
+        .unwrap();
+    let path = file.path().to_str().unwrap().to_string();
+
+    // Write parquet WITHOUT page index
+    // The default WriterProperties does not write page index, but we set it explicitly
+    // to be robust against future changes in defaults as requested by reviewers.
+    let props = WriterProperties::builder()
+        .set_statistics_enabled(parquet::file::properties::EnabledStatistics::None)
+        .build();
+
+    let file_fs = std::fs::File::create(&path).unwrap();
+    let mut writer = ArrowWriter::try_new(file_fs, batch.schema(), Some(props)).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+
+    // Setup SessionContext with PageIndex enabled
+    // This triggers the ParquetOpener to try and load page index if available
+    let config = SessionConfig::new().with_parquet_page_index_pruning(true);
+
+    let ctx = SessionContext::new_with_config(config);
+
+    // Register the table
+    ctx.register_parquet("t", &path, Default::default())
+        .await
+        .unwrap();
+
+    // Query the table
+    // If the bug exists, this might fail because Opener tries to load PageIndex forcefully
+    let df = ctx.sql("SELECT * FROM t").await.unwrap();
+    let batches = df
+        .collect()
+        .await
+        .expect("Failed to read parquet file without page index");
+
+    // We expect this to succeed, but currently it might fail
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].num_rows(), 3);
 }

@@ -21,7 +21,7 @@ description = "Traits and types for logical plans and expressions for DataFusion
 keywords = ["datafusion", "logical", "plan", "expressions"]
 readme = "README.md"
 version = { workspace = true }
-edition = "2024"
+edition = { workspace = true }
 homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
@@ -53,6 +53,7 @@ datafusion-physical-expr = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 half = { workspace = true }
 log = { workspace = true }
+num-traits = { workspace = true }
 paste = { workspace = true }
 
 [dev-dependencies]

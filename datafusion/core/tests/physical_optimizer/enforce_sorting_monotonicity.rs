@@ -31,7 +31,7 @@ use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::windows::{
-    create_window_expr, BoundedWindowAggExec, WindowAggExec,
+    BoundedWindowAggExec, WindowAggExec, create_window_expr,
 };
 use datafusion_physical_plan::{ExecutionPlan, InputOrderMode};
 use insta::assert_snapshot;

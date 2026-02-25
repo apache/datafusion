@@ -26,7 +26,7 @@ use crate::PhysicalExpr;
 use crate::physical_expr::physical_exprs_bag_equal;
 
 use arrow::array::*;
-use arrow::buffer::BooleanBuffer;
+use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::compute::kernels::boolean::{not, or_kleene};
 use arrow::compute::{SortOptions, take};
 use arrow::datatypes::*;
@@ -91,7 +91,11 @@ impl StaticFilter for ArrayStaticFilter {
         if v.data_type() == &DataType::Null
             || self.in_array.data_type() == &DataType::Null
         {
-            return Ok(BooleanArray::from(vec![None; v.len()]));
+            let nulls = NullBuffer::new_null(v.len());
+            return Ok(BooleanArray::new(
+                BooleanBuffer::new_unset(v.len()),
+                Some(nulls),
+            ));
         }
 
         downcast_dictionary_array! {
@@ -138,9 +142,20 @@ fn instantiate_static_filter(
     in_array: ArrayRef,
 ) -> Result<Arc<dyn StaticFilter + Send + Sync>> {
     match in_array.data_type() {
+        // Integer primitive types
+        DataType::Int8 => Ok(Arc::new(Int8StaticFilter::try_new(&in_array)?)),
+        DataType::Int16 => Ok(Arc::new(Int16StaticFilter::try_new(&in_array)?)),
         DataType::Int32 => Ok(Arc::new(Int32StaticFilter::try_new(&in_array)?)),
+        DataType::Int64 => Ok(Arc::new(Int64StaticFilter::try_new(&in_array)?)),
+        DataType::UInt8 => Ok(Arc::new(UInt8StaticFilter::try_new(&in_array)?)),
+        DataType::UInt16 => Ok(Arc::new(UInt16StaticFilter::try_new(&in_array)?)),
+        DataType::UInt32 => Ok(Arc::new(UInt32StaticFilter::try_new(&in_array)?)),
+        DataType::UInt64 => Ok(Arc::new(UInt64StaticFilter::try_new(&in_array)?)),
+        // Float primitive types (use ordered wrappers for Hash/Eq)
+        DataType::Float32 => Ok(Arc::new(Float32StaticFilter::try_new(&in_array)?)),
+        DataType::Float64 => Ok(Arc::new(Float64StaticFilter::try_new(&in_array)?)),
         _ => {
-            /* fall through to generic implementation */
+            /* fall through to generic implementation for unsupported types (Struct, etc.) */
             Ok(Arc::new(ArrayStaticFilter::try_new(in_array)?))
         }
     }
@@ -198,98 +213,324 @@ impl ArrayStaticFilter {
     }
 }
 
-struct Int32StaticFilter {
-    null_count: usize,
-    values: HashSet<i32>,
+/// Wrapper for f32 that implements Hash and Eq using bit comparison.
+/// This treats NaN values as equal to each other when they have the same bit pattern.
+#[derive(Clone, Copy)]
+struct OrderedFloat32(f32);
+
+impl Hash for OrderedFloat32 {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.to_ne_bytes().hash(state);
+    }
 }
 
-impl Int32StaticFilter {
-    fn try_new(in_array: &ArrayRef) -> Result<Self> {
-        let in_array = in_array
-            .as_primitive_opt::<Int32Type>()
-            .ok_or_else(|| exec_datafusion_err!("Failed to downcast array"))?;
+impl PartialEq for OrderedFloat32 {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.to_bits() == other.0.to_bits()
+    }
+}
 
-        let mut values = HashSet::with_capacity(in_array.len());
-        let null_count = in_array.null_count();
+impl Eq for OrderedFloat32 {}
 
-        for v in in_array.iter().flatten() {
-            values.insert(v);
+impl From<f32> for OrderedFloat32 {
+    fn from(v: f32) -> Self {
+        Self(v)
+    }
+}
+
+/// Wrapper for f64 that implements Hash and Eq using bit comparison.
+/// This treats NaN values as equal to each other when they have the same bit pattern.
+#[derive(Clone, Copy)]
+struct OrderedFloat64(f64);
+
+impl Hash for OrderedFloat64 {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.to_ne_bytes().hash(state);
+    }
+}
+
+impl PartialEq for OrderedFloat64 {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.to_bits() == other.0.to_bits()
+    }
+}
+
+impl Eq for OrderedFloat64 {}
+
+impl From<f64> for OrderedFloat64 {
+    fn from(v: f64) -> Self {
+        Self(v)
+    }
+}
+
+// Macro to generate specialized StaticFilter implementations for primitive types
+macro_rules! primitive_static_filter {
+    ($Name:ident, $ArrowType:ty) => {
+        struct $Name {
+            null_count: usize,
+            values: HashSet<<$ArrowType as ArrowPrimitiveType>::Native>,
         }
 
-        Ok(Self { null_count, values })
-    }
-}
+        impl $Name {
+            fn try_new(in_array: &ArrayRef) -> Result<Self> {
+                let in_array = in_array
+                    .as_primitive_opt::<$ArrowType>()
+                    .ok_or_else(|| exec_datafusion_err!("Failed to downcast an array to a '{}' array", stringify!($ArrowType)))?;
 
-impl StaticFilter for Int32StaticFilter {
-    fn null_count(&self) -> usize {
-        self.null_count
-    }
+                let mut values = HashSet::with_capacity(in_array.len());
+                let null_count = in_array.null_count();
 
-    fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
-        // Handle dictionary arrays by recursing on the values
-        downcast_dictionary_array! {
-            v => {
-                let values_contains = self.contains(v.values().as_ref(), negated)?;
-                let result = take(&values_contains, v.keys(), None)?;
-                return Ok(downcast_array(result.as_ref()))
+                for v in in_array.iter().flatten() {
+                    values.insert(v);
+                }
+
+                Ok(Self { null_count, values })
             }
-            _ => {}
         }
 
-        let v = v
-            .as_primitive_opt::<Int32Type>()
-            .ok_or_else(|| exec_datafusion_err!("Failed to downcast array"))?;
+        impl StaticFilter for $Name {
+            fn null_count(&self) -> usize {
+                self.null_count
+            }
 
-        let haystack_has_nulls = self.null_count > 0;
-        let has_nulls = v.null_count() > 0 || haystack_has_nulls;
+            fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
+                // Handle dictionary arrays by recursing on the values
+                downcast_dictionary_array! {
+                    v => {
+                        let values_contains = self.contains(v.values().as_ref(), negated)?;
+                        let result = take(&values_contains, v.keys(), None)?;
+                        return Ok(downcast_array(result.as_ref()))
+                    }
+                    _ => {}
+                }
 
-        let result = match (has_nulls, negated) {
-            (true, false) => {
-                // needle has nulls, not negated
-                BooleanArray::from_iter(v.iter().map(|value| match value {
-                    None => None,
-                    Some(v) => {
-                        if self.values.contains(&v) {
-                            Some(true)
-                        } else if haystack_has_nulls {
-                            None
-                        } else {
-                            Some(false)
-                        }
+                let v = v
+                    .as_primitive_opt::<$ArrowType>()
+                    .ok_or_else(|| exec_datafusion_err!("Failed to downcast an array to a '{}' array", stringify!($ArrowType)))?;
+
+                let haystack_has_nulls = self.null_count > 0;
+
+                let needle_values = v.values();
+                let needle_nulls = v.nulls();
+                let needle_has_nulls = v.null_count() > 0;
+
+                // Truth table for `value [NOT] IN (set)` with SQL three-valued logic:
+                // ("-" means the value doesn't affect the result)
+                //
+                // | needle_null | haystack_null | negated | in set? | result |
+                // |-------------|---------------|---------|---------|--------|
+                // | true        | -             | false   | -       | null   |
+                // | true        | -             | true    | -       | null   |
+                // | false       | true          | false   | yes     | true   |
+                // | false       | true          | false   | no      | null   |
+                // | false       | true          | true    | yes     | false  |
+                // | false       | true          | true    | no      | null   |
+                // | false       | false         | false   | yes     | true   |
+                // | false       | false         | false   | no      | false  |
+                // | false       | false         | true    | yes     | false  |
+                // | false       | false         | true    | no      | true   |
+
+                // Compute the "contains" result using collect_bool (fast batched approach)
+                // This ignores nulls - we handle them separately
+                let contains_buffer = if negated {
+                    BooleanBuffer::collect_bool(needle_values.len(), |i| {
+                        !self.values.contains(&needle_values[i])
+                    })
+                } else {
+                    BooleanBuffer::collect_bool(needle_values.len(), |i| {
+                        self.values.contains(&needle_values[i])
+                    })
+                };
+
+                // Compute the null mask
+                // Output is null when:
+                // 1. needle value is null, OR
+                // 2. needle value is not in set AND haystack has nulls
+                let result_nulls = match (needle_has_nulls, haystack_has_nulls) {
+                    (false, false) => {
+                        // No nulls anywhere
+                        None
                     }
-                }))
-            }
-            (true, true) => {
-                // needle has nulls, negated
-                BooleanArray::from_iter(v.iter().map(|value| match value {
-                    None => None,
-                    Some(v) => {
-                        if self.values.contains(&v) {
-                            Some(false)
-                        } else if haystack_has_nulls {
-                            None
-                        } else {
-                            Some(true)
-                        }
+                    (true, false) => {
+                        // Only needle has nulls - just use needle's null mask
+                        needle_nulls.cloned()
                     }
-                }))
+                    (false, true) => {
+                        // Only haystack has nulls - result is null when value not in set
+                        // Valid (not null) when original "in set" is true
+                        // For NOT IN: contains_buffer = !original, so validity = !contains_buffer
+                        let validity = if negated {
+                            !&contains_buffer
+                        } else {
+                            contains_buffer.clone()
+                        };
+                        Some(NullBuffer::new(validity))
+                    }
+                    (true, true) => {
+                        // Both have nulls - combine needle nulls with haystack-induced nulls
+                        let needle_validity = needle_nulls.map(|n| n.inner().clone())
+                            .unwrap_or_else(|| BooleanBuffer::new_set(needle_values.len()));
+
+                        // Valid when original "in set" is true (see above)
+                        let haystack_validity = if negated {
+                            !&contains_buffer
+                        } else {
+                            contains_buffer.clone()
+                        };
+
+                        // Combined validity: valid only where both are valid
+                        let combined_validity = &needle_validity & &haystack_validity;
+                        Some(NullBuffer::new(combined_validity))
+                    }
+                };
+
+                Ok(BooleanArray::new(contains_buffer, result_nulls))
             }
-            (false, false) => {
-                // No nulls anywhere, not negated
-                BooleanArray::from_iter(
-                    v.values().iter().map(|value| self.values.contains(value)),
-                )
-            }
-            (false, true) => {
-                // No nulls anywhere, negated
-                BooleanArray::from_iter(
-                    v.values().iter().map(|value| !self.values.contains(value)),
-                )
-            }
-        };
-        Ok(result)
-    }
+        }
+    };
 }
+
+// Generate specialized filters for all integer primitive types
+primitive_static_filter!(Int8StaticFilter, Int8Type);
+primitive_static_filter!(Int16StaticFilter, Int16Type);
+primitive_static_filter!(Int32StaticFilter, Int32Type);
+primitive_static_filter!(Int64StaticFilter, Int64Type);
+primitive_static_filter!(UInt8StaticFilter, UInt8Type);
+primitive_static_filter!(UInt16StaticFilter, UInt16Type);
+primitive_static_filter!(UInt32StaticFilter, UInt32Type);
+primitive_static_filter!(UInt64StaticFilter, UInt64Type);
+
+// Macro to generate specialized StaticFilter implementations for float types
+// Floats require a wrapper type (OrderedFloat*) to implement Hash/Eq due to NaN semantics
+macro_rules! float_static_filter {
+    ($Name:ident, $ArrowType:ty, $OrderedType:ty) => {
+        struct $Name {
+            null_count: usize,
+            values: HashSet<$OrderedType>,
+        }
+
+        impl $Name {
+            fn try_new(in_array: &ArrayRef) -> Result<Self> {
+                let in_array = in_array
+                    .as_primitive_opt::<$ArrowType>()
+                    .ok_or_else(|| exec_datafusion_err!("Failed to downcast an array to a '{}' array", stringify!($ArrowType)))?;
+
+                let mut values = HashSet::with_capacity(in_array.len());
+                let null_count = in_array.null_count();
+
+                for v in in_array.iter().flatten() {
+                    values.insert(<$OrderedType>::from(v));
+                }
+
+                Ok(Self { null_count, values })
+            }
+        }
+
+        impl StaticFilter for $Name {
+            fn null_count(&self) -> usize {
+                self.null_count
+            }
+
+            fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
+                // Handle dictionary arrays by recursing on the values
+                downcast_dictionary_array! {
+                    v => {
+                        let values_contains = self.contains(v.values().as_ref(), negated)?;
+                        let result = take(&values_contains, v.keys(), None)?;
+                        return Ok(downcast_array(result.as_ref()))
+                    }
+                    _ => {}
+                }
+
+                let v = v
+                    .as_primitive_opt::<$ArrowType>()
+                    .ok_or_else(|| exec_datafusion_err!("Failed to downcast an array to a '{}' array", stringify!($ArrowType)))?;
+
+                let haystack_has_nulls = self.null_count > 0;
+
+                let needle_values = v.values();
+                let needle_nulls = v.nulls();
+                let needle_has_nulls = v.null_count() > 0;
+
+                // Truth table for `value [NOT] IN (set)` with SQL three-valued logic:
+                // ("-" means the value doesn't affect the result)
+                //
+                // | needle_null | haystack_null | negated | in set? | result |
+                // |-------------|---------------|---------|---------|--------|
+                // | true        | -             | false   | -       | null   |
+                // | true        | -             | true    | -       | null   |
+                // | false       | true          | false   | yes     | true   |
+                // | false       | true          | false   | no      | null   |
+                // | false       | true          | true    | yes     | false  |
+                // | false       | true          | true    | no      | null   |
+                // | false       | false         | false   | yes     | true   |
+                // | false       | false         | false   | no      | false  |
+                // | false       | false         | true    | yes     | false  |
+                // | false       | false         | true    | no      | true   |
+
+                // Compute the "contains" result using collect_bool (fast batched approach)
+                // This ignores nulls - we handle them separately
+                let contains_buffer = if negated {
+                    BooleanBuffer::collect_bool(needle_values.len(), |i| {
+                        !self.values.contains(&<$OrderedType>::from(needle_values[i]))
+                    })
+                } else {
+                    BooleanBuffer::collect_bool(needle_values.len(), |i| {
+                        self.values.contains(&<$OrderedType>::from(needle_values[i]))
+                    })
+                };
+
+                // Compute the null mask
+                // Output is null when:
+                // 1. needle value is null, OR
+                // 2. needle value is not in set AND haystack has nulls
+                let result_nulls = match (needle_has_nulls, haystack_has_nulls) {
+                    (false, false) => {
+                        // No nulls anywhere
+                        None
+                    }
+                    (true, false) => {
+                        // Only needle has nulls - just use needle's null mask
+                        needle_nulls.cloned()
+                    }
+                    (false, true) => {
+                        // Only haystack has nulls - result is null when value not in set
+                        // Valid (not null) when original "in set" is true
+                        // For NOT IN: contains_buffer = !original, so validity = !contains_buffer
+                        let validity = if negated {
+                            !&contains_buffer
+                        } else {
+                            contains_buffer.clone()
+                        };
+                        Some(NullBuffer::new(validity))
+                    }
+                    (true, true) => {
+                        // Both have nulls - combine needle nulls with haystack-induced nulls
+                        let needle_validity = needle_nulls.map(|n| n.inner().clone())
+                            .unwrap_or_else(|| BooleanBuffer::new_set(needle_values.len()));
+
+                        // Valid when original "in set" is true (see above)
+                        let haystack_validity = if negated {
+                            !&contains_buffer
+                        } else {
+                            contains_buffer.clone()
+                        };
+
+                        // Combined validity: valid only where both are valid
+                        let combined_validity = &needle_validity & &haystack_validity;
+                        Some(NullBuffer::new(combined_validity))
+                    }
+                };
+
+                Ok(BooleanArray::new(contains_buffer, result_nulls))
+            }
+        }
+    };
+}
+
+// Generate specialized filters for float types using ordered wrappers
+float_static_filter!(Float32StaticFilter, Float32Type, OrderedFloat32);
+float_static_filter!(Float64StaticFilter, Float64Type, OrderedFloat64);
 
 /// Evaluates the list of expressions into an array, flattening any dictionaries
 fn evaluate_list(
@@ -500,8 +741,12 @@ impl PhysicalExpr for InListExpr {
                         if scalar.is_null() {
                             // SQL three-valued logic: null IN (...) is always null
                             // The code below would handle this correctly but this is a faster path
+                            let nulls = NullBuffer::new_null(num_rows);
                             return Ok(ColumnarValue::Array(Arc::new(
-                                BooleanArray::from(vec![None; num_rows]),
+                                BooleanArray::new(
+                                    BooleanBuffer::new_unset(num_rows),
+                                    Some(nulls),
+                                ),
                             )));
                         }
                         // Use a 1 row array to avoid code duplication/branching
@@ -512,12 +757,15 @@ impl PhysicalExpr for InListExpr {
                         // Broadcast the single result to all rows
                         // Must check is_null() to preserve NULL values (SQL three-valued logic)
                         if result_array.is_null(0) {
-                            BooleanArray::from(vec![None; num_rows])
+                            let nulls = NullBuffer::new_null(num_rows);
+                            BooleanArray::new(
+                                BooleanBuffer::new_unset(num_rows),
+                                Some(nulls),
+                            )
+                        } else if result_array.value(0) {
+                            BooleanArray::new(BooleanBuffer::new_set(num_rows), None)
                         } else {
-                            BooleanArray::from_iter(std::iter::repeat_n(
-                                result_array.value(0),
-                                num_rows,
-                            ))
+                            BooleanArray::new(BooleanBuffer::new_unset(num_rows), None)
                         }
                     }
                 }
@@ -650,6 +898,7 @@ mod tests {
     use super::*;
     use crate::expressions::{col, lit, try_cast};
     use arrow::buffer::NullBuffer;
+    use arrow::datatypes::{IntervalDayTime, IntervalMonthDayNano, i256};
     use datafusion_common::plan_err;
     use datafusion_expr::type_coercion::binary::comparison_coercion;
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
@@ -1087,16 +1336,59 @@ mod tests {
     /// Test data: 0 (in list), 2000 (not in list), [1000, 3000] (other list values)
     #[test]
     fn in_list_timestamp_types() -> Result<()> {
-        run_test_cases(vec![InListPrimitiveTestCase {
-            name: "timestamp_nanosecond",
-            value_in: ScalarValue::TimestampNanosecond(Some(0), None),
-            value_not_in: ScalarValue::TimestampNanosecond(Some(2000), None),
-            other_list_values: vec![
-                ScalarValue::TimestampNanosecond(Some(1000), None),
-                ScalarValue::TimestampNanosecond(Some(3000), None),
-            ],
-            null_value: Some(ScalarValue::TimestampNanosecond(None, None)),
-        }])
+        run_test_cases(vec![
+            InListPrimitiveTestCase {
+                name: "timestamp_nanosecond",
+                value_in: ScalarValue::TimestampNanosecond(Some(0), None),
+                value_not_in: ScalarValue::TimestampNanosecond(Some(2000), None),
+                other_list_values: vec![
+                    ScalarValue::TimestampNanosecond(Some(1000), None),
+                    ScalarValue::TimestampNanosecond(Some(3000), None),
+                ],
+                null_value: Some(ScalarValue::TimestampNanosecond(None, None)),
+            },
+            InListPrimitiveTestCase {
+                name: "timestamp_millisecond_with_tz",
+                value_in: ScalarValue::TimestampMillisecond(
+                    Some(1500000),
+                    Some("+05:00".into()),
+                ),
+                value_not_in: ScalarValue::TimestampMillisecond(
+                    Some(2500000),
+                    Some("+05:00".into()),
+                ),
+                other_list_values: vec![ScalarValue::TimestampMillisecond(
+                    Some(3500000),
+                    Some("+05:00".into()),
+                )],
+                null_value: Some(ScalarValue::TimestampMillisecond(
+                    None,
+                    Some("+05:00".into()),
+                )),
+            },
+            InListPrimitiveTestCase {
+                name: "timestamp_millisecond_mixed_tz",
+                value_in: ScalarValue::TimestampMillisecond(
+                    Some(1500000),
+                    Some("+05:00".into()),
+                ),
+                value_not_in: ScalarValue::TimestampMillisecond(
+                    Some(2500000),
+                    Some("+05:00".into()),
+                ),
+                other_list_values: vec![
+                    ScalarValue::TimestampMillisecond(
+                        Some(3500000),
+                        Some("+01:00".into()),
+                    ),
+                    ScalarValue::TimestampMillisecond(Some(4500000), Some("UTC".into())),
+                ],
+                null_value: Some(ScalarValue::TimestampMillisecond(
+                    None,
+                    Some("+05:00".into()),
+                )),
+            },
+        ])
     }
 
     #[test]
@@ -2974,6 +3266,244 @@ mod tests {
             col_a,
             &schema
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_in_list_esoteric_types() -> Result<()> {
+        // Test esoteric/less common types to validate the transform and mapping flow.
+        // These types are reinterpreted to base primitive types (e.g., Timestamp -> UInt64,
+        // Interval -> Decimal128, Float16 -> UInt16). We just need to verify basic
+        // functionality works - no need for comprehensive null handling tests.
+
+        // Helper: simple IN test that expects [Some(true), Some(false)]
+        let test_type = |data_type: DataType,
+                         in_array: ArrayRef,
+                         list_values: Vec<ScalarValue>|
+         -> Result<()> {
+            let schema = Schema::new(vec![Field::new("a", data_type.clone(), false)]);
+            let col_a = col("a", &schema)?;
+            let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![in_array])?;
+
+            let list = list_values.into_iter().map(lit).collect();
+            in_list!(
+                batch,
+                list,
+                &false,
+                vec![Some(true), Some(false)],
+                col_a,
+                &schema
+            );
+            Ok(())
+        };
+
+        // Timestamp types (all units map to Int64 -> UInt64)
+        test_type(
+            DataType::Timestamp(TimeUnit::Second, None),
+            Arc::new(TimestampSecondArray::from(vec![Some(1000), Some(2000)])),
+            vec![
+                ScalarValue::TimestampSecond(Some(1000), None),
+                ScalarValue::TimestampSecond(Some(1500), None),
+            ],
+        )?;
+
+        test_type(
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            Arc::new(TimestampMillisecondArray::from(vec![
+                Some(1000000),
+                Some(2000000),
+            ])),
+            vec![
+                ScalarValue::TimestampMillisecond(Some(1000000), None),
+                ScalarValue::TimestampMillisecond(Some(1500000), None),
+            ],
+        )?;
+
+        test_type(
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            Arc::new(TimestampMicrosecondArray::from(vec![
+                Some(1000000000),
+                Some(2000000000),
+            ])),
+            vec![
+                ScalarValue::TimestampMicrosecond(Some(1000000000), None),
+                ScalarValue::TimestampMicrosecond(Some(1500000000), None),
+            ],
+        )?;
+
+        // Time32 and Time64 (map to Int32 -> UInt32 and Int64 -> UInt64 respectively)
+        test_type(
+            DataType::Time32(TimeUnit::Second),
+            Arc::new(Time32SecondArray::from(vec![Some(3600), Some(7200)])),
+            vec![
+                ScalarValue::Time32Second(Some(3600)),
+                ScalarValue::Time32Second(Some(5400)),
+            ],
+        )?;
+
+        test_type(
+            DataType::Time32(TimeUnit::Millisecond),
+            Arc::new(Time32MillisecondArray::from(vec![
+                Some(3600000),
+                Some(7200000),
+            ])),
+            vec![
+                ScalarValue::Time32Millisecond(Some(3600000)),
+                ScalarValue::Time32Millisecond(Some(5400000)),
+            ],
+        )?;
+
+        test_type(
+            DataType::Time64(TimeUnit::Microsecond),
+            Arc::new(Time64MicrosecondArray::from(vec![
+                Some(3600000000),
+                Some(7200000000),
+            ])),
+            vec![
+                ScalarValue::Time64Microsecond(Some(3600000000)),
+                ScalarValue::Time64Microsecond(Some(5400000000)),
+            ],
+        )?;
+
+        test_type(
+            DataType::Time64(TimeUnit::Nanosecond),
+            Arc::new(Time64NanosecondArray::from(vec![
+                Some(3600000000000),
+                Some(7200000000000),
+            ])),
+            vec![
+                ScalarValue::Time64Nanosecond(Some(3600000000000)),
+                ScalarValue::Time64Nanosecond(Some(5400000000000)),
+            ],
+        )?;
+
+        // Duration types (map to Int64 -> UInt64)
+        test_type(
+            DataType::Duration(TimeUnit::Second),
+            Arc::new(DurationSecondArray::from(vec![Some(86400), Some(172800)])),
+            vec![
+                ScalarValue::DurationSecond(Some(86400)),
+                ScalarValue::DurationSecond(Some(129600)),
+            ],
+        )?;
+
+        test_type(
+            DataType::Duration(TimeUnit::Millisecond),
+            Arc::new(DurationMillisecondArray::from(vec![
+                Some(86400000),
+                Some(172800000),
+            ])),
+            vec![
+                ScalarValue::DurationMillisecond(Some(86400000)),
+                ScalarValue::DurationMillisecond(Some(129600000)),
+            ],
+        )?;
+
+        test_type(
+            DataType::Duration(TimeUnit::Microsecond),
+            Arc::new(DurationMicrosecondArray::from(vec![
+                Some(86400000000),
+                Some(172800000000),
+            ])),
+            vec![
+                ScalarValue::DurationMicrosecond(Some(86400000000)),
+                ScalarValue::DurationMicrosecond(Some(129600000000)),
+            ],
+        )?;
+
+        test_type(
+            DataType::Duration(TimeUnit::Nanosecond),
+            Arc::new(DurationNanosecondArray::from(vec![
+                Some(86400000000000),
+                Some(172800000000000),
+            ])),
+            vec![
+                ScalarValue::DurationNanosecond(Some(86400000000000)),
+                ScalarValue::DurationNanosecond(Some(129600000000000)),
+            ],
+        )?;
+
+        // Interval types (map to 16-byte Decimal128Type)
+        test_type(
+            DataType::Interval(IntervalUnit::YearMonth),
+            Arc::new(IntervalYearMonthArray::from(vec![Some(12), Some(24)])),
+            vec![
+                ScalarValue::IntervalYearMonth(Some(12)),
+                ScalarValue::IntervalYearMonth(Some(18)),
+            ],
+        )?;
+
+        test_type(
+            DataType::Interval(IntervalUnit::DayTime),
+            Arc::new(IntervalDayTimeArray::from(vec![
+                Some(IntervalDayTime {
+                    days: 1,
+                    milliseconds: 0,
+                }),
+                Some(IntervalDayTime {
+                    days: 2,
+                    milliseconds: 0,
+                }),
+            ])),
+            vec![
+                ScalarValue::IntervalDayTime(Some(IntervalDayTime {
+                    days: 1,
+                    milliseconds: 0,
+                })),
+                ScalarValue::IntervalDayTime(Some(IntervalDayTime {
+                    days: 1,
+                    milliseconds: 500,
+                })),
+            ],
+        )?;
+
+        test_type(
+            DataType::Interval(IntervalUnit::MonthDayNano),
+            Arc::new(IntervalMonthDayNanoArray::from(vec![
+                Some(IntervalMonthDayNano {
+                    months: 1,
+                    days: 0,
+                    nanoseconds: 0,
+                }),
+                Some(IntervalMonthDayNano {
+                    months: 2,
+                    days: 0,
+                    nanoseconds: 0,
+                }),
+            ])),
+            vec![
+                ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNano {
+                    months: 1,
+                    days: 0,
+                    nanoseconds: 0,
+                })),
+                ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNano {
+                    months: 1,
+                    days: 15,
+                    nanoseconds: 0,
+                })),
+            ],
+        )?;
+
+        // Decimal256 (maps to Decimal128Type for 16-byte width)
+        // Need to use with_precision_and_scale() to set the metadata
+        let precision = 38;
+        let scale = 10;
+        test_type(
+            DataType::Decimal256(precision, scale),
+            Arc::new(
+                Decimal256Array::from(vec![
+                    Some(i256::from(12345)),
+                    Some(i256::from(67890)),
+                ])
+                .with_precision_and_scale(precision, scale)?,
+            ),
+            vec![
+                ScalarValue::Decimal256(Some(i256::from(12345)), precision, scale),
+                ScalarValue::Decimal256(Some(i256::from(54321)), precision, scale),
+            ],
+        )?;
 
         Ok(())
     }

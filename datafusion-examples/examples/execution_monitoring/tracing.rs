@@ -51,17 +51,18 @@
 //! 10:29:40.809  INFO                 main ThreadId(01) tracing: ***** WITH tracer: Non-main tasks DID inherit the `run_instrumented_query` span *****
 //! ```
 
-use datafusion::common::runtime::{set_join_set_tracer, JoinSetTracer};
+use std::any::Any;
+use std::sync::Arc;
+
+use datafusion::common::runtime::{JoinSetTracer, set_join_set_tracer};
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingOptions;
 use datafusion::error::Result;
 use datafusion::prelude::*;
-use datafusion::test_util::parquet_test_data;
-use futures::future::BoxFuture;
+use datafusion_examples::utils::{datasets::ExampleDataset, write_csv_to_parquet};
 use futures::FutureExt;
-use std::any::Any;
-use std::sync::Arc;
-use tracing::{info, instrument, Instrument, Level, Span};
+use futures::future::BoxFuture;
+use tracing::{Instrument, Level, Span, info, instrument};
 
 /// Demonstrates the tracing injection feature for the DataFusion runtime
 pub async fn tracing() -> Result<()> {
@@ -75,7 +76,9 @@ pub async fn tracing() -> Result<()> {
     // Run query WITHOUT tracer injection.
     info!("***** RUNNING WITHOUT INJECTED TRACER *****");
     run_instrumented_query().await?;
-    info!("***** WITHOUT tracer: `tokio-runtime-worker` tasks did NOT inherit the `run_instrumented_query` span *****");
+    info!(
+        "***** WITHOUT tracer: `tokio-runtime-worker` tasks did NOT inherit the `run_instrumented_query` span *****"
+    );
 
     // Inject custom tracer so tasks run in the current span.
     info!("Injecting custom tracer...");
@@ -84,7 +87,9 @@ pub async fn tracing() -> Result<()> {
     // Run query WITH tracer injection.
     info!("***** RUNNING WITH INJECTED TRACER *****");
     run_instrumented_query().await?;
-    info!("***** WITH tracer: `tokio-runtime-worker` tasks DID inherit the `run_instrumented_query` span *****");
+    info!(
+        "***** WITH tracer: `tokio-runtime-worker` tasks DID inherit the `run_instrumented_query` span *****"
+    );
 
     Ok(())
 }
@@ -122,18 +127,27 @@ async fn run_instrumented_query() -> Result<()> {
     info!("Starting query execution");
 
     let ctx = SessionContext::new();
-    let test_data = parquet_test_data();
+
+    // Convert the CSV input into a temporary Parquet directory for querying
+    let dataset = ExampleDataset::Cars;
+    let parquet_temp = write_csv_to_parquet(&ctx, &dataset.path()).await?;
+
     let file_format = ParquetFormat::default().with_enable_pruning(true);
-    let listing_options = ListingOptions::new(Arc::new(file_format))
-        .with_file_extension("alltypes_tiny_pages_plain.parquet");
+    let listing_options =
+        ListingOptions::new(Arc::new(file_format)).with_file_extension(".parquet");
 
-    let table_path = format!("file://{test_data}/");
-    info!("Registering table 'alltypes' from {}", table_path);
-    ctx.register_listing_table("alltypes", &table_path, listing_options, None, None)
-        .await
-        .expect("Failed to register table");
+    info!("Registering table 'cars' from {}", parquet_temp.path_str()?);
+    ctx.register_listing_table(
+        "cars",
+        parquet_temp.path_str()?,
+        listing_options,
+        None,
+        None,
+    )
+    .await
+    .expect("Failed to register table");
 
-    let sql = "SELECT COUNT(*), string_col FROM alltypes GROUP BY string_col";
+    let sql = "SELECT COUNT(*), car, sum(speed) FROM cars GROUP BY car";
     info!(sql, "Executing SQL query");
     let result = ctx.sql(sql).await?.collect().await?;
     info!("Query complete: {} batches returned", result.len());

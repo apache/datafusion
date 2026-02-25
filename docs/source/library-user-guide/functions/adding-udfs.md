@@ -583,7 +583,6 @@ For async UDF implementation details, see [`async_udf.rs`](https://github.com/ap
 
 [`scalarudf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.ScalarUDF.html
 [`create_udf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udf.html
-[`process_scalar_func_inputs`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/functions/fn.process_scalar_func_inputs.html
 [`advanced_udf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udf.rs
 
 ## Named Arguments
@@ -683,6 +682,10 @@ No function matches the given name and argument types substr(Utf8).
 
 Scalar UDFs are functions that take a row of data and return a single value. Window UDFs are similar, but they also have
 access to the rows around them. Access to the proximal rows is helpful, but adds some complexity to the implementation.
+
+For background and other considerations, see the [User defined Window Functions in DataFusion] blog.
+
+[user defined window functions in datafusion]: https://datafusion.apache.org/blog/2025/04/19/user-defined-window-functions
 
 For example, we will declare a user defined window function that computes a moving average.
 
@@ -1492,7 +1495,9 @@ async fn main() -> Result<()> {
 
 ## Custom Expression Planning
 
-DataFusion provides native support for common SQL operators by default such as `+`, `-`, `||`. However it does not provide support for other operators such as `@>`. To override DataFusion's default handling or support unsupported operators, developers can extend DataFusion by implementing custom expression planning, a core feature of DataFusion
+DataFusion provides native support for common SQL operators and constructs by default such as `+`, `-`, `||`. However it does not provide support for other operators such as `@>` or constructs like `TABLESAMPLE` which are less common or vary more between SQL dialects. To override DataFusion's default handling or support these unsupported features, developers can extend DataFusion by implementing custom expression planning, a core feature of DataFusion.
+
+For a comprehensive guide on extending SQL syntax including `ExprPlanner`, `TypePlanner`, and `RelationPlanner`, see [Extending DataFusion's SQL Syntax](../extending-sql.md)
 
 ### Implementing Custom Expression Planning
 

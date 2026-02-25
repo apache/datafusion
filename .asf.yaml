@@ -62,6 +62,9 @@ github:
     branch-51:
       required_pull_request_reviews:
         required_approving_review_count: 1
+    branch-52:
+      required_pull_request_reviews:
+        required_approving_review_count: 1
   pull_requests:
     # enable updating head branches of pull requests
     allow_update_branch: true

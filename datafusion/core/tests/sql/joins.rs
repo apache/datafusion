@@ -38,14 +38,16 @@ async fn join_change_in_planner() -> Result<()> {
         Field::new("a2", DataType::UInt32, false),
     ]));
     // Specify the ordering:
-    let file_sort_order = vec![[col("a1")]
-        .into_iter()
-        .map(|e| {
-            let ascending = true;
-            let nulls_first = false;
-            e.sort(ascending, nulls_first)
-        })
-        .collect::<Vec<_>>()];
+    let file_sort_order = vec![
+        [col("a1")]
+            .into_iter()
+            .map(|e| {
+                let ascending = true;
+                let nulls_first = false;
+                e.sort(ascending, nulls_first)
+            })
+            .collect::<Vec<_>>(),
+    ];
     register_unbounded_file_with_ordering(
         &ctx,
         schema.clone(),
@@ -72,12 +74,10 @@ async fn join_change_in_planner() -> Result<()> {
         actual,
         @r"
     SymmetricHashJoinExec: mode=Partitioned, join_type=Full, on=[(a2@1, a2@1)], filter=CAST(a1@0 AS Int64) > CAST(a1@1 AS Int64) + 3 AND CAST(a1@0 AS Int64) < CAST(a1@1 AS Int64) + 10
-      CoalesceBatchesExec: target_batch_size=8192
-        RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=1, maintains_sort_order=true
-          StreamingTableExec: partition_sizes=1, projection=[a1, a2], infinite_source=true, output_ordering=[a1@0 ASC NULLS LAST]
-      CoalesceBatchesExec: target_batch_size=8192
-        RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=1, maintains_sort_order=true
-          StreamingTableExec: partition_sizes=1, projection=[a1, a2], infinite_source=true, output_ordering=[a1@0 ASC NULLS LAST]
+      RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=1, maintains_sort_order=true
+        StreamingTableExec: partition_sizes=1, projection=[a1, a2], infinite_source=true, output_ordering=[a1@0 ASC NULLS LAST]
+      RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=1, maintains_sort_order=true
+        StreamingTableExec: partition_sizes=1, projection=[a1, a2], infinite_source=true, output_ordering=[a1@0 ASC NULLS LAST]
     "
     );
     Ok(())
@@ -97,14 +97,16 @@ async fn join_no_order_on_filter() -> Result<()> {
         Field::new("a3", DataType::UInt32, false),
     ]));
     // Specify the ordering:
-    let file_sort_order = vec![[col("a1")]
-        .into_iter()
-        .map(|e| {
-            let ascending = true;
-            let nulls_first = false;
-            e.sort(ascending, nulls_first)
-        })
-        .collect::<Vec<_>>()];
+    let file_sort_order = vec![
+        [col("a1")]
+            .into_iter()
+            .map(|e| {
+                let ascending = true;
+                let nulls_first = false;
+                e.sort(ascending, nulls_first)
+            })
+            .collect::<Vec<_>>(),
+    ];
     register_unbounded_file_with_ordering(
         &ctx,
         schema.clone(),
@@ -131,12 +133,10 @@ async fn join_no_order_on_filter() -> Result<()> {
         actual,
         @r"
     SymmetricHashJoinExec: mode=Partitioned, join_type=Full, on=[(a2@1, a2@1)], filter=CAST(a3@0 AS Int64) > CAST(a3@1 AS Int64) + 3 AND CAST(a3@0 AS Int64) < CAST(a3@1 AS Int64) + 10
-      CoalesceBatchesExec: target_batch_size=8192
-        RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=1, maintains_sort_order=true
-          StreamingTableExec: partition_sizes=1, projection=[a1, a2, a3], infinite_source=true, output_ordering=[a1@0 ASC NULLS LAST]
-      CoalesceBatchesExec: target_batch_size=8192
-        RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=1, maintains_sort_order=true
-          StreamingTableExec: partition_sizes=1, projection=[a1, a2, a3], infinite_source=true, output_ordering=[a1@0 ASC NULLS LAST]
+      RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=1, maintains_sort_order=true
+        StreamingTableExec: partition_sizes=1, projection=[a1, a2, a3], infinite_source=true, output_ordering=[a1@0 ASC NULLS LAST]
+      RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=1, maintains_sort_order=true
+        StreamingTableExec: partition_sizes=1, projection=[a1, a2, a3], infinite_source=true, output_ordering=[a1@0 ASC NULLS LAST]
     "
     );
     Ok(())
@@ -172,12 +172,10 @@ async fn join_change_in_planner_without_sort() -> Result<()> {
         actual,
         @r"
     SymmetricHashJoinExec: mode=Partitioned, join_type=Full, on=[(a2@1, a2@1)], filter=CAST(a1@0 AS Int64) > CAST(a1@1 AS Int64) + 3 AND CAST(a1@0 AS Int64) < CAST(a1@1 AS Int64) + 10
-      CoalesceBatchesExec: target_batch_size=8192
-        RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=1
-          StreamingTableExec: partition_sizes=1, projection=[a1, a2], infinite_source=true
-      CoalesceBatchesExec: target_batch_size=8192
-        RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=1
-          StreamingTableExec: partition_sizes=1, projection=[a1, a2], infinite_source=true
+      RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=1
+        StreamingTableExec: partition_sizes=1, projection=[a1, a2], infinite_source=true
+      RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=1
+        StreamingTableExec: partition_sizes=1, projection=[a1, a2], infinite_source=true
     "
     );
     Ok(())
@@ -208,7 +206,10 @@ async fn join_change_in_planner_without_sort_not_allowed() -> Result<()> {
     match df.create_physical_plan().await {
         Ok(_) => panic!("Expecting error."),
         Err(e) => {
-            assert_eq!(e.strip_backtrace(), "SanityCheckPlan\ncaused by\nError during planning: Join operation cannot operate on a non-prunable stream without enabling the 'allow_symmetric_joins_without_pruning' configuration flag")
+            assert_eq!(
+                e.strip_backtrace(),
+                "SanityCheckPlan\ncaused by\nError during planning: Join operation cannot operate on a non-prunable stream without enabling the 'allow_symmetric_joins_without_pruning' configuration flag"
+            )
         }
     }
     Ok(())
@@ -289,16 +290,12 @@ async fn unparse_cross_join() -> Result<()> {
         .await?;
 
     let unopt_sql = plan_to_sql(df.logical_plan())?;
-    assert_snapshot!(unopt_sql, @r#"
-        SELECT j1.j1_id, j2.j2_string FROM j1 CROSS JOIN j2 WHERE (j2.j2_id = 0)
-    "#);
+    assert_snapshot!(unopt_sql, @"SELECT j1.j1_id, j2.j2_string FROM j1 CROSS JOIN j2 WHERE (j2.j2_id = 0)");
 
     let optimized_plan = df.into_optimized_plan()?;
 
     let opt_sql = plan_to_sql(&optimized_plan)?;
-    assert_snapshot!(opt_sql, @r#"
-        SELECT j1.j1_id, j2.j2_string FROM j1 CROSS JOIN j2 WHERE (j2.j2_id = 0)
-    "#);
+    assert_snapshot!(opt_sql, @"SELECT j1.j1_id, j2.j2_string FROM j1 CROSS JOIN j2 WHERE (j2.j2_id = 0)");
 
     Ok(())
 }

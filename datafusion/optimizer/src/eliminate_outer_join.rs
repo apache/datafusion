@@ -52,7 +52,7 @@ use std::sync::Arc;
 pub struct EliminateOuterJoin;
 
 impl EliminateOuterJoin {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
@@ -119,6 +119,7 @@ impl OptimizerRule for EliminateOuterJoin {
                         filter: join.filter.clone(),
                         schema: Arc::clone(&join.schema),
                         null_equality: join.null_equality,
+                        null_aware: join.null_aware,
                     }));
                     Filter::try_new(filter.predicate, new_join)
                         .map(|f| Transformed::yes(LogicalPlan::Filter(f)))

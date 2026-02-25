@@ -32,6 +32,7 @@ use datafusion_expr::{
     Volatility,
 };
 use datafusion_macros::user_doc;
+use memchr::memchr;
 
 #[user_doc(
     doc_section(label = "String Functions"),
@@ -179,6 +180,31 @@ fn strpos(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
+/// Find `needle` in `haystack` using `memchr` to quickly skip to positions
+/// where the first byte matches, then verify the remaining bytes. Using
+/// string::find is slower because it has significant per-call overhead that
+/// `memchr` does not, and strpos is often invoked many times on short inputs.
+/// Returns a 1-based position, or 0 if not found.
+/// Both inputs must be ASCII-only.
+fn find_ascii_substring(haystack: &[u8], needle: &[u8]) -> usize {
+    let needle_len = needle.len();
+    let first_byte = needle[0];
+    let mut offset = 0;
+
+    while let Some(pos) = memchr(first_byte, &haystack[offset..]) {
+        let start = offset + pos;
+        if start + needle_len > haystack.len() {
+            return 0;
+        }
+        if haystack[start..start + needle_len] == *needle {
+            return start + 1;
+        }
+        offset = start + 1;
+    }
+
+    0
+}
+
 /// Returns starting index of specified substring within string, or zero if it's not present. (Same as position(substring in string), but note the reversed argument order.)
 /// strpos('high', 'ig') = 2
 /// The implementation uses UTF-8 code points as characters
@@ -198,31 +224,42 @@ where
         .zip(substring_iter)
         .map(|(string, substring)| match (string, substring) {
             (Some(string), Some(substring)) => {
-                // If only ASCII characters are present, we can use the slide window method to find
-                // the sub vector in the main vector. This is faster than string.find() method.
+                if substring.is_empty() {
+                    return T::Native::from_usize(1);
+                }
+
+                let substring_bytes = substring.as_bytes();
+                let string_bytes = string.as_bytes();
+
+                if substring_bytes.len() > string_bytes.len() {
+                    return T::Native::from_usize(0);
+                }
+
                 if ascii_only {
-                    // If the substring is empty, the result is 1.
-                    if substring.is_empty() {
-                        T::Native::from_usize(1)
-                    } else {
-                        T::Native::from_usize(
-                            string
-                                .as_bytes()
-                                .windows(substring.len())
-                                .position(|w| w == substring.as_bytes())
-                                .map(|x| x + 1)
-                                .unwrap_or(0),
-                        )
-                    }
+                    T::Native::from_usize(find_ascii_substring(
+                        string_bytes,
+                        substring_bytes,
+                    ))
                 } else {
-                    // The `find` method returns the byte index of the substring.
-                    // We count the number of chars up to that byte index.
-                    T::Native::from_usize(
-                        string
-                            .find(substring)
-                            .map(|x| string[..x].chars().count() + 1)
-                            .unwrap_or(0),
-                    )
+                    // For non-ASCII, use a single-pass search that tracks both
+                    // byte position and character position simultaneously
+                    let mut char_pos = 0;
+                    for (byte_idx, _) in string.char_indices() {
+                        char_pos += 1;
+                        if byte_idx + substring_bytes.len() <= string_bytes.len() {
+                            // SAFETY: We just checked that byte_idx + substring_bytes.len() <= string_bytes.len()
+                            let slice = unsafe {
+                                string_bytes.get_unchecked(
+                                    byte_idx..byte_idx + substring_bytes.len(),
+                                )
+                            };
+                            if slice == substring_bytes {
+                                return T::Native::from_usize(char_pos);
+                            }
+                        }
+                    }
+
+                    T::Native::from_usize(0)
                 }
             }
             _ => None,

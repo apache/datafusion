@@ -26,7 +26,7 @@ use datafusion::datasource::physical_plan::{
     FileGroup, FileScanConfigBuilder, ParquetSource,
 };
 use datafusion::error::Result;
-use datafusion::physical_plan::{displayable, ExecutionPlan};
+use datafusion::physical_plan::{ExecutionPlan, displayable};
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion_substrait::physical_plan::{consumer, producer};
 

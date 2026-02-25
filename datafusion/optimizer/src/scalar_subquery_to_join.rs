@@ -43,7 +43,7 @@ use datafusion_expr::{EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder, expr
 pub struct ScalarSubqueryToJoin {}
 
 impl ScalarSubqueryToJoin {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self::default()
     }

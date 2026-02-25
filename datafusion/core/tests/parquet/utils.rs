@@ -20,7 +20,7 @@
 use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion_physical_plan::metrics::MetricsSet;
-use datafusion_physical_plan::{accept, ExecutionPlan, ExecutionPlanVisitor};
+use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanVisitor, accept};
 
 /// Find the metrics from the first DataSourceExec encountered in the plan
 #[derive(Debug)]
@@ -47,13 +47,12 @@ impl MetricsFinder {
 impl ExecutionPlanVisitor for MetricsFinder {
     type Error = std::convert::Infallible;
     fn pre_visit(&mut self, plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
-        if let Some(data_source_exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
-            if data_source_exec
+        if let Some(data_source_exec) = plan.as_any().downcast_ref::<DataSourceExec>()
+            && data_source_exec
                 .downcast_to_file_source::<ParquetSource>()
                 .is_some()
-            {
-                self.metrics = data_source_exec.metrics();
-            }
+        {
+            self.metrics = data_source_exec.metrics();
         }
         // stop searching once we have found the metrics
         Ok(self.metrics.is_none())

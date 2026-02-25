@@ -65,14 +65,13 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, Int64Array, StringArray};
 use arrow::record_batch::RecordBatch;
 use datafusion::prelude::*;
-use datafusion_common::{plan_datafusion_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, plan_datafusion_err};
 use datafusion_expr::{
-    case, col, lit,
+    Expr, case, col, lit,
     logical_plan::builder::LogicalPlanBuilder,
     planner::{
         PlannedRelation, RelationPlanner, RelationPlannerContext, RelationPlanning,
     },
-    Expr,
 };
 use datafusion_sql::sqlparser::ast::{NullInclusion, PivotValueSource, TableFactor};
 use insta::assert_snapshot;
@@ -340,7 +339,7 @@ impl RelationPlanner for PivotUnpivotPlanner {
                 alias,
             ),
 
-            other => Ok(RelationPlanning::Original(other)),
+            other => Ok(RelationPlanning::Original(Box::new(other))),
         }
     }
 }
@@ -460,7 +459,9 @@ fn plan_pivot(
         .aggregate(group_by_cols, pivot_exprs)?
         .build()?;
 
-    Ok(RelationPlanning::Planned(PlannedRelation::new(plan, alias)))
+    Ok(RelationPlanning::Planned(Box::new(PlannedRelation::new(
+        plan, alias,
+    ))))
 }
 
 // ============================================================================
@@ -541,7 +542,9 @@ fn plan_unpivot(
             .build()?;
     }
 
-    Ok(RelationPlanning::Planned(PlannedRelation::new(plan, alias)))
+    Ok(RelationPlanning::Planned(Box::new(PlannedRelation::new(
+        plan, alias,
+    ))))
 }
 
 // ============================================================================

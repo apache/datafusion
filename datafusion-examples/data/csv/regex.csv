@@ -1,0 +1,12 @@
+values,patterns,replacement,flags
+abc,^(a),bb\1bb,i
+ABC,^(A).*,B,i
+aBc,(b|d),e,i
+AbC,(B|D),e,
+aBC,^(b|c),d,
+4000,\b4([1-9]\d\d|\d[1-9]\d|\d\d[1-9])\b,xyz,
+4010,\b4([1-9]\d\d|\d[1-9]\d|\d\d[1-9])\b,xyz,
+Düsseldorf,[\p{Letter}-]+,München,
+Москва,[\p{L}-]+,Moscow,
+Köln,[a-zA-Z]ö[a-zA-Z]{2},Koln,
+اليوم,^\p{Arabic}+$,Today,

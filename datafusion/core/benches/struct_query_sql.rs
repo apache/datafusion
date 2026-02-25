@@ -20,7 +20,7 @@ use arrow::{
     datatypes::{DataType, Field, Schema},
     record_batch::RecordBatch,
 };
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion::prelude::SessionContext;
 use datafusion::{datasource::MemTable, error::Result};
 use futures::executor::block_on;

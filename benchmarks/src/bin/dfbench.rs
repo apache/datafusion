@@ -18,7 +18,7 @@
 //! DataFusion benchmark runner
 use datafusion::error::Result;
 
-use structopt::StructOpt;
+use clap::{Parser, Subcommand};
 
 #[cfg(all(feature = "snmalloc", feature = "mimalloc"))]
 compile_error!(
@@ -37,8 +37,14 @@ use datafusion_benchmarks::{
     cancellation, clickbench, h2o, hj, imdb, nlj, smj, sort_tpch, tpcds, tpch,
 };
 
-#[derive(Debug, StructOpt)]
-#[structopt(about = "benchmark command")]
+#[derive(Debug, Parser)]
+#[command(about = "benchmark command")]
+struct Cli {
+    #[command(subcommand)]
+    command: Options,
+}
+
+#[derive(Debug, Subcommand)]
 enum Options {
     Cancellation(cancellation::RunOpt),
     Clickbench(clickbench::RunOpt),
@@ -57,7 +63,8 @@ enum Options {
 pub async fn main() -> Result<()> {
     env_logger::init();
 
-    match Options::from_args() {
+    let cli = Cli::parse();
+    match cli.command {
         Options::Cancellation(opt) => opt.run().await,
         Options::Clickbench(opt) => opt.run().await,
         Options::H2o(opt) => opt.run().await,

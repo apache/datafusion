@@ -19,21 +19,21 @@
 
 use std::sync::Arc;
 
-use arrow::array::{record_batch, RecordBatch};
+use arrow::array::{RecordBatch, record_batch};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 
 use datafusion::assert_batches_eq;
+use datafusion::common::Result;
 use datafusion::common::not_impl_err;
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion::common::Result;
 use datafusion::datasource::listing::{
     ListingTable, ListingTableConfig, ListingTableConfigExt, ListingTableUrl,
 };
 use datafusion::execution::context::SessionContext;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::parquet::arrow::ArrowWriter;
-use datafusion::physical_expr::expressions::{CastColumnExpr, CastExpr};
 use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_expr::expressions::{CastColumnExpr, CastExpr};
 use datafusion::prelude::SessionConfig;
 use datafusion_physical_expr_adapter::{
     DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter, PhysicalExprAdapterFactory,
@@ -49,9 +49,9 @@ use object_store::{ObjectStore, PutPayload};
 pub async fn custom_file_casts() -> Result<()> {
     println!("=== Creating example data ===");
 
-    // Create a logical / table schema with an Int32 column
+    // Create a logical / table schema with an Int32 column (nullable)
     let logical_schema =
-        Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, true)]));
 
     // Create some data that can be cast (Int16 -> Int32 is widening) and some that cannot (Int64 -> Int32 is narrowing)
     let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
@@ -156,14 +156,14 @@ impl PhysicalExprAdapterFactory for CustomCastPhysicalExprAdapterFactory {
         &self,
         logical_file_schema: SchemaRef,
         physical_file_schema: SchemaRef,
-    ) -> Arc<dyn PhysicalExprAdapter> {
+    ) -> Result<Arc<dyn PhysicalExprAdapter>> {
         let inner = self
             .inner
-            .create(logical_file_schema, Arc::clone(&physical_file_schema));
-        Arc::new(CustomCastsPhysicalExprAdapter {
+            .create(logical_file_schema, Arc::clone(&physical_file_schema))?;
+        Ok(Arc::new(CustomCastsPhysicalExprAdapter {
             physical_file_schema,
             inner,
-        })
+        }))
     }
 }
 

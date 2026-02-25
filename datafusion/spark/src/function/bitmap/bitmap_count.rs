@@ -19,15 +19,15 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{
-    as_dictionary_array, Array, ArrayRef, BinaryArray, BinaryViewArray,
-    FixedSizeBinaryArray, Int64Array, LargeBinaryArray,
+    Array, ArrayRef, BinaryArray, BinaryViewArray, FixedSizeBinaryArray, Int64Array,
+    LargeBinaryArray, as_dictionary_array,
 };
 use arrow::datatypes::DataType::{
     Binary, BinaryView, Dictionary, FixedSizeBinary, LargeBinary,
 };
-use arrow::datatypes::{DataType, FieldRef, Int16Type, Int32Type, Int64Type, Int8Type};
+use arrow::datatypes::{DataType, FieldRef, Int8Type, Int16Type, Int32Type, Int64Type};
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::{
     Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     TypeSignatureClass, Volatility,
@@ -218,12 +218,17 @@ mod tests {
             Box::new(ScalarValue::Binary(Some(vec![0xFFu8, 0xFFu8]))),
         ));
 
-        let arg_fields = vec![Field::new(
-            "a",
-            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary)),
-            true,
-        )
-        .into()];
+        let arg_fields = vec![
+            Field::new(
+                "a",
+                DataType::Dictionary(
+                    Box::new(DataType::Int32),
+                    Box::new(DataType::Binary),
+                ),
+                true,
+            )
+            .into(),
+        ];
         let args = ScalarFunctionArgs {
             args: vec![dict.clone()],
             arg_fields,

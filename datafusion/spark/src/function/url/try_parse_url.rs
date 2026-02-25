@@ -17,7 +17,7 @@
 
 use std::any::Any;
 
-use crate::function::url::parse_url::{spark_handled_parse_url, ParseUrl};
+use crate::function::url::parse_url::{ParseUrl, spark_handled_parse_url};
 use arrow::array::ArrayRef;
 use arrow::datatypes::DataType;
 use datafusion_common::Result;

@@ -25,23 +25,33 @@ use std::sync::Arc;
 use crate::file_groups::FileGroupPartitioner;
 use crate::file_scan_config::FileScanConfig;
 use crate::file_stream::FileOpener;
+#[expect(deprecated)]
 use crate::schema_adapter::SchemaAdapterFactory;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Result, not_impl_err};
 use datafusion_physical_expr::projection::ProjectionExprs;
-use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
+use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr};
 use datafusion_physical_plan::DisplayFormatType;
+use datafusion_physical_plan::SortOrderPushdownResult;
 use datafusion_physical_plan::filter_pushdown::{FilterPushdownPropagation, PushedDown};
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use object_store::ObjectStore;
 
-/// Helper function to convert any type implementing FileSource to Arc&lt;dyn FileSource&gt;
+/// Helper function to convert any type implementing [`FileSource`] to `Arc<dyn FileSource>`
 pub fn as_file_source<T: FileSource + 'static>(source: T) -> Arc<dyn FileSource> {
     Arc::new(source)
 }
 
-/// file format specific behaviors for elements in [`DataSource`]
+/// File format specific behaviors for [`DataSource`]
+///
+/// # Schema information
+/// There are two important schemas for a [`FileSource`]:
+/// 1. [`Self::table_schema`] -- the schema for the overall table
+///    (file data plus partition columns)
+/// 2. The logical output schema, comprised of [`Self::table_schema`] with
+///    [`Self::projection`] applied
 ///
 /// See more details on specific implementations:
 /// * [`ArrowSource`](https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.ArrowSource.html)
@@ -61,27 +71,62 @@ pub trait FileSource: Send + Sync {
     ) -> Result<Arc<dyn FileOpener>>;
     /// Any
     fn as_any(&self) -> &dyn Any;
-    /// Returns the table schema for this file source.
+
+    /// Returns the table schema for the overall table (including partition columns, if any)
     ///
-    /// This always returns the unprojected schema (the full schema of the data).
+    /// This method returns the unprojected schema: the full schema of the data
+    /// without [`Self::projection`] applied.
+    ///
+    /// The output schema of this `FileSource` is this TableSchema
+    /// with [`Self::projection`] applied.
+    ///
+    /// Use [`ProjectionExprs::project_schema`] to get the projected schema
+    /// after applying the projection.
     fn table_schema(&self) -> &crate::table_schema::TableSchema;
+
     /// Initialize new type with batch size configuration
     fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource>;
-    /// Returns the filter expression that will be applied during the file scan.
+
+    /// Returns the filter expression that will be applied *during* the file scan.
+    ///
+    /// These expressions are in terms of the unprojected [`Self::table_schema`].
     fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
         None
     }
-    /// Return the projection that will be applied to the output stream on top of the table schema.
+
+    /// Return the projection that will be applied to the output stream on top
+    /// of [`Self::table_schema`].
+    ///
+    /// Note you can use [`ProjectionExprs::project_schema`] on the table
+    /// schema to get the effective output schema of this source.
     fn projection(&self) -> Option<&ProjectionExprs> {
         None
     }
+
     /// Return execution plan metrics
     fn metrics(&self) -> &ExecutionPlanMetricsSet;
+
     /// String representation of file source such as "csv", "json", "parquet"
     fn file_type(&self) -> &str;
+
     /// Format FileType specific information
     fn fmt_extra(&self, _t: DisplayFormatType, _f: &mut Formatter) -> fmt::Result {
         Ok(())
+    }
+
+    /// Returns whether this file source supports repartitioning files by byte ranges.
+    ///
+    /// When this returns `true`, files can be split into multiple partitions
+    /// based on byte offsets for parallel reading.
+    ///
+    /// When this returns `false`, files cannot be repartitioned (e.g., CSV files
+    /// with `newlines_in_values` enabled cannot be split because record boundaries
+    /// cannot be determined by byte offset alone).
+    ///
+    /// The default implementation returns `true`. File sources that cannot support
+    /// repartitioning should override this method.
+    fn supports_repartitioning(&self) -> bool {
+        true
     }
 
     /// If supported by the [`FileSource`], redistribute files across partitions
@@ -97,7 +142,8 @@ pub trait FileSource: Send + Sync {
         output_ordering: Option<LexOrdering>,
         config: &FileScanConfig,
     ) -> Result<Option<FileScanConfig>> {
-        if config.file_compression_type.is_compressed() || config.new_lines_in_values {
+        if config.file_compression_type.is_compressed() || !self.supports_repartitioning()
+        {
             return Ok(None);
         }
 
@@ -116,6 +162,19 @@ pub trait FileSource: Send + Sync {
     }
 
     /// Try to push down filters into this FileSource.
+    ///
+    /// `filters` must be in terms of the unprojected table schema (file schema
+    /// plus partition columns), before any projection is applied.
+    ///
+    /// Any filters that this FileSource chooses to evaluate itself should be
+    /// returned as `PushedDown::Yes` in the result, along with a FileSource
+    /// instance that incorporates those filters. Such filters are logically
+    /// applied "during" the file scan, meaning they may refer to columns not
+    /// included in the final output projection.
+    ///
+    /// Filters that cannot be pushed down should be marked as `PushedDown::No`,
+    /// and will be evaluated by an execution plan after the file source.
+    ///
     /// See [`ExecutionPlan::handle_child_pushdown_result`] for more details.
     ///
     /// [`ExecutionPlan::handle_child_pushdown_result`]: datafusion_physical_plan::ExecutionPlan::handle_child_pushdown_result
@@ -129,7 +188,79 @@ pub trait FileSource: Send + Sync {
         ))
     }
 
-    /// Try to push down a projection into a this FileSource.
+    /// Try to create a new FileSource that can produce data in the specified sort order.
+    ///
+    /// This method attempts to optimize data retrieval to match the requested ordering.
+    /// It receives both the requested ordering and equivalence properties that describe
+    /// the output data from this file source.
+    ///
+    /// # Parameters
+    /// * `order` - The requested sort ordering from the query
+    /// * `eq_properties` - Equivalence properties of the data that will be produced by this
+    ///   file source. These properties describe the ordering, constant columns, and other
+    ///   relationships in the output data, allowing the implementation to determine if
+    ///   optimizations like reversed scanning can help satisfy the requested ordering.
+    ///   This includes information about:
+    ///   - The file's natural ordering (from output_ordering in FileScanConfig)
+    ///   - Constant columns (e.g., from filters like `ticker = 'AAPL'`)
+    ///   - Monotonic functions (e.g., `extract_year_month(timestamp)`)
+    ///   - Other equivalence relationships
+    ///
+    /// # Examples
+    ///
+    /// ## Example 1: Simple reverse
+    /// ```text
+    /// File ordering: [a ASC, b DESC]
+    /// Requested:     [a DESC]
+    /// Reversed file: [a DESC, b ASC]
+    /// Result: Satisfies request (prefix match) → Inexact
+    /// ```
+    ///
+    /// ## Example 2: Monotonic function
+    /// ```text
+    /// File ordering: [extract_year_month(ts) ASC, ts ASC]
+    /// Requested:     [ts DESC]
+    /// Reversed file: [extract_year_month(ts) DESC, ts DESC]
+    /// Result: Through monotonicity, satisfies [ts DESC] → Inexact
+    /// ```
+    ///
+    /// # Returns
+    /// * `Exact` - Created a source that guarantees perfect ordering
+    /// * `Inexact` - Created a source optimized for ordering (e.g., reversed row groups) but not perfectly sorted
+    /// * `Unsupported` - Cannot optimize for this ordering
+    ///
+    /// # Deprecation / migration notes
+    /// - [`Self::try_reverse_output`] was renamed to this method and deprecated since `53.0.0`.
+    ///   Per DataFusion's deprecation guidelines, it will be removed in `59.0.0` or later
+    ///   (6 major versions or 6 months, whichever is longer).
+    /// - New implementations should override [`Self::try_pushdown_sort`] directly.
+    /// - For backwards compatibility, the default implementation of
+    ///   [`Self::try_pushdown_sort`] delegates to the deprecated
+    ///   [`Self::try_reverse_output`] until it is removed. After that point, the
+    ///   default implementation will return [`SortOrderPushdownResult::Unsupported`].
+    fn try_pushdown_sort(
+        &self,
+        order: &[PhysicalSortExpr],
+        eq_properties: &EquivalenceProperties,
+    ) -> Result<SortOrderPushdownResult<Arc<dyn FileSource>>> {
+        #[expect(deprecated)]
+        self.try_reverse_output(order, eq_properties)
+    }
+
+    /// Deprecated: Renamed to [`Self::try_pushdown_sort`].
+    #[deprecated(
+        since = "53.0.0",
+        note = "Renamed to try_pushdown_sort. This method was never limited to reversing output. It will be removed in 59.0.0 or later."
+    )]
+    fn try_reverse_output(
+        &self,
+        _order: &[PhysicalSortExpr],
+        _eq_properties: &EquivalenceProperties,
+    ) -> Result<SortOrderPushdownResult<Arc<dyn FileSource>>> {
+        Ok(SortOrderPushdownResult::Unsupported)
+    }
+
+    /// Try to push down a projection into this FileSource.
     ///
     /// `FileSource` implementations that support projection pushdown should
     /// override this method and return a new `FileSource` instance with the
@@ -158,28 +289,33 @@ pub trait FileSource: Send + Sync {
         Ok(None)
     }
 
-    /// Set optional schema adapter factory.
+    /// Deprecated: Set optional schema adapter factory.
     ///
-    /// [`SchemaAdapterFactory`] allows user to specify how fields from the
-    /// file get mapped to that of the table schema.  If you implement this
-    /// method, you should also implement [`schema_adapter_factory`].
-    ///
-    /// The default implementation returns a not implemented error.
-    ///
-    /// [`schema_adapter_factory`]: Self::schema_adapter_factory
+    /// `SchemaAdapterFactory` has been removed. Use `PhysicalExprAdapterFactory` instead.
+    /// See `upgrading.md` for more details.
+    #[deprecated(
+        since = "53.0.0",
+        note = "SchemaAdapterFactory has been removed. Use PhysicalExprAdapterFactory instead. See upgrading.md for more details."
+    )]
+    #[expect(deprecated)]
     fn with_schema_adapter_factory(
         &self,
         _factory: Arc<dyn SchemaAdapterFactory>,
     ) -> Result<Arc<dyn FileSource>> {
         not_impl_err!(
-            "FileSource {} does not support schema adapter factory",
-            self.file_type()
+            "SchemaAdapterFactory has been removed. Use PhysicalExprAdapterFactory instead. See upgrading.md for more details."
         )
     }
 
-    /// Returns the current schema adapter factory if set
+    /// Deprecated: Returns the current schema adapter factory if set.
     ///
-    /// Default implementation returns `None`.
+    /// `SchemaAdapterFactory` has been removed. Use `PhysicalExprAdapterFactory` instead.
+    /// See `upgrading.md` for more details.
+    #[deprecated(
+        since = "53.0.0",
+        note = "SchemaAdapterFactory has been removed. Use PhysicalExprAdapterFactory instead. See upgrading.md for more details."
+    )]
+    #[expect(deprecated)]
     fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
         None
     }

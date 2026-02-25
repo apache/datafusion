@@ -18,16 +18,16 @@
 use arrow::array::RecordBatch;
 use arrow::datatypes::{DataType, Field, Schema};
 use bytes::{BufMut, BytesMut};
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion::config::ConfigOptions;
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion_execution::object_store::ObjectStoreUrl;
-use datafusion_physical_optimizer::filter_pushdown::FilterPushdown;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::filter_pushdown::FilterPushdown;
 use datafusion_physical_plan::ExecutionPlan;
+use object_store::ObjectStore;
 use object_store::memory::InMemory;
 use object_store::path::Path;
-use object_store::ObjectStore;
 use parquet::arrow::ArrowWriter;
 use std::sync::Arc;
 

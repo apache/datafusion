@@ -23,8 +23,11 @@ use std::sync::Arc;
 
 pub mod abs;
 pub mod bounds;
+pub mod ceil;
 pub mod cot;
+mod decimal;
 pub mod factorial;
+pub mod floor;
 pub mod gcd;
 pub mod iszero;
 pub mod lcm;
@@ -104,14 +107,7 @@ make_math_unary_udf!(
     super::bounds::unbounded_bounds,
     super::get_cbrt_doc
 );
-make_math_unary_udf!(
-    CeilFunc,
-    ceil,
-    ceil,
-    super::ceil_order,
-    super::bounds::unbounded_bounds,
-    super::get_ceil_doc
-);
+make_udf_function!(ceil::CeilFunc, ceil);
 make_math_unary_udf!(
     CosFunc,
     cos,
@@ -146,14 +142,7 @@ make_math_unary_udf!(
     super::get_exp_doc
 );
 make_udf_function!(factorial::FactorialFunc, factorial);
-make_math_unary_udf!(
-    FloorFunc,
-    floor,
-    floor,
-    super::floor_order,
-    super::bounds::unbounded_bounds,
-    super::get_floor_doc
-);
+make_udf_function!(floor::FloorFunc, floor);
 make_udf_function!(log::LogFunc, log);
 make_udf_function!(gcd::GcdFunc, gcd);
 make_udf_function!(nans::IsNanFunc, isnan);

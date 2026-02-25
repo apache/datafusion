@@ -1,0 +1,70 @@
+# postgresql behavior
+#
+# time + interval → time
+# Add an interval to a time
+# time '01:00' + interval '3 hours' → 04:00:00
+#
+# note that while the above reflects what postgresql does
+# in the case of datafusion/arrow that is not the case. The
+# result will be an interval, not a time.
+
+query ?
+SELECT '01:00'::time + interval '3 hours'
+----
+4 hours
+
+query T
+SELECT arrow_typeof('01:00'::time + interval '3 hours')
+----
+Interval(MonthDayNano)
+
+query ?
+SELECT '22:00'::time + interval '3 hours'
+----
+25 hours
+
+query ?
+SELECT interval '3 hours' + '22:00'::time
+----
+25 hours
+
+query ?
+SELECT arrow_cast('22:00', 'Time32(Second)') + interval '3 hours'
+----
+25 hours
+
+query ?
+SELECT arrow_cast('22:00', 'Time32(Millisecond)') + interval '3 hours'
+----
+25 hours
+
+query ?
+SELECT arrow_cast('22:00', 'Time64(Microsecond)') + interval '3 hours'
+----
+25 hours
+
+query ?
+SELECT arrow_cast('22:00', 'Time64(Nanosecond)') + interval '3 hours'
+----
+25 hours
+
+# postgresql behavior
+#
+# time - interval → time
+# Subtract an interval from a time
+# time '05:00' - interval '2 hours' → 03:00:00
+
+query ?
+SELECT '05:00'::time - interval '2 hours'
+----
+3 hours
+
+query T
+SELECT arrow_typeof('05:00'::time - interval '2 hours')
+----
+Interval(MonthDayNano)
+
+query ?
+SELECT '02:00'::time - interval '3 hours'
+----
+-1 hours

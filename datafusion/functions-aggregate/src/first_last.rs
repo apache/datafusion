@@ -41,6 +41,7 @@ use datafusion_common::cast::as_boolean_array;
 use datafusion_common::utils::{compare_rows, extract_row_at_idx_to_buf, get_row_at_idx};
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, arrow_datafusion_err, internal_err,
+    not_impl_err,
 };
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::{AggregateOrderSensitivity, format_state_name};
@@ -89,20 +90,10 @@ pub fn last_value(expression: Expr, order_by: Vec<SortExpr>) -> Expr {
 ```"#,
     standard_argument(name = "expression",)
 )]
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash, Debug)]
 pub struct FirstValue {
     signature: Signature,
     is_input_pre_ordered: bool,
-}
-
-impl Debug for FirstValue {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.debug_struct("FirstValue")
-            .field("name", &self.name())
-            .field("signature", &self.signature)
-            .field("accumulator", &"<FUNC>")
-            .finish()
-    }
 }
 
 impl Default for FirstValue {
@@ -133,8 +124,20 @@ impl AggregateUDFImpl for FirstValue {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[0].clone())
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        not_impl_err!("Not called because the return_field_from_args is implemented")
+    }
+
+    fn return_field(&self, arg_fields: &[FieldRef]) -> Result<FieldRef> {
+        // Preserve metadata from the first argument field
+        Ok(Arc::new(
+            Field::new(
+                self.name(),
+                arg_fields[0].data_type().clone(),
+                true, // always nullable, there may be no rows
+            )
+            .with_metadata(arg_fields[0].metadata().clone()),
+        ))
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
@@ -1027,20 +1030,10 @@ impl Accumulator for FirstValueAccumulator {
 ```"#,
     standard_argument(name = "expression",)
 )]
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash, Debug)]
 pub struct LastValue {
     signature: Signature,
     is_input_pre_ordered: bool,
-}
-
-impl Debug for LastValue {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.debug_struct("LastValue")
-            .field("name", &self.name())
-            .field("signature", &self.signature)
-            .field("accumulator", &"<FUNC>")
-            .finish()
-    }
 }
 
 impl Default for LastValue {
@@ -1071,8 +1064,20 @@ impl AggregateUDFImpl for LastValue {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[0].clone())
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        not_impl_err!("Not called because the return_field_from_args is implemented")
+    }
+
+    fn return_field(&self, arg_fields: &[FieldRef]) -> Result<FieldRef> {
+        // Preserve metadata from the first argument field
+        Ok(Arc::new(
+            Field::new(
+                self.name(),
+                arg_fields[0].data_type().clone(),
+                true, // always nullable, there may be no rows
+            )
+            .with_metadata(arg_fields[0].metadata().clone()),
+        ))
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {

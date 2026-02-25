@@ -27,30 +27,34 @@ use datafusion::error::DataFusionError;
 use datafusion::execution::context::SessionContext;
 use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::{
-    execute_stream, visit_execution_plan, ExecutionPlan, ExecutionPlanVisitor,
+    ExecutionPlan, ExecutionPlanVisitor, execute_stream, visit_execution_plan,
 };
+use datafusion_examples::utils::{datasets::ExampleDataset, write_csv_to_parquet};
 use futures::StreamExt;
 
 /// Example of collecting metrics after execution by visiting the `ExecutionPlan`
 pub async fn parquet_exec_visitor() -> datafusion::common::Result<()> {
     let ctx = SessionContext::new();
 
-    let test_data = datafusion::test_util::parquet_test_data();
+    // Convert the CSV input into a temporary Parquet directory for querying
+    let dataset = ExampleDataset::Cars;
+    let parquet_temp = write_csv_to_parquet(&ctx, &dataset.path()).await?;
 
     // Configure listing options
     let file_format = ParquetFormat::default().with_enable_pruning(true);
     let listing_options = ListingOptions::new(Arc::new(file_format));
 
+    let table_path = parquet_temp.file_uri()?;
+
     // First example were we use an absolute path, which requires no additional setup.
-    let _ = ctx
-        .register_listing_table(
-            "my_table",
-            &format!("file://{test_data}/alltypes_plain.parquet"),
-            listing_options.clone(),
-            None,
-            None,
-        )
-        .await;
+    ctx.register_listing_table(
+        "my_table",
+        &table_path,
+        listing_options.clone(),
+        None,
+        None,
+    )
+    .await?;
 
     let df = ctx.sql("SELECT * FROM my_table").await?;
     let plan = df.create_physical_plan().await?;
@@ -100,18 +104,17 @@ impl ExecutionPlanVisitor for ParquetExecVisitor {
     /// or `post_visit` (visit each node after its children/inputs)
     fn pre_visit(&mut self, plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
         // If needed match on a specific `ExecutionPlan` node type
-        if let Some(data_source_exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
-            if let Some((file_config, _)) =
+        if let Some(data_source_exec) = plan.as_any().downcast_ref::<DataSourceExec>()
+            && let Some((file_config, _)) =
                 data_source_exec.downcast_to_file_source::<ParquetSource>()
-            {
-                self.file_groups = Some(file_config.file_groups.clone());
+        {
+            self.file_groups = Some(file_config.file_groups.clone());
 
-                let metrics = match data_source_exec.metrics() {
-                    None => return Ok(true),
-                    Some(metrics) => metrics,
-                };
-                self.bytes_scanned = metrics.sum_by_name("bytes_scanned");
-            }
+            let metrics = match data_source_exec.metrics() {
+                None => return Ok(true),
+                Some(metrics) => metrics,
+            };
+            self.bytes_scanned = metrics.sum_by_name("bytes_scanned");
         }
         Ok(true)
     }

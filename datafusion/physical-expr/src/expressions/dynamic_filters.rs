@@ -26,7 +26,7 @@ use datafusion_common::{
     tree_node::{Transformed, TransformedResult, TreeNode},
 };
 use datafusion_expr::ColumnarValue;
-use datafusion_physical_expr_common::physical_expr::{DynEq, DynHash};
+use datafusion_physical_expr_common::physical_expr::DynHash;
 
 /// State of a dynamic filter, tracking both updates and completion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,6 +51,10 @@ impl FilterState {
 /// Any `ExecutionPlan` that uses this expression and holds a reference to it internally should probably also
 /// implement `ExecutionPlan::reset_state` to remain compatible with recursive queries and other situations where
 /// the same `ExecutionPlan` is reused with different data.
+///
+/// For more background, please also see the [Dynamic Filters: Passing Information Between Operators During Execution for 25x Faster Queries blog]
+///
+/// [Dynamic Filters: Passing Information Between Operators During Execution for 25x Faster Queries blog]: https://datafusion.apache.org/blog/2025/09/10/dynamic-filters
 #[derive(Debug)]
 pub struct DynamicFilterPhysicalExpr {
     /// The original children of this PhysicalExpr, if any.
@@ -103,8 +107,11 @@ impl Inner {
 
 impl Hash for DynamicFilterPhysicalExpr {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        let inner = self.current().expect("Failed to get current expression");
-        inner.dyn_hash(state);
+        // Use pointer identity of the inner Arc for stable hashing.
+        // This is stable across update() calls and consistent with Eq.
+        // See issue #19641 for details on why content-based hashing violates
+        // the Hash/Eq contract when the underlying expression can change.
+        Arc::as_ptr(&self.inner).hash(state);
         self.children.dyn_hash(state);
         self.remapped_children.dyn_hash(state);
     }
@@ -112,11 +119,13 @@ impl Hash for DynamicFilterPhysicalExpr {
 
 impl PartialEq for DynamicFilterPhysicalExpr {
     fn eq(&self, other: &Self) -> bool {
-        let inner = self.current().expect("Failed to get current expression");
-        let our_children = self.remapped_children.as_ref().unwrap_or(&self.children);
-        let other_children = other.remapped_children.as_ref().unwrap_or(&other.children);
-        let other = other.current().expect("Failed to get current expression");
-        inner.dyn_eq(other.as_any()) && our_children == other_children
+        // Two dynamic filters are equal if they share the same inner source
+        // AND have the same children configuration.
+        // This is consistent with Hash using Arc::as_ptr.
+        // See issue #19641 for details on the Hash/Eq contract violation fix.
+        Arc::ptr_eq(&self.inner, &other.inner)
+            && self.children == other.children
+            && self.remapped_children == other.remapped_children
     }
 }
 
@@ -267,6 +276,10 @@ impl DynamicFilterPhysicalExpr {
     ///
     /// This method will return when [`Self::update`] is called and the generation increases.
     /// It does not guarantee that the filter is complete.
+    ///
+    /// Producers (e.g.) HashJoinExec may never update the expression or mark it as completed if there are no consumers.
+    /// If you call this method on a dynamic filter created by such a producer and there are no consumers registered this method would wait indefinitely.
+    /// This should not happen under normal operation and would indicate a programming error either in your producer or in DataFusion if the producer is a built in node.
     pub async fn wait_update(&self) {
         let mut rx = self.state_watch.subscribe();
         // Get the current generation
@@ -283,6 +296,10 @@ impl DynamicFilterPhysicalExpr {
     ///
     /// Unlike [`Self::wait_update`], this method guarantees that when it returns,
     /// the filter is fully complete with no more updates expected.
+    ///
+    /// Producers (e.g.) HashJoinExec may never update the expression or mark it as completed if there are no consumers.
+    /// If you call this method on a dynamic filter created by such a producer and there are no consumers registered this method would wait indefinitely.
+    /// This should not happen under normal operation and would indicate a programming error either in your producer or in DataFusion if the producer is a built in node.
     pub async fn wait_complete(&self) {
         if self.inner.read().is_complete {
             return;
@@ -292,6 +309,22 @@ impl DynamicFilterPhysicalExpr {
         let _ = rx
             .wait_for(|state| matches!(state, FilterState::Complete { .. }))
             .await;
+    }
+
+    /// Check if this dynamic filter is being actively used by any consumers.
+    ///
+    /// Returns `true` if there are references beyond the producer (e.g., the HashJoinExec
+    /// that created the filter). This is useful to avoid computing expensive filter
+    /// expressions when no consumer will actually use them.
+    ///
+    /// # Implementation Details
+    ///
+    /// We check both Arc counts to handle two cases:
+    /// - Transformed filters (via `with_new_children`) share the inner Arc (inner count > 1)
+    /// - Direct clones (via `Arc::clone`) increment the outer count (outer count > 1)
+    pub fn is_used(self: &Arc<Self>) -> bool {
+        // Strong count > 1 means at least one consumer is holding a reference beyond the producer.
+        Arc::strong_count(self) > 1 || Arc::strong_count(&self.inner) > 1
     }
 
     fn render(
@@ -606,5 +639,232 @@ mod test {
 
         // wait_complete should return immediately
         dynamic_filter.wait_complete().await;
+    }
+
+    #[test]
+    fn test_with_new_children_independence() {
+        // Create a schema with columns a, b, c, d
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+            Field::new("d", DataType::Int32, false),
+        ]));
+
+        // Create expression col(a) + col(b)
+        let col_a = col("a", &schema).unwrap();
+        let col_b = col("b", &schema).unwrap();
+        let col_c = col("c", &schema).unwrap();
+        let col_d = col("d", &schema).unwrap();
+
+        let expr = Arc::new(BinaryExpr::new(
+            Arc::clone(&col_a),
+            datafusion_expr::Operator::Plus,
+            Arc::clone(&col_b),
+        ));
+
+        // Create DynamicFilterPhysicalExpr with children [col_a, col_b]
+        let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::clone(&col_a), Arc::clone(&col_b)],
+            expr as Arc<dyn PhysicalExpr>,
+        ));
+
+        // Clone the Arc (two references to the same DynamicFilterPhysicalExpr)
+        let clone_1 = Arc::clone(&dynamic_filter);
+        let clone_2 = Arc::clone(&dynamic_filter);
+
+        // Call with_new_children with different children on each clone
+        // clone_1: replace [a, b] with [b, c] -> expression becomes b + c
+        let remapped_1 = clone_1
+            .with_new_children(vec![Arc::clone(&col_b), Arc::clone(&col_c)])
+            .unwrap();
+
+        // clone_2: replace [a, b] with [b, d] -> expression becomes b + d
+        let remapped_2 = clone_2
+            .with_new_children(vec![Arc::clone(&col_b), Arc::clone(&col_d)])
+            .unwrap();
+
+        // Create a RecordBatch with columns a=1,2,3  b=10,20,30  c=100,200,300  d=1000,2000,3000
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::Int32Array::from(vec![1, 2, 3])), // a
+                Arc::new(arrow::array::Int32Array::from(vec![10, 20, 30])), // b
+                Arc::new(arrow::array::Int32Array::from(vec![100, 200, 300])), // c
+                Arc::new(arrow::array::Int32Array::from(vec![1000, 2000, 3000])), // d
+            ],
+        )
+        .unwrap();
+
+        // Evaluate both remapped expressions
+        let result_1 = remapped_1.evaluate(&batch).unwrap();
+        let result_2 = remapped_2.evaluate(&batch).unwrap();
+
+        // Extract arrays from results
+        let ColumnarValue::Array(arr_1) = result_1 else {
+            panic!("Expected ColumnarValue::Array for result_1");
+        };
+        let ColumnarValue::Array(arr_2) = result_2 else {
+            panic!("Expected ColumnarValue::Array for result_2");
+        };
+
+        // Verify result_1 = b + c = [110, 220, 330]
+        let expected_1: Arc<dyn arrow::array::Array> =
+            Arc::new(arrow::array::Int32Array::from(vec![110, 220, 330]));
+        assert!(
+            arr_1.eq(&expected_1),
+            "Expected b + c = [110, 220, 330], got {arr_1:?}",
+        );
+
+        // Verify result_2 = b + d = [1010, 2020, 3030]
+        let expected_2: Arc<dyn arrow::array::Array> =
+            Arc::new(arrow::array::Int32Array::from(vec![1010, 2020, 3030]));
+        assert!(
+            arr_2.eq(&expected_2),
+            "Expected b + d = [1010, 2020, 3030], got {arr_2:?}",
+        );
+    }
+
+    #[test]
+    fn test_is_used() {
+        let filter = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![],
+            lit(true) as Arc<dyn PhysicalExpr>,
+        ));
+
+        // Initially, only one reference to the inner Arc exists
+        assert!(
+            !filter.is_used(),
+            "Filter should not be used with only one inner reference"
+        );
+
+        // Simulate a consumer created via transformation (what happens during filter pushdown).
+        // When filters are pushed down and transformed via reassign_expr_columns/transform_down,
+        // with_new_children() is called which creates a new outer Arc but clones the inner Arc.
+        let consumer1_expr = Arc::clone(&filter).with_new_children(vec![]).unwrap();
+        let _consumer1 = consumer1_expr
+            .as_any()
+            .downcast_ref::<DynamicFilterPhysicalExpr>()
+            .expect("Should be DynamicFilterPhysicalExpr");
+
+        // Now the inner Arc is shared (inner_count = 2)
+        assert!(
+            filter.is_used(),
+            "Filter should be used when inner Arc is shared with transformed consumer"
+        );
+
+        // Create another transformed consumer
+        let consumer2_expr = Arc::clone(&filter).with_new_children(vec![]).unwrap();
+        let _consumer2 = consumer2_expr
+            .as_any()
+            .downcast_ref::<DynamicFilterPhysicalExpr>()
+            .expect("Should be DynamicFilterPhysicalExpr");
+
+        assert!(
+            filter.is_used(),
+            "Filter should still be used with multiple consumers"
+        );
+    }
+
+    /// Test that verifies the Hash/Eq contract is now satisfied (issue #19641 fix).
+    ///
+    /// After the fix, Hash uses Arc::as_ptr(&self.inner) which is stable across
+    /// update() calls, fixing the HashMap key instability issue.
+    #[test]
+    fn test_hash_stable_after_update() {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        // Create filter with initial value
+        let filter =
+            DynamicFilterPhysicalExpr::new(vec![], lit(true) as Arc<dyn PhysicalExpr>);
+
+        // Compute hash BEFORE update
+        let mut hasher_before = DefaultHasher::new();
+        filter.hash(&mut hasher_before);
+        let hash_before = hasher_before.finish();
+
+        // Update changes the underlying expression
+        filter
+            .update(lit(false) as Arc<dyn PhysicalExpr>)
+            .expect("Update should succeed");
+
+        // Compute hash AFTER update
+        let mut hasher_after = DefaultHasher::new();
+        filter.hash(&mut hasher_after);
+        let hash_after = hasher_after.finish();
+
+        // FIXED: Hash should now be STABLE after update() because we use
+        // Arc::as_ptr for identity-based hashing instead of expression content.
+        assert_eq!(
+            hash_before, hash_after,
+            "Hash should be stable after update() - fix for issue #19641"
+        );
+
+        // Self-equality should still hold
+        assert!(filter.eq(&filter), "Self-equality should hold");
+    }
+
+    /// Test that verifies separate DynamicFilterPhysicalExpr instances
+    /// with the same expression are NOT equal (identity-based comparison).
+    #[test]
+    fn test_identity_based_equality() {
+        // Create two separate filters with identical initial expressions
+        let filter1 =
+            DynamicFilterPhysicalExpr::new(vec![], lit(true) as Arc<dyn PhysicalExpr>);
+        let filter2 =
+            DynamicFilterPhysicalExpr::new(vec![], lit(true) as Arc<dyn PhysicalExpr>);
+
+        // Different instances should NOT be equal even with same expression
+        // because they have independent inner Arcs (different update lifecycles)
+        assert!(
+            !filter1.eq(&filter2),
+            "Different instances should not be equal (identity-based)"
+        );
+
+        // Self-equality should hold
+        assert!(filter1.eq(&filter1), "Self-equality should hold");
+    }
+
+    /// Test that hash is stable for the same filter instance.
+    /// After the fix, hash uses Arc::as_ptr which is pointer-based.
+    #[test]
+    fn test_hash_stable_for_same_instance() {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let filter =
+            DynamicFilterPhysicalExpr::new(vec![], lit(true) as Arc<dyn PhysicalExpr>);
+
+        // Compute hash twice for the same instance
+        let hash1 = {
+            let mut h = DefaultHasher::new();
+            filter.hash(&mut h);
+            h.finish()
+        };
+        let hash2 = {
+            let mut h = DefaultHasher::new();
+            filter.hash(&mut h);
+            h.finish()
+        };
+
+        assert_eq!(hash1, hash2, "Same instance should have stable hash");
+
+        // Update the expression
+        filter
+            .update(lit(false) as Arc<dyn PhysicalExpr>)
+            .expect("Update should succeed");
+
+        // Hash should STILL be the same (identity-based)
+        let hash3 = {
+            let mut h = DefaultHasher::new();
+            filter.hash(&mut h);
+            h.finish()
+        };
+
+        assert_eq!(
+            hash1, hash3,
+            "Hash should be stable after update (identity-based)"
+        );
     }
 }

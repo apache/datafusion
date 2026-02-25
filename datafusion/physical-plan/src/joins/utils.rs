@@ -411,7 +411,35 @@ struct PartialJoinStatistics {
     pub column_statistics: Vec<ColumnStatistics>,
 }
 
-/// Estimate the statistics for the given join's output.
+/// Estimates the output statistics for a join operation based on input statistics.
+///
+/// # Statistics Propagation
+///
+/// This function estimates join output statistics using the following approach:
+/// - **Row count estimation**: Uses the `on` parameter (equijoin keys) to estimate
+///   output cardinality via [`estimate_join_cardinality`]. The estimation is based on
+///   column-level statistics (distinct counts, min/max values) of the join keys.
+/// - **Column statistics**: Combines column statistics from both inputs. For join types
+///   that preserve all columns (Inner, Left, Right, Full), statistics from both sides
+///   are concatenated. For semi/anti joins, only the relevant side's statistics are kept.
+/// - **Byte size**: Always returns `Precision::Absent` as join output size is difficult
+///   to estimate without knowing the actual data.
+///
+/// # The `on` Parameter
+///
+/// The `on` parameter represents equijoin keys (e.g., `t1.id = t2.id`). When `on` is
+/// empty (as in NestedLoopJoinExec which handles non-equijoin predicates), the
+/// cardinality estimation cannot compute selectivity from join keys, and this function
+/// returns unknown statistics (`num_rows: Precision::Absent`).
+///
+/// # Limitations
+///
+/// - Does not account for selectivity of arbitrary join filter expressions
+///   (e.g., `(t1.v1 + t2.v1) % 2 = 0`). Such filters, common in NestedLoopJoinExec,
+///   are not factored into the cardinality estimation.
+/// - Column statistics for the output are simply combined from inputs without
+///   adjusting for join selectivity (acknowledged in the code as needing
+///   "filter selectivity analysis").
 pub(crate) fn estimate_join_statistics(
     left_stats: Statistics,
     right_stats: Statistics,
@@ -711,7 +739,7 @@ fn max_distinct_count(
             {
                 let range_dc = range_dc as usize;
                 // Note that the `unwrap` calls in the below statement are safe.
-                return if matches!(result, Precision::Absent)
+                return if result == Precision::Absent
                     || &range_dc < result.get_value().unwrap()
                 {
                     if stats.min_value.is_exact().unwrap()
@@ -949,6 +977,17 @@ pub(crate) fn apply_join_filter_to_indices(
     ))
 }
 
+/// Creates a [RecordBatch] with zero columns but the given row count.
+/// Used when a join has an empty projection (e.g. `SELECT count(1) ...`).
+fn new_empty_schema_batch(schema: &Schema, row_count: usize) -> Result<RecordBatch> {
+    let options = RecordBatchOptions::new().with_row_count(Some(row_count));
+    Ok(RecordBatch::try_new_with_options(
+        Arc::new(schema.clone()),
+        vec![],
+        &options,
+    )?)
+}
+
 /// Returns a new [RecordBatch] by combining the `left` and `right` according to `indices`.
 /// The resulting batch has [Schema] `schema`.
 pub(crate) fn build_batch_from_indices(
@@ -961,15 +1000,7 @@ pub(crate) fn build_batch_from_indices(
     build_side: JoinSide,
 ) -> Result<RecordBatch> {
     if schema.fields().is_empty() {
-        let options = RecordBatchOptions::new()
-            .with_match_field_names(true)
-            .with_row_count(Some(build_indices.len()));
-
-        return Ok(RecordBatch::try_new_with_options(
-            Arc::new(schema.clone()),
-            vec![],
-            &options,
-        )?);
+        return new_empty_schema_batch(schema, build_indices.len());
     }
 
     // build the columns of the new [RecordBatch]:
@@ -1029,6 +1060,9 @@ pub(crate) fn build_batch_empty_build_side(
         // the remaining joins will return data for the right columns and null for the left ones
         JoinType::Right | JoinType::Full | JoinType::RightAnti | JoinType::RightMark => {
             let num_rows = probe_batch.num_rows();
+            if schema.fields().is_empty() {
+                return new_empty_schema_batch(schema, num_rows);
+            }
             let mut columns: Vec<Arc<dyn Array>> =
                 Vec::with_capacity(schema.fields().len());
 
@@ -1646,7 +1680,7 @@ fn swap_reverting_projection(
 pub fn swap_join_projection(
     left_schema_len: usize,
     right_schema_len: usize,
-    projection: Option<&Vec<usize>>,
+    projection: Option<&[usize]>,
     join_type: &JoinType,
 ) -> Option<Vec<usize>> {
     match join_type {
@@ -1657,7 +1691,7 @@ pub fn swap_join_projection(
         | JoinType::RightAnti
         | JoinType::RightSemi
         | JoinType::LeftMark
-        | JoinType::RightMark => projection.cloned(),
+        | JoinType::RightMark => projection.map(|p| p.to_vec()),
         _ => projection.map(|p| {
             p.iter()
                 .map(|i| {
@@ -2858,6 +2892,37 @@ mod tests {
             join_schema.metadata(),
             &HashMap::from([("key".to_string(), "right".to_string())])
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_build_batch_empty_build_side_empty_schema() -> Result<()> {
+        // When the output schema has no fields (empty projection pushed into
+        // the join), build_batch_empty_build_side should return a RecordBatch
+        // with the correct row count but no columns.
+        let empty_schema = Schema::empty();
+
+        let build_batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)])),
+            vec![Arc::new(arrow::array::Int32Array::from(vec![1, 2, 3]))],
+        )?;
+
+        let probe_batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("b", DataType::Int32, true)])),
+            vec![Arc::new(arrow::array::Int32Array::from(vec![4, 5, 6, 7]))],
+        )?;
+
+        let result = build_batch_empty_build_side(
+            &empty_schema,
+            &build_batch,
+            &probe_batch,
+            &[], // no column indices with empty projection
+            JoinType::Right,
+        )?;
+
+        assert_eq!(result.num_rows(), 4);
+        assert_eq!(result.num_columns(), 0);
 
         Ok(())
     }
