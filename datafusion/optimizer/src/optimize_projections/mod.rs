@@ -329,29 +329,34 @@ fn optimize_projections(
                 .collect()
         }
         LogicalPlan::Extension(extension) => {
-            let Some(necessary_children_indices) =
+            if let Some(necessary_children_indices) =
                 extension.node.necessary_children_exprs(indices.indices())
-            else {
-                // Requirements from parent cannot be routed down to user defined logical plan safely
-                return Ok(Transformed::no(plan));
-            };
-            let children = extension.node.inputs();
-            assert_eq_or_internal_err!(
-                children.len(),
-                necessary_children_indices.len(),
-                "Inconsistent length between children and necessary children indices. \
+            {
+                let children = extension.node.inputs();
+                assert_eq_or_internal_err!(
+                    children.len(),
+                    necessary_children_indices.len(),
+                    "Inconsistent length between children and necessary children indices. \
                 Make sure `.necessary_children_exprs` implementation of the \
                 `UserDefinedLogicalNode` is consistent with actual children length \
                 for the node."
-            );
-            children
-                .into_iter()
-                .zip(necessary_children_indices)
-                .map(|(child, necessary_indices)| {
-                    RequiredIndices::new_from_indices(necessary_indices)
-                        .with_plan_exprs(&plan, child.schema())
-                })
-                .collect::<Result<Vec<_>>>()?
+                );
+                children
+                    .into_iter()
+                    .zip(necessary_children_indices)
+                    .map(|(child, necessary_indices)| {
+                        RequiredIndices::new_from_indices(necessary_indices)
+                            .with_plan_exprs(&plan, child.schema())
+                    })
+                    .collect::<Result<Vec<_>>>()?
+            } else {
+                // Requirements from parent cannot be routed down to user defined logical plan safely
+                // Assume it requires all input exprs here
+                plan.inputs()
+                    .into_iter()
+                    .map(RequiredIndices::new_for_all_exprs)
+                    .collect()
+            }
         }
         LogicalPlan::EmptyRelation(_)
         | LogicalPlan::Values(_)
@@ -1169,6 +1174,57 @@ mod tests {
 
         fn supports_limit_pushdown(&self) -> bool {
             false // Disallow limit push-down by default
+        }
+    }
+
+    /// A user-defined node that does NOT implement `necessary_children_exprs`,
+    /// so the optimizer cannot determine which columns are required from its
+    /// children and must assume all columns are needed.
+    #[derive(Debug, Hash, PartialEq, Eq)]
+    struct OpaqueRequirementsUserDefined {
+        input: Arc<LogicalPlan>,
+        schema: DFSchemaRef,
+    }
+
+    // Manual implementation needed because of `schema` field. Comparison excludes this field.
+    impl PartialOrd for OpaqueRequirementsUserDefined {
+        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+            self.input
+                .partial_cmp(&other.input)
+                .filter(|cmp| *cmp != Ordering::Equal || self == other)
+        }
+    }
+
+    impl UserDefinedLogicalNodeCore for OpaqueRequirementsUserDefined {
+        fn name(&self) -> &str {
+            "OpaqueRequirementsUserDefined"
+        }
+
+        fn inputs(&self) -> Vec<&LogicalPlan> {
+            vec![&self.input]
+        }
+
+        fn schema(&self) -> &DFSchemaRef {
+            &self.schema
+        }
+
+        fn expressions(&self) -> Vec<Expr> {
+            vec![]
+        }
+
+        fn with_exprs_and_inputs(
+            &self,
+            _exprs: Vec<Expr>,
+            mut inputs: Vec<LogicalPlan>,
+        ) -> Result<Self> {
+            Ok(Self {
+                input: Arc::new(inputs.swap_remove(0)),
+                schema: Arc::clone(&self.schema),
+            })
+        }
+
+        fn fmt_for_explain(&self, f: &mut Formatter) -> std::fmt::Result {
+            write!(f, "OpaqueRequirementsUserDefined")
         }
     }
 
@@ -2202,6 +2258,29 @@ mod tests {
         let formatted_plan2 = format!("{optimized_plan2:?}");
         assert_eq!(formatted_plan1, formatted_plan2);
         Ok(())
+    }
+
+    #[test]
+    fn test_continue_processing_through_extension() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan.clone())
+            .project(vec![col("a")])?
+            .project(vec![col("a")])?
+            .build()?;
+        let plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(OpaqueRequirementsUserDefined {
+                input: Arc::new(plan),
+                schema: Arc::clone(table_scan.schema()),
+            }),
+        });
+        let plan = optimize(plan).expect("failed to optimize plan");
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        OpaqueRequirementsUserDefined
+          TableScan: test projection=[a]
+        "
+        )
     }
 
     /// tests that it removes an aggregate is never used downstream
