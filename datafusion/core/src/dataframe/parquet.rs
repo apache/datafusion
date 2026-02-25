@@ -487,10 +487,7 @@ mod tests {
         use crate::prelude::CsvReadOptions;
         let ctx = SessionContext::new();
         let df = ctx
-            .read_csv(
-                "tests/data/example.csv",
-                CsvReadOptions::new(),
-            )
+            .read_csv("tests/data/example.csv", CsvReadOptions::new())
             .await?;
 
         // Obtain the physical plan for inspection without consuming `df`.
