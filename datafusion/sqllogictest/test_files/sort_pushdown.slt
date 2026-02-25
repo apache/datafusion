@@ -1421,4 +1421,7 @@ statement ok
 DROP TABLE signed_parquet;
 
 statement ok
-SET datafusion.optimizer.enable_sort_pushdown = true;
+SET datafusion.optimizer.enable_sort_pushdown = false;
+
+statement ok
+SET datafusion.execution.parquet.pushdown_filters = false;

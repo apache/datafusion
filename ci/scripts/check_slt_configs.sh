@@ -22,12 +22,21 @@
 #
 # Any configuration set with:
 #     set datafusion.<config> = true
-# must be reset in the same file with:
+# must be restored in the same file using either:
 #     set datafusion.<config> = false
-#
+# or:
+#     reset datafusion.<config> 
+# 
 # This prevents configuration state from leaking into subsequent tests,
 # which can cause nondeterministic or hard-to-debug failures.
+# 
+# TODO:
+# This script currently detects only boolean configurations that are enabled
+# via `set datafusion.<config> = true`.
 #
+# It does NOT detect non-boolean configuration mutations such as:
+#     SET datafusion.catalog.default_catalog = 'foo';
+# 
 # Usage:
 #   Check all .slt files under datafusion/sqllogictest/test_files:
 #       ./check_slt_configs.sh
@@ -42,7 +51,6 @@
 
 set -euo pipefail
 
-# Resolve repository root
 ROOT_DIR="$(git rev-parse --show-toplevel)"
 TARGET_DIR="${ROOT_DIR}/datafusion/sqllogictest/test_files"
 
@@ -51,65 +59,55 @@ FAILED=0
 resolve_file() {
   local input="$1"
 
-  # If absolute and exists
   if [[ -f "$input" ]]; then
-    realpath "$input"
-    return
+    RESOLVED_FILE="$(realpath "$input")"
+    return 0
   fi
 
-  # If relative to repo root
   if [[ -f "${ROOT_DIR}/${input}" ]]; then
-    realpath "${ROOT_DIR}/${input}"
-    return
+    RESOLVED_FILE="$(realpath "${ROOT_DIR}/${input}")"
+    return 0
   fi
 
-  echo ""
+  echo "❌ File does not exist: $input"
+  return 1
 }
 
-# If file argument is passed, check only that file
 if [[ $# -eq 1 ]]; then
-  RESOLVED_FILE="$(resolve_file "$1")"
-
-  if [[ -z "$RESOLVED_FILE" ]]; then
-    echo "❌ File does not exist: $1"
+  if ! resolve_file "$1"; then
     exit 1
   fi
-
   FILES="$RESOLVED_FILE"
 else
   FILES=$(find "$TARGET_DIR" -type f -name "*.slt")
 fi
 
-# Iterate safely even if filenames contain spaces
 while IFS= read -r file; do
   echo "Checking file: $file"
 
-  if [[ ! -f "$file" ]]; then
-    echo "  ❌ File not found: $file"
-    FAILED=1
-    continue
-  fi
+  [[ ! -f "$file" ]] && continue
 
-  matches=$(grep -En \
+  # Detect: set datafusion.xxx = true (case-insensitive)
+  matches=$(grep -Eni \
     'set[[:space:]]+datafusion\.[a-zA-Z0-9_.]+[[:space:]]*=[[:space:]]*true' \
     "$file" || true)
 
   [[ -z "$matches" ]] && continue
 
-  # Process each match line-by-line
   while IFS= read -r match; do
-    line_number=$(echo "$match" | cut -d: -f1)
-    line_content=$(echo "$match" | cut -d: -f2-)
+    line_number=${match%%:*}
+    line_content=${match#*:}
 
-    # Extract config name
     config=$(echo "$line_content" \
-      | sed -E 's/set[[:space:]]+(datafusion\.[a-zA-Z0-9_.]+).*/\1/')
+      | sed -E 's/[sS][eE][tT][[:space:]]+(datafusion\.[a-zA-Z0-9_.]+).*/\1/')
 
-    # Check if reset exists anywhere in file
-    if ! grep -Eq \
-      "set[[:space:]]+$config[[:space:]]*=[[:space:]]*false" \
+    # Check for either (case-insensitive):
+    #   set datafusion.xxx = false
+    #   reset datafusion.xxx
+    if ! grep -Eqi \
+      "(set[[:space:]]+${config}[[:space:]]*=[[:space:]]*false)|(reset[[:space:]]+${config})" \
       "$file"; then
-      echo "  ❌ $config set to true at line $line_number but never reset to false"
+      echo "  ❌ ${config} set to true at line $line_number but never reset (false or RESET)"
       FAILED=1
     fi
 
