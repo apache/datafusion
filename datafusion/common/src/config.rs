@@ -751,7 +751,7 @@ config_namespace! {
         /// are promoted to row filters.
         /// f64::INFINITY = no filters promoted (feature disabled).
         /// 0.0 = all filters pushed as row filters (no adaptive logic).
-        /// Default: 52,428,800 bytes/sec (50 MiB/sec), empirically chosen based on
+        /// Default: 104,857,600 bytes/sec (100 MiB/sec), empirically chosen based on
         /// TPC-H, TPC-DS, and ClickBench benchmarks on an m4 MacBook Pro.
         /// The optimal value for this setting likely depends on the relative
         /// cost of CPU vs. IO in your environment, and to some extent the shape
@@ -761,7 +761,7 @@ config_namespace! {
         /// This option only takes effect when `pushdown_filters = true`.
         /// When pushdown is disabled, all filters run post-scan and this
         /// threshold is ignored.
-        pub filter_pushdown_min_bytes_per_sec: f64, default = 52_428_800.0
+        pub filter_pushdown_min_bytes_per_sec: f64, default = 104_857_600.0
 
         /// (reading) Byte-ratio threshold (filter_bytes / projected_bytes) for
         /// applying filters one at a time (iterative pruning; aka row-level) vs. all at once (post-scan).
@@ -775,7 +775,7 @@ config_namespace! {
         ///
         /// **Interaction with `pushdown_filters`:**
         /// Only takes effect when `pushdown_filters = true`.
-        pub filter_collecting_byte_ratio_threshold: f64, default = 0.15
+        pub filter_collecting_byte_ratio_threshold: f64, default = 0.05
 
         /// (reading) Z-score for confidence intervals on filter effectiveness.
         /// Controls how much statistical evidence is required before promoting
