@@ -204,8 +204,7 @@ fn test_ambiguous_reference() -> Result<()> {
 
 #[test]
 fn test_incompatible_types_binary_arithmetic() -> Result<()> {
-    let query =
-        "SELECT /*whole+left*/id/*left*/ + /*right*/first_name/*right+whole*/ FROM person";
+    let query = "SELECT /*whole+left*/id/*left*/ + /*right*/first_name/*right+whole*/ FROM person";
     let spans = get_spans(query);
     let diag = do_query(query);
     assert_snapshot!(diag.message, @"expressions have incompatible types");

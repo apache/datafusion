@@ -19,7 +19,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::cast::AsArray;
-use arrow::array::{new_null_array, Array, ArrayRef, StringArray};
+use arrow::array::{Array, ArrayRef, StringArray, new_null_array};
 use arrow::compute::cast;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{
@@ -28,10 +28,10 @@ use arrow::datatypes::DataType::{
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::error::ArrowError;
 use arrow::util::display::{ArrayFormatter, DurationFormat, FormatOptions};
-use datafusion_common::{exec_err, utils::take_function_args, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err, utils::take_function_args};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility, TIMEZONE_WILDCARD,
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, TIMEZONE_WILDCARD, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -48,7 +48,7 @@ use datafusion_macros::user_doc;
 +----------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 "#,
     argument(
         name = "expression",
@@ -144,18 +144,16 @@ impl ScalarUDFImpl for ToCharFunc {
 
         match format {
             ColumnarValue::Scalar(ScalarValue::Utf8(None))
-            | ColumnarValue::Scalar(ScalarValue::Null) => {
-                to_char_scalar(date_time.clone(), None)
-            }
+            | ColumnarValue::Scalar(ScalarValue::Null) => to_char_scalar(date_time, None),
             // constant format
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(format))) => {
                 // invoke to_char_scalar with the known string, without converting to array
-                to_char_scalar(date_time.clone(), Some(format))
+                to_char_scalar(date_time, Some(format))
             }
             ColumnarValue::Array(_) => to_char_array(&args),
             _ => {
                 exec_err!(
-                    "Format for `to_char` must be non-null Utf8, received {:?}",
+                    "Format for `to_char` must be non-null Utf8, received {}",
                     format.data_type()
                 )
             }
@@ -206,7 +204,7 @@ fn build_format_options<'a>(
 
 /// Special version when arg\[1] is a scalar
 fn to_char_scalar(
-    expression: ColumnarValue,
+    expression: &ColumnarValue,
     format: Option<&str>,
 ) -> Result<ColumnarValue> {
     // it's possible that the expression is a scalar however because
@@ -253,7 +251,7 @@ fn to_char_scalar(
         // if the data type was a Date32, formatting could have failed because the format string
         // contained datetime specifiers, so we'll retry by casting the date array as a timestamp array
         if data_type == &Date32 {
-            return to_char_scalar(expression.clone().cast_to(&Date64, None)?, format);
+            return to_char_scalar(&expression.cast_to(&Date64, None)?, format);
         }
 
         exec_err!("{}", formatted.unwrap_err())
@@ -292,7 +290,7 @@ fn to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                 if data_type == &Date32 {
                     let failed_date_value = arrays[0].slice(idx, 1);
 
-                    match retry_date_as_timestamp(failed_date_value, &format_options) {
+                    match retry_date_as_timestamp(&failed_date_value, &format_options) {
                         Ok(value) => {
                             results.push(Some(value));
                             continue;
@@ -322,7 +320,7 @@ fn to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 }
 
 fn retry_date_as_timestamp(
-    array_ref: ArrayRef,
+    array_ref: &ArrayRef,
     format_options: &FormatOptions,
 ) -> Result<String> {
     let target_data_type = Date64;
@@ -345,8 +343,8 @@ mod tests {
     };
     use arrow::datatypes::{DataType, Field, TimeUnit};
     use chrono::{NaiveDateTime, Timelike};
-    use datafusion_common::config::ConfigOptions;
     use datafusion_common::ScalarValue;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
     use std::sync::Arc;
 
@@ -816,7 +814,7 @@ mod tests {
         let result = ToCharFunc::new().invoke_with_args(args);
         assert_eq!(
             result.err().unwrap().strip_backtrace(),
-            "Execution error: Format for `to_char` must be non-null Utf8, received Timestamp(Nanosecond, None)"
+            "Execution error: Format for `to_char` must be non-null Utf8, received Timestamp(ns)"
         );
     }
 }

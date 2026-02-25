@@ -17,13 +17,13 @@
 
 //! external_aggr binary entrypoint
 
+use clap::{Args, Parser, Subcommand};
 use datafusion::execution::memory_pool::GreedyMemoryPool;
 use datafusion::execution::memory_pool::MemoryPool;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::LazyLock;
-use structopt::StructOpt;
 
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty;
@@ -33,47 +33,53 @@ use datafusion::datasource::listing::{
 };
 use datafusion::datasource::{MemTable, TableProvider};
 use datafusion::error::Result;
-use datafusion::execution::memory_pool::FairSpillPool;
-use datafusion::execution::memory_pool::{human_readable_size, units};
-use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::SessionStateBuilder;
+use datafusion::execution::memory_pool::FairSpillPool;
+use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{collect, displayable};
 use datafusion::prelude::*;
 use datafusion_benchmarks::util::{BenchmarkRun, CommonOpt, QueryResult};
 use datafusion_common::instant::Instant;
 use datafusion_common::utils::get_available_parallelism;
-use datafusion_common::{exec_err, DEFAULT_PARQUET_EXTENSION};
+use datafusion_common::{DEFAULT_PARQUET_EXTENSION, exec_err};
+use datafusion_common::{human_readable_size, units};
 
-#[derive(Debug, StructOpt)]
-#[structopt(
+#[derive(Debug, Parser)]
+#[command(
     name = "datafusion-external-aggregation",
     about = "DataFusion external aggregation benchmark"
 )]
+struct Cli {
+    #[command(subcommand)]
+    command: ExternalAggrOpt,
+}
+
+#[derive(Debug, Subcommand)]
 enum ExternalAggrOpt {
     Benchmark(ExternalAggrConfig),
 }
 
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Args)]
 struct ExternalAggrConfig {
     /// Query number. If not specified, runs all queries
-    #[structopt(short, long)]
+    #[arg(short, long)]
     query: Option<usize>,
 
     /// Common options
-    #[structopt(flatten)]
+    #[command(flatten)]
     common: CommonOpt,
 
     /// Path to data files (lineitem). Only parquet format is supported
-    #[structopt(parse(from_os_str), required = true, short = "p", long = "path")]
+    #[arg(required = true, short = 'p', long = "path")]
     path: PathBuf,
 
     /// Load the data into a MemTable before executing the query
-    #[structopt(short = "m", long = "mem-table")]
+    #[arg(short = 'm', long = "mem-table")]
     mem_table: bool,
 
     /// Path to JSON benchmark result to be compare using `compare.py`
-    #[structopt(parse(from_os_str), short = "o", long = "output")]
+    #[arg(short = 'o', long = "output")]
     output_path: Option<PathBuf>,
 }
 
@@ -338,7 +344,8 @@ impl ExternalAggrConfig {
 pub async fn main() -> Result<()> {
     env_logger::init();
 
-    match ExternalAggrOpt::from_args() {
+    let cli = Cli::parse();
+    match cli.command {
         ExternalAggrOpt::Benchmark(opt) => opt.run().await?,
     }
 

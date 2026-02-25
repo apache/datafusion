@@ -17,8 +17,8 @@
 
 use std::{collections::HashSet, sync::Arc};
 
-use datafusion_common::plan_err;
 use datafusion_common::Result;
+use datafusion_common::plan_err;
 use datafusion_execution::registry::FunctionRegistry;
 use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
@@ -33,27 +33,42 @@ impl FunctionRegistry for NoRegistry {
     }
 
     fn udf(&self, name: &str) -> Result<Arc<ScalarUDF>> {
-        plan_err!("No function registry provided to deserialize, so can not deserialize User Defined Function '{name}'")
+        plan_err!(
+            "No function registry provided to deserialize, so can not deserialize User Defined Function '{name}'"
+        )
     }
 
     fn udaf(&self, name: &str) -> Result<Arc<AggregateUDF>> {
-        plan_err!("No function registry provided to deserialize, so can not deserialize User Defined Aggregate Function '{name}'")
+        plan_err!(
+            "No function registry provided to deserialize, so can not deserialize User Defined Aggregate Function '{name}'"
+        )
     }
 
     fn udwf(&self, name: &str) -> Result<Arc<WindowUDF>> {
-        plan_err!("No function registry provided to deserialize, so can not deserialize User Defined Window Function '{name}'")
+        plan_err!(
+            "No function registry provided to deserialize, so can not deserialize User Defined Window Function '{name}'"
+        )
     }
     fn register_udaf(
         &mut self,
         udaf: Arc<AggregateUDF>,
     ) -> Result<Option<Arc<AggregateUDF>>> {
-        plan_err!("No function registry provided to deserialize, so can not register User Defined Aggregate Function '{}'", udaf.inner().name())
+        plan_err!(
+            "No function registry provided to deserialize, so can not register User Defined Aggregate Function '{}'",
+            udaf.inner().name()
+        )
     }
     fn register_udf(&mut self, udf: Arc<ScalarUDF>) -> Result<Option<Arc<ScalarUDF>>> {
-        plan_err!("No function registry provided to deserialize, so can not deserialize User Defined Function '{}'", udf.inner().name())
+        plan_err!(
+            "No function registry provided to deserialize, so can not deserialize User Defined Function '{}'",
+            udf.inner().name()
+        )
     }
     fn register_udwf(&mut self, udwf: Arc<WindowUDF>) -> Result<Option<Arc<WindowUDF>>> {
-        plan_err!("No function registry provided to deserialize, so can not deserialize User Defined Window Function '{}'", udwf.inner().name())
+        plan_err!(
+            "No function registry provided to deserialize, so can not deserialize User Defined Window Function '{}'",
+            udwf.inner().name()
+        )
     }
 
     fn expr_planners(&self) -> Vec<Arc<dyn ExprPlanner>> {

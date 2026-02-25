@@ -47,7 +47,7 @@ extern crate libc;
     any(target_arch = "x86_64", target_arch = "aarch64"),
     not(target_os = "windows")
 ))]
-extern "C" {
+unsafe extern "C" {
     fn fesetround(round: i32);
     fn fegetround() -> i32;
 }

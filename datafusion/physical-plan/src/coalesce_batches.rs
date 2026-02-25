@@ -24,8 +24,10 @@ use std::task::{Context, Poll};
 
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties, Statistics};
+use crate::projection::ProjectionExec;
 use crate::{
     DisplayFormatType, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
+    check_if_same_properties,
 };
 
 use arrow::datatypes::SchemaRef;
@@ -40,7 +42,9 @@ use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
 };
+use crate::sort_pushdown::SortOrderPushdownResult;
 use datafusion_common::config::ConfigOptions;
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 
@@ -54,6 +58,10 @@ use futures::stream::{Stream, StreamExt};
 /// reaches the `fetch` value.
 ///
 /// See [`LimitedBatchCoalescer`] for more information
+#[deprecated(
+    since = "52.0.0",
+    note = "We now use BatchCoalescer from arrow-rs instead of a dedicated operator"
+)]
 #[derive(Debug, Clone)]
 pub struct CoalesceBatchesExec {
     /// The input plan
@@ -64,9 +72,10 @@ pub struct CoalesceBatchesExec {
     fetch: Option<usize>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
+#[expect(deprecated)]
 impl CoalesceBatchesExec {
     /// Create a new CoalesceBatchesExec
     pub fn new(input: Arc<dyn ExecutionPlan>, target_batch_size: usize) -> Self {
@@ -76,7 +85,7 @@ impl CoalesceBatchesExec {
             target_batch_size,
             fetch: None,
             metrics: ExecutionPlanMetricsSet::new(),
-            cache,
+            cache: Arc::new(cache),
         }
     }
 
@@ -107,8 +116,20 @@ impl CoalesceBatchesExec {
             input.boundedness(),
         )
     }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(self)
+        }
+    }
 }
 
+#[expect(deprecated)]
 impl DisplayAs for CoalesceBatchesExec {
     fn fmt_as(
         &self,
@@ -139,6 +160,7 @@ impl DisplayAs for CoalesceBatchesExec {
     }
 }
 
+#[expect(deprecated)]
 impl ExecutionPlan for CoalesceBatchesExec {
     fn name(&self) -> &'static str {
         "CoalesceBatchesExec"
@@ -149,7 +171,7 @@ impl ExecutionPlan for CoalesceBatchesExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -167,10 +189,11 @@ impl ExecutionPlan for CoalesceBatchesExec {
 
     fn with_new_children(
         self: Arc<Self>,
-        children: Vec<Arc<dyn ExecutionPlan>>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        check_if_same_properties!(self, children);
         Ok(Arc::new(
-            CoalesceBatchesExec::new(Arc::clone(&children[0]), self.target_batch_size)
+            CoalesceBatchesExec::new(children.swap_remove(0), self.target_batch_size)
                 .with_fetch(self.fetch),
         ))
     }
@@ -196,10 +219,6 @@ impl ExecutionPlan for CoalesceBatchesExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
-    }
-
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         self.input
             .partition_statistics(partition)?
@@ -212,7 +231,7 @@ impl ExecutionPlan for CoalesceBatchesExec {
             target_batch_size: self.target_batch_size,
             fetch: limit,
             metrics: self.metrics.clone(),
-            cache: self.cache.clone(),
+            cache: Arc::clone(&self.cache),
         }))
     }
 
@@ -222,6 +241,18 @@ impl ExecutionPlan for CoalesceBatchesExec {
 
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::Equal
+    }
+
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        match self.input.try_swapping_with_projection(projection)? {
+            Some(new_input) => Ok(Some(
+                Arc::new(self.clone()).with_new_children(vec![new_input])?,
+            )),
+            None => Ok(None),
+        }
     }
 
     fn gather_filters_for_pushdown(
@@ -240,6 +271,20 @@ impl ExecutionPlan for CoalesceBatchesExec {
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
         Ok(FilterPushdownPropagation::if_all(child_pushdown_result))
+    }
+
+    fn try_pushdown_sort(
+        &self,
+        order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+        // CoalesceBatchesExec is transparent for sort ordering - it preserves order
+        // Delegate to the child and wrap with a new CoalesceBatchesExec
+        self.input.try_pushdown_sort(order)?.try_map(|new_input| {
+            Ok(Arc::new(
+                CoalesceBatchesExec::new(new_input, self.target_batch_size)
+                    .with_fetch(self.fetch),
+            ) as Arc<dyn ExecutionPlan>)
+        })
     }
 }
 

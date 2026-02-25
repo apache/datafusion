@@ -31,21 +31,21 @@ mod tests {
     use crate::test::object_store::local_unpartitioned_file;
     use arrow::datatypes::{DataType, Field, SchemaBuilder};
     use datafusion_common::test_util::batches_to_string;
-    use datafusion_common::{test_util, Result, ScalarValue};
+    use datafusion_common::{Result, ScalarValue, test_util};
     use datafusion_datasource::file_format::FileFormat;
     use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
-    use datafusion_datasource::PartitionedFile;
-    use datafusion_datasource_avro::source::AvroSource;
+    use datafusion_datasource::{PartitionedFile, TableSchema};
     use datafusion_datasource_avro::AvroFormat;
+    use datafusion_datasource_avro::source::AvroSource;
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_physical_plan::ExecutionPlan;
 
     use datafusion_datasource::source::DataSourceExec;
     use futures::StreamExt;
     use insta::assert_snapshot;
+    use object_store::ObjectStore;
     use object_store::chunked::ChunkedStore;
     use object_store::local::LocalFileSystem;
-    use object_store::ObjectStore;
     use rstest::*;
     use url::Url;
 
@@ -81,15 +81,11 @@ mod tests {
             .infer_schema(&state, &store, std::slice::from_ref(&meta))
             .await?;
 
-        let source = Arc::new(AvroSource::new());
-        let conf = FileScanConfigBuilder::new(
-            ObjectStoreUrl::local_filesystem(),
-            file_schema,
-            source,
-        )
-        .with_file(meta.into())
-        .with_projection_indices(Some(vec![0, 1, 2]))
-        .build();
+        let source = Arc::new(AvroSource::new(Arc::clone(&file_schema)));
+        let conf = FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
+            .with_file(meta.into())
+            .with_projection_indices(Some(vec![0, 1, 2]))?
+            .build();
 
         let source_exec = DataSourceExec::from_data_source(conf);
         assert_eq!(
@@ -109,20 +105,20 @@ mod tests {
             .expect("plan iterator empty")
             .expect("plan iterator returned an error");
 
-        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&[batch]), @r###"
-            +----+----------+-------------+
-            | id | bool_col | tinyint_col |
-            +----+----------+-------------+
-            | 4  | true     | 0           |
-            | 5  | false    | 1           |
-            | 6  | true     | 0           |
-            | 7  | false    | 1           |
-            | 2  | true     | 0           |
-            | 3  | false    | 1           |
-            | 0  | true     | 0           |
-            | 1  | false    | 1           |
-            +----+----------+-------------+
-        "###);}
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&[batch]), @r"
+        +----+----------+-------------+
+        | id | bool_col | tinyint_col |
+        +----+----------+-------------+
+        | 4  | true     | 0           |
+        | 5  | false    | 1           |
+        | 6  | true     | 0           |
+        | 7  | false    | 1           |
+        | 2  | true     | 0           |
+        | 3  | false    | 1           |
+        | 0  | true     | 0           |
+        | 1  | false    | 1           |
+        +----+----------+-------------+
+        ");}
 
         let batch = results.next().await;
         assert!(batch.is_none());
@@ -157,10 +153,10 @@ mod tests {
         // Include the missing column in the projection
         let projection = Some(vec![0, 1, 2, actual_schema.fields().len()]);
 
-        let source = Arc::new(AvroSource::new());
-        let conf = FileScanConfigBuilder::new(object_store_url, file_schema, source)
+        let source = Arc::new(AvroSource::new(Arc::clone(&file_schema)));
+        let conf = FileScanConfigBuilder::new(object_store_url, source)
             .with_file(meta.into())
-            .with_projection_indices(projection)
+            .with_projection_indices(projection)?
             .build();
 
         let source_exec = DataSourceExec::from_data_source(conf);
@@ -182,20 +178,20 @@ mod tests {
             .expect("plan iterator empty")
             .expect("plan iterator returned an error");
 
-        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&[batch]), @r###"
-            +----+----------+-------------+-------------+
-            | id | bool_col | tinyint_col | missing_col |
-            +----+----------+-------------+-------------+
-            | 4  | true     | 0           |             |
-            | 5  | false    | 1           |             |
-            | 6  | true     | 0           |             |
-            | 7  | false    | 1           |             |
-            | 2  | true     | 0           |             |
-            | 3  | false    | 1           |             |
-            | 0  | true     | 0           |             |
-            | 1  | false    | 1           |             |
-            +----+----------+-------------+-------------+
-        "###);}
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&[batch]), @r"
+        +----+----------+-------------+-------------+
+        | id | bool_col | tinyint_col | missing_col |
+        +----+----------+-------------+-------------+
+        | 4  | true     | 0           |             |
+        | 5  | false    | 1           |             |
+        | 6  | true     | 0           |             |
+        | 7  | false    | 1           |             |
+        | 2  | true     | 0           |             |
+        | 3  | false    | 1           |             |
+        | 0  | true     | 0           |             |
+        | 1  | false    | 1           |             |
+        +----+----------+-------------+-------------+
+        ");}
 
         let batch = results.next().await;
         assert!(batch.is_none());
@@ -227,13 +223,16 @@ mod tests {
         partitioned_file.partition_values = vec![ScalarValue::from("2021-10-26")];
 
         let projection = Some(vec![0, 1, file_schema.fields().len(), 2]);
-        let source = Arc::new(AvroSource::new());
-        let conf = FileScanConfigBuilder::new(object_store_url, file_schema, source)
+        let table_schema = TableSchema::new(
+            file_schema.clone(),
+            vec![Arc::new(Field::new("date", DataType::Utf8, false))],
+        );
+        let source = Arc::new(AvroSource::new(table_schema.clone()));
+        let conf = FileScanConfigBuilder::new(object_store_url, source)
             // select specific columns of the files as well as the partitioning
             // column which is supposed to be the last column in the table schema.
-            .with_projection_indices(projection)
+            .with_projection_indices(projection)?
             .with_file(partitioned_file)
-            .with_table_partition_cols(vec![Field::new("date", DataType::Utf8, false)])
             .build();
 
         let source_exec = DataSourceExec::from_data_source(conf);
@@ -256,20 +255,20 @@ mod tests {
             .expect("plan iterator empty")
             .expect("plan iterator returned an error");
 
-        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&[batch]), @r###"
-            +----+----------+------------+-------------+
-            | id | bool_col | date       | tinyint_col |
-            +----+----------+------------+-------------+
-            | 4  | true     | 2021-10-26 | 0           |
-            | 5  | false    | 2021-10-26 | 1           |
-            | 6  | true     | 2021-10-26 | 0           |
-            | 7  | false    | 2021-10-26 | 1           |
-            | 2  | true     | 2021-10-26 | 0           |
-            | 3  | false    | 2021-10-26 | 1           |
-            | 0  | true     | 2021-10-26 | 0           |
-            | 1  | false    | 2021-10-26 | 1           |
-            +----+----------+------------+-------------+
-        "###);}
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&[batch]), @r"
+        +----+----------+------------+-------------+
+        | id | bool_col | date       | tinyint_col |
+        +----+----------+------------+-------------+
+        | 4  | true     | 2021-10-26 | 0           |
+        | 5  | false    | 2021-10-26 | 1           |
+        | 6  | true     | 2021-10-26 | 0           |
+        | 7  | false    | 2021-10-26 | 1           |
+        | 2  | true     | 2021-10-26 | 0           |
+        | 3  | false    | 2021-10-26 | 1           |
+        | 0  | true     | 2021-10-26 | 0           |
+        | 1  | false    | 2021-10-26 | 1           |
+        +----+----------+------------+-------------+
+        ");}
 
         let batch = results.next().await;
         assert!(batch.is_none());

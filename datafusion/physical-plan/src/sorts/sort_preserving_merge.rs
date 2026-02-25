@@ -23,16 +23,17 @@ use std::sync::Arc;
 use crate::common::spawn_buffered;
 use crate::limit::LimitStream;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
-use crate::projection::{make_with_child, update_ordering, ProjectionExec};
+use crate::projection::{ProjectionExec, make_with_child, update_ordering};
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     Partitioning, PlanProperties, SendableRecordBatchStream, Statistics,
+    check_if_same_properties,
 };
 
-use datafusion_common::{internal_err, Result};
-use datafusion_execution::memory_pool::MemoryConsumer;
+use datafusion_common::{Result, assert_eq_or_internal_err, internal_err};
 use datafusion_execution::TaskContext;
+use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
 
 use crate::execution_plan::{EvaluationType, SchedulingType};
@@ -93,7 +94,7 @@ pub struct SortPreservingMergeExec {
     /// Optional number of rows to fetch. Stops producing rows after this fetch
     fetch: Option<usize>,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
     /// Use round-robin selection of tied winners of loser tree
     ///
     /// See [`Self::with_round_robin_repartition`] for more information.
@@ -109,7 +110,7 @@ impl SortPreservingMergeExec {
             expr,
             metrics: ExecutionPlanMetricsSet::new(),
             fetch: None,
-            cache,
+            cache: Arc::new(cache),
             enable_round_robin_repartition: true,
         }
     }
@@ -180,6 +181,17 @@ impl SortPreservingMergeExec {
         .with_evaluation_type(drive)
         .with_scheduling_type(scheduling)
     }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(self)
+        }
+    }
 }
 
 impl DisplayAs for SortPreservingMergeExec {
@@ -225,7 +237,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -240,9 +252,22 @@ impl ExecutionPlan for SortPreservingMergeExec {
             expr: self.expr.clone(),
             metrics: self.metrics.clone(),
             fetch: limit,
-            cache: self.cache.clone(),
+            cache: Arc::clone(&self.cache),
             enable_round_robin_repartition: true,
         }))
+    }
+
+    fn with_preserve_order(
+        &self,
+        preserve_order: bool,
+    ) -> Option<Arc<dyn ExecutionPlan>> {
+        self.input
+            .with_preserve_order(preserve_order)
+            .and_then(|new_input| {
+                Arc::new(self.clone())
+                    .with_new_children(vec![new_input])
+                    .ok()
+            })
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
@@ -267,10 +292,11 @@ impl ExecutionPlan for SortPreservingMergeExec {
 
     fn with_new_children(
         self: Arc<Self>,
-        children: Vec<Arc<dyn ExecutionPlan>>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        check_if_same_properties!(self, children);
         Ok(Arc::new(
-            SortPreservingMergeExec::new(self.expr.clone(), Arc::clone(&children[0]))
+            SortPreservingMergeExec::new(self.expr.clone(), children.swap_remove(0))
                 .with_fetch(self.fetch),
         ))
     }
@@ -281,11 +307,11 @@ impl ExecutionPlan for SortPreservingMergeExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         trace!("Start SortPreservingMergeExec::execute for partition: {partition}");
-        if 0 != partition {
-            return internal_err!(
-                "SortPreservingMergeExec invalid partition {partition}"
-            );
-        }
+        assert_eq_or_internal_err!(
+            partition,
+            0,
+            "SortPreservingMergeExec invalid partition {partition}"
+        );
 
         let input_partitions = self.input.output_partitioning().partition_count();
         trace!(
@@ -304,7 +330,9 @@ impl ExecutionPlan for SortPreservingMergeExec {
             1 => match self.fetch {
                 Some(fetch) => {
                     let stream = self.input.execute(0, context)?;
-                    debug!("Done getting stream for SortPreservingMergeExec::execute with 1 input with {fetch}");
+                    debug!(
+                        "Done getting stream for SortPreservingMergeExec::execute with 1 input with {fetch}"
+                    );
                     Ok(Box::pin(LimitStream::new(
                         stream,
                         0,
@@ -314,7 +342,9 @@ impl ExecutionPlan for SortPreservingMergeExec {
                 }
                 None => {
                     let stream = self.input.execute(0, context);
-                    debug!("Done getting stream for SortPreservingMergeExec::execute with 1 input without fetch");
+                    debug!(
+                        "Done getting stream for SortPreservingMergeExec::execute with 1 input without fetch"
+                    );
                     stream
                 }
             },
@@ -327,7 +357,9 @@ impl ExecutionPlan for SortPreservingMergeExec {
                     })
                     .collect::<Result<_>>()?;
 
-                debug!("Done setting up sender-receiver for SortPreservingMergeExec::execute");
+                debug!(
+                    "Done setting up sender-receiver for SortPreservingMergeExec::execute"
+                );
 
                 let result = StreamingMergeBuilder::new()
                     .with_streams(receivers)
@@ -340,7 +372,9 @@ impl ExecutionPlan for SortPreservingMergeExec {
                     .with_round_robin_tie_breaker(self.enable_round_robin_repartition)
                     .build()?;
 
-                debug!("Got stream result from SortPreservingMergeStream::new_from_receivers");
+                debug!(
+                    "Got stream result from SortPreservingMergeStream::new_from_receivers"
+                );
 
                 Ok(result)
             }
@@ -349,10 +383,6 @@ impl ExecutionPlan for SortPreservingMergeExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        self.input.partition_statistics(None)
     }
 
     fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
@@ -396,11 +426,10 @@ mod tests {
     use std::fmt::Formatter;
     use std::pin::Pin;
     use std::sync::Mutex;
-    use std::task::{ready, Context, Poll, Waker};
+    use std::task::{Context, Poll, Waker, ready};
     use std::time::Duration;
 
     use super::*;
-    use crate::coalesce_batches::CoalesceBatchesExec;
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::execution_plan::{Boundedness, EmissionType};
     use crate::expressions::col;
@@ -408,8 +437,8 @@ mod tests {
     use crate::repartition::RepartitionExec;
     use crate::sorts::sort::SortExec;
     use crate::stream::RecordBatchReceiverStream;
-    use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::TestMemoryExec;
+    use crate::test::exec::{BlockingExec, assert_strong_count_converges_to_zero};
     use crate::test::{self, assert_is_pending, make_partition};
     use crate::{collect, common};
 
@@ -422,11 +451,11 @@ mod tests {
     use datafusion_common::test_util::batches_to_string;
     use datafusion_common::{assert_batches_eq, exec_err};
     use datafusion_common_runtime::SpawnedTask;
+    use datafusion_execution::RecordBatchStream;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
-    use datafusion_execution::RecordBatchStream;
-    use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_expr::EquivalenceProperties;
+    use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
@@ -436,11 +465,14 @@ mod tests {
 
     // The number in the function is highly related to the memory limit we are testing
     // any change of the constant should be aware of
-    fn generate_task_ctx_for_round_robin_tie_breaker() -> Result<Arc<TaskContext>> {
+    fn generate_task_ctx_for_round_robin_tie_breaker(
+        target_batch_size: usize,
+    ) -> Result<Arc<TaskContext>> {
         let runtime = RuntimeEnvBuilder::new()
             .with_memory_limit(20_000_000, 1.0)
             .build_arc()?;
-        let config = SessionConfig::new();
+        let mut config = SessionConfig::new();
+        config.options_mut().execution.batch_size = target_batch_size;
         let task_ctx = TaskContext::default()
             .with_runtime(runtime)
             .with_session_config(config);
@@ -451,16 +483,14 @@ mod tests {
     fn generate_spm_for_round_robin_tie_breaker(
         enable_round_robin_repartition: bool,
     ) -> Result<Arc<SortPreservingMergeExec>> {
-        let target_batch_size = 12500;
         let row_size = 12500;
         let a: ArrayRef = Arc::new(Int32Array::from(vec![1; row_size]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![Some("a"); row_size]));
         let c: ArrayRef = Arc::new(Int64Array::from_iter(vec![0; row_size]));
         let rb = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)])?;
-
-        let rbs = (0..1024).map(|_| rb.clone()).collect::<Vec<_>>();
-
         let schema = rb.schema();
+
+        let rbs = std::iter::repeat_n(rb, 1024).collect::<Vec<_>>();
         let sort = [
             PhysicalSortExpr {
                 expr: col("b", &schema)?,
@@ -477,9 +507,7 @@ mod tests {
             TestMemoryExec::try_new_exec(&[rbs], schema, None)?,
             Partitioning::RoundRobinBatch(2),
         )?;
-        let coalesce_batches_exec =
-            CoalesceBatchesExec::new(Arc::new(repartition_exec), target_batch_size);
-        let spm = SortPreservingMergeExec::new(sort, Arc::new(coalesce_batches_exec))
+        let spm = SortPreservingMergeExec::new(sort, Arc::new(repartition_exec))
             .with_round_robin_repartition(enable_round_robin_repartition);
         Ok(Arc::new(spm))
     }
@@ -491,7 +519,8 @@ mod tests {
     /// based on whether the tie breaker is enabled or disabled.
     #[tokio::test(flavor = "multi_thread")]
     async fn test_round_robin_tie_breaker_success() -> Result<()> {
-        let task_ctx = generate_task_ctx_for_round_robin_tie_breaker()?;
+        let target_batch_size = 12500;
+        let task_ctx = generate_task_ctx_for_round_robin_tie_breaker(target_batch_size)?;
         let spm = generate_spm_for_round_robin_tie_breaker(true)?;
         let _collected = collect(spm, task_ctx).await?;
         Ok(())
@@ -504,7 +533,7 @@ mod tests {
     /// based on whether the tie breaker is enabled or disabled.
     #[tokio::test(flavor = "multi_thread")]
     async fn test_round_robin_tie_breaker_fail() -> Result<()> {
-        let task_ctx = generate_task_ctx_for_round_robin_tie_breaker()?;
+        let task_ctx = generate_task_ctx_for_round_robin_tie_breaker(8192)?;
         let spm = generate_spm_for_round_robin_tie_breaker(false)?;
         let _err = collect(spm, task_ctx).await.unwrap_err();
         Ok(())
@@ -975,22 +1004,22 @@ mod tests {
         let collected = collect(merge, task_ctx).await.unwrap();
         assert_eq!(collected.len(), 1);
 
-        assert_snapshot!(batches_to_string(collected.as_slice()), @r#"
-            +---+---+-------------------------------+
-            | a | b | c                             |
-            +---+---+-------------------------------+
-            | 1 |   | 1970-01-01T00:00:00.000000008 |
-            | 1 |   | 1970-01-01T00:00:00.000000008 |
-            | 2 | a |                               |
-            | 7 | b | 1970-01-01T00:00:00.000000006 |
-            | 2 | b |                               |
-            | 9 | d |                               |
-            | 3 | e | 1970-01-01T00:00:00.000000004 |
-            | 3 | g | 1970-01-01T00:00:00.000000005 |
-            | 4 | h |                               |
-            | 5 | i | 1970-01-01T00:00:00.000000004 |
-            +---+---+-------------------------------+
-            "#);
+        assert_snapshot!(batches_to_string(collected.as_slice()), @r"
+        +---+---+-------------------------------+
+        | a | b | c                             |
+        +---+---+-------------------------------+
+        | 1 |   | 1970-01-01T00:00:00.000000008 |
+        | 1 |   | 1970-01-01T00:00:00.000000008 |
+        | 2 | a |                               |
+        | 7 | b | 1970-01-01T00:00:00.000000006 |
+        | 2 | b |                               |
+        | 9 | d |                               |
+        | 3 | e | 1970-01-01T00:00:00.000000004 |
+        | 3 | g | 1970-01-01T00:00:00.000000005 |
+        | 4 | h |                               |
+        | 5 | i | 1970-01-01T00:00:00.000000004 |
+        +---+---+-------------------------------+
+        ");
     }
 
     #[tokio::test]
@@ -1016,14 +1045,14 @@ mod tests {
         let collected = collect(merge, task_ctx).await.unwrap();
         assert_eq!(collected.len(), 1);
 
-        assert_snapshot!(batches_to_string(collected.as_slice()), @r#"
-            +---+---+
-            | a | b |
-            +---+---+
-            | 1 | a |
-            | 2 | b |
-            +---+---+
-            "#);
+        assert_snapshot!(batches_to_string(collected.as_slice()), @r"
+        +---+---+
+        | a | b |
+        +---+---+
+        | 1 | a |
+        | 2 | b |
+        +---+---+
+        ");
     }
 
     #[tokio::test]
@@ -1048,17 +1077,17 @@ mod tests {
         let collected = collect(merge, task_ctx).await.unwrap();
         assert_eq!(collected.len(), 1);
 
-        assert_snapshot!(batches_to_string(collected.as_slice()), @r#"
-            +---+---+
-            | a | b |
-            +---+---+
-            | 1 | a |
-            | 2 | b |
-            | 7 | c |
-            | 9 | d |
-            | 3 | e |
-            +---+---+
-            "#);
+        assert_snapshot!(batches_to_string(collected.as_slice()), @r"
+        +---+---+
+        | a | b |
+        +---+---+
+        | 1 | a |
+        | 2 | b |
+        | 7 | c |
+        | 9 | d |
+        | 3 | e |
+        +---+---+
+        ");
     }
 
     #[tokio::test]
@@ -1157,16 +1186,16 @@ mod tests {
         let collected = collect(Arc::clone(&merge) as Arc<dyn ExecutionPlan>, task_ctx)
             .await
             .unwrap();
-        assert_snapshot!(batches_to_string(collected.as_slice()), @r#"
-            +----+---+
-            | a  | b |
-            +----+---+
-            | 1  | a |
-            | 10 | b |
-            | 2  | c |
-            | 20 | d |
-            +----+---+
-            "#);
+        assert_snapshot!(batches_to_string(collected.as_slice()), @r"
+        +----+---+
+        | a  | b |
+        +----+---+
+        | 1  | a |
+        | 10 | b |
+        | 2  | c |
+        | 20 | d |
+        +----+---+
+        ");
 
         // Now, validate metrics
         let metrics = merge.metrics().unwrap();
@@ -1272,32 +1301,32 @@ mod tests {
         // Expect the data to be sorted first by "batch_number" (because
         // that was the order it was fed in, even though only "value"
         // is in the sort key)
-        assert_snapshot!(batches_to_string(collected.as_slice()), @r#"
-                +--------------+-------+
-                | batch_number | value |
-                +--------------+-------+
-                | 0            | A     |
-                | 1            | A     |
-                | 2            | A     |
-                | 3            | A     |
-                | 4            | A     |
-                | 5            | A     |
-                | 6            | A     |
-                | 7            | A     |
-                | 8            | A     |
-                | 9            | A     |
-                | 0            | B     |
-                | 1            | B     |
-                | 2            | B     |
-                | 3            | B     |
-                | 4            | B     |
-                | 5            | B     |
-                | 6            | B     |
-                | 7            | B     |
-                | 8            | B     |
-                | 9            | B     |
-                +--------------+-------+
-            "#);
+        assert_snapshot!(batches_to_string(collected.as_slice()), @r"
+        +--------------+-------+
+        | batch_number | value |
+        +--------------+-------+
+        | 0            | A     |
+        | 1            | A     |
+        | 2            | A     |
+        | 3            | A     |
+        | 4            | A     |
+        | 5            | A     |
+        | 6            | A     |
+        | 7            | A     |
+        | 8            | A     |
+        | 9            | A     |
+        | 0            | B     |
+        | 1            | B     |
+        | 2            | B     |
+        | 3            | B     |
+        | 4            | B     |
+        | 5            | B     |
+        | 6            | B     |
+        | 7            | B     |
+        | 8            | B     |
+        | 9            | B     |
+        +--------------+-------+
+        ");
     }
 
     #[derive(Debug)]
@@ -1342,7 +1371,7 @@ mod tests {
     #[derive(Debug, Clone)]
     struct CongestedExec {
         schema: Schema,
-        cache: PlanProperties,
+        cache: Arc<PlanProperties>,
         congestion: Arc<Congestion>,
     }
 
@@ -1378,7 +1407,7 @@ mod tests {
         fn as_any(&self) -> &dyn Any {
             self
         }
-        fn properties(&self) -> &PlanProperties {
+        fn properties(&self) -> &Arc<PlanProperties> {
             &self.cache
         }
         fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -1471,7 +1500,7 @@ mod tests {
         };
         let source = CongestedExec {
             schema: schema.clone(),
-            cache: properties,
+            cache: Arc::new(properties),
             congestion: Arc::new(Congestion::new(partition_count)),
         };
         let spm = SortPreservingMergeExec::new(

@@ -15,14 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::logical_plan::producer::{to_substrait_type, SubstraitProducer};
+use crate::logical_plan::producer::{SubstraitProducer, to_substrait_type};
 use crate::variation_const::DEFAULT_TYPE_VARIATION_REF;
 use datafusion::common::{DFSchemaRef, ScalarValue};
 use datafusion::logical_expr::{Cast, Expr, TryCast};
+use substrait::proto::Expression;
 use substrait::proto::expression::cast::FailureBehavior;
 use substrait::proto::expression::literal::LiteralType;
 use substrait::proto::expression::{Literal, RexType};
-use substrait::proto::Expression;
 
 pub fn from_cast(
     producer: &mut impl SubstraitProducer,
@@ -35,7 +35,7 @@ pub fn from_cast(
         // only the untyped(a null scalar value) null literal need this special handling
         // since all other kind of nulls are already typed and can be handled by substrait
         // e.g. null::<Int32Type> or null::<Utf8Type>
-        if matches!(lit, ScalarValue::Null) {
+        if *lit == ScalarValue::Null {
             let lit = Literal {
                 nullable: true,
                 type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
@@ -80,7 +80,7 @@ pub fn from_try_cast(
 mod tests {
     use super::*;
     use crate::logical_plan::producer::{
-        to_substrait_extended_expr, DefaultSubstraitProducer,
+        DefaultSubstraitProducer, to_substrait_extended_expr,
     };
     use datafusion::arrow::datatypes::{DataType, Field};
     use datafusion::common::DFSchema;

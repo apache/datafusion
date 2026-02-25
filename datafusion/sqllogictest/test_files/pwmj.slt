@@ -87,13 +87,11 @@ physical_plan
 02)--SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
 03)----PiecewiseMergeJoin: operator=Gt, join_type=Inner, on=(t1_id > t2_id)
 04)------SortExec: expr=[t1_id@0 ASC], preserve_partitioning=[false]
-05)--------CoalesceBatchesExec: target_batch_size=8192
-06)----------FilterExec: t1_id@0 > 10
-07)------------DataSourceExec: partitions=1, partition_sizes=[1]
-08)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)--------CoalesceBatchesExec: target_batch_size=8192
-10)----------FilterExec: t2_int@1 > 1, projection=[t2_id@0]
-11)------------DataSourceExec: partitions=1, partition_sizes=[1]
+05)--------FilterExec: t1_id@0 > 10
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+07)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+08)--------FilterExec: t2_int@1 > 1, projection=[t2_id@0]
+09)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query II
 SELECT t1.t1_id, t2.t2_id
@@ -134,13 +132,11 @@ physical_plan
 02)--SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
 03)----PiecewiseMergeJoin: operator=GtEq, join_type=Inner, on=(t1_id >= t2_id)
 04)------SortExec: expr=[t1_id@0 ASC], preserve_partitioning=[false]
-05)--------CoalesceBatchesExec: target_batch_size=8192
-06)----------FilterExec: t1_id@0 >= 22
-07)------------DataSourceExec: partitions=1, partition_sizes=[1]
-08)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)--------CoalesceBatchesExec: target_batch_size=8192
-10)----------FilterExec: t2_int@1 = 3, projection=[t2_id@0]
-11)------------DataSourceExec: partitions=1, partition_sizes=[1]
+05)--------FilterExec: t1_id@0 >= 22
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+07)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+08)--------FilterExec: t2_int@1 = 3, projection=[t2_id@0]
+09)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query II
 SELECT t1.t1_id, t2.t2_id
@@ -183,9 +179,8 @@ physical_plan
 04)------SortExec: expr=[t1_id@0 DESC], preserve_partitioning=[false]
 05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 06)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-07)--------CoalesceBatchesExec: target_batch_size=8192
-08)----------FilterExec: t2_int@1 >= 3, projection=[t2_id@0]
-09)------------DataSourceExec: partitions=1, partition_sizes=[1]
+07)--------FilterExec: t2_int@1 >= 3, projection=[t2_id@0]
+08)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 
 query II
@@ -231,9 +226,8 @@ physical_plan
 04)------SortExec: expr=[CAST(t1_id@0 AS Int64) DESC], preserve_partitioning=[false]
 05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 06)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-07)--------CoalesceBatchesExec: target_batch_size=8192
-08)----------FilterExec: t2_int@1 >= 3, projection=[t2_id@0]
-09)------------DataSourceExec: partitions=1, partition_sizes=[1]
+07)--------FilterExec: t2_int@1 >= 3, projection=[t2_id@0]
+08)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query II
 SELECT t1.t1_id, t2.t2_id
@@ -275,13 +269,11 @@ physical_plan
 02)--SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
 03)----PiecewiseMergeJoin: operator=LtEq, join_type=Inner, on=(t1_id <= t2_id)
 04)------SortExec: expr=[t1_id@0 DESC], preserve_partitioning=[false]
-05)--------CoalesceBatchesExec: target_batch_size=8192
-06)----------FilterExec: t1_id@0 = 11 OR t1_id@0 = 44
-07)------------DataSourceExec: partitions=1, partition_sizes=[1]
-08)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)--------CoalesceBatchesExec: target_batch_size=8192
-10)----------FilterExec: t2_name@1 != y, projection=[t2_id@0]
-11)------------DataSourceExec: partitions=1, partition_sizes=[1]
+05)--------FilterExec: t1_id@0 = 11 OR t1_id@0 = 44
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+07)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+08)--------FilterExec: t2_name@1 != y, projection=[t2_id@0]
+09)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 CREATE TABLE null_join_t1 (id INT);

@@ -27,8 +27,8 @@ use arrow::compute::kernels::boolean::not;
 use arrow::compute::kernels::comparison::{regexp_is_match, regexp_is_match_scalar};
 use arrow::datatypes::DataType;
 use arrow::error::ArrowError;
-use datafusion_common::{internal_err, plan_err};
 use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{internal_err, plan_err};
 
 use std::sync::Arc;
 
@@ -108,16 +108,35 @@ macro_rules! call_scalar_kernel {
 /// downcasts left / right to the appropriate integral type and calls the kernel
 macro_rules! create_left_integral_dyn_scalar_kernel {
     ($FUNC:ident, $KERNEL:ident) => {
-        pub(crate) fn $FUNC(array: &dyn Array, scalar: ScalarValue) -> Option<Result<ArrayRef>> {
+        pub(crate) fn $FUNC(
+            array: &dyn Array,
+            scalar: ScalarValue,
+        ) -> Option<Result<ArrayRef>> {
             let result = match array.data_type() {
-                DataType::Int8 => call_scalar_kernel!(array, scalar, $KERNEL, Int8Array, i8),
-                DataType::Int16 => call_scalar_kernel!(array, scalar, $KERNEL, Int16Array, i16),
-                DataType::Int32 => call_scalar_kernel!(array, scalar, $KERNEL, Int32Array, i32),
-                DataType::Int64 => call_scalar_kernel!(array, scalar, $KERNEL, Int64Array, i64),
-                DataType::UInt8 => call_scalar_kernel!(array, scalar, $KERNEL, UInt8Array, u8),
-                DataType::UInt16 => call_scalar_kernel!(array, scalar, $KERNEL, UInt16Array, u16),
-                DataType::UInt32 => call_scalar_kernel!(array, scalar, $KERNEL, UInt32Array, u32),
-                DataType::UInt64 => call_scalar_kernel!(array, scalar, $KERNEL, UInt64Array, u64),
+                DataType::Int8 => {
+                    call_scalar_kernel!(array, scalar, $KERNEL, Int8Array, i8)
+                }
+                DataType::Int16 => {
+                    call_scalar_kernel!(array, scalar, $KERNEL, Int16Array, i16)
+                }
+                DataType::Int32 => {
+                    call_scalar_kernel!(array, scalar, $KERNEL, Int32Array, i32)
+                }
+                DataType::Int64 => {
+                    call_scalar_kernel!(array, scalar, $KERNEL, Int64Array, i64)
+                }
+                DataType::UInt8 => {
+                    call_scalar_kernel!(array, scalar, $KERNEL, UInt8Array, u8)
+                }
+                DataType::UInt16 => {
+                    call_scalar_kernel!(array, scalar, $KERNEL, UInt16Array, u16)
+                }
+                DataType::UInt32 => {
+                    call_scalar_kernel!(array, scalar, $KERNEL, UInt32Array, u32)
+                }
+                DataType::UInt64 => {
+                    call_scalar_kernel!(array, scalar, $KERNEL, UInt64Array, u64)
+                }
                 other => plan_err!(
                     "Data type {} not supported for binary operation '{}' on dyn arrays",
                     other,
@@ -207,8 +226,8 @@ macro_rules! regexp_is_match_flag {
 }
 
 pub(crate) fn regex_match_dyn(
-    left: ArrayRef,
-    right: ArrayRef,
+    left: &ArrayRef,
+    right: &ArrayRef,
     not_match: bool,
     flag: bool,
 ) -> Result<ArrayRef> {
@@ -259,7 +278,7 @@ macro_rules! regexp_is_match_flag_scalar {
 
 pub(crate) fn regex_match_dyn_scalar(
     left: &dyn Array,
-    right: ScalarValue,
+    right: &ScalarValue,
     not_match: bool,
     flag: bool,
 ) -> Option<Result<ArrayRef>> {
@@ -296,8 +315,8 @@ pub(crate) fn regex_match_dyn_scalar(
             )
         }
         other => internal_err!(
-                "Data type {} not supported for operation 'regex_match_dyn_scalar' on string array",
-                other
+            "Data type {} not supported for operation 'regex_match_dyn_scalar' on string array",
+            other
         ),
     };
     Some(result)

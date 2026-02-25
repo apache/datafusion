@@ -15,12 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::arrow_wrappers::WrappedSchema;
-use abi_stable::std_types::RVec;
-use arrow::datatypes::Field;
-use arrow::{datatypes::DataType, ffi::FFI_ArrowSchema};
-use arrow_schema::FieldRef;
 use std::sync::Arc;
+
+use abi_stable::std_types::{RResult, RString, RVec};
+use arrow::datatypes::{DataType, Field};
+use arrow::ffi::FFI_ArrowSchema;
+use arrow_schema::FieldRef;
+
+use crate::arrow_wrappers::WrappedSchema;
+
+/// Convenience type for results passed through the FFI boundary. Since the
+/// `DataFusionError` enum is complex and little value is gained from creating
+/// a FFI safe variant of it, we convert errors to strings when passing results
+/// back. These are converted back and forth using the `df_result`, `rresult`,
+/// and `rresult_return` macros.
+pub type FFIResult<T> = RResult<T, RString>;
 
 /// This macro is a helpful conversion utility to convert from an abi_stable::RResult to a
 /// DataFusion result.
@@ -29,8 +38,8 @@ macro_rules! df_result {
     ( $x:expr ) => {
         match $x {
             abi_stable::std_types::RResult::ROk(v) => Ok(v),
-            abi_stable::std_types::RResult::RErr(e) => {
-                datafusion_common::exec_err!("FFI error: {}", e)
+            abi_stable::std_types::RResult::RErr(err) => {
+                datafusion_common::ffi_err!("{err}")
             }
         }
     };
@@ -117,11 +126,27 @@ pub fn rvec_wrapped_to_vec_datatype(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
+    use std::sync::Arc;
+
     use abi_stable::std_types::{RResult, RString};
     use datafusion::error::DataFusionError;
+    use datafusion::prelude::SessionContext;
+    use datafusion_execution::TaskContextProvider;
 
-    fn wrap_result(result: Result<String, DataFusionError>) -> RResult<String, RString> {
+    use crate::execution::FFI_TaskContextProvider;
+    use crate::util::FFIResult;
+
+    pub(crate) fn test_session_and_ctx() -> (Arc<SessionContext>, FFI_TaskContextProvider)
+    {
+        let ctx = Arc::new(SessionContext::new());
+        let task_ctx_provider = Arc::clone(&ctx) as Arc<dyn TaskContextProvider>;
+        let task_ctx_provider = FFI_TaskContextProvider::from(&task_ctx_provider);
+
+        (ctx, task_ctx_provider)
+    }
+
+    fn wrap_result(result: Result<String, DataFusionError>) -> FFIResult<String> {
         RResult::ROk(rresult_return!(result))
     }
 
@@ -130,9 +155,9 @@ mod tests {
         const VALID_VALUE: &str = "valid_value";
         const ERROR_VALUE: &str = "error_value";
 
-        let ok_r_result: RResult<RString, RString> =
+        let ok_r_result: FFIResult<RString> =
             RResult::ROk(VALID_VALUE.to_string().into());
-        let err_r_result: RResult<RString, RString> =
+        let err_r_result: FFIResult<RString> =
             RResult::RErr(ERROR_VALUE.to_string().into());
 
         let returned_ok_result = df_result!(ok_r_result);
@@ -143,20 +168,22 @@ mod tests {
         assert!(returned_err_result.is_err());
         assert!(
             returned_err_result.unwrap_err().strip_backtrace()
-                == format!("Execution error: FFI error: {ERROR_VALUE}")
+                == format!("FFI error: {ERROR_VALUE}")
         );
 
         let ok_result: Result<String, DataFusionError> = Ok(VALID_VALUE.to_string());
         let err_result: Result<String, DataFusionError> =
-            datafusion_common::exec_err!("{ERROR_VALUE}");
+            datafusion_common::ffi_err!("{ERROR_VALUE}");
 
         let returned_ok_r_result = wrap_result(ok_result);
         assert!(returned_ok_r_result == RResult::ROk(VALID_VALUE.into()));
 
         let returned_err_r_result = wrap_result(err_result);
         assert!(returned_err_r_result.is_err());
-        assert!(returned_err_r_result
-            .unwrap_err()
-            .starts_with(format!("Execution error: {ERROR_VALUE}").as_str()));
+        assert!(
+            returned_err_r_result
+                .unwrap_err()
+                .starts_with(format!("FFI error: {ERROR_VALUE}").as_str())
+        );
     }
 }

@@ -17,10 +17,10 @@
 
 use std::{collections::BTreeMap, sync::Arc};
 
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, Field, FieldRef};
 use hashbrown::HashMap;
 
-use crate::{error::_plan_err, DataFusionError, ScalarValue};
+use crate::{DataFusionError, ScalarValue, error::_plan_err};
 
 /// A [`ScalarValue`] with optional [`FieldMetadata`]
 #[derive(Debug, Clone)]
@@ -171,6 +171,10 @@ pub fn format_type_and_metadata(
 /// // Add any metadata from `FieldMetadata` to `Field`
 /// let updated_field = metadata.add_to_field(field);
 /// ```
+///
+/// For more background, please also see the [Implementing User Defined Types and Custom Metadata in DataFusion blog]
+///
+/// [Implementing User Defined Types and Custom Metadata in DataFusion blog]: https://datafusion.apache.org/blog/2025/09/21/custom-types-using-metadata
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct FieldMetadata {
     /// The inner metadata of a literal expression, which is a map of string
@@ -319,6 +323,16 @@ impl FieldMetadata {
         }
 
         field.with_metadata(self.to_hashmap())
+    }
+
+    /// Updates the metadata on the FieldRef with this metadata, if it is not empty.
+    pub fn add_to_field_ref(&self, mut field_ref: FieldRef) -> FieldRef {
+        if self.inner.is_empty() {
+            return field_ref;
+        }
+
+        Arc::make_mut(&mut field_ref).set_metadata(self.to_hashmap());
+        field_ref
     }
 }
 

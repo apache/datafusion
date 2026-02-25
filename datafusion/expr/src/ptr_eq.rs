@@ -39,7 +39,7 @@ pub fn arc_ptr_hash<T: ?Sized>(a: &Arc<T>, hasher: &mut impl Hasher) {
 ///
 /// If you have pointers to a `dyn UDF impl` consider using [`super::udf_eq::UdfEq`].
 #[derive(Clone)]
-#[allow(private_bounds)] // This is so that PtrEq can only be used with allowed pointer types (e.g. Arc), without allowing misuse.
+#[expect(private_bounds)] // This is so that PtrEq can only be used with allowed pointer types (e.g. Arc), without allowing misuse.
 pub struct PtrEq<Ptr: PointerType>(Ptr);
 
 impl<T> PartialEq for PtrEq<Arc<T>>

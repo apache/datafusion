@@ -15,9 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#[macro_use]
-extern crate criterion;
-use criterion::Criterion;
+use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion::datasource::file_format::csv::CsvFormat;
 use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
@@ -27,9 +25,6 @@ use datafusion::prelude::SessionConfig;
 use parking_lot::Mutex;
 use std::sync::Arc;
 
-extern crate arrow;
-extern crate datafusion;
-
 use arrow::datatypes::{DataType, Field, Schema};
 
 use datafusion::datasource::MemTable;
@@ -37,6 +32,7 @@ use datafusion::execution::context::SessionContext;
 
 use tokio::runtime::Runtime;
 
+#[expect(clippy::needless_pass_by_value)]
 fn query(ctx: Arc<Mutex<SessionContext>>, rt: &Runtime, sql: &str) {
     // execute the query
     let df = rt.block_on(ctx.lock().sql(sql)).unwrap();
@@ -97,8 +93,7 @@ fn create_context() -> Arc<Mutex<SessionContext>> {
         ctx_holder.lock().push(Arc::new(Mutex::new(ctx)))
     });
 
-    let ctx = ctx_holder.lock().first().unwrap().clone();
-    ctx
+    ctx_holder.lock().first().unwrap().clone()
 }
 
 fn criterion_benchmark(c: &mut Criterion) {

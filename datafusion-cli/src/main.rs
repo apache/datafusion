@@ -31,16 +31,17 @@ use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::logical_expr::ExplainFormat;
 use datafusion::prelude::SessionContext;
 use datafusion_cli::catalog::DynamicObjectStoreCatalog;
-use datafusion_cli::functions::{MetadataCacheFunc, ParquetMetadataFunc};
+use datafusion_cli::functions::{
+    ListFilesCacheFunc, MetadataCacheFunc, ParquetMetadataFunc, StatisticsCacheFunc,
+};
 use datafusion_cli::object_storage::instrumented::{
     InstrumentedObjectStoreMode, InstrumentedObjectStoreRegistry,
 };
 use datafusion_cli::{
-    exec,
+    DATAFUSION_CLI_VERSION, exec,
     pool_type::PoolType,
     print_format::PrintFormat,
     print_options::{MaxRows, PrintOptions},
-    DATAFUSION_CLI_VERSION,
 };
 
 use clap::Parser;
@@ -244,6 +245,21 @@ async fn main_inner() -> Result<()> {
         )),
     );
 
+    // register `statistics_cache` table function to get the contents of the file statistics cache
+    ctx.register_udtf(
+        "statistics_cache",
+        Arc::new(StatisticsCacheFunc::new(
+            ctx.task_ctx().runtime_env().cache_manager.clone(),
+        )),
+    );
+
+    ctx.register_udtf(
+        "list_files_cache",
+        Arc::new(ListFilesCacheFunc::new(
+            ctx.task_ctx().runtime_env().cache_manager.clone(),
+        )),
+    );
+
     let mut print_options = PrintOptions {
         format: args.format,
         quiet: args.quiet,
@@ -422,9 +438,20 @@ pub fn extract_disk_limit(size: &str) -> Result<usize, String> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
-    use datafusion::{common::test_util::batches_to_string, prelude::ParquetReadOptions};
+    use datafusion::{
+        common::test_util::batches_to_string,
+        execution::cache::{
+            DefaultListFilesCache, cache_manager::CacheManagerConfig,
+            cache_unit::DefaultFileStatisticsCache,
+        },
+        prelude::{ParquetReadOptions, col, lit, split_part},
+    };
     use insta::assert_snapshot;
+    use object_store::memory::InMemory;
+    use url::Url;
 
     fn assert_conversion(input: &str, expected: Result<usize, String>) {
         let result = extract_memory_pool_size(input);
@@ -488,8 +515,7 @@ mod tests {
         ctx.register_udtf("parquet_metadata", Arc::new(ParquetMetadataFunc {}));
 
         // input with single quote
-        let sql =
-            "SELECT * FROM parquet_metadata('../datafusion/core/tests/data/fixed_size_list_array.parquet')";
+        let sql = "SELECT * FROM parquet_metadata('../datafusion/core/tests/data/fixed_size_list_array.parquet')";
         let df = ctx.sql(sql).await?;
         let rbs = df.collect().await?;
 
@@ -502,8 +528,7 @@ mod tests {
         "#);
 
         // input with double quote
-        let sql =
-            "SELECT * FROM parquet_metadata(\"../datafusion/core/tests/data/fixed_size_list_array.parquet\")";
+        let sql = "SELECT * FROM parquet_metadata(\"../datafusion/core/tests/data/fixed_size_list_array.parquet\")";
         let df = ctx.sql(sql).await?;
         let rbs = df.collect().await?;
         assert_snapshot!(batches_to_string(&rbs), @r#"
@@ -523,8 +548,7 @@ mod tests {
         ctx.register_udtf("parquet_metadata", Arc::new(ParquetMetadataFunc {}));
 
         // input with string columns
-        let sql =
-            "SELECT * FROM parquet_metadata('../parquet-testing/data/data_index_bloom_encoding_stats.parquet')";
+        let sql = "SELECT * FROM parquet_metadata('../parquet-testing/data/data_index_bloom_encoding_stats.parquet')";
         let df = ctx.sql(sql).await?;
         let rbs = df.collect().await?;
 
@@ -592,9 +616,9 @@ mod tests {
         +-----------------------------------+-----------------+---------------------+------+------------------+
         | filename                          | file_size_bytes | metadata_size_bytes | hits | extra            |
         +-----------------------------------+-----------------+---------------------+------+------------------+
-        | alltypes_plain.parquet            | 1851            | 6957                | 2    | page_index=false |
-        | alltypes_tiny_pages.parquet       | 454233          | 267014              | 2    | page_index=true  |
-        | lz4_raw_compressed_larger.parquet | 380836          | 996                 | 2    | page_index=false |
+        | alltypes_plain.parquet            | 1851            | 8882                | 2    | page_index=false |
+        | alltypes_tiny_pages.parquet       | 454233          | 269266              | 2    | page_index=true  |
+        | lz4_raw_compressed_larger.parquet | 380836          | 1347                | 2    | page_index=false |
         +-----------------------------------+-----------------+---------------------+------+------------------+
         ");
 
@@ -623,10 +647,203 @@ mod tests {
         +-----------------------------------+-----------------+---------------------+------+------------------+
         | filename                          | file_size_bytes | metadata_size_bytes | hits | extra            |
         +-----------------------------------+-----------------+---------------------+------+------------------+
-        | alltypes_plain.parquet            | 1851            | 6957                | 5    | page_index=false |
-        | alltypes_tiny_pages.parquet       | 454233          | 267014              | 2    | page_index=true  |
-        | lz4_raw_compressed_larger.parquet | 380836          | 996                 | 3    | page_index=false |
+        | alltypes_plain.parquet            | 1851            | 8882                | 5    | page_index=false |
+        | alltypes_tiny_pages.parquet       | 454233          | 269266              | 2    | page_index=true  |
+        | lz4_raw_compressed_larger.parquet | 380836          | 1347                | 3    | page_index=false |
         +-----------------------------------+-----------------+---------------------+------+------------------+
+        ");
+
+        Ok(())
+    }
+
+    /// Shows that the statistics cache is not enabled by default yet
+    /// See https://github.com/apache/datafusion/issues/19217
+    #[tokio::test]
+    async fn test_statistics_cache_default() -> Result<(), DataFusionError> {
+        let ctx = SessionContext::new();
+
+        ctx.register_udtf(
+            "statistics_cache",
+            Arc::new(StatisticsCacheFunc::new(
+                ctx.task_ctx().runtime_env().cache_manager.clone(),
+            )),
+        );
+
+        for filename in [
+            "alltypes_plain",
+            "alltypes_tiny_pages",
+            "lz4_raw_compressed_larger",
+        ] {
+            ctx.sql(
+                format!(
+                    "create external table {filename}
+                    stored as parquet
+                    location '../parquet-testing/data/{filename}.parquet'",
+                )
+                .as_str(),
+            )
+            .await?
+            .collect()
+            .await?;
+        }
+
+        // When the cache manager creates a StatisticsCache by default,
+        // the contents will show up here
+        let sql = "SELECT split_part(path, '/', -1) as filename, file_size_bytes, num_rows, num_columns, table_size_bytes from statistics_cache() order by filename";
+        let df = ctx.sql(sql).await?;
+        let rbs = df.collect().await?;
+        assert_snapshot!(batches_to_string(&rbs),@r"
+        ++
+        ++
+        ");
+
+        Ok(())
+    }
+
+    // Can be removed when https://github.com/apache/datafusion/issues/19217 is resolved
+    #[tokio::test]
+    async fn test_statistics_cache_override() -> Result<(), DataFusionError> {
+        // Install a specific StatisticsCache implementation
+        let file_statistics_cache = Arc::new(DefaultFileStatisticsCache::default());
+        let cache_config = CacheManagerConfig::default()
+            .with_files_statistics_cache(Some(file_statistics_cache.clone()));
+        let runtime = RuntimeEnvBuilder::new()
+            .with_cache_manager(cache_config)
+            .build()?;
+        let config = SessionConfig::new().with_collect_statistics(true);
+        let ctx = SessionContext::new_with_config_rt(config, Arc::new(runtime));
+
+        ctx.register_udtf(
+            "statistics_cache",
+            Arc::new(StatisticsCacheFunc::new(
+                ctx.task_ctx().runtime_env().cache_manager.clone(),
+            )),
+        );
+
+        for filename in [
+            "alltypes_plain",
+            "alltypes_tiny_pages",
+            "lz4_raw_compressed_larger",
+        ] {
+            ctx.sql(
+                format!(
+                    "create external table {filename}
+                    stored as parquet
+                    location '../parquet-testing/data/{filename}.parquet'",
+                )
+                .as_str(),
+            )
+            .await?
+            .collect()
+            .await?;
+        }
+
+        let sql = "SELECT split_part(path, '/', -1) as filename, file_size_bytes, num_rows, num_columns, table_size_bytes from statistics_cache() order by filename";
+        let df = ctx.sql(sql).await?;
+        let rbs = df.collect().await?;
+        assert_snapshot!(batches_to_string(&rbs),@r"
+        +-----------------------------------+-----------------+--------------+-------------+------------------+
+        | filename                          | file_size_bytes | num_rows     | num_columns | table_size_bytes |
+        +-----------------------------------+-----------------+--------------+-------------+------------------+
+        | alltypes_plain.parquet            | 1851            | Exact(8)     | 11          | Absent           |
+        | alltypes_tiny_pages.parquet       | 454233          | Exact(7300)  | 13          | Absent           |
+        | lz4_raw_compressed_larger.parquet | 380836          | Exact(10000) | 1           | Absent           |
+        +-----------------------------------+-----------------+--------------+-------------+------------------+
+        ");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_list_files_cache() -> Result<(), DataFusionError> {
+        let list_files_cache = Arc::new(DefaultListFilesCache::new(
+            1024,
+            Some(Duration::from_secs(1)),
+        ));
+
+        let rt = RuntimeEnvBuilder::new()
+            .with_cache_manager(
+                CacheManagerConfig::default()
+                    .with_list_files_cache(Some(list_files_cache)),
+            )
+            .build_arc()
+            .unwrap();
+
+        let ctx = SessionContext::new_with_config_rt(SessionConfig::default(), rt);
+
+        ctx.register_object_store(
+            &Url::parse("mem://test_table").unwrap(),
+            Arc::new(InMemory::new()),
+        );
+
+        ctx.register_udtf(
+            "list_files_cache",
+            Arc::new(ListFilesCacheFunc::new(
+                ctx.task_ctx().runtime_env().cache_manager.clone(),
+            )),
+        );
+
+        ctx.sql(
+            "CREATE EXTERNAL TABLE src_table
+            STORED AS PARQUET
+            LOCATION '../parquet-testing/data/alltypes_plain.parquet'",
+        )
+        .await?
+        .collect()
+        .await?;
+
+        ctx.sql("COPY (SELECT * FROM src_table) TO 'mem://test_table/0.parquet' STORED AS PARQUET").await?.collect().await?;
+
+        ctx.sql("COPY (SELECT * FROM src_table) TO 'mem://test_table/1.parquet' STORED AS PARQUET").await?.collect().await?;
+
+        ctx.sql(
+            "CREATE EXTERNAL TABLE test_table 
+            STORED AS PARQUET
+            LOCATION 'mem://test_table/'
+        ",
+        )
+        .await?
+        .collect()
+        .await?;
+
+        let sql = "SELECT metadata_size_bytes, expires_in, metadata_list FROM list_files_cache()";
+        let df = ctx
+            .sql(sql)
+            .await?
+            .unnest_columns(&["metadata_list"])?
+            .with_column_renamed("metadata_list", "metadata")?
+            .unnest_columns(&["metadata"])?;
+
+        assert_eq!(
+            2,
+            df.clone()
+                .filter(col("expires_in").is_not_null())?
+                .count()
+                .await?
+        );
+
+        let df = df
+            .with_column_renamed(r#""metadata.file_size_bytes""#, "file_size_bytes")?
+            .with_column_renamed(r#""metadata.e_tag""#, "etag")?
+            .with_column(
+                "filename",
+                split_part(col(r#""metadata.file_path""#), lit("/"), lit(-1)),
+            )?
+            .select_columns(&[
+                "metadata_size_bytes",
+                "filename",
+                "file_size_bytes",
+                "etag",
+            ])?
+            .sort(vec![col("filename").sort(true, false)])?;
+        let rbs = df.collect().await?;
+        assert_snapshot!(batches_to_string(&rbs),@r"
+        +---------------------+-----------+-----------------+------+
+        | metadata_size_bytes | filename  | file_size_bytes | etag |
+        +---------------------+-----------+-----------------+------+
+        | 212                 | 0.parquet | 3645            | 0    |
+        | 212                 | 1.parquet | 3645            | 1    |
+        +---------------------+-----------+-----------------+------+
         ");
 
         Ok(())

@@ -22,21 +22,24 @@ use crate::filter_pushdown::{
 };
 pub use crate::metrics::Metric;
 pub use crate::ordering::InputOrderMode;
+use crate::sort_pushdown::SortOrderPushdownResult;
 pub use crate::stream::EmptyRecordBatchStream;
 
+use arrow_schema::Schema;
 pub use datafusion_common::hash_utils;
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 pub use datafusion_common::utils::project_schema;
-pub use datafusion_common::{internal_err, ColumnStatistics, Statistics};
+pub use datafusion_common::{ColumnStatistics, Statistics, internal_err};
 pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 pub use datafusion_expr::{Accumulator, ColumnarValue};
 pub use datafusion_physical_expr::window::WindowExpr;
 pub use datafusion_physical_expr::{
-    expressions, Distribution, Partitioning, PhysicalExpr,
+    Distribution, Partitioning, PhysicalExpr, expressions,
 };
 
 use std::any::Any;
 use std::fmt::Debug;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::display::DisplayableExecutionPlan;
@@ -47,11 +50,16 @@ use crate::stream::RecordBatchStreamAdapter;
 use arrow::array::{Array, RecordBatch};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{exec_err, Constraints, DataFusionError, Result};
+use datafusion_common::{
+    Constraints, DataFusionError, Result, assert_eq_or_internal_err,
+    assert_or_internal_err, exec_err,
+};
 use datafusion_common_runtime::JoinSet;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
+use datafusion_physical_expr_common::sort_expr::{
+    LexOrdering, OrderingRequirements, PhysicalSortExpr,
+};
 
 use futures::stream::{StreamExt, TryStreamExt};
 
@@ -82,7 +90,7 @@ use futures::stream::{StreamExt, TryStreamExt};
 /// `ExecutionPlan` with memory tracking and spilling support.
 ///
 /// [`datafusion-examples`]: https://github.com/apache/datafusion/tree/main/datafusion-examples
-/// [`memory_pool_execution_plan.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/memory_pool_execution_plan.rs
+/// [`memory_pool_execution_plan.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/execution_monitoring/memory_pool_execution_plan.rs
 pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// Short name for the ExecutionPlan, such as 'DataSourceExec'.
     ///
@@ -121,7 +129,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///
     /// This information is available via methods on [`ExecutionPlanProperties`]
     /// trait, which is implemented for all `ExecutionPlan`s.
-    fn properties(&self) -> &PlanProperties;
+    fn properties(&self) -> &Arc<PlanProperties>;
 
     /// Returns an error if this individual node does not conform to its invariants.
     /// These invariants are typically only checked in debug mode.
@@ -465,17 +473,6 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         None
     }
 
-    /// Returns statistics for this `ExecutionPlan` node. If statistics are not
-    /// available, should return [`Statistics::new_unknown`] (the default), not
-    /// an error.
-    ///
-    /// For TableScan executors, which supports filter pushdown, special attention
-    /// needs to be paid to whether the stats returned by this method are exact or not
-    #[deprecated(since = "48.0.0", note = "Use `partition_statistics` method instead")]
-    fn statistics(&self) -> Result<Statistics> {
-        Ok(Statistics::new_unknown(&self.schema()))
-    }
-
     /// Returns statistics for a specific partition of this `ExecutionPlan` node.
     /// If statistics are not available, should return [`Statistics::new_unknown`]
     /// (the default), not an error.
@@ -484,13 +481,12 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         if let Some(idx) = partition {
             // Validate partition index
             let partition_count = self.properties().partitioning.partition_count();
-            if idx >= partition_count {
-                return internal_err!(
-                    "Invalid partition index: {}, the partition count is {}",
-                    idx,
-                    partition_count
-                );
-            }
+            assert_or_internal_err!(
+                idx < partition_count,
+                "Invalid partition index: {}, the partition count is {}",
+                idx,
+                partition_count
+            );
         }
         Ok(Statistics::new_unknown(&self.schema()))
     }
@@ -571,6 +567,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     }
 
     /// Handle the result of a child pushdown.
+    ///
     /// This method is called as we recurse back up the plan tree after pushing
     /// filters down to child nodes via [`ExecutionPlan::gather_filters_for_pushdown`].
     /// It allows the current node to process the results of filter pushdown from
@@ -677,6 +674,42 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     fn with_new_state(
         &self,
         _state: Arc<dyn Any + Send + Sync>,
+    ) -> Option<Arc<dyn ExecutionPlan>> {
+        None
+    }
+
+    /// Try to push down sort ordering requirements to this node.
+    ///
+    /// This method is called during sort pushdown optimization to determine if this
+    /// node can optimize for a requested sort ordering. Implementations should:
+    ///
+    /// - Return [`SortOrderPushdownResult::Exact`] if the node can guarantee the exact
+    ///   ordering (allowing the Sort operator to be removed)
+    /// - Return [`SortOrderPushdownResult::Inexact`] if the node can optimize for the
+    ///   ordering but cannot guarantee perfect sorting (Sort operator is kept)
+    /// - Return [`SortOrderPushdownResult::Unsupported`] if the node cannot optimize
+    ///   for the ordering
+    ///
+    /// For transparent nodes (that preserve ordering), implement this to delegate to
+    /// children and wrap the result with a new instance of this node.
+    ///
+    /// Default implementation returns `Unsupported`.
+    fn try_pushdown_sort(
+        &self,
+        _order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+        Ok(SortOrderPushdownResult::Unsupported)
+    }
+
+    /// Returns a variant of this `ExecutionPlan` that is aware of order-sensitivity.
+    ///
+    /// This is used to signal to data sources that the output ordering must be
+    /// preserved, even if it might be more efficient to ignore it (e.g. by
+    /// skipping some row groups in Parquet).
+    ///
+    fn with_preserve_order(
+        &self,
+        _preserve_order: bool,
     ) -> Option<Arc<dyn ExecutionPlan>> {
         None
     }
@@ -919,7 +952,7 @@ pub(crate) fn boundedness_from_children<'a>(
             } => {
                 return Boundedness::Unbounded {
                     requires_infinite_memory: true,
-                }
+                };
             }
             Boundedness::Unbounded {
                 requires_infinite_memory: false,
@@ -1018,12 +1051,17 @@ impl PlanProperties {
         self
     }
 
-    /// Overwrite equivalence properties with its new value.
-    pub fn with_eq_properties(mut self, eq_properties: EquivalenceProperties) -> Self {
+    /// Set equivalence properties having mut reference.
+    pub fn set_eq_properties(&mut self, eq_properties: EquivalenceProperties) {
         // Changing equivalence properties also changes output ordering, so
         // make sure to overwrite it:
         self.output_ordering = eq_properties.output_ordering();
         self.eq_properties = eq_properties;
+    }
+
+    /// Overwrite equivalence properties with its new value.
+    pub fn with_eq_properties(mut self, eq_properties: EquivalenceProperties) -> Self {
+        self.set_eq_properties(eq_properties);
         self
     }
 
@@ -1055,9 +1093,14 @@ impl PlanProperties {
         self
     }
 
+    /// Set constraints having mut reference.
+    pub fn set_constraints(&mut self, constraints: Constraints) {
+        self.eq_properties.set_constraints(constraints);
+    }
+
     /// Overwrite constraints with its new value.
     pub fn with_constraints(mut self, constraints: Constraints) -> Self {
-        self.eq_properties = self.eq_properties.with_constraints(constraints);
+        self.set_constraints(constraints);
         self
     }
 
@@ -1082,15 +1125,15 @@ impl PlanProperties {
 macro_rules! check_len {
     ($target:expr, $func_name:ident, $expected_len:expr) => {
         let actual_len = $target.$func_name().len();
-        if actual_len != $expected_len {
-            return internal_err!(
-                "{}::{} returned Vec with incorrect size: {} != {}",
-                $target.name(),
-                stringify!($func_name),
-                actual_len,
-                $expected_len
-            );
-        }
+        assert_eq_or_internal_err!(
+            actual_len,
+            $expected_len,
+            "{}::{} returned Vec with incorrect size: {} != {}",
+            $target.name(),
+            stringify!($func_name),
+            actual_len,
+            $expected_len
+        );
     };
 }
 
@@ -1116,6 +1159,7 @@ pub fn check_default_invariants<P: ExecutionPlan + ?Sized>(
 ///     1. RepartitionExec for changing the partition number between two `ExecutionPlan`s
 ///     2. CoalescePartitionsExec for collapsing all of the partitions into one without ordering guarantee
 ///     3. SortPreservingMergeExec for collapsing all of the sorted partitions into one with ordering guarantee
+#[expect(clippy::needless_pass_by_value)]
 pub fn need_data_exchange(plan: Arc<dyn ExecutionPlan>) -> bool {
     plan.properties().evaluation_type == EvaluationType::Eager
 }
@@ -1127,9 +1171,12 @@ pub fn with_new_children_if_necessary(
     children: Vec<Arc<dyn ExecutionPlan>>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let old_children = plan.children();
-    if children.len() != old_children.len() {
-        internal_err!("Wrong number of children")
-    } else if children.is_empty()
+    assert_eq_or_internal_err!(
+        children.len(),
+        old_children.len(),
+        "Wrong number of children"
+    );
+    if children.is_empty()
         || children
             .iter()
             .zip(old_children.iter())
@@ -1167,6 +1214,10 @@ pub async fn collect(
 ///
 /// Dropping the stream will abort the execution of the query, and free up
 /// any allocated resources
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Public API that historically takes owned Arcs"
+)]
 pub fn execute_stream(
     plan: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,
@@ -1231,6 +1282,10 @@ pub async fn collect_partitioned(
 ///
 /// Dropping the stream will abort the execution of the query, and free up
 /// any allocated resources
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Public API that historically takes owned Arcs"
+)]
 pub fn execute_stream_partitioned(
     plan: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,
@@ -1262,6 +1317,10 @@ pub fn execute_stream_partitioned(
 /// violate the `not null` constraints specified in the `sink_schema`. If there are
 /// such columns, it wraps the resulting stream to enforce the `not null` constraints
 /// by invoking the [`check_not_null_constraints`] function on each batch of the stream.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Public API that historically takes owned Arcs"
+)]
 pub fn execute_input_stream(
     input: Arc<dyn ExecutionPlan>,
     sink_schema: SchemaRef,
@@ -1340,6 +1399,65 @@ pub fn check_not_null_constraints(
     Ok(batch)
 }
 
+/// Make plan ready to be re-executed returning its clone with state reset for all nodes.
+///
+/// Some plans will change their internal states after execution, making them unable to be executed again.
+/// This function uses [`ExecutionPlan::reset_state`] to reset any internal state within the plan.
+///
+/// An example is `CrossJoinExec`, which loads the left table into memory and stores it in the plan.
+/// However, if the data of the left table is derived from the work table, it will become outdated
+/// as the work table changes. When the next iteration executes this plan again, we must clear the left table.
+///
+/// # Limitations
+///
+/// While this function enables plan reuse, it does not allow the same plan to be executed if it (OR):
+///
+/// * uses dynamic filters,
+/// * represents a recursive query.
+///
+pub fn reset_plan_states(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
+    plan.transform_up(|plan| {
+        let new_plan = Arc::clone(&plan).reset_state()?;
+        Ok(Transformed::yes(new_plan))
+    })
+    .data()
+}
+
+/// Check if the `plan` children has the same properties as passed `children`.
+/// In this case plan can avoid self properties re-computation when its children
+/// replace is requested.
+/// The size of `children` must be equal to the size of `ExecutionPlan::children()`.
+pub fn has_same_children_properties(
+    plan: &Arc<impl ExecutionPlan>,
+    children: &[Arc<dyn ExecutionPlan>],
+) -> Result<bool> {
+    let old_children = plan.children();
+    assert_eq_or_internal_err!(
+        children.len(),
+        old_children.len(),
+        "Wrong number of children"
+    );
+    for (lhs, rhs) in old_children.iter().zip(children.iter()) {
+        if !Arc::ptr_eq(lhs.properties(), rhs.properties()) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Helper macro to avoid properties re-computation if passed children properties
+/// the same as plan already has. Could be used to implement fast-path for method
+/// [`ExecutionPlan::with_new_children`].
+#[macro_export]
+macro_rules! check_if_same_properties {
+    ($plan: expr, $children: expr) => {
+        if $crate::execution_plan::has_same_children_properties(&$plan, &$children)? {
+            let plan = $plan.with_new_children_and_same_properties($children);
+            return Ok(::std::sync::Arc::new(plan));
+        }
+    };
+}
+
 /// Utility function yielding a string representation of the given [`ExecutionPlan`].
 pub fn get_plan_string(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
     let formatted = displayable(plan.as_ref()).indent(true).to_string();
@@ -1359,6 +1477,20 @@ pub enum CardinalityEffect {
     LowerEqual,
     /// The operator may produce more output rows than it receives input rows
     GreaterEqual,
+}
+
+/// Can be used in contexts where properties have not yet been initialized properly.
+pub(crate) fn stub_properties() -> Arc<PlanProperties> {
+    static STUB_PROPERTIES: LazyLock<Arc<PlanProperties>> = LazyLock::new(|| {
+        Arc::new(PlanProperties::new(
+            EquivalenceProperties::new(Arc::new(Schema::empty())),
+            Partitioning::UnknownPartitioning(1),
+            EmissionType::Final,
+            Boundedness::Bounded,
+        ))
+    });
+
+    Arc::clone(&STUB_PROPERTIES)
 }
 
 #[cfg(test)]
@@ -1402,7 +1534,7 @@ mod tests {
             self
         }
 
-        fn properties(&self) -> &PlanProperties {
+        fn properties(&self) -> &Arc<PlanProperties> {
             unimplemented!()
         }
 
@@ -1422,10 +1554,6 @@ mod tests {
             _partition: usize,
             _context: Arc<TaskContext>,
         ) -> Result<SendableRecordBatchStream> {
-            unimplemented!()
-        }
-
-        fn statistics(&self) -> Result<Statistics> {
             unimplemented!()
         }
 
@@ -1469,7 +1597,7 @@ mod tests {
             self
         }
 
-        fn properties(&self) -> &PlanProperties {
+        fn properties(&self) -> &Arc<PlanProperties> {
             unimplemented!()
         }
 
@@ -1489,10 +1617,6 @@ mod tests {
             _partition: usize,
             _context: Arc<TaskContext>,
         ) -> Result<SendableRecordBatchStream> {
-            unimplemented!()
-        }
-
-        fn statistics(&self) -> Result<Statistics> {
             unimplemented!()
         }
 
@@ -1516,7 +1640,7 @@ mod tests {
     /// A compilation test to ensure that the `ExecutionPlan::name()` method can
     /// be called from a trait object.
     /// Related ticket: https://github.com/apache/datafusion/pull/11047
-    #[allow(dead_code)]
+    #[expect(unused)]
     fn use_execution_plan_as_trait_object(plan: &dyn ExecutionPlan) {
         let _ = plan.name();
     }

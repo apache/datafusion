@@ -18,3 +18,4 @@
 mod coop;
 mod datasource_split;
 mod logical_plan;
+mod register_arrow;

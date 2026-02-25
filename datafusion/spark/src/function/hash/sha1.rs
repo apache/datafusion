@@ -16,17 +16,20 @@
 // under the License.
 
 use std::any::Any;
-use std::fmt::Write;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, StringArray};
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cast::{
-    as_binary_array, as_binary_view_array, as_large_binary_array,
+    as_binary_array, as_binary_view_array, as_fixed_size_binary_array,
+    as_large_binary_array,
 };
-use datafusion_common::{exec_err, internal_err, Result};
+use datafusion_common::types::{NativeType, logical_string};
+use datafusion_common::utils::take_function_args;
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    Coercion, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, TypeSignatureClass, Volatility,
 };
 use datafusion_functions::utils::make_scalar_function;
 use sha1::{Digest, Sha1};
@@ -47,7 +50,14 @@ impl Default for SparkSha1 {
 impl SparkSha1 {
     pub fn new() -> Self {
         Self {
-            signature: Signature::user_defined(Volatility::Immutable),
+            signature: Signature::coercible(
+                vec![Coercion::new_implicit(
+                    TypeSignatureClass::Binary,
+                    vec![TypeSignatureClass::Native(logical_string())],
+                    NativeType::Binary,
+                )],
+                Volatility::Immutable,
+            ),
             aliases: vec!["sha".to_string()],
         }
     }
@@ -71,38 +81,29 @@ impl ScalarUDFImpl for SparkSha1 {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Utf8)
+        internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
+        Ok(Arc::new(Field::new(self.name(), DataType::Utf8, nullable)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(spark_sha1, vec![])(&args.args)
     }
-
-    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() != 1 {
-            return exec_err!(
-                "`sha1` function requires 1 argument, got {}",
-                arg_types.len()
-            );
-        }
-        match arg_types[0] {
-            DataType::Binary | DataType::LargeBinary | DataType::BinaryView => {
-                Ok(vec![arg_types[0].clone()])
-            }
-            DataType::Utf8 | DataType::Utf8View => Ok(vec![DataType::Binary]),
-            DataType::LargeUtf8 => Ok(vec![DataType::LargeBinary]),
-            DataType::Null => Ok(vec![DataType::Binary]),
-            _ => exec_err!("`sha1` function does not support type {}", arg_types[0]),
-        }
-    }
 }
 
+/// Hex encoding lookup table for fast byte-to-hex conversion
+const HEX_CHARS_LOWER: &[u8; 16] = b"0123456789abcdef";
+
+#[inline]
 fn spark_sha1_digest(value: &[u8]) -> String {
     let result = Sha1::digest(value);
     let mut s = String::with_capacity(result.len() * 2);
-    for b in result.as_slice() {
-        #[allow(clippy::unwrap_used)]
-        write!(&mut s, "{b:02x}").unwrap();
+    for &b in result.as_slice() {
+        s.push(HEX_CHARS_LOWER[(b >> 4) as usize] as char);
+        s.push(HEX_CHARS_LOWER[(b & 0x0f) as usize] as char);
     }
     s
 }
@@ -115,14 +116,10 @@ fn spark_sha1_impl<'a>(input: impl Iterator<Item = Option<&'a [u8]>>) -> ArrayRe
 }
 
 fn spark_sha1(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let [input] = args else {
-        return internal_err!(
-            "Spark `sha1` function requires 1 argument, got {}",
-            args.len()
-        );
-    };
+    let [input] = take_function_args("sha1", args)?;
 
     match input.data_type() {
+        DataType::Null => Ok(Arc::new(StringArray::new_null(input.len()))),
         DataType::Binary => {
             let input = as_binary_array(input)?;
             Ok(spark_sha1_impl(input.iter()))
@@ -135,11 +132,42 @@ fn spark_sha1(args: &[ArrayRef]) -> Result<ArrayRef> {
             let input = as_binary_view_array(input)?;
             Ok(spark_sha1_impl(input.iter()))
         }
-        _ => {
-            exec_err!(
-                "Spark `sha1` function: argument must be binary or large binary, got {:?}",
-                input.data_type()
-            )
+        DataType::FixedSizeBinary(_) => {
+            let input = as_fixed_size_binary_array(input)?;
+            Ok(spark_sha1_impl(input.iter()))
         }
+        dt => {
+            internal_err!("Unsupported data type for sha1: {dt}")
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sha1_nullability() -> Result<()> {
+        let func = SparkSha1::new();
+
+        // Non-nullable input keeps output non-nullable
+        let non_nullable: FieldRef = Arc::new(Field::new("col", DataType::Binary, false));
+        let out = func.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &[Arc::clone(&non_nullable)],
+            scalar_arguments: &[None],
+        })?;
+        assert!(!out.is_nullable());
+        assert_eq!(out.data_type(), &DataType::Utf8);
+
+        // Nullable input makes output nullable
+        let nullable: FieldRef = Arc::new(Field::new("col", DataType::Binary, true));
+        let out = func.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &[Arc::clone(&nullable)],
+            scalar_arguments: &[None],
+        })?;
+        assert!(out.is_nullable());
+        assert_eq!(out.data_type(), &DataType::Utf8);
+
+        Ok(())
     }
 }

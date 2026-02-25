@@ -18,7 +18,7 @@
 use arrow::{
     array::{ArrayRef, ArrowNumericType},
     datatypes::{
-        i256, Decimal128Type, Decimal256Type, Decimal32Type, Decimal64Type, DecimalType,
+        Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, DecimalType, i256,
     },
 };
 use datafusion_common::{Result, ScalarValue};
@@ -158,7 +158,7 @@ impl<T: DecimalType + ArrowNumericType + Debug> Accumulator
 mod tests {
     use super::*;
     use arrow::array::{
-        Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array,
+        Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
     };
     use std::sync::Arc;
 

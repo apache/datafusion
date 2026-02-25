@@ -31,9 +31,8 @@
 
 use arrow::datatypes::DataType;
 use arrow::datatypes::Float64Type;
-use datafusion_common::cast::as_primitive_array;
-use datafusion_common::Result;
 use datafusion_common::ScalarValue;
+use datafusion_common::cast::as_primitive_array;
 use std::cmp::Ordering;
 use std::mem::{size_of, size_of_val};
 
@@ -49,52 +48,6 @@ macro_rules! cast_scalar_f64 {
         }
     };
 }
-
-// Cast a non-null [`ScalarValue::UInt64`] to an [`u64`], or
-// panic.
-macro_rules! cast_scalar_u64 {
-    ($value:expr ) => {
-        match &$value {
-            ScalarValue::UInt64(Some(v)) => *v,
-            v => panic!("invalid type {}", v),
-        }
-    };
-}
-
-/// This trait is implemented for each type a [`TDigest`] can operate on,
-/// allowing it to support both numerical rust types (obtained from
-/// `PrimitiveArray` instances), and [`ScalarValue`] instances.
-pub trait TryIntoF64 {
-    /// A fallible conversion of a possibly null `self` into a [`f64`].
-    ///
-    /// If `self` is null, this method must return `Ok(None)`.
-    ///
-    /// If `self` cannot be coerced to the desired type, this method must return
-    /// an `Err` variant.
-    fn try_as_f64(&self) -> Result<Option<f64>>;
-}
-
-/// Generate an infallible conversion from `type` to an [`f64`].
-macro_rules! impl_try_ordered_f64 {
-    ($type:ty) => {
-        impl TryIntoF64 for $type {
-            fn try_as_f64(&self) -> Result<Option<f64>> {
-                Ok(Some(*self as f64))
-            }
-        }
-    };
-}
-
-impl_try_ordered_f64!(f64);
-impl_try_ordered_f64!(f32);
-impl_try_ordered_f64!(i64);
-impl_try_ordered_f64!(i32);
-impl_try_ordered_f64!(i16);
-impl_try_ordered_f64!(i8);
-impl_try_ordered_f64!(u64);
-impl_try_ordered_f64!(u32);
-impl_try_ordered_f64!(u16);
-impl_try_ordered_f64!(u8);
 
 /// Centroid implementation to the cluster mentioned in the paper.
 #[derive(Debug, PartialEq, Clone)]
@@ -146,7 +99,7 @@ pub struct TDigest {
     centroids: Vec<Centroid>,
     max_size: usize,
     sum: f64,
-    count: u64,
+    count: f64,
     max: f64,
     min: f64,
 }
@@ -156,26 +109,27 @@ impl TDigest {
         TDigest {
             centroids: Vec::new(),
             max_size,
-            sum: 0_f64,
-            count: 0,
+            sum: 0.0,
+            count: 0.0,
             max: f64::NAN,
             min: f64::NAN,
         }
     }
 
+    #[expect(clippy::needless_pass_by_value)]
     pub fn new_with_centroid(max_size: usize, centroid: Centroid) -> Self {
         TDigest {
             centroids: vec![centroid.clone()],
             max_size,
             sum: centroid.mean * centroid.weight,
-            count: 1,
+            count: centroid.weight,
             max: centroid.mean,
             min: centroid.mean,
         }
     }
 
     #[inline]
-    pub fn count(&self) -> u64 {
+    pub fn count(&self) -> f64 {
         self.count
     }
 
@@ -205,8 +159,8 @@ impl Default for TDigest {
         TDigest {
             centroids: Vec::new(),
             max_size: 100,
-            sum: 0_f64,
-            count: 0,
+            sum: 0.0,
+            count: 0.0,
             max: f64::NAN,
             min: f64::NAN,
         }
@@ -228,7 +182,11 @@ impl TDigest {
         if lo.is_nan() || hi.is_nan() {
             return v;
         }
-        v.clamp(lo, hi)
+
+        // Handle the case where floating point precision causes min > max.
+        let (min, max) = if lo > hi { (hi, lo) } else { (lo, hi) };
+
+        v.clamp(min, max)
     }
 
     // public for testing in other modules
@@ -247,12 +205,12 @@ impl TDigest {
         }
 
         let mut result = TDigest::new(self.max_size());
-        result.count = self.count() + sorted_values.len() as u64;
+        result.count = self.count() + sorted_values.len() as f64;
 
         let maybe_min = *sorted_values.first().unwrap();
         let maybe_max = *sorted_values.last().unwrap();
 
-        if self.count() > 0 {
+        if self.count() > 0.0 {
             result.min = self.min.min(maybe_min);
             result.max = self.max.max(maybe_max);
         } else {
@@ -264,7 +222,7 @@ impl TDigest {
 
         let mut k_limit: u64 = 1;
         let mut q_limit_times_count =
-            Self::k_to_q(k_limit, self.max_size) * result.count() as f64;
+            Self::k_to_q(k_limit, self.max_size) * result.count();
         k_limit += 1;
 
         let mut iter_centroids = self.centroids.iter().peekable();
@@ -312,7 +270,7 @@ impl TDigest {
 
                 compressed.push(curr.clone());
                 q_limit_times_count =
-                    Self::k_to_q(k_limit, self.max_size) * result.count() as f64;
+                    Self::k_to_q(k_limit, self.max_size) * result.count();
                 k_limit += 1;
                 curr = next;
             }
@@ -384,7 +342,7 @@ impl TDigest {
         let mut centroids: Vec<Centroid> = Vec::with_capacity(n_centroids);
         let mut starts: Vec<usize> = Vec::with_capacity(digests.len());
 
-        let mut count = 0;
+        let mut count = 0.0;
         let mut min = f64::INFINITY;
         let mut max = f64::NEG_INFINITY;
 
@@ -393,7 +351,7 @@ impl TDigest {
             starts.push(start);
 
             let curr_count = digest.count();
-            if curr_count > 0 {
+            if curr_count > 0.0 {
                 min = min.min(digest.min);
                 max = max.max(digest.max);
                 count += curr_count;
@@ -402,6 +360,11 @@ impl TDigest {
                     start += 1;
                 }
             }
+        }
+
+        // If no centroids were added (all digests had zero count), return default
+        if centroids.is_empty() {
+            return TDigest::default();
         }
 
         let mut digests_per_block: usize = 1;
@@ -428,7 +391,7 @@ impl TDigest {
         let mut compressed: Vec<Centroid> = Vec::with_capacity(max_size);
 
         let mut k_limit = 1;
-        let mut q_limit_times_count = Self::k_to_q(k_limit, max_size) * count as f64;
+        let mut q_limit_times_count = Self::k_to_q(k_limit, max_size) * count;
 
         let mut iter_centroids = centroids.iter_mut();
         let mut curr = iter_centroids.next().unwrap();
@@ -447,7 +410,7 @@ impl TDigest {
                 sums_to_merge = 0_f64;
                 weights_to_merge = 0_f64;
                 compressed.push(curr.clone());
-                q_limit_times_count = Self::k_to_q(k_limit, max_size) * count as f64;
+                q_limit_times_count = Self::k_to_q(k_limit, max_size) * count;
                 k_limit += 1;
                 curr = centroid;
             }
@@ -471,7 +434,7 @@ impl TDigest {
             return 0.0;
         }
 
-        let rank = q * self.count as f64;
+        let rank = q * self.count;
 
         let mut pos: usize;
         let mut t;
@@ -481,7 +444,7 @@ impl TDigest {
             }
 
             pos = 0;
-            t = self.count as f64;
+            t = self.count;
 
             for (k, centroid) in self.centroids.iter().enumerate().rev() {
                 t -= centroid.weight();
@@ -594,7 +557,7 @@ impl TDigest {
         vec![
             ScalarValue::UInt64(Some(self.max_size as u64)),
             ScalarValue::Float64(Some(self.sum)),
-            ScalarValue::UInt64(Some(self.count)),
+            ScalarValue::Float64(Some(self.count)),
             ScalarValue::Float64(Some(self.max)),
             ScalarValue::Float64(Some(self.min)),
             ScalarValue::List(arr),
@@ -642,7 +605,7 @@ impl TDigest {
         Self {
             max_size,
             sum: cast_scalar_f64!(state[1]),
-            count: cast_scalar_u64!(&state[2]),
+            count: cast_scalar_f64!(state[2]),
             max,
             min,
             centroids,
@@ -778,5 +741,23 @@ mod tests {
         let t = t.merge_unsorted_f64(vec![0.0, 1.0]);
 
         assert_eq!(t.size(), 96);
+    }
+
+    #[test]
+    fn test_identical_values_floating_point_precision() {
+        // Regression test for https://github.com/apache/datafusion/issues/14855
+        // When all values are the same, floating-point arithmetic during centroid
+        // merging can cause slight precision differences between min and max,
+        // which previously caused a panic in clamp().
+
+        let t = TDigest::new(100);
+        let values: Vec<_> = (0..215).map(|_| 15.699999988079073_f64).collect();
+
+        let t = t.merge_unsorted_f64(values);
+
+        // This should not panic
+        let result = t.estimate_quantile(0.99);
+        // The result should be approximately equal to the input value
+        assert!((result - 15.699999988079073).abs() < 1e-10);
     }
 }

@@ -22,21 +22,21 @@
 use std::any::Any;
 
 use arrow::datatypes::{
-    DataType, FieldRef, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
-    DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE, DECIMAL32_MAX_PRECISION,
-    DECIMAL32_MAX_SCALE, DECIMAL64_MAX_PRECISION, DECIMAL64_MAX_SCALE,
+    DECIMAL32_MAX_PRECISION, DECIMAL32_MAX_SCALE, DECIMAL64_MAX_PRECISION,
+    DECIMAL64_MAX_SCALE, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
+    DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE, DataType, FieldRef,
 };
 
 use datafusion_common::plan_err;
-use datafusion_common::{exec_err, not_impl_err, utils::take_function_args, Result};
+use datafusion_common::{Result, exec_err, not_impl_err, utils::take_function_args};
 
-use crate::type_coercion::aggregates::NUMERICS;
 use crate::Volatility::Immutable;
+use crate::type_coercion::aggregates::NUMERICS;
 use crate::{
+    Accumulator, AggregateUDFImpl, Expr, GroupsAccumulator, ReversedUDAF, Signature,
     expr::AggregateFunction,
     function::{AccumulatorArgs, StateFieldsArgs},
     utils::AggregateOrderSensitivity,
-    Accumulator, AggregateUDFImpl, Expr, GroupsAccumulator, ReversedUDAF, Signature,
 };
 
 macro_rules! create_func {

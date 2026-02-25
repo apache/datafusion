@@ -28,8 +28,8 @@ use crate::datasource::listing::{
 use crate::execution::context::SessionState;
 
 use arrow::datatypes::DataType;
-use datafusion_common::{arrow_datafusion_err, plan_err, DataFusionError, ToDFSchema};
-use datafusion_common::{config_datafusion_err, Result};
+use datafusion_common::{Result, config_datafusion_err};
+use datafusion_common::{ToDFSchema, arrow_datafusion_err, plan_err};
 use datafusion_expr::CreateExternalTable;
 
 use async_trait::async_trait;
@@ -54,7 +54,15 @@ impl TableProviderFactory for ListingTableFactory {
         cmd: &CreateExternalTable,
     ) -> Result<Arc<dyn TableProvider>> {
         // TODO (https://github.com/apache/datafusion/issues/11600) remove downcast_ref from here. Should file format factory be an extension to session state?
-        let session_state = state.as_any().downcast_ref::<SessionState>().unwrap();
+        let session_state =
+            state
+                .as_any()
+                .downcast_ref::<SessionState>()
+                .ok_or_else(|| {
+                    datafusion_common::internal_datafusion_err!(
+                        "ListingTableFactory requires SessionState"
+                    )
+                })?;
         let file_format = session_state
             .get_file_format_factory(cmd.file_type.as_str())
             .ok_or(config_datafusion_err!(
@@ -63,7 +71,8 @@ impl TableProviderFactory for ListingTableFactory {
             ))?
             .create(session_state, &cmd.options)?;
 
-        let mut table_path = ListingTableUrl::parse(&cmd.location)?;
+        let mut table_path =
+            ListingTableUrl::parse(&cmd.location)?.with_table_ref(cmd.name.clone());
         let file_extension = match table_path.is_collection() {
             // Setting the extension to be empty instead of allowing the default extension seems
             // odd, but was done to ensure existing behavior isn't modified. It seems like this
@@ -190,6 +199,16 @@ impl TableProviderFactory for ListingTableFactory {
             .with_definition(cmd.definition.clone())
             .with_constraints(cmd.constraints.clone())
             .with_column_defaults(cmd.column_defaults.clone());
+
+        // Pre-warm statistics cache if collect_statistics is enabled
+        if session_state.config().collect_statistics() {
+            let filters = &[];
+            let limit = None;
+            if let Err(e) = table.list_files_for_scan(state, filters, limit).await {
+                log::warn!("Failed to pre-warm statistics cache: {e}");
+            }
+        }
+
         Ok(Arc::new(table))
     }
 }
@@ -205,19 +224,23 @@ fn get_extension(path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::{
+        datasource::file_format::csv::CsvFormat, execution::context::SessionContext,
+        test_util::parquet_test_data,
+    };
+    use datafusion_execution::cache::CacheAccessor;
+    use datafusion_execution::cache::cache_manager::CacheManagerConfig;
+    use datafusion_execution::cache::cache_unit::DefaultFileStatisticsCache;
     use datafusion_execution::config::SessionConfig;
+    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use glob::Pattern;
     use std::collections::HashMap;
     use std::fs;
     use std::path::PathBuf;
 
-    use super::*;
-    use crate::{
-        datasource::file_format::csv::CsvFormat, execution::context::SessionContext,
-    };
-
     use datafusion_common::parsers::CompressionTypeVariant;
-    use datafusion_common::{Constraints, DFSchema, TableReference};
+    use datafusion_common::{DFSchema, TableReference};
 
     #[tokio::test]
     async fn test_create_using_non_std_file_ext() {
@@ -231,22 +254,14 @@ mod tests {
         let context = SessionContext::new();
         let state = context.state();
         let name = TableReference::bare("foo");
-        let cmd = CreateExternalTable {
+        let cmd = CreateExternalTable::builder(
             name,
-            location: csv_file.path().to_str().unwrap().to_string(),
-            file_type: "csv".to_string(),
-            schema: Arc::new(DFSchema::empty()),
-            table_partition_cols: vec![],
-            if_not_exists: false,
-            or_replace: false,
-            temporary: false,
-            definition: None,
-            order_exprs: vec![],
-            unbounded: false,
-            options: HashMap::from([("format.has_header".into(), "true".into())]),
-            constraints: Constraints::default(),
-            column_defaults: HashMap::new(),
-        };
+            csv_file.path().to_str().unwrap().to_string(),
+            "csv",
+            Arc::new(DFSchema::empty()),
+        )
+        .with_options(HashMap::from([("format.has_header".into(), "true".into())]))
+        .build();
         let table_provider = factory.create(&state, &cmd).await.unwrap();
         let listing_table = table_provider
             .as_any()
@@ -272,22 +287,14 @@ mod tests {
         let mut options = HashMap::new();
         options.insert("format.schema_infer_max_rec".to_owned(), "1000".to_owned());
         options.insert("format.has_header".into(), "true".into());
-        let cmd = CreateExternalTable {
+        let cmd = CreateExternalTable::builder(
             name,
-            location: csv_file.path().to_str().unwrap().to_string(),
-            file_type: "csv".to_string(),
-            schema: Arc::new(DFSchema::empty()),
-            table_partition_cols: vec![],
-            if_not_exists: false,
-            or_replace: false,
-            temporary: false,
-            definition: None,
-            order_exprs: vec![],
-            unbounded: false,
-            options,
-            constraints: Constraints::default(),
-            column_defaults: HashMap::new(),
-        };
+            csv_file.path().to_str().unwrap().to_string(),
+            "csv",
+            Arc::new(DFSchema::empty()),
+        )
+        .with_options(options)
+        .build();
         let table_provider = factory.create(&state, &cmd).await.unwrap();
         let listing_table = table_provider
             .as_any()
@@ -317,22 +324,14 @@ mod tests {
         options.insert("format.schema_infer_max_rec".to_owned(), "1000".to_owned());
         options.insert("format.has_header".into(), "true".into());
         options.insert("format.compression".into(), "gzip".into());
-        let cmd = CreateExternalTable {
+        let cmd = CreateExternalTable::builder(
             name,
-            location: dir.path().to_str().unwrap().to_string(),
-            file_type: "csv".to_string(),
-            schema: Arc::new(DFSchema::empty()),
-            table_partition_cols: vec![],
-            if_not_exists: false,
-            or_replace: false,
-            temporary: false,
-            definition: None,
-            order_exprs: vec![],
-            unbounded: false,
-            options,
-            constraints: Constraints::default(),
-            column_defaults: HashMap::new(),
-        };
+            dir.path().to_str().unwrap().to_string(),
+            "csv",
+            Arc::new(DFSchema::empty()),
+        )
+        .with_options(options)
+        .build();
         let table_provider = factory.create(&state, &cmd).await.unwrap();
         let listing_table = table_provider
             .as_any()
@@ -369,22 +368,14 @@ mod tests {
         let mut options = HashMap::new();
         options.insert("format.schema_infer_max_rec".to_owned(), "1000".to_owned());
         options.insert("format.has_header".into(), "true".into());
-        let cmd = CreateExternalTable {
+        let cmd = CreateExternalTable::builder(
             name,
-            location: dir.path().to_str().unwrap().to_string(),
-            file_type: "csv".to_string(),
-            schema: Arc::new(DFSchema::empty()),
-            table_partition_cols: vec![],
-            if_not_exists: false,
-            or_replace: false,
-            temporary: false,
-            definition: None,
-            order_exprs: vec![],
-            unbounded: false,
-            options,
-            constraints: Constraints::default(),
-            column_defaults: HashMap::new(),
-        };
+            dir.path().to_str().unwrap().to_string(),
+            "csv",
+            Arc::new(DFSchema::empty()),
+        )
+        .with_options(options)
+        .build();
         let table_provider = factory.create(&state, &cmd).await.unwrap();
         let listing_table = table_provider
             .as_any()
@@ -413,22 +404,13 @@ mod tests {
         let state = context.state();
         let name = TableReference::bare("foo");
 
-        let cmd = CreateExternalTable {
+        let cmd = CreateExternalTable::builder(
             name,
-            location: String::from(path.to_str().unwrap()),
-            file_type: "parquet".to_string(),
-            schema: Arc::new(DFSchema::empty()),
-            table_partition_cols: vec![],
-            if_not_exists: false,
-            or_replace: false,
-            temporary: false,
-            definition: None,
-            order_exprs: vec![],
-            unbounded: false,
-            options: HashMap::new(),
-            constraints: Constraints::default(),
-            column_defaults: HashMap::new(),
-        };
+            String::from(path.to_str().unwrap()),
+            "parquet",
+            Arc::new(DFSchema::empty()),
+        )
+        .build();
         let table_provider = factory.create(&state, &cmd).await.unwrap();
         let listing_table = table_provider
             .as_any()
@@ -453,22 +435,13 @@ mod tests {
         let state = context.state();
         let name = TableReference::bare("foo");
 
-        let cmd = CreateExternalTable {
+        let cmd = CreateExternalTable::builder(
             name,
-            location: dir.path().to_str().unwrap().to_string(),
-            file_type: "parquet".to_string(),
-            schema: Arc::new(DFSchema::empty()),
-            table_partition_cols: vec![],
-            if_not_exists: false,
-            or_replace: false,
-            temporary: false,
-            definition: None,
-            order_exprs: vec![],
-            unbounded: false,
-            options: HashMap::new(),
-            constraints: Constraints::default(),
-            column_defaults: HashMap::new(),
-        };
+            dir.path().to_str().unwrap(),
+            "parquet",
+            Arc::new(DFSchema::empty()),
+        )
+        .build();
         let table_provider = factory.create(&state, &cmd).await.unwrap();
         let listing_table = table_provider
             .as_any()
@@ -494,22 +467,13 @@ mod tests {
         let state = context.state();
         let name = TableReference::bare("foo");
 
-        let cmd = CreateExternalTable {
+        let cmd = CreateExternalTable::builder(
             name,
-            location: dir.path().to_str().unwrap().to_string(),
-            file_type: "parquet".to_string(),
-            schema: Arc::new(DFSchema::empty()),
-            table_partition_cols: vec![],
-            if_not_exists: false,
-            or_replace: false,
-            temporary: false,
-            definition: None,
-            order_exprs: vec![],
-            unbounded: false,
-            options: HashMap::new(),
-            constraints: Constraints::default(),
-            column_defaults: HashMap::new(),
-        };
+            dir.path().to_str().unwrap().to_string(),
+            "parquet",
+            Arc::new(DFSchema::empty()),
+        )
+        .build();
         let table_provider = factory.create(&state, &cmd).await.unwrap();
         let listing_table = table_provider
             .as_any()
@@ -518,5 +482,175 @@ mod tests {
 
         let listing_options = listing_table.options();
         assert!(listing_options.table_partition_cols.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_statistics_cache_prewarming() {
+        let factory = ListingTableFactory::new();
+
+        let location = PathBuf::from(parquet_test_data())
+            .join("alltypes_tiny_pages_plain.parquet")
+            .to_string_lossy()
+            .to_string();
+
+        // Test with collect_statistics enabled
+        let file_statistics_cache = Arc::new(DefaultFileStatisticsCache::default());
+        let cache_config = CacheManagerConfig::default()
+            .with_files_statistics_cache(Some(file_statistics_cache.clone()));
+        let runtime = RuntimeEnvBuilder::new()
+            .with_cache_manager(cache_config)
+            .build_arc()
+            .unwrap();
+
+        let mut config = SessionConfig::new();
+        config.options_mut().execution.collect_statistics = true;
+        let context = SessionContext::new_with_config_rt(config, runtime);
+        let state = context.state();
+        let name = TableReference::bare("test");
+
+        let cmd = CreateExternalTable::builder(
+            name,
+            location.clone(),
+            "parquet",
+            Arc::new(DFSchema::empty()),
+        )
+        .build();
+
+        let _table_provider = factory.create(&state, &cmd).await.unwrap();
+
+        assert!(
+            file_statistics_cache.len() > 0,
+            "Statistics cache should be pre-warmed when collect_statistics is enabled"
+        );
+
+        // Test with collect_statistics disabled
+        let file_statistics_cache = Arc::new(DefaultFileStatisticsCache::default());
+        let cache_config = CacheManagerConfig::default()
+            .with_files_statistics_cache(Some(file_statistics_cache.clone()));
+        let runtime = RuntimeEnvBuilder::new()
+            .with_cache_manager(cache_config)
+            .build_arc()
+            .unwrap();
+
+        let mut config = SessionConfig::new();
+        config.options_mut().execution.collect_statistics = false;
+        let context = SessionContext::new_with_config_rt(config, runtime);
+        let state = context.state();
+        let name = TableReference::bare("test");
+
+        let cmd = CreateExternalTable::builder(
+            name,
+            location,
+            "parquet",
+            Arc::new(DFSchema::empty()),
+        )
+        .build();
+
+        let _table_provider = factory.create(&state, &cmd).await.unwrap();
+
+        assert_eq!(
+            file_statistics_cache.len(),
+            0,
+            "Statistics cache should not be pre-warmed when collect_statistics is disabled"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_with_invalid_session() {
+        use async_trait::async_trait;
+        use datafusion_catalog::Session;
+        use datafusion_common::Result;
+        use datafusion_common::config::TableOptions;
+        use datafusion_execution::TaskContext;
+        use datafusion_execution::config::SessionConfig;
+        use datafusion_physical_expr::PhysicalExpr;
+        use datafusion_physical_plan::ExecutionPlan;
+        use std::any::Any;
+        use std::collections::HashMap;
+        use std::sync::Arc;
+
+        // A mock Session that is NOT SessionState
+        #[derive(Debug)]
+        struct MockSession;
+
+        #[async_trait]
+        impl Session for MockSession {
+            fn session_id(&self) -> &str {
+                "mock_session"
+            }
+            fn config(&self) -> &SessionConfig {
+                unimplemented!()
+            }
+            async fn create_physical_plan(
+                &self,
+                _logical_plan: &datafusion_expr::LogicalPlan,
+            ) -> Result<Arc<dyn ExecutionPlan>> {
+                unimplemented!()
+            }
+            fn create_physical_expr(
+                &self,
+                _expr: datafusion_expr::Expr,
+                _df_schema: &DFSchema,
+            ) -> Result<Arc<dyn PhysicalExpr>> {
+                unimplemented!()
+            }
+            fn scalar_functions(
+                &self,
+            ) -> &HashMap<String, Arc<datafusion_expr::ScalarUDF>> {
+                unimplemented!()
+            }
+            fn aggregate_functions(
+                &self,
+            ) -> &HashMap<String, Arc<datafusion_expr::AggregateUDF>> {
+                unimplemented!()
+            }
+            fn window_functions(
+                &self,
+            ) -> &HashMap<String, Arc<datafusion_expr::WindowUDF>> {
+                unimplemented!()
+            }
+            fn runtime_env(&self) -> &Arc<datafusion_execution::runtime_env::RuntimeEnv> {
+                unimplemented!()
+            }
+            fn execution_props(
+                &self,
+            ) -> &datafusion_expr::execution_props::ExecutionProps {
+                unimplemented!()
+            }
+            fn as_any(&self) -> &dyn Any {
+                self
+            }
+            fn table_options(&self) -> &TableOptions {
+                unimplemented!()
+            }
+            fn table_options_mut(&mut self) -> &mut TableOptions {
+                unimplemented!()
+            }
+            fn task_ctx(&self) -> Arc<TaskContext> {
+                unimplemented!()
+            }
+        }
+
+        let factory = ListingTableFactory::new();
+        let mock_session = MockSession;
+
+        let name = TableReference::bare("foo");
+        let cmd = CreateExternalTable::builder(
+            name,
+            "foo.csv".to_string(),
+            "csv",
+            Arc::new(DFSchema::empty()),
+        )
+        .build();
+
+        // This should return an error, not panic
+        let result = factory.create(&mock_session, &cmd).await;
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .strip_backtrace()
+                .contains("Internal error: ListingTableFactory requires SessionState")
+        );
     }
 }

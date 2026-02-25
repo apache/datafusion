@@ -24,13 +24,13 @@ use crate::coop::cooperative;
 use crate::execution_plan::{Boundedness, EmissionType, SchedulingType};
 use crate::memory::MemoryStream;
 use crate::{
-    common, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
-    SendableRecordBatchStream, Statistics,
+    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
+    SendableRecordBatchStream, Statistics, common,
 };
 
 use arrow::array::{ArrayRef, NullArray, RecordBatch, RecordBatchOptions};
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, assert_or_internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
 
@@ -43,7 +43,7 @@ pub struct PlaceholderRowExec {
     schema: SchemaRef,
     /// Number of partitions
     partitions: usize,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl PlaceholderRowExec {
@@ -54,7 +54,7 @@ impl PlaceholderRowExec {
         PlaceholderRowExec {
             schema,
             partitions,
-            cache,
+            cache: Arc::new(cache),
         }
     }
 
@@ -63,7 +63,7 @@ impl PlaceholderRowExec {
         self.partitions = partitions;
         // Update output partitioning when updating partitions:
         let output_partitioning = Self::output_partitioning_helper(self.partitions);
-        self.cache = self.cache.with_partitioning(output_partitioning);
+        Arc::make_mut(&mut self.cache).partitioning = output_partitioning;
         self
     }
 
@@ -132,7 +132,7 @@ impl ExecutionPlan for PlaceholderRowExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -152,22 +152,21 @@ impl ExecutionPlan for PlaceholderRowExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        trace!("Start PlaceholderRowExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
+        trace!(
+            "Start PlaceholderRowExec::execute for partition {} of context session_id {} and task_id {:?}",
+            partition,
+            context.session_id(),
+            context.task_id()
+        );
 
-        if partition >= self.partitions {
-            return internal_err!(
-                "PlaceholderRowExec invalid partition {} (expected less than {})",
-                partition,
-                self.partitions
-            );
-        }
+        assert_or_internal_err!(
+            partition < self.partitions,
+            "PlaceholderRowExec invalid partition {partition} (expected less than {})",
+            self.partitions
+        );
 
         let ms = MemoryStream::try_new(self.data()?, Arc::clone(&self.schema), None)?;
         Ok(Box::pin(cooperative(ms)))
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {

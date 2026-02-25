@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::logical_plan::producer::utils::flatten_names;
-use crate::logical_plan::producer::{to_substrait_precision, SubstraitProducer};
+use crate::logical_plan::producer::{SubstraitProducer, to_substrait_precision};
 use crate::variation_const::{
     DATE_32_TYPE_VARIATION_REF, DATE_64_TYPE_VARIATION_REF,
     DECIMAL_128_TYPE_VARIATION_REF, DECIMAL_256_TYPE_VARIATION_REF,
@@ -28,8 +28,8 @@ use crate::variation_const::{
     UNSIGNED_INTEGER_TYPE_VARIATION_REF, VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
 use datafusion::arrow::datatypes::{DataType, IntervalUnit};
-use datafusion::common::{not_impl_err, plan_err, DFSchemaRef};
-use substrait::proto::{r#type, NamedStruct};
+use datafusion::common::{DFSchemaRef, not_impl_err, plan_err};
+use substrait::proto::{NamedStruct, r#type};
 
 pub(crate) fn to_substrait_type(
     producer: &mut impl SubstraitProducer,
@@ -386,8 +386,8 @@ mod tests {
     use super::*;
     use crate::logical_plan::consumer::tests::test_consumer;
     use crate::logical_plan::consumer::{
-        from_substrait_named_struct, from_substrait_type_without_names,
-        DefaultSubstraitConsumer,
+        DefaultSubstraitConsumer, from_substrait_named_struct,
+        from_substrait_type_without_names,
     };
     use crate::logical_plan::producer::DefaultSubstraitProducer;
     use datafusion::arrow::datatypes::{Field, Fields, Schema, TimeUnit};

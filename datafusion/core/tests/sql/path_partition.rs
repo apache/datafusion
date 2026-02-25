@@ -31,14 +31,13 @@ use datafusion::{
         listing::{ListingOptions, ListingTable, ListingTableConfig},
     },
     error::Result,
-    physical_plan::ColumnStatistics,
     prelude::SessionContext,
     test_util::{self, arrow_test_data, parquet_test_data},
 };
 use datafusion_catalog::TableProvider;
+use datafusion_common::ScalarValue;
 use datafusion_common::stats::Precision;
 use datafusion_common::test_util::batches_to_sort_string;
-use datafusion_common::ScalarValue;
 use datafusion_execution::config::SessionConfig;
 
 use async_trait::async_trait;
@@ -46,11 +45,11 @@ use bytes::Bytes;
 use chrono::{TimeZone, Utc};
 use futures::stream::{self, BoxStream};
 use insta::assert_snapshot;
-use object_store::{
-    path::Path, GetOptions, GetResult, GetResultPayload, ListResult, ObjectMeta,
-    ObjectStore, PutOptions, PutResult,
-};
 use object_store::{Attributes, MultipartUpload, PutMultipartOptions, PutPayload};
+use object_store::{
+    GetOptions, GetResult, GetResultPayload, ListResult, ObjectMeta, ObjectStore,
+    PutOptions, PutResult, path::Path,
+};
 use url::Url;
 
 #[tokio::test]
@@ -464,10 +463,19 @@ async fn parquet_statistics() -> Result<()> {
     assert_eq!(stat_cols.len(), 4);
     // stats for the first col are read from the parquet file
     assert_eq!(stat_cols[0].null_count, Precision::Exact(3));
-    // TODO assert partition column (1,2,3) stats once implemented (#1186)
-    assert_eq!(stat_cols[1], ColumnStatistics::new_unknown(),);
-    assert_eq!(stat_cols[2], ColumnStatistics::new_unknown(),);
-    assert_eq!(stat_cols[3], ColumnStatistics::new_unknown(),);
+    // Partition column statistics (year=2021 for all 3 rows)
+    assert_eq!(stat_cols[1].null_count, Precision::Exact(0));
+    assert_eq!(
+        stat_cols[1].min_value,
+        Precision::Exact(ScalarValue::Int32(Some(2021)))
+    );
+    assert_eq!(
+        stat_cols[1].max_value,
+        Precision::Exact(ScalarValue::Int32(Some(2021)))
+    );
+    // month and day are Utf8 partition columns with statistics
+    assert_eq!(stat_cols[2].null_count, Precision::Exact(0));
+    assert_eq!(stat_cols[3].null_count, Precision::Exact(0));
 
     //// WITH PROJECTION ////
     let dataframe = ctx.sql("SELECT mycol, day FROM t WHERE day='28'").await?;
@@ -479,8 +487,16 @@ async fn parquet_statistics() -> Result<()> {
     assert_eq!(stat_cols.len(), 2);
     // stats for the first col are read from the parquet file
     assert_eq!(stat_cols[0].null_count, Precision::Exact(1));
-    // TODO assert partition column stats once implemented (#1186)
-    assert_eq!(stat_cols[1], ColumnStatistics::new_unknown());
+    // Partition column statistics for day='28' (1 row)
+    assert_eq!(stat_cols[1].null_count, Precision::Exact(0));
+    assert_eq!(
+        stat_cols[1].min_value,
+        Precision::Exact(ScalarValue::Utf8(Some("28".to_string())))
+    );
+    assert_eq!(
+        stat_cols[1].max_value,
+        Precision::Exact(ScalarValue::Utf8(Some("28".to_string())))
+    );
 
     Ok(())
 }

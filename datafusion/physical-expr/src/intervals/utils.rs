@@ -20,15 +20,15 @@
 use std::sync::Arc;
 
 use crate::{
-    expressions::{BinaryExpr, CastExpr, Column, Literal, NegativeExpr},
     PhysicalExpr,
+    expressions::{BinaryExpr, CastExpr, Column, Literal, NegativeExpr},
 };
 
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::datatypes::{DataType, SchemaRef};
-use datafusion_common::{internal_err, Result, ScalarValue};
-use datafusion_expr::interval_arithmetic::Interval;
+use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::Operator;
+use datafusion_expr::interval_arithmetic::Interval;
 
 /// Indicates whether interval arithmetic is supported for the given expression.
 /// Currently, we do not support all [`PhysicalExpr`]s for interval calculations.

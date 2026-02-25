@@ -16,21 +16,12 @@
 // under the License.
 
 use std::any::Any;
-use std::cmp::Ordering;
-use std::sync::Arc;
 
-use arrow::array::{
-    Array, ArrayAccessor, ArrayIter, ArrayRef, GenericStringArray, Int64Array,
-    OffsetSizeTrait,
-};
+use crate::unicode::common::{LeftSlicer, general_left_right};
+use crate::utils::make_scalar_function;
 use arrow::datatypes::DataType;
-
-use crate::utils::{make_scalar_function, utf8_to_str_type};
-use datafusion_common::cast::{
-    as_generic_string_array, as_int64_array, as_string_view_array,
-};
-use datafusion_common::exec_err;
 use datafusion_common::Result;
+use datafusion_common::exec_err;
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
@@ -94,22 +85,26 @@ impl ScalarUDFImpl for LeftFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        utf8_to_str_type(&arg_types[0], "left")
+        Ok(arg_types[0].clone())
     }
 
+    /// Returns first n characters in the string, or when n is negative, returns all but last |n| characters.
+    /// left('abcde', 2) = 'ab'
+    /// left('abcde', -2) = 'abc'
+    /// The implementation uses UTF-8 code points as characters
     fn invoke_with_args(
         &self,
         args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
         let args = &args.args;
         match args[0].data_type() {
-            DataType::Utf8 | DataType::Utf8View => {
-                make_scalar_function(left::<i32>, vec![])(args)
+            DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => {
+                make_scalar_function(general_left_right::<LeftSlicer>, vec![])(args)
             }
-            DataType::LargeUtf8 => make_scalar_function(left::<i64>, vec![])(args),
             other => exec_err!(
-                "Unsupported data type {other:?} for function left,\
-                expected Utf8View, Utf8 or LargeUtf8."
+                "Unsupported data type {other:?} for function {},\
+                expected Utf8View, Utf8 or LargeUtf8.",
+                self.name()
             ),
         }
     }
@@ -119,54 +114,10 @@ impl ScalarUDFImpl for LeftFunc {
     }
 }
 
-/// Returns first n characters in the string, or when n is negative, returns all but last |n| characters.
-/// left('abcde', 2) = 'ab'
-/// The implementation uses UTF-8 code points as characters
-pub fn left<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let n_array = as_int64_array(&args[1])?;
-
-    if args[0].data_type() == &DataType::Utf8View {
-        let string_array = as_string_view_array(&args[0])?;
-        left_impl::<T, _>(string_array, n_array)
-    } else {
-        let string_array = as_generic_string_array::<T>(&args[0])?;
-        left_impl::<T, _>(string_array, n_array)
-    }
-}
-
-fn left_impl<'a, T: OffsetSizeTrait, V: ArrayAccessor<Item = &'a str>>(
-    string_array: V,
-    n_array: &Int64Array,
-) -> Result<ArrayRef> {
-    let iter = ArrayIter::new(string_array);
-    let result = iter
-        .zip(n_array.iter())
-        .map(|(string, n)| match (string, n) {
-            (Some(string), Some(n)) => match n.cmp(&0) {
-                Ordering::Less => {
-                    let len = string.chars().count() as i64;
-                    Some(if n.abs() < len {
-                        string.chars().take((len + n) as usize).collect::<String>()
-                    } else {
-                        "".to_string()
-                    })
-                }
-                Ordering::Equal => Some("".to_string()),
-                Ordering::Greater => {
-                    Some(string.chars().take(n as usize).collect::<String>())
-                }
-            },
-            _ => None,
-        })
-        .collect::<GenericStringArray<T>>();
-
-    Ok(Arc::new(result) as ArrayRef)
-}
-
 #[cfg(test)]
 mod tests {
-    use arrow::array::{Array, StringArray};
-    use arrow::datatypes::DataType::Utf8;
+    use arrow::array::{Array, StringArray, StringViewArray};
+    use arrow::datatypes::DataType::{Utf8, Utf8View};
 
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
@@ -205,6 +156,17 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::from(-2i64)),
             ],
             Ok(Some("abc")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            LeftFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::from("abcde")),
+                ColumnarValue::Scalar(ScalarValue::from(i64::MIN)),
+            ],
+            Ok(Some("")),
             &str,
             Utf8,
             StringArray
@@ -289,6 +251,74 @@ mod tests {
             Utf8,
             StringArray
         );
+
+        // StringView cases
+        test_function!(
+            LeftFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some("abcde".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::from(2i64)),
+            ],
+            Ok(Some("ab")),
+            &str,
+            Utf8View,
+            StringViewArray
+        );
+        test_function!(
+            LeftFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some("abcde".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::from(200i64)),
+            ],
+            Ok(Some("abcde")),
+            &str,
+            Utf8View,
+            StringViewArray
+        );
+        test_function!(
+            LeftFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some("".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::from(200i64)),
+            ],
+            Ok(Some("")),
+            &str,
+            Utf8View,
+            StringViewArray
+        );
+        test_function!(
+            LeftFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
+                    "joséésoj".to_string()
+                ))),
+                ColumnarValue::Scalar(ScalarValue::from(-3i64)),
+            ],
+            Ok(Some("joséé")),
+            &str,
+            Utf8View,
+            StringViewArray
+        );
+
+        // Unicode indexing case
+        let input = "joé楽s𐀀so↓j";
+        for n in 1..=input.chars().count() {
+            let expected = input
+                .chars()
+                .take(input.chars().count() - n)
+                .collect::<String>();
+            test_function!(
+                LeftFunc::new(),
+                vec![
+                    ColumnarValue::Scalar(ScalarValue::from(input)),
+                    ColumnarValue::Scalar(ScalarValue::from(-(n as i64))),
+                ],
+                Ok(Some(expected.as_str())),
+                &str,
+                Utf8,
+                StringArray
+            );
+        }
 
         Ok(())
     }

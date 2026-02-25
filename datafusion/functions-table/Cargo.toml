@@ -48,7 +48,7 @@ datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-physical-plan = { workspace = true }
 parking_lot = { workspace = true }
-paste = "1.0.14"
+paste = { workspace = true }
 
 [dev-dependencies]
 arrow = { workspace = true, features = ["test_utils"] }

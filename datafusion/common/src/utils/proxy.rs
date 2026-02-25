@@ -15,12 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`VecAllocExt`] and [`RawTableAllocExt`] to help tracking of memory allocations
+//! [`VecAllocExt`] to help tracking of memory allocations
 
-use hashbrown::{
-    hash_table::HashTable,
-    raw::{Bucket, RawTable},
-};
+use hashbrown::hash_table::HashTable;
 use std::mem::size_of;
 
 /// Extension trait for [`Vec`] to account for allocations.
@@ -114,75 +111,6 @@ impl<T> VecAllocExt for Vec<T> {
     }
 }
 
-/// Extension trait for hash browns [`RawTable`] to account for allocations.
-pub trait RawTableAllocExt {
-    /// Item type.
-    type T;
-
-    /// [Insert](RawTable::insert) new element into table and increase
-    /// `accounting` by any newly allocated bytes.
-    ///
-    /// Returns the bucket where the element was inserted.
-    /// Note that allocation counts capacity, not size.
-    ///
-    /// # Example:
-    /// ```
-    /// # use datafusion_common::utils::proxy::RawTableAllocExt;
-    /// # use hashbrown::raw::RawTable;
-    /// let mut table = RawTable::new();
-    /// let mut allocated = 0;
-    /// let hash_fn = |x: &u32| (*x as u64) % 1000;
-    /// // pretend 0x3117 is the hash value for 1
-    /// table.insert_accounted(1, hash_fn, &mut allocated);
-    /// assert_eq!(allocated, 64);
-    ///
-    /// // insert more values
-    /// for i in 0..100 {
-    ///     table.insert_accounted(i, hash_fn, &mut allocated);
-    /// }
-    /// assert_eq!(allocated, 400);
-    /// ```
-    fn insert_accounted(
-        &mut self,
-        x: Self::T,
-        hasher: impl Fn(&Self::T) -> u64,
-        accounting: &mut usize,
-    ) -> Bucket<Self::T>;
-}
-
-impl<T> RawTableAllocExt for RawTable<T> {
-    type T = T;
-
-    fn insert_accounted(
-        &mut self,
-        x: Self::T,
-        hasher: impl Fn(&Self::T) -> u64,
-        accounting: &mut usize,
-    ) -> Bucket<Self::T> {
-        let hash = hasher(&x);
-
-        match self.try_insert_no_grow(hash, x) {
-            Ok(bucket) => bucket,
-            Err(x) => {
-                // need to request more memory
-
-                let bump_elements = self.capacity().max(16);
-                let bump_size = bump_elements * size_of::<T>();
-                *accounting = (*accounting).checked_add(bump_size).expect("overflow");
-
-                self.reserve(bump_elements, hasher);
-
-                // still need to insert the element since first try failed
-                // Note: cannot use `.expect` here because `T` may not implement `Debug`
-                match self.try_insert_no_grow(hash, x) {
-                    Ok(bucket) => bucket,
-                    Err(_) => panic!("just grew the container"),
-                }
-            }
-        }
-    }
-}
-
 /// Extension trait for hash browns [`HashTable`] to account for allocations.
 pub trait HashTableAllocExt {
     /// Item type.
@@ -193,6 +121,8 @@ pub trait HashTableAllocExt {
     ///
     /// Returns the bucket where the element was inserted.
     /// Note that allocation counts capacity, not size.
+    /// Panics:
+    ///     Assumes the element is not already present, and may panic if it does
     ///
     /// # Example:
     /// ```
@@ -206,7 +136,7 @@ pub trait HashTableAllocExt {
     /// assert_eq!(allocated, 64);
     ///
     /// // insert more values
-    /// for i in 0..100 {
+    /// for i in 2..100 {
     ///     table.insert_accounted(i, hash_fn, &mut allocated);
     /// }
     /// assert_eq!(allocated, 400);
@@ -233,22 +163,24 @@ where
     ) {
         let hash = hasher(&x);
 
-        // NOTE: `find_entry` does NOT grow!
-        match self.find_entry(hash, |y| y == &x) {
-            Ok(_occupied) => {}
-            Err(_absent) => {
-                if self.len() == self.capacity() {
-                    // need to request more memory
-                    let bump_elements = self.capacity().max(16);
-                    let bump_size = bump_elements * size_of::<T>();
-                    *accounting = (*accounting).checked_add(bump_size).expect("overflow");
-
-                    self.reserve(bump_elements, &hasher);
-                }
-
-                // still need to insert the element since first try failed
-                self.entry(hash, |y| y == &x, hasher).insert(x);
-            }
+        if cfg!(debug_assertions) {
+            // In debug mode, check that the element is not already present
+            debug_assert!(
+                self.find_entry(hash, |y| y == &x).is_err(),
+                "attempted to insert duplicate element into HashTableAllocExt::insert_accounted"
+            );
         }
+
+        if self.len() == self.capacity() {
+            // need to request more memory
+            let bump_elements = self.capacity().max(16);
+            let bump_size = bump_elements * size_of::<T>();
+            *accounting = (*accounting).checked_add(bump_size).expect("overflow");
+
+            self.reserve(bump_elements, &hasher);
+        }
+
+        // We assume the element is not already present
+        self.insert_unique(hash, x, hasher);
     }
 }

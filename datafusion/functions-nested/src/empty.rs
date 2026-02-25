@@ -25,7 +25,7 @@ use arrow::datatypes::{
     DataType::{Boolean, FixedSizeList, LargeList, List},
 };
 use datafusion_common::cast::as_generic_list_array;
-use datafusion_common::{exec_err, utils::take_function_args, Result};
+use datafusion_common::{Result, exec_err, utils::take_function_args};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
@@ -110,8 +110,7 @@ impl ScalarUDFImpl for ArrayEmpty {
     }
 }
 
-/// Array_empty SQL function
-pub fn array_empty_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_empty_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array] = take_function_args("array_empty", args)?;
     match array.data_type() {
         List(_) => general_array_empty::<i32>(array),

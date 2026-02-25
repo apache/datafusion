@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::logical_plan::producer::{to_substrait_type, SubstraitProducer};
+use crate::logical_plan::producer::{SubstraitProducer, to_substrait_type};
 use crate::variation_const::{
     DATE_32_TYPE_VARIATION_REF, DECIMAL_128_TYPE_VARIATION_REF,
     DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF, FLOAT_16_TYPE_NAME,
@@ -25,7 +25,7 @@ use crate::variation_const::{
 };
 use datafusion::arrow::array::{Array, GenericListArray, OffsetSizeTrait};
 use datafusion::arrow::temporal_conversions::NANOSECONDS;
-use datafusion::common::{exec_err, not_impl_err, ScalarValue};
+use datafusion::common::{ScalarValue, exec_err, not_impl_err};
 use substrait::proto::expression::literal::interval_day_to_second::PrecisionMode;
 use substrait::proto::expression::literal::map::KeyValue;
 use substrait::proto::expression::literal::{
@@ -33,7 +33,7 @@ use substrait::proto::expression::literal::{
     LiteralType, Map, PrecisionTime, PrecisionTimestamp, Struct,
 };
 use substrait::proto::expression::{Literal, RexType};
-use substrait::proto::{r#type, Expression};
+use substrait::proto::{Expression, r#type};
 
 pub fn from_literal(
     producer: &mut impl SubstraitProducer,
@@ -413,8 +413,8 @@ mod tests {
     use datafusion::arrow::datatypes::{
         DataType, Field, IntervalDayTime, IntervalMonthDayNano,
     };
-    use datafusion::common::scalar::ScalarStructBuilder;
     use datafusion::common::Result;
+    use datafusion::common::scalar::ScalarStructBuilder;
     use datafusion::prelude::SessionContext;
     use std::sync::Arc;
 

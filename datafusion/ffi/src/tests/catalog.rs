@@ -25,20 +25,21 @@
 //! access the runtime, then you will get a panic when trying to do operations
 //! such as spawning a tokio task.
 
-use std::{any::Any, fmt::Debug, sync::Arc};
+use std::any::Any;
+use std::fmt::Debug;
+use std::sync::Arc;
 
-use crate::catalog_provider::FFI_CatalogProvider;
 use arrow::datatypes::Schema;
 use async_trait::async_trait;
-use datafusion::{
-    catalog::{
-        CatalogProvider, MemoryCatalogProvider, MemorySchemaProvider, SchemaProvider,
-        TableProvider,
-    },
-    common::exec_err,
-    datasource::MemTable,
-    error::{DataFusionError, Result},
+use datafusion_catalog::{
+    CatalogProvider, CatalogProviderList, MemTable, MemoryCatalogProvider,
+    MemoryCatalogProviderList, MemorySchemaProvider, SchemaProvider, TableProvider,
 };
+use datafusion_common::{Result, exec_err};
+
+use crate::catalog_provider::FFI_CatalogProvider;
+use crate::catalog_provider_list::FFI_CatalogProviderList;
+use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
 
 /// This schema provider is intended only for unit tests. It prepopulates with one
 /// table and only allows for tables named sales and purchases.
@@ -49,7 +50,7 @@ pub struct FixedSchemaProvider {
 
 pub fn fruit_table() -> Arc<dyn TableProvider + 'static> {
     use arrow::datatypes::{DataType, Field};
-    use datafusion::common::record_batch;
+    use datafusion_common::record_batch;
 
     let schema = Arc::new(Schema::new(vec![
         Field::new("units", DataType::Int32, true),
@@ -96,10 +97,7 @@ impl SchemaProvider for FixedSchemaProvider {
         self.inner.table_names()
     }
 
-    async fn table(
-        &self,
-        name: &str,
-    ) -> Result<Option<Arc<dyn TableProvider>>, DataFusionError> {
+    async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
         self.inner.table(name).await
     }
 
@@ -162,7 +160,9 @@ impl CatalogProvider for FixedCatalogProvider {
         schema: Arc<dyn SchemaProvider>,
     ) -> Result<Option<Arc<dyn SchemaProvider>>> {
         if !["apple", "banana", "cherry", "date"].contains(&name) {
-            return exec_err!("FixedCatalogProvider only provides four schemas: apple, banana, cherry, date");
+            return exec_err!(
+                "FixedCatalogProvider only provides four schemas: apple, banana, cherry, date"
+            );
         }
 
         self.inner.register_schema(name, schema)
@@ -177,7 +177,65 @@ impl CatalogProvider for FixedCatalogProvider {
     }
 }
 
-pub(crate) extern "C" fn create_catalog_provider() -> FFI_CatalogProvider {
+pub(crate) extern "C" fn create_catalog_provider(
+    codec: FFI_LogicalExtensionCodec,
+) -> FFI_CatalogProvider {
     let catalog_provider = Arc::new(FixedCatalogProvider::default());
-    FFI_CatalogProvider::new(catalog_provider, None)
+    FFI_CatalogProvider::new_with_ffi_codec(catalog_provider, None, codec)
+}
+
+/// This catalog provider list is intended only for unit tests. It prepopulates with one
+/// catalog and only allows for catalogs named after four colors.
+#[derive(Debug)]
+pub struct FixedCatalogProviderList {
+    inner: MemoryCatalogProviderList,
+}
+
+impl Default for FixedCatalogProviderList {
+    fn default() -> Self {
+        let inner = MemoryCatalogProviderList::new();
+
+        let _ = inner.register_catalog(
+            "blue".to_owned(),
+            Arc::new(FixedCatalogProvider::default()),
+        );
+
+        Self { inner }
+    }
+}
+
+impl CatalogProviderList for FixedCatalogProviderList {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn catalog_names(&self) -> Vec<String> {
+        self.inner.catalog_names()
+    }
+
+    fn catalog(&self, name: &str) -> Option<Arc<dyn CatalogProvider>> {
+        self.inner.catalog(name)
+    }
+
+    fn register_catalog(
+        &self,
+        name: String,
+        catalog: Arc<dyn CatalogProvider>,
+    ) -> Option<Arc<dyn CatalogProvider>> {
+        if !["blue", "red", "green", "yellow"].contains(&name.as_str()) {
+            log::warn!(
+                "FixedCatalogProviderList only provides four catalogs: blue, red, green, yellow"
+            );
+            return None;
+        }
+
+        self.inner.register_catalog(name, catalog)
+    }
+}
+
+pub(crate) extern "C" fn create_catalog_provider_list(
+    codec: FFI_LogicalExtensionCodec,
+) -> FFI_CatalogProviderList {
+    let catalog_provider_list = Arc::new(FixedCatalogProviderList::default());
+    FFI_CatalogProviderList::new_with_ffi_codec(catalog_provider_list, None, codec)
 }

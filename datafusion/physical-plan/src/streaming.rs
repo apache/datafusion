@@ -23,18 +23,18 @@ use std::sync::Arc;
 
 use super::{DisplayAs, DisplayFormatType, PlanProperties};
 use crate::coop::make_cooperative;
-use crate::display::{display_orderings, ProjectSchemaDisplay};
+use crate::display::{ProjectSchemaDisplay, display_orderings};
 use crate::execution_plan::{Boundedness, EmissionType, SchedulingType};
 use crate::limit::LimitStream;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::projection::{
-    all_alias_free_columns, new_projections_for_columns, update_ordering, ProjectionExec,
+    ProjectionExec, all_alias_free_columns, new_projections_for_columns, update_ordering,
 };
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{ExecutionPlan, Partitioning, SendableRecordBatchStream};
 
 use arrow::datatypes::{Schema, SchemaRef};
-use datafusion_common::{internal_err, plan_err, Result};
+use datafusion_common::{Result, internal_err, plan_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
@@ -67,7 +67,7 @@ pub struct StreamingTableExec {
     projected_output_ordering: Vec<LexOrdering>,
     infinite: bool,
     limit: Option<usize>,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
     metrics: ExecutionPlanMetricsSet,
 }
 
@@ -111,7 +111,7 @@ impl StreamingTableExec {
             projected_output_ordering,
             infinite,
             limit,
-            cache,
+            cache: Arc::new(cache),
             metrics: ExecutionPlanMetricsSet::new(),
         })
     }
@@ -236,7 +236,7 @@ impl ExecutionPlan for StreamingTableExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -335,7 +335,7 @@ impl ExecutionPlan for StreamingTableExec {
             projected_output_ordering: self.projected_output_ordering.clone(),
             infinite: self.infinite,
             limit,
-            cache: self.cache.clone(),
+            cache: Arc::clone(&self.cache),
             metrics: self.metrics.clone(),
         }))
     }
@@ -346,7 +346,7 @@ mod test {
     use super::*;
     use crate::collect_partitioned;
     use crate::streaming::PartitionStream;
-    use crate::test::{make_partition, TestPartitionStream};
+    use crate::test::{TestPartitionStream, make_partition};
     use arrow::record_batch::RecordBatch;
 
     #[tokio::test]

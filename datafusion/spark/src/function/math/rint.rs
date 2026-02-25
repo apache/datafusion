@@ -21,10 +21,10 @@ use std::sync::Arc;
 use arrow::array::{Array, ArrayRef, AsArray};
 use arrow::compute::cast;
 use arrow::datatypes::DataType::{
-    Float32, Float64, Int16, Int32, Int64, Int8, UInt16, UInt32, UInt64, UInt8,
+    Float32, Float64, Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64,
 };
 use arrow::datatypes::{DataType, Float32Type, Float64Type};
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{Result, assert_eq_or_internal_err, exec_err};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
@@ -83,9 +83,7 @@ impl ScalarUDFImpl for SparkRint {
 }
 
 pub fn spark_rint(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 1 {
-        return exec_err!("rint expects exactly 1 argument, got {}", args.len());
-    }
+    assert_eq_or_internal_err!(args.len(), 1, "`rint` expects exactly one argument");
 
     let array: &dyn Array = args[0].as_ref();
     match args[0].data_type() {

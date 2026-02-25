@@ -18,20 +18,21 @@
 //! [`VarianceSample`]: variance sample aggregations.
 //! [`VariancePopulation`]: variance population aggregations.
 
-use arrow::datatypes::FieldRef;
+use arrow::datatypes::{FieldRef, Float64Type};
 use arrow::{
     array::{Array, ArrayRef, BooleanArray, Float64Array, UInt64Array},
     buffer::NullBuffer,
-    compute::kernels::cast,
     datatypes::{DataType, Field},
 };
-use datafusion_common::{downcast_value, not_impl_err, plan_err, Result, ScalarValue};
+use datafusion_common::cast::{as_float64_array, as_uint64_array};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
-    function::{AccumulatorArgs, StateFieldsArgs},
-    utils::format_state_name,
     Accumulator, AggregateUDFImpl, Documentation, GroupsAccumulator, Signature,
     Volatility,
+    function::{AccumulatorArgs, StateFieldsArgs},
+    utils::format_state_name,
 };
+use datafusion_functions_aggregate_common::utils::GenericDistinctBuffer;
 use datafusion_functions_aggregate_common::{
     aggregate::groups_accumulator::accumulate::accumulate, stats::StatsType,
 };
@@ -61,19 +62,10 @@ make_udaf_expr_and_func!(
     syntax_example = "var(expression)",
     standard_argument(name = "expression", prefix = "Numeric")
 )]
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash, Debug)]
 pub struct VarianceSample {
     signature: Signature,
     aliases: Vec<String>,
-}
-
-impl Debug for VarianceSample {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.debug_struct("VarianceSample")
-            .field("name", &self.name())
-            .field("signature", &self.signature)
-            .finish()
-    }
 }
 
 impl Default for VarianceSample {
@@ -86,7 +78,7 @@ impl VarianceSample {
     pub fn new() -> Self {
         Self {
             aliases: vec![String::from("var_sample"), String::from("var_samp")],
-            signature: Signature::numeric(1, Volatility::Immutable),
+            signature: Signature::exact(vec![DataType::Float64], Volatility::Immutable),
         }
     }
 }
@@ -110,19 +102,35 @@ impl AggregateUDFImpl for VarianceSample {
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         let name = args.name;
-        Ok(vec![
-            Field::new(format_state_name(name, "count"), DataType::UInt64, true),
-            Field::new(format_state_name(name, "mean"), DataType::Float64, true),
-            Field::new(format_state_name(name, "m2"), DataType::Float64, true),
-        ]
-        .into_iter()
-        .map(Arc::new)
-        .collect())
+        match args.is_distinct {
+            false => Ok(vec![
+                Field::new(format_state_name(name, "count"), DataType::UInt64, true),
+                Field::new(format_state_name(name, "mean"), DataType::Float64, true),
+                Field::new(format_state_name(name, "m2"), DataType::Float64, true),
+            ]
+            .into_iter()
+            .map(Arc::new)
+            .collect()),
+            true => {
+                let field = Field::new_list_field(DataType::Float64, true);
+                let state_name = "distinct_var";
+                Ok(vec![
+                    Field::new(
+                        format_state_name(name, state_name),
+                        DataType::List(Arc::new(field)),
+                        true,
+                    )
+                    .into(),
+                ])
+            }
+        }
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         if acc_args.is_distinct {
-            return not_impl_err!("VAR(DISTINCT) aggregations are not available");
+            return Ok(Box::new(DistinctVarianceAccumulator::new(
+                StatsType::Sample,
+            )));
         }
 
         Ok(Box::new(VarianceAccumulator::try_new(StatsType::Sample)?))
@@ -154,19 +162,10 @@ impl AggregateUDFImpl for VarianceSample {
     syntax_example = "var_pop(expression)",
     standard_argument(name = "expression", prefix = "Numeric")
 )]
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash, Debug)]
 pub struct VariancePopulation {
     signature: Signature,
     aliases: Vec<String>,
-}
-
-impl Debug for VariancePopulation {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.debug_struct("VariancePopulation")
-            .field("name", &self.name())
-            .field("signature", &self.signature)
-            .finish()
-    }
 }
 
 impl Default for VariancePopulation {
@@ -179,7 +178,7 @@ impl VariancePopulation {
     pub fn new() -> Self {
         Self {
             aliases: vec![String::from("var_population")],
-            signature: Signature::numeric(1, Volatility::Immutable),
+            signature: Signature::exact(vec![DataType::Float64], Volatility::Immutable),
         }
     }
 }
@@ -197,29 +196,43 @@ impl AggregateUDFImpl for VariancePopulation {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if !arg_types[0].is_numeric() {
-            return plan_err!("Variance requires numeric input types");
-        }
-
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Float64)
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-        let name = args.name;
-        Ok(vec![
-            Field::new(format_state_name(name, "count"), DataType::UInt64, true),
-            Field::new(format_state_name(name, "mean"), DataType::Float64, true),
-            Field::new(format_state_name(name, "m2"), DataType::Float64, true),
-        ]
-        .into_iter()
-        .map(Arc::new)
-        .collect())
+        match args.is_distinct {
+            false => {
+                let name = args.name;
+                Ok(vec![
+                    Field::new(format_state_name(name, "count"), DataType::UInt64, true),
+                    Field::new(format_state_name(name, "mean"), DataType::Float64, true),
+                    Field::new(format_state_name(name, "m2"), DataType::Float64, true),
+                ]
+                .into_iter()
+                .map(Arc::new)
+                .collect())
+            }
+            true => {
+                let field = Field::new_list_field(DataType::Float64, true);
+                let state_name = "distinct_var";
+                Ok(vec![
+                    Field::new(
+                        format_state_name(args.name, state_name),
+                        DataType::List(Arc::new(field)),
+                        true,
+                    )
+                    .into(),
+                ])
+            }
+        }
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         if acc_args.is_distinct {
-            return not_impl_err!("VAR_POP(DISTINCT) aggregations are not available");
+            return Ok(Box::new(DistinctVarianceAccumulator::new(
+                StatsType::Population,
+            )));
         }
 
         Ok(Box::new(VarianceAccumulator::try_new(
@@ -243,6 +256,7 @@ impl AggregateUDFImpl for VariancePopulation {
             StatsType::Population,
         )))
     }
+
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
@@ -330,10 +344,8 @@ impl Accumulator for VarianceAccumulator {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let values = &cast(&values[0], &DataType::Float64)?;
-        let arr = downcast_value!(values, Float64Array).iter().flatten();
-
-        for value in arr {
+        let arr = as_float64_array(&values[0])?;
+        for value in arr.iter().flatten() {
             (self.count, self.mean, self.m2) =
                 update(self.count, self.mean, self.m2, value)
         }
@@ -342,10 +354,8 @@ impl Accumulator for VarianceAccumulator {
     }
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let values = &cast(&values[0], &DataType::Float64)?;
-        let arr = downcast_value!(values, Float64Array).iter().flatten();
-
-        for value in arr {
+        let arr = as_float64_array(&values[0])?;
+        for value in arr.iter().flatten() {
             let new_count = self.count - 1;
             let delta1 = self.mean - value;
             let new_mean = delta1 / new_count as f64 + self.mean;
@@ -361,9 +371,9 @@ impl Accumulator for VarianceAccumulator {
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        let counts = downcast_value!(states[0], UInt64Array);
-        let means = downcast_value!(states[1], Float64Array);
-        let m2s = downcast_value!(states[2], Float64Array);
+        let counts = as_uint64_array(&states[0])?;
+        let means = as_float64_array(&states[1])?;
+        let m2s = as_float64_array(&states[2])?;
 
         for i in 0..counts.len() {
             let c = counts.value(i);
@@ -498,8 +508,7 @@ impl GroupsAccumulator for VarianceGroupsAccumulator {
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 1, "single argument to update_batch");
-        let values = &cast(&values[0], &DataType::Float64)?;
-        let values = downcast_value!(values, Float64Array);
+        let values = as_float64_array(&values[0])?;
 
         self.resize(total_num_groups);
         accumulate(group_indices, values, opt_filter, |group_index, value| {
@@ -526,9 +535,9 @@ impl GroupsAccumulator for VarianceGroupsAccumulator {
     ) -> Result<()> {
         assert_eq!(values.len(), 3, "two arguments to merge_batch");
         // first batch is counts, second is partial means, third is partial m2s
-        let partial_counts = downcast_value!(values[0], UInt64Array);
-        let partial_means = downcast_value!(values[1], Float64Array);
-        let partial_m2s = downcast_value!(values[2], Float64Array);
+        let partial_counts = as_uint64_array(&values[0])?;
+        let partial_means = as_float64_array(&values[1])?;
+        let partial_m2s = as_float64_array(&values[2])?;
 
         self.resize(total_num_groups);
         Self::merge(
@@ -578,6 +587,71 @@ impl GroupsAccumulator for VarianceGroupsAccumulator {
         self.m2s.capacity() * size_of::<f64>()
             + self.means.capacity() * size_of::<f64>()
             + self.counts.capacity() * size_of::<u64>()
+    }
+}
+
+#[derive(Debug)]
+pub struct DistinctVarianceAccumulator {
+    distinct_values: GenericDistinctBuffer<Float64Type>,
+    stat_type: StatsType,
+}
+
+impl DistinctVarianceAccumulator {
+    pub fn new(stat_type: StatsType) -> Self {
+        Self {
+            distinct_values: GenericDistinctBuffer::<Float64Type>::new(DataType::Float64),
+            stat_type,
+        }
+    }
+}
+
+impl Accumulator for DistinctVarianceAccumulator {
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        self.distinct_values.update_batch(values)
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        let values = self
+            .distinct_values
+            .values
+            .iter()
+            .map(|v| v.0)
+            .collect::<Vec<_>>();
+
+        let count = match self.stat_type {
+            StatsType::Sample => {
+                if !values.is_empty() {
+                    values.len() - 1
+                } else {
+                    0
+                }
+            }
+            StatsType::Population => values.len(),
+        };
+
+        let mean = values.iter().sum::<f64>() / values.len() as f64;
+        let m2 = values.iter().map(|x| (x - mean) * (x - mean)).sum::<f64>();
+
+        Ok(ScalarValue::Float64(match values.len() {
+            0 => None,
+            1 => match self.stat_type {
+                StatsType::Population => Some(0.0),
+                StatsType::Sample => None,
+            },
+            _ => Some(m2 / count as f64),
+        }))
+    }
+
+    fn size(&self) -> usize {
+        size_of_val(self) + self.distinct_values.size()
+    }
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        self.distinct_values.state()
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        self.distinct_values.merge_batch(states)
     }
 }
 

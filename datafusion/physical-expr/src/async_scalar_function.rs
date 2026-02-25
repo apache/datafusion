@@ -16,13 +16,14 @@
 // under the License.
 
 use crate::ScalarFunctionExpr;
-use arrow::array::{make_array, MutableArrayData, RecordBatch};
+use arrow::array::RecordBatch;
+use arrow::compute::concat;
 use arrow::datatypes::{DataType, Field, FieldRef, Schema};
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::Result;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::{internal_err, not_impl_err};
-use datafusion_expr::async_udf::AsyncScalarUDF;
 use datafusion_expr::ScalarFunctionArgs;
+use datafusion_expr::async_udf::AsyncScalarUDF;
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::any::Any;
@@ -98,12 +99,11 @@ impl AsyncFuncExpr {
 
     /// Return the ideal batch size for this function
     pub fn ideal_batch_size(&self) -> Result<Option<usize>> {
-        if let Some(expr) = self.func.as_any().downcast_ref::<ScalarFunctionExpr>() {
-            if let Some(udf) =
+        if let Some(expr) = self.func.as_any().downcast_ref::<ScalarFunctionExpr>()
+            && let Some(udf) =
                 expr.fun().inner().as_any().downcast_ref::<AsyncScalarUDF>()
-            {
-                return Ok(udf.ideal_batch_size());
-            }
+        {
+            return Ok(udf.ideal_batch_size());
         }
         not_impl_err!("Can't get ideal_batch_size from {:?}", self.func)
     }
@@ -192,17 +192,21 @@ impl AsyncFuncExpr {
             );
         }
 
-        let datas = ColumnarValue::values_to_arrays(&result_batches)?
+        let datas = result_batches
+            .into_iter()
+            .map(|cv| match cv {
+                ColumnarValue::Array(arr) => Ok(arr),
+                ColumnarValue::Scalar(scalar) => Ok(scalar.to_array_of_size(1)?),
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        // Get references to the arrays as dyn Array to call concat
+        let dyn_arrays = datas
             .iter()
-            .map(|b| b.to_data())
+            .map(|arr| arr as &dyn arrow::array::Array)
             .collect::<Vec<_>>();
-        let total_len = datas.iter().map(|d| d.len()).sum();
-        let mut mutable = MutableArrayData::new(datas.iter().collect(), false, total_len);
-        datas.iter().enumerate().for_each(|(i, data)| {
-            mutable.extend(i, 0, data.len());
-        });
-        let array_ref = make_array(mutable.freeze());
-        Ok(ColumnarValue::Array(array_ref))
+        let result_array = concat(&dyn_arrays)?;
+        Ok(ColumnarValue::Array(result_array))
     }
 }
 

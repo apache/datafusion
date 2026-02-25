@@ -17,9 +17,12 @@
   under the License.
 -->
 
-# Extending DataFusion's operators: custom LogicalPlan and Execution Plans
+# Extending Operators
 
-DataFusion supports extension of operators by transforming logical plan and execution plan through customized [optimizer rules](https://docs.rs/datafusion/latest/datafusion/optimizer/trait.OptimizerRule.html). This section will use the µWheel project to illustrate such capabilities.
+DataFusion supports extending operators by transforming [`LogicalPlan`] and [`ExecutionPlan`] through customized [optimizer rules](https://docs.rs/datafusion/latest/datafusion/optimizer/trait.OptimizerRule.html). This section will use the µWheel project to illustrate such capabilities.
+
+[`logicalplan`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/enum.LogicalPlan.html
+[`executionplan`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html
 
 ## About DataFusion µWheel
 

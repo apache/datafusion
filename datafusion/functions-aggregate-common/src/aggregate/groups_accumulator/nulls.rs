@@ -24,7 +24,7 @@ use arrow::array::{
 };
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::DataType;
-use datafusion_common::{not_impl_err, Result};
+use datafusion_common::{Result, not_impl_err};
 use std::sync::Arc;
 
 /// Sets the validity mask for a `PrimitiveArray` to `nulls`

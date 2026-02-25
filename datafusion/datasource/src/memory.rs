@@ -29,18 +29,21 @@ use crate::source::{DataSource, DataSourceExec};
 
 use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::{Schema, SchemaRef};
-use datafusion_common::{internal_err, plan_err, project_schema, Result, ScalarValue};
+use datafusion_common::{
+    Result, ScalarValue, assert_or_internal_err, plan_err, project_schema,
+};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::project_orderings;
+use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 use datafusion_physical_plan::memory::MemoryStream;
 use datafusion_physical_plan::projection::{
-    all_alias_free_columns, new_projections_for_columns, ProjectionExpr,
+    all_alias_free_columns, new_projections_for_columns,
 };
 use datafusion_physical_plan::{
-    common, ColumnarValue, DisplayAs, DisplayFormatType, Partitioning, PhysicalExpr,
-    SendableRecordBatchStream, Statistics,
+    ColumnarValue, DisplayAs, DisplayFormatType, Partitioning, PhysicalExpr,
+    SendableRecordBatchStream, Statistics, common,
 };
 
 use async_trait::async_trait;
@@ -117,10 +120,10 @@ impl DataSource for MemorySourceConfig {
                     .map_or(String::new(), |limit| format!(", fetch={limit}"));
                 if self.show_sizes {
                     write!(
-                                f,
-                                "partitions={}, partition_sizes={partition_sizes:?}{limit}{output_ordering}{constraints}",
-                                partition_sizes.len(),
-                            )
+                        f,
+                        "partitions={}, partition_sizes={partition_sizes:?}{limit}{output_ordering}{constraints}",
+                        partition_sizes.len(),
+                    )
                 } else {
                     write!(
                         f,
@@ -227,15 +230,16 @@ impl DataSource for MemorySourceConfig {
 
     fn try_swapping_with_projection(
         &self,
-        projection: &[ProjectionExpr],
+        projection: &ProjectionExprs,
     ) -> Result<Option<Arc<dyn DataSource>>> {
         // If there is any non-column or alias-carrier expression, Projection should not be removed.
         // This process can be moved into MemoryExec, but it would be an overlap of their responsibility.
-        all_alias_free_columns(projection)
+        let exprs = projection.iter().cloned().collect_vec();
+        all_alias_free_columns(exprs.as_slice())
             .then(|| {
                 let all_projections = (0..self.schema.fields().len()).collect();
                 let new_projections = new_projections_for_columns(
-                    projection,
+                    &exprs,
                     self.projection().as_ref().unwrap_or(&all_projections),
                 );
 
@@ -282,6 +286,7 @@ impl MemorySourceConfig {
     }
 
     /// Create a new execution plan from a list of constant values (`ValuesExec`)
+    #[expect(clippy::needless_pass_by_value)]
     pub fn try_new_as_values(
         schema: SchemaRef,
         data: Vec<Vec<Arc<dyn PhysicalExpr>>>,
@@ -339,6 +344,7 @@ impl MemorySourceConfig {
     ///
     /// Errors if any of the batches don't match the provided schema, or if no
     /// batches are provided.
+    #[expect(clippy::needless_pass_by_value)]
     pub fn try_new_from_batches(
         schema: SchemaRef,
         batches: Vec<RecordBatch>,
@@ -438,12 +444,11 @@ impl MemorySourceConfig {
                     .map(|field| field.name() != col.name())
                     .unwrap_or(true)
             });
-        if let Some(col) = ambiguous_column {
-            return internal_err!(
-                "Column {:?} is not found in the original schema of the MemorySourceConfig",
-                col
-            );
-        }
+        assert_or_internal_err!(
+            ambiguous_column.is_none(),
+            "Column {:?} is not found in the original schema of the MemorySourceConfig",
+            ambiguous_column.as_ref().unwrap()
+        );
 
         // If there is a projection on the source, we also need to project orderings
         if self.projection.is_some() {
@@ -943,10 +948,9 @@ mod tests {
             vec![lit(ScalarValue::Null)],
         ];
         let rows = data.len();
-        let values = MemorySourceConfig::try_new_as_values(
-            Arc::new(Schema::new(vec![Field::new("col0", DataType::Null, true)])),
-            data,
-        )?;
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("col0", DataType::Null, true)]));
+        let values = MemorySourceConfig::try_new_as_values(schema, data)?;
 
         assert_eq!(
             values.partition_statistics(None)?,
@@ -959,6 +963,7 @@ mod tests {
                     max_value: Precision::Absent,
                     min_value: Precision::Absent,
                     sum_value: Precision::Absent,
+                    byte_size: Precision::Absent,
                 },],
             }
         );
@@ -1079,8 +1084,7 @@ mod tests {
         let actual = partitioned_datasrc
             .map(|datasrc| datasrc.output_partitioning().partition_count());
         assert_eq!(
-            actual,
-            partition_cnt,
+            actual, partition_cnt,
             "partitioned datasrc does not match expected, we expected {should_exist}, instead found {actual:?}"
         );
     }
@@ -1266,8 +1270,8 @@ mod tests {
     }
 
     #[test]
-    fn test_repartition_no_sort_information_no_output_ordering_lopsized_batches(
-    ) -> Result<()> {
+    fn test_repartition_no_sort_information_no_output_ordering_lopsized_batches()
+    -> Result<()> {
         let no_sort = vec![];
         let no_output_ordering = None;
 

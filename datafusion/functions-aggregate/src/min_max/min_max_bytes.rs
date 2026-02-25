@@ -21,7 +21,7 @@ use arrow::array::{
 };
 use arrow::datatypes::DataType;
 use datafusion_common::hash_map::Entry;
-use datafusion_common::{internal_err, HashMap, Result};
+use datafusion_common::{HashMap, Result, internal_err};
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::apply_filter_as_nulls;
 use std::mem::size_of;

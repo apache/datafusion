@@ -21,7 +21,7 @@
 //! infinite inputs.
 
 use std::any::Any;
-use std::cmp::{min, Ordering};
+use std::cmp::{Ordering, min};
 use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -36,7 +36,7 @@ use crate::windows::{
 use crate::{
     ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
     ExecutionPlanProperties, InputOrderMode, PlanProperties, RecordBatchStream,
-    SendableRecordBatchStream, Statistics, WindowExpr,
+    SendableRecordBatchStream, Statistics, WindowExpr, check_if_same_properties,
 };
 
 use arrow::compute::take_record_batch;
@@ -52,11 +52,11 @@ use datafusion_common::utils::{
     evaluate_partition_ranges, get_at_indices, get_row_at_idx,
 };
 use datafusion_common::{
-    arrow_datafusion_err, exec_datafusion_err, exec_err, DataFusionError, HashMap, Result,
+    HashMap, Result, arrow_datafusion_err, exec_datafusion_err, exec_err,
 };
 use datafusion_execution::TaskContext;
-use datafusion_expr::window_state::{PartitionBatchState, WindowAggState};
 use datafusion_expr::ColumnarValue;
+use datafusion_expr::window_state::{PartitionBatchState, WindowAggState};
 use datafusion_physical_expr::window::{
     PartitionBatches, PartitionKey, PartitionWindowAggStates, WindowState,
 };
@@ -67,7 +67,7 @@ use datafusion_physical_expr_common::sort_expr::{
 
 use ahash::RandomState;
 use futures::stream::Stream;
-use futures::{ready, StreamExt};
+use futures::{StreamExt, ready};
 use hashbrown::hash_table::HashTable;
 use indexmap::IndexMap;
 use log::debug;
@@ -93,7 +93,7 @@ pub struct BoundedWindowAggExec {
     // See `get_ordered_partition_by_indices` for more details.
     ordered_partition_by_indices: Vec<usize>,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
     /// If `can_rerepartition` is false, partition_keys is always empty.
     can_repartition: bool,
 }
@@ -134,7 +134,7 @@ impl BoundedWindowAggExec {
             metrics: ExecutionPlanMetricsSet::new(),
             input_order_mode,
             ordered_partition_by_indices,
-            cache,
+            cache: Arc::new(cache),
             can_repartition,
         })
     }
@@ -175,7 +175,9 @@ impl BoundedWindowAggExec {
                 if self.window_expr()[0].partition_by().len()
                     != ordered_partition_by_indices.len()
                 {
-                    return exec_err!("All partition by columns should have an ordering in Sorted mode.");
+                    return exec_err!(
+                        "All partition by columns should have an ordering in Sorted mode."
+                    );
                 }
                 Box::new(SortedSearch {
                     partition_by_sort_keys,
@@ -246,6 +248,17 @@ impl BoundedWindowAggExec {
             total_byte_size: Precision::Absent,
         })
     }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(self)
+        }
+    }
 }
 
 impl DisplayAs for BoundedWindowAggExec {
@@ -302,7 +315,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -337,6 +350,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        check_if_same_properties!(self, children);
         Ok(Arc::new(BoundedWindowAggExec::try_new(
             self.window_expr.clone(),
             Arc::clone(&children[0]),
@@ -364,10 +378,6 @@ impl ExecutionPlan for BoundedWindowAggExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
@@ -627,23 +637,23 @@ impl PartitionSearcher for LinearSearch {
     fn mark_partition_end(&self, partition_buffers: &mut PartitionBatches) {
         // We should be in the `PartiallySorted` case, otherwise we can not
         // tell when we are at the end of a given partition.
-        if !self.ordered_partition_by_indices.is_empty() {
-            if let Some((last_row, _)) = partition_buffers.last() {
-                let last_sorted_cols = self
+        if !self.ordered_partition_by_indices.is_empty()
+            && let Some((last_row, _)) = partition_buffers.last()
+        {
+            let last_sorted_cols = self
+                .ordered_partition_by_indices
+                .iter()
+                .map(|idx| last_row[*idx].clone())
+                .collect::<Vec<_>>();
+            for (row, partition_batch_state) in partition_buffers.iter_mut() {
+                let sorted_cols = self
                     .ordered_partition_by_indices
                     .iter()
-                    .map(|idx| last_row[*idx].clone())
-                    .collect::<Vec<_>>();
-                for (row, partition_batch_state) in partition_buffers.iter_mut() {
-                    let sorted_cols = self
-                        .ordered_partition_by_indices
-                        .iter()
-                        .map(|idx| &row[*idx]);
-                    // All the partitions other than `last_sorted_cols` are done.
-                    // We are sure that we will no longer receive values for these
-                    // partitions (arrival of a new value would violate ordering).
-                    partition_batch_state.is_end = !sorted_cols.eq(&last_sorted_cols);
-                }
+                    .map(|idx| &row[*idx]);
+                // All the partitions other than `last_sorted_cols` are done.
+                // We are sure that we will no longer receive values for these
+                // partitions (arrival of a new value would violate ordering).
+                partition_batch_state.is_end = !sorted_cols.eq(&last_sorted_cols);
             }
         }
     }
@@ -1247,18 +1257,18 @@ mod tests {
     use crate::streaming::{PartitionStream, StreamingTableExec};
     use crate::test::TestMemoryExec;
     use crate::windows::{
-        create_udwf_window_expr, create_window_expr, BoundedWindowAggExec, InputOrderMode,
+        BoundedWindowAggExec, InputOrderMode, create_udwf_window_expr, create_window_expr,
     };
-    use crate::{displayable, execute_stream, ExecutionPlan};
+    use crate::{ExecutionPlan, displayable, execute_stream};
 
     use arrow::array::{
-        builder::{Int64Builder, UInt64Builder},
         RecordBatch,
+        builder::{Int64Builder, UInt64Builder},
     };
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::test_util::batches_to_string;
-    use datafusion_common::{exec_datafusion_err, Result, ScalarValue};
+    use datafusion_common::{Result, ScalarValue, exec_datafusion_err};
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::{
         RecordBatchStream, SendableRecordBatchStream, TaskContext,
@@ -1269,12 +1279,12 @@ mod tests {
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_window::nth_value::last_value_udwf;
     use datafusion_functions_window::nth_value::nth_value_udwf;
-    use datafusion_physical_expr::expressions::{col, Column, Literal};
+    use datafusion_physical_expr::expressions::{Column, Literal, col};
     use datafusion_physical_expr::window::StandardWindowExpr;
     use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
 
     use futures::future::Shared;
-    use futures::{pin_mut, ready, FutureExt, Stream, StreamExt};
+    use futures::{FutureExt, Stream, StreamExt, pin_mut, ready};
     use insta::assert_snapshot;
     use itertools::Itertools;
     use tokio::time::timeout;
@@ -1474,20 +1484,6 @@ mod tests {
         Ok(results)
     }
 
-    /// Execute the [ExecutionPlan] and collect the results in memory
-    #[allow(dead_code)]
-    pub async fn collect_bonafide(
-        plan: Arc<dyn ExecutionPlan>,
-        context: Arc<TaskContext>,
-    ) -> Result<Vec<RecordBatch>> {
-        let stream = execute_stream(plan, context)?;
-        let mut results = vec![];
-
-        collect_stream(stream, &mut results).await?;
-
-        Ok(results)
-    }
-
     fn test_schema() -> SchemaRef {
         Arc::new(Schema::new(vec![
             Field::new("sn", DataType::UInt64, true),
@@ -1496,14 +1492,16 @@ mod tests {
     }
 
     fn schema_orders(schema: &SchemaRef) -> Result<Vec<LexOrdering>> {
-        let orderings = vec![[PhysicalSortExpr {
-            expr: col("sn", schema)?,
-            options: SortOptions {
-                descending: false,
-                nulls_first: false,
-            },
-        }]
-        .into()];
+        let orderings = vec![
+            [PhysicalSortExpr {
+                expr: col("sn", schema)?,
+                options: SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                },
+            }]
+            .into(),
+        ];
         Ok(orderings)
     }
 
@@ -1700,21 +1698,21 @@ mod tests {
           DataSourceExec: partitions=1, partition_sizes=[3]
         "#);
 
-        assert_snapshot!(batches_to_string(&batches), @r#"
-            +---+------+---------------+---------------+
-            | a | last | nth_value(-1) | nth_value(-2) |
-            +---+------+---------------+---------------+
-            | 1 | 1    | 1             |               |
-            | 2 | 2    | 2             | 1             |
-            | 3 | 3    | 3             | 2             |
-            | 1 | 1    | 1             | 3             |
-            | 2 | 2    | 2             | 1             |
-            | 3 | 3    | 3             | 2             |
-            | 1 | 1    | 1             | 3             |
-            | 2 | 2    | 2             | 1             |
-            | 3 | 3    | 3             | 2             |
-            +---+------+---------------+---------------+
-            "#);
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +---+------+---------------+---------------+
+        | a | last | nth_value(-1) | nth_value(-2) |
+        +---+------+---------------+---------------+
+        | 1 | 1    | 1             |               |
+        | 2 | 2    | 2             | 1             |
+        | 3 | 3    | 3             | 2             |
+        | 1 | 1    | 1             | 3             |
+        | 2 | 2    | 2             | 1             |
+        | 3 | 3    | 3             | 2             |
+        | 1 | 1    | 1             | 3             |
+        | 2 | 2    | 2             | 1             |
+        | 3 | 3    | 3             | 2             |
+        +---+------+---------------+---------------+
+        ");
         Ok(())
     }
 
@@ -1821,20 +1819,20 @@ mod tests {
         let task_ctx = task_context();
         let batches = collect_with_timeout(plan, task_ctx, timeout_duration).await?;
 
-        assert_snapshot!(batches_to_string(&batches), @r#"
-            +----+------+-------+
-            | sn | hash | col_2 |
-            +----+------+-------+
-            | 0  | 2    | 2     |
-            | 1  | 2    | 2     |
-            | 2  | 2    | 2     |
-            | 3  | 2    | 1     |
-            | 4  | 1    | 2     |
-            | 5  | 1    | 2     |
-            | 6  | 1    | 2     |
-            | 7  | 1    | 1     |
-            +----+------+-------+
-            "#);
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +----+------+-------+
+        | sn | hash | col_2 |
+        +----+------+-------+
+        | 0  | 2    | 2     |
+        | 1  | 2    | 2     |
+        | 2  | 2    | 2     |
+        | 3  | 2    | 1     |
+        | 4  | 1    | 2     |
+        | 5  | 1    | 2     |
+        | 6  | 1    | 2     |
+        | 7  | 1    | 1     |
+        +----+------+-------+
+        ");
 
         Ok(())
     }

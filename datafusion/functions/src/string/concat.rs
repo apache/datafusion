@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{as_largestring_array, Array};
+use arrow::array::{Array, as_largestring_array};
 use arrow::datatypes::DataType;
 use datafusion_expr::sort_properties::ExprProperties;
 use std::any::Any;
@@ -26,10 +26,10 @@ use crate::strings::{
     ColumnarValueRef, LargeStringArrayBuilder, StringArrayBuilder, StringViewArrayBuilder,
 };
 use datafusion_common::cast::{as_string_array, as_string_view_array};
-use datafusion_common::{internal_err, plan_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, internal_err, plan_err};
 use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
-use datafusion_expr::{lit, ColumnarValue, Documentation, Expr, Volatility};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
+use datafusion_expr::{ColumnarValue, Documentation, Expr, Volatility, lit};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_macros::user_doc;
 
@@ -120,24 +120,21 @@ impl ScalarUDFImpl for ConcatFunc {
             }
         });
 
-        let array_len = args
-            .iter()
-            .filter_map(|x| match x {
-                ColumnarValue::Array(array) => Some(array.len()),
-                _ => None,
-            })
-            .next();
+        let array_len = args.iter().find_map(|x| match x {
+            ColumnarValue::Array(array) => Some(array.len()),
+            _ => None,
+        });
 
         // Scalar
         if array_len.is_none() {
-            let mut result = String::new();
-            for arg in args {
+            let mut values = Vec::with_capacity(args.len());
+            for arg in &args {
                 let ColumnarValue::Scalar(scalar) = arg else {
                     return internal_err!("concat expected scalar value, got {arg:?}");
                 };
 
                 match scalar.try_as_str() {
-                    Some(Some(v)) => result.push_str(v),
+                    Some(Some(v)) => values.push(v),
                     Some(None) => {} // null literal
                     None => plan_err!(
                         "Concat function does not support scalar type {}",
@@ -145,6 +142,7 @@ impl ScalarUDFImpl for ConcatFunc {
                     )?,
                 }
             }
+            let result = values.concat();
 
             return match return_datatype {
                 DataType::Utf8View => {
@@ -189,7 +187,7 @@ impl ScalarUDFImpl for ConcatFunc {
                                 ColumnarValueRef::NonNullableArray(string_array)
                             };
                             columns.push(column);
-                        },
+                        }
                         DataType::LargeUtf8 => {
                             let string_array = as_largestring_array(array);
 
@@ -197,23 +195,29 @@ impl ScalarUDFImpl for ConcatFunc {
                             let column = if array.is_nullable() {
                                 ColumnarValueRef::NullableLargeStringArray(string_array)
                             } else {
-                                ColumnarValueRef::NonNullableLargeStringArray(string_array)
+                                ColumnarValueRef::NonNullableLargeStringArray(
+                                    string_array,
+                                )
                             };
                             columns.push(column);
-                        },
+                        }
                         DataType::Utf8View => {
                             let string_array = as_string_view_array(array)?;
 
-                            data_size += string_array.len();
+                            // This is an estimate; in particular, it will
+                            // undercount arrays of short strings (<= 12 bytes).
+                            data_size += string_array.total_buffer_bytes_used();
                             let column = if array.is_nullable() {
                                 ColumnarValueRef::NullableStringViewArray(string_array)
                             } else {
                                 ColumnarValueRef::NonNullableStringViewArray(string_array)
                             };
                             columns.push(column);
-                        },
+                        }
                         other => {
-                            return plan_err!("Input was {other} which is not a supported datatype for concat function")
+                            return plan_err!(
+                                "Input was {other} which is not a supported datatype for concat function"
+                            );
                         }
                     };
                 }
@@ -273,7 +277,7 @@ impl ScalarUDFImpl for ConcatFunc {
     fn simplify(
         &self,
         args: Vec<Expr>,
-        _info: &dyn SimplifyInfo,
+        _info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         simplify_concat(args)
     }
@@ -287,7 +291,7 @@ impl ScalarUDFImpl for ConcatFunc {
     }
 }
 
-pub fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
+pub(crate) fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
     let mut new_args = Vec::with_capacity(args.len());
     let mut contiguous_scalar = "".to_string();
 
@@ -305,9 +309,8 @@ pub fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
     for arg in args.clone() {
         match arg {
             Expr::Literal(ScalarValue::Utf8(None), _) => {}
-            Expr::Literal(ScalarValue::LargeUtf8(None), _) => {
-            }
-            Expr::Literal(ScalarValue::Utf8View(None), _) => { }
+            Expr::Literal(ScalarValue::LargeUtf8(None), _) => {}
+            Expr::Literal(ScalarValue::Utf8View(None), _) => {}
 
             // filter out `null` args
             // All literals have been converted to Utf8 or LargeUtf8 in type_coercion.
@@ -325,7 +328,7 @@ pub fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
             Expr::Literal(x, _) => {
                 return internal_err!(
                     "The scalar {x} should be casted to string type during the type coercion."
-                )
+                );
             }
             // If the arg is not a literal, we should first push the current `contiguous_scalar`
             // to the `new_args` (if it is not empty) and reset it to empty string.
@@ -334,8 +337,10 @@ pub fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
                 if !contiguous_scalar.is_empty() {
                     match return_type {
                         DataType::Utf8 => new_args.push(lit(contiguous_scalar)),
-                        DataType::LargeUtf8 => new_args.push(lit(ScalarValue::LargeUtf8(Some(contiguous_scalar)))),
-                        DataType::Utf8View => new_args.push(lit(ScalarValue::Utf8View(Some(contiguous_scalar)))),
+                        DataType::LargeUtf8 => new_args
+                            .push(lit(ScalarValue::LargeUtf8(Some(contiguous_scalar)))),
+                        DataType::Utf8View => new_args
+                            .push(lit(ScalarValue::Utf8View(Some(contiguous_scalar)))),
                         _ => unreachable!(),
                     }
                     contiguous_scalar = "".to_string();
@@ -374,11 +379,11 @@ pub fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
 mod tests {
     use super::*;
     use crate::utils::test::test_function;
+    use DataType::*;
     use arrow::array::{Array, LargeStringArray, StringViewArray};
     use arrow::array::{ArrayRef, StringArray};
     use arrow::datatypes::Field;
     use datafusion_common::config::ConfigOptions;
-    use DataType::*;
 
     #[test]
     fn test_functions() -> Result<()> {

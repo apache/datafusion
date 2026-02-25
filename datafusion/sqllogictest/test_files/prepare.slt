@@ -34,7 +34,7 @@ statement error DataFusion error: SQL error: ParserError
 PREPARE AS SELECT id, age  FROM person WHERE age = $foo;
 
 # param following a non-number, $foo, not supported
-statement error Invalid placeholder, not a number: \$foo
+statement error Unknown placeholder: \$foo
 PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age = $foo;
 
 # not specify table hence cannot specify columns
@@ -204,9 +204,11 @@ EXECUTE my_plan6(20.0);
 statement error Cast error: Cannot cast string 'foo' to value of Int32 type
 EXECUTE my_plan6('foo');
 
-# TODO: support non-literal expressions
-statement error Unsupported parameter type
-EXECUTE my_plan6(10 + 20);
+# support non-literal expressions
+query II
+EXECUTE my_plan6(10 + 10);
+----
+1 20
 
 statement ok
 DEALLOCATE my_plan6;
@@ -356,6 +358,18 @@ EXECUTE my_plan(1, 2)
 
 statement ok
 SET datafusion.explain.logical_plan_only=false;
+
+statement ok
+DEALLOCATE my_plan
+
+
+statement ok
+PREPARE my_plan AS SELECT a, b FROM (VALUES ($1, $2)) AS t(a, b);
+
+query II
+EXECUTE my_plan(1, 2)
+----
+1 2
 
 statement ok
 DEALLOCATE my_plan

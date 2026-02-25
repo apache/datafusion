@@ -29,13 +29,13 @@ use datafusion::logical_expr::TableProviderFilterPushDown;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
-    SendableRecordBatchStream, Statistics,
+    SendableRecordBatchStream,
 };
 use datafusion::prelude::*;
 use datafusion::scalar::ScalarValue;
 use datafusion_catalog::Session;
 use datafusion_common::cast::as_primitive_array;
-use datafusion_common::{internal_err, not_impl_err};
+use datafusion_common::{DataFusionError, internal_err, not_impl_err};
 use datafusion_expr::expr::{BinaryExpr, Cast};
 use datafusion_functions_aggregate::expr_fn::count;
 use datafusion_physical_expr::EquivalenceProperties;
@@ -62,13 +62,16 @@ fn create_batch(value: i32, num_rows: usize) -> Result<RecordBatch> {
 #[derive(Debug)]
 struct CustomPlan {
     batches: Vec<RecordBatch>,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl CustomPlan {
     fn new(schema: SchemaRef, batches: Vec<RecordBatch>) -> Self {
         let cache = Self::compute_properties(schema);
-        Self { batches, cache }
+        Self {
+            batches,
+            cache: Arc::new(cache),
+        }
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
@@ -109,7 +112,7 @@ impl ExecutionPlan for CustomPlan {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -134,16 +137,20 @@ impl ExecutionPlan for CustomPlan {
         _partition: usize,
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        let schema_captured = self.schema().clone();
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             self.schema(),
-            futures::stream::iter(self.batches.clone().into_iter().map(Ok)),
+            futures::stream::iter(self.batches.clone().into_iter().map(move |batch| {
+                let projection: Vec<usize> = schema_captured
+                    .fields()
+                    .iter()
+                    .filter_map(|field| batch.schema().index_of(field.name()).ok())
+                    .collect();
+                batch
+                    .project(&projection)
+                    .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
+            })),
         )))
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        // here we could provide more accurate statistics
-        // but we want to test the filter pushdown not the CBOs
-        Ok(Statistics::new_unknown(&self.schema()))
     }
 }
 

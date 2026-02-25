@@ -21,6 +21,7 @@ use datafusion_expr::ScalarUDF;
 use std::sync::Arc;
 
 pub mod arrow_cast;
+pub mod arrow_metadata;
 pub mod arrowtypeof;
 pub mod coalesce;
 pub mod expr_ext;
@@ -55,6 +56,7 @@ make_udf_function!(least::LeastFunc, least);
 make_udf_function!(union_extract::UnionExtractFun, union_extract);
 make_udf_function!(union_tag::UnionTagFunc, union_tag);
 make_udf_function!(version::VersionFunc, version);
+make_udf_function!(arrow_metadata::ArrowMetadataFunc, arrow_metadata);
 
 pub mod expr_fn {
     use datafusion_expr::{Expr, Literal};
@@ -84,6 +86,10 @@ pub mod expr_fn {
         "Returns the Arrow type of the input expression.",
         arg1
     ),(
+        arrow_metadata,
+        "Returns the metadata of the input expression",
+        args,
+    ),(
         r#struct,
         "Returns a struct with the given arguments",
         args,
@@ -110,11 +116,20 @@ pub mod expr_fn {
     ));
 
     #[doc = "Returns the value of the field with the given name from the struct"]
+    #[expect(clippy::needless_pass_by_value)]
     pub fn get_field(arg1: Expr, arg2: impl Literal) -> Expr {
         super::get_field().call(vec![arg1, arg2.lit()])
     }
 
+    #[doc = "Returns the value of nested fields by traversing multiple field names"]
+    pub fn get_field_path(base: Expr, field_names: Vec<Expr>) -> Expr {
+        let mut args = vec![base];
+        args.extend(field_names);
+        super::get_field().call(args)
+    }
+
     #[doc = "Returns the value of the field with the given name from the union when it's selected, or NULL otherwise"]
+    #[expect(clippy::needless_pass_by_value)]
     pub fn union_extract(arg1: Expr, arg2: impl Literal) -> Expr {
         super::union_extract().call(vec![arg1, arg2.lit()])
     }
@@ -125,6 +140,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
     vec![
         nullif(),
         arrow_cast(),
+        arrow_metadata(),
         nvl(),
         nvl2(),
         overlay(),

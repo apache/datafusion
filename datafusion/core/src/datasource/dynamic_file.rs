@@ -20,9 +20,9 @@
 
 use std::sync::Arc;
 
+use crate::datasource::TableProvider;
 use crate::datasource::listing::ListingTableConfigExt;
 use crate::datasource::listing::{ListingTable, ListingTableConfig, ListingTableUrl};
-use crate::datasource::TableProvider;
 use crate::error::Result;
 use crate::execution::context::SessionState;
 

@@ -19,10 +19,10 @@
 
 use super::THRESHOLD_INLINE_INLIST;
 
-use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
 use datafusion_common::Result;
-use datafusion_expr::expr::InList;
+use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
 use datafusion_expr::Expr;
+use datafusion_expr::expr::InList;
 
 pub(super) struct ShortenInListSimplifier {}
 
@@ -43,52 +43,50 @@ impl TreeNodeRewriter for ShortenInListSimplifier {
             ref list,
             negated,
         }) = expr
+            && !list.is_empty()
+            && (
+                // For lists with only 1 value we allow more complex expressions to be simplified
+                // e.g SUBSTR(c1, 2, 3) IN ('1') -> SUBSTR(c1, 2, 3) = '1'
+                // for more than one we avoid repeating this potentially expensive
+                // expressions
+                list.len() == 1
+                    || list.len() <= THRESHOLD_INLINE_INLIST
+                        && expr.try_as_col().is_some()
+            )
         {
-            if !list.is_empty()
-                && (
-                    // For lists with only 1 value we allow more complex expressions to be simplified
-                    // e.g SUBSTR(c1, 2, 3) IN ('1') -> SUBSTR(c1, 2, 3) = '1'
-                    // for more than one we avoid repeating this potentially expensive
-                    // expressions
-                    list.len() == 1
-                        || list.len() <= THRESHOLD_INLINE_INLIST
-                            && expr.try_as_col().is_some()
-                )
-            {
-                let first_val = list[0].clone();
-                if negated {
-                    return Ok(Transformed::yes(list.iter().skip(1).cloned().fold(
-                        (*expr.clone()).not_eq(first_val),
-                        |acc, y| {
-                            // Note that `A and B and C and D` is a left-deep tree structure
-                            // as such we want to maintain this structure as much as possible
-                            // to avoid reordering the expression during each optimization
-                            // pass.
-                            //
-                            // Left-deep tree structure for `A and B and C and D`:
-                            // ```
-                            //        &
-                            //       / \
-                            //      &   D
-                            //     / \
-                            //    &   C
-                            //   / \
-                            //  A   B
-                            // ```
-                            //
-                            // The code below maintain the left-deep tree structure.
-                            acc.and((*expr.clone()).not_eq(y))
-                        },
-                    )));
-                } else {
-                    return Ok(Transformed::yes(list.iter().skip(1).cloned().fold(
-                        (*expr.clone()).eq(first_val),
-                        |acc, y| {
-                            // Same reasoning as above
-                            acc.or((*expr.clone()).eq(y))
-                        },
-                    )));
-                }
+            let first_val = list[0].clone();
+            if negated {
+                return Ok(Transformed::yes(list.iter().skip(1).cloned().fold(
+                    (*expr.clone()).not_eq(first_val),
+                    |acc, y| {
+                        // Note that `A and B and C and D` is a left-deep tree structure
+                        // as such we want to maintain this structure as much as possible
+                        // to avoid reordering the expression during each optimization
+                        // pass.
+                        //
+                        // Left-deep tree structure for `A and B and C and D`:
+                        // ```
+                        //        &
+                        //       / \
+                        //      &   D
+                        //     / \
+                        //    &   C
+                        //   / \
+                        //  A   B
+                        // ```
+                        //
+                        // The code below maintain the left-deep tree structure.
+                        acc.and((*expr.clone()).not_eq(y))
+                    },
+                )));
+            } else {
+                return Ok(Transformed::yes(list.iter().skip(1).cloned().fold(
+                    (*expr.clone()).eq(first_val),
+                    |acc, y| {
+                        // Same reasoning as above
+                        acc.or((*expr.clone()).eq(y))
+                    },
+                )));
             }
         }
 

@@ -19,7 +19,7 @@
 
 use std::sync::Arc;
 
-use arrow::array::{cast::AsArray, Array, OffsetSizeTrait, RecordBatch};
+use arrow::array::{Array, OffsetSizeTrait, RecordBatch, cast::AsArray};
 
 use datafusion::datasource::MemTable;
 use datafusion_common_runtime::JoinSet;

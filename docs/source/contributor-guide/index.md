@@ -32,7 +32,8 @@ community as well as get more familiar with Rust and the relevant codebases.
 
 ## Development Environment
 
-You can find how to setup build and testing environment [here](https://datafusion.apache.org/contributor-guide/development_environment.html)
+Setup your development environment [here](development_environment.md), and learn
+how to test the code [here](testing.md).
 
 ## Finding and Creating Issues to Work On
 
@@ -59,9 +60,8 @@ If you want to work on an issue which is not already assigned to someone else
 and there are no comment indicating that someone is already working on that
 issue then you can assign the issue to yourself by submitting a single word
 comment `take`. This will assign the issue to yourself. However, if you are
-unable to make progress you should unassign the issue by using the `unassign me`
-link at the top of the issue page (and ask for help if are stuck) so that
-someone else can get involved in the work.
+unable to make progress you should unassign the issue by commenting a single
+word `untake`.
 
 # Developer's guide
 
@@ -199,3 +199,35 @@ Please understand the reviewing capacity is **very limited** for the project, so
 ### Better ways to contribute than an “AI dump”
 
 It's recommended to write a high-quality issue with a clear problem statement and a minimal, reproducible example. This can make it easier for others to contribute.
+
+### CI Runners
+
+#### Runs-On
+
+We use [Runs-On](https://runs-on.com/) for some actions in the main repository, which run in the ASF AWS account to speed up CI. In forks, these actions run on the default GitHub runners since forks do not have access to ASF infrastructure.
+
+To configure them, we use the following format:
+
+`runs-on: ${{ github.repository_owner == 'apache' && format('runs-on={0},family=m8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}`
+
+This is a conditional expression that uses Runs-On custom runners for the main repository and falls back to the standard GitHub runners for forks. Runs-On configuration follows the [Runs-On pattern](https://runs-on.com/configuration/job-labels/).
+
+For those actions we also use the [Runs-On action](https://runs-on.com/caching/magic-cache/#how-to-use), which adds support for external caching and reports job metrics:
+
+`- uses: runs-on/action@cd2b598b0515d39d78c38a02d529db87d2196d1e`
+
+For the standard GitHub runners, this action will do nothing.
+
+##### Spot Instances
+
+By default, Runs-On actions run as [spot instances](https://runs-on.com/configuration/spot-instances/), which means they might occasionally be interrupted. In the CI you would see:
+
+```
+Error: The operation was canceled.
+```
+
+According to Runs-On, spot instance termination is extremely rare for instances running for less than 1h. Those actions will be restarted automatically.
+
+#### GitHub Runners
+
+We also use standard GitHub runners for some actions in the main repository; these are also runnable in forks.

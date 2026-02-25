@@ -7,7 +7,6 @@ info:
     - EXPLAIN SELECT 123
   env:
     DATAFUSION_EXPLAIN_FORMAT: pgjson
-snapshot_kind: text
 ---
 success: true
 exit_code: 0

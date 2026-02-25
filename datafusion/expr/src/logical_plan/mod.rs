@@ -21,15 +21,15 @@ pub mod display;
 pub mod dml;
 mod extension;
 pub(crate) mod invariants;
-pub use invariants::{assert_expected_schema, check_subquery_expr, InvariantLevel};
+pub use invariants::{InvariantLevel, assert_expected_schema, check_subquery_expr};
 mod plan;
 mod statement;
 pub mod tree_node;
 
 pub use builder::{
+    LogicalPlanBuilder, LogicalPlanBuilderOptions, LogicalTableSource, UNNAMED_TABLE,
     build_join_schema, requalify_sides_if_needed, table_scan, union,
-    wrap_projection_for_join_if_necessary, LogicalPlanBuilder, LogicalPlanBuilderOptions,
-    LogicalTableSource, UNNAMED_TABLE,
+    wrap_projection_for_join_if_necessary,
 };
 pub use ddl::{
     CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateFunction,
@@ -46,8 +46,9 @@ pub use plan::{
     SubqueryAlias, TableScan, ToStringifiedPlan, Union, Unnest, Values, Window,
 };
 pub use statement::{
-    Deallocate, Execute, Prepare, SetVariable, Statement, TransactionAccessMode,
-    TransactionConclusion, TransactionEnd, TransactionIsolationLevel, TransactionStart,
+    Deallocate, Execute, Prepare, ResetVariable, SetVariable, Statement,
+    TransactionAccessMode, TransactionConclusion, TransactionEnd,
+    TransactionIsolationLevel, TransactionStart,
 };
 
 pub use datafusion_common::format::ExplainFormat;

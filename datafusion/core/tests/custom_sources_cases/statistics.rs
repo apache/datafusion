@@ -45,7 +45,7 @@ use async_trait::async_trait;
 struct StatisticsValidation {
     stats: Statistics,
     schema: Arc<Schema>,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl StatisticsValidation {
@@ -59,7 +59,7 @@ impl StatisticsValidation {
         Self {
             stats,
             schema,
-            cache,
+            cache: Arc::new(cache),
         }
     }
 
@@ -158,7 +158,7 @@ impl ExecutionPlan for StatisticsValidation {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -179,10 +179,6 @@ impl ExecutionPlan for StatisticsValidation {
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         unimplemented!("This plan only serves for testing statistics")
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        Ok(self.stats.clone())
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
@@ -214,6 +210,7 @@ fn fully_defined() -> (Statistics, Schema) {
                     min_value: Precision::Exact(ScalarValue::Int32(Some(-24))),
                     sum_value: Precision::Exact(ScalarValue::Int64(Some(10))),
                     null_count: Precision::Exact(0),
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(13),
@@ -221,6 +218,7 @@ fn fully_defined() -> (Statistics, Schema) {
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-6783))),
                     sum_value: Precision::Exact(ScalarValue::Int64(Some(10))),
                     null_count: Precision::Exact(5),
+                    byte_size: Precision::Absent,
                 },
             ],
         },

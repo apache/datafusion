@@ -38,20 +38,20 @@
 //! * [`LogicalPlan::expressions`]: Return a copy of the plan's expressions
 
 use crate::{
-    dml::CopyTo, Aggregate, Analyze, CreateMemoryTable, CreateView, DdlStatement,
-    DependentJoin, Distinct, DistinctOn, DmlStatement, Execute, Explain, Expr, Extension,
-    Filter, Join, Limit, LogicalPlan, Partitioning, Prepare, Projection, RecursiveQuery,
-    Repartition, Sort, Statement, Subquery, SubqueryAlias, TableScan, Union, Unnest,
-    UserDefinedLogicalNode, Values, Window,
+    Aggregate, Analyze, CreateMemoryTable, CreateView, DdlStatement, DependentJoin,
+    Distinct, DistinctOn, DmlStatement, Execute, Explain, Expr, Extension, Filter, Join,
+    Limit, LogicalPlan, Partitioning, Prepare, Projection, RecursiveQuery, Repartition,
+    Sort, Statement, Subquery, SubqueryAlias, TableScan, Union, Unnest,
+    UserDefinedLogicalNode, Values, Window, dml::CopyTo,
 };
 use datafusion_common::tree_node::TreeNodeRefContainer;
 
-use crate::expr::{Exists, InSubquery};
+use crate::expr::{Exists, InSubquery, SetComparison};
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeContainer, TreeNodeIterator, TreeNodeRecursion,
     TreeNodeRewriter, TreeNodeVisitor,
 };
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, internal_err};
 
 impl TreeNode for LogicalPlan {
     fn apply_children<'n, F: FnMut(&'n Self) -> Result<TreeNodeRecursion>>(
@@ -134,6 +134,7 @@ impl TreeNode for LogicalPlan {
                 schema,
                 null_equality,
                 join_kind,
+                null_aware,
             }) => (left, right).map_elements(f)?.update_data(|(left, right)| {
                 LogicalPlan::Join(Join {
                     left,
@@ -145,6 +146,7 @@ impl TreeNode for LogicalPlan {
                     schema,
                     null_equality,
                     join_kind,
+                    null_aware,
                 })
             }),
             LogicalPlan::Limit(Limit { skip, fetch, input }) => input
@@ -608,6 +610,7 @@ impl LogicalPlan {
                 schema,
                 null_equality,
                 join_kind,
+                null_aware,
             }) => (on, filter).map_elements(f)?.update_data(|(on, filter)| {
                 LogicalPlan::Join(Join {
                     left,
@@ -619,6 +622,7 @@ impl LogicalPlan {
                     schema,
                     null_equality,
                     join_kind,
+                    null_aware,
                 })
             }),
             LogicalPlan::Sort(Sort { expr, input, fetch }) => expr
@@ -862,6 +866,7 @@ impl LogicalPlan {
             expr.apply(|expr| match expr {
                 Expr::Exists(Exists { subquery, .. })
                 | Expr::InSubquery(InSubquery { subquery, .. })
+                | Expr::SetComparison(SetComparison { subquery, .. })
                 | Expr::ScalarSubquery(subquery) => {
                     // use a synthetic plan so the collector sees a
                     // LogicalPlan::Subquery (even though it is
@@ -901,6 +906,22 @@ impl LogicalPlan {
                         subquery,
                         negated,
                     })),
+                    _ => internal_err!("Transformation should return Subquery"),
+                }),
+                Expr::SetComparison(SetComparison {
+                    expr,
+                    subquery,
+                    op,
+                    quantifier,
+                }) => f(LogicalPlan::Subquery(subquery))?.map_data(|s| match s {
+                    LogicalPlan::Subquery(subquery) => {
+                        Ok(Expr::SetComparison(SetComparison {
+                            expr,
+                            subquery,
+                            op,
+                            quantifier,
+                        }))
+                    }
                     _ => internal_err!("Transformation should return Subquery"),
                 }),
                 Expr::ScalarSubquery(subquery) => f(LogicalPlan::Subquery(subquery))?

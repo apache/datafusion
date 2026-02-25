@@ -18,7 +18,7 @@
 use arrow::compute::kernels::numeric::add;
 use arrow::compute::kernels::{cmp::lt, numeric::rem, zip::zip};
 use arrow::datatypes::DataType;
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, assert_eq_or_internal_err};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -27,9 +27,7 @@ use std::any::Any;
 /// Spark-compatible `mod` function
 /// This function directly uses Arrow's arithmetic_op function for modulo operations
 pub fn spark_mod(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    if args.len() != 2 {
-        return internal_err!("mod expects exactly two arguments");
-    }
+    assert_eq_or_internal_err!(args.len(), 2, "mod expects exactly two arguments");
     let args = ColumnarValue::values_to_arrays(args)?;
     let result = rem(&args[0], &args[1])?;
     Ok(ColumnarValue::Array(result))
@@ -38,9 +36,7 @@ pub fn spark_mod(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 /// Spark-compatible `pmod` function
 /// This function directly uses Arrow's arithmetic_op function for modulo operations
 pub fn spark_pmod(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    if args.len() != 2 {
-        return internal_err!("pmod expects exactly two arguments");
-    }
+    assert_eq_or_internal_err!(args.len(), 2, "pmod expects exactly two arguments");
     let args = ColumnarValue::values_to_arrays(args)?;
     let left = &args[0];
     let right = &args[1];
@@ -87,9 +83,11 @@ impl ScalarUDFImpl for SparkMod {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.len() != 2 {
-            return internal_err!("mod expects exactly two arguments");
-        }
+        assert_eq_or_internal_err!(
+            arg_types.len(),
+            2,
+            "mod expects exactly two arguments"
+        );
 
         // Return the same type as the first argument for simplicity
         // Arrow's rem function handles type promotion internally
@@ -135,9 +133,11 @@ impl ScalarUDFImpl for SparkPmod {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.len() != 2 {
-            return internal_err!("pmod expects exactly two arguments");
-        }
+        assert_eq_or_internal_err!(
+            arg_types.len(),
+            2,
+            "pmod expects exactly two arguments"
+        );
 
         // Return the same type as the first argument for simplicity
         // Arrow's rem function handles type promotion internally
@@ -239,7 +239,7 @@ mod test {
             assert!((result_float64.value(0) - 1.5).abs() < f64::EPSILON); // 10.5 % 3.0 = 1.5
             assert!((result_float64.value(1) - 2.2).abs() < f64::EPSILON); // 7.2 % 2.5 = 2.2
             assert!((result_float64.value(2) - 3.2).abs() < f64::EPSILON); // 15.8 % 4.2 = 3.2
-                                                                           // nan % 2.0 = nan
+            // nan % 2.0 = nan
             assert!(result_float64.value(3).is_nan());
             // inf % 2.0 = nan (IEEE 754)
             assert!(result_float64.value(4).is_nan());
@@ -295,7 +295,7 @@ mod test {
             assert!((result_float32.value(0) - 1.5).abs() < f32::EPSILON); // 10.5 % 3.0 = 1.5
             assert!((result_float32.value(1) - 2.2).abs() < f32::EPSILON * 3.0); // 7.2 % 2.5 = 2.2
             assert!((result_float32.value(2) - 3.2).abs() < f32::EPSILON * 10.0); // 15.8 % 4.2 = 3.2
-                                                                                  // nan % 2.0 = nan
+            // nan % 2.0 = nan
             assert!(result_float32.value(3).is_nan());
             // inf % 2.0 = nan (IEEE 754)
             assert!(result_float32.value(4).is_nan());
@@ -437,7 +437,7 @@ mod test {
             assert!((result_float64.value(1) - 1.8).abs() < f64::EPSILON * 3.0); // -7.2 pmod 3.0 = 1.8 (positive)
             assert!((result_float64.value(2) - 3.2).abs() < f64::EPSILON * 3.0); // 15.8 pmod 4.2 = 3.2
             assert!((result_float64.value(3) - 1.0).abs() < f64::EPSILON * 3.0); // -15.8 pmod 4.2 = 1.0 (positive)
-                                                                                 // nan pmod 2.0 = nan
+            // nan pmod 2.0 = nan
             assert!(result_float64.value(4).is_nan());
             // inf pmod 2.0 = nan (IEEE 754)
             assert!(result_float64.value(5).is_nan());
@@ -488,7 +488,7 @@ mod test {
             assert!((result_float32.value(1) - 1.8).abs() < f32::EPSILON * 3.0); // -7.2 pmod 3.0 = 1.8 (positive)
             assert!((result_float32.value(2) - 3.2).abs() < f32::EPSILON * 10.0); // 15.8 pmod 4.2 = 3.2
             assert!((result_float32.value(3) - 1.0).abs() < f32::EPSILON * 10.0); // -15.8 pmod 4.2 = 1.0 (positive)
-                                                                                  // nan pmod 2.0 = nan
+            // nan pmod 2.0 = nan
             assert!(result_float32.value(4).is_nan());
             // inf pmod 2.0 = nan (IEEE 754)
             assert!(result_float32.value(5).is_nan());

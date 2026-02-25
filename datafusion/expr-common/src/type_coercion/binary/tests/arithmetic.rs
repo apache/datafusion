@@ -25,20 +25,23 @@ fn test_coercion_error() -> Result<()> {
     let result_type = coercer.get_input_types();
 
     let e = result_type.unwrap_err();
-    assert_eq!(e.strip_backtrace(), "Error during planning: Cannot coerce arithmetic expression Float32 + Utf8 to valid types");
+    assert_eq!(
+        e.strip_backtrace(),
+        "Error during planning: Cannot coerce arithmetic expression Float32 + Utf8 to valid types"
+    );
     Ok(())
 }
 
 #[test]
 fn test_date_timestamp_arithmetic_error() -> Result<()> {
     let (lhs, rhs) = BinaryTypeCoercer::new(
-        &DataType::Timestamp(TimeUnit::Nanosecond, None),
+        &DataType::Timestamp(Nanosecond, None),
         &Operator::Minus,
-        &DataType::Timestamp(TimeUnit::Millisecond, None),
+        &DataType::Timestamp(Millisecond, None),
     )
     .get_input_types()?;
-    assert_eq!(lhs, DataType::Timestamp(TimeUnit::Millisecond, None));
-    assert_eq!(rhs, DataType::Timestamp(TimeUnit::Millisecond, None));
+    assert_eq!(lhs, DataType::Timestamp(Millisecond, None));
+    assert_eq!(rhs, DataType::Timestamp(Millisecond, None));
 
     let err =
         BinaryTypeCoercer::new(&DataType::Date32, &Operator::Plus, &DataType::Date64)
@@ -146,14 +149,18 @@ fn test_type_coercion_arithmetic() -> Result<()> {
     // (_, Float32) | (Float32, _) => Some(Float32)
     test_coercion_binary_rule_multiple!(
         Float32,
-        [Float32, Float16, Int64, UInt64, Int32, UInt32, Int16, UInt16, Int8, UInt8],
+        [
+            Float32, Float16, Int64, UInt64, Int32, UInt32, Int16, UInt16, Int8, UInt8
+        ],
         Operator::Plus,
         Float32
     );
     // (_, Float16) | (Float16, _) => Some(Float16)
     test_coercion_binary_rule_multiple!(
         Float16,
-        [Float16, Int64, UInt64, Int32, UInt32, Int16, UInt16, Int8, UInt8],
+        [
+            Float16, Int64, UInt64, Int32, UInt32, Int16, UInt16, Int8, UInt8
+        ],
         Operator::Plus,
         Float16
     );
@@ -217,6 +224,53 @@ fn test_type_coercion_arithmetic() -> Result<()> {
     test_coercion_binary_rule!(UInt8, UInt8, Operator::Minus, UInt8);
     // (Int8, _) | (_, Int8) => Some(Int8)
     test_coercion_binary_rule!(Int8, Int8, Operator::Plus, Int8);
+
+    Ok(())
+}
+
+#[test]
+fn test_bitwise_coercion_non_integer_types() -> Result<()> {
+    let err = BinaryTypeCoercer::new(
+        &DataType::Float32,
+        &Operator::BitwiseAnd,
+        &DataType::Float32,
+    )
+    .get_input_types()
+    .unwrap_err()
+    .to_string();
+    assert_contains!(
+        &err,
+        "Cannot infer common type for bitwise operation Float32 & Float32"
+    );
+
+    let err = BinaryTypeCoercer::new(
+        &DataType::Float32,
+        &Operator::BitwiseAnd,
+        &DataType::Float64,
+    )
+    .get_input_types()
+    .unwrap_err()
+    .to_string();
+    assert_contains!(
+        &err,
+        "Cannot infer common type for bitwise operation Float32 & Float64"
+    );
+
+    let err = BinaryTypeCoercer::new(
+        &DataType::Decimal128(10, 2),
+        &Operator::BitwiseAnd,
+        &DataType::Decimal128(10, 2),
+    )
+    .get_input_types()
+    .unwrap_err()
+    .to_string();
+    assert_contains!(
+        &err,
+        "Cannot infer common type for bitwise operation Decimal128(10, 2) & Decimal128(10, 2)"
+    );
+
+    let dict_int8 = DataType::Dictionary(DataType::Int8.into(), DataType::Int8.into());
+    test_coercion_binary_rule!(dict_int8, dict_int8, Operator::BitwiseAnd, dict_int8);
 
     Ok(())
 }

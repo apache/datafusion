@@ -89,7 +89,7 @@ mod tests {
     use std::sync::Arc;
 
     use datafusion_common::{DFSchema, Result};
-    use datafusion_expr::{lit, LogicalPlan};
+    use datafusion_expr::{LogicalPlan, lit};
 
     use crate::plan_signature::get_node_number;
 

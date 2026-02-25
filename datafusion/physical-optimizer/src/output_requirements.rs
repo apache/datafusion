@@ -34,7 +34,7 @@ use datafusion_physical_expr::Distribution;
 use datafusion_physical_expr_common::sort_expr::OrderingRequirements;
 use datafusion_physical_plan::execution_plan::Boundedness;
 use datafusion_physical_plan::projection::{
-    make_with_child, update_expr, update_ordering_requirement, ProjectionExec,
+    ProjectionExec, make_with_child, update_expr, update_ordering_requirement,
 };
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
@@ -98,7 +98,7 @@ pub struct OutputRequirementExec {
     input: Arc<dyn ExecutionPlan>,
     order_requirement: Option<OrderingRequirements>,
     dist_requirement: Distribution,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
     fetch: Option<usize>,
 }
 
@@ -114,7 +114,7 @@ impl OutputRequirementExec {
             input,
             order_requirement: requirements,
             dist_requirement,
-            cache,
+            cache: Arc::new(cache),
             fetch,
         }
     }
@@ -200,7 +200,7 @@ impl ExecutionPlan for OutputRequirementExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -242,10 +242,6 @@ impl ExecutionPlan for OutputRequirementExec {
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         unreachable!();
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        self.input.partition_statistics(None)
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {

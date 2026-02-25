@@ -20,22 +20,22 @@ use arrow::array::ArrayDataBuilder;
 use arrow::array::BufferBuilder;
 use arrow::array::GenericStringArray;
 use arrow::array::StringViewBuilder;
-use arrow::array::{new_null_array, ArrayIter, AsArray};
 use arrow::array::{Array, ArrayRef, OffsetSizeTrait};
 use arrow::array::{ArrayAccessor, StringViewArray};
+use arrow::array::{ArrayIter, AsArray, new_null_array};
 use arrow::datatypes::DataType;
+use datafusion_common::ScalarValue;
 use datafusion_common::cast::{
     as_large_string_array, as_string_array, as_string_view_array,
 };
 use datafusion_common::exec_err;
 use datafusion_common::plan_err;
-use datafusion_common::ScalarValue;
 use datafusion_common::{
-    cast::as_generic_string_array, internal_err, DataFusionError, Result,
+    DataFusionError, Result, cast::as_generic_string_array, internal_err,
 };
-use datafusion_expr::function::Hint;
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::TypeSignature;
+use datafusion_expr::function::Hint;
 use datafusion_expr::{Documentation, ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 use regex::Regex;
@@ -61,7 +61,7 @@ SELECT regexp_replace('aBc', '(b|d)', 'Ab\\1a', 'i');
 | aAbBac                                                            |
 +-------------------------------------------------------------------+
 ```
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/regexp.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/regexp.rs)
 "#,
     standard_argument(name = "str", prefix = "String"),
     argument(
@@ -76,7 +76,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
     argument(
         name = "flags",
         description = r#"Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
-- **g**: (global) Search globally and don't return after the first match        
+- **g**: (global) Search globally and don't return after the first match
 - **i**: case-insensitive: letters match both upper and lower case
 - **m**: multi-line mode: ^ and $ match begin/end of line
 - **s**: allow . to match \n
@@ -189,13 +189,19 @@ fn regexp_replace_func(args: &[ColumnarValue]) -> Result<ArrayRef> {
     }
 }
 
-/// replace POSIX capture groups (like \1) with Rust Regex group (like ${1})
+/// replace POSIX capture groups (like \1 or \\1) with Rust Regex group (like ${1})
 /// used by regexp_replace
+/// Handles both single backslash (\1) and double backslash (\\1) which can occur
+/// when SQL strings with escaped backslashes are passed through
+///
+/// Note: \0 is converted to ${0}, which in Rust's regex replacement syntax
+/// substitutes the entire match. This is consistent with POSIX behavior where
+/// \0 (or &) refers to the entire matched string.
 fn regex_replace_posix_groups(replacement: &str) -> String {
     static CAPTURE_GROUPS_RE_LOCK: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"(\\)(\d*)").unwrap());
+        LazyLock::new(|| Regex::new(r"\\{1,2}(\d+)").unwrap());
     CAPTURE_GROUPS_RE_LOCK
-        .replace_all(replacement, "$${$2}")
+        .replace_all(replacement, "$${$1}")
         .into_owned()
 }
 
@@ -382,48 +388,32 @@ where
     }
 }
 
-fn _regexp_replace_early_abort<T: ArrayAccessor>(
-    input_array: T,
-    sz: usize,
-) -> Result<ArrayRef> {
-    // Mimicking the existing behavior of regexp_replace, if any of the scalar arguments
-    // are actually null, then the result will be an array of the same size as the first argument with all nulls.
-    //
-    // Also acts like an early abort mechanism when the input array is empty.
-    Ok(new_null_array(input_array.data_type(), sz))
-}
-
 /// Get the first argument from the given string array.
 ///
 /// Note: If the array is empty or the first argument is null,
-/// then calls the given early abort function.
+/// then aborts early.
 macro_rules! fetch_string_arg {
-    ($ARG:expr, $NAME:expr, $EARLY_ABORT:ident, $ARRAY_SIZE:expr) => {{
+    ($ARG:expr, $NAME:expr, $ARRAY_SIZE:expr) => {{
         let string_array_type = ($ARG).data_type();
         match string_array_type {
+            dt if $ARG.len() == 0 || $ARG.is_null(0) => {
+                // Mimicking the existing behavior of regexp_replace, if any of the scalar arguments
+                // are actually null, then the result will be an array of the same size as the first argument with all nulls.
+                //
+                // Also acts like an early abort mechanism when the input array is empty.
+                return Ok(new_null_array(dt, $ARRAY_SIZE));
+            }
             DataType::Utf8 => {
                 let array = as_string_array($ARG)?;
-                if array.len() == 0 || array.is_null(0) {
-                    return $EARLY_ABORT(array, $ARRAY_SIZE);
-                } else {
-                    array.value(0)
-                }
+                array.value(0)
             }
             DataType::LargeUtf8 => {
                 let array = as_large_string_array($ARG)?;
-                if array.len() == 0 || array.is_null(0) {
-                    return $EARLY_ABORT(array, $ARRAY_SIZE);
-                } else {
-                    array.value(0)
-                }
+                array.value(0)
             }
             DataType::Utf8View => {
                 let array = as_string_view_array($ARG)?;
-                if array.len() == 0 || array.is_null(0) {
-                    return $EARLY_ABORT(array, $ARRAY_SIZE);
-                } else {
-                    array.value(0)
-                }
+                array.value(0)
             }
             _ => unreachable!(
                 "Invalid data type for regexp_replace: {}",
@@ -442,21 +432,15 @@ fn _regexp_replace_static_pattern_replace<T: OffsetSizeTrait>(
     args: &[ArrayRef],
 ) -> Result<ArrayRef> {
     let array_size = args[0].len();
-    let pattern =
-        fetch_string_arg!(&args[1], "pattern", _regexp_replace_early_abort, array_size);
-    let replacement = fetch_string_arg!(
-        &args[2],
-        "replacement",
-        _regexp_replace_early_abort,
-        array_size
-    );
+    let pattern = fetch_string_arg!(&args[1], "pattern", array_size);
+    let replacement = fetch_string_arg!(&args[2], "replacement", array_size);
     let flags = match args.len() {
         3 => None,
-        4 => Some(fetch_string_arg!(&args[3], "flags", _regexp_replace_early_abort, array_size)),
+        4 => Some(fetch_string_arg!(&args[3], "flags", array_size)),
         other => {
             return exec_err!(
                 "regexp_replace was called with {other} arguments. It requires at least 3 and at most 4."
-            )
+            );
         }
     };
 
@@ -537,7 +521,7 @@ fn _regexp_replace_static_pattern_replace<T: OffsetSizeTrait>(
 
 /// Determine which implementation of the regexp_replace to use based
 /// on the given set of arguments.
-pub fn specialize_regexp_replace<T: OffsetSizeTrait>(
+fn specialize_regexp_replace<T: OffsetSizeTrait>(
     args: &[ColumnarValue],
 ) -> Result<ArrayRef> {
     // This will serve as a dispatch table where we can
@@ -680,6 +664,42 @@ mod tests {
     use arrow::array::*;
 
     use super::*;
+
+    #[test]
+    fn test_regex_replace_posix_groups() {
+        // Test that \1, \2, etc. are replaced with ${1}, ${2}, etc.
+        assert_eq!(regex_replace_posix_groups(r"\1"), "${1}");
+        assert_eq!(regex_replace_posix_groups(r"\12"), "${12}");
+        assert_eq!(regex_replace_posix_groups(r"X\1Y"), "X${1}Y");
+        assert_eq!(regex_replace_posix_groups(r"\1\2"), "${1}${2}");
+
+        // Test double backslash (from SQL escaped strings like '\\1')
+        assert_eq!(regex_replace_posix_groups(r"\\1"), "${1}");
+        assert_eq!(regex_replace_posix_groups(r"X\\1Y"), "X${1}Y");
+        assert_eq!(regex_replace_posix_groups(r"\\1\\2"), "${1}${2}");
+
+        // Test 3 or 4 backslashes before digits to document expected behavior
+        assert_eq!(regex_replace_posix_groups(r"\\\1"), r"\${1}");
+        assert_eq!(regex_replace_posix_groups(r"\\\\1"), r"\\${1}");
+        assert_eq!(regex_replace_posix_groups(r"\\\1\\\\2"), r"\${1}\\${2}");
+
+        // Test that a lone backslash is NOT replaced (requires at least one digit)
+        assert_eq!(regex_replace_posix_groups(r"\"), r"\");
+        assert_eq!(regex_replace_posix_groups(r"foo\bar"), r"foo\bar");
+
+        // Test that backslash followed by non-digit is preserved
+        assert_eq!(regex_replace_posix_groups(r"\n"), r"\n");
+        assert_eq!(regex_replace_posix_groups(r"\t"), r"\t");
+
+        // Test \0 behavior: \0 is converted to ${0}, which in Rust's regex
+        // replacement syntax substitutes the entire match. This is consistent
+        // with POSIX behavior where \0 (or &) refers to the entire matched string.
+        assert_eq!(regex_replace_posix_groups(r"\0"), "${0}");
+        assert_eq!(
+            regex_replace_posix_groups(r"prefix\0suffix"),
+            "prefix${0}suffix"
+        );
+    }
 
     macro_rules! static_pattern_regexp_replace {
         ($name:ident, $T:ty, $O:ty) => {

@@ -16,17 +16,17 @@
 // under the License.
 
 use crate::logical_plan::producer::{
-    to_substrait_named_struct, DefaultSubstraitProducer, SubstraitProducer,
+    DefaultSubstraitProducer, SubstraitProducer, to_substrait_named_struct,
 };
 use datafusion::execution::SessionState;
 use datafusion::logical_expr::{LogicalPlan, SubqueryAlias};
-use substrait::proto::{plan_rel, Plan, PlanRel, Rel, RelRoot};
+use substrait::proto::{Plan, PlanRel, Rel, RelRoot, plan_rel};
 use substrait::version;
 
 /// Convert DataFusion LogicalPlan to Substrait Plan
 // Silence deprecation warnings for `extension_uris` during the uri -> urn migration
 // See: https://github.com/substrait-io/substrait/issues/856
-#[allow(deprecated)]
+#[expect(deprecated)]
 pub fn to_substrait_plan(
     plan: &LogicalPlan,
     state: &SessionState,

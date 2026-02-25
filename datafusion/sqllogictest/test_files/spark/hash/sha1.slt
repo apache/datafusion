@@ -31,40 +31,51 @@ SELECT sha1('Spark');
 85f5955f4b27a9a4c2aab6ffe5d7189fc298b92c
 
 query T
-SELECT sha1(NULL);
+SELECT sha('Spark');
 ----
-NULL
+85f5955f4b27a9a4c2aab6ffe5d7189fc298b92c
 
 query T
 SELECT sha1('');
 ----
 da39a3ee5e6b4b0d3255bfef95601890afd80709
 
-# Test with LargeUtf8 (using CAST to ensure type)
+# Test with different types
+query T
+SELECT sha1(NULL);
+----
+NULL
+
 query T
 SELECT sha1(arrow_cast('Spark', 'LargeUtf8'));
 ----
 85f5955f4b27a9a4c2aab6ffe5d7189fc298b92c
 
-# Test with Utf8View (using CAST to ensure type)
 query T
 SELECT sha1(arrow_cast('Spark', 'Utf8View'));
 ----
 85f5955f4b27a9a4c2aab6ffe5d7189fc298b92c
 
-# Test with Binary
+query T
+SELECT sha1(arrow_cast('Spark', 'Utf8'));
+----
+85f5955f4b27a9a4c2aab6ffe5d7189fc298b92c
+
 query T
 SELECT sha1(arrow_cast('Spark', 'Binary'));
 ----
 85f5955f4b27a9a4c2aab6ffe5d7189fc298b92c
 
-# Test with LargeBinary
+query T
+SELECT sha1(arrow_cast(arrow_cast('Spark', 'Binary'), 'FixedSizeBinary(5)'));
+----
+85f5955f4b27a9a4c2aab6ffe5d7189fc298b92c
+
 query T
 SELECT sha1(arrow_cast('Spark', 'LargeBinary'));
 ----
 85f5955f4b27a9a4c2aab6ffe5d7189fc298b92c
 
-# Test with BinaryView
 query T
 SELECT sha1(arrow_cast('Spark', 'BinaryView'));
 ----

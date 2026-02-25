@@ -28,11 +28,11 @@ use datafusion::datasource::{TableProvider, TableType};
 use datafusion::error::Result;
 use datafusion::execution::context::{SessionContext, TaskContext};
 use datafusion::logical_expr::{
-    col, Expr, LogicalPlan, LogicalPlanBuilder, TableScan, UNNAMED_TABLE,
+    Expr, LogicalPlan, LogicalPlanBuilder, TableScan, UNNAMED_TABLE, col,
 };
 use datafusion::physical_plan::{
-    collect, ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
-    RecordBatchStream, SendableRecordBatchStream, Statistics,
+    ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
+    RecordBatchStream, SendableRecordBatchStream, Statistics, collect,
 };
 use datafusion::scalar::ScalarValue;
 use datafusion_catalog::Session;
@@ -40,13 +40,14 @@ use datafusion_common::cast::as_primitive_array;
 use datafusion_common::project_schema;
 use datafusion_common::stats::Precision;
 use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_plan::PlanProperties;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
-use datafusion_physical_plan::PlanProperties;
 
 use async_trait::async_trait;
 use futures::stream::Stream;
 
+mod dml_planning;
 mod provider_filter_pushdown;
 mod statistics;
 
@@ -78,7 +79,7 @@ struct CustomTableProvider;
 #[derive(Debug, Clone)]
 struct CustomExecutionPlan {
     projection: Option<Vec<usize>>,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl CustomExecutionPlan {
@@ -87,7 +88,10 @@ impl CustomExecutionPlan {
         let schema =
             project_schema(&schema, projection.as_ref()).expect("projected schema");
         let cache = Self::compute_properties(schema);
-        Self { projection, cache }
+        Self {
+            projection,
+            cache: Arc::new(cache),
+        }
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
@@ -156,7 +160,7 @@ impl ExecutionPlan for CustomExecutionPlan {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -177,10 +181,6 @@ impl ExecutionPlan for CustomExecutionPlan {
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         Ok(Box::pin(TestCustomRecordBatchStream { nb_batch: 1 }))
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
@@ -316,6 +316,7 @@ async fn optimizers_catch_all_statistics() {
     assert_eq!(format!("{:?}", actual[0]), format!("{expected:?}"));
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn contains_place_holder_exec(plan: Arc<dyn ExecutionPlan>) -> bool {
     if plan.as_any().is::<PlaceholderRowExec>() {
         true

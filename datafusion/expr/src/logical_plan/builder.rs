@@ -44,8 +44,8 @@ use crate::utils::{
     group_window_expr_by_sort_keys,
 };
 use crate::{
-    and, binary_expr, lit, DmlStatement, ExplainOption, Expr, ExprSchemable, Operator,
-    RecursiveQuery, Statement, TableProviderFilterPushDown, TableSource, WriteOp,
+    DmlStatement, ExplainOption, Expr, ExprSchemable, Operator, RecursiveQuery,
+    Statement, TableProviderFilterPushDown, TableSource, WriteOp, and, binary_expr, lit,
 };
 
 use super::dml::InsertOp;
@@ -182,19 +182,14 @@ impl LogicalPlanBuilder {
         recursive_term: LogicalPlan,
         is_distinct: bool,
     ) -> Result<Self> {
-        // TODO: we need to do a bunch of validation here. Maybe more.
-        if is_distinct {
-            return not_impl_err!(
-                "Recursive queries with a distinct 'UNION' (in which the previous iteration's results will be de-duplicated) is not supported"
-            );
-        }
         // Ensure that the static term and the recursive term have the same number of fields
         let static_fields_len = self.plan.schema().fields().len();
         let recursive_fields_len = recursive_term.schema().fields().len();
         if static_fields_len != recursive_fields_len {
             return plan_err!(
                 "Non-recursive term and recursive term must have the same number of columns ({} != {})",
-                static_fields_len, recursive_fields_len
+                static_fields_len,
+                recursive_fields_len
             );
         }
         // Ensure that the recursive term has the same field types as the static term
@@ -315,7 +310,11 @@ impl LogicalPlanBuilder {
                 let metadata = value.metadata(&schema)?;
                 if let Some(ref cm) = common_metadata {
                     if &metadata != cm {
-                        return plan_err!("Inconsistent metadata across values list at row {i} column {j}. Was {:?} but found {:?}", cm, metadata);
+                        return plan_err!(
+                            "Inconsistent metadata across values list at row {i} column {j}. Was {:?} but found {:?}",
+                            cm,
+                            metadata
+                        );
                     }
                 } else {
                     common_metadata = Some(metadata.clone());
@@ -329,7 +328,9 @@ impl LogicalPlanBuilder {
                     // get common type of each column values.
                     let data_types = vec![prev_type.clone(), data_type.clone()];
                     let Some(new_type) = type_union_resolution(&data_types) else {
-                        return plan_err!("Inconsistent data type across values list at row {i} column {j}. Was {prev_type} but found {data_type}");
+                        return plan_err!(
+                            "Inconsistent data type across values list at row {i} column {j}. Was {prev_type} but found {data_type}"
+                        );
                     };
                     common_type = Some(new_type);
                 } else {
@@ -528,29 +529,27 @@ impl LogicalPlanBuilder {
             TableScan::try_new(table_name, table_source, projection, filters, fetch)?;
 
         // Inline TableScan
-        if table_scan.filters.is_empty() {
-            if let Some(p) = table_scan.source.get_logical_plan() {
-                let sub_plan = p.into_owned();
+        if table_scan.filters.is_empty()
+            && let Some(p) = table_scan.source.get_logical_plan()
+        {
+            let sub_plan = p.into_owned();
 
-                if let Some(proj) = table_scan.projection {
-                    let projection_exprs = proj
-                        .into_iter()
-                        .map(|i| {
-                            Expr::Column(Column::from(
-                                sub_plan.schema().qualified_field(i),
-                            ))
-                        })
-                        .collect::<Vec<_>>();
-                    return Self::new(sub_plan)
-                        .project(projection_exprs)?
-                        .alias(table_scan.table_name);
-                }
-
-                // Ensures that the reference to the inlined table remains the
-                // same, meaning we don't have to change any of the parent nodes
-                // that reference this table.
-                return Self::new(sub_plan).alias(table_scan.table_name);
+            if let Some(proj) = table_scan.projection {
+                let projection_exprs = proj
+                    .into_iter()
+                    .map(|i| {
+                        Expr::Column(Column::from(sub_plan.schema().qualified_field(i)))
+                    })
+                    .collect::<Vec<_>>();
+                return Self::new(sub_plan)
+                    .project(projection_exprs)?
+                    .alias(table_scan.table_name);
             }
+
+            // Ensures that the reference to the inlined table remains the
+            // same, meaning we don't have to change any of the parent nodes
+            // that reference this table.
+            return Self::new(sub_plan).alias(table_scan.table_name);
         }
 
         Ok(Self::new(LogicalPlan::TableScan(table_scan)))
@@ -786,7 +785,9 @@ impl LogicalPlanBuilder {
             .map(|col| col.flat_name())
             .collect::<String>();
 
-        plan_err!("For SELECT DISTINCT, ORDER BY expressions {missing_col_names} must appear in select list")
+        plan_err!(
+            "For SELECT DISTINCT, ORDER BY expressions {missing_col_names} must appear in select list"
+        )
     }
 
     /// Apply a sort by provided expressions with default direction
@@ -1000,7 +1001,7 @@ impl LogicalPlanBuilder {
         join_keys: (Vec<impl Into<Column>>, Vec<impl Into<Column>>),
         filter: Option<Expr>,
     ) -> Result<Self> {
-        self.join_detailed_with_join_kind(
+        self.join_detailed_with_options(
             right,
             join_type,
             join_keys,
@@ -1096,23 +1097,45 @@ impl LogicalPlanBuilder {
         filter: Option<Expr>,
         null_equality: NullEquality,
     ) -> Result<Self> {
-        self.join_detailed_with_join_kind(
+        self.join_detailed_with_options(
             right,
             join_type,
             join_keys,
             filter,
             null_equality,
-            JoinKind::ComparisonJoin,
+            false,
         )
     }
 
-    pub fn join_detailed_with_join_kind(
+    pub fn join_detailed_with_options(
         self,
         right: LogicalPlan,
         join_type: JoinType,
         join_keys: (Vec<impl Into<Column>>, Vec<impl Into<Column>>),
         filter: Option<Expr>,
         null_equality: NullEquality,
+        null_aware: bool,
+        join_kind: JoinKind,
+    ) -> Result<Self> {
+        self.join_detailed_with_options_and_join_kind(
+            right,
+            join_type,
+            join_keys,
+            filter,
+            null_equality,
+            null_aware,
+            JoinKind::ComparisonJoin,
+        )
+    }
+
+    pub fn join_detailed_with_options_and_join_kind(
+        self,
+        right: LogicalPlan,
+        join_type: JoinType,
+        join_keys: (Vec<impl Into<Column>>, Vec<impl Into<Column>>),
+        filter: Option<Expr>,
+        null_equality: NullEquality,
+        null_aware: bool,
         join_kind: JoinKind,
     ) -> Result<Self> {
         if join_keys.0.len() != join_keys.1.len() {
@@ -1231,7 +1254,8 @@ impl LogicalPlanBuilder {
             join_constraint: JoinConstraint::On,
             schema: DFSchemaRef::new(join_schema),
             null_equality,
-            join_kind,
+            join_kind: JoinKind::ComparisonJoin,
+            null_aware,
         })))
     }
 
@@ -1305,6 +1329,7 @@ impl LogicalPlanBuilder {
                 join_type,
                 JoinConstraint::Using,
                 NullEquality::NullEqualsNothing,
+                false, // null_aware
             )?;
 
             Ok(Self::new(LogicalPlan::Join(join)))
@@ -1321,6 +1346,7 @@ impl LogicalPlanBuilder {
             JoinType::Inner,
             JoinConstraint::On,
             NullEquality::NullEqualsNothing,
+            false, // null_aware
         )?;
 
         Ok(Self::new(LogicalPlan::Join(join)))
@@ -1456,6 +1482,15 @@ impl LogicalPlanBuilder {
             );
         }
 
+        // Requalify sides if needed to avoid duplicate qualified field names
+        // (e.g., when both sides reference the same table)
+        let left_builder = LogicalPlanBuilder::from(left_plan);
+        let right_builder = LogicalPlanBuilder::from(right_plan);
+        let (left_builder, right_builder, _requalified) =
+            requalify_sides_if_needed(left_builder, right_builder)?;
+        let left_plan = left_builder.build()?;
+        let right_plan = right_builder.build()?;
+
         let join_keys = left_plan
             .schema()
             .fields()
@@ -1566,6 +1601,7 @@ impl LogicalPlanBuilder {
             join_type,
             JoinConstraint::On,
             NullEquality::NullEqualsNothing,
+            false, // null_aware
         )?;
 
         Ok(Self::new(LogicalPlan::Join(join)))
@@ -1857,23 +1893,61 @@ pub fn requalify_sides_if_needed(
 ) -> Result<(LogicalPlanBuilder, LogicalPlanBuilder, bool)> {
     let left_cols = left.schema().columns();
     let right_cols = right.schema().columns();
-    if left_cols.iter().any(|l| {
-        right_cols.iter().any(|r| {
-            l == r || (l.name == r.name && (l.relation.is_none() || r.relation.is_none()))
-        })
-    }) {
-        // These names have no connection to the original plan, but they'll make the columns
-        // (mostly) unique.
-        Ok((
-            left.alias(TableReference::bare("left"))?,
-            right.alias(TableReference::bare("right"))?,
-            true,
-        ))
-    } else {
-        Ok((left, right, false))
-    }
-}
 
+    // Requalify if merging the schemas would cause an error during join.
+    // This can happen in several cases:
+    // 1. Duplicate qualified fields: both sides have same relation.name
+    // 2. Duplicate unqualified fields: both sides have same unqualified name
+    // 3. Ambiguous reference: one side qualified, other unqualified, same name
+    //
+    // Implementation note: This uses a simple O(n*m) nested loop rather than
+    // a HashMap-based O(n+m) approach. The nested loop is preferred because:
+    // - Schemas are typically small (in TPCH benchmark, max is 16 columns),
+    //   so n*m is negligible
+    // - Early return on first conflict makes common case very fast
+    // - Code is simpler and easier to reason about
+    // - Called only during plan construction, not in execution hot path
+    for l in &left_cols {
+        for r in &right_cols {
+            if l.name != r.name {
+                continue;
+            }
+
+            // Same name - check if this would cause a conflict
+            match (&l.relation, &r.relation) {
+                // Both qualified with same relation - duplicate qualified field
+                (Some(l_rel), Some(r_rel)) if l_rel == r_rel => {
+                    return Ok((
+                        left.alias(TableReference::bare("left"))?,
+                        right.alias(TableReference::bare("right"))?,
+                        true,
+                    ));
+                }
+                // Both unqualified - duplicate unqualified field
+                (None, None) => {
+                    return Ok((
+                        left.alias(TableReference::bare("left"))?,
+                        right.alias(TableReference::bare("right"))?,
+                        true,
+                    ));
+                }
+                // One qualified, one not - ambiguous reference
+                (Some(_), None) | (None, Some(_)) => {
+                    return Ok((
+                        left.alias(TableReference::bare("left"))?,
+                        right.alias(TableReference::bare("right"))?,
+                        true,
+                    ));
+                }
+                // Different qualifiers - OK, no conflict
+                _ => {}
+            }
+        }
+    }
+
+    // No conflicts found
+    Ok((left, right, false))
+}
 /// Add additional "synthetic" group by expressions based on functional
 /// dependencies.
 ///
@@ -2054,15 +2128,14 @@ fn replace_columns(
     replace: &PlannedReplaceSelectItem,
 ) -> Result<Vec<Expr>> {
     for expr in exprs.iter_mut() {
-        if let Expr::Column(Column { name, .. }) = expr {
-            if let Some((_, new_expr)) = replace
+        if let Expr::Column(Column { name, .. }) = expr
+            && let Some((_, new_expr)) = replace
                 .items()
                 .iter()
                 .zip(replace.expressions().iter())
                 .find(|(item, _)| item.column_name.value == *name)
-            {
-                *expr = new_expr.clone().alias(name.clone())
-            }
+        {
+            *expr = new_expr.clone().alias(name.clone())
         }
     }
     Ok(exprs)
@@ -2833,9 +2906,23 @@ mod tests {
 
         let join = LogicalPlanBuilder::from(left).cross_join(right)?.build()?;
 
-        let _ = LogicalPlanBuilder::from(join.clone())
+        let plan = LogicalPlanBuilder::from(join.clone())
             .union(join)?
             .build()?;
+
+        assert_snapshot!(plan, @r"
+        Union
+          Cross Join:
+            SubqueryAlias: left
+              Values: (Int32(1))
+            SubqueryAlias: right
+              Values: (Int32(1))
+          Cross Join:
+            SubqueryAlias: left
+              Values: (Int32(1))
+            SubqueryAlias: right
+              Values: (Int32(1))
+        ");
 
         Ok(())
     }
@@ -2945,11 +3032,13 @@ mod tests {
                 .into_iter()
                 .collect();
         let metadata2 = FieldMetadata::from(metadata2);
-        assert!(LogicalPlanBuilder::values(vec![
-            vec![lit_with_metadata(1, Some(metadata.clone()))],
-            vec![lit_with_metadata(2, Some(metadata2.clone()))],
-        ])
-        .is_err());
+        assert!(
+            LogicalPlanBuilder::values(vec![
+                vec![lit_with_metadata(1, Some(metadata.clone()))],
+                vec![lit_with_metadata(2, Some(metadata2.clone()))],
+            ])
+            .is_err()
+        );
 
         Ok(())
     }

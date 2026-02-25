@@ -17,7 +17,7 @@
 
 use arrow::compute::SortOptions;
 use datafusion_common::utils::compare_rows;
-use datafusion_common::{exec_err, ScalarValue};
+use datafusion_common::{ScalarValue, exec_err};
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, VecDeque};
 

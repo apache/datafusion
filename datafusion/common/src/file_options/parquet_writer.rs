@@ -20,22 +20,20 @@
 use std::sync::Arc;
 
 use crate::{
+    _internal_datafusion_err, DataFusionError, Result,
     config::{ParquetOptions, TableParquetOptions},
-    DataFusionError, Result, _internal_datafusion_err,
 };
 
 use arrow::datatypes::Schema;
 use parquet::arrow::encode_arrow_schema;
-// TODO: handle once deprecated
-#[allow(deprecated)]
 use parquet::{
     arrow::ARROW_SCHEMA_META_KEY,
     basic::{BrotliLevel, GzipLevel, ZstdLevel},
     file::{
         metadata::KeyValue,
         properties::{
-            EnabledStatistics, WriterProperties, WriterPropertiesBuilder, WriterVersion,
-            DEFAULT_STATISTICS_ENABLED,
+            DEFAULT_STATISTICS_ENABLED, EnabledStatistics, WriterProperties,
+            WriterPropertiesBuilder,
         },
     },
     schema::types::ColumnPath,
@@ -106,7 +104,9 @@ impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
         if !global.skip_arrow_metadata
             && !key_value_metadata.contains_key(ARROW_SCHEMA_META_KEY)
         {
-            return Err(_internal_datafusion_err!("arrow schema was not added to the kv_metadata, even though it is required by configuration settings"));
+            return Err(_internal_datafusion_err!(
+                "arrow schema was not added to the kv_metadata, even though it is required by configuration settings"
+            ));
         }
 
         // add kv_meta, if any
@@ -174,7 +174,6 @@ impl ParquetOptions {
     ///
     /// Note that this method does not include the key_value_metadata from [`TableParquetOptions`].
     pub fn into_writer_properties_builder(&self) -> Result<WriterPropertiesBuilder> {
-        #[allow(deprecated)]
         let ParquetOptions {
             data_pagesize_limit,
             write_batch_size,
@@ -200,6 +199,7 @@ impl ParquetOptions {
             metadata_size_hint: _,
             pushdown_filters: _,
             reorder_filters: _,
+            force_filter_selections: _, // not used for writer props
             allow_single_file_parallelism: _,
             maximum_parallel_row_group_writers: _,
             maximum_buffered_record_batches_per_stream: _,
@@ -214,7 +214,7 @@ impl ParquetOptions {
         let mut builder = WriterProperties::builder()
             .set_data_page_size_limit(*data_pagesize_limit)
             .set_write_batch_size(*write_batch_size)
-            .set_writer_version(parse_version_string(writer_version.as_str())?)
+            .set_writer_version((*writer_version).into())
             .set_dictionary_page_size_limit(*dictionary_page_size_limit)
             .set_statistics_enabled(
                 statistics_enabled
@@ -261,7 +261,7 @@ pub(crate) fn parse_encoding_string(
         "plain" => Ok(parquet::basic::Encoding::PLAIN),
         "plain_dictionary" => Ok(parquet::basic::Encoding::PLAIN_DICTIONARY),
         "rle" => Ok(parquet::basic::Encoding::RLE),
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         "bit_packed" => Ok(parquet::basic::Encoding::BIT_PACKED),
         "delta_binary_packed" => Ok(parquet::basic::Encoding::DELTA_BINARY_PACKED),
         "delta_length_byte_array" => {
@@ -341,10 +341,6 @@ pub fn parse_compression_string(
                 level,
             )?))
         }
-        "lzo" => {
-            check_level_is_none(codec, &level)?;
-            Ok(parquet::basic::Compression::LZO)
-        }
         "brotli" => {
             let level = require_level(codec, level)?;
             Ok(parquet::basic::Compression::BROTLI(BrotliLevel::try_new(
@@ -368,19 +364,7 @@ pub fn parse_compression_string(
         _ => Err(DataFusionError::Configuration(format!(
             "Unknown or unsupported parquet compression: \
         {str_setting}. Valid values are: uncompressed, snappy, gzip(level), \
-        lzo, brotli(level), lz4, zstd(level), and lz4_raw."
-        ))),
-    }
-}
-
-pub(crate) fn parse_version_string(str_setting: &str) -> Result<WriterVersion> {
-    let str_setting_lower: &str = &str_setting.to_lowercase();
-    match str_setting_lower {
-        "1.0" => Ok(WriterVersion::PARQUET_1_0),
-        "2.0" => Ok(WriterVersion::PARQUET_2_0),
-        _ => Err(DataFusionError::Configuration(format!(
-            "Unknown or unsupported parquet writer version {str_setting} \
-            valid options are 1.0 and 2.0"
+        brotli(level), lz4, zstd(level), and lz4_raw."
         ))),
     }
 }
@@ -402,14 +386,14 @@ pub(crate) fn parse_statistics_string(str_setting: &str) -> Result<EnabledStatis
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{
-        ConfigFileEncryptionProperties, ParquetColumnOptions, ParquetEncryptionOptions,
-        ParquetOptions,
-    };
+    #[cfg(feature = "parquet_encryption")]
+    use crate::config::ConfigFileEncryptionProperties;
+    use crate::config::{ParquetColumnOptions, ParquetEncryptionOptions, ParquetOptions};
+    use crate::parquet_config::DFParquetWriterVersion;
     use parquet::basic::Compression;
     use parquet::file::properties::{
-        BloomFilterProperties, EnabledStatistics, DEFAULT_BLOOM_FILTER_FPP,
-        DEFAULT_BLOOM_FILTER_NDV,
+        BloomFilterProperties, DEFAULT_BLOOM_FILTER_FPP, DEFAULT_BLOOM_FILTER_NDV,
+        EnabledStatistics,
     };
     use std::collections::HashMap;
 
@@ -432,17 +416,17 @@ mod tests {
 
     fn parquet_options_with_non_defaults() -> ParquetOptions {
         let defaults = ParquetOptions::default();
-        let writer_version = if defaults.writer_version.eq("1.0") {
-            "2.0"
+        let writer_version = if defaults.writer_version.eq(&DFParquetWriterVersion::V1_0)
+        {
+            DFParquetWriterVersion::V2_0
         } else {
-            "1.0"
+            DFParquetWriterVersion::V1_0
         };
 
-        #[allow(deprecated)] // max_statistics_size
         ParquetOptions {
             data_pagesize_limit: 42,
             write_batch_size: 42,
-            writer_version: writer_version.into(),
+            writer_version,
             compression: Some("zstd(22)".into()),
             dictionary_enabled: Some(!defaults.dictionary_enabled.unwrap_or(false)),
             dictionary_page_size_limit: 42,
@@ -464,6 +448,7 @@ mod tests {
             metadata_size_hint: defaults.metadata_size_hint,
             pushdown_filters: defaults.pushdown_filters,
             reorder_filters: defaults.reorder_filters,
+            force_filter_selections: defaults.force_filter_selections,
             allow_single_file_parallelism: defaults.allow_single_file_parallelism,
             maximum_parallel_row_group_writers: defaults
                 .maximum_parallel_row_group_writers,
@@ -484,7 +469,6 @@ mod tests {
     ) -> ParquetColumnOptions {
         let bloom_filter_default_props = props.bloom_filter_properties(&col);
 
-        #[allow(deprecated)] // max_statistics_size
         ParquetColumnOptions {
             bloom_filter_enabled: Some(bloom_filter_default_props.is_some()),
             encoding: props.encoding(&col).map(|s| s.to_string()),
@@ -545,13 +529,12 @@ mod tests {
         #[cfg(not(feature = "parquet_encryption"))]
         let fep = None;
 
-        #[allow(deprecated)] // max_statistics_size
         TableParquetOptions {
             global: ParquetOptions {
                 // global options
                 data_pagesize_limit: props.dictionary_page_size_limit(),
                 write_batch_size: props.write_batch_size(),
-                writer_version: format!("{}.0", props.writer_version().as_num()),
+                writer_version: props.writer_version().into(),
                 dictionary_page_size_limit: props.dictionary_page_size_limit(),
                 max_row_group_size: props.max_row_group_size(),
                 created_by: props.created_by().to_string(),
@@ -577,6 +560,7 @@ mod tests {
                 metadata_size_hint: global_options_defaults.metadata_size_hint,
                 pushdown_filters: global_options_defaults.pushdown_filters,
                 reorder_filters: global_options_defaults.reorder_filters,
+                force_filter_selections: global_options_defaults.force_filter_selections,
                 allow_single_file_parallelism: global_options_defaults
                     .allow_single_file_parallelism,
                 maximum_parallel_row_group_writers: global_options_defaults
@@ -674,8 +658,7 @@ mod tests {
         let mut default_table_writer_opts = TableParquetOptions::default();
         let default_parquet_opts = ParquetOptions::default();
         assert_eq!(
-            default_table_writer_opts.global,
-            default_parquet_opts,
+            default_table_writer_opts.global, default_parquet_opts,
             "should have matching defaults for TableParquetOptions.global and ParquetOptions",
         );
 
@@ -699,7 +682,9 @@ mod tests {
             "should have different created_by sources",
         );
         assert!(
-            default_writer_props.created_by().starts_with("parquet-rs version"),
+            default_writer_props
+                .created_by()
+                .starts_with("parquet-rs version"),
             "should indicate that writer_props defaults came from the extern parquet crate",
         );
         assert!(
@@ -733,8 +718,7 @@ mod tests {
         from_extern_parquet.global.skip_arrow_metadata = true;
 
         assert_eq!(
-            default_table_writer_opts,
-            from_extern_parquet,
+            default_table_writer_opts, from_extern_parquet,
             "the default writer_props should have the same configuration as the session's default TableParquetOptions",
         );
     }
