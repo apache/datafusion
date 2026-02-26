@@ -44,6 +44,8 @@ use datafusion_datasource_json::source::JsonSource;
 #[cfg(feature = "parquet")]
 use datafusion_datasource_parquet::file_format::ParquetSink;
 #[cfg(feature = "parquet")]
+use datafusion_datasource_parquet::CachedParquetFileReaderFactory;
+#[cfg(feature = "parquet")]
 use datafusion_datasource_parquet::source::ParquetSource;
 use datafusion_execution::{FunctionRegistry, TaskContext};
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
@@ -861,6 +863,23 @@ impl protobuf::PhysicalPlanNode {
                 proto_converter,
                 Arc::new(source),
             )?;
+            let store = ctx
+                .runtime_env()
+                .object_store(base_config.object_store_url.clone())?;
+            let metadata_cache =
+                ctx.runtime_env().cache_manager.get_file_metadata_cache();
+            let reader_factory =
+                Arc::new(CachedParquetFileReaderFactory::new(store, metadata_cache));
+            let parquet_source = base_config
+                .file_source()
+                .as_any()
+                .downcast_ref::<ParquetSource>()
+                .ok_or_else(|| proto_error("Expected ParquetSource in FileScanConfig"))?
+                .clone()
+                .with_parquet_file_reader_factory(reader_factory);
+            let base_config = FileScanConfigBuilder::from(base_config)
+                .with_source(Arc::new(parquet_source))
+                .build();
             Ok(DataSourceExec::from_data_source(base_config))
         }
         #[cfg(not(feature = "parquet"))]
