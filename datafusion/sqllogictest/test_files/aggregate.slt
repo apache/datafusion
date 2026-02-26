@@ -7893,8 +7893,8 @@ logical_plan
 03)----Aggregate: groupBy=[[aggregate_test_100.c2]], aggr=[[count(Int64(1))]]
 04)------TableScan: aggregate_test_100 projection=[c2]
 physical_plan
-01)SortExec: TopK(fetch=3), expr=[cnt@1 DESC], preserve_partitioning=[false]
-02)--ProjectionExec: expr=[c2@0 as c2, count(Int64(1))@1 as cnt]
+01)ProjectionExec: expr=[c2@0 as c2, count(Int64(1))@1 as cnt]
+02)--GlobalLimitExec: skip=0, fetch=3
 03)----AggregateExec: mode=Final, gby=[c2@0 as c2], aggr=[count(Int64(1))], lim=[3], topk=[count(Int64(1)) DESC]
 04)------CoalescePartitionsExec
 05)--------AggregateExec: mode=Partial, gby=[c2@0 as c2], aggr=[count(Int64(1))]
@@ -7906,8 +7906,8 @@ query II
 SELECT c2, COUNT(*) AS cnt FROM aggregate_test_100 GROUP BY c2 ORDER BY cnt DESC LIMIT 3;
 ----
 4 23
-1 22
 2 22
+1 22
 
 # GROUP BY multiple columns, ORDER BY SUM aggregate DESC LIMIT K
 query III

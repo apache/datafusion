@@ -41,6 +41,7 @@ use parking_lot::Mutex;
 use std::collections::HashSet;
 
 use arrow::array::{ArrayRef, UInt8Array, UInt16Array, UInt32Array, UInt64Array};
+use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::FieldRef;
@@ -54,7 +55,7 @@ use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::{Column, DynamicFilterPhysicalExpr, lit};
 use datafusion_physical_expr::{
-    ConstExpr, EquivalenceProperties, physical_exprs_contains,
+    ConstExpr, EquivalenceProperties, PhysicalSortExpr, physical_exprs_contains,
 };
 use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, fmt_sql};
 use datafusion_physical_expr_common::sort_expr::{
@@ -711,13 +712,39 @@ impl AggregateExec {
 
     /// Clone this exec, overriding only the limit hint.
     pub fn with_new_limit_options(&self, limit_options: Option<LimitOptions>) -> Self {
+        // When topk_sort_columns is set, the AggregateExec will emit rows
+        // already sorted by those columns. Declare this output ordering so
+        // downstream SortExec can be eliminated.
+        let cache = if let Some(ref opts) = limit_options
+            && let Some(sort_cols) = opts.topk_sort_columns()
+            && !sort_cols.is_empty()
+        {
+            let schema = self.schema();
+            let sort_exprs = sort_cols.iter().map(|&(col_idx, descending)| {
+                let field = schema.field(col_idx);
+                let expr: Arc<dyn PhysicalExpr> =
+                    Arc::new(Column::new(field.name(), col_idx));
+                PhysicalSortExpr::new(
+                    expr,
+                    SortOptions {
+                        descending,
+                        nulls_first: !descending,
+                    },
+                )
+            });
+            let mut eq_properties = self.cache.equivalence_properties().clone();
+            eq_properties.add_orderings([sort_exprs]);
+            self.cache.clone().with_eq_properties(eq_properties)
+        } else {
+            self.cache.clone()
+        };
         Self {
             limit_options,
             // clone the rest of the fields
             required_input_ordering: self.required_input_ordering.clone(),
             metrics: ExecutionPlanMetricsSet::new(),
             input_order_mode: self.input_order_mode.clone(),
-            cache: self.cache.clone(),
+            cache,
             mode: self.mode,
             group_by: Arc::clone(&self.group_by),
             aggr_expr: Arc::clone(&self.aggr_expr),

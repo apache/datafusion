@@ -24,12 +24,13 @@ use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion_physical_plan::aggregates::LimitOptions;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, topk_types_supported,
 };
 use datafusion_physical_plan::execution_plan::CardinalityEffect;
+use datafusion_physical_plan::limit::GlobalLimitExec;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use itertools::Itertools;
@@ -191,6 +192,21 @@ impl TopKAggregation {
             Ok(Transformed::no(plan))
         };
         let child = Arc::clone(child).transform_down(closure).data().ok()?;
+
+        // If the child now satisfies the sort ordering (because the aggregate
+        // declares sorted output via topk_emit) and we're in the non-partitioned
+        // case, eliminate the SortExec and replace it with a GlobalLimitExec.
+        // For the partitioned case (preserve_partitioning=true), keep the SortExec
+        // since SortPreservingMergeExec above needs per-partition sorted input.
+        if !sort.preserve_partitioning()
+            && child
+                .equivalence_properties()
+                .ordering_satisfy(sort.expr().clone())
+                .unwrap_or(false)
+        {
+            return Some(Arc::new(GlobalLimitExec::new(child, 0, Some(limit))));
+        }
+
         let sort = SortExec::new(sort.expr().clone(), child)
             .with_fetch(sort.fetch())
             .with_preserve_partitioning(sort.preserve_partitioning());
