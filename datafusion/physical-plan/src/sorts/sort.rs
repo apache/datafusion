@@ -28,7 +28,8 @@ use parking_lot::RwLock;
 
 use crate::common::spawn_buffered;
 use crate::execution_plan::{
-    Boundedness, CardinalityEffect, EmissionType, has_same_children_properties,
+    Boundedness, CardinalityEffect, EmissionType, ReplacePhysicalExpr,
+    has_same_children_properties,
 };
 use crate::expressions::PhysicalSortExpr;
 use crate::filter_pushdown::{
@@ -58,8 +59,8 @@ use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::SpillCompression;
 use datafusion_common::{
-    DataFusionError, Result, assert_or_internal_err, internal_datafusion_err,
-    unwrap_or_internal_err,
+    DataFusionError, Result, assert_eq_or_internal_err, assert_or_internal_err,
+    internal_datafusion_err, unwrap_or_internal_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
@@ -1426,6 +1427,55 @@ impl ExecutionPlan for SortExec {
         }
 
         Ok(FilterDescription::new().with_child(child))
+    }
+
+    fn physical_expressions<'a>(
+        &'a self,
+    ) -> Option<Box<dyn Iterator<Item = Arc<dyn PhysicalExpr>> + 'a>> {
+        Some(Box::new(
+            self.expr.iter().map(|sort| Arc::clone(&sort.expr)),
+        ))
+    }
+
+    fn with_physical_expressions(
+        &self,
+        params: ReplacePhysicalExpr,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let expected_count = self.expr.len();
+        let exprs_count = params.exprs.len();
+        assert_eq_or_internal_err!(
+            expected_count,
+            exprs_count,
+            "Inconsistent number of physical expressions for {}",
+            self.name()
+        );
+
+        let expr = self.expr.try_with_new_expressions(params.exprs)?;
+        let filter = self.filter.as_ref().map(|_| {
+            let children = expr
+                .iter()
+                .map(|sort_expr| Arc::clone(&sort_expr.expr))
+                .collect::<Vec<_>>();
+
+            Arc::new(RwLock::new(TopKDynamicFilters::new(Arc::new(
+                DynamicFilterPhysicalExpr::new(children, lit(true)),
+            ))))
+        });
+
+        let (cache, sort_prefix) = Self::compute_properties(
+            &self.input,
+            expr.clone(),
+            self.preserve_partitioning,
+        )?;
+
+        Ok(Some(Arc::new(Self {
+            expr,
+            filter,
+            metrics_set: ExecutionPlanMetricsSet::new(),
+            cache: Arc::new(cache),
+            common_sort_prefix: sort_prefix,
+            ..self.clone()
+        })))
     }
 }
 

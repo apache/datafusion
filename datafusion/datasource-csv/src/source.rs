@@ -35,14 +35,14 @@ use datafusion_datasource::{
 
 use arrow::csv;
 use datafusion_common::config::CsvOptions;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, assert_or_internal_err};
 use datafusion_common_runtime::JoinSet;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_execution::TaskContext;
 use datafusion_physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet};
 use datafusion_physical_plan::{
-    DisplayFormatType, ExecutionPlan, ExecutionPlanProperties,
+    DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PhysicalExpr,
 };
 
 use crate::file_format::CsvDecoder;
@@ -290,6 +290,20 @@ impl FileSource for CsvSource {
 
     fn projection(&self) -> Option<&ProjectionExprs> {
         Some(&self.projection.source)
+    }
+
+    fn with_filter_and_projection(
+        &self,
+        filter: Option<Arc<dyn PhysicalExpr>>,
+        projection: ProjectionExprs,
+    ) -> Result<Option<Arc<dyn FileSource>>> {
+        assert_or_internal_err!(filter.is_none(), "filter should not be defined");
+
+        let mut conf = self.clone();
+        conf.projection =
+            SplitProjection::new(self.table_schema.file_schema(), &projection);
+
+        Ok(Some(Arc::new(conf)))
     }
 
     fn metrics(&self) -> &ExecutionPlanMetricsSet {

@@ -155,6 +155,16 @@ impl FileSource for TestSource {
         })
     }
 
+    fn with_filter_and_projection(
+        &self,
+        filter: Option<Arc<dyn PhysicalExpr>>,
+        _projection: ProjectionExprs,
+    ) -> Result<Option<Arc<dyn FileSource>>> {
+        let mut conf = self.clone();
+        conf.predicate = filter;
+        Ok(Some(Arc::new(conf)))
+    }
+
     fn metrics(&self) -> &ExecutionPlanMetricsSet {
         &self.metrics
     }

@@ -30,7 +30,7 @@ use arrow::array::{ArrayRef, new_empty_array};
 use arrow::datatypes::FieldRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::evaluate_partition_ranges;
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, assert_eq_or_internal_err};
 use datafusion_expr::WindowFrame;
 use datafusion_expr::window_state::{WindowAggState, WindowFrameContext};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
@@ -284,6 +284,50 @@ impl WindowExpr for StandardWindowExpr {
 
     fn create_window_fn(&self) -> Result<WindowFn> {
         Ok(WindowFn::Builtin(self.expr.create_evaluator()?))
+    }
+
+    fn inner_expressions_count(&self) -> usize {
+        self.partition_by.len() + self.order_by.len()
+    }
+
+    fn inner_expressions_iter<'a>(
+        &'a self,
+    ) -> Box<dyn Iterator<Item = Arc<dyn PhysicalExpr>> + 'a> {
+        let partition_by_exprs = self.partition_by.iter().cloned();
+        let order_by_exprs = self.order_by.iter().map(|sort| Arc::clone(&sort.expr));
+        Box::new(partition_by_exprs.chain(order_by_exprs))
+    }
+
+    fn with_inner_expressions(
+        &self,
+        exprs: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Result<Arc<dyn WindowExpr>> {
+        let partition_by_count = self.partition_by().len();
+        let order_by_count = self.order_by().len();
+
+        let expected_count = partition_by_count + order_by_count;
+        let exprs_count = exprs.len();
+        assert_eq_or_internal_err!(
+            expected_count,
+            exprs_count,
+            "Inconsistent number of physical expressions for StandardWindowExpr",
+        );
+
+        let mut exprs_iter = exprs.into_iter();
+        let partition_by = exprs_iter.by_ref().take(partition_by_count).collect();
+        let order_by = self
+            .order_by
+            .iter()
+            .zip(exprs_iter)
+            .map(|(sort, expr)| PhysicalSortExpr::new(expr, sort.options))
+            .collect::<Vec<_>>();
+
+        Ok(Arc::new(Self {
+            expr: Arc::clone(&self.expr),
+            partition_by,
+            order_by,
+            window_frame: Arc::clone(&self.window_frame),
+        }))
     }
 }
 
