@@ -32,6 +32,7 @@ use super::{
     SendableRecordBatchStream, Statistics,
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
 };
+use crate::check_if_same_properties;
 use crate::execution_plan::{
     InvariantLevel, boundedness_from_children, check_default_invariants,
     emission_type_from_children,
@@ -106,7 +107,7 @@ pub struct UnionExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl UnionExec {
@@ -124,7 +125,7 @@ impl UnionExec {
         UnionExec {
             inputs,
             metrics: ExecutionPlanMetricsSet::new(),
-            cache,
+            cache: Arc::new(cache),
         }
     }
 
@@ -153,7 +154,7 @@ impl UnionExec {
                 Ok(Arc::new(UnionExec {
                     inputs,
                     metrics: ExecutionPlanMetricsSet::new(),
-                    cache,
+                    cache: Arc::new(cache),
                 }))
             }
         }
@@ -189,6 +190,17 @@ impl UnionExec {
             boundedness_from_children(inputs),
         ))
     }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        Self {
+            inputs: children,
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(self)
+        }
+    }
 }
 
 impl DisplayAs for UnionExec {
@@ -216,7 +228,7 @@ impl ExecutionPlan for UnionExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -265,6 +277,7 @@ impl ExecutionPlan for UnionExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        check_if_same_properties!(self, children);
         UnionExec::try_new(children)
     }
 
@@ -383,7 +396,7 @@ impl ExecutionPlan for UnionExec {
         // children with FilterExec and reporting all filters as handled.
         // Post phase: use default behavior to let the filter creator decide how to handle
         // filters that weren't fully pushed down.
-        if !matches!(phase, FilterPushdownPhase::Pre) {
+        if phase != FilterPushdownPhase::Pre {
             return Ok(FilterPushdownPropagation::if_all(child_pushdown_result));
         }
 
@@ -490,7 +503,7 @@ pub struct InterleaveExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl InterleaveExec {
@@ -504,7 +517,7 @@ impl InterleaveExec {
         Ok(InterleaveExec {
             inputs,
             metrics: ExecutionPlanMetricsSet::new(),
-            cache,
+            cache: Arc::new(cache),
         })
     }
 
@@ -525,6 +538,17 @@ impl InterleaveExec {
             emission_type_from_children(inputs),
             boundedness_from_children(inputs),
         ))
+    }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        Self {
+            inputs: children,
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(self)
+        }
     }
 }
 
@@ -553,7 +577,7 @@ impl ExecutionPlan for InterleaveExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -574,6 +598,7 @@ impl ExecutionPlan for InterleaveExec {
             can_interleave(children.iter()),
             "Can not create InterleaveExec: new children can not be interleaved"
         );
+        check_if_same_properties!(self, children);
         Ok(Arc::new(InterleaveExec::try_new(children)?))
     }
 

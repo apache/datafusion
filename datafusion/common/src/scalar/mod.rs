@@ -3008,7 +3008,7 @@ impl ScalarValue {
     ///
     /// Errors if `self` is
     /// - a decimal that fails be converted to a decimal array of size
-    /// - a `FixedsizeList` that fails to be concatenated into an array of size
+    /// - a `FixedSizeList` that fails to be concatenated into an array of size
     /// - a `List` that fails to be concatenated into an array of size
     /// - a `Dictionary` that fails be converted to a dictionary array of size
     pub fn to_array_of_size(&self, size: usize) -> Result<ArrayRef> {
@@ -3434,13 +3434,22 @@ impl ScalarValue {
         }
     }
 
+    /// Repeats the rows of `arr` `size` times, producing an array with
+    /// `arr.len() * size` total rows.
     fn list_to_array_of_size(arr: &dyn Array, size: usize) -> Result<ArrayRef> {
-        let arrays = repeat_n(arr, size).collect::<Vec<_>>();
-        let ret = match !arrays.is_empty() {
-            true => arrow::compute::concat(arrays.as_slice())?,
-            false => arr.slice(0, 0),
-        };
-        Ok(ret)
+        if size == 0 {
+            return Ok(arr.slice(0, 0));
+        }
+
+        // Examples: given `arr = [[A, B, C]]` and `size = 3`, `indices = [0, 0, 0]` and
+        // the result is `[[A, B, C], [A, B, C], [A, B, C]]`.
+        //
+        // Given `arr = [[A, B], [C]]` and `size = 2`, `indices = [0, 1, 0, 1]` and the
+        // result is `[[A, B], [C], [A, B], [C]]`. (But in practice, we are always called
+        // with `arr.len() == 1`.)
+        let n = arr.len() as u32;
+        let indices = UInt32Array::from_iter_values((0..size).flat_map(|_| 0..n));
+        Ok(arrow::compute::take(arr, &indices, None)?)
     }
 
     /// Retrieve ScalarValue for each row in `array`
@@ -5530,6 +5539,79 @@ mod tests {
             .expect("Failed to convert to empty array");
 
         assert_eq!(empty_array.len(), 0);
+    }
+
+    #[test]
+    fn test_to_array_of_size_list_size_one() {
+        // size=1 takes the fast path (Arc::clone)
+        let arr = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+            Some(10),
+            Some(20),
+        ])]);
+        let sv = ScalarValue::List(Arc::new(arr.clone()));
+        let result = sv.to_array_of_size(1).unwrap();
+        assert_eq!(result.as_list::<i32>(), &arr);
+    }
+
+    #[test]
+    fn test_to_array_of_size_list_empty_inner() {
+        // A list scalar containing an empty list: [[]]
+        let arr = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![])]);
+        let sv = ScalarValue::List(Arc::new(arr));
+        let result = sv.to_array_of_size(3).unwrap();
+        let result_list = result.as_list::<i32>();
+        assert_eq!(result_list.len(), 3);
+        for i in 0..3 {
+            assert_eq!(result_list.value(i).len(), 0);
+        }
+    }
+
+    #[test]
+    fn test_to_array_of_size_large_list() {
+        let arr =
+            LargeListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+                Some(100),
+                Some(200),
+            ])]);
+        let sv = ScalarValue::LargeList(Arc::new(arr));
+        let result = sv.to_array_of_size(3).unwrap();
+        let expected = LargeListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(100), Some(200)]),
+            Some(vec![Some(100), Some(200)]),
+            Some(vec![Some(100), Some(200)]),
+        ]);
+        assert_eq!(result.as_list::<i64>(), &expected);
+    }
+
+    #[test]
+    fn test_list_to_array_of_size_multi_row() {
+        // Call list_to_array_of_size directly with arr.len() > 1
+        let arr = Int32Array::from(vec![Some(10), None, Some(30)]);
+        let result = ScalarValue::list_to_array_of_size(&arr, 3).unwrap();
+        let result = result.as_primitive::<Int32Type>();
+        assert_eq!(
+            result.iter().collect::<Vec<_>>(),
+            vec![
+                Some(10),
+                None,
+                Some(30),
+                Some(10),
+                None,
+                Some(30),
+                Some(10),
+                None,
+                Some(30),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_to_array_of_size_null_list() {
+        let dt = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
+        let sv = ScalarValue::try_from(&dt).unwrap();
+        let result = sv.to_array_of_size(3).unwrap();
+        assert_eq!(result.len(), 3);
+        assert_eq!(result.null_count(), 3);
     }
 
     /// See https://github.com/apache/datafusion/issues/18870

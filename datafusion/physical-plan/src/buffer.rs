@@ -27,6 +27,7 @@ use crate::projection::ProjectionExec;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, SortOrderPushdownResult,
+    check_if_same_properties,
 };
 use arrow::array::RecordBatch;
 use datafusion_common::config::ConfigOptions;
@@ -92,7 +93,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 #[derive(Debug, Clone)]
 pub struct BufferExec {
     input: Arc<dyn ExecutionPlan>,
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
     capacity: usize,
     metrics: ExecutionPlanMetricsSet,
 }
@@ -100,14 +101,12 @@ pub struct BufferExec {
 impl BufferExec {
     /// Builds a new [BufferExec] with the provided capacity in bytes.
     pub fn new(input: Arc<dyn ExecutionPlan>, capacity: usize) -> Self {
-        let properties = input
-            .properties()
-            .clone()
+        let properties = PlanProperties::clone(input.properties())
             .with_scheduling_type(SchedulingType::Cooperative);
 
         Self {
             input,
-            properties,
+            properties: Arc::new(properties),
             capacity,
             metrics: ExecutionPlanMetricsSet::new(),
         }
@@ -121,6 +120,17 @@ impl BufferExec {
     /// Returns the per-partition capacity in bytes for this [BufferExec].
     pub fn capacity(&self) -> usize {
         self.capacity
+    }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(self)
+        }
     }
 }
 
@@ -146,7 +156,7 @@ impl ExecutionPlan for BufferExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 
@@ -166,6 +176,7 @@ impl ExecutionPlan for BufferExec {
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        check_if_same_properties!(self, children);
         if children.len() != 1 {
             return plan_err!("BufferExec can only have one child");
         }
