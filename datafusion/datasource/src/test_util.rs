@@ -84,6 +84,21 @@ impl FileSource for MockSource {
         self.filter.clone()
     }
 
+    fn with_filter_and_projection(
+        &self,
+        filter: Option<Arc<dyn PhysicalExpr>>,
+        projection: datafusion_physical_plan::projection::ProjectionExprs,
+    ) -> Result<Option<Arc<dyn FileSource>>> {
+        let mut conf = self.clone();
+        conf.filter = filter;
+        conf.projection = crate::projection::SplitProjection::new(
+            self.table_schema.file_schema(),
+            &projection,
+        );
+
+        Ok(Some(Arc::new(conf)))
+    }
+
     fn with_batch_size(&self, _batch_size: usize) -> Arc<dyn FileSource> {
         Arc::new(Self { ..self.clone() })
     }

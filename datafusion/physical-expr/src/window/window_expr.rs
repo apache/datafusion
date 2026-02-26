@@ -164,6 +164,38 @@ pub trait WindowExpr: Send + Sync + Debug {
     ) -> Option<Arc<dyn WindowExpr>> {
         None
     }
+
+    /// Returns the total count of a subset of inner expressions used in this window expression.
+    ///
+    /// This count corresponds to the number of expressions that would be returned by
+    /// [`WindowExpr::inner_expressions_iter`].
+    ///
+    /// Note: This count may differ from the count of expressions returned by
+    /// [`WindowExpr::all_expressions`].
+    fn inner_expressions_count(&self) -> usize {
+        self.inner_expressions_iter().count()
+    }
+
+    /// Returns an iterator over a subset of inner expressions used in this window expression.
+    ///
+    /// Note: Implementations may return a different set of expressions than those returned by
+    /// [`WindowExpr::all_expressions`]. This method must be consistent with
+    /// [`WindowExpr::with_inner_expressions`] in that
+    /// `expr.with_inner_expressions(&expr.inner_expressions_iter().collect())` should return an
+    /// instance with the same expressions as the initial one.
+    fn inner_expressions_iter<'a>(
+        &'a self,
+    ) -> Box<dyn Iterator<Item = Arc<dyn PhysicalExpr>> + 'a>;
+
+    /// Replaces the expressions in this window expression with new ones.
+    ///
+    /// This method allows for rewriting the window expression with different physical expressions.
+    /// The number of expressions provided should match the count returned by
+    /// [`WindowExpr::inner_expressions_count`].
+    fn with_inner_expressions(
+        &self,
+        _exprs: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Result<Arc<dyn WindowExpr>>;
 }
 
 /// Stores the physical expressions used inside the `WindowExpr`.

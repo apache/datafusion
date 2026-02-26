@@ -30,7 +30,7 @@ use super::{
 use crate::check_if_same_properties;
 use crate::coalesce::{LimitedBatchCoalescer, PushBatchStatus};
 use crate::common::can_project;
-use crate::execution_plan::CardinalityEffect;
+use crate::execution_plan::{CardinalityEffect, ReplacePhysicalExpr};
 use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation, PushedDown,
@@ -53,7 +53,8 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
-    DataFusionError, Result, ScalarValue, internal_err, plan_err, project_schema,
+    DataFusionError, Result, ScalarValue, assert_eq_or_internal_err, internal_err,
+    plan_err, project_schema,
 };
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
@@ -775,6 +776,32 @@ impl ExecutionPlan for FilterExec {
                     .with_new_children(vec![new_input])
                     .ok()
             })
+    }
+
+    fn physical_expressions<'a>(
+        &'a self,
+    ) -> Option<Box<dyn Iterator<Item = Arc<dyn PhysicalExpr>> + 'a>> {
+        Some(Box::new(std::iter::once(Arc::clone(&self.predicate))))
+    }
+
+    fn with_physical_expressions(
+        &self,
+        mut params: ReplacePhysicalExpr,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let exprs_count = params.exprs.len();
+        assert_eq_or_internal_err!(
+            exprs_count,
+            1,
+            "Inconsistent number of physical expressions for {}",
+            self.name()
+        );
+
+        let predicate = params.exprs.pop().unwrap();
+        Ok(Some(Arc::new(Self {
+            predicate,
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..self.clone()
+        })))
     }
 }
 

@@ -31,7 +31,7 @@ use crate::{PhysicalExpr, expressions::PhysicalSortExpr};
 use arrow::array::{ArrayRef, BooleanArray};
 use arrow::datatypes::FieldRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, assert_eq_or_internal_err};
 use datafusion_expr::{Accumulator, WindowFrame};
 
 /// A window expr that takes the form of an aggregate function that
@@ -184,6 +184,95 @@ impl WindowExpr for SlidingAggregateWindowExpr {
 
     fn create_window_fn(&self) -> Result<WindowFn> {
         Ok(WindowFn::Aggregate(self.get_accumulator()?))
+    }
+
+    fn inner_expressions_count(&self) -> usize {
+        let aggregate_args_count = self.aggregate.expressions().len();
+        let aggregate_order_by_count = self.aggregate.order_bys().len();
+        let partition_by_count = self.partition_by.len();
+        let order_by_count = self.order_by.len();
+        let filter_count = self.filter.iter().len();
+
+        aggregate_args_count
+            + aggregate_order_by_count
+            + partition_by_count
+            + order_by_count
+            + filter_count
+    }
+
+    fn inner_expressions_iter<'a>(
+        &'a self,
+    ) -> Box<dyn Iterator<Item = Arc<dyn PhysicalExpr>> + 'a> {
+        let aggregate_args = self.aggregate.expressions().into_iter();
+        let aggregate_order_by = self
+            .aggregate
+            .order_bys()
+            .iter()
+            .map(|sort| Arc::clone(&sort.expr));
+
+        let partition_by = self.partition_by.iter().cloned();
+        let order_by = self.order_by.iter().map(|sort| Arc::clone(&sort.expr));
+        let filter = self.filter.iter().cloned();
+
+        Box::new(
+            aggregate_args
+                .chain(aggregate_order_by)
+                .chain(partition_by)
+                .chain(order_by)
+                .chain(filter),
+        )
+    }
+
+    fn with_inner_expressions(
+        &self,
+        exprs: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Result<Arc<dyn WindowExpr>> {
+        let aggregate_args_count = self.aggregate.expressions().len();
+        let aggregate_order_by_count = self.aggregate.order_bys().len();
+        let partition_by_count = self.partition_by.len();
+        let order_by_count = self.order_by.len();
+        let filter_count = self.filter.iter().len();
+
+        let expected_count = aggregate_args_count
+            + aggregate_order_by_count
+            + partition_by_count
+            + order_by_count
+            + filter_count;
+
+        let exprs_count = exprs.len();
+        assert_eq_or_internal_err!(
+            expected_count,
+            exprs_count,
+            "Inconsistent number of physical expressions for SlidingAggregateWindowExpr",
+        );
+
+        let mut exprs_iter = exprs.into_iter();
+        let aggregate_args = exprs_iter.by_ref().take(aggregate_args_count).collect();
+        let aggregate_order_by =
+            exprs_iter.by_ref().take(aggregate_order_by_count).collect();
+        let aggregate = Arc::new(
+            self.aggregate
+                .with_new_expressions(aggregate_args, aggregate_order_by)
+                .expect("should rewrite"),
+        );
+
+        let partition_by = exprs_iter.by_ref().take(partition_by_count).collect();
+        let order_by = self
+            .order_by
+            .iter()
+            .zip(&mut exprs_iter)
+            .map(|(sort, expr)| PhysicalSortExpr::new(expr, sort.options))
+            .collect::<Vec<_>>();
+
+        let filter = exprs_iter.next();
+
+        Ok(Arc::new(Self {
+            aggregate,
+            partition_by,
+            order_by,
+            window_frame: Arc::clone(&self.window_frame),
+            filter,
+        }))
     }
 }
 

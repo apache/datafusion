@@ -29,7 +29,9 @@ use super::utils::{
     reorder_output_after_swap, swap_join_projection,
 };
 use crate::common::can_project;
-use crate::execution_plan::{EmissionType, boundedness_from_children};
+use crate::execution_plan::{
+    EmissionType, ReplacePhysicalExpr, boundedness_from_children,
+};
 use crate::joins::SharedBitmapBuilder;
 use crate::joins::utils::{
     BuildProbeJoinMetrics, ColumnIndex, JoinFilter, OnceAsync, OnceFut,
@@ -73,7 +75,10 @@ use datafusion_physical_expr::equivalence::{
     ProjectionMapping, join_equivalence_properties,
 };
 
-use datafusion_physical_expr::projection::{ProjectionRef, combine_projections};
+use datafusion_physical_expr::{
+    PhysicalExpr,
+    projection::{ProjectionRef, combine_projections},
+};
 use futures::{Stream, StreamExt, TryStreamExt};
 use log::debug;
 use parking_lot::Mutex;
@@ -560,7 +565,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
 
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(&dyn crate::PhysicalExpr) -> Result<TreeNodeRecursion>,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         // Apply to join filter expressions if present
         if let Some(filter) = &self.filter {
@@ -714,6 +719,49 @@ impl ExecutionPlan for NestedLoopJoinExec {
         } else {
             try_embed_projection(projection, self)
         }
+    }
+
+    fn physical_expressions<'a>(
+        &'a self,
+    ) -> Option<Box<dyn Iterator<Item = Arc<dyn PhysicalExpr>> + 'a>> {
+        self.filter
+            .as_ref()
+            .map(|f| Box::new(std::iter::once(Arc::clone(&f.expression))) as Box<_>)
+    }
+
+    fn with_physical_expressions(
+        &self,
+        mut params: ReplacePhysicalExpr,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let expected_count = self.filter.iter().len();
+        let exprs_count = params.exprs.len();
+        assert_eq_or_internal_err!(
+            expected_count,
+            exprs_count,
+            "Inconsistent number of physical expressions for {}",
+            self.name()
+        );
+
+        let filter = self
+            .filter
+            .as_ref()
+            .zip(params.exprs.pop())
+            .map(|(f, expr)| {
+                JoinFilter::new(expr, f.column_indices.clone(), Arc::clone(&f.schema))
+            });
+
+        Ok(Some(Arc::new(Self {
+            left: Arc::clone(&self.left),
+            right: Arc::clone(&self.right),
+            filter,
+            join_type: self.join_type,
+            join_schema: Arc::clone(&self.join_schema),
+            build_side_data: Default::default(),
+            column_indices: self.column_indices.clone(),
+            projection: self.projection.clone(),
+            metrics: Default::default(),
+            cache: Arc::clone(&self.cache),
+        })))
     }
 }
 

@@ -38,6 +38,7 @@ use datafusion_datasource::{TableSchema, as_file_source};
 
 use arrow::buffer::Buffer;
 use arrow::ipc::reader::{FileDecoder, FileReader, StreamReader};
+use datafusion_common::assert_or_internal_err;
 use datafusion_common::error::Result;
 use datafusion_common::exec_datafusion_err;
 use datafusion_common::tree_node::TreeNodeRecursion;
@@ -51,6 +52,7 @@ use datafusion_physical_plan::projection::ProjectionExprs;
 
 use datafusion_datasource::file_stream::FileOpenFuture;
 use datafusion_datasource::file_stream::FileOpener;
+use datafusion_physical_plan::PhysicalExpr;
 use futures::StreamExt;
 use itertools::Itertools;
 use object_store::{GetOptions, GetRange, GetResultPayload, ObjectStore, ObjectStoreExt};
@@ -400,9 +402,7 @@ impl FileSource for ArrowSource {
 
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(
-            &dyn datafusion_physical_plan::PhysicalExpr,
-        ) -> Result<TreeNodeRecursion>,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         // Visit projection expressions
         let mut tnr = TreeNodeRecursion::Continue;
@@ -410,6 +410,20 @@ impl FileSource for ArrowSource {
             tnr = tnr.visit_sibling(|| f(proj_expr.expr.as_ref()))?;
         }
         Ok(tnr)
+    }
+
+    fn with_filter_and_projection(
+        &self,
+        filter: Option<Arc<dyn PhysicalExpr>>,
+        projection: ProjectionExprs,
+    ) -> Result<Option<Arc<dyn FileSource>>> {
+        assert_or_internal_err!(filter.is_none(), "filter should not be defined");
+
+        let mut conf = self.clone();
+        conf.projection =
+            SplitProjection::new(self.table_schema.file_schema(), &projection);
+
+        Ok(Some(Arc::new(conf)))
     }
 }
 

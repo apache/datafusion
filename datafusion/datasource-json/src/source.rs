@@ -26,6 +26,7 @@ use std::task::{Context, Poll};
 use crate::file_format::JsonDecoder;
 use crate::utils::{ChannelReader, JsonArrayToNdjsonReader};
 
+use datafusion_common::assert_or_internal_err;
 use datafusion_common::error::{DataFusionError, Result};
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common_runtime::{JoinSet, SpawnedTask};
@@ -37,7 +38,7 @@ use datafusion_datasource::{
     ListingTableUrl, PartitionedFile, RangeCalculation, as_file_source, calculate_range,
 };
 use datafusion_physical_plan::projection::ProjectionExprs;
-use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
+use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties, PhysicalExpr};
 
 use arrow::array::RecordBatch;
 use arrow::json::ReaderBuilder;
@@ -230,6 +231,20 @@ impl FileSource for JsonSource {
         Some(&self.projection.source)
     }
 
+    fn with_filter_and_projection(
+        &self,
+        filter: Option<Arc<dyn PhysicalExpr>>,
+        projection: ProjectionExprs,
+    ) -> Result<Option<Arc<dyn FileSource>>> {
+        assert_or_internal_err!(filter.is_none(), "filter should not be defined");
+
+        let mut conf = self.clone();
+        conf.projection =
+            SplitProjection::new(self.table_schema.file_schema(), &projection);
+
+        Ok(Some(Arc::new(conf)))
+    }
+
     fn metrics(&self) -> &ExecutionPlanMetricsSet {
         &self.metrics
     }
@@ -240,9 +255,7 @@ impl FileSource for JsonSource {
 
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(
-            &dyn datafusion_physical_plan::PhysicalExpr,
-        ) -> Result<TreeNodeRecursion>,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         // Visit projection expressions
         let mut tnr = TreeNodeRecursion::Continue;
