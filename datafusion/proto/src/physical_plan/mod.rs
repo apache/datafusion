@@ -47,6 +47,8 @@ use datafusion_datasource_parquet::CachedParquetFileReaderFactory;
 use datafusion_datasource_parquet::file_format::ParquetSink;
 #[cfg(feature = "parquet")]
 use datafusion_datasource_parquet::source::ParquetSource;
+#[cfg(feature = "parquet")]
+use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{FunctionRegistry, TaskContext};
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 use datafusion_functions_table::generate_series::{
@@ -849,9 +851,19 @@ impl protobuf::PhysicalPlanNode {
 
             // Parse table schema with partition columns
             let table_schema = parse_table_schema_from_proto(base_conf)?;
+            let object_store_url = match base_conf.object_store_url.is_empty() {
+                false => ObjectStoreUrl::parse(&base_conf.object_store_url)?,
+                true => ObjectStoreUrl::local_filesystem(),
+            };
+            let store = ctx.runtime_env().object_store(object_store_url)?;
+            let metadata_cache =
+                ctx.runtime_env().cache_manager.get_file_metadata_cache();
+            let reader_factory =
+                Arc::new(CachedParquetFileReaderFactory::new(store, metadata_cache));
 
-            let mut source =
-                ParquetSource::new(table_schema).with_table_parquet_options(options);
+            let mut source = ParquetSource::new(table_schema)
+                .with_parquet_file_reader_factory(reader_factory)
+                .with_table_parquet_options(options);
 
             if let Some(predicate) = predicate {
                 source = source.with_predicate(predicate);
@@ -863,24 +875,7 @@ impl protobuf::PhysicalPlanNode {
                 proto_converter,
                 Arc::new(source),
             )?;
-            let store = ctx
-                .runtime_env()
-                .object_store(base_config.object_store_url.clone())?;
-            let metadata_cache =
-                ctx.runtime_env().cache_manager.get_file_metadata_cache();
-            let reader_factory =
-                Arc::new(CachedParquetFileReaderFactory::new(store, metadata_cache));
-            let parquet_source = base_config
-                .file_source()
-                .as_any()
-                .downcast_ref::<ParquetSource>()
-                .ok_or_else(|| proto_error("Expected ParquetSource in FileScanConfig"))?
-                .clone()
-                .with_parquet_file_reader_factory(reader_factory);
-            let base_config = FileScanConfigBuilder::from(base_config)
-                .with_source(Arc::new(parquet_source))
-                .build();
-            Ok(DataSourceExec::from_data_source(base_config))
+            return Ok(DataSourceExec::from_data_source(base_config));
         }
         #[cfg(not(feature = "parquet"))]
         panic!(
