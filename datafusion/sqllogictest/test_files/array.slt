@@ -5181,12 +5181,17 @@ select cardinality(arrow_cast([[1, 2], [3, 4], [5, 6]], 'FixedSizeList(3, List(I
 query II
 select cardinality(make_array()), cardinality(make_array(make_array()))
 ----
-NULL 0
+0 0
+
+query II
+select cardinality([]), cardinality([]::int[]) as with_cast
+----
+0 0
 
 query II
 select cardinality(arrow_cast(make_array(), 'LargeList(Int64)')), cardinality(arrow_cast(make_array(make_array()), 'LargeList(List(Int64))'))
 ----
-NULL 0
+0 0
 
 #TODO
 #https://github.com/apache/datafusion/issues/9158
@@ -5194,6 +5199,12 @@ NULL 0
 #select cardinality(arrow_cast(make_array(), 'FixedSizeList(1, Null)')), cardinality(arrow_cast(make_array(make_array()), 'FixedSizeList(1, List(Int64))'))
 #----
 #NULL 0
+
+# cardinality of NULL arrays should return NULL
+query II
+select cardinality(NULL), cardinality(arrow_cast(NULL, 'LargeList(Int64)'))
+----
+NULL NULL
 
 # cardinality with columns
 query III

@@ -39,6 +39,7 @@ use crate::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, SpillMetrics,
 };
 use crate::projection::{ProjectionExec, make_with_child, update_ordering};
+use crate::sorts::IncrementalSortIterator;
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::get_record_batch_memory_size;
 use crate::spill::in_progress_spill_file::InProgressSpillFile;
@@ -728,7 +729,6 @@ impl ExternalSorter {
 
             // Sort the batch immediately and get all output batches
             let sorted_batches = sort_batch_chunked(&batch, &expressions, batch_size)?;
-            drop(batch);
 
             // Free the old reservation and grow it to match the actual sorted output size
             reservation.free();
@@ -853,11 +853,13 @@ pub(crate) fn get_reserved_bytes_for_record_batch_size(
 /// Estimate how much memory is needed to sort a `RecordBatch`.
 /// This will just call `get_reserved_bytes_for_record_batch_size` with the
 /// memory size of the record batch and its sliced size.
-pub(super) fn get_reserved_bytes_for_record_batch(batch: &RecordBatch) -> Result<usize> {
-    Ok(get_reserved_bytes_for_record_batch_size(
-        get_record_batch_memory_size(batch),
-        batch.get_sliced_size()?,
-    ))
+pub(crate) fn get_reserved_bytes_for_record_batch(batch: &RecordBatch) -> Result<usize> {
+    batch.get_sliced_size().map(|sliced_size| {
+        get_reserved_bytes_for_record_batch_size(
+            get_record_batch_memory_size(batch),
+            sliced_size,
+        )
+    })
 }
 
 impl Debug for ExternalSorter {
@@ -900,38 +902,7 @@ pub fn sort_batch_chunked(
     expressions: &LexOrdering,
     batch_size: usize,
 ) -> Result<Vec<RecordBatch>> {
-    let sort_columns = expressions
-        .iter()
-        .map(|expr| expr.evaluate_to_sort_column(batch))
-        .collect::<Result<Vec<_>>>()?;
-
-    let indices = lexsort_to_indices(&sort_columns, None)?;
-
-    // Split indices into chunks of batch_size
-    let num_rows = indices.len();
-    let num_chunks = num_rows.div_ceil(batch_size);
-
-    let result_batches = (0..num_chunks)
-        .map(|chunk_idx| {
-            let start = chunk_idx * batch_size;
-            let end = (start + batch_size).min(num_rows);
-            let chunk_len = end - start;
-
-            // Create a slice of indices for this chunk
-            let chunk_indices = indices.slice(start, chunk_len);
-
-            // Take the columns using this chunk of indices
-            let columns = take_arrays(batch.columns(), &chunk_indices, None)?;
-
-            let options = RecordBatchOptions::new().with_row_count(Some(chunk_len));
-            let chunk_batch =
-                RecordBatch::try_new_with_options(batch.schema(), columns, &options)?;
-
-            Ok(chunk_batch)
-        })
-        .collect::<Result<Vec<RecordBatch>>>()?;
-
-    Ok(result_batches)
+    IncrementalSortIterator::new(batch.clone(), expressions.clone(), batch_size).collect()
 }
 
 /// Sort execution plan.
