@@ -1290,6 +1290,20 @@ impl DisplayAs for AggregateExec {
                 write!(f, ", aggr=[{}]", a.join(", "))?;
                 if let Some(config) = &self.limit_options {
                     write!(f, ", lim=[{}]", config.limit)?;
+                    if let Some(cols) = config.topk_sort_columns() {
+                        let sort_strs: Vec<String> = cols
+                            .iter()
+                            .map(|&(idx, desc)| {
+                                let name = self.schema.field(idx).name();
+                                if desc {
+                                    format!("{name} DESC")
+                                } else {
+                                    format!("{name} ASC")
+                                }
+                            })
+                            .collect();
+                        write!(f, ", topk=[{}]", sort_strs.join(", "))?;
+                    }
                 }
 
                 if self.input_order_mode != InputOrderMode::Linear {
@@ -1350,6 +1364,20 @@ impl DisplayAs for AggregateExec {
                 }
                 if let Some(config) = &self.limit_options {
                     writeln!(f, "limit={}", config.limit)?;
+                    if let Some(cols) = config.topk_sort_columns() {
+                        let sort_strs: Vec<String> = cols
+                            .iter()
+                            .map(|&(idx, desc)| {
+                                let name = self.schema.field(idx).name();
+                                if desc {
+                                    format!("{name} DESC")
+                                } else {
+                                    format!("{name} ASC")
+                                }
+                            })
+                            .collect();
+                        writeln!(f, "topk=[{}]", sort_strs.join(", "))?;
+                    }
                 }
             }
         }
