@@ -612,19 +612,26 @@ pub fn build_row_filter(
 
         match candidate {
             Some(c) => {
-                // Check if RowFilter saves column decoding for this conjunct:
-                // if there are projected columns NOT referenced by this
-                // conjunct, RowFilter can skip decoding them for non-matching
-                // rows.
                 let conjunct_cols: HashSet<usize> = collect_columns(&c.expr)
                     .iter()
                     .map(|col| col.index())
                     .collect();
+
+                // Keep in RowFilter when:
+                // 1. There are projected columns NOT in this conjunct →
+                //    RowFilter can skip decoding them for non-matching rows.
                 let has_extra_cols = projection_col_indices
                     .iter()
                     .any(|idx| !conjunct_cols.contains(idx));
+                // 2. The conjunct references columns NOT in the output
+                //    projection (e.g. COUNT(*) WHERE col = X) → the
+                //    batch filter can't evaluate it because those
+                //    columns won't be in the output schema.
+                let needs_non_projected = conjunct_cols
+                    .iter()
+                    .any(|idx| !projection_col_indices.contains(idx));
 
-                if has_extra_cols || c.can_use_index {
+                if has_extra_cols || needs_non_projected || c.can_use_index {
                     candidates.push(c);
                 } else {
                     demoted.push(c.expr);
