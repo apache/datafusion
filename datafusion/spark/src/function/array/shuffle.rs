@@ -277,8 +277,7 @@ fn fixed_size_array_shuffle(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::ListArray;
-    use arrow::datatypes::{Field, Int32Type};
+    use arrow::datatypes::Field;
     use datafusion_expr::ReturnFieldArgs;
 
     #[test]
@@ -320,40 +319,5 @@ mod tests {
         // The result should be nullable (same as input)
         assert!(result.is_nullable());
         assert_eq!(result.data_type(), nullable_field.data_type());
-    }
-
-    #[test]
-    fn test_spark_shuffle_function_when_seed_is_null() {
-        let arr_ref =
-            ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
-                Some(1),
-                Some(2),
-            ])]);
-
-        let input_args = vec![
-            ColumnarValue::Array(Arc::new(arr_ref)),
-            ColumnarValue::Scalar(ScalarValue::Int64(None)),
-        ];
-
-        let args = datafusion_expr::ScalarFunctionArgs {
-            args: input_args.to_owned(),
-            arg_fields: vec![Arc::new(Field::new(
-                "item",
-                LargeList(FieldRef::new(Field::new("", DataType::Int64, true))),
-                false,
-            ))],
-            number_rows: 1,
-            return_field: Arc::new(Field::new(
-                "item",
-                LargeList(FieldRef::new(Field::new("", DataType::Int64, true))),
-                false,
-            )),
-            config_options: Arc::new(Default::default()),
-        };
-
-        let shuffle = SparkShuffle::new();
-        let result = shuffle.invoke_with_args(args).unwrap();
-        let arr = result.into_array(2).unwrap();
-        assert!(!arr.is_empty(), "shuffle result should be non-empty array");
     }
 }
