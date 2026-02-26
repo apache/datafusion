@@ -16,6 +16,7 @@
 // under the License.
 
 pub mod abs;
+mod ceil;
 pub mod expm1;
 pub mod factorial;
 pub mod hex;
@@ -42,6 +43,7 @@ make_udf_function!(width_bucket::SparkWidthBucket, width_bucket);
 make_udf_function!(trigonometry::SparkCsc, csc);
 make_udf_function!(trigonometry::SparkSec, sec);
 make_udf_function!(negative::SparkNegative, negative);
+make_udf_function!(ceil::SparkCiel, ceil);
 
 pub mod expr_fn {
     use datafusion_functions::export_functions;
@@ -70,6 +72,7 @@ pub mod expr_fn {
         "Returns the negation of expr (unary minus).",
         arg1
     ));
+    export_functions!((ceil, "Returns the ceiling of expr.", arg1));
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
@@ -86,5 +89,6 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         csc(),
         sec(),
         negative(),
+        ceil(),
     ]
 }
