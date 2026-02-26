@@ -223,10 +223,12 @@ impl From<DynamicFilterSnapshot> for DynamicFilterPhysicalExpr {
                 generation,
                 expr: inner_expr,
                 is_complete,
+                partitioned_exprs: vec![],
             })),
             state_watch,
             data_type: Arc::new(RwLock::new(None)),
             nullable: Arc::new(RwLock::new(None)),
+            runtime_partition: None,
         }
     }
 }
@@ -373,6 +375,7 @@ impl DynamicFilterPhysicalExpr {
             state_watch: self.state_watch.clone(),
             data_type: Arc::clone(&self.data_type),
             nullable: Arc::clone(&self.nullable),
+            runtime_partition: None,
         })
     }
 
@@ -414,7 +417,7 @@ impl DynamicFilterPhysicalExpr {
             self.current_for_partition(partition)
         } else {
             let expr = Arc::clone(self.inner.read().expr());
-            Self::remap_children(&self.children, self.remapped_children.as_ref(), expr)
+            self.remap_children(expr)
         }
     }
 
@@ -439,11 +442,7 @@ impl DynamicFilterPhysicalExpr {
             // and the same externally facing `PhysicalExpr` is used for both
             // `with_new_children` and `update()`.
             DynamicFilterUpdate::Global(new_expr) => {
-                DynamicFilterUpdate::Global(Self::remap_children(
-                    &self.children,
-                    self.remapped_children.as_ref(),
-                    new_expr,
-                )?)
+                DynamicFilterUpdate::Global(self.remap_children(new_expr)?)
             }
             DynamicFilterUpdate::Partitioned(partition_exprs) => {
                 DynamicFilterUpdate::Partitioned(partition_exprs)
@@ -502,21 +501,13 @@ impl DynamicFilterPhysicalExpr {
         if guard.partitioned_exprs.is_empty() {
             let expr = Arc::clone(guard.expr());
             drop(guard);
-            return Self::remap_children(
-                &self.children,
-                self.remapped_children.as_ref(),
-                expr,
-            );
+            return self.remap_children(expr);
         }
         match guard.partitioned_exprs.get(partition) {
             Some(Some(expr)) => {
                 let expr = Arc::clone(expr);
                 drop(guard);
-                Self::remap_children(
-                    &self.children,
-                    self.remapped_children.as_ref(),
-                    expr,
-                )
+                self.remap_children(expr)
             }
             Some(None) => Ok(lit(false) as Arc<dyn PhysicalExpr>),
             None => Ok(lit(true) as Arc<dyn PhysicalExpr>),

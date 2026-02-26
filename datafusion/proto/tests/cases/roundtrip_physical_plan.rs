@@ -24,16 +24,6 @@ use std::vec;
 use arrow::array::RecordBatch;
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{Fields, TimeUnit};
-use datafusion::physical_expr::aggregate::AggregateExprBuilder;
-use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
-use datafusion::physical_plan::metrics::MetricType;
-use datafusion_datasource::TableSchema;
-use datafusion_expr::dml::InsertOp;
-use datafusion_functions_aggregate::approx_percentile_cont::approx_percentile_cont_udaf;
-use datafusion_functions_aggregate::array_agg::array_agg_udaf;
-use datafusion_functions_aggregate::min_max::max_udaf;
-use prost::Message;
-
 use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::compute::kernels::sort::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema};
@@ -137,6 +127,7 @@ use datafusion_proto::physical_plan::{
 use datafusion_proto::protobuf;
 use datafusion_proto::protobuf::physical_plan_node::PhysicalPlanType;
 use datafusion_proto::protobuf::{PhysicalExprNode, PhysicalPlanNode};
+use prost::Message;
 
 use crate::cases::{
     CustomUDWF, CustomUDWFNode, MyAggregateUDF, MyAggregateUdfNode, MyRegexUdf,
@@ -144,7 +135,7 @@ use crate::cases::{
 };
 
 use datafusion_physical_expr::expressions::{
-    DynamicFilterPhysicalExpr, DynamicFilterSnapshot,
+    DynamicFilterPhysicalExpr, DynamicFilterSnapshot, DynamicFilterUpdate,
 };
 use datafusion_physical_expr::utils::reassign_expr_columns;
 
@@ -2603,13 +2594,13 @@ fn test_expression_deduplication() -> Result<()> {
 
     // Create a plan that has both expressions (they share the `shared_col` Arc)
     let input = Arc::new(EmptyExec::new(schema.clone()));
-    let filter = FilterExecBuilder::new(in_list_expr, input).build()?;
+    let filter = Arc::new(FilterExec::try_new(in_list_expr, input)?);
     let projection_exprs = vec![ProjectionExpr {
         expr: binary_expr,
         alias: "result".to_string(),
     }];
     let exec_plan =
-        Arc::new(ProjectionExec::try_new(projection_exprs, Arc::new(filter))?);
+        Arc::new(ProjectionExec::try_new(projection_exprs, filter)?);
 
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
@@ -3003,8 +2994,8 @@ fn test_dynamic_filter_roundtrip() -> Result<()> {
         .as_any()
         .downcast_ref::<DynamicFilterPhysicalExpr>()
         .unwrap();
-    df.update(lit(42))?;
-    df.update(lit(100))?;
+    df.update(DynamicFilterUpdate::Global(lit(42)))?;
+    df.update(DynamicFilterUpdate::Global(lit(100)))?;
     df.mark_complete();
 
     // Serialize
@@ -3348,7 +3339,6 @@ fn test_hash_join_with_dynamic_filter_roundtrip() -> Result<()> {
         None,
         PartitionMode::CollectLeft,
         NullEquality::NullEqualsNothing,
-        false,
     )?) as Arc<dyn ExecutionPlan>;
 
     // Run the optimizer rule for filter pushdown.
