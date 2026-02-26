@@ -212,7 +212,7 @@ impl FunctionRegistry for TaskContext {
 }
 
 /// Produce the [`TaskContext`].
-pub trait TaskContextProvider {
+pub trait TaskContextProvider: Sync + Send {
     fn task_ctx(&self) -> Arc<TaskContext>;
 }
 
