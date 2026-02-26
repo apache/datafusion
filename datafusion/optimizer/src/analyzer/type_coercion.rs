@@ -142,10 +142,15 @@ fn analyze_internal(
         expr.rewrite(&mut expr_rewrite)
             .map(|transformed| transformed.update_data(|e| original_name.restore(e)))
     })?;
-    // `coerce_plan` does not mutate projections, so recompute is only needed when expression rewriting
-    // changed projection expressions (tracked by the transformed flag).
+    // `coerce_plan` does not mutate projections. Skip schema recomputation only when
+    // expression rewriting made no changes and the existing projection schema still
+    // matches names and types derived from the current input schema.
     let skip_projection_recompute =
-        matches!(&mapped.data, LogicalPlan::Projection(_)) && !mapped.transformed;
+        if let LogicalPlan::Projection(projection) = &mapped.data {
+            !mapped.transformed && projection_schema_matches_names_and_types(projection)?
+        } else {
+            false
+        };
 
     // some plans need extra coercion after their expressions are coerced
     mapped
@@ -158,6 +163,32 @@ fn analyze_internal(
                 Ok(plan)
             }
         })
+}
+
+fn projection_schema_matches_names_and_types(projection: &Projection) -> Result<bool> {
+    if projection.expr.len() != projection.schema.fields().len() {
+        return Ok(false);
+    }
+
+    for (idx, expr) in projection.expr.iter().enumerate() {
+        let (expected_qualifier, expected_name) = expr.qualified_name();
+        let expected_type = expr.get_type(projection.input.schema())?;
+
+        let (actual_qualifier, actual_field) = projection.schema.qualified_field(idx);
+        if actual_field.name().as_str() != expected_name.as_str()
+            || actual_field.data_type() != &expected_type
+        {
+            return Ok(false);
+        }
+
+        match (actual_qualifier, expected_qualifier.as_ref()) {
+            (Some(actual), Some(expected)) if actual.resolved_eq(expected) => {}
+            (None, None) => {}
+            _ => return Ok(false),
+        }
+    }
+
+    Ok(true)
 }
 
 /// Rewrite expressions to apply type coercion.
@@ -1372,8 +1403,11 @@ mod test {
 
     fn analyze_type_coercion(plan: LogicalPlan) -> Result<LogicalPlan> {
         let options = ConfigOptions::default();
-        Analyzer::with_rules(vec![Arc::new(TypeCoercion::new())])
-            .execute_and_check(plan, &options, |_, _| {})
+        Analyzer::with_rules(vec![Arc::new(TypeCoercion::new())]).execute_and_check(
+            plan,
+            &options,
+            |_, _| {},
+        )
     }
 
     #[test]
@@ -1444,6 +1478,28 @@ mod test {
             subquery.subquery.schema().field(0).data_type(),
             &DataType::Int64
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn projection_schema_recomputed_when_input_type_changes_without_expr_rewrite()
+    -> Result<()> {
+        let input = empty_with_type(DataType::Int64);
+        let stale_schema = Arc::new(DFSchema::from_unqualified_fields(
+            vec![Field::new("a", DataType::UInt32, true)].into(),
+            std::collections::HashMap::new(),
+        )?);
+        let plan = LogicalPlan::Projection(Projection::try_new_with_schema(
+            vec![col("a")],
+            input,
+            Arc::clone(&stale_schema),
+        )?);
+
+        let analyzed = analyze_type_coercion(plan)?;
+        assert!(matches!(analyzed, LogicalPlan::Projection(_)));
+        assert_eq!(analyzed.schema().field(0).data_type(), &DataType::Int64);
+        assert!(!Arc::ptr_eq(&stale_schema, analyzed.schema()));
 
         Ok(())
     }
