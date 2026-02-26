@@ -1335,16 +1335,14 @@ impl ExecutionPlan for SortExec {
         Some(self.metrics_set.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        if !self.preserve_partitioning() {
-            return self
-                .input
-                .partition_statistics(None)?
-                .with_fetch(self.fetch, 0, 1);
-        }
-        self.input
-            .partition_statistics(partition)?
-            .with_fetch(self.fetch, 0, 1)
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+        let p = if !self.preserve_partitioning() {
+            None
+        } else {
+            partition
+        };
+        let stats = Arc::unwrap_or_clone(self.input.partition_statistics(p)?);
+        Ok(Arc::new(stats.with_fetch(self.fetch, 0, 1)?))
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {

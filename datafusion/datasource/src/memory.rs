@@ -197,26 +197,26 @@ impl DataSource for MemorySourceConfig {
         SchedulingType::Cooperative
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         if let Some(partition) = partition {
             // Compute statistics for a specific partition
             if let Some(batches) = self.partitions.get(partition) {
-                Ok(common::compute_record_batch_statistics(
+                Ok(Arc::new(common::compute_record_batch_statistics(
                     from_ref(batches),
                     &self.schema,
                     self.projection.clone(),
-                ))
+                )))
             } else {
                 // Invalid partition index
-                Ok(Statistics::new_unknown(&self.projected_schema))
+                Ok(Arc::new(Statistics::new_unknown(&self.projected_schema)))
             }
         } else {
             // Compute statistics across all partitions
-            Ok(common::compute_record_batch_statistics(
+            Ok(Arc::new(common::compute_record_batch_statistics(
                 &self.partitions,
                 &self.schema,
                 self.projection.clone(),
-            ))
+            )))
         }
     }
 
@@ -968,7 +968,7 @@ mod tests {
         let values = MemorySourceConfig::try_new_as_values(schema, data)?;
 
         assert_eq!(
-            values.partition_statistics(None)?,
+            *values.partition_statistics(None)?,
             Statistics {
                 num_rows: Precision::Exact(rows),
                 total_byte_size: Precision::Exact(8), // not important
