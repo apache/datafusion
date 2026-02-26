@@ -1867,7 +1867,8 @@ pub struct AggLimit {
     /// Optional ordering direction for TopK aggregation (true = descending, false = ascending)
     #[prost(bool, optional, tag = "2")]
     pub descending: ::core::option::Option<bool>,
-    /// Multi-column sort for general top-K emit.
+    /// Multi-column sort for general top-K emit. Each entry identifies a column
+    /// in the aggregate's output schema and its sort direction.
     #[prost(message, repeated, tag = "4")]
     pub topk_sort_columns: ::prost::alloc::vec::Vec<AggLimitSortColumn>,
 }
