@@ -707,7 +707,7 @@ mod tests {
         let expr = expressions::BinaryExpr::new(
             Arc::clone(&column_a),
             Operator::Plus,
-            Arc::new(expressions::Literal::new(ScalarValue::Int64(Some(5)))),
+            Arc::new(Literal::new(ScalarValue::Int64(Some(5)))),
         );
         let expr = expressions::BinaryExpr::new(
             Arc::new(expr),
@@ -715,7 +715,7 @@ mod tests {
             Arc::new(expressions::BinaryExpr::new(
                 Arc::clone(&column_c),
                 Operator::Gt,
-                Arc::new(expressions::Literal::new(ScalarValue::Float64(Some(0.0)))),
+                Arc::new(Literal::new(ScalarValue::Float64(Some(0.0)))),
             )),
         );
 
@@ -730,7 +730,7 @@ mod tests {
                 None,
             )),
             Operator::Plus,
-            Arc::new(expressions::Literal::new(ScalarValue::Int64(Some(5)))),
+            Arc::new(Literal::new(ScalarValue::Int64(Some(5)))),
         );
         let expected = Arc::new(expressions::BinaryExpr::new(
             Arc::new(expected),
@@ -738,7 +738,7 @@ mod tests {
             Arc::new(expressions::BinaryExpr::new(
                 lit(ScalarValue::Float64(None)), // c is missing, so it becomes null
                 Operator::Gt,
-                Arc::new(expressions::Literal::new(ScalarValue::Float64(Some(0.0)))),
+                Arc::new(Literal::new(ScalarValue::Float64(Some(0.0)))),
             )),
         )) as Arc<dyn PhysicalExpr>;
 
@@ -856,7 +856,7 @@ mod tests {
         let result = adapter.rewrite(column_expr)?;
 
         // Should be replaced with a literal null
-        if let Some(literal) = result.as_any().downcast_ref::<expressions::Literal>() {
+        if let Some(literal) = result.as_any().downcast_ref::<Literal>() {
             assert_eq!(*literal.value(), ScalarValue::Float64(None));
         } else {
             panic!("Expected literal expression");
@@ -917,7 +917,7 @@ mod tests {
         // Should be replaced with the partition value
         let literal = result
             .as_any()
-            .downcast_ref::<expressions::Literal>()
+            .downcast_ref::<Literal>()
             .expect("Expected literal expression");
         assert_eq!(*literal.value(), partition_value);
 
@@ -1075,7 +1075,7 @@ mod tests {
         assert_eq!(
             res.column(0)
                 .as_any()
-                .downcast_ref::<arrow::array::StringArray>()
+                .downcast_ref::<StringArray>()
                 .unwrap()
                 .iter()
                 .collect_vec(),
@@ -1084,7 +1084,7 @@ mod tests {
         assert_eq!(
             res.column(1)
                 .as_any()
-                .downcast_ref::<arrow::array::Int64Array>()
+                .downcast_ref::<Int64Array>()
                 .unwrap()
                 .iter()
                 .collect_vec(),
@@ -1448,8 +1448,8 @@ mod tests {
         let adapter2 = factory.make_adapter(source2).unwrap();
 
         // Both should work correctly
-        assert!(format!("{:?}", adapter1).contains("BatchAdapter"));
-        assert!(format!("{:?}", adapter2).contains("BatchAdapter"));
+        assert!(format!("{adapter1:?}").contains("BatchAdapter"));
+        assert!(format!("{adapter2:?}").contains("BatchAdapter"));
     }
 
     #[test]
