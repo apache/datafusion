@@ -45,7 +45,7 @@ use datafusion_physical_expr_common::datum::{apply, apply_cmp};
 use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
     bitwise_shift_left_dyn, bitwise_shift_left_dyn_scalar, bitwise_shift_right_dyn,
-    bitwise_shift_right_dyn_scalar, bitwise_xor_dyn, bitwise_xor_dyn_scalar,
+    bitwise_shift_right_dyn_scalar,
     concat_elements_utf8view, regex_match_dyn, regex_match_dyn_scalar,
 };
 
@@ -657,7 +657,6 @@ impl BinaryExpr {
             RegexNotIMatch => regex_match_dyn_scalar(array, &scalar, true, true),
             BitwiseAnd => bitwise_and_dyn_scalar(array, scalar),
             BitwiseOr => bitwise_or_dyn_scalar(array, scalar),
-            BitwiseXor => bitwise_xor_dyn_scalar(array, scalar),
             BitwiseShiftRight => bitwise_shift_right_dyn_scalar(array, scalar),
             BitwiseShiftLeft => bitwise_shift_left_dyn_scalar(array, scalar),
             // if scalar operation is not supported - fallback to array implementation
@@ -709,13 +708,12 @@ impl BinaryExpr {
             RegexNotIMatch => regex_match_dyn(&left, &right, true, true),
             BitwiseAnd => bitwise_and_dyn(left, right),
             BitwiseOr => bitwise_or_dyn(left, right),
-            BitwiseXor => bitwise_xor_dyn(left, right),
             BitwiseShiftRight => bitwise_shift_right_dyn(left, right),
             BitwiseShiftLeft => bitwise_shift_left_dyn(left, right),
             StringConcat => concat_elements(&left, &right),
             AtArrow | ArrowAt | Arrow | LongArrow | HashArrow | HashLongArrow | AtAt
             | HashMinus | AtQuestion | Question | QuestionAnd | QuestionPipe
-            | IntegerDivide => {
+            | IntegerDivide | BitwiseXor => {
                 not_impl_err!(
                     "Binary operator '{:?}' is not supported in the physical expr",
                     self.op
@@ -1534,30 +1532,6 @@ mod tests {
             UInt64Array,
             DataType::UInt64,
             [11u64, 6u64, 7u64],
-        );
-        test_coercion!(
-            Int16Array,
-            DataType::Int16,
-            vec![3i16, 2i16, 3i16],
-            Int64Array,
-            DataType::Int64,
-            vec![10i64, 6i64, 5i64],
-            Operator::BitwiseXor,
-            Int64Array,
-            DataType::Int64,
-            [9i64, 4i64, 6i64],
-        );
-        test_coercion!(
-            UInt16Array,
-            DataType::UInt16,
-            vec![3u16, 2u16, 3u16],
-            UInt64Array,
-            DataType::UInt64,
-            vec![10u64, 6u64, 5u64],
-            Operator::BitwiseXor,
-            UInt64Array,
-            DataType::UInt64,
-            [9u64, 4u64, 6u64],
         );
         test_coercion!(
             Int16Array,
@@ -4267,10 +4241,6 @@ mod tests {
         let expected = Int32Array::from(vec![Some(13), None, Some(15)]);
         assert_eq!(result.as_ref(), &expected);
 
-        result = bitwise_xor_dyn(Arc::clone(&left), Arc::clone(&right))?;
-        let expected = Int32Array::from(vec![Some(13), None, Some(12)]);
-        assert_eq!(result.as_ref(), &expected);
-
         let left =
             Arc::new(UInt32Array::from(vec![Some(12), None, Some(11)])) as ArrayRef;
         let right =
@@ -4281,10 +4251,6 @@ mod tests {
 
         result = bitwise_or_dyn(Arc::clone(&left), Arc::clone(&right))?;
         let expected = UInt32Array::from(vec![Some(13), None, Some(15)]);
-        assert_eq!(result.as_ref(), &expected);
-
-        result = bitwise_xor_dyn(Arc::clone(&left), Arc::clone(&right))?;
-        let expected = UInt32Array::from(vec![Some(13), None, Some(12)]);
         assert_eq!(result.as_ref(), &expected);
 
         Ok(())
@@ -4349,10 +4315,6 @@ mod tests {
         let expected = Int32Array::from(vec![Some(15), None, Some(11)]);
         assert_eq!(result.as_ref(), &expected);
 
-        result = bitwise_xor_dyn_scalar(&left, right).unwrap()?;
-        let expected = Int32Array::from(vec![Some(15), None, Some(8)]);
-        assert_eq!(result.as_ref(), &expected);
-
         let left =
             Arc::new(UInt32Array::from(vec![Some(12), None, Some(11)])) as ArrayRef;
         let right = ScalarValue::from(3u32);
@@ -4364,9 +4326,6 @@ mod tests {
         let expected = UInt32Array::from(vec![Some(15), None, Some(11)]);
         assert_eq!(result.as_ref(), &expected);
 
-        result = bitwise_xor_dyn_scalar(&left, right).unwrap()?;
-        let expected = UInt32Array::from(vec![Some(15), None, Some(8)]);
-        assert_eq!(result.as_ref(), &expected);
         Ok(())
     }
 
