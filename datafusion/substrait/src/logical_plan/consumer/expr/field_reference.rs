@@ -39,48 +39,46 @@ pub(crate) fn from_substrait_field_reference(
 ) -> datafusion::common::Result<Expr> {
     match &field_ref.reference_type {
         Some(DirectReference(direct)) => match &direct.reference_type.as_ref() {
-            Some(StructField(x)) => match &x.child.as_ref() {
-                Some(_) => not_impl_err!(
-                    "Direct reference StructField with child is not supported"
-                ),
-                None => {
-                    let field_idx = x.field as usize;
-                    match &field_ref.root_type {
-                        // Normal reference: resolve against the current
-                        // relation's schema.
-                        Some(RootType::RootReference(_)) | None => Ok(Expr::Column(
-                            Column::from(input_schema.qualified_field(field_idx)),
-                        )),
-                        // Correlated reference: resolve against the
-                        // enclosing query's schema.
-                        Some(RootType::OuterReference(outer_ref)) => {
-                            let steps_out = outer_ref.steps_out as usize;
-                            let Some(outer_schema) = consumer.get_outer_schema(steps_out)
-                            else {
-                                return substrait_err!(
-                                    "OuterReference with steps_out={steps_out} \
-                                     but no outer schema is available"
-                                );
-                            };
-                            let (qualifier, field) =
-                                outer_schema.qualified_field(field_idx);
-                            let col = Column::from((qualifier, field));
-                            Ok(Expr::OuterReferenceColumn(Arc::clone(field), col))
-                        }
-                        // The root is an arbitrary expression rather
-                        // than a relation's schema.
-                        Some(RootType::Expression(_)) => {
-                            not_impl_err!(
-                                "Expression root type in field reference is not supported"
-                            )
-                        }
-                    }
+            Some(StructField(struct_field)) => {
+                if struct_field.child.is_some() {
+                    return not_impl_err!(
+                        "Direct reference StructField with child is not supported"
+                    );
                 }
-            },
+                let field_idx = struct_field.field as usize;
+                match &field_ref.root_type {
+                    Some(RootType::RootReference(_)) | None => Ok(Expr::Column(
+                        Column::from(input_schema.qualified_field(field_idx)),
+                    )),
+                    Some(RootType::OuterReference(outer_ref)) => {
+                        resolve_outer_reference(consumer, outer_ref, field_idx)
+                    }
+                    Some(RootType::Expression(_)) => not_impl_err!(
+                        "Expression root type in field reference is not supported"
+                    ),
+                }
+            }
             _ => not_impl_err!(
                 "Direct reference with types other than StructField is not supported"
             ),
         },
         _ => not_impl_err!("unsupported field ref type"),
     }
+}
+
+fn resolve_outer_reference(
+    consumer: &impl SubstraitConsumer,
+    outer_ref: &substrait::proto::expression::field_reference::OuterReference,
+    field_idx: usize,
+) -> datafusion::common::Result<Expr> {
+    let steps_out = outer_ref.steps_out as usize;
+    let Some(outer_schema) = consumer.get_outer_schema(steps_out) else {
+        return substrait_err!(
+            "OuterReference with steps_out={steps_out} \
+             but no outer schema is available"
+        );
+    };
+    let (qualifier, field) = outer_schema.qualified_field(field_idx);
+    let col = Column::from((qualifier, field));
+    Ok(Expr::OuterReferenceColumn(Arc::clone(field), col))
 }

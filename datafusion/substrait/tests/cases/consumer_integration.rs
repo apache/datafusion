@@ -507,6 +507,52 @@ mod tests {
         Ok(())
     }
 
+    /// Tests nested correlated subqueries where the innermost subquery
+    /// references the outermost query (steps_out=2).
+    ///
+    /// This tests the outer schema stack with depth > 1.
+    /// The plan represents:
+    /// ```sql
+    /// SELECT * FROM A
+    /// WHERE EXISTS (
+    ///     SELECT * FROM B
+    ///     WHERE B.b1 = A.a1              -- steps_out=1 (references immediate parent)
+    ///       AND EXISTS (
+    ///         SELECT * FROM C
+    ///         WHERE C.c1 = A.a1          -- steps_out=2 (references grandparent)
+    ///           AND C.c2 = B.b2          -- steps_out=1 (references immediate parent)
+    ///     )
+    /// )
+    /// ```
+    ///
+    #[tokio::test]
+    async fn test_nested_correlated_subquery() -> Result<()> {
+        let path = "tests/testdata/test_plans/nested_correlated_subquery.substrait.json";
+        let proto = serde_json::from_reader::<_, Plan>(BufReader::new(
+            File::open(path).expect("file not found"),
+        ))
+        .expect("failed to parse json");
+
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto)?;
+        let plan = from_substrait_plan(&ctx.state(), &proto).await?;
+        let plan_str = format!("{plan}");
+
+        assert_snapshot!(
+            plan_str,
+            @r#"
+        Filter: EXISTS (<subquery>)
+          Subquery:
+            Filter: B.b1 = outer_ref(A.a1) AND EXISTS (<subquery>)
+              Subquery:
+                Filter: C.c1 = outer_ref(A.a1) AND C.c2 = outer_ref(B.b2)
+                  TableScan: C
+              TableScan: B
+          TableScan: A
+        "#
+        );
+        Ok(())
+    }
+
     async fn test_plan_to_string(name: &str) -> Result<String> {
         let path = format!("tests/testdata/test_plans/{name}");
         let proto = serde_json::from_reader::<_, Plan>(BufReader::new(
