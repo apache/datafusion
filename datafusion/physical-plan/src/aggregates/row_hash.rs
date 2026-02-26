@@ -701,7 +701,13 @@ impl GroupedHashAggregateStream {
             group_ordering,
             input_done: false,
             spill_state,
-            group_values_soft_limit: agg.limit_options().map(|config| config.limit()),
+            // Only set group_values_soft_limit for DISTINCT/MIN-MAX cases (no topk_sort_columns).
+            // For general aggregate TopK, we must process ALL input rows before applying
+            // top-K selection — flushing early would reset accumulator state and corrupt results.
+            group_values_soft_limit: agg
+                .limit_options()
+                .filter(|config| config.topk_sort_columns().is_none())
+                .map(|config| config.limit()),
             skip_aggregation_probe,
             reduction_factor,
             topk_emit,

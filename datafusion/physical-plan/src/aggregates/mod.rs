@@ -715,7 +715,17 @@ impl AggregateExec {
         // When topk_sort_columns is set, the AggregateExec will emit rows
         // already sorted by those columns. Declare this output ordering so
         // downstream SortExec can be eliminated.
-        let cache = if let Some(ref opts) = limit_options
+        // Only declare ordering for single-output-partition modes.
+        // For FinalPartitioned/SinglePartitioned, output is sorted per-partition
+        // but declaring ordering causes EnforceSorting to replace
+        // SortPreservingMergeExec with CoalescePartitionsExec, losing the
+        // merge-sort and producing wrong results.
+        let can_declare_ordering = !matches!(
+            self.mode,
+            AggregateMode::FinalPartitioned | AggregateMode::SinglePartitioned
+        );
+        let cache = if can_declare_ordering
+            && let Some(ref opts) = limit_options
             && let Some(sort_cols) = opts.topk_sort_columns()
             && !sort_cols.is_empty()
         {
@@ -734,8 +744,8 @@ impl AggregateExec {
             });
             let mut eq_properties = self.cache.equivalence_properties().clone();
             eq_properties.add_orderings([sort_exprs]);
-            let props = PlanProperties::clone(&self.cache)
-                .with_eq_properties(eq_properties);
+            let props =
+                PlanProperties::clone(&self.cache).with_eq_properties(eq_properties);
             Arc::new(props)
         } else {
             Arc::clone(&self.cache)
