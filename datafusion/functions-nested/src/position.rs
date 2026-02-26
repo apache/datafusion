@@ -204,10 +204,11 @@ fn resolve_start_from(
 ) -> Result<Vec<i64>> {
     match third_arg {
         None => Ok(vec![0i64; num_rows]),
+        Some(ColumnarValue::Scalar(ScalarValue::Int64(Some(v)))) => {
+            Ok(vec![v - 1; num_rows])
+        }
         Some(ColumnarValue::Scalar(s)) => {
-            let v = s.to_array_of_size(1)?;
-            let v = as_int64_array(&v)?.value(0) - 1;
-            Ok(vec![v; num_rows])
+            exec_err!("array_position expected Int64 for start_from, got {s}")
         }
         Some(ColumnarValue::Array(a)) => {
             Ok(as_int64_array(a)?.values().iter().map(|&x| x - 1).collect())
