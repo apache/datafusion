@@ -23,7 +23,6 @@ use crate::{common::spawn_buffered, metrics::SpillMetrics};
 use arrow::array::StringViewArray;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::utils::memory::get_record_batch_memory_size;
 use datafusion_common::{DataFusionError, Result, config::SpillCompression};
 use datafusion_execution::SendableRecordBatchStream;
 use datafusion_execution::disk_manager::RefCountedTempFile;
@@ -127,10 +126,8 @@ impl SpillManager {
             if borrowed.num_rows() == 0 {
                 return Ok(());
             }
-            in_progress_file.append_batch(borrowed)?;
-
-            max_record_batch_size =
-                max_record_batch_size.max(get_record_batch_memory_size(borrowed));
+            let gc_sliced_size = in_progress_file.append_batch(borrowed)?;
+            max_record_batch_size = max_record_batch_size.max(gc_sliced_size);
             Result::<_, DataFusionError>::Ok(())
         })?;
 
@@ -153,9 +150,9 @@ impl SpillManager {
 
         while let Some(batch) = stream.next().await {
             let batch = batch?;
-            in_progress_file.append_batch(&batch)?;
+            let gc_sliced_size = in_progress_file.append_batch(&batch)?;
 
-            max_record_batch_size = max_record_batch_size.max(batch.get_sliced_size()?);
+            max_record_batch_size = max_record_batch_size.max(gc_sliced_size);
         }
 
         let file = in_progress_file.finish()?;
@@ -197,7 +194,7 @@ impl SpillManager {
 pub(crate) trait GetSlicedSize {
     /// Returns the size of the `RecordBatch` when sliced.
     /// Note: if multiple arrays or even a single array share the same data buffers, we may double count each buffer.
-    /// Therefore, make sure we call gc() or organize_stringview_arrays() before using this method.
+    /// Therefore, make sure we call gc() or gc_view_arrays() before using this method.
     fn get_sliced_size(&self) -> Result<usize>;
 }
 

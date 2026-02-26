@@ -24,7 +24,10 @@ use arrow::array::RecordBatch;
 use datafusion_common::exec_datafusion_err;
 use datafusion_execution::disk_manager::RefCountedTempFile;
 
-use super::{IPCStreamWriter, spill_manager::SpillManager};
+use super::{
+    IPCStreamWriter, gc_view_arrays,
+    spill_manager::{GetSlicedSize, SpillManager},
+};
 
 /// Represents an in-progress spill file used for writing `RecordBatch`es to disk, created by `SpillManager`.
 /// Caller is able to use this struct to incrementally append in-memory batches to
@@ -51,18 +54,27 @@ impl InProgressSpillFile {
 
     /// Appends a `RecordBatch` to the spill file, initializing the writer if necessary.
     ///
+    /// Before writing, performs GC on StringView/BinaryView arrays to compact backing
+    /// buffers. When a view array is sliced, it still references the original full buffers,
+    /// causing massive spill files without GC (see issue #19414: 820MB → 33MB after GC).
+    ///
+    /// Returns the post-GC sliced memory size of the batch for memory accounting.
+    ///
     /// # Errors
     /// - Returns an error if the file is not active (has been finalized)
     /// - Returns an error if appending would exceed the disk usage limit configured
     ///   by `max_temp_directory_size` in `DiskManager`
-    pub fn append_batch(&mut self, batch: &RecordBatch) -> Result<()> {
+    pub fn append_batch(&mut self, batch: &RecordBatch) -> Result<usize> {
         if self.in_progress_file.is_none() {
             return Err(exec_datafusion_err!(
                 "Append operation failed: No active in-progress file. The file may have already been finalized."
             ));
         }
+
+        let gc_batch = gc_view_arrays(batch)?;
+
         if self.writer.is_none() {
-            let schema = batch.schema();
+            let schema = gc_batch.schema();
             if let Some(in_progress_file) = &mut self.in_progress_file {
                 self.writer = Some(IPCStreamWriter::new(
                     in_progress_file.path(),
@@ -83,7 +95,7 @@ impl InProgressSpillFile {
             }
         }
         if let Some(writer) = &mut self.writer {
-            let (spilled_rows, _) = writer.write(batch)?;
+            let (spilled_rows, _) = writer.write(&gc_batch)?;
             if let Some(in_progress_file) = &mut self.in_progress_file {
                 let pre_size = in_progress_file.current_disk_usage();
                 in_progress_file.update_disk_usage()?;
@@ -98,7 +110,7 @@ impl InProgressSpillFile {
                 unreachable!() // Already checked inside current function
             }
         }
-        Ok(())
+        gc_batch.get_sliced_size()
     }
 
     pub fn flush(&mut self) -> Result<()> {
