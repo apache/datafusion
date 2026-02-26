@@ -51,3 +51,6 @@ drop table t1
 
 statement ok
 drop table table_with_many_types
+
+statement ok
+set datafusion.catalog.information_schema = false;

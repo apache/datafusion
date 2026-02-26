@@ -1184,3 +1184,6 @@ logical_plan
 
 statement ok
 drop table test
+
+statement ok
+set datafusion.explain.logical_plan_only = false;

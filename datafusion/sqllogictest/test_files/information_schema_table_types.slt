@@ -52,3 +52,6 @@ drop table physical
 
 statement ok
 drop view query
+
+statement ok
+set datafusion.catalog.information_schema = false;

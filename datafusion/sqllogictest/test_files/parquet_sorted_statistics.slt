@@ -275,3 +275,11 @@ logical_plan
 physical_plan
 01)SortPreservingMergeExec: [constant_col@0 ASC NULLS LAST]
 02)--DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=A/0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=B/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=C/2.parquet]]}, projection=[constant_col], output_ordering=[constant_col@0 ASC NULLS LAST], file_type=parquet
+
+# Cleanup
+
+statement ok
+set datafusion.execution.collect_statistics = false;
+
+statement ok
+set datafusion.execution.split_file_groups_by_statistics = false;

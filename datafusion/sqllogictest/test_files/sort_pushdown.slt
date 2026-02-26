@@ -1625,10 +1625,7 @@ statement ok
 DROP TABLE signed_parquet;
 
 statement ok
-DROP TABLE agg_expr_data;
+SET datafusion.optimizer.enable_sort_pushdown = false;
 
 statement ok
-DROP TABLE agg_expr_parquet;
-
-statement ok
-SET datafusion.optimizer.enable_sort_pushdown = true;
+SET datafusion.execution.parquet.pushdown_filters = false;
