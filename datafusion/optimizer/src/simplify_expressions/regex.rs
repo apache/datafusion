@@ -46,10 +46,16 @@ pub fn simplify_regex_expr(
 ) -> Result<Expr> {
     let mode = OperatorMode::new(&op);
 
-    if let Expr::Literal(ScalarValue::Utf8(Some(pattern)), _) = right.as_ref() {
-        // Handle the special case for ".*" pattern
-        if pattern == ANY_CHAR_REGEX_PATTERN {
-            let new_expr = if mode.not {
+    let (pattern, is_utf8) = match right.as_ref() {
+        Expr::Literal(ScalarValue::Utf8(Some(p)), _) => (p.as_str(), true),
+        Expr::Literal(ScalarValue::Utf8View(Some(p)), _) => (p.as_str(), false),
+        _ => return Ok(Expr::BinaryExpr(BinaryExpr { left, op, right })),
+    };
+
+    // Handle the special case for ".*" pattern
+    if pattern == ANY_CHAR_REGEX_PATTERN {
+        let new_expr = if mode.not {
+            if is_utf8 {
                 // not empty
                 let empty_lit = Box::new(lit(""));
                 Expr::BinaryExpr(BinaryExpr {
@@ -58,32 +64,35 @@ pub fn simplify_regex_expr(
                     right: empty_lit,
                 })
             } else {
-                // not null
-                left.is_not_null()
-            };
-            return Ok(new_expr);
-        }
+                // Leave untouched because optimization doesn't work for Utf8View
+                Expr::BinaryExpr(BinaryExpr { left, op, right })
+            }
+        } else {
+            // not null
+            left.is_not_null()
+        };
+        return Ok(new_expr);
+    }
 
-        match regex_syntax::Parser::new().parse(pattern) {
-            Ok(hir) => {
-                let kind = hir.kind();
-                if let HirKind::Alternation(alts) = kind {
-                    if alts.len() <= MAX_REGEX_ALTERNATIONS_EXPANSION
-                        && let Some(expr) = lower_alt(&mode, &left, alts)
-                    {
-                        return Ok(expr);
-                    }
-                } else if let Some(expr) = lower_simple(&mode, &left, &hir) {
+    match regex_syntax::Parser::new().parse(pattern) {
+        Ok(hir) => {
+            let kind = hir.kind();
+            if let HirKind::Alternation(alts) = kind {
+                if alts.len() <= MAX_REGEX_ALTERNATIONS_EXPANSION
+                    && let Some(expr) = lower_alt(&mode, &left, alts)
+                {
                     return Ok(expr);
                 }
+            } else if let Some(expr) = lower_simple(&mode, &left, &hir) {
+                return Ok(expr);
             }
-            Err(e) => {
-                // error out early since the execution may fail anyways
-                return Err(DataFusionError::Context(
-                    "Invalid regex".to_owned(),
-                    Box::new(DataFusionError::External(Box::new(e))),
-                ));
-            }
+        }
+        Err(e) => {
+            // error out early since the execution may fail anyways
+            return Err(DataFusionError::Context(
+                "Invalid regex".to_owned(),
+                Box::new(DataFusionError::External(Box::new(e))),
+            ));
         }
     }
 
