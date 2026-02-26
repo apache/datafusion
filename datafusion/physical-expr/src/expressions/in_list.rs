@@ -149,9 +149,8 @@ fn supports_arrow_eq(dt: &DataType) -> bool {
     use DataType::*;
     match dt {
         Boolean | Binary | LargeBinary | BinaryView | FixedSizeBinary(_) => true,
-        dt if dt.is_primitive() || dt.is_null() || dt.is_string() => true,
         Dictionary(_, v) => supports_arrow_eq(v.as_ref()),
-        _ => false,
+        _ => dt.is_primitive() || dt.is_null() || dt.is_string(),
     }
 }
 
