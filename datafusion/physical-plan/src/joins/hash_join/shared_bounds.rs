@@ -24,7 +24,7 @@ use std::sync::Arc;
 use crate::ExecutionPlan;
 use crate::ExecutionPlanProperties;
 use crate::joins::PartitionMode;
-use crate::joins::hash_join::exec::HASH_JOIN_SEED;
+use crate::joins::hash_join::exec::{DynamicFilterRoutingMode, HASH_JOIN_SEED};
 use crate::joins::hash_join::inlist_builder::build_struct_fields;
 use crate::joins::hash_join::partitioned_hash_eval::{
     HashExpr, HashTableLookupExpr, SeededRandomState,
@@ -37,7 +37,7 @@ use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Operator;
 use datafusion_functions::core::r#struct as struct_func;
 use datafusion_physical_expr::expressions::{
-    BinaryExpr, CaseExpr, DynamicFilterPhysicalExpr, InListExpr, lit,
+    BinaryExpr, CaseExpr, DynamicFilterPhysicalExpr, DynamicFilterUpdate, InListExpr, lit,
 };
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef, ScalarFunctionExpr};
 
@@ -225,7 +225,7 @@ pub(crate) struct SharedBuildAccumulator {
     inner: Mutex<AccumulatedBuildData>,
     barrier: Barrier,
     /// How to route partitioned dynamic filters.
-    routing: DynamicFilterRouting,
+    routing: DynamicFilterRoutingMode,
     /// Dynamic filter for pushdown to probe side
     dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
     /// Right side join expressions needed for creating filter expressions
@@ -246,17 +246,6 @@ pub(crate) enum PushdownStrategy {
     HashTable(Arc<dyn JoinHashMapType>),
     /// There was no data in this partition, do not build a dynamic filter for it
     Empty,
-}
-
-/// How to route partitioned dynamic filters.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum DynamicFilterRouting {
-    /// Route using hash(join_keys) % N.
-    Hash,
-    /// Route by partition index without hashing.
-    PartitionIndex,
-    /// Use a global OR filter across partitions.
-    Global,
 }
 
 /// Build-side data reported by a single partition
@@ -303,14 +292,6 @@ impl SharedBuildAccumulator {
             (None, Some(bounds)) => Some(bounds),
             (None, None) => None,
         }
-    }
-
-    fn combine_or_filters(
-        filters: impl IntoIterator<Item = Arc<dyn PhysicalExpr>>,
-    ) -> Option<Arc<dyn PhysicalExpr>> {
-        filters.into_iter().reduce(|acc, filter| {
-            Arc::new(BinaryExpr::new(acc, Operator::Or, filter)) as Arc<dyn PhysicalExpr>
-        })
     }
 
     fn build_partition_filter_expr(
@@ -365,7 +346,7 @@ impl SharedBuildAccumulator {
         dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
         on_right: Vec<PhysicalExprRef>,
         repartition_random_state: SeededRandomState,
-        routing: DynamicFilterRouting,
+        routing: DynamicFilterRoutingMode,
     ) -> Self {
         // Troubleshooting: If partition counts are incorrect, verify this logic matches
         // the actual execution pattern in collect_build_side()
@@ -478,7 +459,8 @@ impl SharedBuildAccumulator {
                             &partition_data.pushdown,
                             &partition_data.bounds,
                         )? {
-                            self.dynamic_filter.update(filter_expr)?;
+                            self.dynamic_filter
+                                .update(DynamicFilterUpdate::Global(filter_expr))?;
                         }
                     }
                 }
@@ -490,7 +472,7 @@ impl SharedBuildAccumulator {
 
                     if !partition_data.is_empty() {
                         match self.routing {
-                            DynamicFilterRouting::Hash => {
+                            DynamicFilterRoutingMode::CaseHash => {
                                 // Build a CASE expression that combines range checks AND membership checks
                                 // CASE (hash_repartition(join_keys) % num_partitions)
                                 //   WHEN 0 THEN (col >= min_0 AND col <= max_0 AND ...) AND membership_check_0
@@ -567,9 +549,10 @@ impl SharedBuildAccumulator {
                                         as Arc<dyn PhysicalExpr>
                                 };
 
-                                self.dynamic_filter.update(filter_expr)?;
+                                self.dynamic_filter
+                                    .update(DynamicFilterUpdate::Global(filter_expr))?;
                             }
-                            DynamicFilterRouting::PartitionIndex => {
+                            DynamicFilterRoutingMode::PartitionIndex => {
                                 let mut partition_filters: Vec<
                                     Option<Arc<dyn PhysicalExpr>>,
                                 > = vec![None; partitions.len()];
@@ -579,45 +562,28 @@ impl SharedBuildAccumulator {
                                         p.as_ref().map(|partition| (i, partition))
                                     })
                                 {
-                                    if let Some(filter_expr) = self
+                                    if matches!(
+                                        partition.pushdown,
+                                        PushdownStrategy::Empty
+                                    ) {
+                                        continue;
+                                    }
+
+                                    let filter_expr = self
                                         .build_partition_filter_expr(
                                             &partition.pushdown,
                                             &partition.bounds,
                                         )?
-                                    {
-                                        partition_filters[partition_id] =
-                                            Some(filter_expr);
-                                    }
+                                        // Defensive fallback: if no partition-local
+                                        // predicate can be built, keep this partition
+                                        // fail-open.
+                                        .unwrap_or_else(|| lit(true));
+                                    partition_filters[partition_id] = Some(filter_expr);
                                 }
 
-                                let combined_filter = Self::combine_or_filters(
-                                    partition_filters.iter().flatten().cloned(),
-                                );
-                                let filter_expr =
-                                    combined_filter.unwrap_or_else(|| lit(false));
-                                self.dynamic_filter
-                                    .update_partitioned(filter_expr, partition_filters)?;
-                            }
-                            DynamicFilterRouting::Global => {
-                                let mut filters = Vec::new();
-                                for partition in
-                                    partitions.iter().filter_map(|p| p.as_ref())
-                                {
-                                    if let Some(filter_expr) = self
-                                        .build_partition_filter_expr(
-                                            &partition.pushdown,
-                                            &partition.bounds,
-                                        )?
-                                    {
-                                        filters.push(filter_expr);
-                                    }
-                                }
-
-                                if let Some(filter_expr) =
-                                    Self::combine_or_filters(filters)
-                                {
-                                    self.dynamic_filter.update(filter_expr)?;
-                                }
+                                self.dynamic_filter.update(
+                                    DynamicFilterUpdate::Partitioned(partition_filters),
+                                )?;
                             }
                         }
                     }
@@ -643,7 +609,10 @@ mod tests {
     use arrow::array::{ArrayRef, Int32Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
-    use datafusion_physical_expr::expressions::{Column, Literal};
+    use datafusion_physical_expr::expressions::{
+        Column, DynamicFilterRuntimeContext, Literal,
+    };
+    use datafusion_physical_expr_common::physical_expr::bind_runtime_physical_expr;
 
     fn make_exec(schema: Arc<Schema>, partitions: usize) -> Arc<dyn ExecutionPlan> {
         let batch = RecordBatch::new_empty(Arc::clone(&schema));
@@ -673,15 +642,6 @@ mod tests {
         expr.children()
             .iter()
             .any(|child| contains_hash_expr(child))
-    }
-
-    fn contains_or_expr(expr: &Arc<dyn PhysicalExpr>) -> bool {
-        if let Some(binary) = expr.as_any().downcast_ref::<BinaryExpr>() {
-            if *binary.op() == Operator::Or {
-                return true;
-            }
-        }
-        expr.children().iter().any(|child| contains_or_expr(child))
     }
 
     fn contains_case_expr(expr: &Arc<dyn PhysicalExpr>) -> bool {
@@ -717,7 +677,7 @@ mod tests {
             Arc::clone(&dynamic_filter),
             on_right,
             SeededRandomState::with_seeds(0, 0, 0, 0),
-            DynamicFilterRouting::Hash,
+            DynamicFilterRoutingMode::CaseHash,
         );
 
         tokio::try_join!(
@@ -742,52 +702,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn partitioned_dynamic_filter_falls_back_to_or_without_hash_routing()
-    -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![Field::new("b", DataType::Int32, true)]));
-        let left = make_exec(Arc::clone(&schema), 2);
-        let right = make_exec(Arc::clone(&schema), 2);
-        let on_right: Vec<PhysicalExprRef> =
-            vec![Arc::new(Column::new_with_schema("b", &schema)?)];
-        let dynamic_filter =
-            Arc::new(DynamicFilterPhysicalExpr::new(on_right.clone(), lit(true)));
-        let accumulator = SharedBuildAccumulator::new_from_partition_mode(
-            PartitionMode::Partitioned,
-            left.as_ref(),
-            right.as_ref(),
-            Arc::clone(&dynamic_filter),
-            on_right,
-            SeededRandomState::with_seeds(0, 0, 0, 0),
-            DynamicFilterRouting::Global,
-        );
-
-        tokio::try_join!(
-            accumulator.report_build_data(PartitionBuildData::Partitioned {
-                partition_id: 0,
-                pushdown: make_in_list(&[1, 2]),
-                bounds: make_bounds(1, 2),
-            }),
-            accumulator.report_build_data(PartitionBuildData::Partitioned {
-                partition_id: 1,
-                pushdown: make_in_list(&[10, 11]),
-                bounds: make_bounds(10, 11),
-            })
-        )?;
-
-        let expr = dynamic_filter.current()?;
-        assert!(
-            !dynamic_filter.has_partitioned_filters(),
-            "global routing should not set partitioned filters"
-        );
-        assert!(
-            !contains_hash_expr(&expr),
-            "unexpected hash routing expression"
-        );
-        assert!(contains_or_expr(&expr), "expected OR combination");
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn collect_left_dynamic_filter_never_uses_hash_routing() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new("b", DataType::Int32, true)]));
         let left = make_exec(Arc::clone(&schema), 1);
@@ -803,7 +717,7 @@ mod tests {
             Arc::clone(&dynamic_filter),
             on_right,
             SeededRandomState::with_seeds(0, 0, 0, 0),
-            DynamicFilterRouting::Hash,
+            DynamicFilterRoutingMode::CaseHash,
         );
 
         tokio::try_join!(
@@ -841,7 +755,7 @@ mod tests {
             Arc::clone(&dynamic_filter),
             on_right,
             SeededRandomState::with_seeds(0, 0, 0, 0),
-            DynamicFilterRouting::PartitionIndex,
+            DynamicFilterRoutingMode::PartitionIndex,
         );
 
         tokio::try_join!(
@@ -857,11 +771,12 @@ mod tests {
             })
         )?;
 
-        assert!(
-            dynamic_filter.has_partitioned_filters(),
-            "expected partitioned filters to be present"
-        );
-        let per_partition = dynamic_filter.current_for_partition(1)?;
+        let runtime_ctx = DynamicFilterRuntimeContext::for_partition(1);
+        let bound = bind_runtime_physical_expr(
+            Arc::clone(&dynamic_filter) as Arc<dyn PhysicalExpr>,
+            &runtime_ctx,
+        )?;
+        let per_partition = bound.snapshot()?.expect("expected snapshot");
         assert!(
             !contains_hash_expr(&per_partition),
             "partition-index routing should not introduce hash routing"
@@ -893,7 +808,7 @@ mod tests {
             Arc::clone(&dynamic_filter),
             on_right,
             SeededRandomState::with_seeds(0, 0, 0, 0),
-            DynamicFilterRouting::PartitionIndex,
+            DynamicFilterRoutingMode::PartitionIndex,
         );
 
         tokio::try_join!(
@@ -909,7 +824,12 @@ mod tests {
             })
         )?;
 
-        let expr = dynamic_filter.current_for_partition(0)?;
+        let runtime_ctx = DynamicFilterRuntimeContext::for_partition(0);
+        let bound = bind_runtime_physical_expr(
+            Arc::clone(&dynamic_filter) as Arc<dyn PhysicalExpr>,
+            &runtime_ctx,
+        )?;
+        let expr = bound.snapshot()?.expect("expected snapshot");
         assert!(
             !contains_hash_expr(&expr),
             "single non-empty partition should not need hash routing"

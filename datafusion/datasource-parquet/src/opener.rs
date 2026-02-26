@@ -26,6 +26,7 @@ use crate::{
 use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::DataType;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
+use datafusion_physical_expr::expressions::DynamicFilterRuntimeContext;
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::utils::reassign_expr_columns;
 use datafusion_physical_expr_adapter::replace_columns_with_literals;
@@ -44,7 +45,7 @@ use datafusion_datasource::{PartitionedFile, TableSchema};
 use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::{
-    PhysicalExpr, is_dynamic_physical_expr,
+    PhysicalExpr, bind_runtime_physical_expr, is_dynamic_physical_expr,
 };
 use datafusion_physical_plan::metrics::{
     Count, ExecutionPlanMetricsSet, MetricBuilder, PruningMetrics,
@@ -254,6 +255,15 @@ impl FileOpener for ParquetOpener {
                 .map(|p| replace_columns_with_literals(p, &literal_columns))
                 .transpose()?;
         }
+
+        // Bind runtime context for this opener partition.
+        // For partition-index dynamic filters this binds probe partition `i`
+        // to build-side filter `i`.
+        let runtime_ctx =
+            DynamicFilterRuntimeContext::for_partition(self.partition_index);
+        predicate = predicate
+            .map(|p| bind_runtime_physical_expr(p, &runtime_ctx))
+            .transpose()?;
 
         let reorder_predicates = self.reorder_filters;
         let pushdown_filters = self.pushdown_filters;
@@ -981,7 +991,9 @@ mod test {
     use datafusion_expr::{col, lit};
     use datafusion_physical_expr::{
         PhysicalExpr,
-        expressions::{Column, DynamicFilterPhysicalExpr, Literal},
+        expressions::{
+            BinaryExpr, Column, DynamicFilterPhysicalExpr, DynamicFilterUpdate, Literal,
+        },
         planner::logical2physical,
         projection::ProjectionExprs,
     };
@@ -1065,6 +1077,12 @@ mod test {
         /// Set projection by column indices (convenience method for common case).
         fn with_projection_indices(mut self, indices: &[usize]) -> Self {
             self.projection_indices = Some(indices.to_vec());
+            self
+        }
+
+        /// Set the partition index.
+        fn with_partition_index(mut self, index: usize) -> Self {
+            self.partition_index = index;
             self
         }
 
@@ -1953,5 +1971,115 @@ mod test {
             vec![7, 5, 1],
             "Reverse scan with non-contiguous row groups should correctly map RowSelection"
         );
+    }
+
+    #[tokio::test]
+    async fn test_partition_bind_in_opener() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        let batch = record_batch!(("a", Int32, vec![Some(1), Some(2), Some(3)])).unwrap();
+        let data_size =
+            write_parquet(Arc::clone(&store), "test.parquet", batch.clone()).await;
+
+        let schema = batch.schema();
+        let file = PartitionedFile::new(
+            "test.parquet".to_string(),
+            u64::try_from(data_size).unwrap(),
+        );
+
+        let col_a = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
+
+        let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::clone(&col_a)],
+            datafusion_physical_expr::expressions::lit(true) as Arc<dyn PhysicalExpr>,
+        ));
+
+        let p0_filter = Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                Arc::clone(&col_a),
+                datafusion_expr::Operator::GtEq,
+                datafusion_physical_expr::expressions::lit(1i32) as Arc<dyn PhysicalExpr>,
+            )) as Arc<dyn PhysicalExpr>,
+            datafusion_expr::Operator::And,
+            Arc::new(BinaryExpr::new(
+                Arc::clone(&col_a),
+                datafusion_expr::Operator::LtEq,
+                datafusion_physical_expr::expressions::lit(2i32) as Arc<dyn PhysicalExpr>,
+            )) as Arc<dyn PhysicalExpr>,
+        )) as Arc<dyn PhysicalExpr>;
+
+        let p1_filter = Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                Arc::clone(&col_a),
+                datafusion_expr::Operator::GtEq,
+                datafusion_physical_expr::expressions::lit(10i32)
+                    as Arc<dyn PhysicalExpr>,
+            )) as Arc<dyn PhysicalExpr>,
+            datafusion_expr::Operator::And,
+            Arc::new(BinaryExpr::new(
+                Arc::clone(&col_a),
+                datafusion_expr::Operator::LtEq,
+                datafusion_physical_expr::expressions::lit(20i32)
+                    as Arc<dyn PhysicalExpr>,
+            )) as Arc<dyn PhysicalExpr>,
+        )) as Arc<dyn PhysicalExpr>;
+
+        let p2_filter = Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                Arc::clone(&col_a),
+                datafusion_expr::Operator::GtEq,
+                datafusion_physical_expr::expressions::lit(3i32) as Arc<dyn PhysicalExpr>,
+            )) as Arc<dyn PhysicalExpr>,
+            datafusion_expr::Operator::And,
+            Arc::new(BinaryExpr::new(
+                Arc::clone(&col_a),
+                datafusion_expr::Operator::LtEq,
+                datafusion_physical_expr::expressions::lit(3i32) as Arc<dyn PhysicalExpr>,
+            )) as Arc<dyn PhysicalExpr>,
+        )) as Arc<dyn PhysicalExpr>;
+
+        dynamic_filter
+            .update(DynamicFilterUpdate::Partitioned(vec![
+                Some(p0_filter),
+                Some(p1_filter),
+                Some(p2_filter),
+            ]))
+            .unwrap();
+
+        let opener_p0 = ParquetOpenerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_projection_indices(&[0])
+            .with_predicate(Arc::clone(&dynamic_filter) as Arc<dyn PhysicalExpr>)
+            .with_partition_index(0)
+            .with_row_group_stats_pruning(true)
+            .build();
+        let stream = opener_p0.open(file.clone()).unwrap().await.unwrap();
+        let (_, num_rows) = count_batches_and_rows(stream).await;
+        assert_eq!(num_rows, 3);
+
+        let opener_p1 = ParquetOpenerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_projection_indices(&[0])
+            .with_predicate(Arc::clone(&dynamic_filter) as Arc<dyn PhysicalExpr>)
+            .with_partition_index(1)
+            .with_row_group_stats_pruning(true)
+            .build();
+        let stream = opener_p1.open(file.clone()).unwrap().await.unwrap();
+        let (_, num_rows) = count_batches_and_rows(stream).await;
+        assert_eq!(num_rows, 0);
+
+        let opener_p2 = ParquetOpenerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_projection_indices(&[0])
+            .with_predicate(Arc::clone(&dynamic_filter) as Arc<dyn PhysicalExpr>)
+            .with_partition_index(2)
+            .with_row_group_stats_pruning(true)
+            .build();
+        let stream = opener_p2.open(file).unwrap().await.unwrap();
+        let (_, num_rows) = count_batches_and_rows(stream).await;
+        assert_eq!(num_rows, 3);
     }
 }
