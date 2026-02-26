@@ -548,7 +548,7 @@ impl DefaultPhysicalExprAdapterRewriter {
 /// let factory = BatchAdapterFactory::new(Arc::clone(&target_schema));
 ///
 /// // Create adapter for this specific source schema
-/// let adapter = factory.make_adapter(Arc::clone(&source_schema)).unwrap();
+/// let adapter = factory.make_adapter(&source_schema).unwrap();
 ///
 /// // Create a source batch
 /// let source_batch = RecordBatch::try_new(
@@ -603,7 +603,7 @@ impl BatchAdapterFactory {
     ///
     /// Batches fed into this [`BatchAdapter`] *must* conform to the source schema,
     /// no validation is performed at runtime to minimize overheads.
-    pub fn make_adapter(&self, source_schema: SchemaRef) -> Result<BatchAdapter> {
+    pub fn make_adapter(&self, source_schema: &SchemaRef) -> Result<BatchAdapter> {
         let expr_adapter = self
             .expr_adapter_factory
             .create(Arc::clone(&self.target_schema), Arc::clone(&source_schema))?;
@@ -1262,7 +1262,7 @@ mod tests {
         ]));
 
         let factory = BatchAdapterFactory::new(Arc::clone(&target_schema));
-        let adapter = factory.make_adapter(Arc::clone(&source_schema)).unwrap();
+        let adapter = factory.make_adapter(&source_schema).unwrap();
 
         // Create source batch
         let source_batch = RecordBatch::try_new(
@@ -1317,7 +1317,7 @@ mod tests {
         ]));
 
         let factory = BatchAdapterFactory::new(Arc::clone(&target_schema));
-        let adapter = factory.make_adapter(Arc::clone(&source_schema)).unwrap();
+        let adapter = factory.make_adapter(&source_schema).unwrap();
 
         let source_batch = RecordBatch::try_new(
             Arc::clone(&source_schema),
@@ -1380,7 +1380,7 @@ mod tests {
         .unwrap();
 
         let factory = BatchAdapterFactory::new(Arc::clone(&target_schema));
-        let adapter = factory.make_adapter(source_schema).unwrap();
+        let adapter = factory.make_adapter(&source_schema).unwrap();
         let adapted = adapter.adapt_batch(&source_batch).unwrap();
 
         let result_struct = adapted
@@ -1405,7 +1405,7 @@ mod tests {
         ]));
 
         let factory = BatchAdapterFactory::new(Arc::clone(&schema));
-        let adapter = factory.make_adapter(Arc::clone(&schema)).unwrap();
+        let adapter = factory.make_adapter(&schema).unwrap();
 
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
@@ -1438,14 +1438,14 @@ mod tests {
             Field::new("x", DataType::Int32, false),
             Field::new("y", DataType::Utf8, true),
         ]));
-        let adapter1 = factory.make_adapter(source1).unwrap();
+        let adapter1 = factory.make_adapter(&source1).unwrap();
 
         // Second source schema (different order)
         let source2 = Arc::new(Schema::new(vec![
             Field::new("y", DataType::Utf8, true),
             Field::new("x", DataType::Int64, false),
         ]));
-        let adapter2 = factory.make_adapter(source2).unwrap();
+        let adapter2 = factory.make_adapter(&source2).unwrap();
 
         // Both should work correctly
         assert!(format!("{adapter1:?}").contains("BatchAdapter"));
