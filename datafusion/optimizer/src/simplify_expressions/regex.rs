@@ -17,6 +17,7 @@
 
 use arrow::datatypes::DataType;
 use datafusion_common::{DataFusionError, Result};
+use datafusion_common::tree_node::Transformed;
 use datafusion_expr::{BinaryExpr, Expr, Like, Operator, lit};
 use regex_syntax::hir::{Capture, Hir, HirKind, Literal, Look};
 
@@ -46,13 +47,13 @@ pub fn simplify_regex_expr(
     left: Box<Expr>,
     op: Operator,
     right: Box<Expr>,
-) -> Result<Expr> {
+) -> Result<Transformed<Expr>> {
     // Check if the right operand is a string literal
     let Some((datatype, pattern_opt)) = as_string_scalar(&right) else {
-        return Ok(Expr::BinaryExpr(BinaryExpr { left, op, right }));
+        return Ok(Transformed::no(Expr::BinaryExpr(BinaryExpr { left, op, right })));
     };
     let Some(pattern_owned) = pattern_opt.as_ref() else {
-        return Ok(Expr::BinaryExpr(BinaryExpr { left, op, right }));
+        return Ok(Transformed::no(Expr::BinaryExpr(BinaryExpr { left, op, right })));
     };
     let pattern = pattern_owned.as_str();
 
@@ -72,7 +73,7 @@ pub fn simplify_regex_expr(
             // not null
             left.is_not_null()
         };
-        return Ok(new_expr);
+        return Ok(Transformed::yes(new_expr));
     }
 
     match regex_syntax::Parser::new().parse(pattern) {
@@ -82,10 +83,10 @@ pub fn simplify_regex_expr(
                 if alts.len() <= MAX_REGEX_ALTERNATIONS_EXPANSION
                     && let Some(expr) = lower_alt(&mode, &left, alts)
                 {
-                    return Ok(expr);
+                    return Ok(Transformed::yes(expr));
                 }
             } else if let Some(expr) = lower_simple(&mode, &left, &hir) {
-                return Ok(expr);
+                return Ok(Transformed::yes(expr));
             }
         }
         Err(e) => {
@@ -98,7 +99,7 @@ pub fn simplify_regex_expr(
     }
 
     // Leave untouched if optimization didn't work
-    Ok(Expr::BinaryExpr(BinaryExpr { left, op, right }))
+    Ok(Transformed::no(Expr::BinaryExpr(BinaryExpr { left, op, right })))
 }
 
 #[derive(Debug)]
@@ -107,6 +108,7 @@ struct OperatorMode {
     not: bool,
     /// Ignore case (`true` for case-insensitive).
     i: bool,
+    /// Data type of the pattern (e.g. Utf8, Utf8View, LargeUtf8)
     datatype: DataType,
 }
 

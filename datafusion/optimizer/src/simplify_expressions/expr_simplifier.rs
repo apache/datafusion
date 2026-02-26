@@ -1660,7 +1660,8 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 left,
                 op: op @ (RegexMatch | RegexNotMatch | RegexIMatch | RegexNotIMatch),
                 right,
-            }) => Transformed::yes(simplify_regex_expr(left, op, right)?),
+            // }) => Transformed::yes(simplify_regex_expr(left, op, right)?),
+        }) => simplify_regex_expr(left, op, right)?,
 
             // Rules for Like
             Expr::Like(like) => {
