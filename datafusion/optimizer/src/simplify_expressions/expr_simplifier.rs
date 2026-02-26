@@ -2126,7 +2126,7 @@ fn is_literal_or_literal_cast(expr: &Expr) -> bool {
     }
 }
 
-fn as_string_scalar(expr: &Expr) -> Option<(DataType, &Option<String>)> {
+pub fn as_string_scalar(expr: &Expr) -> Option<(DataType, &Option<String>)> {
     match expr {
         Expr::Literal(ScalarValue::Utf8(s), _) => Some((DataType::Utf8, s)),
         Expr::Literal(ScalarValue::LargeUtf8(s), _) => Some((DataType::LargeUtf8, s)),
@@ -2135,7 +2135,7 @@ fn as_string_scalar(expr: &Expr) -> Option<(DataType, &Option<String>)> {
     }
 }
 
-fn to_string_scalar(data_type: &DataType, value: Option<String>) -> Expr {
+pub fn to_string_scalar(data_type: &DataType, value: Option<String>) -> Expr {
     match data_type {
         DataType::Utf8 => Expr::Literal(ScalarValue::Utf8(value), None),
         DataType::LargeUtf8 => Expr::Literal(ScalarValue::LargeUtf8(value), None),

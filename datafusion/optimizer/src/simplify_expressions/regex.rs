@@ -15,9 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use arrow::datatypes::DataType;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{BinaryExpr, Expr, Like, Operator, lit};
 use regex_syntax::hir::{Capture, Hir, HirKind, Literal, Look};
+
+use crate::simplify_expressions::expr_simplifier::{as_string_scalar, to_string_scalar};
 
 /// Maximum number of regex alternations (`foo|bar|...`) that will be expanded into multiple `LIKE` expressions.
 const MAX_REGEX_ALTERNATIONS_EXPANSION: usize = 4;
@@ -44,29 +47,27 @@ pub fn simplify_regex_expr(
     op: Operator,
     right: Box<Expr>,
 ) -> Result<Expr> {
-    let mode = OperatorMode::new(&op);
-
-    let (pattern, is_utf8) = match right.as_ref() {
-        Expr::Literal(ScalarValue::Utf8(Some(p)), _) => (p.as_str(), true),
-        Expr::Literal(ScalarValue::Utf8View(Some(p)), _) => (p.as_str(), false),
-        _ => return Ok(Expr::BinaryExpr(BinaryExpr { left, op, right })),
+    // Check if the right operand is a string literal
+    let Some((datatype, pattern_opt)) = as_string_scalar(&right) else {
+        return Ok(Expr::BinaryExpr(BinaryExpr { left, op, right }));
     };
+    let Some(pattern_owned) = pattern_opt.as_ref() else {
+        return Ok(Expr::BinaryExpr(BinaryExpr { left, op, right }));
+    };
+    let pattern = pattern_owned.as_str();
+
+    let mode = OperatorMode::new(&op, datatype.clone());
 
     // Handle the special case for ".*" pattern
     if pattern == ANY_CHAR_REGEX_PATTERN {
         let new_expr = if mode.not {
-            if is_utf8 {
-                // not empty
-                let empty_lit = Box::new(lit(""));
-                Expr::BinaryExpr(BinaryExpr {
-                    left,
-                    op: Operator::Eq,
-                    right: empty_lit,
-                })
-            } else {
-                // Leave untouched because optimization doesn't work for Utf8View
-                Expr::BinaryExpr(BinaryExpr { left, op, right })
-            }
+            // not empty
+            let empty_lit = Box::new(to_string_scalar(&datatype, Some("".to_string())));
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Operator::Eq,
+                right: empty_lit,
+            })
         } else {
             // not null
             left.is_not_null()
@@ -106,10 +107,11 @@ struct OperatorMode {
     not: bool,
     /// Ignore case (`true` for case-insensitive).
     i: bool,
+    datatype: DataType,
 }
 
 impl OperatorMode {
-    fn new(op: &Operator) -> Self {
+    fn new(op: &Operator, datatype: DataType) -> Self {
         let not = match op {
             Operator::RegexMatch | Operator::RegexIMatch => false,
             Operator::RegexNotMatch | Operator::RegexNotIMatch => true,
@@ -122,7 +124,7 @@ impl OperatorMode {
             _ => unreachable!(),
         };
 
-        Self { not, i }
+        Self { not, i, datatype }
     }
 
     /// Creates an [`LIKE`](Expr::Like) from the given `LIKE` pattern.
@@ -130,7 +132,7 @@ impl OperatorMode {
         let like = Like {
             negated: self.not,
             expr,
-            pattern: Box::new(Expr::Literal(ScalarValue::from(pattern), None)),
+            pattern: Box::new(to_string_scalar(&self.datatype, Some(pattern))),
             escape_char: None,
             case_insensitive: self.i,
         };
