@@ -1273,10 +1273,18 @@ impl protobuf::PhysicalPlanNode {
         let agg = if let Some(limit_proto) = &hash_agg.limit {
             let limit = limit_proto.limit as usize;
             let limit_options = if !limit_proto.topk_sort_columns.is_empty() {
-                let sort_cols: Vec<(usize, bool)> = limit_proto
+                let sort_cols: Vec<(usize, SortOptions)> = limit_proto
                     .topk_sort_columns
                     .iter()
-                    .map(|sc| (sc.column_index as usize, sc.descending))
+                    .map(|sc| {
+                        (
+                            sc.column_index as usize,
+                            SortOptions {
+                                descending: sc.descending,
+                                nulls_first: sc.nulls_first,
+                            },
+                        )
+                    })
                     .collect();
                 LimitOptions::new_with_topk_emit(limit, sort_cols)
             } else if let Some(descending) = limit_proto.descending {
@@ -2769,9 +2777,10 @@ impl protobuf::PhysicalPlanNode {
                 .topk_sort_columns()
                 .map(|cols| {
                     cols.iter()
-                        .map(|&(idx, desc)| protobuf::AggLimitSortColumn {
+                        .map(|&(idx, opts)| protobuf::AggLimitSortColumn {
                             column_index: idx as u64,
-                            descending: desc,
+                            descending: opts.descending,
+                            nulls_first: opts.nulls_first,
                         })
                         .collect()
                 })

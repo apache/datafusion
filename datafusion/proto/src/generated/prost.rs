@@ -1858,6 +1858,8 @@ pub struct AggLimitSortColumn {
     pub column_index: u64,
     #[prost(bool, tag = "2")]
     pub descending: bool,
+    #[prost(bool, tag = "3")]
+    pub nulls_first: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AggLimit {

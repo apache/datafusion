@@ -20,6 +20,7 @@
 use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
+use arrow::compute::SortOptions;
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
@@ -47,7 +48,7 @@ impl TopKAggregation {
 
     fn transform_agg(
         aggr: &AggregateExec,
-        sort_columns: &[(String, bool)],
+        sort_columns: &[(String, SortOptions)],
         limit: usize,
     ) -> Option<Arc<dyn ExecutionPlan>> {
         if aggr.filter_expr().iter().any(|e| e.is_some()) {
@@ -60,7 +61,7 @@ impl TopKAggregation {
             if sort_columns.len() != 1 {
                 return None;
             }
-            let (order_by, order_desc) = &sort_columns[0];
+            let (order_by, sort_opts) = &sort_columns[0];
             // MIN/MAX path requires single group key and type support
             let (group_key, _group_key_alias) =
                 aggr.group_expr().expr().iter().exactly_one().ok()?;
@@ -70,7 +71,7 @@ impl TopKAggregation {
                 return None;
             }
             // ensure the sort direction matches aggregate function
-            if desc != *order_desc {
+            if desc != sort_opts.descending {
                 return None;
             }
             // ensure the sort is on the same field as the aggregate output
@@ -79,7 +80,7 @@ impl TopKAggregation {
             }
             let new_aggr = AggregateExec::with_new_limit_options(
                 aggr,
-                Some(LimitOptions::new_with_order(limit, *order_desc)),
+                Some(LimitOptions::new_with_order(limit, sort_opts.descending)),
             );
             return Some(Arc::new(new_aggr));
         }
@@ -90,7 +91,7 @@ impl TopKAggregation {
             if sort_columns.len() != 1 {
                 return None;
             }
-            let (order_by, order_desc) = &sort_columns[0];
+            let (order_by, sort_opts) = &sort_columns[0];
             let (_group_key, group_key_alias) =
                 aggr.group_expr().expr().iter().exactly_one().ok()?;
             let (group_key_expr, _) =
@@ -104,7 +105,7 @@ impl TopKAggregation {
             }
             let new_aggr = AggregateExec::with_new_limit_options(
                 aggr,
-                Some(LimitOptions::new_with_order(limit, *order_desc)),
+                Some(LimitOptions::new_with_order(limit, sort_opts.descending)),
             );
             return Some(Arc::new(new_aggr));
         }
@@ -122,11 +123,11 @@ impl TopKAggregation {
         // Sort columns can reference any output column (group keys or aggregates).
         // Resolve each sort column name to its index in the aggregate output schema.
         let schema = aggr.schema();
-        let topk_sort_cols: Option<Vec<(usize, bool)>> = sort_columns
+        let topk_sort_cols: Option<Vec<(usize, SortOptions)>> = sort_columns
             .iter()
-            .map(|(col_name, desc)| {
+            .map(|(col_name, sort_opts)| {
                 let (col_idx, _) = schema.column_with_name(col_name)?;
-                Some((col_idx, *desc))
+                Some((col_idx, *sort_opts))
             })
             .collect();
         let topk_sort_cols = topk_sort_cols?;
@@ -147,10 +148,10 @@ impl TopKAggregation {
         let limit = sort.fetch()?;
 
         // Extract all sort columns — each must be a simple Column reference
-        let mut sort_col_names: Vec<(String, bool)> = Vec::new();
+        let mut sort_col_names: Vec<(String, SortOptions)> = Vec::new();
         for sort_expr in order.iter() {
             let col = sort_expr.expr.as_any().downcast_ref::<Column>()?;
-            sort_col_names.push((col.name().to_string(), sort_expr.options.descending));
+            sort_col_names.push((col.name().to_string(), sort_expr.options));
         }
         if sort_col_names.is_empty() {
             return None;
@@ -174,7 +175,7 @@ impl TopKAggregation {
                     else {
                         continue;
                     };
-                    for (col_name, _) in sort_col_names.iter_mut() {
+                    for (col_name, _opts) in sort_col_names.iter_mut() {
                         if *col_name == proj_expr.alias {
                             *col_name = src_col.name().to_string();
                         }
@@ -194,18 +195,20 @@ impl TopKAggregation {
         let child = Arc::clone(child).transform_down(closure).data().ok()?;
 
         // If the child now satisfies the sort ordering (because the aggregate
-        // declares sorted output via topk_emit), eliminate the SortExec and
-        // replace it with a GlobalLimitExec.
-        // Note: ordering is only declared for Single/Final modes (not
-        // FinalPartitioned) to avoid EnforceSorting replacing
-        // SortPreservingMergeExec with CoalescePartitionsExec.
-        if !sort.preserve_partitioning()
-            && child
-                .equivalence_properties()
-                .ordering_satisfy(sort.expr().clone())
-                .unwrap_or(false)
+        // declares sorted output via topk_emit), eliminate the SortExec.
+        if child
+            .equivalence_properties()
+            .ordering_satisfy(sort.expr().clone())
+            .unwrap_or(false)
         {
-            return Some(Arc::new(GlobalLimitExec::new(child, 0, Some(limit))));
+            if sort.preserve_partitioning() {
+                // Each partition already produces sorted, limited output via
+                // topk_emit. The SortExec is redundant.
+                return Some(child);
+            } else {
+                // Single-partition output: replace sort with a simple limit.
+                return Some(Arc::new(GlobalLimitExec::new(child, 0, Some(limit))));
+            }
         }
 
         let sort = SortExec::new(sort.expr().clone(), child)

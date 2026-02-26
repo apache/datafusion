@@ -142,6 +142,9 @@ impl serde::Serialize for AggLimitSortColumn {
         if self.descending {
             len += 1;
         }
+        if self.nulls_first {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.AggLimitSortColumn", len)?;
         if self.column_index != 0 {
             #[allow(clippy::needless_borrow)]
@@ -150,6 +153,9 @@ impl serde::Serialize for AggLimitSortColumn {
         }
         if self.descending {
             struct_ser.serialize_field("descending", &self.descending)?;
+        }
+        if self.nulls_first {
+            struct_ser.serialize_field("nullsFirst", &self.nulls_first)?;
         }
         struct_ser.end()
     }
@@ -164,12 +170,15 @@ impl<'de> serde::Deserialize<'de> for AggLimitSortColumn {
             "column_index",
             "columnIndex",
             "descending",
+            "nulls_first",
+            "nullsFirst",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             ColumnIndex,
             Descending,
+            NullsFirst,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -193,6 +202,7 @@ impl<'de> serde::Deserialize<'de> for AggLimitSortColumn {
                         match value {
                             "columnIndex" | "column_index" => Ok(GeneratedField::ColumnIndex),
                             "descending" => Ok(GeneratedField::Descending),
+                            "nullsFirst" | "nulls_first" => Ok(GeneratedField::NullsFirst),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -214,6 +224,7 @@ impl<'de> serde::Deserialize<'de> for AggLimitSortColumn {
             {
                 let mut column_index__ = None;
                 let mut descending__ = None;
+                let mut nulls_first__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::ColumnIndex => {
@@ -230,11 +241,18 @@ impl<'de> serde::Deserialize<'de> for AggLimitSortColumn {
                             }
                             descending__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::NullsFirst => {
+                            if nulls_first__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nullsFirst"));
+                            }
+                            nulls_first__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(AggLimitSortColumn {
                     column_index: column_index__.unwrap_or_default(),
                     descending: descending__.unwrap_or_default(),
+                    nulls_first: nulls_first__.unwrap_or_default(),
                 })
             }
         }

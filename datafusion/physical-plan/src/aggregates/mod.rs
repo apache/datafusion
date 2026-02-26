@@ -594,11 +594,11 @@ pub struct LimitOptions {
     /// This is used for TopK aggregation to maintain a priority queue with the correct ordering
     pub descending: Option<bool>,
     /// Optional sort columns for general TopK emit. Each entry is
-    /// (column_index_in_output_schema, descending). When set,
+    /// (column_index_in_output_schema, sort_options). When set,
     /// GroupedHashAggregateStream will apply a lexicographic partial sort + take
     /// after emitting all groups, returning only the top-K rows.
     /// Supports multi-column sort (e.g. ORDER BY COUNT(*) DESC, name ASC).
-    pub topk_sort_columns: Option<Vec<(usize, bool)>>,
+    pub topk_sort_columns: Option<Vec<(usize, SortOptions)>>,
 }
 
 impl LimitOptions {
@@ -621,8 +621,11 @@ impl LimitOptions {
     }
 
     /// Create a new LimitOptions for general top-K emit with multi-column sort.
-    /// Each entry in `sort_columns` is `(column_index_in_output_schema, descending)`.
-    pub fn new_with_topk_emit(limit: usize, sort_columns: Vec<(usize, bool)>) -> Self {
+    /// Each entry in `sort_columns` is `(column_index_in_output_schema, sort_options)`.
+    pub fn new_with_topk_emit(
+        limit: usize,
+        sort_columns: Vec<(usize, SortOptions)>,
+    ) -> Self {
         Self {
             limit,
             descending: None,
@@ -638,7 +641,7 @@ impl LimitOptions {
         self.descending
     }
 
-    pub fn topk_sort_columns(&self) -> Option<&[(usize, bool)]> {
+    pub fn topk_sort_columns(&self) -> Option<&[(usize, SortOptions)]> {
         self.topk_sort_columns.as_deref()
     }
 }
@@ -715,32 +718,16 @@ impl AggregateExec {
         // When topk_sort_columns is set, the AggregateExec will emit rows
         // already sorted by those columns. Declare this output ordering so
         // downstream SortExec can be eliminated.
-        // Only declare ordering for single-output-partition modes.
-        // For FinalPartitioned/SinglePartitioned, output is sorted per-partition
-        // but declaring ordering causes EnforceSorting to replace
-        // SortPreservingMergeExec with CoalescePartitionsExec, losing the
-        // merge-sort and producing wrong results.
-        let can_declare_ordering = !matches!(
-            self.mode,
-            AggregateMode::FinalPartitioned | AggregateMode::SinglePartitioned
-        );
-        let cache = if can_declare_ordering
-            && let Some(ref opts) = limit_options
+        let cache = if let Some(ref opts) = limit_options
             && let Some(sort_cols) = opts.topk_sort_columns()
             && !sort_cols.is_empty()
         {
             let schema = self.schema();
-            let sort_exprs = sort_cols.iter().map(|&(col_idx, descending)| {
+            let sort_exprs = sort_cols.iter().map(|&(col_idx, options)| {
                 let field = schema.field(col_idx);
                 let expr: Arc<dyn PhysicalExpr> =
                     Arc::new(Column::new(field.name(), col_idx));
-                PhysicalSortExpr::new(
-                    expr,
-                    SortOptions {
-                        descending,
-                        nulls_first: !descending,
-                    },
-                )
+                PhysicalSortExpr::new(expr, options)
             });
             let mut eq_properties = self.cache.equivalence_properties().clone();
             eq_properties.add_orderings([sort_exprs]);
@@ -1343,13 +1330,10 @@ impl DisplayAs for AggregateExec {
                     if let Some(cols) = config.topk_sort_columns() {
                         let sort_strs: Vec<String> = cols
                             .iter()
-                            .map(|&(idx, desc)| {
+                            .map(|&(idx, opts)| {
                                 let name = self.schema.field(idx).name();
-                                if desc {
-                                    format!("{name} DESC")
-                                } else {
-                                    format!("{name} ASC")
-                                }
+                                let dir = if opts.descending { "DESC" } else { "ASC" };
+                                format!("{name} {dir}")
                             })
                             .collect();
                         write!(f, ", topk=[{}]", sort_strs.join(", "))?;
@@ -1417,13 +1401,10 @@ impl DisplayAs for AggregateExec {
                     if let Some(cols) = config.topk_sort_columns() {
                         let sort_strs: Vec<String> = cols
                             .iter()
-                            .map(|&(idx, desc)| {
+                            .map(|&(idx, opts)| {
                                 let name = self.schema.field(idx).name();
-                                if desc {
-                                    format!("{name} DESC")
-                                } else {
-                                    format!("{name} ASC")
-                                }
+                                let dir = if opts.descending { "DESC" } else { "ASC" };
+                                format!("{name} {dir}")
                             })
                             .collect();
                         writeln!(f, "topk=[{}]", sort_strs.join(", "))?;
@@ -1501,6 +1482,27 @@ impl ExecutionPlan for AggregateExec {
         )?;
         me.limit_options = self.limit_options.clone();
         me.dynamic_filter = self.dynamic_filter.clone();
+
+        // If topk_sort_columns is set, the output is sorted by those columns.
+        // Declare this ordering in the cache so downstream operators (e.g.
+        // SortPreservingMergeExec) can rely on it.
+        if let Some(ref opts) = me.limit_options
+            && let Some(sort_cols) = opts.topk_sort_columns()
+            && !sort_cols.is_empty()
+        {
+            let schema = me.schema();
+            let sort_exprs = sort_cols.iter().map(|&(col_idx, options)| {
+                let field = schema.field(col_idx);
+                let expr: Arc<dyn PhysicalExpr> =
+                    Arc::new(Column::new(field.name(), col_idx));
+                PhysicalSortExpr::new(expr, options)
+            });
+            let mut eq_properties = me.cache.equivalence_properties().clone();
+            eq_properties.add_orderings([sort_exprs]);
+            me.cache = Arc::new(
+                PlanProperties::clone(&me.cache).with_eq_properties(eq_properties),
+            );
+        }
 
         Ok(Arc::new(me))
     }

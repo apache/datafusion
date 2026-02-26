@@ -1249,6 +1249,7 @@ message MaybePhysicalSortExprs {
 message AggLimitSortColumn {
   uint64 column_index = 1;
   bool descending = 2;
+  bool nulls_first = 3;
 }
 
 message AggLimit {

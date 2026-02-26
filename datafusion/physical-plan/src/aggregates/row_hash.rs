@@ -467,9 +467,9 @@ pub(crate) struct GroupedHashAggregateStream {
 /// Supports multi-column lexicographic sort.
 #[derive(Debug, Clone)]
 struct TopKEmit {
-    /// Sort columns: each entry is (column_index_in_output_schema, descending).
+    /// Sort columns: each entry is (column_index_in_output_schema, sort_options).
     /// Used for lexicographic sort when selecting top-K rows.
-    sort_columns: Vec<(usize, bool)>,
+    sort_columns: Vec<(usize, SortOptions)>,
     /// Maximum number of rows to emit
     limit: usize,
 }
@@ -1263,18 +1263,15 @@ impl GroupedHashAggregateStream {
     /// `lexsort_to_indices` with a limit for efficient heap-based partial sort.
     /// Supports multi-column sort keys.
     fn apply_topk(batch: RecordBatch, topk: &TopKEmit) -> Result<RecordBatch> {
-        if batch.num_rows() <= topk.limit {
+        if batch.num_rows() <= 1 {
             return Ok(batch);
         }
         let sort_columns: Vec<SortColumn> = topk
             .sort_columns
             .iter()
-            .map(|&(col_idx, descending)| SortColumn {
+            .map(|&(col_idx, options)| SortColumn {
                 values: Arc::clone(batch.column(col_idx)),
-                options: Some(SortOptions {
-                    descending,
-                    nulls_first: !descending,
-                }),
+                options: Some(options),
             })
             .collect();
         let indices = lexsort_to_indices(&sort_columns, Some(topk.limit))?;
