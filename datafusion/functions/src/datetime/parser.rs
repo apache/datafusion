@@ -16,6 +16,7 @@
 // under the License.
 
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::parsers::DateTimeParserType;
 use dyn_eq::DynEq;
 use dyn_hash::DynHash;
 use std::fmt::Debug;
@@ -64,21 +65,20 @@ pub fn get_date_time_parser(config_options: &ConfigOptions) -> Box<dyn DateTimeP
     let parser_cfg = config_options.execution.date_time_parser.as_ref();
 
     match parser_cfg {
-        Some(p) => match p.as_str() {
-            "chrono" => {
+        Some(p) => match p {
+            DateTimeParserType::Chrono => {
                 Box::new(chrono::ChronoDateTimeParser::new()) as Box<dyn DateTimeParser>
             }
             #[cfg(feature = "jiff")]
-            "jiff" => {
+            DateTimeParserType::Jiff => {
                 Box::new(jiff::JiffDateTimeParser::new()) as Box<dyn DateTimeParser>
             }
             #[cfg(not(feature = "jiff"))]
-            "jiff" => {
+            DateTimeParserType::Jiff => {
                 panic!(
                     "jiff parser requested but 'jiff' feature is not enabled. Enable with --features jiff"
                 );
             }
-            _ => panic!("Unknown/unsupported date time parser: {p}"),
         },
         None => Box::new(chrono::ChronoDateTimeParser::new()) as Box<dyn DateTimeParser>,
     }
@@ -586,7 +586,7 @@ pub mod jiff {
                         let zoned = timezone
                             .to_owned()
                             .into_ambiguous_zoned(datetime)
-                            .disambiguate(Disambiguation::Compatible);
+                            .disambiguate(Disambiguation::Reject);
 
                         match zoned {
                             Ok(z) => return Ok(z),

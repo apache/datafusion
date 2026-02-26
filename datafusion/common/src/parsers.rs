@@ -17,10 +17,10 @@
 
 //! Interval parsing logic
 
+use crate::DataFusionError;
+use crate::config::{ConfigField, Visit};
 use std::fmt::Display;
 use std::str::FromStr;
-
-use crate::DataFusionError;
 
 /// Readable file compression type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -73,3 +73,48 @@ impl CompressionTypeVariant {
         !matches!(self, &Self::UNCOMPRESSED)
     }
 }
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DateTimeParserType {
+    #[default]
+    Chrono,
+    Jiff,
+}
+
+impl ConfigField for DateTimeParserType {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, _: &str, value: &str) -> crate::Result<()> {
+        *self = DateTimeParserType::from_str(value)?;
+        Ok(())
+    }
+}
+
+impl FromStr for DateTimeParserType {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s = s.to_uppercase();
+        match s.as_str() {
+            "CHRONO" => Ok(Self::Chrono),
+            "JIFF" => Ok(Self::Jiff),
+            _ => Err(DataFusionError::NotImplemented(format!(
+                "Unsupported datetime parser type {s}"
+            ))),
+        }
+    }
+}
+
+impl Display for DateTimeParserType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let str = match self {
+            Self::Chrono => "chrono",
+            Self::Jiff => "jiff",
+        };
+        write!(f, "{str}")
+    }
+}
+
+impl DateTimeParserType {}

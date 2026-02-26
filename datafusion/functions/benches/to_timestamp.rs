@@ -24,6 +24,7 @@ use arrow::compute::cast;
 use arrow::datatypes::{DataType, Field, TimeUnit};
 use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::parsers::DateTimeParserType;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::datetime::parser::DateTimeParser;
 use datafusion_functions::datetime::parser::chrono::ChronoDateTimeParser;
@@ -189,32 +190,18 @@ fn criterion_benchmark(c: &mut Criterion) {
                         izip!(inputs.iter(), format3.iter(), jiffformat3.iter())
                     {
                         let _ = black_box(match parser {
-                            "chrono" => {
-                                let t = datetime_parser
-                                    .string_to_timestamp_nanos_formatted(
-                                        "UTC",
-                                        input.unwrap(),
-                                        &[format3.unwrap()],
-                                    );
-                                if t.is_err() {
-                                    println!("Error: {t:?}");
-                                }
-
-                                t
-                            }
-                            "jiff" => {
-                                let t = datetime_parser
-                                    .string_to_timestamp_nanos_formatted(
-                                        "UTC",
-                                        input.unwrap(),
-                                        &[jiff_format3.unwrap()],
-                                    );
-                                if t.is_err() {
-                                    println!("Error: {t:?}");
-                                }
-
-                                t
-                            }
+                            "chrono" => datetime_parser
+                                .string_to_timestamp_nanos_formatted(
+                                    "UTC",
+                                    input.unwrap(),
+                                    &[format3.unwrap()],
+                                ),
+                            "jiff" => datetime_parser
+                                .string_to_timestamp_nanos_formatted(
+                                    "UTC",
+                                    input.unwrap(),
+                                    &[jiff_format3.unwrap()],
+                                ),
                             _ => unreachable!(),
                         });
                     }
@@ -315,7 +302,8 @@ fn criterion_benchmark(c: &mut Criterion) {
         c.bench_function(&format!("to_timestamp_no_formats_utf8_{parser}"), |b| {
             let mut config_options = ConfigOptions::default();
             if parser == "jiff" {
-                config_options.execution.date_time_parser = Some("jiff".to_string());
+                config_options.execution.date_time_parser =
+                    Some(DateTimeParserType::Jiff);
             }
             let config = Arc::new(config_options.clone());
             let to_timestamp_udf = to_timestamp(&config_options);
@@ -344,7 +332,8 @@ fn criterion_benchmark(c: &mut Criterion) {
             |b| {
                 let mut config_options = ConfigOptions::default();
                 if parser == "jiff" {
-                    config_options.execution.date_time_parser = Some("jiff".to_string());
+                    config_options.execution.date_time_parser =
+                        Some(DateTimeParserType::Jiff);
                 }
                 let config = Arc::new(config_options.clone());
                 let to_timestamp_udf = to_timestamp(&config_options);
@@ -372,7 +361,8 @@ fn criterion_benchmark(c: &mut Criterion) {
         c.bench_function(&format!("to_timestamp_no_formats_utf8view_{parser}"), |b| {
             let mut config_options = ConfigOptions::default();
             if parser == "jiff" {
-                config_options.execution.date_time_parser = Some("jiff".to_string());
+                config_options.execution.date_time_parser =
+                    Some(DateTimeParserType::Jiff);
             }
             let config = Arc::new(config_options.clone());
             let to_timestamp_udf = to_timestamp(&config_options);
@@ -398,7 +388,8 @@ fn criterion_benchmark(c: &mut Criterion) {
         c.bench_function(&format!("to_timestamp_with_formats_utf8_{parser}"), |b| {
             let mut config_options = ConfigOptions::default();
             if parser == "jiff" {
-                config_options.execution.date_time_parser = Some("jiff".to_string());
+                config_options.execution.date_time_parser =
+                    Some(DateTimeParserType::Jiff);
             }
             let config = Arc::new(config_options.clone());
             let to_timestamp_udf = to_timestamp(&config_options);
@@ -460,7 +451,8 @@ fn criterion_benchmark(c: &mut Criterion) {
             |b| {
                 let mut config_options = ConfigOptions::default();
                 if parser == "jiff" {
-                    config_options.execution.date_time_parser = Some("jiff".to_string());
+                    config_options.execution.date_time_parser =
+                        Some(DateTimeParserType::Jiff);
                 }
                 let config = Arc::new(config_options.clone());
                 let to_timestamp_udf = to_timestamp(&config_options);
@@ -536,7 +528,8 @@ fn criterion_benchmark(c: &mut Criterion) {
             |b| {
                 let mut config_options = ConfigOptions::default();
                 if parser == "jiff" {
-                    config_options.execution.date_time_parser = Some("jiff".to_string());
+                    config_options.execution.date_time_parser =
+                        Some(DateTimeParserType::Jiff);
                 }
                 let config = Arc::new(config_options.clone());
                 let to_timestamp_udf = to_timestamp(&config_options);

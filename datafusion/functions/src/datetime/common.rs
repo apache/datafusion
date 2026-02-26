@@ -179,9 +179,9 @@ where
                     }
                 }
 
-                let a = a.as_ref();
-                // ASK: Why do we trust `a` to be non-null at this point?
-                let a = unwrap_or_internal_err!(a);
+                let Some(a) = a else {
+                    return Ok(ColumnarValue::Scalar(ScalarValue::Null));
+                };
 
                 let ret = match op(a, &vals) {
                     Ok(r) => {
@@ -294,11 +294,24 @@ where
                 for arg in args {
                     match arg {
                         ColumnarValue::Array(a) => match a.data_type() {
-                            DataType::Utf8View => v.push(a.as_string_view().value(pos)),
-                            DataType::LargeUtf8 => {
-                                v.push(a.as_string::<i64>().value(pos))
+                            DataType::Utf8View => {
+                                let sa = a.as_string_view();
+                                if !sa.is_null(pos) {
+                                    v.push(sa.value(pos))
+                                }
                             }
-                            DataType::Utf8 => v.push(a.as_string::<i32>().value(pos)),
+                            DataType::LargeUtf8 => {
+                                let sa = a.as_string::<i64>();
+                                if !sa.is_null(pos) {
+                                    v.push(sa.value(pos))
+                                }
+                            }
+                            DataType::Utf8 => {
+                                let sa = a.as_string::<i32>();
+                                if !sa.is_null(pos) {
+                                    v.push(sa.value(pos))
+                                }
+                            }
                             other => {
                                 return exec_err!(
                                     "Unexpected type encountered '{other}'"

@@ -26,7 +26,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::format::DEFAULT_CAST_OPTIONS;
 use datafusion_common::{Result, arrow_err, exec_err, internal_datafusion_err};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -147,6 +147,10 @@ impl ScalarUDFImpl for ToDateFunc {
 
     fn signature(&self) -> &Signature {
         &self.signature
+    }
+
+    fn with_updated_config(&self, config: &ConfigOptions) -> Option<ScalarUDF> {
+        Some(Self::new_with_config(config).into())
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
@@ -414,8 +418,7 @@ mod tests {
                         tc.name, tc.formatted_date, tc.format_str
                     );
                 }
-                e => {
-                    println!("e was {e:?}");
+                _ => {
                     panic!(
                         "Could not convert '{}' with format string '{}' to Date",
                         tc.formatted_date, tc.format_str

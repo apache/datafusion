@@ -506,7 +506,7 @@ impl ScalarUDFImpl for ToTimestampFunc {
                 &args,
                 "to_timestamp",
                 &tz,
-                &self.parser,
+                self.parser.as_ref(),
             ),
             other => {
                 exec_err!("Unsupported data type {other} for function to_timestamp")
@@ -580,7 +580,7 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
                 &args,
                 "to_timestamp_seconds",
                 &self.timezone,
-                &self.parser,
+                self.parser.as_ref(),
             ),
             other => {
                 exec_err!(
@@ -657,7 +657,7 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
                 &args,
                 "to_timestamp_millis",
                 &self.timezone,
-                &self.parser,
+                self.parser.as_ref(),
             ),
             other => {
                 exec_err!(
@@ -734,7 +734,7 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
                 &args,
                 "to_timestamp_micros",
                 &self.timezone,
-                &self.parser,
+                self.parser.as_ref(),
             ),
             other => {
                 exec_err!(
@@ -811,7 +811,7 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
                 &args,
                 "to_timestamp_nanos",
                 &self.timezone,
-                &self.parser,
+                self.parser.as_ref(),
             ),
             other => {
                 exec_err!(
@@ -827,12 +827,11 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
     }
 }
 
-#[expect(clippy::borrowed_box)]
 fn to_timestamp_impl<T: ArrowTimestampType + ScalarType<i64>>(
     args: &[ColumnarValue],
     name: &str,
     timezone: &Option<Arc<str>>,
-    parser: &Box<dyn DateTimeParser>,
+    parser: &dyn DateTimeParser,
 ) -> Result<ColumnarValue> {
     let factor = match T::UNIT {
         Second => 1_000_000_000,
@@ -881,7 +880,7 @@ mod tests {
 
     fn to_timestamp(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         let timezone: Option<Arc<str>> = Some("UTC".into());
-        let parser = Box::new(ChronoDateTimeParser::new()) as Box<dyn DateTimeParser>;
+        let parser = ChronoDateTimeParser::new();
 
         to_timestamp_impl::<TimestampNanosecondType>(
             args,
@@ -894,7 +893,7 @@ mod tests {
     /// to_timestamp_millis SQL function
     fn to_timestamp_millis(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         let timezone: Option<Arc<str>> = Some("UTC".into());
-        let parser = Box::new(ChronoDateTimeParser::new()) as Box<dyn DateTimeParser>;
+        let parser = ChronoDateTimeParser::new();
 
         to_timestamp_impl::<TimestampMillisecondType>(
             args,
@@ -907,7 +906,7 @@ mod tests {
     /// to_timestamp_micros SQL function
     fn to_timestamp_micros(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         let timezone: Option<Arc<str>> = Some("UTC".into());
-        let parser = Box::new(ChronoDateTimeParser::new()) as Box<dyn DateTimeParser>;
+        let parser = ChronoDateTimeParser::new();
 
         to_timestamp_impl::<TimestampMicrosecondType>(
             args,
@@ -920,7 +919,7 @@ mod tests {
     /// to_timestamp_nanos SQL function
     fn to_timestamp_nanos(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         let timezone: Option<Arc<str>> = Some("UTC".into());
-        let parser = Box::new(ChronoDateTimeParser::new()) as Box<dyn DateTimeParser>;
+        let parser = ChronoDateTimeParser::new();
 
         to_timestamp_impl::<TimestampNanosecondType>(
             args,
@@ -933,7 +932,8 @@ mod tests {
     /// to_timestamp_seconds SQL function
     fn to_timestamp_seconds(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         let timezone: Option<Arc<str>> = Some("UTC".into());
-        let parser = Box::new(ChronoDateTimeParser::new()) as Box<dyn DateTimeParser>;
+        let parser = ChronoDateTimeParser::new();
+
         to_timestamp_impl::<TimestampSecondType>(
             args,
             "to_timestamp_seconds",

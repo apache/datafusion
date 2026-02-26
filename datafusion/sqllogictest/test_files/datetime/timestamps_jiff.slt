@@ -77,12 +77,6 @@ SELECT to_timestamp(null, '%+'), to_timestamp(0, '%s'), to_timestamp(1926632005,
 ----
 NULL 1970-01-01T00:00:00 2031-01-19T23:33:25 1970-01-01T00:00:01 1969-12-31T23:59:59 1969-12-31T23:59:59
 
-# verify timestamp data with formatting options
-query PPPPPP
-SELECT to_timestamp(null, '%+'), to_timestamp(0, '%s'), to_timestamp(1926632005, '%s'), to_timestamp(1, '%+', '%s'), to_timestamp(-1, '%c', '%+', '%s'), to_timestamp(0-1, '%c', '%+', '%s')
-----
-NULL 1970-01-01T00:00:00 2031-01-19T23:33:25 1970-01-01T00:00:01 1969-12-31T23:59:59 1969-12-31T23:59:59
-
 # verify timestamp output types with formatting options
 query TTT
 SELECT arrow_typeof(to_timestamp(1, '%c', '%s')), arrow_typeof(to_timestamp(null, '%+', '%s')), arrow_typeof(to_timestamp('2023-01-10 12:34:56.000', '%Y-%m-%d %H:%M:%S%.f'))
@@ -279,6 +273,12 @@ drop table ts_data_nanos
 
 statement ok
 drop table ts_data_micros
+
+statement ok
+drop table ts_largeutf8_data
+
+statement ok
+drop table ts_utf8view_data
 
 statement ok
 drop table ts_data_millis

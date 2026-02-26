@@ -70,7 +70,6 @@ make_udf_function_with_config!(now::NowFunc, now);
 // functions with varargs currently
 
 pub mod expr_fn {
-    use datafusion_common::config::ConfigOptions;
     use datafusion_expr::Expr;
 
     export_functions!((
@@ -107,6 +106,11 @@ pub mod expr_fn {
         now,
         "returns the current timestamp in nanoseconds, using the same value for all instances of now() in same statement",
         @config
+    ),
+    (
+        to_date,
+        "converts a string and optional formats to a `Date32`",
+        @config args,
     ),
     (
         to_local_time,
@@ -220,57 +224,6 @@ pub mod expr_fn {
     /// ```
     pub fn to_char(datetime: Expr, format: Expr) -> Expr {
         super::to_char().call(vec![datetime, format])
-    }
-
-    /// ```ignore
-    /// # use std::sync::Arc;
-    ///
-    /// # use datafusion_common::Result;
-    ///
-    /// # #[tokio::main]
-    /// # async fn main() -> Result<()> {
-    /// #  use arrow::array::StringArray;
-    /// #  use arrow::datatypes::{DataType, Field, Schema};
-    /// #  use arrow::record_batch::RecordBatch;
-    /// #  use datafusion_expr::col;
-    /// #  use datafusion::prelude::*;
-    /// #  use datafusion_functions::expr_fn::to_date;
-    ///
-    ///     // define a schema.
-    ///     let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
-    ///
-    ///     // define data.
-    ///     let batch = RecordBatch::try_new(
-    ///         schema,
-    ///         vec![Arc::new(StringArray::from(vec![
-    ///             "2020-09-08T13:42:29Z",
-    ///             "2020-09-08T13:42:29.190855-05:00",
-    ///             "2020-08-09 12:13:29",
-    ///             "2020-01-02",
-    ///         ]))],
-    ///     )?;
-    ///
-    ///     // declare a new context. In spark API, this corresponds to a new spark SQLsession
-    ///     let ctx = SessionContext::new();
-    ///
-    ///     // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
-    ///     ctx.register_batch("t", batch)?;
-    ///     let df = ctx.table("t").await?;
-    ///
-    ///     // use to_date function to convert col 'a' to timestamp type using the default parsing
-    ///     let df = df.with_column("a", to_date(vec![col("a")]))?;
-    ///
-    ///     let df = df.select_columns(&["a"])?;
-    ///
-    ///     // print the results
-    ///     df.show().await?;
-    ///
-    ///     # Ok(())
-    /// # }
-    /// ```
-    pub fn to_date(args: Vec<Expr>) -> Expr {
-        let config = ConfigOptions::default();
-        super::to_date(&config).call(args)
     }
 }
 
