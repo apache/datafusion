@@ -209,7 +209,7 @@ impl CredentialsFromConfig {
 
 #[derive(Debug)]
 struct S3CredentialProvider {
-    credentials: aws_credential_types::provider::SharedCredentialsProvider,
+    credentials: SharedCredentialsProvider,
 }
 
 #[async_trait]
