@@ -1176,14 +1176,14 @@ mod tests {
             todo!()
         }
 
-        fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
             if partition.is_some() {
-                return Ok(Statistics::new_unknown(self.schema().as_ref()));
+                return Ok(Arc::new(Statistics::new_unknown(self.schema().as_ref())));
             }
             match self {
                 Self::Panic => panic!("expected panic"),
                 Self::Error => Err(internal_datafusion_err!("expected error")),
-                Self::Ok => Ok(Statistics::new_unknown(self.schema().as_ref())),
+                Self::Ok => Ok(Arc::new(Statistics::new_unknown(self.schema().as_ref()))),
             }
         }
     }

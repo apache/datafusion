@@ -156,7 +156,7 @@ pub trait DataSource: Send + Sync + Debug {
 
     /// Returns statistics for a specific partition, or aggregate statistics
     /// across all partitions if `partition` is `None`.
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics>;
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>>;
 
     /// Return a copy of this DataSource with a new fetch limit
     fn with_fetch(&self, _limit: Option<usize>) -> Option<Arc<dyn DataSource>>;
@@ -318,7 +318,7 @@ impl ExecutionPlan for DataSourceExec {
         Some(self.data_source.metrics().clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         self.data_source.partition_statistics(partition)
     }
 

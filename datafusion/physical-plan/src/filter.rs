@@ -387,7 +387,7 @@ impl FilterExec {
         let schema = input.schema();
         let stats = Self::statistics_helper(
             &schema,
-            input.partition_statistics(None)?,
+            Arc::unwrap_or_clone(input.partition_statistics(None)?),
             predicate,
             default_selectivity,
         )?;
@@ -542,15 +542,15 @@ impl ExecutionPlan for FilterExec {
 
     /// The output statistics of a filtering operation can be estimated if the
     /// predicate's selectivity value can be determined for the incoming data.
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        let input_stats = self.input.partition_statistics(partition)?;
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+        let input_stats = Arc::unwrap_or_clone(self.input.partition_statistics(partition)?);
         let stats = Self::statistics_helper(
             &self.input.schema(),
             input_stats,
             self.predicate(),
             self.default_selectivity,
         )?;
-        Ok(stats.project(self.projection.as_ref()))
+        Ok(Arc::new(stats.project(self.projection.as_ref())))
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {
@@ -1323,7 +1323,7 @@ mod tests {
         ];
         let _ = exp_col_stats
             .into_iter()
-            .zip(statistics.column_statistics)
+            .zip(statistics.column_statistics.clone())
             .map(|(expected, actual)| {
                 if let Some(val) = actual.min_value.get_value() {
                     if val.data_type().is_floating() {
@@ -1394,7 +1394,7 @@ mod tests {
             )),
         ));
         // Since filter predicate passes all entries, statistics after filter shouldn't change.
-        let expected = input.partition_statistics(None)?.column_statistics;
+        let expected = input.partition_statistics(None)?.column_statistics.clone();
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, input)?);
         let statistics = filter.partition_statistics(None)?;
@@ -1577,7 +1577,7 @@ mod tests {
             }],
         };
 
-        assert_eq!(filter_statistics, expected_filter_statistics);
+        assert_eq!(*filter_statistics, expected_filter_statistics);
 
         Ok(())
     }

@@ -244,7 +244,7 @@ impl ExecutionPlan for OutputRequirementExec {
         unreachable!();
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         self.input.partition_statistics(partition)
     }
 

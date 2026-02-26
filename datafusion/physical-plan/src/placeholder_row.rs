@@ -169,7 +169,7 @@ impl ExecutionPlan for PlaceholderRowExec {
         Ok(Box::pin(cooperative(ms)))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         let batches = self
             .data()
             .expect("Create single row placeholder RecordBatch should not fail");
@@ -180,11 +180,11 @@ impl ExecutionPlan for PlaceholderRowExec {
             None => vec![batches; self.partitions],
         };
 
-        Ok(common::compute_record_batch_statistics(
+        Ok(Arc::new(common::compute_record_batch_statistics(
             &batches,
             &self.schema,
             None,
-        ))
+        )))
     }
 }
 
