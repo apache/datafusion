@@ -30,7 +30,7 @@ use datafusion_expr::EmitTo;
 
 pub mod multi_group_by;
 
-mod row;
+pub mod row;
 mod single_group_by;
 use datafusion_physical_expr::binary_map::OutputType;
 use multi_group_by::GroupValuesColumn;
