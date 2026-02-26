@@ -446,3 +446,47 @@ impl RecordBatchStream for WindowAggStream {
         Arc::clone(&self.schema)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test::TestMemoryExec;
+    use crate::windows::create_window_expr;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::ScalarValue;
+    use datafusion_expr::{
+        WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
+    };
+    use datafusion_functions_aggregate::count::count_udaf;
+
+    #[test]
+    fn test_window_agg_cardinality_effect() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
+        let input: Arc<dyn ExecutionPlan> =
+            Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?);
+        let args = vec![crate::expressions::col("a", &schema)?];
+        let window_expr = create_window_expr(
+            &WindowFunctionDefinition::AggregateUDF(count_udaf()),
+            "count(a)".to_string(),
+            &args,
+            &[],
+            &[],
+            Arc::new(WindowFrame::new_bounds(
+                WindowFrameUnits::Rows,
+                WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+                WindowFrameBound::CurrentRow,
+            )),
+            Arc::clone(&schema),
+            false,
+            false,
+            None,
+        )?;
+
+        let window = WindowAggExec::try_new(vec![window_expr], input, true)?;
+        assert!(matches!(
+            window.cardinality_effect(),
+            CardinalityEffect::Equal
+        ));
+        Ok(())
+    }
+}

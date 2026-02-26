@@ -1249,6 +1249,7 @@ mod tests {
     use std::time::Duration;
 
     use crate::common::collect;
+    use crate::execution_plan::CardinalityEffect;
     use crate::expressions::PhysicalSortExpr;
     use crate::projection::{ProjectionExec, ProjectionExpr};
     use crate::streaming::{PartitionStream, StreamingTableExec};
@@ -1831,6 +1832,24 @@ mod tests {
         +----+------+-------+
         ");
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_bounded_window_agg_cardinality_effect() -> Result<()> {
+        let schema = test_schema();
+        let input: Arc<dyn ExecutionPlan> =
+            Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?);
+        let plan = bounded_window_exec_pb_latent_range(input, 1, "hash", "sn")?;
+        let plan = plan
+            .as_any()
+            .downcast_ref::<BoundedWindowAggExec>()
+            .expect("expected BoundedWindowAggExec");
+
+        assert!(matches!(
+            plan.cardinality_effect(),
+            CardinalityEffect::Equal
+        ));
         Ok(())
     }
 }

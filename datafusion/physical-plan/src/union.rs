@@ -344,6 +344,8 @@ impl ExecutionPlan for UnionExec {
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {
+        // Union combines rows from multiple inputs, so output rows are not tied
+        // to any single input and can only be constrained as greater-or-equal.
         CardinalityEffect::GreaterEqual
     }
 
@@ -1181,5 +1183,26 @@ mod tests {
                 "UnionExec/InterleaveExec requires all inputs to have the same number of fields"
             )
         );
+    }
+
+    #[test]
+    fn test_union_cardinality_effect() -> Result<()> {
+        let schema = create_test_schema()?;
+        let input1: Arc<dyn ExecutionPlan> =
+            Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?);
+        let input2: Arc<dyn ExecutionPlan> =
+            Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?);
+
+        let union = UnionExec::try_new(vec![input1, input2])?;
+        let union = union
+            .as_any()
+            .downcast_ref::<UnionExec>()
+            .expect("expected UnionExec for multiple inputs");
+
+        assert!(matches!(
+            union.cardinality_effect(),
+            CardinalityEffect::GreaterEqual
+        ));
+        Ok(())
     }
 }
