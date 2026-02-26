@@ -37,7 +37,7 @@ use crate::{PhysicalExpr, aggregates, metrics};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 
 use arrow::array::*;
-use arrow::compute::{SortOptions, sort_to_indices, take};
+use arrow::compute::{SortOptions, sort_to_indices, take_record_batch};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{
     DataFusionError, Result, assert_eq_or_internal_err, assert_or_internal_err,
@@ -1267,12 +1267,7 @@ impl GroupedHashAggregateStream {
             nulls_first: !topk.descending,
         };
         let indices = sort_to_indices(sort_column, Some(options), Some(topk.limit))?;
-        let columns = batch
-            .columns()
-            .iter()
-            .map(|col| take(col, &indices, None).map_err(DataFusionError::from))
-            .collect::<Result<Vec<_>>>()?;
-        Ok(RecordBatch::try_new(batch.schema(), columns)?)
+        take_record_batch(&batch, &indices).map_err(|e| e.into())
     }
 
     /// Updates skip aggregation probe state.
