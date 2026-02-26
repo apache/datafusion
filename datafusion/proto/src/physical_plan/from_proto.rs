@@ -495,6 +495,32 @@ pub fn parse_physical_expr_with_converter(
                 hash_expr.description.clone(),
             ))
         }
+        ExprType::DynamicFilter(dynamic_filter) => {
+            use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
+
+            let children = parse_physical_exprs(
+                &dynamic_filter.children,
+                ctx,
+                input_schema,
+                codec,
+                proto_converter,
+            )?;
+
+            let initial_expr = parse_required_physical_expr(
+                dynamic_filter.initial_expr.as_deref(),
+                ctx,
+                "initial_expr",
+                input_schema,
+                codec,
+                proto_converter,
+            )?;
+
+            // Constructor signature is: new(children, inner)
+            Arc::new(DynamicFilterPhysicalExpr::new(
+                children,
+                initial_expr,
+            ))
+        }
         ExprType::Extension(extension) => {
             let inputs: Vec<Arc<dyn PhysicalExpr>> = extension
                 .inputs

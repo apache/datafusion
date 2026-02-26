@@ -52,6 +52,7 @@ use datafusion_functions_table::generate_series::{
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::async_scalar_function::AsyncFuncExpr;
+use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
 use datafusion_physical_expr::{LexOrdering, LexRequirement, PhysicalExprRef};
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, LimitOptions, PhysicalGroupBy,
@@ -1391,7 +1392,8 @@ impl protobuf::PhysicalPlanNode {
         } else {
             None
         };
-        Ok(Arc::new(HashJoinExec::try_new(
+
+        let mut hash_join = HashJoinExec::try_new(
             left,
             right,
             on,
@@ -1401,7 +1403,26 @@ impl protobuf::PhysicalPlanNode {
             partition_mode,
             null_equality.into(),
             hashjoin.null_aware,
-        )?))
+        )?;
+
+        // Deserialize dynamic_filter if present
+        if let Some(dynamic_filter_proto) = &hashjoin.dynamic_filter {
+            // We need to create a schema for deserializing the dynamic filter expression
+            // The dynamic filter applies to the right (probe) side
+            let right_schema = hash_join.right().schema();
+
+            let dynamic_filter_expr = proto_converter.proto_to_physical_expr(
+                dynamic_filter_proto,
+                ctx,
+                right_schema.as_ref(),
+                codec,
+            )?;
+
+            // Set the dynamic filter on the hash join
+            hash_join = hash_join.with_dynamic_filter(dynamic_filter_expr)?;
+        }
+
+        Ok(Arc::new(hash_join))
     }
 
     fn try_into_symmetric_hash_join_physical_plan(
@@ -2431,6 +2452,16 @@ impl protobuf::PhysicalPlanNode {
             PartitionMode::Auto => protobuf::PartitionMode::Auto,
         };
 
+        // Serialize dynamic_filter if present
+        let dynamic_filter = exec
+            .dynamic_filter_for_test()
+            .map(|filter| {
+                // Convert Arc<DynamicFilterPhysicalExpr> to Arc<dyn PhysicalExpr>
+                let expr: Arc<dyn PhysicalExpr> = filter.clone();
+                proto_converter.physical_expr_to_proto(&expr, codec)
+            })
+            .transpose()?;
+
         Ok(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::HashJoin(Box::new(
                 protobuf::HashJoinExecNode {
@@ -2445,6 +2476,7 @@ impl protobuf::PhysicalPlanNode {
                         v.iter().map(|x| *x as u32).collect::<Vec<u32>>()
                     }),
                     null_aware: exec.null_aware,
+                    dynamic_filter,
                 },
             ))),
         })
@@ -3869,9 +3901,19 @@ impl PhysicalProtoConverterExtension for DeduplicatingSerializer {
         // - session_id: random per serializer, prevents collisions when merging serializations
         // - ptr: unique address per Arc within a process
         // - pid: prevents collisions if serializer is shared across processes
+        //
+        // Special case for DynamicFilterPhysicalExpr: use inner Arc address instead of outer Arc.
+        // This ensures that remapped filters (which have different outer Arcs but share the same
+        // inner Arc for state synchronization) get the same expr_id and are properly deduplicated.
+        let ptr_to_hash = if let Some(dynamic_filter) = expr.as_any().downcast_ref::<DynamicFilterPhysicalExpr>() {
+            dynamic_filter.inner_id()
+        } else {
+            Arc::as_ptr(expr) as *const () as u64
+        };
+
         let mut hasher = DefaultHasher::new();
         self.session_id.hash(&mut hasher);
-        (Arc::as_ptr(expr) as *const () as u64).hash(&mut hasher);
+        ptr_to_hash.hash(&mut hasher);
         std::process::id().hash(&mut hasher);
         proto.expr_id = Some(hasher.finish());
 
@@ -3962,8 +4004,17 @@ impl PhysicalProtoConverterExtension for DeduplicatingDeserializer {
 /// on demand for each operation.
 ///
 /// [`DynamicFilterPhysicalExpr`]: https://docs.rs/datafusion-physical-expr/latest/datafusion_physical_expr/expressions/struct.DynamicFilterPhysicalExpr.html
-#[derive(Debug, Default, Clone, Copy)]
-pub struct DeduplicatingProtoConverter {}
+pub struct DeduplicatingProtoConverter {
+    serializer: DeduplicatingSerializer,
+}
+
+impl Default for DeduplicatingProtoConverter {
+    fn default() -> Self {
+        Self {
+            serializer: DeduplicatingSerializer::new(),
+        }
+    }
+}
 
 impl PhysicalProtoConverterExtension for DeduplicatingProtoConverter {
     fn proto_to_execution_plan(
@@ -3984,11 +4035,10 @@ impl PhysicalProtoConverterExtension for DeduplicatingProtoConverter {
     where
         Self: Sized,
     {
-        let serializer = DeduplicatingSerializer::new();
         protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             Arc::clone(plan),
             codec,
-            &serializer,
+            &self.serializer,
         )
     }
 
@@ -4011,8 +4061,7 @@ impl PhysicalProtoConverterExtension for DeduplicatingProtoConverter {
         expr: &Arc<dyn PhysicalExpr>,
         codec: &dyn PhysicalExtensionCodec,
     ) -> Result<protobuf::PhysicalExprNode> {
-        let serializer = DeduplicatingSerializer::new();
-        serializer.physical_expr_to_proto(expr, codec)
+        self.serializer.physical_expr_to_proto(expr, codec)
     }
 }
 
