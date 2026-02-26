@@ -633,7 +633,7 @@ physical_plan
 01)GlobalLimitExec: skip=1, fetch=2
 02)--SortPreservingMergeExec: [b@0 DESC], fetch=3
 03)----SortExec: TopK(fetch=3), expr=[b@0 DESC], preserve_partitioning=[true]
-04)------AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[sum(ordered_table.a)]
+04)------AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[sum(ordered_table.a)], lim=[3]
 05)--------RepartitionExec: partitioning=Hash([b@0], 4), input_partitions=4
 06)----------AggregateExec: mode=Partial, gby=[b@1 as b], aggr=[sum(ordered_table.a)]
 07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
