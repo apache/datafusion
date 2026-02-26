@@ -1272,12 +1272,17 @@ impl protobuf::PhysicalPlanNode {
 
         let agg = if let Some(limit_proto) = &hash_agg.limit {
             let limit = limit_proto.limit as usize;
-            let limit_options = match (limit_proto.descending, limit_proto.sort_column_index) {
-                (Some(descending), Some(sort_col)) => {
-                    LimitOptions::new_with_topk_emit(limit, descending, sort_col as usize)
-                }
-                (Some(descending), None) => LimitOptions::new_with_order(limit, descending),
-                _ => LimitOptions::new(limit),
+            let limit_options = if !limit_proto.topk_sort_columns.is_empty() {
+                let sort_cols: Vec<(usize, bool)> = limit_proto
+                    .topk_sort_columns
+                    .iter()
+                    .map(|sc| (sc.column_index as usize, sc.descending))
+                    .collect();
+                LimitOptions::new_with_topk_emit(limit, sort_cols)
+            } else if let Some(descending) = limit_proto.descending {
+                LimitOptions::new_with_order(limit, descending)
+            } else {
+                LimitOptions::new(limit)
             };
             agg.with_limit_options(Some(limit_options))
         } else {
@@ -2760,7 +2765,17 @@ impl protobuf::PhysicalPlanNode {
         let limit = exec.limit_options().map(|config| protobuf::AggLimit {
             limit: config.limit() as u64,
             descending: config.descending(),
-            sort_column_index: config.sort_column_index().map(|i| i as u64),
+            topk_sort_columns: config
+                .topk_sort_columns()
+                .map(|cols| {
+                    cols.iter()
+                        .map(|&(idx, desc)| protobuf::AggLimitSortColumn {
+                            column_index: idx as u64,
+                            descending: desc,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
         });
 
         Ok(protobuf::PhysicalPlanNode {

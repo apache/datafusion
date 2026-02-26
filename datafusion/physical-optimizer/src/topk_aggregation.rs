@@ -46,8 +46,7 @@ impl TopKAggregation {
 
     fn transform_agg(
         aggr: &AggregateExec,
-        order_by: &str,
-        order_desc: bool,
+        sort_columns: &[(String, bool)],
         limit: usize,
     ) -> Option<Arc<dyn ExecutionPlan>> {
         if aggr.filter_expr().iter().any(|e| e.is_some()) {
@@ -55,7 +54,12 @@ impl TopKAggregation {
         }
 
         // Check if this is ordering by an aggregate function (MIN/MAX)
+        // This path requires exactly one sort column.
         if let Some((field, desc)) = aggr.get_minmax_desc() {
+            if sort_columns.len() != 1 {
+                return None;
+            }
+            let (order_by, order_desc) = &sort_columns[0];
             // MIN/MAX path requires single group key and type support
             let (group_key, _group_key_alias) =
                 aggr.group_expr().expr().iter().exactly_one().ok()?;
@@ -65,22 +69,27 @@ impl TopKAggregation {
                 return None;
             }
             // ensure the sort direction matches aggregate function
-            if desc != order_desc {
+            if desc != *order_desc {
                 return None;
             }
             // ensure the sort is on the same field as the aggregate output
-            if order_by != field.name() {
+            if *order_by != *field.name() {
                 return None;
             }
             let new_aggr = AggregateExec::with_new_limit_options(
                 aggr,
-                Some(LimitOptions::new_with_order(limit, order_desc)),
+                Some(LimitOptions::new_with_order(limit, *order_desc)),
             );
             return Some(Arc::new(new_aggr));
         }
 
         if aggr.aggr_expr().is_empty() {
-            // DISTINCT path: GROUP BY without aggregates, ordering on group key
+            // DISTINCT path: GROUP BY without aggregates, ordering on group key.
+            // Requires exactly one sort column.
+            if sort_columns.len() != 1 {
+                return None;
+            }
+            let (order_by, order_desc) = &sort_columns[0];
             let (_group_key, group_key_alias) =
                 aggr.group_expr().expr().iter().exactly_one().ok()?;
             let (group_key_expr, _) =
@@ -89,12 +98,12 @@ impl TopKAggregation {
             if !topk_types_supported(&kt, &kt) {
                 return None;
             }
-            if order_by != group_key_alias {
+            if *order_by != *group_key_alias {
                 return None;
             }
             let new_aggr = AggregateExec::with_new_limit_options(
                 aggr,
-                Some(LimitOptions::new_with_order(limit, order_desc)),
+                Some(LimitOptions::new_with_order(limit, *order_desc)),
             );
             return Some(Arc::new(new_aggr));
         }
@@ -109,19 +118,21 @@ impl TopKAggregation {
             _ => return None,
         }
 
-        // Sort column matches any aggregate output column.
-        // Works with any number of group keys and any aggregate functions
-        // (COUNT, SUM, AVG, etc.)
-        let n_groups = aggr.group_expr().num_group_exprs();
+        // Sort columns can reference any output column (group keys or aggregates).
+        // Resolve each sort column name to its index in the aggregate output schema.
         let schema = aggr.schema();
-        let (col_idx, _) = schema.column_with_name(order_by)?;
-        // Must be an aggregate column, not a group key
-        if col_idx < n_groups {
-            return None;
-        }
+        let topk_sort_cols: Option<Vec<(usize, bool)>> = sort_columns
+            .iter()
+            .map(|(col_name, desc)| {
+                let (col_idx, _) = schema.column_with_name(col_name)?;
+                Some((col_idx, *desc))
+            })
+            .collect();
+        let topk_sort_cols = topk_sort_cols?;
+
         let new_aggr = AggregateExec::with_new_limit_options(
             aggr,
-            Some(LimitOptions::new_with_topk_emit(limit, order_desc, col_idx)),
+            Some(LimitOptions::new_with_topk_emit(limit, topk_sort_cols)),
         );
         Some(Arc::new(new_aggr))
     }
@@ -132,11 +143,17 @@ impl TopKAggregation {
         let children = sort.children();
         let child = children.into_iter().exactly_one().ok()?;
         let order = sort.properties().output_ordering()?;
-        let order = order.iter().exactly_one().ok()?;
-        let order_desc = order.options.descending;
-        let order = order.expr.as_any().downcast_ref::<Column>()?;
-        let mut cur_col_name = order.name().to_string();
         let limit = sort.fetch()?;
+
+        // Extract all sort columns — each must be a simple Column reference
+        let mut sort_col_names: Vec<(String, bool)> = Vec::new();
+        for sort_expr in order.iter() {
+            let col = sort_expr.expr.as_any().downcast_ref::<Column>()?;
+            sort_col_names.push((col.name().to_string(), sort_expr.options.descending));
+        }
+        if sort_col_names.is_empty() {
+            return None;
+        }
 
         let mut cardinality_preserved = true;
         let closure = |plan: Arc<dyn ExecutionPlan>| {
@@ -145,19 +162,21 @@ impl TopKAggregation {
             }
             if let Some(aggr) = plan.as_any().downcast_ref::<AggregateExec>() {
                 // either we run into an Aggregate and transform it
-                match Self::transform_agg(aggr, &cur_col_name, order_desc, limit) {
+                match Self::transform_agg(aggr, &sort_col_names, limit) {
                     None => cardinality_preserved = false,
                     Some(plan) => return Ok(Transformed::yes(plan)),
                 }
             } else if let Some(proj) = plan.as_any().downcast_ref::<ProjectionExec>() {
-                // track renames due to successive projections
+                // track renames due to successive projections — for all sort columns
                 for proj_expr in proj.expr() {
                     let Some(src_col) = proj_expr.expr.as_any().downcast_ref::<Column>()
                     else {
                         continue;
                     };
-                    if proj_expr.alias == cur_col_name {
-                        cur_col_name = src_col.name().to_string();
+                    for (col_name, _) in sort_col_names.iter_mut() {
+                        if *col_name == proj_expr.alias {
+                            *col_name = src_col.name().to_string();
+                        }
                     }
                 }
             } else {

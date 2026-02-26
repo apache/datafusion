@@ -585,18 +585,19 @@ enum DynamicFilterAggregateType {
 }
 
 /// Configuration for limit-based optimizations in aggregation
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LimitOptions {
     /// The maximum number of rows to return
     pub limit: usize,
     /// Optional ordering direction (true = descending, false = ascending)
     /// This is used for TopK aggregation to maintain a priority queue with the correct ordering
     pub descending: Option<bool>,
-    /// Optional index into the aggregate's output schema identifying which column
-    /// to sort by for top-K emit. When set, GroupedHashAggregateStream will
-    /// apply a partial sort + take after emitting all groups, returning only
-    /// the top-K rows instead of all groups.
-    pub sort_column_index: Option<usize>,
+    /// Optional sort columns for general TopK emit. Each entry is
+    /// (column_index_in_output_schema, descending). When set,
+    /// GroupedHashAggregateStream will apply a lexicographic partial sort + take
+    /// after emitting all groups, returning only the top-K rows.
+    /// Supports multi-column sort (e.g. ORDER BY COUNT(*) DESC, name ASC).
+    pub topk_sort_columns: Option<Vec<(usize, bool)>>,
 }
 
 impl LimitOptions {
@@ -605,7 +606,7 @@ impl LimitOptions {
         Self {
             limit,
             descending: None,
-            sort_column_index: None,
+            topk_sort_columns: None,
         }
     }
 
@@ -614,20 +615,17 @@ impl LimitOptions {
         Self {
             limit,
             descending: Some(descending),
-            sort_column_index: None,
+            topk_sort_columns: None,
         }
     }
 
-    /// Create a new LimitOptions for general top-K emit on an aggregate column
-    pub fn new_with_topk_emit(
-        limit: usize,
-        descending: bool,
-        sort_column_index: usize,
-    ) -> Self {
+    /// Create a new LimitOptions for general top-K emit with multi-column sort.
+    /// Each entry in `sort_columns` is `(column_index_in_output_schema, descending)`.
+    pub fn new_with_topk_emit(limit: usize, sort_columns: Vec<(usize, bool)>) -> Self {
         Self {
             limit,
-            descending: Some(descending),
-            sort_column_index: Some(sort_column_index),
+            descending: None,
+            topk_sort_columns: Some(sort_columns),
         }
     }
 
@@ -639,8 +637,8 @@ impl LimitOptions {
         self.descending
     }
 
-    pub fn sort_column_index(&self) -> Option<usize> {
-        self.sort_column_index
+    pub fn topk_sort_columns(&self) -> Option<&[(usize, bool)]> {
+        self.topk_sort_columns.as_deref()
     }
 }
 
@@ -703,7 +701,7 @@ impl AggregateExec {
             mode: self.mode,
             group_by: Arc::clone(&self.group_by),
             filter_expr: Arc::clone(&self.filter_expr),
-            limit_options: self.limit_options,
+            limit_options: self.limit_options.clone(),
             input: Arc::clone(&self.input),
             schema: Arc::clone(&self.schema),
             input_schema: Arc::clone(&self.input_schema),
@@ -881,8 +879,8 @@ impl AggregateExec {
     }
 
     /// Get the limit options (if set)
-    pub fn limit_options(&self) -> Option<LimitOptions> {
-        self.limit_options
+    pub fn limit_options(&self) -> Option<&LimitOptions> {
+        self.limit_options.as_ref()
     }
 
     /// Grouping expressions
@@ -927,13 +925,13 @@ impl AggregateExec {
         }
 
         // grouping by an expression that has a sort/limit upstream
-        if let Some(config) = self.limit_options
+        if let Some(config) = &self.limit_options
             && !self.is_unordered_unfiltered_group_by_distinct()
         {
             // General aggregate TopK (e.g. GROUP BY ... ORDER BY COUNT(*) DESC LIMIT K):
             // falls through to GroupedHashAggregateStream which applies top-K
             // selection after building the full hash table.
-            if config.sort_column_index.is_some() {
+            if config.topk_sort_columns.is_some() {
                 // Fall through to GroupedHashAggregateStream below
             } else {
                 // MIN/MAX or DISTINCT: existing priority queue path
@@ -967,7 +965,7 @@ impl AggregateExec {
     pub fn is_unordered_unfiltered_group_by_distinct(&self) -> bool {
         if self
             .limit_options()
-            .and_then(|config| config.descending)
+            .and_then(|config| config.descending())
             .is_some()
         {
             return false;
@@ -1290,7 +1288,7 @@ impl DisplayAs for AggregateExec {
                     .map(|agg| agg.name().to_string())
                     .collect();
                 write!(f, ", aggr=[{}]", a.join(", "))?;
-                if let Some(config) = self.limit_options {
+                if let Some(config) = &self.limit_options {
                     write!(f, ", lim=[{}]", config.limit)?;
                 }
 
@@ -1350,7 +1348,7 @@ impl DisplayAs for AggregateExec {
                 if !a.is_empty() {
                     writeln!(f, "aggr={}", a.join(", "))?;
                 }
-                if let Some(config) = self.limit_options {
+                if let Some(config) = &self.limit_options {
                     writeln!(f, "limit={}", config.limit)?;
                 }
             }
@@ -1421,7 +1419,7 @@ impl ExecutionPlan for AggregateExec {
             Arc::clone(&self.input_schema),
             Arc::clone(&self.schema),
         )?;
-        me.limit_options = self.limit_options;
+        me.limit_options = self.limit_options.clone();
         me.dynamic_filter = self.dynamic_filter.clone();
 
         Ok(Arc::new(me))

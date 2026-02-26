@@ -1,3 +1,116 @@
+impl serde::Serialize for AggLimitSortColumn {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.column_index != 0 {
+            len += 1;
+        }
+        if self.descending {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.AggLimitSortColumn", len)?;
+        if self.column_index != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("columnIndex", ToString::to_string(&self.column_index).as_str())?;
+        }
+        if self.descending {
+            struct_ser.serialize_field("descending", &self.descending)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for AggLimitSortColumn {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "column_index",
+            "columnIndex",
+            "descending",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            ColumnIndex,
+            Descending,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl serde::de::Visitor<'_> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "columnIndex" | "column_index" => Ok(GeneratedField::ColumnIndex),
+                            "descending" => Ok(GeneratedField::Descending),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = AggLimitSortColumn;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.AggLimitSortColumn")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<AggLimitSortColumn, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut column_index__ = None;
+                let mut descending__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::ColumnIndex => {
+                            if column_index__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("columnIndex"));
+                            }
+                            column_index__ =
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Descending => {
+                            if descending__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("descending"));
+                            }
+                            descending__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(AggLimitSortColumn {
+                    column_index: column_index__.unwrap_or_default(),
+                    descending: descending__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.AggLimitSortColumn", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for AggLimit {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -12,7 +125,7 @@ impl serde::Serialize for AggLimit {
         if self.descending.is_some() {
             len += 1;
         }
-        if self.sort_column_index.is_some() {
+        if !self.topk_sort_columns.is_empty() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.AggLimit", len)?;
@@ -24,10 +137,8 @@ impl serde::Serialize for AggLimit {
         if let Some(v) = self.descending.as_ref() {
             struct_ser.serialize_field("descending", v)?;
         }
-        if let Some(v) = self.sort_column_index.as_ref() {
-            #[allow(clippy::needless_borrow)]
-            #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("sortColumnIndex", ToString::to_string(&v).as_str())?;
+        if !self.topk_sort_columns.is_empty() {
+            struct_ser.serialize_field("topkSortColumns", &self.topk_sort_columns)?;
         }
         struct_ser.end()
     }
@@ -41,15 +152,15 @@ impl<'de> serde::Deserialize<'de> for AggLimit {
         const FIELDS: &[&str] = &[
             "limit",
             "descending",
-            "sort_column_index",
-            "sortColumnIndex",
+            "topk_sort_columns",
+            "topkSortColumns",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Limit,
             Descending,
-            SortColumnIndex,
+            TopkSortColumns,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -73,7 +184,7 @@ impl<'de> serde::Deserialize<'de> for AggLimit {
                         match value {
                             "limit" => Ok(GeneratedField::Limit),
                             "descending" => Ok(GeneratedField::Descending),
-                            "sortColumnIndex" | "sort_column_index" => Ok(GeneratedField::SortColumnIndex),
+                            "topkSortColumns" | "topk_sort_columns" => Ok(GeneratedField::TopkSortColumns),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -95,14 +206,14 @@ impl<'de> serde::Deserialize<'de> for AggLimit {
             {
                 let mut limit__ = None;
                 let mut descending__ = None;
-                let mut sort_column_index__ = None;
+                let mut topk_sort_columns__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Limit => {
                             if limit__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("limit"));
                             }
-                            limit__ = 
+                            limit__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -112,20 +223,18 @@ impl<'de> serde::Deserialize<'de> for AggLimit {
                             }
                             descending__ = map_.next_value()?;
                         }
-                        GeneratedField::SortColumnIndex => {
-                            if sort_column_index__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("sortColumnIndex"));
+                        GeneratedField::TopkSortColumns => {
+                            if topk_sort_columns__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("topkSortColumns"));
                             }
-                            sort_column_index__ = 
-                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
-                            ;
+                            topk_sort_columns__ = Some(map_.next_value()?);
                         }
                     }
                 }
                 Ok(AggLimit {
                     limit: limit__.unwrap_or_default(),
                     descending: descending__,
-                    sort_column_index: sort_column_index__,
+                    topk_sort_columns: topk_sort_columns__.unwrap_or_default(),
                 })
             }
         }

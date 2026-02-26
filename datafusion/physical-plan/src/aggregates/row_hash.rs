@@ -37,7 +37,7 @@ use crate::{PhysicalExpr, aggregates, metrics};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 
 use arrow::array::*;
-use arrow::compute::{SortOptions, sort_to_indices, take_record_batch};
+use arrow::compute::{SortColumn, SortOptions, lexsort_to_indices, take_record_batch};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{
     DataFusionError, Result, assert_eq_or_internal_err, assert_or_internal_err,
@@ -354,16 +354,16 @@ enum OutOfMemoryMode {
 /// └─────────────────┘    └─────────────────┘
 /// ```
 /// Configuration for applying top-K selection after aggregation emit.
-/// When present, after emitting all groups, only the top-K rows (by sort column)
+/// When present, after emitting all groups, only the top-K rows (by sort columns)
 /// are kept, avoiding full materialization of all groups downstream.
+/// Supports multi-column lexicographic sort.
 #[derive(Debug, Clone)]
 struct TopKEmit {
-    /// Index of the sort column in the output schema
-    sort_column_index: usize,
+    /// Sort columns: each entry is (column_index_in_output_schema, descending).
+    /// Used for lexicographic sort when selecting top-K rows.
+    sort_columns: Vec<(usize, bool)>,
     /// Maximum number of rows to emit
     limit: usize,
-    /// Sort direction (true = descending)
-    descending: bool,
 }
 
 pub(crate) struct GroupedHashAggregateStream {
@@ -675,12 +675,10 @@ impl GroupedHashAggregateStream {
         };
 
         let topk_emit = agg.limit_options().and_then(|config| {
-            let sort_col = config.sort_column_index()?;
-            let descending = config.descending()?;
+            let sort_columns = config.topk_sort_columns()?.to_vec();
             Some(TopKEmit {
-                sort_column_index: sort_col,
+                sort_columns,
                 limit: config.limit(),
-                descending,
             })
         });
 
@@ -1254,19 +1252,26 @@ impl GroupedHashAggregateStream {
         Ok(())
     }
 
-    /// Applies top-K selection to a batch: sorts by the specified column and
-    /// takes only the top `limit` rows. Uses Arrow's built-in `sort_to_indices`
-    /// with a limit for efficient heap-based partial sort.
+    /// Applies top-K selection to a batch: lexicographically sorts by the
+    /// specified columns and takes only the top `limit` rows. Uses Arrow's
+    /// `lexsort_to_indices` with a limit for efficient heap-based partial sort.
+    /// Supports multi-column sort keys.
     fn apply_topk(batch: RecordBatch, topk: &TopKEmit) -> Result<RecordBatch> {
         if batch.num_rows() <= topk.limit {
             return Ok(batch);
         }
-        let sort_column = batch.column(topk.sort_column_index);
-        let options = SortOptions {
-            descending: topk.descending,
-            nulls_first: !topk.descending,
-        };
-        let indices = sort_to_indices(sort_column, Some(options), Some(topk.limit))?;
+        let sort_columns: Vec<SortColumn> = topk
+            .sort_columns
+            .iter()
+            .map(|&(col_idx, descending)| SortColumn {
+                values: Arc::clone(batch.column(col_idx)),
+                options: Some(SortOptions {
+                    descending,
+                    nulls_first: !descending,
+                }),
+            })
+            .collect();
+        let indices = lexsort_to_indices(&sort_columns, Some(topk.limit))?;
         take_record_batch(&batch, &indices).map_err(|e| e.into())
     }
 

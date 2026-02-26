@@ -1853,6 +1853,13 @@ pub struct MaybePhysicalSortExprs {
     pub sort_expr: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AggLimitSortColumn {
+    #[prost(uint64, tag = "1")]
+    pub column_index: u64,
+    #[prost(bool, tag = "2")]
+    pub descending: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AggLimit {
     /// wrap into a message to make it optional
     #[prost(uint64, tag = "1")]
@@ -1860,10 +1867,9 @@ pub struct AggLimit {
     /// Optional ordering direction for TopK aggregation (true = descending, false = ascending)
     #[prost(bool, optional, tag = "2")]
     pub descending: ::core::option::Option<bool>,
-    /// Optional index into the aggregate's output schema identifying which column
-    /// to sort by for general top-K emit
-    #[prost(uint64, optional, tag = "3")]
-    pub sort_column_index: ::core::option::Option<u64>,
+    /// Multi-column sort for general top-K emit.
+    #[prost(message, repeated, tag = "4")]
+    pub topk_sort_columns: ::prost::alloc::vec::Vec<AggLimitSortColumn>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AggregateExecNode {
