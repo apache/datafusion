@@ -16,8 +16,8 @@
 // under the License.
 
 use arrow::datatypes::DataType;
-use datafusion_common::{DataFusionError, Result};
 use datafusion_common::tree_node::Transformed;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{BinaryExpr, Expr, Like, Operator, lit};
 use regex_syntax::hir::{Capture, Hir, HirKind, Literal, Look};
 
@@ -50,10 +50,18 @@ pub fn simplify_regex_expr(
 ) -> Result<Transformed<Expr>> {
     // Check if the right operand is a string literal
     let Some((datatype, pattern_opt)) = as_string_scalar(&right) else {
-        return Ok(Transformed::no(Expr::BinaryExpr(BinaryExpr { left, op, right })));
+        return Ok(Transformed::no(Expr::BinaryExpr(BinaryExpr {
+            left,
+            op,
+            right,
+        })));
     };
     let Some(pattern_owned) = pattern_opt.as_ref() else {
-        return Ok(Transformed::no(Expr::BinaryExpr(BinaryExpr { left, op, right })));
+        return Ok(Transformed::no(Expr::BinaryExpr(BinaryExpr {
+            left,
+            op,
+            right,
+        })));
     };
     let pattern = pattern_owned.as_str();
 
@@ -99,7 +107,11 @@ pub fn simplify_regex_expr(
     }
 
     // Leave untouched if optimization didn't work
-    Ok(Transformed::no(Expr::BinaryExpr(BinaryExpr { left, op, right })))
+    Ok(Transformed::no(Expr::BinaryExpr(BinaryExpr {
+        left,
+        op,
+        right,
+    })))
 }
 
 #[derive(Debug)]
