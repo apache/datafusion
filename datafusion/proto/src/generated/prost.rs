@@ -1860,6 +1860,10 @@ pub struct AggLimit {
     /// Optional ordering direction for TopK aggregation (true = descending, false = ascending)
     #[prost(bool, optional, tag = "2")]
     pub descending: ::core::option::Option<bool>,
+    /// Optional index into the aggregate's output schema identifying which column
+    /// to sort by for general top-K emit
+    #[prost(uint64, optional, tag = "3")]
+    pub sort_column_index: ::core::option::Option<u64>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AggregateExecNode {

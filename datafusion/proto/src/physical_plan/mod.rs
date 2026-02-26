@@ -1272,9 +1272,12 @@ impl protobuf::PhysicalPlanNode {
 
         let agg = if let Some(limit_proto) = &hash_agg.limit {
             let limit = limit_proto.limit as usize;
-            let limit_options = match limit_proto.descending {
-                Some(descending) => LimitOptions::new_with_order(limit, descending),
-                None => LimitOptions::new(limit),
+            let limit_options = match (limit_proto.descending, limit_proto.sort_column_index) {
+                (Some(descending), Some(sort_col)) => {
+                    LimitOptions::new_with_topk_emit(limit, descending, sort_col as usize)
+                }
+                (Some(descending), None) => LimitOptions::new_with_order(limit, descending),
+                _ => LimitOptions::new(limit),
             };
             agg.with_limit_options(Some(limit_options))
         } else {
@@ -2757,6 +2760,7 @@ impl protobuf::PhysicalPlanNode {
         let limit = exec.limit_options().map(|config| protobuf::AggLimit {
             limit: config.limit() as u64,
             descending: config.descending(),
+            sort_column_index: config.sort_column_index().map(|i| i as u64),
         });
 
         Ok(protobuf::PhysicalPlanNode {
