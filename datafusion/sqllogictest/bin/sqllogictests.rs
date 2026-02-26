@@ -393,10 +393,14 @@ fn print_timing_summary(
     }
 
     let top_n = options.timing_top_n;
-    let count = match mode {
-        TimingSummaryMode::Off => 0,
-        TimingSummaryMode::Auto | TimingSummaryMode::Top => top_n,
-        TimingSummaryMode::Full => file_timings.len(),
+    debug_assert!(matches!(
+        mode,
+        TimingSummaryMode::Top | TimingSummaryMode::Full
+    ));
+    let count = if mode == TimingSummaryMode::Full {
+        file_timings.len()
+    } else {
+        top_n
     };
 
     progress.println("Per-file elapsed summary (deterministic):")?;
