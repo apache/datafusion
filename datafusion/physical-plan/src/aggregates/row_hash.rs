@@ -353,19 +353,6 @@ enum OutOfMemoryMode {
 /// │ 2 │ 2     │ 3.0 │    │ 2 │ 2     │ 3.0 │                   └────────────┘
 /// └─────────────────┘    └─────────────────┘
 /// ```
-/// Configuration for applying top-K selection after aggregation emit.
-/// When present, after emitting all groups, only the top-K rows (by sort columns)
-/// are kept, avoiding full materialization of all groups downstream.
-/// Supports multi-column lexicographic sort.
-#[derive(Debug, Clone)]
-struct TopKEmit {
-    /// Sort columns: each entry is (column_index_in_output_schema, descending).
-    /// Used for lexicographic sort when selecting top-K rows.
-    sort_columns: Vec<(usize, bool)>,
-    /// Maximum number of rows to emit
-    limit: usize,
-}
-
 pub(crate) struct GroupedHashAggregateStream {
     // ========================================================================
     // PROPERTIES:
@@ -472,6 +459,19 @@ pub(crate) struct GroupedHashAggregateStream {
     /// Optional top-K emit configuration. When set, only the top-K rows
     /// (by the specified sort column) are emitted after aggregation completes.
     topk_emit: Option<TopKEmit>,
+}
+
+/// Configuration for applying top-K selection after aggregation emit.
+/// When present, after emitting all groups, only the top-K rows (by sort columns)
+/// are kept, avoiding full materialization of all groups downstream.
+/// Supports multi-column lexicographic sort.
+#[derive(Debug, Clone)]
+struct TopKEmit {
+    /// Sort columns: each entry is (column_index_in_output_schema, descending).
+    /// Used for lexicographic sort when selecting top-K rows.
+    sort_columns: Vec<(usize, bool)>,
+    /// Maximum number of rows to emit
+    limit: usize,
 }
 
 impl GroupedHashAggregateStream {
