@@ -1298,6 +1298,7 @@ mod test {
         );
     }
 
+    #[test]
     fn test_bind_dynamic_filters_for_partition_without_partitioned_data() {
         let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
             vec![],
@@ -1438,7 +1439,7 @@ mod test {
         // Update and mark complete
         source
             .update(DynamicFilterUpdate::Global(
-                lit(100) as Arc<dyn PhysicalExpr>,
+                lit(100) as Arc<dyn PhysicalExpr>
             ))
             .unwrap();
         source.mark_complete();

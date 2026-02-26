@@ -59,7 +59,6 @@ use datafusion::physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
 use datafusion::physical_plan::analyze::AnalyzeExec;
-#[expect(deprecated)]
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::empty::EmptyExec;
@@ -2599,8 +2598,7 @@ fn test_expression_deduplication() -> Result<()> {
         expr: binary_expr,
         alias: "result".to_string(),
     }];
-    let exec_plan =
-        Arc::new(ProjectionExec::try_new(projection_exprs, filter)?);
+    let exec_plan = Arc::new(ProjectionExec::try_new(projection_exprs, filter)?);
 
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};

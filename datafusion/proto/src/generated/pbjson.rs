@@ -8059,8 +8059,6 @@ impl serde::Serialize for HashJoinExecNode {
         if !self.projection.is_empty() {
             len += 1;
         }
-            len += 1;
-        }
         if self.dynamic_filter.is_some() {
             len += 1;
         }
@@ -8094,7 +8092,6 @@ impl serde::Serialize for HashJoinExecNode {
         }
         if !self.projection.is_empty() {
             struct_ser.serialize_field("projection", &self.projection)?;
-        }
         }
         if let Some(v) = self.dynamic_filter.as_ref() {
             struct_ser.serialize_field("dynamicFilter", v)?;
@@ -8245,8 +8242,6 @@ impl<'de> serde::Deserialize<'de> for HashJoinExecNode {
                                 Some(map_.next_value::<Vec<::pbjson::private::NumberDeserialize<_>>>()?
                                     .into_iter().map(|x| x.0).collect())
                             ;
-                        }
-                            }
                         }
                         GeneratedField::DynamicFilter => {
                             if dynamic_filter__.is_some() {
@@ -15983,7 +15978,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalDynamicFilterNode {
             {
                 struct GeneratedVisitor;
 
-                impl serde::de::Visitor<'_> for GeneratedVisitor {
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
                     type Value = GeneratedField;
 
                     fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

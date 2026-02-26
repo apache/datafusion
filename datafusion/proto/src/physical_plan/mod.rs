@@ -58,7 +58,6 @@ use datafusion_physical_plan::aggregates::AggregateMode;
 use datafusion_physical_plan::aggregates::{AggregateExec, PhysicalGroupBy};
 use datafusion_physical_plan::analyze::AnalyzeExec;
 use datafusion_physical_plan::async_func::AsyncFuncExec;
-#[expect(deprecated)]
 use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::coop::CooperativeExec;
