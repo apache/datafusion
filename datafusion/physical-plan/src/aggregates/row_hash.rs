@@ -37,6 +37,7 @@ use crate::{PhysicalExpr, aggregates, metrics};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 
 use arrow::array::*;
+use arrow::compute::{SortOptions, sort_to_indices, take};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{
     DataFusionError, Result, assert_eq_or_internal_err, assert_or_internal_err,
@@ -352,6 +353,19 @@ enum OutOfMemoryMode {
 /// │ 2 │ 2     │ 3.0 │    │ 2 │ 2     │ 3.0 │                   └────────────┘
 /// └─────────────────┘    └─────────────────┘
 /// ```
+/// Configuration for applying top-K selection after aggregation emit.
+/// When present, after emitting all groups, only the top-K rows (by sort column)
+/// are kept, avoiding full materialization of all groups downstream.
+#[derive(Debug, Clone)]
+struct TopKEmit {
+    /// Index of the sort column in the output schema
+    sort_column_index: usize,
+    /// Maximum number of rows to emit
+    limit: usize,
+    /// Sort direction (true = descending)
+    descending: bool,
+}
+
 pub(crate) struct GroupedHashAggregateStream {
     // ========================================================================
     // PROPERTIES:
@@ -454,6 +468,10 @@ pub(crate) struct GroupedHashAggregateStream {
 
     /// Reduction factor metric, calculated as `output_rows/input_rows` (only for partial aggregation)
     reduction_factor: Option<metrics::RatioMetrics>,
+
+    /// Optional top-K emit configuration. When set, only the top-K rows
+    /// (by the specified sort column) are emitted after aggregation completes.
+    topk_emit: Option<TopKEmit>,
 }
 
 impl GroupedHashAggregateStream {
@@ -656,6 +674,16 @@ impl GroupedHashAggregateStream {
             None
         };
 
+        let topk_emit = agg.limit_options().and_then(|config| {
+            let sort_col = config.sort_column_index()?;
+            let descending = config.descending()?;
+            Some(TopKEmit {
+                sort_column_index: sort_col,
+                limit: config.limit(),
+                descending,
+            })
+        });
+
         Ok(GroupedHashAggregateStream {
             schema: agg_schema,
             input,
@@ -678,6 +706,7 @@ impl GroupedHashAggregateStream {
             group_values_soft_limit: agg.limit_options().map(|config| config.limit()),
             skip_aggregation_probe,
             reduction_factor,
+            topk_emit,
         })
     }
 }
@@ -1174,6 +1203,12 @@ impl GroupedHashAggregateStream {
             // Flush any remaining group values.
             let batch = self.emit(EmitTo::All, false)?;
 
+            // Apply top-K selection if configured
+            let batch = match (batch, &self.topk_emit) {
+                (Some(batch), Some(topk)) => Some(Self::apply_topk(batch, topk)?),
+                (batch, _) => batch,
+            };
+
             // If there are none, we're done; otherwise switch to emitting them
             batch.map_or(ExecutionState::Done, ExecutionState::ProducingOutput)
         } else {
@@ -1217,6 +1252,27 @@ impl GroupedHashAggregateStream {
         };
         timer.done();
         Ok(())
+    }
+
+    /// Applies top-K selection to a batch: sorts by the specified column and
+    /// takes only the top `limit` rows. Uses Arrow's built-in `sort_to_indices`
+    /// with a limit for efficient heap-based partial sort.
+    fn apply_topk(batch: RecordBatch, topk: &TopKEmit) -> Result<RecordBatch> {
+        if batch.num_rows() <= topk.limit {
+            return Ok(batch);
+        }
+        let sort_column = batch.column(topk.sort_column_index);
+        let options = SortOptions {
+            descending: topk.descending,
+            nulls_first: !topk.descending,
+        };
+        let indices = sort_to_indices(sort_column, Some(options), Some(topk.limit))?;
+        let columns = batch
+            .columns()
+            .iter()
+            .map(|col| take(col, &indices, None).map_err(DataFusionError::from))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(RecordBatch::try_new(batch.schema(), columns)?)
     }
 
     /// Updates skip aggregation probe state.

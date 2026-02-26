@@ -26,7 +26,9 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::aggregates::LimitOptions;
-use datafusion_physical_plan::aggregates::{AggregateExec, topk_types_supported};
+use datafusion_physical_plan::aggregates::{
+    AggregateExec, AggregateMode, topk_types_supported,
+};
 use datafusion_physical_plan::execution_plan::CardinalityEffect;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
@@ -48,24 +50,20 @@ impl TopKAggregation {
         order_desc: bool,
         limit: usize,
     ) -> Option<Arc<dyn ExecutionPlan>> {
-        // Current only support single group key
-        let (group_key, group_key_alias) =
-            aggr.group_expr().expr().iter().exactly_one().ok()?;
-        let kt = group_key.data_type(&aggr.input().schema()).ok()?;
-        let vt = if let Some((field, _)) = aggr.get_minmax_desc() {
-            field.data_type().clone()
-        } else {
-            kt.clone()
-        };
-        if !topk_types_supported(&kt, &vt) {
-            return None;
-        }
         if aggr.filter_expr().iter().any(|e| e.is_some()) {
             return None;
         }
 
         // Check if this is ordering by an aggregate function (MIN/MAX)
         if let Some((field, desc)) = aggr.get_minmax_desc() {
+            // MIN/MAX path requires single group key and type support
+            let (group_key, _group_key_alias) =
+                aggr.group_expr().expr().iter().exactly_one().ok()?;
+            let kt = group_key.data_type(&aggr.input().schema()).ok()?;
+            let vt = field.data_type().clone();
+            if !topk_types_supported(&kt, &vt) {
+                return None;
+            }
             // ensure the sort direction matches aggregate function
             if desc != order_desc {
                 return None;
@@ -74,20 +72,56 @@ impl TopKAggregation {
             if order_by != field.name() {
                 return None;
             }
-        } else if aggr.aggr_expr().is_empty() {
-            // This is a GROUP BY without aggregates, check if ordering is on the group key itself
+            let new_aggr = AggregateExec::with_new_limit_options(
+                aggr,
+                Some(LimitOptions::new_with_order(limit, order_desc)),
+            );
+            return Some(Arc::new(new_aggr));
+        }
+
+        if aggr.aggr_expr().is_empty() {
+            // DISTINCT path: GROUP BY without aggregates, ordering on group key
+            let (_group_key, group_key_alias) =
+                aggr.group_expr().expr().iter().exactly_one().ok()?;
+            let (group_key_expr, _) =
+                aggr.group_expr().expr().iter().exactly_one().ok()?;
+            let kt = group_key_expr.data_type(&aggr.input().schema()).ok()?;
+            if !topk_types_supported(&kt, &kt) {
+                return None;
+            }
             if order_by != group_key_alias {
                 return None;
             }
-        } else {
-            // Has aggregates but not MIN/MAX, or doesn't DISTINCT
-            return None;
+            let new_aggr = AggregateExec::with_new_limit_options(
+                aggr,
+                Some(LimitOptions::new_with_order(limit, order_desc)),
+            );
+            return Some(Arc::new(new_aggr));
         }
 
-        // We found what we want: clone, copy the limit down, and return modified node
+        // General aggregate TopK: only applies to modes that produce final
+        // results (Partial results are incomplete and can't be top-K filtered)
+        match aggr.mode() {
+            AggregateMode::Final
+            | AggregateMode::FinalPartitioned
+            | AggregateMode::Single
+            | AggregateMode::SinglePartitioned => {}
+            _ => return None,
+        }
+
+        // Sort column matches any aggregate output column.
+        // Works with any number of group keys and any aggregate functions
+        // (COUNT, SUM, AVG, etc.)
+        let n_groups = aggr.group_expr().num_group_exprs();
+        let schema = aggr.schema();
+        let (col_idx, _) = schema.column_with_name(order_by)?;
+        // Must be an aggregate column, not a group key
+        if col_idx < n_groups {
+            return None;
+        }
         let new_aggr = AggregateExec::with_new_limit_options(
             aggr,
-            Some(LimitOptions::new_with_order(limit, order_desc)),
+            Some(LimitOptions::new_with_topk_emit(limit, order_desc, col_idx)),
         );
         Some(Arc::new(new_aggr))
     }

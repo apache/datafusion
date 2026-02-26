@@ -592,6 +592,11 @@ pub struct LimitOptions {
     /// Optional ordering direction (true = descending, false = ascending)
     /// This is used for TopK aggregation to maintain a priority queue with the correct ordering
     pub descending: Option<bool>,
+    /// Optional index into the aggregate's output schema identifying which column
+    /// to sort by for top-K emit. When set, GroupedHashAggregateStream will
+    /// apply a partial sort + take after emitting all groups, returning only
+    /// the top-K rows instead of all groups.
+    pub sort_column_index: Option<usize>,
 }
 
 impl LimitOptions {
@@ -600,6 +605,7 @@ impl LimitOptions {
         Self {
             limit,
             descending: None,
+            sort_column_index: None,
         }
     }
 
@@ -608,6 +614,20 @@ impl LimitOptions {
         Self {
             limit,
             descending: Some(descending),
+            sort_column_index: None,
+        }
+    }
+
+    /// Create a new LimitOptions for general top-K emit on an aggregate column
+    pub fn new_with_topk_emit(
+        limit: usize,
+        descending: bool,
+        sort_column_index: usize,
+    ) -> Self {
+        Self {
+            limit,
+            descending: Some(descending),
+            sort_column_index: Some(sort_column_index),
         }
     }
 
@@ -617,6 +637,10 @@ impl LimitOptions {
 
     pub fn descending(&self) -> Option<bool> {
         self.descending
+    }
+
+    pub fn sort_column_index(&self) -> Option<usize> {
+        self.sort_column_index
     }
 }
 
@@ -906,9 +930,22 @@ impl AggregateExec {
         if let Some(config) = self.limit_options
             && !self.is_unordered_unfiltered_group_by_distinct()
         {
-            return Ok(StreamType::GroupedPriorityQueue(
-                GroupedTopKAggregateStream::new(self, context, partition, config.limit)?,
-            ));
+            // General aggregate TopK (e.g. GROUP BY ... ORDER BY COUNT(*) DESC LIMIT K):
+            // falls through to GroupedHashAggregateStream which applies top-K
+            // selection after building the full hash table.
+            if config.sort_column_index.is_some() {
+                // Fall through to GroupedHashAggregateStream below
+            } else {
+                // MIN/MAX or DISTINCT: existing priority queue path
+                return Ok(StreamType::GroupedPriorityQueue(
+                    GroupedTopKAggregateStream::new(
+                        self,
+                        context,
+                        partition,
+                        config.limit,
+                    )?,
+                ));
+            }
         }
 
         // grouping by something else and we need to just materialize all results
