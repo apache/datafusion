@@ -606,7 +606,7 @@ impl BatchAdapterFactory {
     pub fn make_adapter(&self, source_schema: &SchemaRef) -> Result<BatchAdapter> {
         let expr_adapter = self
             .expr_adapter_factory
-            .create(Arc::clone(&self.target_schema), Arc::clone(&source_schema))?;
+            .create(Arc::clone(&self.target_schema), Arc::clone(source_schema))?;
 
         let simplifier = PhysicalExprSimplifier::new(&self.target_schema);
 
@@ -617,7 +617,7 @@ impl BatchAdapterFactory {
 
         let adapted = projection
             .try_map_exprs(|e| simplifier.simplify(expr_adapter.rewrite(e)?))?;
-        let projector = adapted.make_projector(&source_schema)?;
+        let projector = adapted.make_projector(source_schema)?;
 
         Ok(BatchAdapter { projector })
     }
