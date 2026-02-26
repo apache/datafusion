@@ -139,6 +139,22 @@ impl StaticFilter for ArrayStaticFilter {
     }
 }
 
+/// Returns true if Arrow's vectorized `eq` kernel supports this data type.
+///
+/// Supported: primitives, boolean, strings (Utf8/LargeUtf8/Utf8View),
+/// binary (Binary/LargeBinary/BinaryView/FixedSizeBinary), Null, and
+/// Dictionary-encoded variants of the above.
+/// Unsupported: nested types (Struct, List, Map, Union) and RunEndEncoded.
+fn supports_arrow_eq(dt: &DataType) -> bool {
+    use DataType::*;
+    match dt {
+        Boolean | Binary | LargeBinary | BinaryView | FixedSizeBinary(_) => true,
+        dt if dt.is_primitive() || dt.is_null() || dt.is_string() => true,
+        Dictionary(_, v) => supports_arrow_eq(v.as_ref()),
+        _ => false,
+    }
+}
+
 fn instantiate_static_filter(
     in_array: ArrayRef,
 ) -> Result<Arc<dyn StaticFilter + Send + Sync>> {
@@ -773,17 +789,19 @@ impl PhysicalExpr for InListExpr {
             }
             None => {
                 // No static filter: iterate through each expression, compare, and OR results.
-                // Use Arrow's vectorized eq kernel for primitive/string/binary types,
-                // falling back to row-by-row comparator for nested types (Struct, List, etc.)
-                // where eq semantics are ambiguous.
+                // Use Arrow's vectorized eq kernel for types it supports (primitive,
+                // boolean, string, binary, dictionary), falling back to row-by-row
+                // comparator for unsupported types (nested, RunEndEncoded, etc.).
                 let value = value.into_array(num_rows)?;
-                let use_arrow_eq = !value.data_type().is_nested();
+                let lhs_supports_arrow_eq = supports_arrow_eq(value.data_type());
                 let found = self.list.iter().map(|expr| expr.evaluate(batch)).try_fold(
                     BooleanArray::new(BooleanBuffer::new_unset(num_rows), None),
                     |result, expr| -> Result<BooleanArray> {
                         let rhs = match expr? {
                             ColumnarValue::Array(array) => {
-                                if use_arrow_eq {
+                                if lhs_supports_arrow_eq
+                                    && supports_arrow_eq(array.data_type())
+                                {
                                     arrow_eq(&value, &array)?
                                 } else {
                                     let cmp = make_comparator(
@@ -806,7 +824,7 @@ impl PhysicalExpr for InListExpr {
                                 if scalar.is_null() {
                                     // If scalar is null, all comparisons return null
                                     BooleanArray::from(vec![None; num_rows])
-                                } else if use_arrow_eq {
+                                } else if lhs_supports_arrow_eq {
                                     let scalar_datum = scalar.to_scalar()?;
                                     arrow_eq(&value, &scalar_datum)?
                                 } else {
