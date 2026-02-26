@@ -235,17 +235,6 @@ fn array_position_scalar<O: OffsetSizeTrait>(
     let offsets = list_array.offsets();
     let validity = list_array.nulls();
 
-    // Validate start_from bounds
-    for i in 0..list_array.len() {
-        if validity.is_none_or(|v| v.is_valid(i)) {
-            let row_len = offsets[i + 1].as_usize() - offsets[i].as_usize();
-            let from = arr_from[i];
-            if !(from >= 0 && (from as usize) <= row_len) {
-                return exec_err!("start_from out of bounds: {}", from + 1);
-            }
-        }
-    }
-
     if list_array.len() == 0 {
         return Ok(Arc::new(UInt64Array::new_null(0)));
     }
@@ -271,7 +260,12 @@ fn array_position_scalar<O: OffsetSizeTrait>(
             continue;
         }
 
-        let search_start = start + arr_from[i] as usize;
+        let from = arr_from[i];
+        let row_len = end - start;
+        if !(from >= 0 && (from as usize) <= row_len) {
+            return exec_err!("start_from out of bounds: {}", from + 1);
+        }
+        let search_start = start + from as usize;
 
         // Advance past matches before search_start
         while matches.peek().is_some_and(|&p| p < search_start) {
