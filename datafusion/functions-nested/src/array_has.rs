@@ -17,7 +17,10 @@
 
 //! [`ScalarUDFImpl`] definitions for array_has, array_has_all and array_has_any functions.
 
-use arrow::array::{Array, ArrayRef, BooleanArray, BooleanBufferBuilder, Datum, Scalar};
+use arrow::array::{
+    Array, ArrayRef, AsArray, BooleanArray, BooleanBufferBuilder, Datum, Scalar,
+    StringArrayType,
+};
 use arrow::buffer::BooleanBuffer;
 use arrow::datatypes::DataType;
 use arrow::row::{RowConverter, Rows, SortField};
@@ -37,6 +40,7 @@ use itertools::Itertools;
 use crate::make_array::make_array_udf;
 use crate::utils::make_scalar_function;
 
+use hashbrown::HashSet;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -55,7 +59,7 @@ make_udf_expr_and_func!(ArrayHasAll,
 );
 make_udf_expr_and_func!(ArrayHasAny,
     array_has_any,
-    haystack_array needle_array, // arg names
+    first_array second_array, // arg names
     "returns true if at least one element of the second array appears in the first array; otherwise, it returns false.", // doc
     array_has_any_udf // internal function name
 );
@@ -303,10 +307,8 @@ impl<'a> ArrayWrapper<'a> {
     fn offsets(&self) -> Box<dyn Iterator<Item = usize> + 'a> {
         match self {
             ArrayWrapper::FixedSizeList(arr) => {
-                let offsets = (0..=arr.len())
-                    .step_by(arr.value_length() as usize)
-                    .collect::<Vec<_>>();
-                Box::new(offsets.into_iter())
+                let value_length = arr.value_length() as usize;
+                Box::new((0..=arr.len()).map(move |i| i * value_length))
             }
             ArrayWrapper::List(arr) => {
                 Box::new(arr.offsets().iter().map(|o| (*o) as usize))
@@ -314,6 +316,14 @@ impl<'a> ArrayWrapper<'a> {
             ArrayWrapper::LargeList(arr) => {
                 Box::new(arr.offsets().iter().map(|o| (*o) as usize))
             }
+        }
+    }
+
+    fn nulls(&self) -> Option<&arrow::buffer::NullBuffer> {
+        match self {
+            ArrayWrapper::FixedSizeList(arr) => arr.nulls(),
+            ArrayWrapper::List(arr) => arr.nulls(),
+            ArrayWrapper::LargeList(arr) => arr.nulls(),
         }
     }
 }
@@ -487,6 +497,218 @@ fn array_has_any_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     array_has_all_and_any_inner(args, ComparisonType::Any)
 }
 
+/// Fast path for `array_has_any` when exactly one argument is a scalar.
+fn array_has_any_with_scalar(
+    columnar_arg: &ColumnarValue,
+    scalar_arg: &ScalarValue,
+) -> Result<ColumnarValue> {
+    if scalar_arg.is_null() {
+        return Ok(ColumnarValue::Scalar(ScalarValue::Boolean(None)));
+    }
+
+    // Convert the scalar to a 1-element ListArray, then extract the inner values
+    let scalar_array = scalar_arg.to_array_of_size(1)?;
+    let scalar_list: ArrayWrapper = scalar_array.as_ref().try_into()?;
+    let offsets: Vec<usize> = scalar_list.offsets().collect();
+    let scalar_values = scalar_list
+        .values()
+        .slice(offsets[0], offsets[1] - offsets[0]);
+
+    // If scalar list is empty, result is always false
+    if scalar_values.is_empty() {
+        return Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(false))));
+    }
+
+    match scalar_values.data_type() {
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
+            array_has_any_with_scalar_string(columnar_arg, &scalar_values)
+        }
+        _ => array_has_any_with_scalar_general(columnar_arg, &scalar_values),
+    }
+}
+
+/// When the scalar argument has more elements than this, the scalar fast path
+/// builds a HashSet for O(1) lookups. At or below this threshold, it falls
+/// back to a linear scan, since hashing every columnar element is more
+/// expensive than a linear scan over a short array.
+const SCALAR_SMALL_THRESHOLD: usize = 8;
+
+/// String-specialized scalar fast path for `array_has_any`.
+fn array_has_any_with_scalar_string(
+    columnar_arg: &ColumnarValue,
+    scalar_values: &ArrayRef,
+) -> Result<ColumnarValue> {
+    let (col_arr, is_scalar_output) = match columnar_arg {
+        ColumnarValue::Array(arr) => (Arc::clone(arr), false),
+        ColumnarValue::Scalar(s) => (s.to_array_of_size(1)?, true),
+    };
+
+    let col_list: ArrayWrapper = col_arr.as_ref().try_into()?;
+    let col_values = col_list.values();
+    let col_offsets: Vec<usize> = col_list.offsets().collect();
+    let col_nulls = col_list.nulls();
+
+    let scalar_lookup = ScalarStringLookup::new(scalar_values);
+    let has_null_scalar = scalar_values.null_count() > 0;
+
+    let result = match col_values.data_type() {
+        DataType::Utf8 => array_has_any_string_inner(
+            col_values.as_string::<i32>(),
+            &col_offsets,
+            col_nulls,
+            has_null_scalar,
+            &scalar_lookup,
+        ),
+        DataType::LargeUtf8 => array_has_any_string_inner(
+            col_values.as_string::<i64>(),
+            &col_offsets,
+            col_nulls,
+            has_null_scalar,
+            &scalar_lookup,
+        ),
+        DataType::Utf8View => array_has_any_string_inner(
+            col_values.as_string_view(),
+            &col_offsets,
+            col_nulls,
+            has_null_scalar,
+            &scalar_lookup,
+        ),
+        _ => unreachable!("array_has_any_with_scalar_string called with non-string type"),
+    };
+
+    if is_scalar_output {
+        Ok(ColumnarValue::Scalar(ScalarValue::try_from_array(
+            &result, 0,
+        )?))
+    } else {
+        Ok(ColumnarValue::Array(result))
+    }
+}
+
+/// Pre-computed lookup structure for the scalar string fastpath.
+enum ScalarStringLookup<'a> {
+    /// Large scalar: HashSet for O(1) lookups.
+    Set(HashSet<&'a str>),
+    /// Small scalar: Vec for linear scan.
+    List(Vec<Option<&'a str>>),
+}
+
+impl<'a> ScalarStringLookup<'a> {
+    fn new(scalar_values: &'a ArrayRef) -> Self {
+        let strings = string_array_to_vec(scalar_values.as_ref());
+        if strings.len() > SCALAR_SMALL_THRESHOLD {
+            ScalarStringLookup::Set(strings.into_iter().flatten().collect())
+        } else {
+            ScalarStringLookup::List(strings)
+        }
+    }
+
+    fn contains(&self, value: &str) -> bool {
+        match self {
+            ScalarStringLookup::Set(set) => set.contains(value),
+            ScalarStringLookup::List(list) => list.contains(&Some(value)),
+        }
+    }
+}
+
+/// Inner implementation of the string scalar fast path, generic over string
+/// array type to allow direct element access by index.
+fn array_has_any_string_inner<'a, C: StringArrayType<'a> + Copy>(
+    col_strings: C,
+    col_offsets: &[usize],
+    col_nulls: Option<&arrow::buffer::NullBuffer>,
+    has_null_scalar: bool,
+    scalar_lookup: &ScalarStringLookup<'_>,
+) -> ArrayRef {
+    let num_rows = col_offsets.len() - 1;
+    let mut builder = BooleanArray::builder(num_rows);
+
+    for i in 0..num_rows {
+        if col_nulls.is_some_and(|v| v.is_null(i)) {
+            builder.append_null();
+            continue;
+        }
+        let start = col_offsets[i];
+        let end = col_offsets[i + 1];
+        let found = (start..end).any(|j| {
+            if col_strings.is_null(j) {
+                has_null_scalar
+            } else {
+                scalar_lookup.contains(col_strings.value(j))
+            }
+        });
+        builder.append_value(found);
+    }
+
+    Arc::new(builder.finish())
+}
+
+/// General scalar fast path for `array_has_any`, using RowConverter for
+/// type-erased comparison.
+fn array_has_any_with_scalar_general(
+    columnar_arg: &ColumnarValue,
+    scalar_values: &ArrayRef,
+) -> Result<ColumnarValue> {
+    let converter =
+        RowConverter::new(vec![SortField::new(scalar_values.data_type().clone())])?;
+    let scalar_rows = converter.convert_columns(&[Arc::clone(scalar_values)])?;
+
+    let (col_arr, is_scalar_output) = match columnar_arg {
+        ColumnarValue::Array(arr) => (Arc::clone(arr), false),
+        ColumnarValue::Scalar(s) => (s.to_array_of_size(1)?, true),
+    };
+
+    let col_list: ArrayWrapper = col_arr.as_ref().try_into()?;
+    let col_rows = converter.convert_columns(&[Arc::clone(col_list.values())])?;
+    let col_offsets: Vec<usize> = col_list.offsets().collect();
+    let col_nulls = col_list.nulls();
+
+    let mut builder = BooleanArray::builder(col_list.len());
+    let num_scalar = scalar_rows.num_rows();
+
+    if num_scalar > SCALAR_SMALL_THRESHOLD {
+        // Large scalar: build HashSet for O(1) lookups
+        let scalar_set: HashSet<Box<[u8]>> = (0..num_scalar)
+            .map(|i| Box::from(scalar_rows.row(i).as_ref()))
+            .collect();
+
+        for i in 0..col_list.len() {
+            if col_nulls.is_some_and(|v| v.is_null(i)) {
+                builder.append_null();
+                continue;
+            }
+            let start = col_offsets[i];
+            let end = col_offsets[i + 1];
+            let found =
+                (start..end).any(|j| scalar_set.contains(col_rows.row(j).as_ref()));
+            builder.append_value(found);
+        }
+    } else {
+        // Small scalar: linear scan avoids HashSet hashing overhead
+        for i in 0..col_list.len() {
+            if col_nulls.is_some_and(|v| v.is_null(i)) {
+                builder.append_null();
+                continue;
+            }
+            let start = col_offsets[i];
+            let end = col_offsets[i + 1];
+            let found = (start..end)
+                .any(|j| (0..num_scalar).any(|k| col_rows.row(j) == scalar_rows.row(k)));
+            builder.append_value(found);
+        }
+    }
+
+    let result: ArrayRef = Arc::new(builder.finish());
+
+    if is_scalar_output {
+        Ok(ColumnarValue::Scalar(ScalarValue::try_from_array(
+            &result, 0,
+        )?))
+    } else {
+        Ok(ColumnarValue::Array(result))
+    }
+}
+
 #[user_doc(
     doc_section(label = "Array Functions"),
     description = "Returns true if all elements of sub-array exist in array.",
@@ -563,8 +785,8 @@ impl ScalarUDFImpl for ArrayHasAll {
 
 #[user_doc(
     doc_section(label = "Array Functions"),
-    description = "Returns true if any elements exist in both arrays.",
-    syntax_example = "array_has_any(array, sub-array)",
+    description = "Returns true if the arrays have any elements in common.",
+    syntax_example = "array_has_any(array1, array2)",
     sql_example = r#"```sql
 > select array_has_any([1, 2, 3], [3, 4]);
 +------------------------------------------+
@@ -574,11 +796,11 @@ impl ScalarUDFImpl for ArrayHasAll {
 +------------------------------------------+
 ```"#,
     argument(
-        name = "array",
+        name = "array1",
         description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
     ),
     argument(
-        name = "sub-array",
+        name = "array2",
         description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
     )
 )]
@@ -623,7 +845,15 @@ impl ScalarUDFImpl for ArrayHasAny {
         &self,
         args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_has_any_inner)(&args.args)
+        let [first_arg, second_arg] = take_function_args(self.name(), &args.args)?;
+
+        // If either argument is scalar, use the fast path.
+        match (&first_arg, &second_arg) {
+            (cv, ColumnarValue::Scalar(scalar)) | (ColumnarValue::Scalar(scalar), cv) => {
+                array_has_any_with_scalar(cv, scalar)
+            }
+            _ => make_scalar_function(array_has_any_inner)(&args.args),
+        }
     }
 
     fn aliases(&self) -> &[String] {

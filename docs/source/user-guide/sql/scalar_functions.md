@@ -3545,16 +3545,16 @@ array_has_all(array, sub-array)
 
 ### `array_has_any`
 
-Returns true if any elements exist in both arrays.
+Returns true if the arrays have any elements in common.
 
 ```sql
-array_has_any(array, sub-array)
+array_has_any(array1, array2)
 ```
 
 #### Arguments
 
-- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
-- **sub-array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **array1**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **array2**: Array expression. Can be a constant, column, or function, and any combination of array operators.
 
 #### Example
 

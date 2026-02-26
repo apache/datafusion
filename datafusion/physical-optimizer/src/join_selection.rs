@@ -34,7 +34,7 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_plan::execution_plan::EmissionType;
 use datafusion_physical_plan::joins::utils::ColumnIndex;
 use datafusion_physical_plan::joins::{
-    CrossJoinExec, HashJoinExec, HashJoinExecBuilder, NestedLoopJoinExec, PartitionMode,
+    CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode,
     StreamJoinPartitionMode, SymmetricHashJoinExec,
 };
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
@@ -192,14 +192,16 @@ pub(crate) fn try_collect_left(
                 Ok(Some(hash_join.swap_inputs(PartitionMode::CollectLeft)?))
             } else {
                 Ok(Some(Arc::new(
-                    HashJoinExecBuilder::from(hash_join)
+                    hash_join
+                        .builder()
                         .with_partition_mode(PartitionMode::CollectLeft)
                         .build()?,
                 )))
             }
         }
         (true, false) => Ok(Some(Arc::new(
-            HashJoinExecBuilder::from(hash_join)
+            hash_join
+                .builder()
                 .with_partition_mode(PartitionMode::CollectLeft)
                 .build()?,
         ))),
@@ -243,7 +245,8 @@ pub(crate) fn partitioned_hash_join(
         };
 
         Ok(Arc::new(
-            HashJoinExecBuilder::from(hash_join)
+            hash_join
+                .builder()
                 .with_partition_mode(partition_mode)
                 .build()?,
         ))
