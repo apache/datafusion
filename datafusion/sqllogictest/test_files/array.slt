@@ -5193,6 +5193,61 @@ select array_to_string(arrow_cast(make_array(1.5, NULL, 3.14), 'List(Decimal128(
 ----
 1.50,N,3.14
 
+# array_to_string with date values
+query T
+select array_to_string(arrow_cast(make_array('2024-01-15', '2024-06-30', '2024-12-25'), 'List(Date32)'), ',');
+----
+2024-01-15,2024-06-30,2024-12-25
+
+query T
+select array_to_string(arrow_cast(make_array('2024-01-15', NULL, '2024-12-25'), 'List(Date32)'), ',', 'N');
+----
+2024-01-15,N,2024-12-25
+
+# array_to_string with timestamp values
+query T
+select array_to_string(make_array(arrow_cast('2024-01-15T10:30:00', 'Timestamp(Second, None)'), arrow_cast('2024-06-30T15:45:00', 'Timestamp(Second, None)')), '|');
+----
+2024-01-15T10:30:00|2024-06-30T15:45:00
+
+query T
+select array_to_string(make_array(arrow_cast('2024-01-15T10:30:00', 'Timestamp(Millisecond, None)'), arrow_cast('2024-06-30T15:45:00', 'Timestamp(Millisecond, None)')), '|');
+----
+2024-01-15T10:30:00|2024-06-30T15:45:00
+
+query T
+select array_to_string(make_array(arrow_cast('2024-01-15T10:30:00', 'Timestamp(Microsecond, None)'), arrow_cast('2024-06-30T15:45:00', 'Timestamp(Microsecond, None)')), '|');
+----
+2024-01-15T10:30:00|2024-06-30T15:45:00
+
+query T
+select array_to_string(make_array(arrow_cast('2024-01-15T10:30:00', 'Timestamp(Nanosecond, None)'), arrow_cast('2024-06-30T15:45:00', 'Timestamp(Nanosecond, None)')), '|');
+----
+2024-01-15T10:30:00|2024-06-30T15:45:00
+
+# array_to_string with time values
+query T
+select array_to_string(make_array(arrow_cast('10:30:00', 'Time32(Second)'), arrow_cast('15:45:00', 'Time32(Second)')), ',');
+----
+10:30:00,15:45:00
+
+query T
+select array_to_string(make_array(arrow_cast('10:30:00', 'Time64(Microsecond)'), arrow_cast('15:45:00', 'Time64(Microsecond)')), ',');
+----
+10:30:00,15:45:00
+
+# array_to_string with interval values
+query T
+select array_to_string(make_array(interval '1 year 2 months', interval '3 days 4 hours'), ',');
+----
+14 mons,3 days 4 hours
+
+# array_to_string with duration values
+query T
+select array_to_string(make_array(arrow_cast(1000, 'Duration(Millisecond)'), arrow_cast(2000, 'Duration(Millisecond)')), ',');
+----
+PT1S,PT2S
+
 ## cardinality
 
 # cardinality scalar function

@@ -37,7 +37,7 @@ use arrow::array::{
     builder::{ArrayBuilder, LargeStringBuilder, StringViewBuilder},
     cast::AsArray,
 };
-use arrow::compute::cast;
+use arrow::compute::{can_cast_types, cast};
 use arrow::datatypes::DataType::{
     Dictionary, FixedSizeList, LargeList, LargeUtf8, List, Null, Utf8, Utf8View,
 };
@@ -481,12 +481,10 @@ fn compute_array_to_string(
                 DataType::UInt16 => int_leaf!(UInt16Array),
                 DataType::UInt32 => int_leaf!(UInt32Array),
                 DataType::UInt64 => int_leaf!(UInt64Array),
-                DataType::Decimal128(_, _) | DataType::Decimal256(_, _) => {
-                    // Decimal arrays iterate over raw integers, so we need to
-                    // cast to Utf8 to ensure the right display formatting.
+                data_type if can_cast_types(data_type, &Utf8) => {
                     let str_arr = cast(arr, &Utf8).map_err(|e| {
                         DataFusionError::from(e)
-                            .context("Casting decimal to string in array_to_string")
+                            .context("Casting to string in array_to_string")
                     })?;
                     return compute_array_to_string(
                         buf,
@@ -496,9 +494,9 @@ fn compute_array_to_string(
                         first,
                     );
                 }
-                dt => {
+                data_type => {
                     return not_impl_err!(
-                        "Unsupported data type in array_to_string: {dt}"
+                        "Unsupported data type in array_to_string: {data_type}"
                     );
                 }
             }
