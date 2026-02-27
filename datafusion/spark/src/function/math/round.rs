@@ -19,15 +19,15 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrowNativeTypeOp, AsArray, Decimal128Array, Int16Array, Int32Array,
-    Int64Array, Int8Array,
+    Array, ArrowNativeTypeOp, AsArray, Decimal128Array, Int8Array, Int16Array,
+    Int32Array, Int64Array,
 };
 use arrow::compute::kernels::arity::try_unary;
 use arrow::datatypes::{
     DataType, Decimal128Type, Field, FieldRef, Float32Type, Float64Type,
 };
 use arrow::error::ArrowError;
-use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     TypeSignature, Volatility,
@@ -191,9 +191,7 @@ macro_rules! round_integer_array {
         let ten: $native_type = 10;
         let result: $array_type = if let Some(div) = ten.checked_pow((-$point) as u32) {
             let half = div / 2;
-            try_unary(array, |x| {
-                integer_round!(x, div, half, $enable_ansi_mode)
-            })?
+            try_unary(array, |x| integer_round!(x, div, half, $enable_ansi_mode))?
         } else {
             try_unary(array, |_| Ok(0 as $native_type))?
         };
@@ -209,12 +207,12 @@ macro_rules! round_integer_scalar {
             let result = $scalar_opt
                 .map(|x| integer_round!(x, div, half, $enable_ansi_mode))
                 .transpose()
-                .map_err(|e| datafusion_common::DataFusionError::ArrowError(Box::new(e), None))?;
+                .map_err(|e| {
+                    datafusion_common::DataFusionError::ArrowError(Box::new(e), None)
+                })?;
             Ok(ColumnarValue::Scalar(ScalarValue::$scalar_variant(result)))
         } else {
-            Ok(ColumnarValue::Scalar(ScalarValue::$scalar_variant(Some(
-                0,
-            ))))
+            Ok(ColumnarValue::Scalar(ScalarValue::$scalar_variant(Some(0))))
         }
     }};
 }
@@ -245,9 +243,7 @@ fn round_float(value: f64, point: i64) -> f64 {
 #[inline]
 fn round_decimal(x: i128, scale: i64, point: i64) -> i128 {
     if point < 0 {
-        if let Some(div) =
-            10_i128.checked_pow(((-point) as u32) + (scale as u32))
-        {
+        if let Some(div) = 10_i128.checked_pow(((-point) as u32) + (scale as u32)) {
             let half = div / 2;
             let mul = 10_i128.pow((-point) as u32);
             (x + x.signum() * half) / div * mul
@@ -273,9 +269,7 @@ fn spark_round(
             DataType::Float32 => {
                 let result = array
                     .as_primitive::<Float32Type>()
-                    .unary::<_, Float32Type>(|x| {
-                        round_float(x as f64, point) as f32
-                    });
+                    .unary::<_, Float32Type>(|x| round_float(x as f64, point) as f32);
                 Ok(ColumnarValue::Array(Arc::new(result)))
             }
             DataType::Float64 => {
@@ -285,40 +279,16 @@ fn spark_round(
                 Ok(ColumnarValue::Array(Arc::new(result)))
             }
             DataType::Int64 if point < 0 => {
-                round_integer_array!(
-                    array,
-                    point,
-                    Int64Array,
-                    i64,
-                    enable_ansi_mode
-                )
+                round_integer_array!(array, point, Int64Array, i64, enable_ansi_mode)
             }
             DataType::Int32 if point < 0 => {
-                round_integer_array!(
-                    array,
-                    point,
-                    Int32Array,
-                    i32,
-                    enable_ansi_mode
-                )
+                round_integer_array!(array, point, Int32Array, i32, enable_ansi_mode)
             }
             DataType::Int16 if point < 0 => {
-                round_integer_array!(
-                    array,
-                    point,
-                    Int16Array,
-                    i16,
-                    enable_ansi_mode
-                )
+                round_integer_array!(array, point, Int16Array, i16, enable_ansi_mode)
             }
             DataType::Int8 if point < 0 => {
-                round_integer_array!(
-                    array,
-                    point,
-                    Int8Array,
-                    i8,
-                    enable_ansi_mode
-                )
+                round_integer_array!(array, point, Int8Array, i8, enable_ansi_mode)
             }
             dt if dt.is_integer() => {
                 // Rounding to >= 0 decimal places on integers is a no-op
@@ -335,12 +305,12 @@ fn spark_round(
             dt => exec_err!("Unsupported data type for round: {dt}"),
         },
         ColumnarValue::Scalar(sv) => match sv {
-            ScalarValue::Float32(v) => Ok(ColumnarValue::Scalar(
-                ScalarValue::Float32(v.map(|x| round_float(x as f64, point) as f32)),
-            )),
-            ScalarValue::Float64(v) => Ok(ColumnarValue::Scalar(
-                ScalarValue::Float64(v.map(|x| round_float(x, point))),
-            )),
+            ScalarValue::Float32(v) => Ok(ColumnarValue::Scalar(ScalarValue::Float32(
+                v.map(|x| round_float(x as f64, point) as f32),
+            ))),
+            ScalarValue::Float64(v) => Ok(ColumnarValue::Scalar(ScalarValue::Float64(
+                v.map(|x| round_float(x, point)),
+            ))),
             ScalarValue::Int64(v) if point < 0 => {
                 round_integer_scalar!(v, point, Int64, i64, enable_ansi_mode)
             }
@@ -361,9 +331,7 @@ fn spark_round(
                 let scale = *s as i64;
                 let result = v.map(|x| round_decimal(x, scale, point));
                 let DataType::Decimal128(p, s) = return_type else {
-                    return internal_err!(
-                        "Expected Decimal128 return type for round"
-                    );
+                    return internal_err!("Expected Decimal128 return type for round");
                 };
                 Ok(ColumnarValue::Scalar(ScalarValue::Decimal128(
                     result, *p, *s,
@@ -377,7 +345,7 @@ fn spark_round(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Float64Array, Int64Array};
+    use arrow::array::{Float32Array, Float64Array, Int64Array};
 
     #[test]
     fn test_round_float64() {
@@ -415,9 +383,41 @@ mod tests {
             _ => panic!("Expected array"),
         };
         let result = result.as_primitive::<Float64Type>();
+        assert_eq!(result, &Float64Array::from(vec![Some(1.23), Some(-1.23)]));
+    }
+
+    #[test]
+    fn test_round_float32_with_decimal_places() {
+        let input = Float32Array::from(vec![
+            Some(125.2345f32),
+            Some(15.3455f32),
+            Some(0.1234f32),
+            Some(0.125f32),
+            Some(0.785f32),
+            Some(123.123f32),
+        ]);
+        let result = spark_round(
+            &ColumnarValue::Array(Arc::new(input)),
+            2,
+            &DataType::Float32,
+            false,
+        )
+        .unwrap();
+        let result = match result {
+            ColumnarValue::Array(arr) => arr,
+            _ => panic!("Expected array"),
+        };
+        let result = result.as_primitive::<Float32Type>();
         assert_eq!(
             result,
-            &Float64Array::from(vec![Some(1.23), Some(-1.23)])
+            &Float32Array::from(vec![
+                Some(125.23f32),
+                Some(15.35f32),
+                Some(0.12f32),
+                Some(0.13f32),
+                Some(0.79f32),
+                Some(123.12f32),
+            ])
         );
     }
 
@@ -494,10 +494,29 @@ mod tests {
             false,
         )
         .unwrap();
-        assert_eq!(
-            result,
-            ColumnarValue::Scalar(ScalarValue::Float64(Some(3.0)))
-        );
+        match result {
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(v))) => {
+                assert_eq!(v, 3.0);
+            }
+            _ => panic!("Expected scalar float64"),
+        }
+    }
+
+    #[test]
+    fn test_round_scalar_float32() {
+        let result = spark_round(
+            &ColumnarValue::Scalar(ScalarValue::Float32(Some(125.2345f32))),
+            2,
+            &DataType::Float32,
+            false,
+        )
+        .unwrap();
+        match result {
+            ColumnarValue::Scalar(ScalarValue::Float32(Some(v))) => {
+                assert_eq!(v, 125.23f32);
+            }
+            _ => panic!("Expected scalar float32"),
+        }
     }
 
     #[test]
@@ -509,10 +528,12 @@ mod tests {
             false,
         )
         .unwrap();
-        assert_eq!(
-            result,
-            ColumnarValue::Scalar(ScalarValue::Int64(Some(1200)))
-        );
+        match result {
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(v))) => {
+                assert_eq!(v, 1200);
+            }
+            _ => panic!("Expected scalar int64"),
+        }
     }
 
     #[test]
@@ -557,10 +578,12 @@ mod tests {
             true,
         );
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("ARITHMETIC_OVERFLOW"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("ARITHMETIC_OVERFLOW")
+        );
     }
 
     #[test]
