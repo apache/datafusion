@@ -3820,6 +3820,12 @@ impl DeduplicatingSerializer {
     }
 }
 
+fn dedup_debug_enabled() -> bool {
+    std::env::var("DD_DF_PROTO_DEBUG")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
 impl PhysicalProtoConverterExtension for DeduplicatingSerializer {
     fn proto_to_execution_plan(
         &self,
@@ -3872,6 +3878,12 @@ impl PhysicalProtoConverterExtension for DeduplicatingSerializer {
             proto.dynamic_filter_inner_id = Some(self.hash(dynamic_filter.inner_id()))
         }
         proto.expr_id = Some(self.hash(Arc::as_ptr(expr) as *const () as u64));
+        if dedup_debug_enabled() && proto.dynamic_filter_inner_id.is_some() {
+            eprintln!(
+                "[df-proto][ser] dynamic expr_id={:?} dynamic_filter_inner_id={:?} expr={expr}",
+                proto.expr_id, proto.dynamic_filter_inner_id
+            );
+        }
 
         Ok(proto)
     }
@@ -3924,12 +3936,24 @@ impl PhysicalProtoConverterExtension for DeduplicatingDeserializer {
         if let Some(expr_id) = proto.expr_id
             && let Some(cached) = self.cache.borrow().get(&expr_id)
         {
+            if dedup_debug_enabled() && proto.dynamic_filter_inner_id.is_some() {
+                eprintln!(
+                    "[df-proto][de] cache_hit expr_id={expr_id} dynamic_filter_inner_id={:?}",
+                    proto.dynamic_filter_inner_id
+                );
+            }
             return Ok(Arc::clone(cached));
         }
 
         // Cache miss, we must deserialize the expr.
         let mut expr =
             parse_physical_expr_with_converter(proto, ctx, input_schema, codec, self)?;
+        if dedup_debug_enabled() && proto.dynamic_filter_inner_id.is_some() {
+            eprintln!(
+                "[df-proto][de] cache_miss expr_id={:?} dynamic_filter_inner_id={:?}",
+                proto.expr_id, proto.dynamic_filter_inner_id
+            );
+        }
 
         // Check if we need to share inner state with a cached dynamic filter
         if let Some(dynamic_filter_id) = proto.dynamic_filter_inner_id {
@@ -3951,11 +3975,21 @@ impl PhysicalProtoConverterExtension for DeduplicatingDeserializer {
                     .map_err(|_| internal_datafusion_err!("dynamic_filter_id present in proto, but the expression was not a DynamicFilterPhysicalExpr"))?;
                 expr = Arc::new(dynamic_filter_expr.new_from_source(cached_df)?)
                     as Arc<dyn PhysicalExpr>;
+                if dedup_debug_enabled() {
+                    eprintln!(
+                        "[df-proto][de] relinked dynamic_filter_inner_id={dynamic_filter_id} from cached source"
+                    );
+                }
             } else {
                 // Cache it
                 self.dynamic_filter_cache
                     .borrow_mut()
                     .insert(dynamic_filter_id, Arc::clone(&expr));
+                if dedup_debug_enabled() {
+                    eprintln!(
+                        "[df-proto][de] seeded dynamic_filter_inner_id={dynamic_filter_id} into cache"
+                    );
+                }
             }
         };
 
@@ -4001,8 +4035,16 @@ impl PhysicalProtoConverterExtension for DeduplicatingProtoConverter {
         codec: &dyn PhysicalExtensionCodec,
         proto: &protobuf::PhysicalPlanNode,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        if dedup_debug_enabled() {
+            eprintln!("[df-proto][plan-de] start");
+        }
         let deserializer = DeduplicatingDeserializer::default();
-        proto.try_into_physical_plan_with_converter(ctx, codec, &deserializer)
+        let plan =
+            proto.try_into_physical_plan_with_converter(ctx, codec, &deserializer)?;
+        if dedup_debug_enabled() {
+            eprintln!("[df-proto][plan-de] done plan={}", plan.name());
+        }
+        Ok(plan)
     }
 
     fn execution_plan_to_proto(
@@ -4013,12 +4055,19 @@ impl PhysicalProtoConverterExtension for DeduplicatingProtoConverter {
     where
         Self: Sized,
     {
+        if dedup_debug_enabled() {
+            eprintln!("[df-proto][plan-ser] start plan={}", plan.name());
+        }
         let serializer = DeduplicatingSerializer::new();
-        protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
+        let proto = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             Arc::clone(plan),
             codec,
             &serializer,
-        )
+        )?;
+        if dedup_debug_enabled() {
+            eprintln!("[df-proto][plan-ser] done plan={}", plan.name());
+        }
+        Ok(proto)
     }
 
     fn proto_to_physical_expr(
