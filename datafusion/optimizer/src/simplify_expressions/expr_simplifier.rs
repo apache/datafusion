@@ -2366,6 +2366,7 @@ mod tests {
         interval_arithmetic::Interval,
         *,
     };
+    use datafusion_functions::expr_fn::contains as contains_fn;
     use datafusion_functions_window_common::field::WindowUDFFieldArgs;
     use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
     use datafusion_physical_expr::PhysicalExpr;
@@ -3380,6 +3381,19 @@ mod tests {
             regex_match(col("c1"), lit("foo")),
             col("c1").like(lit("%foo%")),
         );
+
+        // regular expression that matches a substring
+        assert_change(
+            regex_match(col("c1"), lit(".*foo.*")),
+            contains_fn(col("c1"), lit("foo")),
+        );
+
+        assert_change(
+            regex_not_match(col("c1"), lit(".*foo.*")),
+            Expr::Not(Box::new(contains_fn(col("c1"), lit("foo")))),
+        );
+
+        assert_change(regex_match(col("c1"), lit(".*.*")), col("c1").is_not_null());
 
         // regular expressions that match an exact literal
         assert_change(regex_match(col("c1"), lit("^$")), col("c1").eq(lit("")));

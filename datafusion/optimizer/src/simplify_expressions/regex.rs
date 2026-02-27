@@ -18,6 +18,7 @@
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{BinaryExpr, Expr, Like, Operator, lit};
+use datafusion_functions::expr_fn::contains;
 use regex_syntax::hir::{Capture, Hir, HirKind, Literal, Look};
 
 use crate::simplify_expressions::expr_simplifier::StringScalar;
@@ -34,6 +35,8 @@ const ANY_CHAR_REGEX_PATTERN: &str = ".*";
 ///
 /// Typical cases this function can simplify:
 /// - empty regex pattern to `LIKE '%'`
+/// - `EQ .*foo.*` to `contains(left, "foo")`
+/// - `NE .*foo.*` to `NOT contains(left, "foo")`
 /// - literal regex patterns to `LIKE '%foo%'`
 /// - full anchored regex patterns (e.g. `^foo$`) to `= 'foo'`
 /// - partial anchored regex patterns (e.g. `^foo`) to `LIKE 'foo%'`
@@ -78,6 +81,32 @@ pub fn simplify_regex_expr(
         } else {
             // not null
             left.is_not_null()
+        };
+        return Ok(Transformed::yes(new_expr));
+    }
+
+    // Convert patterns of the form ".*foo.*" to `contains(left, "foo")`
+    if !mode.i
+        && let Some(inner) = pattern
+            // If pattern starts and ends with ".*"
+            .strip_prefix(ANY_CHAR_REGEX_PATTERN)
+            .and_then(|rest| rest.strip_suffix(ANY_CHAR_REGEX_PATTERN))
+            // If inner is all non-special characters
+            && inner.chars().all(|x| !is_special_character(x))
+    {
+        let new_expr = match (mode.not, inner.is_empty()) {
+            // contains(left, inner)
+            (false, false) => contains(*left, lit(inner)),
+            (false, true) => left.is_not_null(),
+            // not (contains(left, inner))
+            (true, false) => Expr::Not(Box::new(contains(*left, lit(inner)))),
+            (true, true) => {
+                return Ok(Transformed::no(Expr::BinaryExpr(BinaryExpr {
+                    left,
+                    op,
+                    right,
+                })));
+            }
         };
         return Ok(Transformed::yes(new_expr));
     }
@@ -200,6 +229,25 @@ fn str_from_literal(l: &Literal) -> Option<&str> {
 
 fn is_safe_for_like(c: char) -> bool {
     (c != '%') && (c != '_')
+}
+
+fn is_special_character(c: char) -> bool {
+    matches!(
+        c,
+        '.' | '*'
+            | '+'
+            | '?'
+            | '|'
+            | '('
+            | ')'
+            | '['
+            | ']'
+            | '{'
+            | '}'
+            | '^'
+            | '$'
+            | '\\'
+    )
 }
 
 /// Returns true if the elements in a `Concat` pattern are:
