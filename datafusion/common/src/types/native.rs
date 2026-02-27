@@ -537,3 +537,86 @@ impl NativeType {
         matches!(self, Self::Float16 | Self::Float32 | Self::Float64)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::LogicalField;
+    use arrow::datatypes::Field;
+    use insta::assert_snapshot;
+
+    #[test]
+    fn test_native_type_display() {
+        assert_snapshot!(NativeType::Null, @"Null");
+        assert_snapshot!(NativeType::Boolean, @"Boolean");
+        assert_snapshot!(NativeType::Int8, @"Int8");
+        assert_snapshot!(NativeType::Int16, @"Int16");
+        assert_snapshot!(NativeType::Int32, @"Int32");
+        assert_snapshot!(NativeType::Int64, @"Int64");
+        assert_snapshot!(NativeType::UInt8, @"UInt8");
+        assert_snapshot!(NativeType::UInt16, @"UInt16");
+        assert_snapshot!(NativeType::UInt32, @"UInt32");
+        assert_snapshot!(NativeType::UInt64, @"UInt64");
+        assert_snapshot!(NativeType::Float16, @"Float16");
+        assert_snapshot!(NativeType::Float32, @"Float32");
+        assert_snapshot!(NativeType::Float64, @"Float64");
+        assert_snapshot!(NativeType::Date, @"Date");
+        assert_snapshot!(NativeType::Binary, @"Binary");
+        assert_snapshot!(NativeType::String, @"String");
+        assert_snapshot!(NativeType::FixedSizeBinary(16), @"FixedSizeBinary(16)");
+        assert_snapshot!(NativeType::Decimal(10, 2), @"Decimal(10, 2)");
+    }
+
+    #[test]
+    fn test_native_type_display_timestamp() {
+        assert_snapshot!(
+            NativeType::Timestamp(TimeUnit::Second, None),
+            @"Timestamp(s)"
+        );
+        assert_snapshot!(
+            NativeType::Timestamp(TimeUnit::Millisecond, None),
+            @"Timestamp(ms)"
+        );
+        assert_snapshot!(
+            NativeType::Timestamp(TimeUnit::Nanosecond, Some(Arc::from("UTC"))),
+            @r#"Timestamp(ns, "UTC")"#
+        );
+    }
+
+    #[test]
+    fn test_native_type_display_time_duration_interval() {
+        assert_snapshot!(NativeType::Time(TimeUnit::Microsecond), @"Time(µs)");
+        assert_snapshot!(NativeType::Duration(TimeUnit::Nanosecond), @"Duration(ns)");
+        assert_snapshot!(NativeType::Interval(IntervalUnit::YearMonth), @"Interval(YearMonth)");
+        assert_snapshot!(NativeType::Interval(IntervalUnit::MonthDayNano), @"Interval(MonthDayNano)");
+    }
+
+    #[test]
+    fn test_native_type_display_nested() {
+        let list = NativeType::List(Arc::new(LogicalField::from(
+            &Field::new("item", DataType::Int32, true),
+        )));
+        assert_snapshot!(list, @"List(LogicalType(Native(Int32), Int32))");
+
+        let fixed_list = NativeType::FixedSizeList(
+            Arc::new(LogicalField::from(
+                &Field::new("item", DataType::Float64, false),
+            )),
+            3,
+        );
+        assert_snapshot!(fixed_list, @"FixedSizeList(3 x LogicalType(Native(Float64), Float64))");
+
+        let struct_type = NativeType::Struct(LogicalFields::from(
+            &Fields::from(vec![
+                Field::new("name", DataType::Utf8, false),
+                Field::new("age", DataType::Int32, true),
+            ]),
+        ));
+        assert_snapshot!(struct_type, @r#"Struct("name": LogicalType(Native(String), String), "age": LogicalType(Native(Int32), Int32))"#);
+
+        let map = NativeType::Map(Arc::new(LogicalField::from(
+            &Field::new("entries", DataType::Utf8, false),
+        )));
+        assert_snapshot!(map, @"Map(LogicalType(Native(String), String))");
+    }
+}

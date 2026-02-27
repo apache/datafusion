@@ -1438,7 +1438,9 @@ impl Signature {
 
 #[cfg(test)]
 mod tests {
-    use datafusion_common::types::{logical_int32, logical_int64, logical_string};
+    use datafusion_common::types::{
+        logical_float64, logical_int32, logical_int64, logical_string, NativeType,
+    };
 
     use super::*;
     use crate::signature::{
@@ -2033,5 +2035,134 @@ mod tests {
     fn test_type_signature_arity_user_defined() {
         let sig = TypeSignature::UserDefined;
         assert_eq!(sig.arity(), Arity::Variable);
+    }
+
+    #[test]
+    fn test_type_signature_class_display() {
+        use insta::assert_snapshot;
+
+        assert_snapshot!(
+            TypeSignatureClass::Any,
+            @"TypeSignatureClass::Any"
+        );
+        assert_snapshot!(
+            TypeSignatureClass::Numeric,
+            @"TypeSignatureClass::Numeric"
+        );
+        assert_snapshot!(
+            TypeSignatureClass::Integer,
+            @"TypeSignatureClass::Integer"
+        );
+        assert_snapshot!(
+            TypeSignatureClass::Float,
+            @"TypeSignatureClass::Float"
+        );
+        assert_snapshot!(
+            TypeSignatureClass::Decimal,
+            @"TypeSignatureClass::Decimal"
+        );
+        assert_snapshot!(
+            TypeSignatureClass::Timestamp,
+            @"TypeSignatureClass::Timestamp"
+        );
+        assert_snapshot!(
+            TypeSignatureClass::Time,
+            @"TypeSignatureClass::Time"
+        );
+        assert_snapshot!(
+            TypeSignatureClass::Interval,
+            @"TypeSignatureClass::Interval"
+        );
+        assert_snapshot!(
+            TypeSignatureClass::Duration,
+            @"TypeSignatureClass::Duration"
+        );
+        assert_snapshot!(
+            TypeSignatureClass::Binary,
+            @"TypeSignatureClass::Binary"
+        );
+        assert_snapshot!(
+            TypeSignatureClass::Native(logical_int32()),
+            @"TypeSignatureClass::Native(LogicalType(Native(Int32), Int32))"
+        );
+        assert_snapshot!(
+            TypeSignatureClass::Native(logical_string()),
+            @"TypeSignatureClass::Native(LogicalType(Native(String), String))"
+        );
+    }
+
+    #[test]
+    fn test_coercion_display() {
+        use insta::assert_snapshot;
+
+        let exact_int = Coercion::new_exact(TypeSignatureClass::Native(logical_int32()));
+        assert_snapshot!(
+            exact_int,
+            @"Coercion(TypeSignatureClass::Native(LogicalType(Native(Int32), Int32)))"
+        );
+
+        let exact_numeric = Coercion::new_exact(TypeSignatureClass::Numeric);
+        assert_snapshot!(exact_numeric, @"Coercion(TypeSignatureClass::Numeric)");
+
+        let implicit = Coercion::new_implicit(
+            TypeSignatureClass::Native(logical_float64()),
+            vec![TypeSignatureClass::Numeric],
+            NativeType::Float64,
+        );
+        assert_snapshot!(
+            implicit,
+            @"Coercion(TypeSignatureClass::Native(LogicalType(Native(Float64), Float64)), implicit_coercion=ImplicitCoercion([Numeric], default_type=Float64)"
+        );
+
+        let implicit_with_multiple_sources = Coercion::new_implicit(
+            TypeSignatureClass::Native(logical_int64()),
+            vec![TypeSignatureClass::Integer, TypeSignatureClass::Numeric],
+            NativeType::Int64,
+        );
+        assert_snapshot!(
+            implicit_with_multiple_sources,
+            @"Coercion(TypeSignatureClass::Native(LogicalType(Native(Int64), Int64)), implicit_coercion=ImplicitCoercion([Integer, Numeric], default_type=Int64)"
+        );
+    }
+
+    #[test]
+    fn test_to_string_repr_coercible() {
+        use insta::assert_snapshot;
+
+        // Simulates a function like round(Float64, Int64) with coercion
+        let sig = TypeSignature::Coercible(vec![
+            Coercion::new_implicit(
+                TypeSignatureClass::Native(logical_float64()),
+                vec![TypeSignatureClass::Numeric],
+                NativeType::Float64,
+            ),
+            Coercion::new_implicit(
+                TypeSignatureClass::Native(logical_int64()),
+                vec![TypeSignatureClass::Integer],
+                NativeType::Int64,
+            ),
+        ]);
+        let repr = sig.to_string_repr();
+        assert_eq!(repr.len(), 1);
+        assert_snapshot!(
+            repr[0],
+            @"Coercion(TypeSignatureClass::Native(LogicalType(Native(Float64), Float64)), implicit_coercion=ImplicitCoercion([Numeric], default_type=Float64), Coercion(TypeSignatureClass::Native(LogicalType(Native(Int64), Int64)), implicit_coercion=ImplicitCoercion([Integer], default_type=Int64)"
+        );
+    }
+
+    #[test]
+    fn test_to_string_repr_coercible_exact() {
+        use insta::assert_snapshot;
+
+        let sig = TypeSignature::Coercible(vec![
+            Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+            Coercion::new_exact(TypeSignatureClass::Native(logical_int64())),
+        ]);
+        let repr = sig.to_string_repr();
+        assert_eq!(repr.len(), 1);
+        assert_snapshot!(
+            repr[0],
+            @"Coercion(TypeSignatureClass::Native(LogicalType(Native(String), String))), Coercion(TypeSignatureClass::Native(LogicalType(Native(Int64), Int64)))"
+        );
     }
 }
