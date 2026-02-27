@@ -248,6 +248,13 @@ pub trait Dialect: Send + Sync {
     fn supports_empty_select_list(&self) -> bool {
         false
     }
+
+    /// Allow the dialect to unparse a string literal as a national string literal.
+    /// Some dialects like MSSQL require national string literals(N'datafusion資料融合') to be prefixed with N
+    /// to support Unicode characters.
+    fn to_unicode_string_literal(&self, _s: &str) -> Option<ast::Expr> {
+        None
+    }
 }
 
 /// `IntervalStyle` to use for unparsing
@@ -630,6 +637,25 @@ impl BigQueryDialect {
     #[must_use]
     pub fn new() -> Self {
         Self {}
+    }
+}
+
+#[derive(Default)]
+pub struct MsSqlDialect {}
+
+impl Dialect for MsSqlDialect {
+    fn identifier_quote_style(&self, _: &str) -> Option<char> {
+        Some('[')
+    }
+
+    fn to_unicode_string_literal(&self, s: &str) -> Option<ast::Expr> {
+        if !s.is_ascii() {
+            Some(ast::Expr::value(ast::Value::NationalStringLiteral(
+                s.to_string(),
+            )))
+        } else {
+            None
+        }
     }
 }
 
