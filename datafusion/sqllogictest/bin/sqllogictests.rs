@@ -378,10 +378,7 @@ async fn run_tests() -> Result<()> {
     }
 }
 
-fn print_timing_summary(
-    options: &Options,
-    file_timings: &[FileTiming],
-) -> Result<()> {
+fn print_timing_summary(options: &Options, file_timings: &[FileTiming]) -> Result<()> {
     if !options.timing_summary || file_timings.is_empty() {
         return Ok(());
     }
