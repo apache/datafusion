@@ -442,11 +442,8 @@ struct ArrayAggGroupsAccumulator {
     /// Source arrays — input arrays (from update_batch) or list backing
     /// arrays (from merge_batch).
     batches: Vec<ArrayRef>,
-    /// Flat list of (group_idx, batch_idx, row_idx) entries across all
-    /// groups. Grouped by counting sort at evaluate time.
-    entries: Vec<(u32, u32, u32)>,
-    /// Per-batch reference count for memory reclamation during partial emit.
-    batch_refcounts: Vec<u32>,
+    /// Per-batch list of (group_idx, row_idx) pairs.
+    batch_entries: Vec<Vec<(u32, u32)>>,
     /// Total number of groups tracked.
     num_groups: usize,
 }
@@ -457,18 +454,15 @@ impl ArrayAggGroupsAccumulator {
             datatype,
             ignore_nulls,
             batches: Vec::new(),
-            entries: Vec::new(),
-            batch_refcounts: Vec::new(),
+            batch_entries: Vec::new(),
             num_groups: 0,
         }
     }
 }
 
 impl GroupsAccumulator for ArrayAggGroupsAccumulator {
-    /// Store references to each input batch and record
-    /// `(group_index, batch_index, row_index)` tuples in a flat vector.
-    /// Materialization is deferred to `evaluate`, which groups entries
-    /// using a counting sort.
+    /// Store a reference to the input batch, plus a `(group_idx, row_idx)` pair
+    /// for every row.
     fn update_batch(
         &mut self,
         values: &[ArrayRef],
@@ -487,8 +481,7 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
             None
         };
 
-        let batch_idx = self.batches.len() as u32;
-        let mut batch_pushed = false;
+        let mut entries = Vec::new();
 
         for (row_idx, &group_idx) in group_indices.iter().enumerate() {
             // Skip filtered rows
@@ -505,39 +498,48 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
                 continue;
             }
 
-            if !batch_pushed {
-                self.batches.push(Arc::clone(input));
-                self.batch_refcounts.push(0);
-                batch_pushed = true;
-            }
-            self.batch_refcounts[batch_idx as usize] += 1;
-            self.entries
-                .push((group_idx as u32, batch_idx, row_idx as u32));
+            entries.push((group_idx as u32, row_idx as u32));
+        }
+
+        // We only need to record the batch if it was non-empty.
+        if !entries.is_empty() {
+            self.batches.push(Arc::clone(input));
+            self.batch_entries.push(entries);
         }
 
         Ok(())
     }
 
+    /// Produce a `ListArray` ordered by group index: the list at
+    /// position N contains the aggregated values for group N.
+    ///
+    /// Uses a counting sort to rearrange the stored `(group, row)`
+    /// entries into group order, then calls `interleave` to gather
+    /// the values into a flat array that backs the output `ListArray`.
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        let num_groups = match emit_to {
+        let emit_groups = match emit_to {
             EmitTo::All => self.num_groups,
             EmitTo::First(n) => n,
         };
 
-        // Step 1: Count entries per group.
-        let mut counts = vec![0u32; num_groups];
-        for &(g, _, _) in &self.entries {
-            let g = g as usize;
-            if g < num_groups {
-                counts[g] += 1;
+        // Step 1: Count entries per group. For EmitTo::First(n), only groups
+        // 0..n are counted; the rest are retained to be emitted in the future.
+        let mut counts = vec![0u32; emit_groups];
+        for entries in &self.batch_entries {
+            for &(g, _) in entries {
+                let g = g as usize;
+                if g < emit_groups {
+                    counts[g] += 1;
+                }
             }
         }
 
-        // Step 2: Build ListArray offsets and null buffer from counts.
-        // Groups with count=0 are null.
-        let mut offsets = Vec::<i32>::with_capacity(num_groups + 1);
+        // Step 2: Do a prefix sum over the counts and use it to build ListArray
+        // offsets, null buffer, and write positions for the counting sort.
+        let mut offsets = Vec::<i32>::with_capacity(emit_groups + 1);
         offsets.push(0);
-        let mut nulls_builder = NullBufferBuilder::new(num_groups);
+        let mut nulls_builder = NullBufferBuilder::new(emit_groups);
+        let mut write_positions = Vec::with_capacity(emit_groups);
         let mut cur_offset = 0u32;
         for &count in &counts {
             if count == 0 {
@@ -545,30 +547,26 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
             } else {
                 nulls_builder.append_non_null();
             }
+            write_positions.push(cur_offset);
             cur_offset += count;
             offsets.push(cur_offset as i32);
         }
         let total_rows = cur_offset as usize;
 
-        // Step 3: Prefix sum to compute write positions for counting sort.
-        let mut write_positions = Vec::with_capacity(num_groups);
-        let mut pos = 0u32;
-        for &count in &counts {
-            write_positions.push(pos);
-            pos += count;
-        }
-
-        // Step 4: Scatter entries into sorted order using the counting sort.
+        // Step 3: Scatter entries into group order using the counting sort. The
+        // batch index is implicit from the outer loop position.
         let flat_values = if total_rows == 0 {
             new_empty_array(&self.datatype)
         } else {
             let mut interleave_indices = vec![(0usize, 0usize); total_rows];
-            for &(g, b, r) in &self.entries {
-                let g = g as usize;
-                if g < num_groups {
-                    let wp = write_positions[g] as usize;
-                    interleave_indices[wp] = (b as usize, r as usize);
-                    write_positions[g] += 1;
+            for (batch_idx, entries) in self.batch_entries.iter().enumerate() {
+                for &(g, r) in entries {
+                    let g = g as usize;
+                    if g < emit_groups {
+                        let wp = write_positions[g] as usize;
+                        interleave_indices[wp] = (batch_idx, r as usize);
+                        write_positions[g] += 1;
+                    }
                 }
             }
 
@@ -577,34 +575,32 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
             arrow::compute::interleave(&sources, &interleave_indices)?
         };
 
-        // Step 5: Cleanup.
+        // Step 4: Release state for emitted groups.
         if emit_to == EmitTo::All {
             self.batches.clear();
-            self.batch_refcounts.clear();
-            self.entries.clear();
+            self.batch_entries.clear();
             self.num_groups = 0;
         } else {
-            // EmitTo::First(n): decrement refcounts for emitted entries
-            // and tombstone batches whose refcount reaches zero. Retain
-            // entries for non-emitted groups with shifted group indices.
+            // EmitTo::First(n): remove entries for emitted groups and
+            // renumber the remaining group indices to start from 0.
+            // Replace unreferenced batch arrays with empty arrays to
+            // allow their memory to be released.
             let empty = new_empty_array(&self.datatype);
-            let n = num_groups as u32;
-            let mut retained = Vec::with_capacity(self.entries.len());
-            for &(g, b, r) in &self.entries {
-                if g < n {
-                    // Emitted group: decrement refcount, maybe tombstone.
-                    let rc = &mut self.batch_refcounts[b as usize];
-                    *rc -= 1;
-                    if *rc == 0 {
-                        self.batches[b as usize] = Arc::clone(&empty);
+            for (batch_idx, entries) in self.batch_entries.iter_mut().enumerate() {
+                let emit_groups = emit_groups as u32;
+                entries.retain_mut(|&mut (ref mut g, _)| {
+                    if *g < emit_groups {
+                        false // emitted
+                    } else {
+                        *g -= emit_groups;
+                        true
                     }
-                } else {
-                    // Retained group: shift index down by n.
-                    retained.push((g - n, b, r));
+                });
+                if entries.is_empty() {
+                    self.batches[batch_idx] = Arc::clone(&empty);
                 }
             }
-            self.entries = retained;
-            self.num_groups -= num_groups;
+            self.num_groups -= emit_groups;
         }
 
         let offsets = OffsetBuffer::new(ScalarBuffer::from(offsets));
@@ -634,8 +630,7 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
         let list_values = input_list.values();
         let list_offsets = input_list.offsets();
 
-        let batch_idx = self.batches.len() as u32;
-        let mut batch_pushed = false;
+        let mut entries = Vec::new();
 
         for (row_idx, &group_idx) in group_indices.iter().enumerate() {
             if input_list.is_null(row_idx) {
@@ -643,20 +638,14 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
             }
             let start = list_offsets[row_idx] as u32;
             let end = list_offsets[row_idx + 1] as u32;
-            if start == end {
-                continue;
-            }
-
-            if !batch_pushed {
-                self.batches.push(Arc::clone(list_values));
-                self.batch_refcounts.push(0);
-                batch_pushed = true;
-            }
-
             for pos in start..end {
-                self.entries.push((group_idx as u32, batch_idx, pos));
-                self.batch_refcounts[batch_idx as usize] += 1;
+                entries.push((group_idx as u32, pos));
             }
+        }
+
+        if !entries.is_empty() {
+            self.batches.push(Arc::clone(list_values));
+            self.batch_entries.push(entries);
         }
 
         Ok(())
@@ -674,8 +663,7 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
         // Each row becomes a 1-element list: offsets are [0, 1, 2, ..., n].
         let offsets = OffsetBuffer::from_repeated_length(1, input.len());
 
-        // Filtered rows become null list entries, which merge_batch
-        // will skip.
+        // Filtered rows become null list entries, which merge_batch will skip.
         let filter_nulls = opt_filter.and_then(filter_to_nulls);
 
         // With ignore_nulls, null values also become null list entries. Without
@@ -703,8 +691,12 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
             .map(|arr| arr.to_data().get_slice_memory_size().unwrap_or_default())
             .sum::<usize>()
             + self.batches.capacity() * size_of::<ArrayRef>()
-            + self.entries.capacity() * size_of::<(u32, u32, u32)>()
-            + self.batch_refcounts.capacity() * size_of::<u32>()
+            + self
+                .batch_entries
+                .iter()
+                .map(|e| e.capacity() * size_of::<(u32, u32)>())
+                .sum::<usize>()
+            + self.batch_entries.capacity() * size_of::<Vec<(u32, u32)>>()
     }
 }
 
