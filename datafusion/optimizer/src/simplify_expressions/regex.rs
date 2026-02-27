@@ -15,13 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::DataType;
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{BinaryExpr, Expr, Like, Operator, lit};
 use regex_syntax::hir::{Capture, Hir, HirKind, Literal, Look};
 
-use crate::simplify_expressions::expr_simplifier::{as_string_scalar, to_string_scalar};
+use crate::simplify_expressions::expr_simplifier::StringScalar;
 
 /// Maximum number of regex alternations (`foo|bar|...`) that will be expanded into multiple `LIKE` expressions.
 const MAX_REGEX_ALTERNATIONS_EXPANSION: usize = 4;
@@ -48,30 +47,39 @@ pub fn simplify_regex_expr(
     op: Operator,
     right: Box<Expr>,
 ) -> Result<Transformed<Expr>> {
+    let right_scalar = match right.as_ref() {
+        Expr::Literal(scalar, _) => scalar,
+        _ => {
+            return Ok(Transformed::no(Expr::BinaryExpr(BinaryExpr {
+                left,
+                op,
+                right,
+            })));
+        }
+    };
     // Check if the right operand is a string literal
-    let Some((datatype, pattern_opt)) = as_string_scalar(&right) else {
+    let Some(string_scalar) = StringScalar::try_from_scalar(right_scalar) else {
         return Ok(Transformed::no(Expr::BinaryExpr(BinaryExpr {
             left,
             op,
             right,
         })));
     };
-    let Some(pattern_owned) = pattern_opt.as_ref() else {
+    let pattern = string_scalar.as_str();
+    let Some(pattern) = pattern else {
         return Ok(Transformed::no(Expr::BinaryExpr(BinaryExpr {
             left,
             op,
             right,
         })));
     };
-    let pattern = pattern_owned.as_str();
 
-    let mode = OperatorMode::new(&op, datatype.clone());
-
+    let mode = OperatorMode::new(&op);
     // Handle the special case for ".*" pattern
     if pattern == ANY_CHAR_REGEX_PATTERN {
         let new_expr = if mode.not {
             // not empty
-            let empty_lit = Box::new(to_string_scalar(&datatype, Some("".to_string())));
+            let empty_lit = Box::new(string_scalar.to_scalar(""));
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Operator::Eq,
@@ -89,11 +97,11 @@ pub fn simplify_regex_expr(
             let kind = hir.kind();
             if let HirKind::Alternation(alts) = kind {
                 if alts.len() <= MAX_REGEX_ALTERNATIONS_EXPANSION
-                    && let Some(expr) = lower_alt(&mode, &left, alts)
+                    && let Some(expr) = lower_alt(&mode, &left, alts, &string_scalar)
                 {
                     return Ok(Transformed::yes(expr));
                 }
-            } else if let Some(expr) = lower_simple(&mode, &left, &hir) {
+            } else if let Some(expr) = lower_simple(&mode, &left, &hir, &string_scalar) {
                 return Ok(Transformed::yes(expr));
             }
         }
@@ -120,12 +128,10 @@ struct OperatorMode {
     not: bool,
     /// Ignore case (`true` for case-insensitive).
     i: bool,
-    /// Data type of the pattern (e.g. Utf8, Utf8View, LargeUtf8)
-    datatype: DataType,
 }
 
 impl OperatorMode {
-    fn new(op: &Operator, datatype: DataType) -> Self {
+    fn new(op: &Operator) -> Self {
         let not = match op {
             Operator::RegexMatch | Operator::RegexIMatch => false,
             Operator::RegexNotMatch | Operator::RegexNotIMatch => true,
@@ -138,15 +144,15 @@ impl OperatorMode {
             _ => unreachable!(),
         };
 
-        Self { not, i, datatype }
+        Self { not, i }
     }
 
     /// Creates an [`LIKE`](Expr::Like) from the given `LIKE` pattern.
-    fn expr(&self, expr: Box<Expr>, pattern: String) -> Expr {
+    fn expr(&self, expr: Box<Expr>, pattern: Box<Expr>) -> Expr {
         let like = Like {
             negated: self.not,
             expr,
-            pattern: Box::new(to_string_scalar(&self.datatype, Some(pattern))),
+            pattern,
             escape_char: None,
             case_insensitive: self.i,
         };
@@ -336,14 +342,25 @@ fn anchored_alternation_to_exprs(v: &[Hir]) -> Option<Vec<Expr>> {
 }
 
 /// Tries to lower (transform) a simple regex pattern to a LIKE expression.
-fn lower_simple(mode: &OperatorMode, left: &Expr, hir: &Hir) -> Option<Expr> {
+fn lower_simple(
+    mode: &OperatorMode,
+    left: &Expr,
+    hir: &Hir,
+    string_scalar: &StringScalar,
+) -> Option<Expr> {
     match hir.kind() {
         HirKind::Empty => {
-            return Some(mode.expr(Box::new(left.clone()), "%".to_owned()));
+            return Some(mode.expr(
+                Box::new(left.clone()),
+                Box::new(string_scalar.to_scalar("%")),
+            ));
         }
         HirKind::Literal(l) => {
             let s = like_str_from_literal(l)?;
-            return Some(mode.expr(Box::new(left.clone()), format!("%{s}%")));
+            return Some(mode.expr(
+                Box::new(left.clone()),
+                Box::new(string_scalar.to_scalar(&format!("%{s}%"))),
+            ));
         }
         HirKind::Concat(inner) if is_anchored_literal(inner) => {
             return anchored_literal_to_expr(inner).map(|right| {
@@ -358,7 +375,10 @@ fn lower_simple(mode: &OperatorMode, left: &Expr, hir: &Hir) -> Option<Expr> {
             if let Some(pattern) = partial_anchored_literal_to_like(inner)
                 .or_else(|| collect_concat_to_like_string(inner))
             {
-                return Some(mode.expr(Box::new(left.clone()), pattern));
+                return Some(mode.expr(
+                    Box::new(left.clone()),
+                    Box::new(string_scalar.to_scalar(&pattern)),
+                ));
             }
         }
         _ => {}
@@ -369,11 +389,16 @@ fn lower_simple(mode: &OperatorMode, left: &Expr, hir: &Hir) -> Option<Expr> {
 /// Calls [`lower_simple`] for each alternative and combine the results with `or` or `and`
 /// based on [`OperatorMode`]. Any fail attempt to lower an alternative will makes this
 /// function to return `None`.
-fn lower_alt(mode: &OperatorMode, left: &Expr, alts: &[Hir]) -> Option<Expr> {
+fn lower_alt(
+    mode: &OperatorMode,
+    left: &Expr,
+    alts: &[Hir],
+    string_scalar: &StringScalar,
+) -> Option<Expr> {
     let mut accu: Option<Expr> = None;
 
     for part in alts {
-        if let Some(expr) = lower_simple(mode, left, part) {
+        if let Some(expr) = lower_simple(mode, left, part, string_scalar) {
             accu = match accu {
                 Some(accu) => {
                     if mode.not {
