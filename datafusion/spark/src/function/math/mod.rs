@@ -23,6 +23,7 @@ pub mod hex;
 pub mod modulus;
 pub mod negative;
 pub mod rint;
+pub mod round;
 pub mod trigonometry;
 pub mod unhex;
 pub mod width_bucket;
@@ -38,6 +39,7 @@ make_udf_function!(hex::SparkHex, hex);
 make_udf_function!(modulus::SparkMod, modulus);
 make_udf_function!(modulus::SparkPmod, pmod);
 make_udf_function!(rint::SparkRint, rint);
+make_udf_function!(round::SparkRound, round);
 make_udf_function!(unhex::SparkUnhex, unhex);
 make_udf_function!(width_bucket::SparkWidthBucket, width_bucket);
 make_udf_function!(trigonometry::SparkCsc, csc);
@@ -63,6 +65,7 @@ pub mod expr_fn {
         "Returns the double value that is closest in value to the argument and is equal to a mathematical integer.",
         arg1
     ));
+    export_functions!((round, "Rounds expr to d decimal places using HALF_UP rounding mode.", arg1 arg2));
     export_functions!((unhex, "Converts hexadecimal string to binary.", arg1));
     export_functions!((width_bucket, "Returns the bucket number into which the value of this expression would fall after being evaluated.", arg1 arg2 arg3 arg4));
     export_functions!((csc, "Returns the cosecant of expr.", arg1));
