@@ -18,6 +18,7 @@
 pub mod abs;
 pub mod bin;
 pub mod expm1;
+pub mod floor;
 pub mod factorial;
 pub mod hex;
 pub mod modulus;
@@ -34,6 +35,7 @@ use std::sync::Arc;
 make_udf_function!(abs::SparkAbs, abs);
 make_udf_function!(expm1::SparkExpm1, expm1);
 make_udf_function!(factorial::SparkFactorial, factorial);
+make_udf_function!(floor::SparkFloor, floor);
 make_udf_function!(hex::SparkHex, hex);
 make_udf_function!(modulus::SparkMod, modulus);
 make_udf_function!(modulus::SparkPmod, pmod);
@@ -53,6 +55,11 @@ pub mod expr_fn {
     export_functions!((
         factorial,
         "Returns the factorial of expr. expr is [0..20]. Otherwise, null.",
+        arg1
+    ));
+    export_functions!((
+        floor,
+        "Returns the largest integer not greater than expr.",
         arg1
     ));
     export_functions!((hex, "Computes hex value of the given column.", arg1));
@@ -84,6 +91,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         abs(),
         expm1(),
         factorial(),
+        floor(),
         hex(),
         modulus(),
         pmod(),
