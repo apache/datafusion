@@ -27,7 +27,7 @@ use arrow::compute::kernels::cmp::eq;
 use arrow::compute::sum;
 use arrow::datatypes::{DataType, Schema, SchemaRef, TimeUnit};
 use datafusion_common::encryption::FileDecryptionProperties;
-use datafusion_common::stats::Precision;
+use datafusion_common::stats::{Precision, StatisticsKey};
 use datafusion_common::{
     ColumnStatistics, DataFusionError, Result, ScalarValue, Statistics,
 };
@@ -375,8 +375,275 @@ impl<'a> DFParquetMetadata<'a> {
             );
         }
 
+        // Populate expression_statistics for struct leaf columns
+        if has_statistics {
+            for field in logical_file_schema.fields() {
+                if let DataType::Struct(children) = field.data_type() {
+                    populate_struct_field_stats(
+                        &mut statistics.expression_statistics,
+                        &[Arc::from(field.name().as_str())],
+                        children,
+                        file_metadata.schema_descr(),
+                        row_groups_metadata,
+                        num_rows,
+                    );
+                }
+            }
+        }
+
         Ok(statistics)
     }
+}
+
+/// Recursively populate expression_statistics for struct fields.
+///
+/// Walks struct children, finds matching Parquet leaf columns by path,
+/// and extracts min/max/null statistics from row group metadata using
+/// `StatisticsConverter`.
+fn populate_struct_field_stats(
+    expression_statistics: &mut HashMap<StatisticsKey, ColumnStatistics>,
+    parent_path: &[Arc<str>],
+    fields: &arrow::datatypes::Fields,
+    parquet_schema: &SchemaDescriptor,
+    row_groups_metadata: &[RowGroupMetaData],
+    num_rows: usize,
+) {
+    for field in fields.iter() {
+        let mut path: Vec<Arc<str>> = parent_path.to_vec();
+        path.push(Arc::from(field.name().as_str()));
+
+        match field.data_type() {
+            DataType::Struct(children) => {
+                // Recurse into nested structs
+                populate_struct_field_stats(
+                    expression_statistics,
+                    &path,
+                    children,
+                    parquet_schema,
+                    row_groups_metadata,
+                    num_rows,
+                );
+            }
+            DataType::Map(_, _) => {
+                // Skip Map types — get_field on maps doesn't have
+                // meaningful per-key statistics in Parquet
+            }
+            _ => {
+                // Leaf field — try to find matching Parquet column
+                let path_parts: Vec<&str> = path.iter().map(|s| s.as_ref()).collect();
+                if let Some(parquet_col_idx) =
+                    find_parquet_leaf_column(parquet_schema, &path_parts)
+                {
+                    if let Some(col_stats) = extract_leaf_column_stats(
+                        parquet_col_idx,
+                        field.as_ref(),
+                        parquet_schema,
+                        row_groups_metadata,
+                        num_rows,
+                    ) {
+                        let key = StatisticsKey::FieldPath(path);
+                        expression_statistics.insert(key, col_stats);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Find the Parquet leaf column index that matches the given field path.
+fn find_parquet_leaf_column(schema: &SchemaDescriptor, path: &[&str]) -> Option<usize> {
+    (0..schema.num_columns()).find(|&i| schema.column(i).path().parts() == path)
+}
+
+/// Convert a Parquet `Statistics` value to a `ScalarValue` for the given Arrow data type.
+/// If `is_min` is true, extracts the min value; otherwise extracts the max value.
+fn scalar_from_parquet_stats(
+    stats: &parquet::file::statistics::Statistics,
+    data_type: &DataType,
+    is_min: bool,
+) -> Option<ScalarValue> {
+    use parquet::file::statistics::Statistics as PqStats;
+
+    match stats {
+        PqStats::Boolean(s) => {
+            let val = if is_min { s.min_opt() } else { s.max_opt() };
+            val.map(|v| ScalarValue::Boolean(Some(*v)))
+        }
+        PqStats::Int32(s) => {
+            let val = if is_min { s.min_opt() } else { s.max_opt() };
+            let v = *val?;
+            match data_type {
+                DataType::Int32 => Some(ScalarValue::Int32(Some(v))),
+                DataType::Date32 => Some(ScalarValue::Date32(Some(v))),
+                DataType::Int16 => Some(ScalarValue::Int16(Some(v as i16))),
+                DataType::Int8 => Some(ScalarValue::Int8(Some(v as i8))),
+                DataType::UInt8 => Some(ScalarValue::UInt8(Some(v as u8))),
+                DataType::UInt16 => Some(ScalarValue::UInt16(Some(v as u16))),
+                DataType::UInt32 => Some(ScalarValue::UInt32(Some(v as u32))),
+                DataType::Decimal128(p, s) => {
+                    Some(ScalarValue::Decimal128(Some(v as i128), *p, *s))
+                }
+                _ => Some(ScalarValue::Int32(Some(v))),
+            }
+        }
+        PqStats::Int64(s) => {
+            let val = if is_min { s.min_opt() } else { s.max_opt() };
+            let v = *val?;
+            match data_type {
+                DataType::Int64 => Some(ScalarValue::Int64(Some(v))),
+                DataType::UInt64 => Some(ScalarValue::UInt64(Some(v as u64))),
+                DataType::Timestamp(TimeUnit::Millisecond, tz) => {
+                    Some(ScalarValue::TimestampMillisecond(Some(v), tz.clone()))
+                }
+                DataType::Timestamp(TimeUnit::Microsecond, tz) => {
+                    Some(ScalarValue::TimestampMicrosecond(Some(v), tz.clone()))
+                }
+                DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
+                    Some(ScalarValue::TimestampNanosecond(Some(v), tz.clone()))
+                }
+                DataType::Date64 => Some(ScalarValue::Date64(Some(v))),
+                DataType::Decimal128(p, s) => {
+                    Some(ScalarValue::Decimal128(Some(v as i128), *p, *s))
+                }
+                _ => Some(ScalarValue::Int64(Some(v))),
+            }
+        }
+        PqStats::Float(s) => {
+            let val = if is_min { s.min_opt() } else { s.max_opt() };
+            val.map(|v| ScalarValue::Float32(Some(*v)))
+        }
+        PqStats::Double(s) => {
+            let val = if is_min { s.min_opt() } else { s.max_opt() };
+            val.map(|v| ScalarValue::Float64(Some(*v)))
+        }
+        PqStats::ByteArray(s) => {
+            let val = if is_min { s.min_opt() } else { s.max_opt() };
+            let bytes = val?;
+            match data_type {
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
+                    let s = std::str::from_utf8(bytes.data()).ok()?;
+                    Some(ScalarValue::Utf8(Some(s.to_string())))
+                }
+                DataType::Binary | DataType::LargeBinary | DataType::BinaryView => {
+                    Some(ScalarValue::Binary(Some(bytes.data().to_vec())))
+                }
+                _ => None,
+            }
+        }
+        PqStats::FixedLenByteArray(s) => {
+            let val = if is_min { s.min_opt() } else { s.max_opt() };
+            let bytes = val?;
+            match data_type {
+                DataType::Decimal128(p, scale) => {
+                    let mut padded = [0u8; 16];
+                    let data = bytes.data();
+                    let len = data.len().min(16);
+                    // Sign extend
+                    if !data.is_empty() && data[0] & 0x80 != 0 {
+                        padded.fill(0xFF);
+                    }
+                    padded[16 - len..].copy_from_slice(&data[..len]);
+                    Some(ScalarValue::Decimal128(
+                        Some(i128::from_be_bytes(padded)),
+                        *p,
+                        *scale,
+                    ))
+                }
+                DataType::FixedSizeBinary(size) => Some(ScalarValue::FixedSizeBinary(
+                    *size,
+                    Some(bytes.data().to_vec()),
+                )),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Extract min/max/null statistics for a single Parquet leaf column
+/// across all row groups using [`Accumulator`]s to aggregate per-row-group values.
+fn extract_leaf_column_stats(
+    parquet_col_idx: usize,
+    arrow_field: &arrow::datatypes::Field,
+    _parquet_schema: &SchemaDescriptor,
+    row_groups_metadata: &[RowGroupMetaData],
+    num_rows: usize,
+) -> Option<ColumnStatistics> {
+    let data_type = arrow_field.data_type();
+    let agg_data_type = min_max_aggregate_data_type(data_type);
+    let mut max_acc = MaxAccumulator::try_new(agg_data_type).ok()?;
+    let mut min_acc = MinAccumulator::try_new(agg_data_type).ok()?;
+    let mut total_null_count: u64 = 0;
+    let mut has_stats = false;
+    let mut has_null_counts = false;
+
+    for rg in row_groups_metadata {
+        let col_chunk = rg.columns().get(parquet_col_idx)?;
+        let stats = col_chunk.statistics()?;
+        has_stats = true;
+
+        // Null counts
+        if let Some(nc) = stats.null_count_opt() {
+            total_null_count += nc;
+            has_null_counts = true;
+        }
+
+        // Min/max: extract typed values from parquet Statistics
+        if let (Some(min_sv), Some(max_sv)) = (
+            scalar_from_parquet_stats(stats, data_type, true),
+            scalar_from_parquet_stats(stats, data_type, false),
+        ) {
+            if let Ok(arr) = min_sv.to_array() {
+                let _ = min_acc.update_batch(&[arr]);
+            }
+            if let Ok(arr) = max_sv.to_array() {
+                let _ = max_acc.update_batch(&[arr]);
+            }
+        }
+    }
+
+    if !has_stats {
+        return None;
+    }
+
+    let min_value = min_acc
+        .evaluate()
+        .ok()
+        .map(Precision::Exact)
+        .unwrap_or(Precision::Absent);
+    let max_value = max_acc
+        .evaluate()
+        .ok()
+        .map(Precision::Exact)
+        .unwrap_or(Precision::Absent);
+
+    let null_count = if has_null_counts {
+        Precision::Exact(total_null_count as usize)
+    } else {
+        Precision::Absent
+    };
+
+    // Only return stats if we got at least something
+    if matches!(max_value, Precision::Absent)
+        && matches!(min_value, Precision::Absent)
+        && matches!(null_count, Precision::Absent)
+    {
+        return None;
+    }
+
+    Some(ColumnStatistics {
+        null_count,
+        max_value,
+        min_value,
+        sum_value: Precision::Absent,
+        distinct_count: Precision::Absent,
+        byte_size: compute_arrow_column_size(
+            data_type,
+            row_groups_metadata,
+            Some(parquet_col_idx),
+            num_rows,
+        ),
+    })
 }
 
 /// Min/max aggregation can take Dictionary encode input but always produces unpacked

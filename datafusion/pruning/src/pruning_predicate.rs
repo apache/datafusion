@@ -42,6 +42,7 @@ use datafusion_common::{
     tree_node::{Transformed, TreeNode},
 };
 use datafusion_expr_common::operator::Operator;
+use datafusion_physical_expr::ScalarFunctionExpr;
 use datafusion_physical_expr::expressions::CastColumnExpr;
 use datafusion_physical_expr::utils::{Guarantee, LiteralGuarantee};
 use datafusion_physical_expr::{PhysicalExprRef, expressions as phys_expr};
@@ -1019,7 +1020,13 @@ impl<'a> PruningExpressionBuilder<'a> {
         let field = match schema.column_with_name(column.name()) {
             Some((_, f)) => f,
             _ => {
-                return plan_err!("Field not found in schema");
+                // Try resolving a dotted name (e.g. "col.a.b") by walking
+                // the schema hierarchy
+                if let Some(f) = resolve_dotted_field(schema, column.name()) {
+                    f
+                } else {
+                    return plan_err!("Field not found in schema");
+                }
             }
         };
 
@@ -1186,6 +1193,13 @@ fn rewrite_expr_to_prunable(
         } else {
             plan_err!("Not with complex expression {column_expr:?} is not supported")
         }
+    } else if let Some((dotted_name, _data_type)) =
+        get_field_to_dotted_name(column_expr.as_ref())
+    {
+        // `get_field(col, 'a') op lit()` → rewrite to synthetic dotted column
+        let synthetic_col =
+            Arc::new(phys_expr::Column::new(&dotted_name, 0)) as PhysicalExprRef;
+        Ok((synthetic_col, op, Arc::clone(scalar_expr)))
     } else {
         plan_err!("column expression {column_expr:?} is not supported")
     }
@@ -1203,6 +1217,89 @@ fn is_compare_op(op: Operator) -> bool {
             | Operator::LikeMatch
             | Operator::NotLikeMatch
     )
+}
+
+/// Resolve a dotted field name like `"col.a.b"` by walking the schema hierarchy.
+///
+/// Returns the leaf `Field` if found, or `None` if the path doesn't resolve.
+fn resolve_dotted_field<'a>(schema: &'a Schema, dotted_name: &str) -> Option<&'a Field> {
+    let parts: Vec<&str> = dotted_name.split('.').collect();
+    if parts.len() < 2 {
+        return None;
+    }
+
+    // Find the top-level field
+    let (_, top_field) = schema.column_with_name(parts[0])?;
+    let mut current_data_type = top_field.data_type();
+    let mut last_field: Option<&Field> = None;
+
+    for part in &parts[1..] {
+        match current_data_type {
+            DataType::Struct(fields) => {
+                let field = fields.iter().find(|f| f.name() == *part)?;
+                current_data_type = field.data_type();
+                last_field = Some(field.as_ref());
+            }
+            _ => return None,
+        }
+    }
+
+    last_field
+}
+
+/// Extract a nested field path from a chain of `get_field` calls.
+///
+/// For example, `get_field(get_field(col, 'a'), 'b')` returns `["col", "a", "b"]`
+/// and the data type of the innermost field.
+///
+/// Returns `None` if the expression is not a `get_field` chain rooted at a `Column`.
+fn extract_get_field_path(expr: &dyn PhysicalExpr) -> Option<(Vec<Arc<str>>, DataType)>
+where
+{
+    use std::sync::Arc as StdArc;
+
+    if let Some(func) = expr.as_any().downcast_ref::<ScalarFunctionExpr>() {
+        if func.name() == "get_field" {
+            let args = func.args();
+            if args.len() < 2 {
+                return None;
+            }
+            // Second arg should be a string literal (the field name)
+            let field_name = args[1]
+                .as_any()
+                .downcast_ref::<phys_expr::Literal>()?
+                .value()
+                .try_as_str()
+                .flatten()?;
+            let field_name = StdArc::from(field_name);
+
+            let base = &args[0];
+            // Base can be a Column or another get_field
+            if let Some(col) = base.as_any().downcast_ref::<phys_expr::Column>() {
+                let data_type = func.return_type().clone();
+                return Some((vec![StdArc::from(col.name()), field_name], data_type));
+            } else if let Some((mut path, _)) = extract_get_field_path(base.as_ref()) {
+                let data_type = func.return_type().clone();
+                path.push(field_name);
+                return Some((path, data_type));
+            }
+        }
+    }
+    None
+}
+
+/// Convert a `get_field` expression (or chain) into a synthetic dotted column
+/// name and its data type for statistics lookup.
+///
+/// For example, `get_field(col, 'a')` becomes `("col.a", DataType::...)`.
+fn get_field_to_dotted_name(expr: &dyn PhysicalExpr) -> Option<(String, DataType)> {
+    let (path, data_type) = extract_get_field_path(expr)?;
+    let dotted = path
+        .iter()
+        .map(|s| s.as_ref())
+        .collect::<Vec<_>>()
+        .join(".");
+    Some((dotted, data_type))
 }
 
 // The pruning logic is based on the comparing the min/max bounds.
@@ -1316,43 +1413,53 @@ fn build_is_null_column_expr(
     required_columns: &mut RequiredColumns,
     with_not: bool,
 ) -> Option<Arc<dyn PhysicalExpr>> {
-    if let Some(col) = expr.as_any().downcast_ref::<phys_expr::Column>() {
+    // Try to get the column reference - either a direct Column or a get_field chain
+    let (col, field) = if let Some(col) =
+        expr.as_any().downcast_ref::<phys_expr::Column>()
+    {
         let field = schema.field_with_name(col.name()).ok()?;
+        (col.clone(), field.clone())
+    } else if let Some((dotted_name, data_type)) = get_field_to_dotted_name(expr.as_ref())
+    {
+        let synthetic_col = phys_expr::Column::new(&dotted_name, 0);
+        let field = Field::new(&dotted_name, data_type, true);
+        (synthetic_col, field)
+    } else {
+        return None;
+    };
 
-        let null_count_field = &Field::new(field.name(), DataType::UInt64, true);
-        if with_not {
-            if let Ok(row_count_expr) =
-                required_columns.row_count_column_expr(col, expr, null_count_field)
-            {
-                required_columns
-                    .null_count_column_expr(col, expr, null_count_field)
-                    .map(|null_count_column_expr| {
-                        // IsNotNull(column) => null_count != row_count
-                        Arc::new(phys_expr::BinaryExpr::new(
-                            null_count_column_expr,
-                            Operator::NotEq,
-                            row_count_expr,
-                        )) as _
-                    })
-                    .ok()
-            } else {
-                None
-            }
-        } else {
+    let null_count_field = &Field::new(field.name(), DataType::UInt64, true);
+    let col_expr: Arc<dyn PhysicalExpr> = Arc::new(col.clone());
+    if with_not {
+        if let Ok(row_count_expr) =
+            required_columns.row_count_column_expr(&col, &col_expr, null_count_field)
+        {
             required_columns
-                .null_count_column_expr(col, expr, null_count_field)
+                .null_count_column_expr(&col, &col_expr, null_count_field)
                 .map(|null_count_column_expr| {
-                    // IsNull(column) => null_count > 0
+                    // IsNotNull(column) => null_count != row_count
                     Arc::new(phys_expr::BinaryExpr::new(
                         null_count_column_expr,
-                        Operator::Gt,
-                        Arc::new(phys_expr::Literal::new(ScalarValue::UInt64(Some(0)))),
+                        Operator::NotEq,
+                        row_count_expr,
                     )) as _
                 })
                 .ok()
+        } else {
+            None
         }
     } else {
-        None
+        required_columns
+            .null_count_column_expr(&col, &col_expr, null_count_field)
+            .map(|null_count_column_expr| {
+                // IsNull(column) => null_count > 0
+                Arc::new(phys_expr::BinaryExpr::new(
+                    null_count_column_expr,
+                    Operator::Gt,
+                    Arc::new(phys_expr::Literal::new(ScalarValue::UInt64(Some(0)))),
+                )) as _
+            })
+            .ok()
     }
 }
 
@@ -1596,10 +1703,29 @@ enum ColumnReferenceCount {
 }
 
 impl ColumnReferenceCount {
-    /// Count the number of distinct column references in an expression
+    /// Count the number of distinct column references in an expression.
+    ///
+    /// Also recognizes `get_field` chains as single-column references:
+    /// `get_field(col, 'a')` is treated as one synthetic column `"col.a"`.
     fn from_expression(expr: &Arc<dyn PhysicalExpr>) -> Self {
+        // First check if the entire expression is a get_field chain
+        if let Some((dotted_name, _)) = get_field_to_dotted_name(expr.as_ref()) {
+            // Treat the whole get_field chain as a single synthetic column
+            // Use index 0 as a placeholder; the name carries the real info
+            return ColumnReferenceCount::One(phys_expr::Column::new(&dotted_name, 0));
+        }
+
         let mut seen = HashSet::<phys_expr::Column>::new();
         expr.apply(|expr| {
+            // If this sub-expression is a get_field chain, treat it as a single column
+            if let Some((dotted_name, _)) = get_field_to_dotted_name(expr.as_ref()) {
+                seen.insert(phys_expr::Column::new(&dotted_name, 0));
+                if seen.len() > 1 {
+                    return Ok(TreeNodeRecursion::Stop);
+                }
+                // Don't recurse into get_field children
+                return Ok(TreeNodeRecursion::Jump);
+            }
             if let Some(column) = expr.as_any().downcast_ref::<phys_expr::Column>() {
                 seen.insert(column.clone());
                 if seen.len() > 1 {

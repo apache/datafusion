@@ -120,6 +120,7 @@ impl TableProvider for StatisticsValidation {
                 column_statistics: proj_col_stats,
                 // TODO stats: knowing the type of the new columns we can guess the output size
                 total_byte_size: Precision::Absent,
+                expression_statistics: Default::default(),
             },
             projected_schema,
         )))
@@ -221,6 +222,7 @@ fn fully_defined() -> (Statistics, Schema) {
                     byte_size: Precision::Absent,
                 },
             ],
+            expression_statistics: Default::default(),
         },
         Schema::new(vec![
             Field::new("c1", DataType::Int32, false),
@@ -276,7 +278,8 @@ async fn sql_limit() -> Result<()> {
                 .iter()
                 .map(|c| c.clone().to_inexact())
                 .collect(),
-            total_byte_size: Precision::Absent
+            total_byte_size: Precision::Absent,
+            expression_statistics: Default::default(),
         },
         physical_plan.partition_statistics(None)?
     );

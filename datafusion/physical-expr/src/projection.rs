@@ -2089,6 +2089,7 @@ pub(crate) mod tests {
                     byte_size: Precision::Absent,
                 },
             ],
+            expression_statistics: Default::default(),
         }
     }
 
@@ -2142,6 +2143,7 @@ pub(crate) mod tests {
                     byte_size: Precision::Absent,
                 },
             ],
+            expression_statistics: Default::default(),
         };
 
         assert_eq!(result, expected);
@@ -2188,6 +2190,7 @@ pub(crate) mod tests {
                     byte_size: Precision::Absent,
                 },
             ],
+            expression_statistics: Default::default(),
         };
 
         assert_eq!(result, expected);

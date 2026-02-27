@@ -919,6 +919,7 @@ impl TryFrom<&protobuf::Statistics> for Statistics {
             },
             // No column statistic (None) is encoded with empty array
             column_statistics: s.column_stats.iter().map(|s| s.into()).collect(),
+            expression_statistics: std::collections::HashMap::new(),
         })
     }
 }

@@ -528,6 +528,7 @@ pub fn generate_test_files(num_files: usize, overlap_factor: f64) -> Vec<FileGro
                     distinct_count: Precision::Absent,
                     byte_size: Precision::Absent,
                 }],
+                expression_statistics: Default::default(),
             })),
             ordering: None,
             extensions: None,
@@ -681,6 +682,7 @@ mod tests {
                 distinct_count: Precision::Absent,
                 byte_size: Precision::Absent,
             }],
+            expression_statistics: Default::default(),
         });
 
         // Call with_statistics - should append partition column stats

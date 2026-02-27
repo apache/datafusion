@@ -1074,6 +1074,7 @@ impl AggregateExec {
                     num_rows: Precision::Exact(1),
                     column_statistics,
                     total_byte_size,
+                    expression_statistics: Default::default(),
                 })
             }
             _ => {
@@ -1107,6 +1108,7 @@ impl AggregateExec {
                     num_rows,
                     column_statistics,
                     total_byte_size,
+                    expression_statistics: Default::default(),
                 })
             }
         }
@@ -3684,6 +3686,7 @@ mod tests {
                     ColumnStatistics::new_unknown(),
                     ColumnStatistics::new_unknown(),
                 ],
+                expression_statistics: Default::default(),
             },
             (*schema).clone(),
         )) as Arc<dyn ExecutionPlan>;
@@ -3714,6 +3717,7 @@ mod tests {
                     ColumnStatistics::new_unknown(),
                     ColumnStatistics::new_unknown(),
                 ],
+                expression_statistics: Default::default(),
             },
             (*schema).clone(),
         )) as Arc<dyn ExecutionPlan>;

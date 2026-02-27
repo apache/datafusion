@@ -923,6 +923,7 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
                 column_statistics: Statistics::unknown_column(&Arc::new(Schema::new(
                     vec![Field::new("col", DataType::Utf8, false)],
                 ))),
+                expression_statistics: Default::default(),
             })
             .build();
 
@@ -947,6 +948,7 @@ fn roundtrip_arrow_scan() -> Result<()> {
                 num_rows: Precision::Inexact(100),
                 total_byte_size: Precision::Inexact(1024),
                 column_statistics: Statistics::unknown_column(&file_schema),
+                expression_statistics: Default::default(),
             })
             .build();
 
@@ -1006,6 +1008,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
                 column_statistics: Statistics::unknown_column(&Arc::new(Schema::new(
                     vec![Field::new("col", DataType::Utf8, false)],
                 ))),
+                expression_statistics: Default::default(),
             })
             .build();
 

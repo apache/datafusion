@@ -287,6 +287,7 @@ impl ExecutionPlan for WindowAggExec {
             num_rows: input_stat.num_rows,
             column_statistics,
             total_byte_size: Precision::Absent,
+            expression_statistics: Default::default(),
         })
     }
 }

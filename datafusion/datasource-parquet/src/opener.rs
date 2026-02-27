@@ -1221,6 +1221,7 @@ mod test {
                 },
                 ColumnStatistics::new_unknown(),
             ],
+            expression_statistics: Default::default(),
         };
         (statistics, schema)
     }
@@ -1248,6 +1249,7 @@ mod test {
                 distinct_count: Precision::Absent,
                 byte_size: Precision::Absent,
             }],
+            expression_statistics: Default::default(),
         };
 
         let constants = constant_columns_from_stats(Some(&statistics), &schema);

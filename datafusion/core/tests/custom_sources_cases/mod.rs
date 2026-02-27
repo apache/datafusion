@@ -204,6 +204,7 @@ impl ExecutionPlan for CustomExecutionPlan {
                     ..Default::default()
                 })
                 .collect(),
+            expression_statistics: Default::default(),
         })
     }
 }

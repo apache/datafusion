@@ -165,6 +165,7 @@ mod test {
             num_rows: Precision::Exact(num_rows),
             total_byte_size: Precision::Exact(total_byte_size),
             column_statistics: column_stats,
+            expression_statistics: Default::default(),
         }
     }
 
@@ -401,6 +402,7 @@ mod test {
                     byte_size: Precision::Exact(16), // 4 rows * 4 bytes (Date32)
                 },
             ],
+            expression_statistics: Default::default(),
         };
         assert_eq!(full_statistics, expected_full_statistic);
 
@@ -430,6 +432,7 @@ mod test {
                     byte_size: Precision::Exact(8), // 2 rows * 4 bytes (Date32)
                 },
             ],
+            expression_statistics: Default::default(),
         };
         assert_eq!(statistics[0], expected_partition_statistic);
         assert_eq!(statistics[1], expected_partition_statistic);
@@ -517,6 +520,7 @@ mod test {
                 ColumnStatistics::new_unknown(),
                 ColumnStatistics::new_unknown(),
             ],
+            expression_statistics: Default::default(),
         };
         assert_eq!(stats[0], expected_stats);
         assert_eq!(stats[1], expected_stats);
@@ -590,6 +594,7 @@ mod test {
                     byte_size: Precision::Absent,
                 },
             ],
+            expression_statistics: Default::default(),
         };
         let expected_statistic_partition_2 = Statistics {
             num_rows: Precision::Exact(8),
@@ -624,6 +629,7 @@ mod test {
                     byte_size: Precision::Absent,
                 },
             ],
+            expression_statistics: Default::default(),
         };
         assert_eq!(statistics[0], expected_statistic_partition_1);
         assert_eq!(statistics[1], expected_statistic_partition_2);
@@ -847,6 +853,7 @@ mod test {
                 ColumnStatistics::new_unknown(),
                 ColumnStatistics::new_unknown(),
             ],
+            expression_statistics: Default::default(),
         };
 
         assert_eq!(&p0_statistics, &expected_p0_statistics);
@@ -866,6 +873,7 @@ mod test {
                 ColumnStatistics::new_unknown(),
                 ColumnStatistics::new_unknown(),
             ],
+            expression_statistics: Default::default(),
         };
 
         let p1_statistics = aggregate_exec_partial.partition_statistics(Some(1))?;
@@ -933,6 +941,7 @@ mod test {
                 ColumnStatistics::new_unknown(),
                 ColumnStatistics::new_unknown(),
             ],
+            expression_statistics: Default::default(),
         };
 
         assert_eq!(&empty_stat, &agg_partial.partition_statistics(Some(0))?);
@@ -997,6 +1006,7 @@ mod test {
             num_rows: Precision::Exact(1),
             total_byte_size: Precision::Absent,
             column_statistics: vec![ColumnStatistics::new_unknown()],
+            expression_statistics: Default::default(),
         };
 
         assert_eq!(&expect_stat, &agg_final.partition_statistics(Some(0))?);
@@ -1066,6 +1076,7 @@ mod test {
                 ColumnStatistics::new_unknown(),
                 ColumnStatistics::new_unknown(),
             ],
+            expression_statistics: Default::default(),
         };
 
         // All partitions should have the same statistics
@@ -1173,6 +1184,7 @@ mod test {
                 ColumnStatistics::new_unknown(),
                 ColumnStatistics::new_unknown(),
             ],
+            expression_statistics: Default::default(),
         };
         assert_eq!(stats[0], expected_stats);
         assert_eq!(stats[1], expected_stats);
@@ -1252,6 +1264,7 @@ mod test {
                 },
                 ColumnStatistics::new_unknown(), // window column
             ],
+            expression_statistics: Default::default(),
         };
 
         let expected_statistic_partition_2 = Statistics {
@@ -1280,6 +1293,7 @@ mod test {
                 },
                 ColumnStatistics::new_unknown(), // window column
             ],
+            expression_statistics: Default::default(),
         };
 
         assert_eq!(statistics[0], expected_statistic_partition_1);
