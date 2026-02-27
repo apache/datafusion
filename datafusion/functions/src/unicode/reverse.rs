@@ -18,12 +18,12 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::strings::StringArrayBuilderType;
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use DataType::{LargeUtf8, Utf8, Utf8View};
 use arrow::array::{
     Array, ArrayRef, AsArray, GenericStringArray, LargeStringBuilder, OffsetSizeTrait,
-    StringArrayType, StringBuilder, StringViewArray, StringViewBuilder,
+    StringArrayType, StringBuilder, StringLikeArrayBuilder, StringViewArray,
+    StringViewBuilder,
 };
 use arrow::datatypes::DataType;
 use datafusion_common::{Result, exec_err};
@@ -140,7 +140,7 @@ fn reverse_impl<'a, StringArrType, StringBuilderType>(
 ) -> Result<ArrayRef>
 where
     StringArrType: StringArrayType<'a>,
-    StringBuilderType: StringArrayBuilderType,
+    StringBuilderType: StringLikeArrayBuilder,
 {
     let mut string_buf = String::new();
     let mut byte_buf = Vec::<u8>::new();
