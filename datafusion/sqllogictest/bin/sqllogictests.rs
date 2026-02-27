@@ -168,8 +168,7 @@ async fn run_tests() -> Result<()> {
     // For CI environments without TTY, print progress periodically unless
     // deterministic timing summary output is requested.
     let is_ci = !stderr().is_terminal();
-    let print_periodic_progress =
-        is_ci && (!options.timing_summary || options.timing_summary_progress);
+    let print_periodic_progress = options.should_print_periodic_progress(is_ci);
     let completed_count = Arc::new(AtomicUsize::new(0));
 
     let file_results: Vec<_> = futures::stream::iter(test_files)
@@ -929,6 +928,10 @@ struct Options {
 }
 
 impl Options {
+    fn should_print_periodic_progress(&self, is_ci: bool) -> bool {
+        is_ci && (!self.timing_summary || self.timing_summary_progress)
+    }
+
     /// Because this test can be run as a cargo test, commands like
     ///
     /// ```shell
