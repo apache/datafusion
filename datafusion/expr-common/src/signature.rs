@@ -322,6 +322,43 @@ impl TypeSignature {
     }
 }
 
+impl Display for TypeSignature {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TypeSignature::Variadic(types) => {
+                write!(f, "Variadic({})", types.iter().join(", "))
+            }
+            TypeSignature::UserDefined => write!(f, "UserDefined"),
+            TypeSignature::VariadicAny => write!(f, "VariadicAny"),
+            TypeSignature::Uniform(count, types) => {
+                write!(f, "Uniform({count}, [{}])", types.iter().join(", "))
+            }
+            TypeSignature::Exact(types) => {
+                write!(f, "Exact({})", types.iter().join(", "))
+            }
+            TypeSignature::Coercible(coercions) => {
+                write!(f, "Coercible({})", coercions.iter().join(", "))
+            }
+            TypeSignature::Comparable(count) => write!(f, "Comparable({count})"),
+            TypeSignature::Any(count) => write!(f, "Any({count})"),
+            TypeSignature::OneOf(sigs) => {
+                write!(f, "OneOf(")?;
+                for (i, sig) in sigs.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{sig}")?;
+                }
+                write!(f, ")")
+            }
+            TypeSignature::ArraySignature(sig) => write!(f, "ArraySignature({sig})"),
+            TypeSignature::Numeric(count) => write!(f, "Numeric({count})"),
+            TypeSignature::String(count) => write!(f, "String({count})"),
+            TypeSignature::Nullary => write!(f, "Nullary"),
+        }
+    }
+}
+
 /// Represents the class of types that can be used in a function signature.
 ///
 /// This is used to specify what types are valid for function arguments in a more flexible way than
@@ -2045,6 +2082,48 @@ mod tests {
     fn test_type_signature_arity_user_defined() {
         let sig = TypeSignature::UserDefined;
         assert_eq!(sig.arity(), Arity::Variable);
+    }
+
+    #[test]
+    fn test_type_signature_display() {
+        use insta::assert_snapshot;
+
+        assert_snapshot!(TypeSignature::Nullary, @"Nullary");
+        assert_snapshot!(TypeSignature::Any(2), @"Any(2)");
+        assert_snapshot!(TypeSignature::Numeric(3), @"Numeric(3)");
+        assert_snapshot!(TypeSignature::String(1), @"String(1)");
+        assert_snapshot!(TypeSignature::Comparable(2), @"Comparable(2)");
+        assert_snapshot!(TypeSignature::VariadicAny, @"VariadicAny");
+        assert_snapshot!(TypeSignature::UserDefined, @"UserDefined");
+
+        assert_snapshot!(
+            TypeSignature::Exact(vec![DataType::Int32, DataType::Utf8]),
+            @"Exact(Int32, Utf8)"
+        );
+        assert_snapshot!(
+            TypeSignature::Variadic(vec![DataType::Utf8, DataType::LargeUtf8]),
+            @"Variadic(Utf8, LargeUtf8)"
+        );
+        assert_snapshot!(
+            TypeSignature::Uniform(2, vec![DataType::Float32, DataType::Float64]),
+            @"Uniform(2, [Float32, Float64])"
+        );
+
+        assert_snapshot!(
+            TypeSignature::Coercible(vec![
+                Coercion::new_exact(TypeSignatureClass::Native(logical_float64())),
+                Coercion::new_exact(TypeSignatureClass::Native(logical_int32())),
+            ]),
+            @"Coercible(Float64, Int32)"
+        );
+
+        assert_snapshot!(
+            TypeSignature::OneOf(vec![
+                TypeSignature::Nullary,
+                TypeSignature::VariadicAny,
+            ]),
+            @"OneOf(Nullary, VariadicAny)"
+        );
     }
 
     #[test]
