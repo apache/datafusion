@@ -596,7 +596,7 @@ mod tests {
         let list = NativeType::List(Arc::new(LogicalField::from(
             &Field::new("item", DataType::Int32, true),
         )));
-        assert_snapshot!(list, @"List(LogicalType(Native(Int32), Int32))");
+        assert_snapshot!(list, @"List(Int32)");
 
         let fixed_list = NativeType::FixedSizeList(
             Arc::new(LogicalField::from(
@@ -604,7 +604,7 @@ mod tests {
             )),
             3,
         );
-        assert_snapshot!(fixed_list, @"FixedSizeList(3 x LogicalType(Native(Float64), Float64))");
+        assert_snapshot!(fixed_list, @"FixedSizeList(3 x Float64)");
 
         let struct_type = NativeType::Struct(LogicalFields::from(
             &Fields::from(vec![
@@ -612,11 +612,11 @@ mod tests {
                 Field::new("age", DataType::Int32, true),
             ]),
         ));
-        assert_snapshot!(struct_type, @r#"Struct("name": LogicalType(Native(String), String), "age": LogicalType(Native(Int32), Int32))"#);
+        assert_snapshot!(struct_type, @r#"Struct("name": String, "age": Int32)"#);
 
         let map = NativeType::Map(Arc::new(LogicalField::from(
             &Field::new("entries", DataType::Utf8, false),
         )));
-        assert_snapshot!(map, @"Map(LogicalType(Native(String), String))");
+        assert_snapshot!(map, @"Map(String)");
     }
 }

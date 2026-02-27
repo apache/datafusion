@@ -1846,7 +1846,7 @@ mod tests {
         assert_snapshot!(msg, @r"
         No function matches the given name and argument types 'round(Utf8, Utf8)'. You might need to add explicit type casts.
         	Candidate functions:
-        	round(Coercion(TypeSignatureClass::Native(LogicalType(Native(Float64), Float64)), implicit_coercion=ImplicitCoercion([Numeric], default_type=Float64), Coercion(TypeSignatureClass::Native(LogicalType(Native(Int64), Int64)), implicit_coercion=ImplicitCoercion([Integer], default_type=Int64))
+        	round(Float64, Int64)
         ");
     }
 
@@ -1889,7 +1889,7 @@ mod tests {
         assert_snapshot!(msg, @r"
         No function matches the given name and argument types 'substr(Int32)'. You might need to add explicit type casts.
         	Candidate functions:
-        	substr(string: Coercion(TypeSignatureClass::Native(LogicalType(Native(String), String))), start_pos: Coercion(TypeSignatureClass::Native(LogicalType(Native(Int64), Int64))), length: Coercion(TypeSignatureClass::Native(LogicalType(Native(Int64), Int64)), implicit_coercion=ImplicitCoercion([Integer], default_type=Int64))
+        	substr(string: String, start_pos: Int64, length: Int64)
         ");
     }
 }

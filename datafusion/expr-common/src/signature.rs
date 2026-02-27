@@ -358,7 +358,19 @@ pub enum TypeSignatureClass {
 
 impl Display for TypeSignatureClass {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "TypeSignatureClass::{self:?}")
+        match self {
+            Self::Any => write!(f, "Any"),
+            Self::Timestamp => write!(f, "Timestamp"),
+            Self::Time => write!(f, "Time"),
+            Self::Interval => write!(f, "Interval"),
+            Self::Duration => write!(f, "Duration"),
+            Self::Native(logical_type) => write!(f, "{logical_type}"),
+            Self::Integer => write!(f, "Integer"),
+            Self::Float => write!(f, "Float"),
+            Self::Decimal => write!(f, "Decimal"),
+            Self::Numeric => write!(f, "Numeric"),
+            Self::Binary => write!(f, "Binary"),
+        }
     }
 }
 
@@ -1062,12 +1074,7 @@ impl Coercion {
 
 impl Display for Coercion {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Coercion({}", self.desired_type())?;
-        if let Some(implicit_coercion) = self.implicit_coercion() {
-            write!(f, ", implicit_coercion={implicit_coercion}",)
-        } else {
-            write!(f, ")")
-        }
+        write!(f, "{}", self.desired_type())
     }
 }
 
@@ -1119,11 +1126,14 @@ pub struct ImplicitCoercion {
 
 impl Display for ImplicitCoercion {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "ImplicitCoercion({:?}, default_type={:?})",
-            self.allowed_source_types, self.default_casted_type
-        )
+        write!(f, "ImplicitCoercion(")?;
+        for (i, source_type) in self.allowed_source_types.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            write!(f, "{source_type}")?;
+        }
+        write!(f, "; default={}", self.default_casted_type)
     }
 }
 
@@ -2041,54 +2051,18 @@ mod tests {
     fn test_type_signature_class_display() {
         use insta::assert_snapshot;
 
-        assert_snapshot!(
-            TypeSignatureClass::Any,
-            @"TypeSignatureClass::Any"
-        );
-        assert_snapshot!(
-            TypeSignatureClass::Numeric,
-            @"TypeSignatureClass::Numeric"
-        );
-        assert_snapshot!(
-            TypeSignatureClass::Integer,
-            @"TypeSignatureClass::Integer"
-        );
-        assert_snapshot!(
-            TypeSignatureClass::Float,
-            @"TypeSignatureClass::Float"
-        );
-        assert_snapshot!(
-            TypeSignatureClass::Decimal,
-            @"TypeSignatureClass::Decimal"
-        );
-        assert_snapshot!(
-            TypeSignatureClass::Timestamp,
-            @"TypeSignatureClass::Timestamp"
-        );
-        assert_snapshot!(
-            TypeSignatureClass::Time,
-            @"TypeSignatureClass::Time"
-        );
-        assert_snapshot!(
-            TypeSignatureClass::Interval,
-            @"TypeSignatureClass::Interval"
-        );
-        assert_snapshot!(
-            TypeSignatureClass::Duration,
-            @"TypeSignatureClass::Duration"
-        );
-        assert_snapshot!(
-            TypeSignatureClass::Binary,
-            @"TypeSignatureClass::Binary"
-        );
-        assert_snapshot!(
-            TypeSignatureClass::Native(logical_int32()),
-            @"TypeSignatureClass::Native(LogicalType(Native(Int32), Int32))"
-        );
-        assert_snapshot!(
-            TypeSignatureClass::Native(logical_string()),
-            @"TypeSignatureClass::Native(LogicalType(Native(String), String))"
-        );
+        assert_snapshot!(TypeSignatureClass::Any, @"Any");
+        assert_snapshot!(TypeSignatureClass::Numeric, @"Numeric");
+        assert_snapshot!(TypeSignatureClass::Integer, @"Integer");
+        assert_snapshot!(TypeSignatureClass::Float, @"Float");
+        assert_snapshot!(TypeSignatureClass::Decimal, @"Decimal");
+        assert_snapshot!(TypeSignatureClass::Timestamp, @"Timestamp");
+        assert_snapshot!(TypeSignatureClass::Time, @"Time");
+        assert_snapshot!(TypeSignatureClass::Interval, @"Interval");
+        assert_snapshot!(TypeSignatureClass::Duration, @"Duration");
+        assert_snapshot!(TypeSignatureClass::Binary, @"Binary");
+        assert_snapshot!(TypeSignatureClass::Native(logical_int32()), @"Int32");
+        assert_snapshot!(TypeSignatureClass::Native(logical_string()), @"String");
     }
 
     #[test]
@@ -2096,33 +2070,24 @@ mod tests {
         use insta::assert_snapshot;
 
         let exact_int = Coercion::new_exact(TypeSignatureClass::Native(logical_int32()));
-        assert_snapshot!(
-            exact_int,
-            @"Coercion(TypeSignatureClass::Native(LogicalType(Native(Int32), Int32)))"
-        );
+        assert_snapshot!(exact_int, @"Int32");
 
         let exact_numeric = Coercion::new_exact(TypeSignatureClass::Numeric);
-        assert_snapshot!(exact_numeric, @"Coercion(TypeSignatureClass::Numeric)");
+        assert_snapshot!(exact_numeric, @"Numeric");
 
         let implicit = Coercion::new_implicit(
             TypeSignatureClass::Native(logical_float64()),
             vec![TypeSignatureClass::Numeric],
             NativeType::Float64,
         );
-        assert_snapshot!(
-            implicit,
-            @"Coercion(TypeSignatureClass::Native(LogicalType(Native(Float64), Float64)), implicit_coercion=ImplicitCoercion([Numeric], default_type=Float64)"
-        );
+        assert_snapshot!(implicit, @"Float64");
 
         let implicit_with_multiple_sources = Coercion::new_implicit(
             TypeSignatureClass::Native(logical_int64()),
             vec![TypeSignatureClass::Integer, TypeSignatureClass::Numeric],
             NativeType::Int64,
         );
-        assert_snapshot!(
-            implicit_with_multiple_sources,
-            @"Coercion(TypeSignatureClass::Native(LogicalType(Native(Int64), Int64)), implicit_coercion=ImplicitCoercion([Integer, Numeric], default_type=Int64)"
-        );
+        assert_snapshot!(implicit_with_multiple_sources, @"Int64");
     }
 
     #[test]
@@ -2144,10 +2109,7 @@ mod tests {
         ]);
         let repr = sig.to_string_repr();
         assert_eq!(repr.len(), 1);
-        assert_snapshot!(
-            repr[0],
-            @"Coercion(TypeSignatureClass::Native(LogicalType(Native(Float64), Float64)), implicit_coercion=ImplicitCoercion([Numeric], default_type=Float64), Coercion(TypeSignatureClass::Native(LogicalType(Native(Int64), Int64)), implicit_coercion=ImplicitCoercion([Integer], default_type=Int64)"
-        );
+        assert_snapshot!(repr[0], @"Float64, Int64");
     }
 
     #[test]
@@ -2160,9 +2122,6 @@ mod tests {
         ]);
         let repr = sig.to_string_repr();
         assert_eq!(repr.len(), 1);
-        assert_snapshot!(
-            repr[0],
-            @"Coercion(TypeSignatureClass::Native(LogicalType(Native(String), String))), Coercion(TypeSignatureClass::Native(LogicalType(Native(Int64), Int64)))"
-        );
+        assert_snapshot!(repr[0], @"String, Int64");
     }
 }
