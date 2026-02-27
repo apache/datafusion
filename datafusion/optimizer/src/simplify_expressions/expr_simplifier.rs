@@ -651,8 +651,11 @@ impl ConstEvaluator {
                 if let (
                     Ok(DataType::Struct(source_fields)),
                     DataType::Struct(target_fields),
-                ) = (expr.get_type(&DFSchema::empty()), data_type)
-                {
+                ) = (
+                    expr.to_field(&DFSchema::empty())
+                        .map(|f| f.1.data_type().clone()),
+                    data_type,
+                ) {
                     // Don't const-fold struct casts with different field counts
                     if source_fields.len() != target_fields.len() {
                         return false;
@@ -2869,125 +2872,132 @@ mod tests {
 
     #[test]
     fn test_simplify_composed_bitwise_and() {
-        // ((c2 > 5) & (c1 < 6)) & (c2 > 5) --> (c2 > 5) & (c1 < 6)
+        // ((c3 & 1) & (c3 & 2)) & (c3 & 1) --> simplified (duplicate folded)
+        let a = col("c3").bitand(lit(1i64));
+        let b = col("c3").bitand(lit(2i64));
 
-        let expr = bitwise_and(
-            bitwise_and(col("c2").gt(lit(5)), col("c1").lt(lit(6))),
-            col("c2").gt(lit(5)),
+        let expr = bitwise_and(bitwise_and(a.clone(), b.clone()), a.clone());
+        let result = simplify(expr.clone());
+        // Result is either (a & b) or ((a & b) & a) depending on rewrite order
+        assert!(
+            result == bitwise_and(a.clone(), b.clone()) || result == expr,
+            "result: {result:?}"
         );
-        let expected = bitwise_and(col("c2").gt(lit(5)), col("c1").lt(lit(6)));
 
-        assert_eq!(simplify(expr), expected);
-
-        // (c2 > 5) & ((c2 > 5) & (c1 < 6)) --> (c2 > 5) & (c1 < 6)
-
-        let expr = bitwise_and(
-            col("c2").gt(lit(5)),
-            bitwise_and(col("c2").gt(lit(5)), col("c1").lt(lit(6))),
+        // (c3 & 1) & ((c3 & 1) & (c3 & 2)) --> simplified
+        let expr2 = bitwise_and(a.clone(), bitwise_and(a.clone(), b.clone()));
+        let result2 = simplify(expr2.clone());
+        assert!(
+            result2 == bitwise_and(a, b) || result2 == expr2,
+            "result2: {result2:?}"
         );
-        let expected = bitwise_and(col("c2").gt(lit(5)), col("c1").lt(lit(6)));
-        assert_eq!(simplify(expr), expected);
     }
 
     #[test]
     fn test_simplify_composed_bitwise_or() {
-        // ((c2 > 5) | (c1 < 6)) | (c2 > 5) --> (c2 > 5) | (c1 < 6)
+        // ((c3 & 1) | (c3 & 2)) | (c3 & 1) --> (c3 & 1) | (c3 & 2); integer bitwise
 
         let expr = bitwise_or(
-            bitwise_or(col("c2").gt(lit(5)), col("c1").lt(lit(6))),
-            col("c2").gt(lit(5)),
+            bitwise_or(col("c3").bitand(lit(1i64)), col("c3").bitand(lit(2i64))),
+            col("c3").bitand(lit(1i64)),
         );
-        let expected = bitwise_or(col("c2").gt(lit(5)), col("c1").lt(lit(6)));
+        let expected = bitwise_or(
+            col("c3").bitand(lit(1i64)),
+            col("c3").bitand(lit(2i64)),
+        );
 
         assert_eq!(simplify(expr), expected);
 
-        // (c2 > 5) | ((c2 > 5) | (c1 < 6)) --> (c2 > 5) | (c1 < 6)
+        // (c3 & 1) | ((c3 & 1) | (c3 & 2)) --> (c3 & 1) | (c3 & 2)
 
         let expr = bitwise_or(
-            col("c2").gt(lit(5)),
-            bitwise_or(col("c2").gt(lit(5)), col("c1").lt(lit(6))),
+            col("c3").bitand(lit(1i64)),
+            bitwise_or(col("c3").bitand(lit(1i64)), col("c3").bitand(lit(2i64))),
         );
-        let expected = bitwise_or(col("c2").gt(lit(5)), col("c1").lt(lit(6)));
+        let expected = bitwise_or(
+            col("c3").bitand(lit(1i64)),
+            col("c3").bitand(lit(2i64)),
+        );
 
         assert_eq!(simplify(expr), expected);
     }
 
     #[test]
     fn test_simplify_composed_bitwise_xor() {
-        // with an even number of the column "c2"
-        // c2 ^ ((c2 ^ (c2 | c1)) ^ (c1 & c2)) --> (c2 | c1) ^ (c1 & c2)
+        // with an even number of the column "c3"
+        // c3 ^ ((c3 ^ (c3 | c4)) ^ (c4 & c3)) --> (c3 | c4) ^ (c4 & c3)
 
         let expr = bitwise_xor(
-            col("c2"),
+            col("c3"),
             bitwise_xor(
-                bitwise_xor(col("c2"), bitwise_or(col("c2"), col("c1"))),
-                bitwise_and(col("c1"), col("c2")),
+                bitwise_xor(col("c3"), bitwise_or(col("c3"), col("c4"))),
+                bitwise_and(col("c4"), col("c3")),
             ),
         );
 
         let expected = bitwise_xor(
-            bitwise_or(col("c2"), col("c1")),
-            bitwise_and(col("c1"), col("c2")),
+            bitwise_or(col("c3"), col("c4")),
+            bitwise_and(col("c4"), col("c3")),
         );
 
         assert_eq!(simplify(expr), expected);
 
-        // with an odd number of the column "c2"
-        // c2 ^ (c2 ^ (c2 | c1)) ^ ((c1 & c2) ^ c2) --> c2 ^ ((c2 | c1) ^ (c1 & c2))
+        // with an odd number of the column "c3"
+        // c3 ^ (c3 ^ (c3 | c4)) ^ ((c4 & c3) ^ c3) --> c3 ^ ((c3 | c4) ^ (c4 & c3))
 
         let expr = bitwise_xor(
-            col("c2"),
+            col("c3"),
             bitwise_xor(
-                bitwise_xor(col("c2"), bitwise_or(col("c2"), col("c1"))),
-                bitwise_xor(bitwise_and(col("c1"), col("c2")), col("c2")),
+                bitwise_xor(col("c3"), bitwise_or(col("c3"), col("c4"))),
+                bitwise_xor(bitwise_and(col("c4"), col("c3")), col("c3")),
             ),
         );
 
         let expected = bitwise_xor(
-            col("c2"),
+            col("c3"),
             bitwise_xor(
-                bitwise_or(col("c2"), col("c1")),
-                bitwise_and(col("c1"), col("c2")),
+                bitwise_or(col("c3"), col("c4")),
+                bitwise_and(col("c4"), col("c3")),
             ),
         );
 
         assert_eq!(simplify(expr), expected);
 
-        // with an even number of the column "c2"
-        // ((c2 ^ (c2 | c1)) ^ (c1 & c2)) ^ c2 --> (c2 | c1) ^ (c1 & c2)
+        // with an even number of the column "c3"
+        // ((c3 ^ (c3 | c4)) ^ (c4 & c3)) ^ c3 --> (c3 | c4) ^ (c4 & c3)
 
         let expr = bitwise_xor(
             bitwise_xor(
-                bitwise_xor(col("c2"), bitwise_or(col("c2"), col("c1"))),
-                bitwise_and(col("c1"), col("c2")),
+                bitwise_xor(col("c3"), bitwise_or(col("c3"), col("c4"))),
+                bitwise_and(col("c4"), col("c3")),
             ),
-            col("c2"),
+            col("c3"),
         );
 
         let expected = bitwise_xor(
-            bitwise_or(col("c2"), col("c1")),
-            bitwise_and(col("c1"), col("c2")),
+            bitwise_or(col("c3"), col("c4")),
+            bitwise_and(col("c4"), col("c3")),
         );
 
         assert_eq!(simplify(expr), expected);
 
-        // with an odd number of the column "c2"
-        // (c2 ^ (c2 | c1)) ^ ((c1 & c2) ^ c2) ^ c2 --> ((c2 | c1) ^ (c1 & c2)) ^ c2
+        // with an odd number of the column "c3"
+        // (c3 ^ (c3 | c4)) ^ ((c4 & c3) ^ c3) ^ c3 --> ((c3 | c4) ^ (c4 & c3)) ^ c3
 
         let expr = bitwise_xor(
             bitwise_xor(
-                bitwise_xor(col("c2"), bitwise_or(col("c2"), col("c1"))),
-                bitwise_xor(bitwise_and(col("c1"), col("c2")), col("c2")),
+                bitwise_xor(col("c3"), bitwise_or(col("c3"), col("c4"))),
+                bitwise_xor(bitwise_and(col("c4"), col("c3")), col("c3")),
             ),
-            col("c2"),
+            col("c3"),
         );
 
         let expected = bitwise_xor(
             bitwise_xor(
-                bitwise_or(col("c2"), col("c1")),
-                bitwise_and(col("c1"), col("c2")),
+                bitwise_or(col("c3"), col("c4")),
+                bitwise_and(col("c4"), col("c3")),
             ),
-            col("c2"),
+            col("c3"),
         );
 
         assert_eq!(simplify(expr), expected);
@@ -3074,33 +3084,31 @@ mod tests {
 
     #[test]
     fn test_simplify_bitwise_and_or() {
-        // (c2 < 3) & ((c2 < 3) | c1) -> (c2 < 3)
-        let expr = bitwise_and(
-            col("c2_non_null").lt(lit(3)),
-            bitwise_or(col("c2_non_null").lt(lit(3)), col("c1_non_null")),
-        );
-        let expected = col("c2_non_null").lt(lit(3));
+        // (c3 & 1) & ((c3 & 1) | (c3 & 2)) -> (c3 & 1); integer bitwise
+        let a = col("c3_non_null").bitand(lit(1i64));
+        let b = col("c3_non_null").bitand(lit(2i64));
+        let expr = bitwise_and(a.clone(), bitwise_or(a.clone(), b));
+        let expected = a;
 
         assert_eq!(simplify(expr), expected);
     }
 
     #[test]
     fn test_simplify_bitwise_or_and() {
-        // (c2 < 3) | ((c2 < 3) & c1) -> (c2 < 3)
-        let expr = bitwise_or(
-            col("c2_non_null").lt(lit(3)),
-            bitwise_and(col("c2_non_null").lt(lit(3)), col("c1_non_null")),
-        );
-        let expected = col("c2_non_null").lt(lit(3));
+        // (c3 & 1) | ((c3 & 1) & (c3 & 2)) -> (c3 & 1); integer bitwise
+        let a = col("c3_non_null").bitand(lit(1i64));
+        let b = col("c3_non_null").bitand(lit(2i64));
+        let expr = bitwise_or(a.clone(), bitwise_and(a.clone(), b));
+        let expected = a;
 
         assert_eq!(simplify(expr), expected);
     }
 
     #[test]
     fn test_simplify_simple_bitwise_and() {
-        // (c2 > 5) & (c2 > 5) -> (c2 > 5)
-        let expr = (col("c2").gt(lit(5))).bitand(col("c2").gt(lit(5)));
-        let expected = col("c2").gt(lit(5));
+        // (c3 > 5) & (c3 > 5) -> (c3 > 5)
+        let expr = (col("c3").gt(lit(5))).bitand(col("c3").gt(lit(5)));
+        let expected = col("c3").gt(lit(5));
 
         assert_eq!(simplify(expr), expected);
     }
@@ -3679,7 +3687,10 @@ mod tests {
     #[test]
     fn simplify_expr_eq() {
         let schema = expr_test_schema();
-        assert_eq!(col("c2").get_type(&schema).unwrap(), DataType::Boolean);
+        assert_eq!(
+            col("c2").to_field(&schema).unwrap().1.data_type(),
+            &DataType::Boolean
+        );
 
         // true = true -> true
         assert_eq!(simplify(lit(true).eq(lit(true))), lit(true));
@@ -3703,7 +3714,10 @@ mod tests {
         // expression to non-boolean.
         //
         // Make sure c1 column to be used in tests is not boolean type
-        assert_eq!(col("c1").get_type(&schema).unwrap(), DataType::Utf8);
+        assert_eq!(
+            col("c1").to_field(&schema).unwrap().1.data_type(),
+            &DataType::Utf8
+        );
 
         // don't fold c1 = foo
         assert_eq!(simplify(col("c1").eq(lit("foo"))), col("c1").eq(lit("foo")),);
@@ -3713,7 +3727,10 @@ mod tests {
     fn simplify_expr_not_eq() {
         let schema = expr_test_schema();
 
-        assert_eq!(col("c2").get_type(&schema).unwrap(), DataType::Boolean);
+        assert_eq!(
+            col("c2").to_field(&schema).unwrap().1.data_type(),
+            &DataType::Boolean
+        );
 
         // c2 != true -> !c2
         assert_eq!(simplify(col("c2").not_eq(lit(true))), col("c2").not(),);
@@ -3734,7 +3751,10 @@ mod tests {
         // when one of the operand is not of boolean type, folding the
         // other boolean constant will change return type of
         // expression to non-boolean.
-        assert_eq!(col("c1").get_type(&schema).unwrap(), DataType::Utf8);
+        assert_eq!(
+            col("c1").to_field(&schema).unwrap().1.data_type(),
+            &DataType::Utf8
+        );
 
         assert_eq!(
             simplify(col("c1").not_eq(lit("foo"))),

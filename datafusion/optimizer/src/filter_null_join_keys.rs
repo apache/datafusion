@@ -64,11 +64,11 @@ impl OptimizerRule for FilterNullJoinKeys {
                 let mut right_filters = vec![];
 
                 for (l, r) in &join.on {
-                    if left_preserved && l.nullable(left_schema)? {
+                    if left_preserved && l.to_field(left_schema)?.1.is_nullable() {
                         left_filters.push(l.clone());
                     }
 
-                    if right_preserved && r.nullable(right_schema)? {
+                    if right_preserved && r.to_field(right_schema)?.1.is_nullable() {
                         right_filters.push(r.clone());
                     }
                 }

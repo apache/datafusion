@@ -121,7 +121,7 @@ impl ScalarUDFImpl for SparkDateTrunc {
         };
 
         let session_tz = info.config_options().execution.time_zone.clone();
-        let ts_type = ts_expr.get_type(info.schema())?;
+        let ts_type = ts_expr.to_field(info.schema())?.1.data_type().clone();
 
         // Spark interprets timestamps in the session timezone before truncating,
         // then returns a timestamp at microsecond precision.

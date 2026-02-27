@@ -253,7 +253,7 @@ fn coerce_exprs_for_schema(
         .enumerate()
         .map(|(idx, expr)| {
             let new_type = dst_schema.field(idx).data_type();
-            if new_type != &expr.get_type(src_schema)? {
+            if new_type != expr.to_field(src_schema)?.1.data_type() {
                 match expr {
                     Expr::Alias(Alias { expr, name, .. }) => {
                         Ok(expr.cast_to(new_type, src_schema)?.alias(name))

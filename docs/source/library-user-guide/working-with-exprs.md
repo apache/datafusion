@@ -342,7 +342,7 @@ I.e. the `add_one` UDF has been inlined into the projection.
 
 ## Getting the data type of the expression
 
-The `arrow::datatypes::DataType` of the expression can be obtained by calling the `get_type` given something that implements `Expr::Schemable`, for example a `DFschema` object:
+The `arrow::datatypes::DataType` of the expression can be obtained by calling `to_field` with an object that implements `ExprSchema` (such as a `DFSchema` object), and then calling `data_type()` on the resulting field:
 
 ```rust
 use arrow::datatypes::{DataType, Field};
@@ -361,7 +361,7 @@ let schema = DFSchema::from_unqualified_fields(
     .into(),
     HashMap::new(),
 ).unwrap();
-assert_eq!("Float32", format!("{}", expr.get_type(&schema).unwrap()));
+assert_eq!("Float32", format!("{}", expr.to_field(&schema).unwrap().1.data_type()));
 ```
 
 ## Conclusion

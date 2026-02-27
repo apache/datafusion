@@ -55,8 +55,8 @@ impl ExprPlanner for NestedFunctionPlanner {
         let RawBinaryExpr { op, left, right } = expr;
 
         if op == BinaryOperator::StringConcat {
-            let left_type = left.get_type(schema)?;
-            let right_type = right.get_type(schema)?;
+            let left_type = left.to_field(schema)?.1.data_type().clone();
+            let right_type = right.to_field(schema)?.1.data_type().clone();
             let left_list_ndims = list_ndims(&left_type);
             let right_list_ndims = list_ndims(&right_type);
 
@@ -79,8 +79,8 @@ impl ExprPlanner for NestedFunctionPlanner {
                 return Ok(PlannerResult::Planned(array_prepend(left, right)));
             }
         } else if matches!(op, BinaryOperator::AtArrow | BinaryOperator::ArrowAt) {
-            let left_type = left.get_type(schema)?;
-            let right_type = right.get_type(schema)?;
+            let left_type = left.to_field(schema)?.1.data_type().clone();
+            let right_type = right.to_field(schema)?.1.data_type().clone();
             let left_list_ndims = list_ndims(&left_type);
             let right_list_ndims = list_ndims(&right_type);
             // if both are list
@@ -165,7 +165,11 @@ impl ExprPlanner for FieldAccessPlanner {
                         )),
                     )),
                     // special case for map access with
-                    _ if matches!(expr.get_type(schema)?, DataType::Map(_, _)) => {
+                    _ if matches!(
+                        expr.to_field(schema)?.1.data_type(),
+                        DataType::Map(_, _)
+                    ) =>
+                    {
                         Ok(PlannerResult::Planned(Expr::ScalarFunction(
                             ScalarFunction::new_udf(
                                 get_field_inner(),

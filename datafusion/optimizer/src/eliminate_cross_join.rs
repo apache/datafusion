@@ -316,7 +316,7 @@ fn find_inner_join(
 
             // Save join keys
             if let Some((valid_l, valid_r)) = key_pair
-                && can_hash(&valid_l.get_type(left_input.schema())?)
+                && can_hash(valid_l.to_field(left_input.schema())?.1.data_type())
             {
                 join_keys.push((valid_l, valid_r));
             }
