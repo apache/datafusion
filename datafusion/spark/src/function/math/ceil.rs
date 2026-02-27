@@ -22,7 +22,7 @@ use arrow::array::{AsArray, Decimal128Array};
 use arrow::compute::cast;
 use arrow::datatypes::{DataType, Decimal128Type, Float32Type, Float64Type, Int64Type};
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -131,7 +131,15 @@ mod tests {
 
     #[test]
     fn test_ceil_float64() {
-        let input = Float64Array::from(vec![Some(1.1), Some(-1.1), Some(0.0), None]);
+        let input = Float64Array::from(vec![
+            Some(125.2345),
+            Some(15.0001),
+            Some(0.1),
+            Some(-0.9),
+            Some(-1.1),
+            Some(123.0),
+            None,
+        ]);
         let args = vec![ColumnarValue::Array(Arc::new(input))];
         let result = spark_ceil(&args, &DataType::Int64).unwrap();
         let result = match result {
@@ -141,13 +149,29 @@ mod tests {
         let result = result.as_primitive::<Int64Type>();
         assert_eq!(
             result,
-            &Int64Array::from(vec![Some(2), Some(-1), Some(0), None])
+            &Int64Array::from(vec![
+                Some(126),
+                Some(16),
+                Some(1),
+                Some(0),
+                Some(-1),
+                Some(123),
+                None,
+            ])
         );
     }
 
     #[test]
     fn test_ceil_float32() {
-        let input = Float32Array::from(vec![Some(1.5f32), Some(-1.5f32)]);
+        let input = Float32Array::from(vec![
+            Some(125.2345f32),
+            Some(15.0001f32),
+            Some(0.1f32),
+            Some(-0.9f32),
+            Some(-1.1f32),
+            Some(123.0f32),
+            None,
+        ]);
         let args = vec![ColumnarValue::Array(Arc::new(input))];
         let result = spark_ceil(&args, &DataType::Int64).unwrap();
         let result = match result {
@@ -155,7 +179,18 @@ mod tests {
             _ => panic!("Expected array"),
         };
         let result = result.as_primitive::<Int64Type>();
-        assert_eq!(result, &Int64Array::from(vec![Some(2), Some(-1)]));
+        assert_eq!(
+            result,
+            &Int64Array::from(vec![
+                Some(126),
+                Some(16),
+                Some(1),
+                Some(0),
+                Some(-1),
+                Some(123),
+                None,
+            ])
+        );
     }
 
     #[test]
@@ -190,8 +225,8 @@ mod tests {
     }
 
     #[test]
-    fn test_ceil_scalar() {
-        let input = ScalarValue::Float64(Some(1.1));
+    fn test_ceil_float64_scalar() {
+        let input = ScalarValue::Float64(Some(-1.1));
         let args = vec![ColumnarValue::Scalar(input)];
         let result = spark_ceil(&args, &DataType::Int64).unwrap();
         let result = match result {
@@ -199,6 +234,32 @@ mod tests {
             _ => panic!("Expected array"),
         };
         let result = result.as_primitive::<Int64Type>();
-        assert_eq!(result, &Int64Array::from(vec![Some(2)]));
+        assert_eq!(result, &Int64Array::from(vec![Some(-1)]));
+    }
+
+    #[test]
+    fn test_ceil_float32_scalar() {
+        let input = ScalarValue::Float32(Some(125.2345f32));
+        let args = vec![ColumnarValue::Scalar(input)];
+        let result = spark_ceil(&args, &DataType::Int64).unwrap();
+        let result = match result {
+            ColumnarValue::Array(arr) => arr,
+            _ => panic!("Expected array"),
+        };
+        let result = result.as_primitive::<Int64Type>();
+        assert_eq!(result, &Int64Array::from(vec![Some(126)]));
+    }
+
+    #[test]
+    fn test_ceil_int64_scalar() {
+        let input = ScalarValue::Int64(Some(48));
+        let args = vec![ColumnarValue::Scalar(input)];
+        let result = spark_ceil(&args, &DataType::Int64).unwrap();
+        let result = match result {
+            ColumnarValue::Array(arr) => arr,
+            _ => panic!("Expected array"),
+        };
+        let result = result.as_primitive::<Int64Type>();
+        assert_eq!(result, &Int64Array::from(vec![Some(48)]));
     }
 }
