@@ -24,7 +24,7 @@ use crate::{
     display::FileGroupsDisplay,
     file::FileSource,
     file_compression_type::FileCompressionType,
-    file_stream::{FileStream, WorkQueue},
+    file_stream::FileStream,
     source::DataSource,
     statistics::MinMaxStatistics,
 };
@@ -208,11 +208,6 @@ pub struct FileScanConfig {
     /// If the number of file partitions > target_partitions, the file partitions will be grouped
     /// in a round-robin fashion such that number of file partitions = target_partitions.
     pub partitioned_by_file_group: bool,
-    /// When true, use morsel-driven execution to avoid data skew.
-    /// This means all partitions share a single pool of work.
-    pub morsel_driven: bool,
-    /// Shared morsel queue, set via [`DataSource::with_shared_morsel_queue`].
-    shared_morsel_queue: Option<Arc<WorkQueue>>,
 }
 
 /// A builder for [`FileScanConfig`]'s.
@@ -283,7 +278,6 @@ pub struct FileScanConfigBuilder {
     batch_size: Option<usize>,
     expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
     partitioned_by_file_group: bool,
-    morsel_driven: bool,
 }
 
 impl FileScanConfigBuilder {
@@ -310,7 +304,6 @@ impl FileScanConfigBuilder {
             batch_size: None,
             expr_adapter_factory: None,
             partitioned_by_file_group: false,
-            morsel_driven: false,
         }
     }
 
@@ -511,12 +504,6 @@ impl FileScanConfigBuilder {
         self
     }
 
-    /// Set whether to use morsel-driven execution.
-    pub fn with_morsel_driven(mut self, morsel_driven: bool) -> Self {
-        self.morsel_driven = morsel_driven;
-        self
-    }
-
     /// Build the final [`FileScanConfig`] with all the configured settings.
     ///
     /// This method takes ownership of the builder and returns the constructed `FileScanConfig`.
@@ -538,7 +525,6 @@ impl FileScanConfigBuilder {
             batch_size,
             expr_adapter_factory: expr_adapter,
             partitioned_by_file_group,
-            morsel_driven,
         } = self;
 
         let constraints = constraints.unwrap_or_default();
@@ -550,24 +536,6 @@ impl FileScanConfigBuilder {
 
         // If there is an output ordering, we should preserve it.
         let preserve_order = preserve_order || !output_ordering.is_empty();
-
-        // Morsel-driven execution pools all files from all file groups into a shared
-        // work queue that any partition may consume, allowing partitions to steal work
-        // from each other's file groups. This breaks two guarantees that downstream
-        // operators may rely on:
-        //
-        // 1. `partitioned_by_file_group`: the optimizer has declared Hash partitioning
-        //    assuming partition N reads only from file_group[N] (e.g. Hive-style
-        //    partitioning with `preserve_file_partitions`). Morsel-driven stealing
-        //    would violate this, breaking `HashJoinExec: mode=Partitioned` correctness.
-        //
-        // 2. `preserve_order`: the scan declares a sort order on its output. When a
-        //    partition interleaves morsels from multiple files (from different groups),
-        //    the per-partition output is no longer globally sorted. Downstream operators
-        //    such as `SortPreservingMergeExec` rely on each partition's stream being
-        //    pre-sorted.
-        let morsel_driven =
-            morsel_driven && !partitioned_by_file_group && !preserve_order;
 
         FileScanConfig {
             object_store_url,
@@ -582,8 +550,6 @@ impl FileScanConfigBuilder {
             expr_adapter_factory: expr_adapter,
             statistics,
             partitioned_by_file_group,
-            morsel_driven,
-            shared_morsel_queue: None,
         }
     }
 }
@@ -603,7 +569,6 @@ impl From<FileScanConfig> for FileScanConfigBuilder {
             batch_size: config.batch_size,
             expr_adapter_factory: config.expr_adapter_factory,
             partitioned_by_file_group: config.partitioned_by_file_group,
-            morsel_driven: config.morsel_driven,
         }
     }
 }
@@ -628,18 +593,8 @@ impl DataSource for FileScanConfig {
             partition,
             opener,
             source.metrics(),
-            self.shared_morsel_queue.clone(),
         )?;
         Ok(Box::pin(cooperative(stream)))
-    }
-
-    fn with_shared_morsel_queue(
-        &self,
-        queue: Option<Arc<WorkQueue>>,
-    ) -> Arc<dyn DataSource> {
-        let mut config = self.clone();
-        config.shared_morsel_queue = queue;
-        Arc::new(config)
     }
 
     fn as_any(&self) -> &dyn Any {

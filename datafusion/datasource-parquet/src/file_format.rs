@@ -48,6 +48,7 @@ use datafusion_common::{
 use datafusion_common::{HashMap, Statistics};
 use datafusion_common_runtime::{JoinSet, SpawnedTask};
 use datafusion_datasource::display::FileGroupDisplay;
+use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::sink::{DataSink, DataSinkExec};
@@ -55,6 +56,7 @@ use datafusion_execution::memory_pool::{MemoryConsumer, MemoryPool, MemoryReserv
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
+use datafusion_physical_plan::merge_partitions::MergePartitionsExec;
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 use datafusion_session::Session;
 
@@ -532,11 +534,49 @@ impl FileFormat for ParquetFormat {
 
         source = self.set_source_encryption_factory(source, state)?;
 
-        let conf = FileScanConfigBuilder::from(conf)
-            .with_source(Arc::new(source))
-            .with_morsel_driven(self.options.global.allow_morsel_driven)
-            .build();
-        Ok(DataSourceExec::from_data_source(conf))
+        let use_merge_partitions = self.options.global.allow_morsel_driven;
+
+        if use_merge_partitions {
+            // Create one partition per file for maximum parallelism,
+            // then wrap with MergePartitionsExec to reduce to target_partitions.
+            // This uses atomic work-stealing at the partition level.
+            let one_per_file: Vec<FileGroup> = conf
+                .file_groups
+                .iter()
+                .flat_map(|group| {
+                    group
+                        .iter()
+                        .map(|file| FileGroup::new(vec![file.clone()]))
+                })
+                .collect();
+
+            let target_partitions =
+                state.config_options().execution.target_partitions;
+
+            let conf = FileScanConfigBuilder::from(conf)
+                .with_source(Arc::new(source))
+                .with_file_groups(one_per_file)
+                .build();
+            let data_source = DataSourceExec::from_data_source(conf);
+            let input_partitions = data_source
+                .properties()
+                .output_partitioning()
+                .partition_count();
+
+            if input_partitions > target_partitions {
+                Ok(Arc::new(MergePartitionsExec::new(
+                    data_source,
+                    target_partitions,
+                )))
+            } else {
+                Ok(data_source)
+            }
+        } else {
+            let conf = FileScanConfigBuilder::from(conf)
+                .with_source(Arc::new(source))
+                .build();
+            Ok(DataSourceExec::from_data_source(conf))
+        }
     }
 
     async fn create_writer_physical_plan(

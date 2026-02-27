@@ -20,7 +20,7 @@
 use std::any::Any;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_plan::execution_plan::{
@@ -36,7 +36,6 @@ use datafusion_physical_plan::{
 use itertools::Itertools;
 
 use crate::file_scan_config::FileScanConfig;
-use crate::file_stream::WorkQueue;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Constraints, Result, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
@@ -127,17 +126,6 @@ pub trait DataSource: Send + Sync + Debug {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream>;
 
-    /// Set a shared morsel queue for morsel-driven execution.
-    ///
-    /// The default implementation is a no-op. Override this in
-    /// implementations that support morsel-driven scheduling (e.g.
-    /// [`FileScanConfig`]).
-    fn with_shared_morsel_queue(
-        &self,
-        _queue: Option<Arc<WorkQueue>>,
-    ) -> Arc<dyn DataSource> {
-        unimplemented!("with_shared_morsel_queue is not supported for this DataSource")
-    }
     fn as_any(&self) -> &dyn Any;
     /// Format this source for display in explain plans
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result;
@@ -244,15 +232,6 @@ pub struct DataSourceExec {
     data_source: Arc<dyn DataSource>,
     /// Cached plan properties such as sort order
     cache: Arc<PlanProperties>,
-    /// Shared morsel queue for current execution lifecycle.
-    morsel_state: Arc<Mutex<MorselState>>,
-}
-
-#[derive(Debug, Default)]
-struct MorselState {
-    queue: Option<Arc<WorkQueue>>,
-    streams_opened: usize,
-    expected_streams: usize,
 }
 
 impl DisplayAs for DataSourceExec {
@@ -322,49 +301,7 @@ impl ExecutionPlan for DataSourceExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let shared_morsel_queue = if let Some(config) =
-            self.data_source.as_any().downcast_ref::<FileScanConfig>()
-        {
-            if config.morsel_driven {
-                let mut state = self.morsel_state.lock().unwrap();
-
-                // Start a new cycle once all expected partition streams for the
-                // previous cycle have been opened.
-                if state.expected_streams > 0
-                    && state.streams_opened >= state.expected_streams
-                {
-                    state.queue = None;
-                    state.streams_opened = 0;
-                    state.expected_streams = 0;
-                }
-
-                if state.queue.is_none() {
-                    let all_files = config
-                        .file_groups
-                        .iter()
-                        .flat_map(|g| g.files().to_vec())
-                        .collect();
-                    state.queue = Some(Arc::new(WorkQueue::new(all_files)));
-                    state.expected_streams = config.file_groups.len();
-                }
-
-                state.streams_opened += 1;
-                state.queue.as_ref().cloned()
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        let data_source = if shared_morsel_queue.is_some() {
-            self.data_source
-                .with_shared_morsel_queue(shared_morsel_queue)
-        } else {
-            Arc::clone(&self.data_source)
-        };
-
-        let stream = data_source.open(partition, Arc::clone(&context))?;
+        let stream = self.data_source.open(partition, Arc::clone(&context))?;
         let batch_size = context.session_config().batch_size();
         log::debug!(
             "Batch splitting enabled for partition {partition}: batch_size={batch_size}"
@@ -393,7 +330,6 @@ impl ExecutionPlan for DataSourceExec {
         Some(Arc::new(Self {
             data_source,
             cache,
-            morsel_state: Arc::new(Mutex::new(MorselState::default())),
         }))
     }
 
@@ -488,7 +424,6 @@ impl DataSourceExec {
         Self {
             data_source,
             cache: Arc::new(cache),
-            morsel_state: Arc::new(Mutex::new(MorselState::default())),
         }
     }
 
@@ -500,7 +435,6 @@ impl DataSourceExec {
     pub fn with_data_source(mut self, data_source: Arc<dyn DataSource>) -> Self {
         self.cache = Arc::new(Self::compute_properties(&data_source));
         self.data_source = data_source;
-        self.morsel_state = Arc::new(Mutex::new(MorselState::default()));
         self
     }
 

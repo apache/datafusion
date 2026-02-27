@@ -78,8 +78,7 @@ mod test {
         target_partition: Option<usize>,
     ) -> Arc<dyn ExecutionPlan> {
         let mut session_config = SessionConfig::new()
-            .with_collect_statistics(true)
-            .set_bool("datafusion.execution.parquet.allow_morsel_driven", false);
+            .with_collect_statistics(true);
         if let Some(partition) = target_partition {
             session_config = session_config.with_target_partitions(partition);
         }
