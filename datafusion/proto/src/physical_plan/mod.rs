@@ -811,11 +811,6 @@ impl protobuf::PhysicalPlanNode {
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        #[cfg(not(feature = "parquet"))]
-        panic!(
-            "Unable to process a Parquet PhysicalPlan when `parquet` feature is not enabled"
-        );
-
         #[cfg(feature = "parquet")]
         {
             let schema = from_proto::parse_protobuf_file_scan_schema(
@@ -882,6 +877,10 @@ impl protobuf::PhysicalPlanNode {
             )?;
             Ok(DataSourceExec::from_data_source(base_config))
         }
+        #[cfg(not(feature = "parquet"))]
+        panic!(
+            "Unable to process a Parquet PhysicalPlan when `parquet` feature is not enabled"
+        )
     }
 
     #[cfg_attr(not(feature = "avro"), expect(unused_variables))]
