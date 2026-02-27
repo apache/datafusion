@@ -22,7 +22,7 @@ use arrow::compute::unary;
 use arrow::datatypes::{DataType, Int64Type, TimeUnit, TimestampMicrosecondType};
 use arrow::error::ArrowError;
 use datafusion_common::cast::as_generic_string_array;
-use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, exec_err};
 use std::sync::Arc;
 
 /// Spark evaluation modes matching Spark's three cast behaviors.
@@ -70,9 +70,15 @@ pub fn parse_spark_datatype(s: &str) -> Result<DataType> {
         "STRING" => Ok(DataType::Utf8),
         "BINARY" => Ok(DataType::Binary),
         "DATE" => Ok(DataType::Date32),
-        "TIMESTAMP" => Ok(DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))),
+        "TIMESTAMP" => Ok(DataType::Timestamp(
+            TimeUnit::Microsecond,
+            Some("UTC".into()),
+        )),
         "TIMESTAMP_NTZ" => Ok(DataType::Timestamp(TimeUnit::Microsecond, None)),
-        _ if s.starts_with("DECIMAL") || s.starts_with("DEC") || s.starts_with("NUMERIC") => {
+        _ if s.starts_with("DECIMAL")
+            || s.starts_with("DEC")
+            || s.starts_with("NUMERIC") =>
+        {
             parse_decimal_type(&s)
         }
         _ => exec_err!("Unsupported Spark SQL type: {s}"),
@@ -82,25 +88,25 @@ pub fn parse_spark_datatype(s: &str) -> Result<DataType> {
 fn parse_decimal_type(s: &str) -> Result<DataType> {
     // DECIMAL, DECIMAL(p), DECIMAL(p, s)
     if let Some(paren_start) = s.find('(') {
-        let paren_end = s
-            .find(')')
-            .ok_or_else(|| DataFusionError::Execution(format!("Invalid decimal type: {s}")))?;
+        let paren_end = s.find(')').ok_or_else(|| {
+            DataFusionError::Execution(format!("Invalid decimal type: {s}"))
+        })?;
         let inner = &s[paren_start + 1..paren_end];
         let parts: Vec<&str> = inner.split(',').map(|p| p.trim()).collect();
         match parts.len() {
             1 => {
-                let precision: u8 = parts[0]
-                    .parse()
-                    .map_err(|_| DataFusionError::Execution(format!("Invalid precision: {s}")))?;
+                let precision: u8 = parts[0].parse().map_err(|_| {
+                    DataFusionError::Execution(format!("Invalid precision: {s}"))
+                })?;
                 Ok(DataType::Decimal128(precision, 0))
             }
             2 => {
-                let precision: u8 = parts[0]
-                    .parse()
-                    .map_err(|_| DataFusionError::Execution(format!("Invalid precision: {s}")))?;
-                let scale: i8 = parts[1]
-                    .parse()
-                    .map_err(|_| DataFusionError::Execution(format!("Invalid scale: {s}")))?;
+                let precision: u8 = parts[0].parse().map_err(|_| {
+                    DataFusionError::Execution(format!("Invalid precision: {s}"))
+                })?;
+                let scale: i8 = parts[1].parse().map_err(|_| {
+                    DataFusionError::Execution(format!("Invalid scale: {s}"))
+                })?;
                 Ok(DataType::Decimal128(precision, scale))
             }
             _ => exec_err!("Invalid decimal type: {s}"),
@@ -115,7 +121,11 @@ fn parse_decimal_type(s: &str) -> Result<DataType> {
 
 /// Creates a DataFusionError with Spark's [CAST_INVALID_INPUT] message format.
 #[inline]
-pub fn cast_invalid_input(value: &str, from_type: &str, to_type: &str) -> DataFusionError {
+pub fn cast_invalid_input(
+    value: &str,
+    from_type: &str,
+    to_type: &str,
+) -> DataFusionError {
     DataFusionError::Execution(format!(
         "[CAST_INVALID_INPUT] The value '{value}' of the type \"{from_type}\" cannot be cast to \"{to_type}\" \
          because it is malformed. Correct the value as per the syntax, or change its target type. \
@@ -136,7 +146,11 @@ pub fn cast_overflow(value: &str, from_type: &str, to_type: &str) -> DataFusionE
 
 /// Creates a DataFusionError with Spark's [NUMERIC_VALUE_OUT_OF_RANGE] message format.
 #[inline]
-pub fn numeric_value_out_of_range(value: &str, precision: u8, scale: i8) -> DataFusionError {
+pub fn numeric_value_out_of_range(
+    value: &str,
+    precision: u8,
+    scale: i8,
+) -> DataFusionError {
     DataFusionError::Execution(format!(
         "[NUMERIC_VALUE_OUT_OF_RANGE] {value} cannot be represented as Decimal({precision}, {scale}). \
          If necessary set \"spark.sql.ansi.enabled\" to \"false\" to bypass this error, and return NULL instead."
@@ -155,7 +169,10 @@ pub fn numeric_out_of_range(value: &str) -> DataFusionError {
 // --- Post-processing ---
 
 /// A fork & modified version of Arrow's `unary_dyn`
-pub(crate) fn unary_dyn<F, T>(array: &ArrayRef, op: F) -> std::result::Result<ArrayRef, ArrowError>
+pub(crate) fn unary_dyn<F, T>(
+    array: &ArrayRef,
+    op: F,
+) -> std::result::Result<ArrayRef, ArrowError>
 where
     T: ArrowPrimitiveType,
     F: Fn(T::Native) -> T::Native,
@@ -190,12 +207,14 @@ pub(crate) fn spark_cast_postprocess(
 ) -> ArrayRef {
     match (from_type, to_type) {
         (DataType::Timestamp(_, _), DataType::Int64) => {
-            unary_dyn::<_, Int64Type>(&array, |v| div_floor(v, MICROS_PER_SECOND)).unwrap()
+            unary_dyn::<_, Int64Type>(&array, |v| div_floor(v, MICROS_PER_SECOND))
+                .unwrap()
         }
         (DataType::Dictionary(_, value_type), DataType::Int64)
             if matches!(value_type.as_ref(), &DataType::Timestamp(_, _)) =>
         {
-            unary_dyn::<_, Int64Type>(&array, |v| div_floor(v, MICROS_PER_SECOND)).unwrap()
+            unary_dyn::<_, Int64Type>(&array, |v| div_floor(v, MICROS_PER_SECOND))
+                .unwrap()
         }
         (DataType::Timestamp(_, _), DataType::Utf8) => remove_trailing_zeroes(array),
         (DataType::Dictionary(_, value_type), DataType::Utf8)
@@ -211,11 +230,7 @@ pub(crate) fn spark_cast_postprocess(
 fn div_floor(a: i64, b: i64) -> i64 {
     let d = a / b;
     let r = a % b;
-    if (r != 0) && ((r ^ b) < 0) {
-        d - 1
-    } else {
-        d
-    }
+    if (r != 0) && ((r ^ b) < 0) { d - 1 } else { d }
 }
 
 fn remove_trailing_zeroes(array: ArrayRef) -> ArrayRef {

@@ -15,13 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::function::conversion::cast_utils::{SparkCastOptions, MICROS_PER_SECOND};
-use arrow::array::{
-    Array, ArrayRef, AsArray, TimestampMicrosecondBuilder,
-};
-use arrow::datatypes::{
-    DataType, Date32Type, Int16Type, Int32Type, Int64Type, Int8Type,
-};
+use crate::function::conversion::cast_utils::{MICROS_PER_SECOND, SparkCastOptions};
+use arrow::array::{Array, ArrayRef, AsArray, TimestampMicrosecondBuilder};
+use arrow::datatypes::{DataType, Date32Type, Int8Type, Int16Type, Int32Type, Int64Type};
 use chrono::{NaiveDate, TimeZone};
 use datafusion_common::Result;
 use std::sync::Arc;
@@ -59,13 +55,11 @@ pub(crate) fn cast_int_to_timestamp(
             return datafusion_common::internal_err!(
                 "Unsupported type for cast_int_to_timestamp: {:?}",
                 dt
-            )
+            );
         }
     }
 
-    Ok(Arc::new(
-        builder.finish().with_timezone_opt(target_tz.clone()),
-    ) as ArrayRef)
+    Ok(Arc::new(builder.finish().with_timezone_opt(target_tz.clone())) as ArrayRef)
 }
 
 /// Cast Date32 to Timestamp(Microsecond) with timezone awareness.
@@ -82,7 +76,9 @@ pub(crate) fn cast_date_to_timestamp(
         cast_options.timezone.as_str()
     };
     let tz: arrow::array::timezone::Tz = tz_str.parse().map_err(|e| {
-        datafusion_common::DataFusionError::Internal(format!("Failed to parse timezone: {e}"))
+        datafusion_common::DataFusionError::Internal(format!(
+            "Failed to parse timezone: {e}"
+        ))
     })?;
     let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
     let date_array = array_ref.as_primitive::<Date32Type>();
@@ -127,12 +123,8 @@ mod tests {
         ];
 
         for tz in &timezones {
-            let int8_array: ArrayRef = Arc::new(Int8Array::from(vec![
-                Some(0),
-                Some(1),
-                Some(-1),
-                None,
-            ]));
+            let int8_array: ArrayRef =
+                Arc::new(Int8Array::from(vec![Some(0), Some(1), Some(-1), None]));
 
             let result = cast_int_to_timestamp(&int8_array, tz).unwrap();
             let ts_array = result.as_primitive::<TimestampMicrosecondType>();
@@ -145,10 +137,8 @@ mod tests {
 
     #[test]
     fn test_cast_int64_overflow() {
-        let int64_array: ArrayRef = Arc::new(Int64Array::from(vec![
-            Some(i64::MAX),
-            Some(i64::MIN),
-        ]));
+        let int64_array: ArrayRef =
+            Arc::new(Int64Array::from(vec![Some(i64::MAX), Some(i64::MIN)]));
         let result =
             cast_int_to_timestamp(&int64_array, &Some(Arc::from("UTC"))).unwrap();
         let ts_array = result.as_primitive::<TimestampMicrosecondType>();
@@ -160,17 +150,13 @@ mod tests {
     #[test]
     fn test_cast_date_to_timestamp_utc() {
         let dates: ArrayRef = Arc::new(Date32Array::from(vec![
-            Some(0),      // epoch
-            Some(19723),  // 2024-01-01
+            Some(0),     // epoch
+            Some(19723), // 2024-01-01
             None,
         ]));
         let opts = SparkCastOptions::new(EvalMode::Legacy, "UTC");
-        let result = cast_date_to_timestamp(
-            &dates,
-            &opts,
-            &Some(Arc::from("UTC")),
-        )
-        .unwrap();
+        let result =
+            cast_date_to_timestamp(&dates, &opts, &Some(Arc::from("UTC"))).unwrap();
         let ts = result.as_primitive::<TimestampMicrosecondType>();
         assert_eq!(ts.value(0), 0);
         assert_eq!(ts.value(1), 1704067200000000i64);

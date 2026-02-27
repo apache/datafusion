@@ -19,8 +19,9 @@ use crate::function::conversion::cast::cast_array;
 use crate::function::conversion::cast_utils::SparkCastOptions;
 use arrow::array::builder::StringBuilder;
 use arrow::array::{
-    Array, ArrayRef, AsArray, BinaryBuilder, GenericByteArray, GenericStringArray, Int8Array,
-    Int16Array, Int32Array, Int64Array, ListArray, OffsetSizeTrait, StringArray, StructArray,
+    Array, ArrayRef, AsArray, BinaryBuilder, GenericByteArray, GenericStringArray,
+    Int8Array, Int16Array, Int32Array, Int64Array, ListArray, OffsetSizeTrait,
+    StringArray, StructArray,
 };
 use arrow::datatypes::{DataType, GenericBinaryType};
 use arrow::error::ArrowError;
@@ -280,11 +281,7 @@ mod tests {
 
     #[test]
     fn test_cast_struct_to_utf8() {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![
-            Some(1),
-            Some(2),
-            None,
-        ]));
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), Some(2), None]));
         let b: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c"]));
         let c: ArrayRef = Arc::new(StructArray::from(vec![
             (Arc::new(Field::new("a", DataType::Int32, true)), a),
@@ -303,8 +300,14 @@ mod tests {
 
     #[test]
     fn test_cast_list_to_string() {
-        let values_array =
-            StringArray::from(vec![Some("a"), Some("b"), Some("c"), Some("a"), None, None]);
+        let values_array = StringArray::from(vec![
+            Some("a"),
+            Some("b"),
+            Some("c"),
+            Some("a"),
+            None,
+            None,
+        ]);
         let offsets_buffer = OffsetBuffer::<i32>::new(vec![0, 3, 5, 6, 6].into());
         let item_field = Arc::new(Field::new("item", DataType::Utf8, true));
         let list_array = Arc::new(ListArray::new(

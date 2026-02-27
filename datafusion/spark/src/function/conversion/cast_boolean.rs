@@ -72,10 +72,7 @@ mod tests {
         let array: ArrayRef =
             Arc::new(BooleanArray::from(vec![Some(true), Some(false), None]));
         let result = cast_boolean_to_decimal(&array, 10, 4).unwrap();
-        let arr = result
-            .as_any()
-            .downcast_ref::<Decimal128Array>()
-            .unwrap();
+        let arr = result.as_any().downcast_ref::<Decimal128Array>().unwrap();
         assert_eq!(arr.value(0), 10000);
         assert_eq!(arr.value(1), 0);
         assert!(arr.is_null(2));

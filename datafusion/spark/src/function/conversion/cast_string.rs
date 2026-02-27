@@ -16,15 +16,15 @@
 // under the License.
 
 use crate::function::conversion::cast_utils::{
-    cast_invalid_input, numeric_out_of_range, numeric_value_out_of_range, EvalMode,
+    EvalMode, cast_invalid_input, numeric_out_of_range, numeric_value_out_of_range,
 };
 use arrow::array::{
-    Array, ArrayRef, ArrowPrimitiveType, BooleanArray, Decimal128Builder, GenericStringArray,
-    OffsetSizeTrait, PrimitiveArray, PrimitiveBuilder, StringArray,
+    Array, ArrayRef, ArrowPrimitiveType, BooleanArray, Decimal128Builder,
+    GenericStringArray, OffsetSizeTrait, PrimitiveArray, PrimitiveBuilder, StringArray,
 };
 use arrow::datatypes::{
-    i256, is_validate_decimal_precision, DataType, Date32Type, Decimal256Type, Float32Type,
-    Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, TimestampMicrosecondType,
+    DataType, Date32Type, Decimal256Type, Float32Type, Float64Type, Int8Type, Int16Type,
+    Int32Type, Int64Type, TimestampMicrosecondType, i256, is_validate_decimal_precision,
 };
 use chrono::{DateTime, NaiveDate, TimeZone, Timelike};
 use datafusion_common::Result;
@@ -36,22 +36,27 @@ use std::sync::{Arc, LazyLock};
 
 // Pre-compiled regex patterns for timestamp parsing (improvement over Comet which recompiles)
 static RE_YEAR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\d{4,5}$").unwrap());
-static RE_MONTH: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\d{4,5}-\d{2}$").unwrap());
-static RE_DAY: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\d{4,5}-\d{2}-\d{2}$").unwrap());
+static RE_MONTH: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\d{4,5}-\d{2}$").unwrap());
+static RE_DAY: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\d{4,5}-\d{2}-\d{2}$").unwrap());
 static RE_HOUR: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\d{4,5}-\d{2}-\d{2}T\d{1,2}$").unwrap());
 static RE_MINUTE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\d{4,5}-\d{2}-\d{2}T\d{2}:\d{2}$").unwrap());
 static RE_SECOND: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\d{4,5}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$").unwrap());
-static RE_MICROSECOND: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\d{4,5}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{1,6}$").unwrap());
-static RE_TIME_ONLY: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^T\d{1,2}$").unwrap());
+static RE_MICROSECOND: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^\d{4,5}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{1,6}$").unwrap()
+});
+static RE_TIME_ONLY: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^T\d{1,2}$").unwrap());
 
 macro_rules! cast_utf8_to_timestamp {
     ($array:expr, $eval_mode:expr, $array_type:ty, $cast_method:ident, $tz:expr) => {{
         let len = $array.len();
-        let mut cast_array = PrimitiveArray::<$array_type>::builder(len).with_timezone("UTC");
+        let mut cast_array =
+            PrimitiveArray::<$array_type>::builder(len).with_timezone("UTC");
         for i in 0..len {
             if $array.is_null(i) {
                 cast_array.append_null()
@@ -510,11 +515,7 @@ fn invalid_decimal_cast(
     precision: u8,
     scale: i8,
 ) -> datafusion_common::DataFusionError {
-    cast_invalid_input(
-        value,
-        "STRING",
-        &format!("DECIMAL({precision},{scale})"),
-    )
+    cast_invalid_input(value, "STRING", &format!("DECIMAL({precision},{scale})"))
 }
 
 fn parse_decimal_str(
@@ -527,16 +528,17 @@ fn parse_decimal_str(
         return Err(invalid_decimal_cast(original_str, precision, scale));
     }
 
-    let (mantissa_str, exponent) = if let Some(e_pos) = s.find(|c| ['e', 'E'].contains(&c)) {
-        let mantissa_part = &s[..e_pos];
-        let exponent_part = &s[e_pos + 1..];
-        let exp: i32 = exponent_part
-            .parse()
-            .map_err(|_| invalid_decimal_cast(original_str, precision, scale))?;
-        (mantissa_part, exp)
-    } else {
-        (s, 0)
-    };
+    let (mantissa_str, exponent) =
+        if let Some(e_pos) = s.find(|c| ['e', 'E'].contains(&c)) {
+            let mantissa_part = &s[..e_pos];
+            let exponent_part = &s[e_pos + 1..];
+            let exp: i32 = exponent_part
+                .parse()
+                .map_err(|_| invalid_decimal_cast(original_str, precision, scale))?;
+            (mantissa_part, exp)
+        } else {
+            (s, 0)
+        };
 
     let negative = mantissa_str.starts_with('-');
     let mantissa_str = if negative || mantissa_str.starts_with('+') {
@@ -567,7 +569,8 @@ fn parse_decimal_str(
         return Err(invalid_decimal_cast(original_str, precision, scale));
     }
 
-    if !fractional_part.is_empty() && !fractional_part.bytes().all(|b| b.is_ascii_digit()) {
+    if !fractional_part.is_empty() && !fractional_part.bytes().all(|b| b.is_ascii_digit())
+    {
         return Err(invalid_decimal_cast(original_str, precision, scale));
     }
 
@@ -736,9 +739,7 @@ fn date_parser(date_str: &str, eval_mode: EvalMode) -> Result<Option<i32>> {
             let duration_since_epoch = date
                 .signed_duration_since(DateTime::UNIX_EPOCH.naive_utc().date())
                 .num_days();
-            Ok(Some(
-                duration_since_epoch.try_into().unwrap_or(i32::MAX),
-            ))
+            Ok(Some(duration_since_epoch.try_into().unwrap_or(i32::MAX)))
         }
         None => Ok(None),
     }
@@ -781,18 +782,10 @@ fn get_timestamp_values<T: TimeZone>(
     let year = values[0].parse::<i32>().unwrap_or_default();
     let month = values.get(1).map_or(1, |m| m.parse::<u32>().unwrap_or(1));
     let day = values.get(2).map_or(1, |d| d.parse::<u32>().unwrap_or(1));
-    let hour = values
-        .get(3)
-        .map_or(0, |h| h.parse::<u32>().unwrap_or(0));
-    let minute = values
-        .get(4)
-        .map_or(0, |m| m.parse::<u32>().unwrap_or(0));
-    let second = values
-        .get(5)
-        .map_or(0, |s| s.parse::<u32>().unwrap_or(0));
-    let microsecond = values
-        .get(6)
-        .map_or(0, |ms| ms.parse::<u32>().unwrap_or(0));
+    let hour = values.get(3).map_or(0, |h| h.parse::<u32>().unwrap_or(0));
+    let minute = values.get(4).map_or(0, |m| m.parse::<u32>().unwrap_or(0));
+    let second = values.get(5).map_or(0, |s| s.parse::<u32>().unwrap_or(0));
+    let microsecond = values.get(6).map_or(0, |ms| ms.parse::<u32>().unwrap_or(0));
 
     let mut timestamp_info = TimeStampInfo::default();
 
@@ -888,11 +881,17 @@ fn parse_str_to_hour_timestamp<T: TimeZone>(value: &str, tz: &T) -> Result<Optio
     get_timestamp_values(value, "hour", tz)
 }
 
-fn parse_str_to_minute_timestamp<T: TimeZone>(value: &str, tz: &T) -> Result<Option<i64>> {
+fn parse_str_to_minute_timestamp<T: TimeZone>(
+    value: &str,
+    tz: &T,
+) -> Result<Option<i64>> {
     get_timestamp_values(value, "minute", tz)
 }
 
-fn parse_str_to_second_timestamp<T: TimeZone>(value: &str, tz: &T) -> Result<Option<i64>> {
+fn parse_str_to_second_timestamp<T: TimeZone>(
+    value: &str,
+    tz: &T,
+) -> Result<Option<i64>> {
     get_timestamp_values(value, "second", tz)
 }
 
@@ -903,7 +902,10 @@ fn parse_str_to_microsecond_timestamp<T: TimeZone>(
     get_timestamp_values(value, "microsecond", tz)
 }
 
-type TimestampPattern<T> = (&'static LazyLock<Regex>, fn(&str, &T) -> Result<Option<i64>>);
+type TimestampPattern<T> = (
+    &'static LazyLock<Regex>,
+    fn(&str, &T) -> Result<Option<i64>>,
+);
 
 fn timestamp_parser<T: TimeZone>(
     value: &str,
@@ -1010,38 +1012,30 @@ pub(crate) fn cast_string_to_int<OffsetSize: OffsetSizeTrait>(
             Int32Type,
             |s| do_parse_string_to_int_legacy::<i32>(s, i32::MIN)
         )?,
-        (DataType::Int32, EvalMode::Ansi) => {
-            cast_utf8_to_int!(string_array, Int32Type, |s| do_parse_string_to_int_ansi::<
-                i32,
-            >(
-                s, "INT", i32::MIN
-            ))?
-        }
+        (DataType::Int32, EvalMode::Ansi) => cast_utf8_to_int!(
+            string_array,
+            Int32Type,
+            |s| do_parse_string_to_int_ansi::<i32>(s, "INT", i32::MIN)
+        )?,
         (DataType::Int32, EvalMode::Try) => {
-            cast_utf8_to_int!(
-                string_array,
-                Int32Type,
-                |s| do_parse_string_to_int_try::<i32>(s, i32::MIN)
-            )?
+            cast_utf8_to_int!(string_array, Int32Type, |s| do_parse_string_to_int_try::<
+                i32,
+            >(s, i32::MIN))?
         }
         (DataType::Int64, EvalMode::Legacy) => cast_utf8_to_int!(
             string_array,
             Int64Type,
             |s| do_parse_string_to_int_legacy::<i64>(s, i64::MIN)
         )?,
-        (DataType::Int64, EvalMode::Ansi) => {
-            cast_utf8_to_int!(string_array, Int64Type, |s| do_parse_string_to_int_ansi::<
-                i64,
-            >(
-                s, "BIGINT", i64::MIN
-            ))?
-        }
+        (DataType::Int64, EvalMode::Ansi) => cast_utf8_to_int!(
+            string_array,
+            Int64Type,
+            |s| do_parse_string_to_int_ansi::<i64>(s, "BIGINT", i64::MIN)
+        )?,
         (DataType::Int64, EvalMode::Try) => {
-            cast_utf8_to_int!(
-                string_array,
-                Int64Type,
-                |s| do_parse_string_to_int_try::<i64>(s, i64::MIN)
-            )?
+            cast_utf8_to_int!(string_array, Int64Type, |s| do_parse_string_to_int_try::<
+                i64,
+            >(s, i64::MIN))?
         }
         (dt, _) => unreachable!(
             "{}",
@@ -1115,7 +1109,11 @@ where
     Ok(finalize_int_result(result, negative))
 }
 
-fn do_parse_string_to_int_ansi<T>(str: &str, type_name: &str, min_value: T) -> Result<Option<T>>
+fn do_parse_string_to_int_ansi<T>(
+    str: &str,
+    type_name: &str,
+    min_value: T,
+) -> Result<Option<T>>
 where
     T: num_traits::CheckedNeg
         + num_traits::Zero
@@ -1303,8 +1301,7 @@ mod tests {
             None,
         ]));
 
-        let result =
-            spark_cast_utf8_to_boolean::<i32>(&array, EvalMode::Legacy).unwrap();
+        let result = spark_cast_utf8_to_boolean::<i32>(&array, EvalMode::Legacy).unwrap();
         let bool_arr = result.as_any().downcast_ref::<BooleanArray>().unwrap();
 
         assert!(bool_arr.value(0));

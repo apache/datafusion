@@ -16,16 +16,16 @@
 // under the License.
 
 use crate::function::conversion::cast_utils::{
-    cast_overflow, format_decimal_str, numeric_value_out_of_range, EvalMode,
+    EvalMode, cast_overflow, format_decimal_str, numeric_value_out_of_range,
 };
 use arrow::array::{
-    Array, ArrayRef, AsArray, BooleanBuilder, Decimal128Array, Decimal128Builder, Float32Array,
-    Float64Array, GenericStringArray, Int16Array, Int32Array, Int64Array, Int8Array,
-    OffsetSizeTrait, PrimitiveArray,
+    Array, ArrayRef, AsArray, BooleanBuilder, Decimal128Array, Decimal128Builder,
+    Float32Array, Float64Array, GenericStringArray, Int8Array, Int16Array, Int32Array,
+    Int64Array, OffsetSizeTrait, PrimitiveArray,
 };
 use arrow::datatypes::{
-    is_validate_decimal_precision, ArrowPrimitiveType, DataType, Decimal128Type, Float32Type,
-    Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
+    ArrowPrimitiveType, DataType, Decimal128Type, Float32Type, Float64Type, Int8Type,
+    Int16Type, Int32Type, Int64Type, is_validate_decimal_precision,
 };
 use datafusion_common::Result;
 use num_traits::{AsPrimitive, ToPrimitive, Zero};
@@ -118,11 +118,10 @@ macro_rules! cast_int_to_int_macro {
             EvalMode::Legacy => cast_array
                 .iter()
                 .map(|value| match value {
-                    Some(value) => {
-                        Ok::<Option<$to_native_type>, datafusion_common::DataFusionError>(Some(
-                            value as $to_native_type,
-                        ))
-                    }
+                    Some(value) => Ok::<
+                        Option<$to_native_type>,
+                        datafusion_common::DataFusionError,
+                    >(Some(value as $to_native_type)),
                     _ => Ok(None),
                 })
                 .collect::<Result<PrimitiveArray<$to_arrow_primitive_type>>>(),
@@ -138,9 +137,10 @@ macro_rules! cast_int_to_int_macro {
                                 $spark_to_data_type_name,
                             ))
                         } else {
-                            Ok::<Option<$to_native_type>, datafusion_common::DataFusionError>(
-                                Some(res.unwrap()),
-                            )
+                            Ok::<
+                                Option<$to_native_type>,
+                                datafusion_common::DataFusionError,
+                            >(Some(res.unwrap()))
                         }
                     }
                     _ => Ok(None),
@@ -177,7 +177,8 @@ macro_rules! cast_float_to_int16_down {
                 .iter()
                 .map(|value| match value {
                     Some(value) => {
-                        let is_overflow = value.is_nan() || value.abs() as i32 == i32::MAX;
+                        let is_overflow =
+                            value.is_nan() || value.abs() as i32 == i32::MAX;
                         if is_overflow {
                             return Err(cast_overflow(
                                 &format!($format_str, value).replace("e", "E"),
@@ -204,9 +205,9 @@ macro_rules! cast_float_to_int16_down {
                 .map(|value| match value {
                     Some(value) => {
                         let i32_value = value as i32;
-                        Ok::<Option<$rust_dest_type>, datafusion_common::DataFusionError>(Some(
-                            i32_value as $rust_dest_type,
-                        ))
+                        Ok::<Option<$rust_dest_type>, datafusion_common::DataFusionError>(
+                            Some(i32_value as $rust_dest_type),
+                        )
                     }
                     None => Ok(None),
                 })
@@ -239,8 +240,8 @@ macro_rules! cast_float_to_int32_up {
                 .iter()
                 .map(|value| match value {
                     Some(value) => {
-                        let is_overflow =
-                            value.is_nan() || value.abs() as $rust_dest_type == $max_dest_val;
+                        let is_overflow = value.is_nan()
+                            || value.abs() as $rust_dest_type == $max_dest_val;
                         if is_overflow {
                             return Err(cast_overflow(
                                 &format!($format_str, value).replace("e", "E"),
@@ -256,11 +257,10 @@ macro_rules! cast_float_to_int32_up {
             _ => cast_array
                 .iter()
                 .map(|value| match value {
-                    Some(value) => {
-                        Ok::<Option<$rust_dest_type>, datafusion_common::DataFusionError>(Some(
-                            value as $rust_dest_type,
-                        ))
-                    }
+                    Some(value) => Ok::<
+                        Option<$rust_dest_type>,
+                        datafusion_common::DataFusionError,
+                    >(Some(value as $rust_dest_type)),
                     None => Ok(None),
                 })
                 .collect::<Result<$dest_array_type>>()?,
@@ -333,9 +333,9 @@ macro_rules! cast_decimal_to_int16_down {
                     Some(value) => {
                         let divisor = 10_i128.pow($scale as u32);
                         let i32_value = (value / divisor) as i32;
-                        Ok::<Option<$rust_dest_type>, datafusion_common::DataFusionError>(Some(
-                            i32_value as $rust_dest_type,
-                        ))
+                        Ok::<Option<$rust_dest_type>, datafusion_common::DataFusionError>(
+                            Some(i32_value as $rust_dest_type),
+                        )
                     }
                     None => Ok(None),
                 })
@@ -394,9 +394,9 @@ macro_rules! cast_decimal_to_int32_up {
                     Some(value) => {
                         let divisor = 10_i128.pow($scale as u32);
                         let truncated = value / divisor;
-                        Ok::<Option<$rust_dest_type>, datafusion_common::DataFusionError>(Some(
-                            truncated as $rust_dest_type,
-                        ))
+                        Ok::<Option<$rust_dest_type>, datafusion_common::DataFusionError>(
+                            Some(truncated as $rust_dest_type),
+                        )
                     }
                     None => Ok(None),
                 })
@@ -468,13 +468,38 @@ pub(crate) fn spark_cast_nonintegral_numeric_to_integral(
 ) -> Result<ArrayRef> {
     match (from_type, to_type) {
         (DataType::Float32, DataType::Int8) => cast_float_to_int16_down!(
-            array, eval_mode, Float32Array, Int8Array, f32, i8, "FLOAT", "TINYINT", "{:e}"
+            array,
+            eval_mode,
+            Float32Array,
+            Int8Array,
+            f32,
+            i8,
+            "FLOAT",
+            "TINYINT",
+            "{:e}"
         ),
         (DataType::Float32, DataType::Int16) => cast_float_to_int16_down!(
-            array, eval_mode, Float32Array, Int16Array, f32, i16, "FLOAT", "SMALLINT", "{:e}"
+            array,
+            eval_mode,
+            Float32Array,
+            Int16Array,
+            f32,
+            i16,
+            "FLOAT",
+            "SMALLINT",
+            "{:e}"
         ),
         (DataType::Float32, DataType::Int32) => cast_float_to_int32_up!(
-            array, eval_mode, Float32Array, Int32Array, f32, i32, "FLOAT", "INT", i32::MAX, "{:e}"
+            array,
+            eval_mode,
+            Float32Array,
+            Int32Array,
+            f32,
+            i32,
+            "FLOAT",
+            "INT",
+            i32::MAX,
+            "{:e}"
         ),
         (DataType::Float32, DataType::Int64) => cast_float_to_int32_up!(
             array,
@@ -570,7 +595,9 @@ pub(crate) fn spark_cast_nonintegral_numeric_to_integral(
         }
         _ => unreachable!(
             "{}",
-            format!("invalid cast from non-integral numeric type: {from_type} to integral numeric type: {to_type}")
+            format!(
+                "invalid cast from non-integral numeric type: {from_type} to integral numeric type: {to_type}"
+            )
         ),
     }
 }
@@ -629,7 +656,10 @@ pub(crate) fn cast_int_to_decimal128(
                 eval_mode,
             )
         }
-        _ => datafusion_common::internal_err!("Unsupported cast from datatype: {}", from_type),
+        _ => datafusion_common::internal_err!(
+            "Unsupported cast from datatype: {}",
+            from_type
+        ),
     }
 }
 
@@ -675,7 +705,7 @@ where
                             &v.to_string(),
                             precision,
                             scale,
-                        ))
+                        ));
                     }
                     EvalMode::Legacy | EvalMode::Try => builder.append_null(),
                 },
@@ -763,9 +793,13 @@ mod tests {
             Some(i64::MIN),
             None,
         ]));
-        let result =
-            spark_cast_int_to_int(&array, EvalMode::Legacy, &DataType::Int64, &DataType::Int32)
-                .unwrap();
+        let result = spark_cast_int_to_int(
+            &array,
+            EvalMode::Legacy,
+            &DataType::Int64,
+            &DataType::Int32,
+        )
+        .unwrap();
         let arr = result.as_any().downcast_ref::<Int32Array>().unwrap();
         assert_eq!(arr.value(0), 1);
         assert_eq!(arr.value(1), -1); // truncation
@@ -776,8 +810,12 @@ mod tests {
     #[test]
     fn test_cast_int64_to_int32_ansi_overflow() {
         let array: ArrayRef = Arc::new(Int64Array::from(vec![Some(i64::MAX)]));
-        let result =
-            spark_cast_int_to_int(&array, EvalMode::Ansi, &DataType::Int64, &DataType::Int32);
+        let result = spark_cast_int_to_int(
+            &array,
+            EvalMode::Ansi,
+            &DataType::Int64,
+            &DataType::Int32,
+        );
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("[CAST_OVERFLOW]"));
@@ -833,7 +871,8 @@ mod tests {
             None,
         ]));
         let b =
-            cast_floating_point_to_decimal128::<Float64Type>(&a, 8, 6, EvalMode::Legacy).unwrap();
+            cast_floating_point_to_decimal128::<Float64Type>(&a, 8, 6, EvalMode::Legacy)
+                .unwrap();
         assert_eq!(b.len(), a.len());
         let casted = b.as_primitive::<Decimal128Type>();
         assert_eq!(casted.value(0), 42000000);

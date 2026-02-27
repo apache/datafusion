@@ -19,33 +19,34 @@ use crate::function::conversion::cast_boolean::{
     cast_boolean_to_decimal, is_df_cast_from_bool_spark_compatible,
 };
 use crate::function::conversion::cast_complex::{
-    cast_array_to_string, cast_binary_to_string, cast_int_to_binary, cast_struct_to_struct,
-    casts_struct_to_string,
+    cast_array_to_string, cast_binary_to_string, cast_int_to_binary,
+    cast_struct_to_struct, casts_struct_to_string,
 };
-use crate::function::conversion::cast_datetime::{cast_date_to_timestamp, cast_int_to_timestamp};
+use crate::function::conversion::cast_datetime::{
+    cast_date_to_timestamp, cast_int_to_timestamp,
+};
 use crate::function::conversion::cast_numeric::{
     cast_float32_to_decimal128, cast_float64_to_decimal128, cast_int_to_decimal128,
-    spark_cast_decimal_to_boolean, spark_cast_float32_to_utf8, spark_cast_float64_to_utf8,
-    spark_cast_int_to_int, spark_cast_nonintegral_numeric_to_integral,
+    spark_cast_decimal_to_boolean, spark_cast_float32_to_utf8,
+    spark_cast_float64_to_utf8, spark_cast_int_to_int,
+    spark_cast_nonintegral_numeric_to_integral,
 };
 use crate::function::conversion::cast_string::{
-    cast_string_to_date, cast_string_to_decimal, cast_string_to_float, cast_string_to_int,
-    cast_string_to_timestamp, is_df_cast_from_string_spark_compatible,
-    spark_cast_utf8_to_boolean,
+    cast_string_to_date, cast_string_to_decimal, cast_string_to_float,
+    cast_string_to_int, cast_string_to_timestamp,
+    is_df_cast_from_string_spark_compatible, spark_cast_utf8_to_boolean,
 };
 use crate::function::conversion::cast_utils::{
-    array_with_timezone, parse_spark_datatype, spark_cast_postprocess, EvalMode,
-    SparkCastOptions, TIMESTAMP_FORMAT,
+    EvalMode, SparkCastOptions, TIMESTAMP_FORMAT, array_with_timezone,
+    parse_spark_datatype, spark_cast_postprocess,
 };
-use arrow::array::{
-    Array, ArrayRef, AsArray, DictionaryArray, PrimitiveArray,
-};
-use arrow::compute::{can_cast_types, cast_with_options, take, CastOptions};
+use arrow::array::{Array, ArrayRef, AsArray, DictionaryArray, PrimitiveArray};
+use arrow::compute::{CastOptions, can_cast_types, cast_with_options, take};
 use arrow::datatypes::{
     ArrowDictionaryKeyType, ArrowNativeType, DataType, Field, Int32Type,
 };
 use arrow::util::display::FormatOptions;
-use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue, internal_err};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -101,10 +102,7 @@ impl ScalarUDFImpl for SparkCast {
         internal_err!("return_field_from_args should be called instead")
     }
 
-    fn return_field_from_args(
-        &self,
-        args: ReturnFieldArgs,
-    ) -> Result<Arc<Field>> {
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Arc<Field>> {
         if args.scalar_arguments.len() != 2 {
             return internal_err!("spark_cast requires exactly 2 arguments");
         }
@@ -137,7 +135,11 @@ impl ScalarUDFImpl for SparkCast {
         };
 
         let cast_options = SparkCastOptions::new(eval_mode, &timezone);
-        spark_cast_inner(args.args.into_iter().next().unwrap(), &target_type, &cast_options)
+        spark_cast_inner(
+            args.args.into_iter().next().unwrap(),
+            &target_type,
+            &cast_options,
+        )
     }
 
     fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
@@ -190,10 +192,7 @@ impl ScalarUDFImpl for SparkTryCast {
         internal_err!("return_field_from_args should be called instead")
     }
 
-    fn return_field_from_args(
-        &self,
-        args: ReturnFieldArgs,
-    ) -> Result<Arc<Field>> {
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Arc<Field>> {
         if args.scalar_arguments.len() != 2 {
             return internal_err!("spark_try_cast requires exactly 2 arguments");
         }
@@ -220,7 +219,11 @@ impl ScalarUDFImpl for SparkTryCast {
             .unwrap_or_else(|| "UTC".to_string());
 
         let cast_options = SparkCastOptions::new(EvalMode::Try, &timezone);
-        spark_cast_inner(args.args.into_iter().next().unwrap(), &target_type, &cast_options)
+        spark_cast_inner(
+            args.args.into_iter().next().unwrap(),
+            &target_type,
+            &cast_options,
+        )
     }
 
     fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
@@ -250,7 +253,9 @@ pub fn spark_cast_inner(
 ) -> Result<ColumnarValue> {
     match arg {
         ColumnarValue::Array(array) => Ok(ColumnarValue::Array(cast_array(
-            array, data_type, cast_options,
+            array,
+            data_type,
+            cast_options,
         )?)),
         ColumnarValue::Scalar(scalar) => {
             let array = scalar.to_array()?;
@@ -297,8 +302,7 @@ pub(crate) fn cast_array(
     cast_options: &SparkCastOptions,
 ) -> Result<ArrayRef> {
     use DataType::*;
-    let array =
-        array_with_timezone(array, cast_options.timezone.clone(), Some(to_type))?;
+    let array = array_with_timezone(array, cast_options.timezone.clone(), Some(to_type))?;
     let from_type = array.data_type().clone();
 
     let native_cast_options: CastOptions = CastOptions {
@@ -343,28 +347,16 @@ pub(crate) fn cast_array(
                             cast_options,
                         )?,
                     );
-                    take(
-                        casted_dictionary.values().as_ref(),
-                        dict_array.keys(),
-                        None,
-                    )?
+                    take(casted_dictionary.values().as_ref(), dict_array.keys(), None)?
                 }
             };
-            return Ok(spark_cast_postprocess(
-                casted_result,
-                &from_type,
-                to_type,
-            ));
+            return Ok(spark_cast_postprocess(casted_result, &from_type, to_type));
         }
         _ => {
             if let Dictionary(_, _) = to_type {
                 let dict_array = dict_from_values::<Int32Type>(array)?;
                 let casted_result = cast_array(dict_array, to_type, cast_options)?;
-                return Ok(spark_cast_postprocess(
-                    casted_result,
-                    &from_type,
-                    to_type,
-                ));
+                return Ok(spark_cast_postprocess(casted_result, &from_type, to_type));
             } else {
                 array
             }
@@ -428,7 +420,9 @@ pub(crate) fn cast_array(
 
         // Int -> Decimal
         (Int8 | Int16 | Int32 | Int64, Decimal128(precision, scale)) => {
-            cast_int_to_decimal128(&array, eval_mode, from_type, to_type, *precision, *scale)
+            cast_int_to_decimal128(
+                &array, eval_mode, from_type, to_type, *precision, *scale,
+            )
         }
 
         // String -> Int
@@ -468,7 +462,9 @@ pub(crate) fn cast_array(
         | (Decimal128(_, _), Int64)
             if eval_mode != EvalMode::Try =>
         {
-            spark_cast_nonintegral_numeric_to_integral(&array, eval_mode, from_type, to_type)
+            spark_cast_nonintegral_numeric_to_integral(
+                &array, eval_mode, from_type, to_type,
+            )
         }
 
         // Decimal -> Boolean
@@ -484,22 +480,15 @@ pub(crate) fn cast_array(
         }
 
         // Struct -> String
-        (Struct(_), Utf8) => {
-            casts_struct_to_string(array.as_struct(), cast_options)
-        }
+        (Struct(_), Utf8) => casts_struct_to_string(array.as_struct(), cast_options),
 
         // Struct -> Struct
-        (Struct(_), Struct(_)) => cast_struct_to_struct(
-            array.as_struct(),
-            from_type,
-            to_type,
-            cast_options,
-        ),
+        (Struct(_), Struct(_)) => {
+            cast_struct_to_struct(array.as_struct(), from_type, to_type, cast_options)
+        }
 
         // List -> String
-        (List(_), Utf8) => {
-            cast_array_to_string(array.as_list(), cast_options)
-        }
+        (List(_), Utf8) => cast_array_to_string(array.as_list(), cast_options),
 
         // List -> List (delegate to Arrow if supported)
         (List(_), List(_)) if can_cast_types(from_type, to_type) => {
@@ -514,9 +503,7 @@ pub(crate) fn cast_array(
         (Binary, Utf8) => Ok(cast_binary_to_string::<i32>(&array, cast_options)?),
 
         // Date -> Timestamp
-        (Date32, Timestamp(_, tz)) => {
-            cast_date_to_timestamp(&array, cast_options, tz)
-        }
+        (Date32, Timestamp(_, tz)) => cast_date_to_timestamp(&array, cast_options, tz),
 
         // Int -> Binary (Legacy mode only)
         (Int8 | Int16 | Int32 | Int64, Binary) if eval_mode == EvalMode::Legacy => {
@@ -665,12 +652,9 @@ mod tests {
         ]);
 
         let opts = SparkCastOptions::new(EvalMode::Legacy, "UTC");
-        let result = spark_cast_inner(
-            ColumnarValue::Array(c),
-            &DataType::Struct(fields),
-            &opts,
-        )
-        .unwrap();
+        let result =
+            spark_cast_inner(ColumnarValue::Array(c), &DataType::Struct(fields), &opts)
+                .unwrap();
         if let ColumnarValue::Array(arr) = result {
             assert_eq!(2, arr.len());
             let a = arr.as_struct().column(0).as_string::<i32>();
