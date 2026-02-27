@@ -27,12 +27,12 @@ use std::{fmt, vec};
 
 use arrow::array::RecordBatch;
 use arrow::datatypes::{Fields, Schema, SchemaRef, TimeUnit};
-use datafusion_datasource::TableSchema;
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
 use datafusion_datasource::write::{
     ObjectWriterBuilder, SharedBuffer, get_writer_schema,
 };
+use datafusion_datasource::{PartitionedFile, TableSchema};
 
 use datafusion_datasource::file_format::{FileFormat, FileFormatFactory};
 use datafusion_datasource::write::demux::DemuxedStreamReceiver;
@@ -524,8 +524,10 @@ impl FileFormat for ParquetFormat {
         let store = state
             .runtime_env()
             .object_store(conf.object_store_url.clone())?;
-        let cached_parquet_read_factory =
-            Arc::new(CachedParquetFileReaderFactory::new(store, metadata_cache));
+        let cached_parquet_read_factory = Arc::new(CachedParquetFileReaderFactory::new(
+            Arc::clone(&store),
+            metadata_cache,
+        ));
         source = source.with_parquet_file_reader_factory(cached_parquet_read_factory);
 
         if let Some(metadata_size_hint) = metadata_size_hint {
@@ -537,9 +539,41 @@ impl FileFormat for ParquetFormat {
         let use_merge_partitions = self.options.global.allow_morsel_driven;
 
         if use_merge_partitions {
-            // Create one partition per file for maximum parallelism,
-            // then wrap with MergePartitionsExec to reduce to target_partitions.
-            // This uses atomic work-stealing at the partition level.
+            // Morsel-driven execution: create one partition per file for the
+            // plan tree, then use a ParquetMorselizer that lazily expands
+            // files into row-group-level work items for fine-grained
+            // work-stealing via MergePartitionsExec.
+            let target_partitions = state.config_options().execution.target_partitions;
+
+            // Collect all files before conf is consumed.
+            let all_files: Vec<PartitionedFile> = conf
+                .file_groups
+                .iter()
+                .flat_map(|group| group.iter().cloned())
+                .collect();
+
+            // Get the reader factory (for metadata reads in the morselizer).
+            // It was set above as CachedParquetFileReaderFactory.
+            let reader_factory: Arc<dyn crate::ParquetFileReaderFactory> = source
+                .parquet_file_reader_factory()
+                .cloned()
+                .expect("reader factory was set above");
+
+            // Set batch size on source before creating the opener (normally
+            // done by FileScanConfig::open_file_reader, but we create the
+            // opener directly here for the morselizer).
+            source.batch_size = Some(
+                conf.batch_size
+                    .unwrap_or(state.config_options().execution.batch_size),
+            );
+
+            // Create the opener for row-group morsel execution.
+            let opener = source.create_file_opener(Arc::clone(&store), &conf, 0)?;
+
+            let output_schema = conf.projected_schema()?;
+            let metrics = source.metrics().clone();
+
+            // Build the DataSourceExec (one partition per file, for plan tree).
             let one_per_file: Vec<FileGroup> = conf
                 .file_groups
                 .iter()
@@ -547,8 +581,6 @@ impl FileFormat for ParquetFormat {
                     group.iter().map(|file| FileGroup::new(vec![file.clone()]))
                 })
                 .collect();
-
-            let target_partitions = state.config_options().execution.target_partitions;
 
             let conf = FileScanConfigBuilder::from(conf)
                 .with_source(Arc::new(source))
@@ -561,9 +593,18 @@ impl FileFormat for ParquetFormat {
                 .partition_count();
 
             if input_partitions > target_partitions {
-                Ok(Arc::new(MergePartitionsExec::new(
+                let morselizer = Arc::new(crate::morselizer::ParquetMorselizer::new(
+                    all_files,
+                    opener,
+                    reader_factory,
+                    metrics,
+                    metadata_size_hint,
+                    output_schema,
+                ));
+                Ok(Arc::new(MergePartitionsExec::new_with_morselizer(
                     data_source,
                     target_partitions,
+                    morselizer,
                 )))
             } else {
                 Ok(data_source)

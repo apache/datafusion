@@ -69,7 +69,7 @@ use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader, RowGroupMe
 use parquet::schema::types::SchemaDescriptor;
 
 /// Implements [`FileOpener`] for a parquet file
-pub(super) struct ParquetOpener {
+pub(crate) struct ParquetOpener {
     /// Execution partition index
     pub(crate) partition_index: usize,
     /// Projection to apply on top of the table schema (i.e. can reference partition columns).
