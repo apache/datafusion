@@ -115,11 +115,11 @@ fn add_field_ids_to_arrow_schema(
             let col_desc = parquet_schema.column(idx);
 
             // Extract field ID from the schema type
-            // Field IDs are optional in Parquet; if not set, they may be 0 or negative
-            let field_id = col_desc.self_type().get_basic_info().id();
-
-            if field_id > 0 {
-                // Add field ID to field metadata
+            // Field IDs are optional in Parquet. Valid field IDs are positive integers(> 0).
+            // if not set, skip adding to metadata
+            let basic_info = col_desc.self_type().get_basic_info();
+            if basic_info.has_id() && basic_info.id() > 0 {
+                let field_id = basic_info.id();
                 let mut metadata = field.metadata().clone();
                 metadata
                     .insert(PARQUET_FIELD_ID_META_KEY.to_string(), field_id.to_string());
