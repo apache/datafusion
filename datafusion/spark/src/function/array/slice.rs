@@ -92,8 +92,8 @@ impl ScalarUDFImpl for SparkSlice {
         mut func_args: ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
         if func_args.args[0].data_type() == DataType::Null {
-            return Ok::<ColumnarValue, DataFusionError>(func_args.args[0].clone());
-        };
+            return Ok(func_args.args[0].clone());
+        }
 
         let array_len = func_args
             .args
@@ -189,13 +189,13 @@ mod tests {
         ];
 
         let args = ScalarFunctionArgs {
-            args: input_args.to_owned(),
+            args: input_args,
             arg_fields: vec![Arc::new(Field::new(
                 "item",
-                List(FieldRef::new(Field::new("", DataType::Int64, true))),
+                List(FieldRef::new(Field::new("f", DataType::Int64, true))),
                 false,
             ))],
-            number_rows: 0,
+            number_rows: 1,
             return_field: Arc::new(Field::new(
                 "item",
                 List(FieldRef::new(Field::new_list_field(DataType::Int64, true))),
@@ -205,6 +205,6 @@ mod tests {
         };
         let slice = SparkSlice::new();
         let result = slice.invoke_with_args(args).unwrap();
-        assert!(result.to_array(1).unwrap() == Arc::new(NullArray::new(1)));
+        assert_eq!(result.to_array(1).unwrap(), Arc::new(NullArray::new(1)));
     }
 }
