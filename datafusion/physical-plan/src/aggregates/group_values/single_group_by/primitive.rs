@@ -123,6 +123,7 @@ where
                 None => *self.null_group.get_or_insert_with(|| {
                     let group_id = self.values.len();
                     self.values.push(Default::default());
+                    self.group_hashes.push(0);
                     group_id
                 }),
                 Some(key) => {
