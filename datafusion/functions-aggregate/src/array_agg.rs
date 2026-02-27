@@ -439,14 +439,16 @@ impl Accumulator for ArrayAggAccumulator {
 struct ArrayAggGroupsAccumulator {
     datatype: DataType,
     ignore_nulls: bool,
-    /// Input batches received via `update_batch`.
+    /// Source arrays — input arrays (from update_batch) or list backing
+    /// arrays (from merge_batch).
     batches: Vec<ArrayRef>,
-    /// Per-group list of `(batch_index, row_index)` pairs into `batches`.
-    indices: Vec<Vec<(u32, u32)>>,
-    /// Number of index entries referencing each batch.
+    /// Flat list of (group_idx, batch_idx, row_idx) entries across all
+    /// groups. Grouped by counting sort at evaluate time.
+    entries: Vec<(u32, u32, u32)>,
+    /// Per-batch reference count for memory reclamation during partial emit.
     batch_refcounts: Vec<u32>,
-    /// Per-group array chunks from `merge_batch`.
-    merged: Vec<Vec<ArrayRef>>,
+    /// Total number of groups tracked.
+    num_groups: usize,
 }
 
 impl ArrayAggGroupsAccumulator {
@@ -455,17 +457,18 @@ impl ArrayAggGroupsAccumulator {
             datatype,
             ignore_nulls,
             batches: Vec::new(),
-            indices: Vec::new(),
+            entries: Vec::new(),
             batch_refcounts: Vec::new(),
-            merged: Vec::new(),
+            num_groups: 0,
         }
     }
 }
 
 impl GroupsAccumulator for ArrayAggGroupsAccumulator {
-    /// Store references to each input batch and record per-group
-    /// `(batch_index, row_index)` pairs. Materialization is deferred
-    /// to `evaluate`, which minimizes the work done per-batch.
+    /// Store references to each input batch and record
+    /// `(group_index, batch_index, row_index)` tuples in a flat vector.
+    /// Materialization is deferred to `evaluate`, which groups entries
+    /// using a counting sort.
     fn update_batch(
         &mut self,
         values: &[ArrayRef],
@@ -476,8 +479,7 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
         assert_eq!(values.len(), 1, "single argument to update_batch");
         let input = &values[0];
 
-        self.indices.resize_with(total_num_groups, Vec::new);
-        self.merged.resize_with(total_num_groups, Vec::new);
+        self.num_groups = self.num_groups.max(total_num_groups);
 
         let nulls = if self.ignore_nulls {
             input.logical_nulls()
@@ -485,7 +487,7 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
             None
         };
 
-        let batch_idx = self.batches.len();
+        let batch_idx = self.batches.len() as u32;
         let mut batch_pushed = false;
 
         for (row_idx, &group_idx) in group_indices.iter().enumerate() {
@@ -508,120 +510,101 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
                 self.batch_refcounts.push(0);
                 batch_pushed = true;
             }
-            self.batch_refcounts[batch_idx] += 1;
-            self.indices[group_idx].push((batch_idx as u32, row_idx as u32));
+            self.batch_refcounts[batch_idx as usize] += 1;
+            self.entries
+                .push((group_idx as u32, batch_idx, row_idx as u32));
         }
 
         Ok(())
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        let emit_indices = emit_to.take_needed(&mut self.indices);
-        let emit_merged = emit_to.take_needed(&mut self.merged);
-        let num_groups = emit_indices.len();
+        let num_groups = match emit_to {
+            EmitTo::All => self.num_groups,
+            EmitTo::First(n) => n,
+        };
 
+        // Step 1: Count entries per group.
+        let mut counts = vec![0u32; num_groups];
+        for &(g, _, _) in &self.entries {
+            let g = g as usize;
+            if g < num_groups {
+                counts[g] += 1;
+            }
+        }
+
+        // Step 2: Build ListArray offsets and null buffer from counts.
+        // Groups with count=0 are null.
         let mut offsets = Vec::<i32>::with_capacity(num_groups + 1);
         offsets.push(0);
         let mut nulls_builder = NullBufferBuilder::new(num_groups);
-        let mut cur_offset = 0usize;
-
-        // Build ListArray offsets and nulls: groups with no elements
-        // are null, others occupy offsets[i]..offsets[i+1] in the
-        // flat values array.
-        for (group_indices, group_merged) in emit_indices.iter().zip(emit_merged.iter()) {
-            let merged_len = group_merged.iter().map(|a| a.len()).sum::<usize>();
-            let total_len = group_indices.len() + merged_len;
-
-            if total_len == 0 {
+        let mut cur_offset = 0u32;
+        for &count in &counts {
+            if count == 0 {
                 nulls_builder.append_null();
             } else {
                 nulls_builder.append_non_null();
             }
-
-            cur_offset += total_len;
-            if i32::try_from(cur_offset).is_err() {
-                return exec_err!("array_agg: cumulative offset exceeds i32::MAX");
-            }
+            cur_offset += count;
             offsets.push(cur_offset as i32);
         }
+        let total_rows = cur_offset as usize;
 
-        let total_rows = cur_offset;
+        // Step 3: Prefix sum to compute write positions for counting sort.
+        let mut write_positions = Vec::with_capacity(num_groups);
+        let mut pos = 0u32;
+        for &count in &counts {
+            write_positions.push(pos);
+            pos += count;
+        }
 
-        // Build the flat values array for the output ListArray using
-        // `interleave`. `interleave` takes a list of source arrays and a list
-        // of (source_index, row_index) pairs, and gathers the referenced
-        // elements into a single output array.
-        //
-        // We assemble two inputs:
-        //  1. `sources`: all arrays that contain data we need — the
-        //     input batches (from update_batch) followed by the merged
-        //     chunks (from merge_batch), flattened in group order.
-        //  2. `interleave_indices`: for each group, the (source, row)
-        //     pairs that select that group's elements from `sources`.
-        //     Batch-indexed rows come first, then merged chunks.
-        //
-        // The resulting array is used directly as the ListArray's values
-        // buffer, with the offsets computed above slicing it into per-group
-        // lists.
+        // Step 4: Scatter entries into sorted order using the counting sort.
         let flat_values = if total_rows == 0 {
             new_empty_array(&self.datatype)
         } else {
-            let mut sources: Vec<&dyn Array> = Vec::new();
-            for batch in &self.batches {
-                sources.push(batch.as_ref());
-            }
-            let merged_source_start = sources.len();
-            for group_merged in &emit_merged {
-                for chunk in group_merged {
-                    sources.push(chunk.as_ref());
+            let mut interleave_indices = vec![(0usize, 0usize); total_rows];
+            for &(g, b, r) in &self.entries {
+                let g = g as usize;
+                if g < num_groups {
+                    let wp = write_positions[g] as usize;
+                    interleave_indices[wp] = (b as usize, r as usize);
+                    write_positions[g] += 1;
                 }
             }
 
-            let mut interleave_indices: Vec<(usize, usize)> =
-                Vec::with_capacity(total_rows);
-            let mut merged_src_idx = merged_source_start;
-            for (group_indices, group_merged) in
-                emit_indices.iter().zip(emit_merged.iter())
-            {
-                for &(batch_idx, row_idx) in group_indices {
-                    interleave_indices.push((batch_idx as usize, row_idx as usize));
-                }
-                for chunk in group_merged {
-                    for row in 0..chunk.len() {
-                        interleave_indices.push((merged_src_idx, row));
-                    }
-                    merged_src_idx += 1;
-                }
-            }
-
+            let sources: Vec<&dyn Array> =
+                self.batches.iter().map(|b| b.as_ref()).collect();
             arrow::compute::interleave(&sources, &interleave_indices)?
         };
 
-        // Release batch references that are no longer needed.
+        // Step 5: Cleanup.
         if emit_to == EmitTo::All {
             self.batches.clear();
             self.batch_refcounts.clear();
+            self.entries.clear();
+            self.num_groups = 0;
         } else {
-            // EmitTo::First(n): remaining groups still reference
-            // `self.batches` by positional index, so we can't remove entries
-            // without invalidating those indices. Instead, when a batch's
-            // refcount reaches zero, we replace it with an empty array to free
-            // the payload buffers while keeping indices stable.
-            //
-            // Repeated partial emits can leave "tombstone" empty batches, so we
-            // retain some vector slots until a later `EmitTo::All` reset. We
-            // could compact more aggressively (e.g., by rewriting batch
-            // indices), but it is probably not worth the cost in practice.
+            // EmitTo::First(n): decrement refcounts for emitted entries
+            // and tombstone batches whose refcount reaches zero. Retain
+            // entries for non-emitted groups with shifted group indices.
             let empty = new_empty_array(&self.datatype);
-            for group_indices in &emit_indices {
-                for &(batch_idx, _) in group_indices {
-                    let rc = &mut self.batch_refcounts[batch_idx as usize];
+            let n = num_groups as u32;
+            let mut retained = Vec::with_capacity(self.entries.len());
+            for &(g, b, r) in &self.entries {
+                if g < n {
+                    // Emitted group: decrement refcount, maybe tombstone.
+                    let rc = &mut self.batch_refcounts[b as usize];
                     *rc -= 1;
                     if *rc == 0 {
-                        self.batches[batch_idx as usize] = Arc::clone(&empty);
+                        self.batches[b as usize] = Arc::clone(&empty);
                     }
+                } else {
+                    // Retained group: shift index down by n.
+                    retained.push((g - n, b, r));
                 }
             }
+            self.entries = retained;
+            self.num_groups -= num_groups;
         }
 
         let offsets = OffsetBuffer::new(ScalarBuffer::from(offsets));
@@ -645,16 +628,34 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
         assert_eq!(values.len(), 1, "one argument to merge_batch");
         let input_list = values[0].as_list::<i32>();
 
-        self.indices.resize_with(total_num_groups, Vec::new);
-        self.merged.resize_with(total_num_groups, Vec::new);
+        self.num_groups = self.num_groups.max(total_num_groups);
+
+        // Push the ListArray's backing values array as a single batch.
+        let list_values = input_list.values();
+        let list_offsets = input_list.offsets();
+
+        let batch_idx = self.batches.len() as u32;
+        let mut batch_pushed = false;
 
         for (row_idx, &group_idx) in group_indices.iter().enumerate() {
             if input_list.is_null(row_idx) {
                 continue;
             }
-            let list_value = input_list.value(row_idx);
-            if !list_value.is_empty() {
-                self.merged[group_idx].push(list_value);
+            let start = list_offsets[row_idx] as u32;
+            let end = list_offsets[row_idx + 1] as u32;
+            if start == end {
+                continue;
+            }
+
+            if !batch_pushed {
+                self.batches.push(Arc::clone(list_values));
+                self.batch_refcounts.push(0);
+                batch_pushed = true;
+            }
+
+            for pos in start..end {
+                self.entries.push((group_idx as u32, batch_idx, pos));
+                self.batch_refcounts[batch_idx as usize] += 1;
             }
         }
 
@@ -702,26 +703,8 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
             .map(|arr| arr.to_data().get_slice_memory_size().unwrap_or_default())
             .sum::<usize>()
             + self.batches.capacity() * size_of::<ArrayRef>()
+            + self.entries.capacity() * size_of::<(u32, u32, u32)>()
             + self.batch_refcounts.capacity() * size_of::<u32>()
-            + self
-                .indices
-                .iter()
-                .map(|g| g.capacity() * size_of::<(u32, u32)>())
-                .sum::<usize>()
-            + self.indices.capacity() * size_of::<Vec<(u32, u32)>>()
-            + self
-                .merged
-                .iter()
-                .map(|g| {
-                    g.capacity() * size_of::<ArrayRef>()
-                        + g.iter()
-                            .map(|arr| {
-                                arr.to_data().get_slice_memory_size().unwrap_or_default()
-                            })
-                            .sum::<usize>()
-                })
-                .sum::<usize>()
-            + self.merged.capacity() * size_of::<Vec<ArrayRef>>()
     }
 }
 
@@ -1699,8 +1682,7 @@ mod tests {
     #[test]
     fn groups_accumulator_state_merge_roundtrip() -> Result<()> {
         // Accumulator 1: update_batch, then merge, then update_batch again.
-        // Verifies that batch-indexed rows (from both update_batch calls)
-        // appear before merged chunks in the output.
+        // Verifies that values appear in chronological insertion order.
         let mut acc1 = ArrayAggGroupsAccumulator::new(DataType::Int32, false);
         let values: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
         acc1.update_batch(&[values], &[0, 1], None, 2)?;
@@ -1718,11 +1700,12 @@ mod tests {
         let values: ArrayRef = Arc::new(Int32Array::from(vec![5, 6]));
         acc1.update_batch(&[values], &[0, 1], None, 2)?;
 
-        // Each group: update_batch rows [1, 5] / [2, 6] first, then
-        // merged chunk [3] / [4].
+        // Each group's values in insertion order:
+        // group 0: update(1), merge(3), update(5) → [1, 3, 5]
+        // group 1: update(2), merge(4), update(6) → [2, 4, 6]
         let vals = eval_i32_lists(&mut acc1, EmitTo::All)?;
-        assert_eq!(vals[0], Some(vec![Some(1), Some(5), Some(3)]));
-        assert_eq!(vals[1], Some(vec![Some(2), Some(6), Some(4)]));
+        assert_eq!(vals[0], Some(vec![Some(1), Some(3), Some(5)]));
+        assert_eq!(vals[1], Some(vec![Some(2), Some(4), Some(6)]));
 
         Ok(())
     }
