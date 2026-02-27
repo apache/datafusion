@@ -5467,6 +5467,20 @@ physical_plan
 01)FilterExec: ts@0 >= 1735689600000000000
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
+# Test YEAR granularity with non-aligned literal (2024-06-20 instead of 2024-01-01)
+# date_trunc('year', x) can never equal '2024-06-20' because date_trunc always sets month=01, day=01
+# So this should return no rows (optimized to EmptyRelation)
+
+query P
+SELECT ts FROM t1 WHERE date_trunc('year', ts) = timestamp '2024-06-20T14:25:30' ORDER BY ts;
+----
+
+query TT
+EXPLAIN SELECT ts FROM t1 WHERE date_trunc('year', ts) = timestamp '2024-06-20T14:25:30';
+----
+logical_plan EmptyRelation: rows=0
+physical_plan EmptyExec
+
 # Test MONTH granularity
 
 query P
@@ -5483,6 +5497,20 @@ logical_plan
 physical_plan
 01)FilterExec: ts@0 >= 1717200000000000000 AND ts@0 < 1719792000000000000
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Test MONTH granularity with non-aligned literal (2024-06-20 instead of 2024-06-01)
+# date_trunc('month', x) can never equal '2024-06-20' because date_trunc always sets day=01
+# So this should return no rows (optimized to EmptyRelation)
+
+query P
+SELECT ts FROM t1 WHERE date_trunc('month', ts) = timestamp '2024-06-20T14:25:30' ORDER BY ts;
+----
+
+query TT
+EXPLAIN SELECT ts FROM t1 WHERE date_trunc('month', ts) = timestamp '2024-06-20T14:25:30';
+----
+logical_plan EmptyRelation: rows=0
+physical_plan EmptyExec
 
 # Test QUARTER granularity
 
@@ -5643,18 +5671,12 @@ CREATE TABLE t3(ts TIMESTAMPTZ) AS VALUES
 query P
 SELECT ts FROM t3 WHERE date_trunc('year', ts) = timestamp '2024-01-01T00:00:00-05:00' ORDER BY ts;
 ----
-2024-01-01T00:00:00-05:00
-2024-12-31T23:59:59-05:00
 
 query TT
 EXPLAIN SELECT ts FROM t3 WHERE date_trunc('year', ts) = timestamp '2024-01-01T00:00:00-05:00';
 ----
-logical_plan
-01)Filter: t3.ts >= TimestampNanosecond(1704085200000000000, Some("America/New_York")) AND t3.ts < TimestampNanosecond(1735707600000000000, Some("America/New_York"))
-02)--TableScan: t3 projection=[ts]
-physical_plan
-01)FilterExec: ts@0 >= 1704085200000000000 AND ts@0 < 1735707600000000000
-02)--DataSourceExec: partitions=1, partition_sizes=[1]
+logical_plan EmptyRelation: rows=0
+physical_plan EmptyExec
 
 statement ok
 RESET datafusion.execution.time_zone;

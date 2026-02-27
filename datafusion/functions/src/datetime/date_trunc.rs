@@ -448,7 +448,7 @@ impl ScalarUDFImpl for DateTruncFunc {
             ts_granularity: DateTruncGranularity,
         ) -> Result<Interval> {
             let parsed_tz = parse_tz(ts_tz)?;
-            let is_calendar_granularity = matches!(
+            let is_calendar_gran = matches!(
                 ts_granularity,
                 DateTruncGranularity::Year
                     | DateTruncGranularity::Month
@@ -457,13 +457,21 @@ impl ScalarUDFImpl for DateTruncFunc {
                     | DateTruncGranularity::Day
             );
 
-            // general_date_trunc converts to nanoseconds
+            // general_date_trunc returns values in TsType::UNIT (seconds/millis/micros/nanos)
             let lower_val =
                 general_date_trunc(TsType::UNIT, *ts_val, parsed_tz, ts_granularity)?;
-            let upper_val = if is_calendar_granularity {
-                increment_timestamp_nanos_calendar(lower_val, parsed_tz, ts_granularity)?
+
+            // Increment based on timestamp unit and granularity
+            let upper_val = if is_calendar_gran {
+                increment_timestamp_nanos_calendar(
+                    TsType::UNIT,
+                    lower_val,
+                    parsed_tz,
+                    ts_granularity,
+                )?
             } else {
-                increment_time_nanos(lower_val, ts_granularity)
+                // For non-calendar granularities, use the increment function matching the time unit
+                increment_time_unit(TsType::UNIT, lower_val, ts_granularity)
             };
 
             // Create the actual interval
@@ -554,9 +562,14 @@ impl ScalarUDFImpl for DateTruncFunc {
             }
         };
 
+        // Determine if the literal is aligned with the interval boundary
+        let is_boundary =
+            Some(truncated_literal.lower() == lit_expr.as_literal().unwrap());
+
         Ok(PreimageResult::Range {
             expr: col_expr.clone(),
             interval: Box::new(truncated_literal),
+            is_boundary,
         })
     }
 
@@ -647,6 +660,20 @@ fn truncate_time_secs(value: i32, granularity: DateTruncGranularity) -> i32 {
         DateTruncGranularity::Microsecond => value, // Can't truncate to finer precision
         // Other granularities are not valid for time
         _ => value,
+    }
+}
+
+/// Dispatch function for the increment functions by time unit
+fn increment_time_unit(
+    time_unit: TimeUnit,
+    value: i64,
+    granularity: DateTruncGranularity,
+) -> i64 {
+    match time_unit {
+        Nanosecond => increment_time_nanos(value, granularity),
+        Microsecond => increment_time_micros(value, granularity),
+        Millisecond => increment_time_millis(value as i32, granularity) as i64,
+        Second => increment_time_secs(value as i32, granularity) as i64,
     }
 }
 
@@ -747,11 +774,20 @@ fn _increment_calendar_without_tz(
 /// Increment timestamp in nanoseconds by calendar-based granularity (year, month, quarter, week, day)
 /// Handles timezone-aware and timezone-naive timestamps (follows pattern from date_trunc_coarse)
 fn increment_timestamp_nanos_calendar(
-    value_ns: i64,
+    ts_unit: TimeUnit,
+    ts_value: i64,
     tz: Option<Tz>,
     granularity: DateTruncGranularity,
 ) -> Result<i64> {
-    match tz {
+    // For calendar granularities, convert to nanos, increment, then convert back
+    let value_ns = match ts_unit {
+        Second => NANOSECONDS * ts_value,
+        Millisecond => NANOS_PER_MILLISECOND * ts_value,
+        Microsecond => NANOS_PER_MICROSECOND * ts_value,
+        Nanosecond => ts_value,
+    };
+
+    let incremented_ns = match tz {
         Some(tz) => {
             let Some(dt) =
                 as_datetime_with_timezone::<TimestampNanosecondType>(value_ns, tz)
@@ -766,6 +802,13 @@ fn increment_timestamp_nanos_calendar(
             };
             _increment_calendar_without_tz(granularity, dt)
         }
+    }?;
+
+    match ts_unit {
+        Second => Ok(incremented_ns / NANOSECONDS),
+        Millisecond => Ok(incremented_ns / NANOS_PER_MILLISECOND),
+        Microsecond => Ok(incremented_ns / NANOS_PER_MICROSECOND),
+        Nanosecond => Ok(incremented_ns),
     }
 }
 
