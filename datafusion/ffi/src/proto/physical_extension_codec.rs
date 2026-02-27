@@ -25,7 +25,10 @@ use datafusion_expr::{
     AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl, WindowUDF, WindowUDFImpl,
 };
 use datafusion_physical_plan::ExecutionPlan;
-use datafusion_proto::physical_plan::PhysicalExtensionCodec;
+use datafusion_proto::physical_plan::{
+    DefaultPhysicalProtoConverter, PhysicalExtensionCodec,
+    PhysicalProtoConverterExtension,
+};
 
 use stabby::slice::Slice as SSlice;
 use stabby::str::Str as SStr;
@@ -145,8 +148,12 @@ unsafe extern "C" fn try_decode_fn_wrapper(
         .collect::<Result<Vec<_>>>();
     let inputs = sresult_return!(inputs);
 
-    let plan =
-        sresult_return!(codec.try_decode(buf.as_ref(), &inputs, task_ctx.as_ref()));
+    let plan = sresult_return!(codec.try_decode(
+        buf.as_ref(),
+        &inputs,
+        task_ctx.as_ref(),
+        &DefaultPhysicalProtoConverter,
+    ));
 
     FFI_Result::Ok(FFI_ExecutionPlan::new(plan, runtime))
 }
@@ -160,7 +167,7 @@ unsafe extern "C" fn try_encode_fn_wrapper(
     let plan: Arc<dyn ExecutionPlan> = sresult_return!((&node).try_into());
 
     let mut bytes = Vec::new();
-    sresult_return!(codec.try_encode(plan, &mut bytes));
+    sresult_return!(codec.try_encode(plan, &mut bytes, &DefaultPhysicalProtoConverter));
 
     FFI_Result::Ok(bytes.into_iter().collect())
 }
@@ -335,6 +342,7 @@ impl PhysicalExtensionCodec for ForeignPhysicalExtensionCodec {
         buf: &[u8],
         inputs: &[Arc<dyn ExecutionPlan>],
         _ctx: &TaskContext,
+        _proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let inputs = inputs
             .iter()
@@ -348,7 +356,12 @@ impl PhysicalExtensionCodec for ForeignPhysicalExtensionCodec {
         Ok(plan)
     }
 
-    fn try_encode(&self, node: Arc<dyn ExecutionPlan>, buf: &mut Vec<u8>) -> Result<()> {
+    fn try_encode(
+        &self,
+        node: Arc<dyn ExecutionPlan>,
+        buf: &mut Vec<u8>,
+        _proto_converter: &dyn PhysicalProtoConverterExtension,
+    ) -> Result<()> {
         let plan = FFI_ExecutionPlan::new(node, None);
         let bytes = df_result!(unsafe { (self.0.try_encode)(&self.0, plan) })?;
 
@@ -426,7 +439,10 @@ pub(crate) mod tests {
     use datafusion_functions_aggregate::sum::Sum;
     use datafusion_functions_window::rank::{Rank, RankType};
     use datafusion_physical_plan::ExecutionPlan;
-    use datafusion_proto::physical_plan::PhysicalExtensionCodec;
+    use datafusion_proto::physical_plan::{
+        DefaultPhysicalProtoConverter, PhysicalExtensionCodec,
+        PhysicalProtoConverterExtension,
+    };
 
     use crate::execution_plan::tests::EmptyExec;
     use crate::proto::physical_extension_codec::FFI_PhysicalExtensionCodec;
@@ -449,6 +465,7 @@ pub(crate) mod tests {
             buf: &[u8],
             _inputs: &[Arc<dyn ExecutionPlan>],
             _ctx: &TaskContext,
+            _proto_converter: &dyn PhysicalProtoConverterExtension,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             if buf[0] != Self::MAGIC_NUMBER {
                 return exec_err!(
@@ -467,6 +484,7 @@ pub(crate) mod tests {
             &self,
             node: Arc<dyn ExecutionPlan>,
             buf: &mut Vec<u8>,
+            _proto_converter: &dyn PhysicalProtoConverterExtension,
         ) -> Result<()> {
             buf.push(Self::MAGIC_NUMBER);
 
@@ -587,10 +605,18 @@ pub(crate) mod tests {
         let exec = create_test_exec();
         let input_execs = [create_test_exec()];
         let mut bytes = Vec::new();
-        foreign_codec.try_encode(Arc::clone(&exec), &mut bytes)?;
+        foreign_codec.try_encode(
+            Arc::clone(&exec),
+            &mut bytes,
+            &DefaultPhysicalProtoConverter,
+        )?;
 
-        let returned_exec =
-            foreign_codec.try_decode(&bytes, &input_execs, ctx.task_ctx().as_ref())?;
+        let returned_exec = foreign_codec.try_decode(
+            &bytes,
+            &input_execs,
+            ctx.task_ctx().as_ref(),
+            &DefaultPhysicalProtoConverter,
+        )?;
 
         assert!(returned_exec.is::<EmptyExec>());
 
