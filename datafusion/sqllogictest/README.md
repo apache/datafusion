@@ -80,7 +80,7 @@ Timing summary output is disabled by default and enabled with
 
 When timing summary is enabled, periodic `Progress:` lines are suppressed by
 default to keep output stable. To keep periodic progress lines in CI, also pass
-`--timing-summary-keep-progress` (or set `SLT_TIMING_SUMMARY_PROGRESS=1`).
+`--timing-summary-keep-progress` (or set `SLT_TIMING_SUMMARY_KEEP_PROGRESS=1`).
 
 ```shell
 # Show deterministic per-file elapsed timings (sorted slowest first)

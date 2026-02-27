@@ -912,7 +912,7 @@ struct Options {
 
     #[clap(
         long,
-        env = "SLT_TIMING_SUMMARY_PROGRESS",
+        env = "SLT_TIMING_SUMMARY_KEEP_PROGRESS",
         default_value_t = false,
         help = "When used with --timing-summary, keep periodic CI Progress: lines enabled"
     )]
