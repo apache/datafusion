@@ -168,7 +168,7 @@ async fn run_tests() -> Result<()> {
     // For CI environments without TTY, print progress periodically unless
     // deterministic timing summary output is requested.
     let is_ci = !stderr().is_terminal();
-    let print_periodic_progress = options.should_print_periodic_progress(is_ci);
+    let print_periodic_progress = is_ci && !options.timing_summary;
     let progress_interval = std::cmp::max(1, num_tests / 10);
     let completed_count = Arc::new(AtomicUsize::new(0));
 
@@ -915,14 +915,6 @@ struct Options {
 
     #[clap(
         long,
-        env = "SLT_TIMING_SUMMARY_KEEP_PROGRESS",
-        default_value_t = false,
-        help = "Keep periodic Progress: lines enabled"
-    )]
-    timing_summary_keep_progress: bool,
-
-    #[clap(
-        long,
         value_name = "MODE",
         help = "Control colored output",
         default_value_t = ColorChoice::Auto
@@ -931,10 +923,6 @@ struct Options {
 }
 
 impl Options {
-    fn should_print_periodic_progress(&self, is_ci: bool) -> bool {
-        self.timing_summary_keep_progress || (is_ci && !self.timing_summary)
-    }
-
     /// Because this test can be run as a cargo test, commands like
     ///
     /// ```shell
