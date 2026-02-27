@@ -216,11 +216,11 @@ pub(crate) fn spark_cast_postprocess(
             unary_dyn::<_, Int64Type>(&array, |v| div_floor(v, MICROS_PER_SECOND))
                 .unwrap()
         }
-        (DataType::Timestamp(_, _), DataType::Utf8) => remove_trailing_zeroes(array),
+        (DataType::Timestamp(_, _), DataType::Utf8) => remove_trailing_zeroes(&array),
         (DataType::Dictionary(_, value_type), DataType::Utf8)
             if matches!(value_type.as_ref(), &DataType::Timestamp(_, _)) =>
         {
-            remove_trailing_zeroes(array)
+            remove_trailing_zeroes(&array)
         }
         _ => array,
     }
@@ -233,7 +233,7 @@ fn div_floor(a: i64, b: i64) -> i64 {
     if (r != 0) && ((r ^ b) < 0) { d - 1 } else { d }
 }
 
-fn remove_trailing_zeroes(array: ArrayRef) -> ArrayRef {
+fn remove_trailing_zeroes(array: &ArrayRef) -> ArrayRef {
     let string_array = as_generic_string_array::<i32>(&array).unwrap();
     let result = string_array
         .iter()
@@ -254,7 +254,7 @@ fn trim_end(s: &str) -> &str {
 /// and handle NTZ (no timezone) to TZ conversions.
 pub(crate) fn array_with_timezone(
     array: ArrayRef,
-    timezone: String,
+    timezone: &str,
     to_type: Option<&DataType>,
 ) -> std::result::Result<ArrayRef, ArrowError> {
     match array.data_type() {
@@ -264,7 +264,7 @@ pub(crate) fn array_with_timezone(
                 Some(DataType::Utf8) | Some(DataType::Date32) => Ok(array),
                 Some(DataType::Timestamp(_, Some(_))) => {
                     // Convert NTZ to TZ by adding the session timezone
-                    timestamp_ntz_to_timestamp(array, &timezone, Some(&timezone))
+                    timestamp_ntz_to_timestamp(&array, timezone, Some(timezone))
                 }
                 _ => Ok(array),
             }
@@ -272,11 +272,11 @@ pub(crate) fn array_with_timezone(
         DataType::Timestamp(TimeUnit::Microsecond, Some(_)) => {
             if !timezone.is_empty() {
                 let ts_array = array.as_primitive::<TimestampMicrosecondType>();
-                let array_with_tz = ts_array.clone().with_timezone(timezone.clone());
+                let array_with_tz = ts_array.clone().with_timezone(timezone.to_string());
                 let array = Arc::new(array_with_tz) as ArrayRef;
                 match to_type {
                     Some(DataType::Utf8) | Some(DataType::Date32) => {
-                        pre_timestamp_cast(array, &timezone)
+                        pre_timestamp_cast(&array, timezone)
                     }
                     _ => Ok(array),
                 }
@@ -290,7 +290,7 @@ pub(crate) fn array_with_timezone(
 
 /// Convert a timestamp without timezone to one with timezone.
 fn timestamp_ntz_to_timestamp(
-    array: ArrayRef,
+    array: &ArrayRef,
     _from_tz: &str,
     to_tz: Option<&str>,
 ) -> std::result::Result<ArrayRef, ArrowError> {
@@ -303,7 +303,7 @@ fn timestamp_ntz_to_timestamp(
 
 /// Pre-process timestamp for cast to string/date by setting UTC timezone.
 fn pre_timestamp_cast(
-    array: ArrayRef,
+    array: &ArrayRef,
     _timezone: &str,
 ) -> std::result::Result<ArrayRef, ArrowError> {
     let ts_array = array.as_primitive::<TimestampMicrosecondType>();
