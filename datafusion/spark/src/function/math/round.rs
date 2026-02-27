@@ -36,8 +36,11 @@ use datafusion_expr::{
 /// Spark-compatible `round` expression
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#round>
 ///
-/// Rounds the value to `d` decimal places using HALF_UP rounding mode.
-/// When `d` is negative, rounds integer types with overflow checking in ANSI mode.
+/// Differences with DataFusion round:
+///  - Spark rounds integer types in-place (preserving the type) when `d` < 0,
+///    with overflow checking in ANSI mode; DataFusion coerces integers to Float64
+///  - Spark adjusts Decimal128 precision/scale based on `d`;
+///    DataFusion preserves the original precision/scale
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkRound {
     signature: Signature,
