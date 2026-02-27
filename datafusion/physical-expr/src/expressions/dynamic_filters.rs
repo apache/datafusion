@@ -372,7 +372,9 @@ impl DynamicFilterPhysicalExpr {
             children: self.children.clone(),
             remapped_children: self.remapped_children.clone(),
             inner: Arc::clone(&source.inner),
-            state_watch: self.state_watch.clone(),
+            // Reuse source watch channel so waiters on any relinked clone
+            // observe update/complete notifications from the producer.
+            state_watch: source.state_watch.clone(),
             data_type: Arc::clone(&self.data_type),
             nullable: Arc::clone(&self.nullable),
             runtime_partition: None,
@@ -1481,5 +1483,35 @@ mod test {
             format!("{:?}", lit(100)),
             "Combined filter should have source's inner expression"
         );
+    }
+
+    #[tokio::test]
+    async fn test_new_from_source_wait_complete_notifications() {
+        // Create an incomplete source and relink a second filter to it.
+        let source = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![],
+            lit(42) as Arc<dyn PhysicalExpr>,
+        ));
+        let target = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![],
+            lit(0) as Arc<dyn PhysicalExpr>,
+        ));
+        let combined = Arc::new(target.new_from_source(&source).unwrap());
+
+        let waiter = tokio::spawn({
+            let combined = Arc::clone(&combined);
+            async move {
+                combined.wait_complete().await;
+            }
+        });
+
+        // Ensure waiter has subscribed before completion is signalled.
+        tokio::task::yield_now().await;
+        source.mark_complete();
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), waiter)
+            .await
+            .expect("wait_complete should be notified by source mark_complete")
+            .expect("wait_complete task should not panic");
     }
 }
