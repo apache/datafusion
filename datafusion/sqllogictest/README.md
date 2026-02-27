@@ -75,24 +75,22 @@ RUST_LOG=debug cargo test --test sqllogictests -- ddl
 The sqllogictest runner can emit deterministic per-file elapsed timings to help
 identify slow test files.
 
-By default (`--timing-summary auto`), timing summary output is disabled in local
-TTY runs and shows a top-slowest summary in non-TTY/CI runs.
-
-`--timing-top-n` / `SLT_TIMING_TOP_N` must be a positive integer (`>= 1`).
+Timing summary output is disabled by default and enabled with
+`--timing-summary` (or `SLT_TIMING_SUMMARY=1`).
 
 ```shell
-# Show top 10 slowest files (good for CI)
-cargo test --test sqllogictests -- --timing-summary top --timing-top-n 10
+# Show deterministic per-file elapsed timings (sorted slowest first)
+cargo test --test sqllogictests -- --timing-summary
 ```
 
 ```shell
-# Show full per-file timing table
-cargo test --test sqllogictests -- --timing-summary full
+# Keep only the top 10 lines using standard shell tooling
+cargo test --test sqllogictests -- --timing-summary | head -n 10
 ```
 
 ```shell
-# Same controls via environment variables
-SLT_TIMING_SUMMARY=top SLT_TIMING_TOP_N=15 cargo test --test sqllogictests
+# Enable via environment variable
+SLT_TIMING_SUMMARY=1 cargo test --test sqllogictests
 ```
 
 ```shell
