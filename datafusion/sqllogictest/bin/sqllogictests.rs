@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use clap::{ColorChoice, Parser, ValueEnum};
+use clap::{ColorChoice, Parser};
 use datafusion::common::instant::Instant;
 use datafusion::common::utils::get_available_parallelism;
 use datafusion::common::{DataFusionError, Result, exec_datafusion_err, exec_err};
@@ -60,14 +60,6 @@ const PG_COMPAT_FILE_PREFIX: &str = "pg_compat_";
 const SQLITE_PREFIX: &str = "sqlite";
 const ERRS_PER_FILE_LIMIT: usize = 10;
 const TIMING_DEBUG_SLOW_FILES_ENV: &str = "SLT_TIMING_DEBUG_SLOW_FILES";
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-enum TimingSummaryMode {
-    Auto,
-    Off,
-    Top,
-    Full,
-}
 
 #[derive(Debug)]
 struct FileTiming {
@@ -321,7 +313,7 @@ async fn run_tests() -> Result<()> {
             .then_with(|| a.relative_path.cmp(&b.relative_path))
     });
 
-    print_timing_summary(&options, &m, is_ci, &file_timings)?;
+    print_timing_summary(&options, &m, &file_timings)?;
 
     let errors: Vec<_> = file_results
         .into_iter()
@@ -384,39 +376,19 @@ async fn run_tests() -> Result<()> {
 fn print_timing_summary(
     options: &Options,
     progress: &MultiProgress,
-    is_ci: bool,
     file_timings: &[FileTiming],
 ) -> Result<()> {
-    let mode = options.timing_summary_mode(is_ci);
-    if mode == TimingSummaryMode::Off || file_timings.is_empty() {
+    if !options.timing_summary || file_timings.is_empty() {
         return Ok(());
     }
 
-    let top_n = options.timing_top_n;
-    debug_assert!(matches!(
-        mode,
-        TimingSummaryMode::Top | TimingSummaryMode::Full
-    ));
-    let count = if mode == TimingSummaryMode::Full {
-        file_timings.len()
-    } else {
-        top_n
-    };
-
     progress.println("Per-file elapsed summary (deterministic):")?;
-    for (idx, timing) in file_timings.iter().take(count).enumerate() {
+    for (idx, timing) in file_timings.iter().enumerate() {
         progress.println(format!(
             "{:>3}. {:>8.3}s  {}",
             idx + 1,
             timing.elapsed.as_secs_f64(),
             timing.relative_path.display()
-        ))?;
-    }
-
-    if mode != TimingSummaryMode::Full && file_timings.len() > count {
-        progress.println(format!(
-            "... {} more files omitted (use --timing-summary full to show all)",
-            file_timings.len() - count
         ))?;
     }
 
@@ -432,16 +404,6 @@ fn is_env_truthy(name: &str) -> bool {
                 "1" | "true" | "yes" | "on"
             )
         })
-}
-
-fn parse_timing_top_n(arg: &str) -> std::result::Result<usize, String> {
-    let parsed = arg
-        .parse::<usize>()
-        .map_err(|error| format!("invalid value '{arg}': {error}"))?;
-    if parsed == 0 {
-        return Err("must be >= 1".to_string());
-    }
-    Ok(parsed)
 }
 
 async fn run_test_file_substrait_round_trip(
@@ -940,20 +902,10 @@ struct Options {
     #[clap(
         long,
         env = "SLT_TIMING_SUMMARY",
-        value_enum,
-        default_value_t = TimingSummaryMode::Auto,
-        help = "Per-file timing summary mode: auto|off|top|full"
+        default_value_t = false,
+        help = "Print deterministic per-file timing summary"
     )]
-    timing_summary: TimingSummaryMode,
-
-    #[clap(
-        long,
-        env = "SLT_TIMING_TOP_N",
-        default_value_t = 10,
-        value_parser = parse_timing_top_n,
-        help = "Number of files to show when timing summary mode is auto/top (must be >= 1)"
-    )]
-    timing_top_n: usize,
+    timing_summary: bool,
 
     #[clap(
         long,
@@ -965,19 +917,6 @@ struct Options {
 }
 
 impl Options {
-    fn timing_summary_mode(&self, is_ci: bool) -> TimingSummaryMode {
-        match self.timing_summary {
-            TimingSummaryMode::Auto => {
-                if is_ci {
-                    TimingSummaryMode::Top
-                } else {
-                    TimingSummaryMode::Off
-                }
-            }
-            mode => mode,
-        }
-    }
-
     /// Because this test can be run as a cargo test, commands like
     ///
     /// ```shell
