@@ -100,9 +100,7 @@ pub fn check_arg_count(
             // Numeric and Coercible signature is validated in `get_valid_types`
         }
         _ => {
-            return internal_err!(
-                "Aggregate functions do not support this {signature}"
-            );
+            return internal_err!("Aggregate functions do not support this {signature}");
         }
     }
     Ok(())

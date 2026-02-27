@@ -186,7 +186,10 @@ pub enum NativeType {
 
 /// Format a [`LogicalField`] for display, matching [`arrow::datatypes::DataType`]'s
 /// Display convention of showing a `"non-null "` prefix for non-nullable fields.
-fn format_logical_field(f: &mut std::fmt::Formatter<'_>, field: &LogicalField) -> std::fmt::Result {
+fn format_logical_field(
+    f: &mut std::fmt::Formatter<'_>,
+    field: &LogicalField,
+) -> std::fmt::Result {
     let non_null = if field.nullable { "" } else { "non-null " };
     write!(f, "{:?}: {non_null}{}", field.name, field.logical_type)
 }
@@ -223,7 +226,11 @@ impl Display for NativeType {
             }
             Self::FixedSizeList(field, size) => {
                 let non_null = if field.nullable { "" } else { "non-null " };
-                write!(f, "FixedSizeList({size} x {non_null}{})", field.logical_type)
+                write!(
+                    f,
+                    "FixedSizeList({size} x {non_null}{})",
+                    field.logical_type
+                )
             }
             Self::Struct(fields) => {
                 write!(f, "Struct(")?;
@@ -609,30 +616,34 @@ mod tests {
 
     #[test]
     fn test_native_type_display_nested() {
-        let list = NativeType::List(Arc::new(LogicalField::from(
-            &Field::new("item", DataType::Int32, true),
-        )));
+        let list = NativeType::List(Arc::new(LogicalField::from(&Field::new(
+            "item",
+            DataType::Int32,
+            true,
+        ))));
         assert_snapshot!(list, @"List(Int32)");
 
         let fixed_list = NativeType::FixedSizeList(
-            Arc::new(LogicalField::from(
-                &Field::new("item", DataType::Float64, false),
-            )),
+            Arc::new(LogicalField::from(&Field::new(
+                "item",
+                DataType::Float64,
+                false,
+            ))),
             3,
         );
         assert_snapshot!(fixed_list, @"FixedSizeList(3 x non-null Float64)");
 
-        let struct_type = NativeType::Struct(LogicalFields::from(
-            &Fields::from(vec![
-                Field::new("name", DataType::Utf8, false),
-                Field::new("age", DataType::Int32, true),
-            ]),
-        ));
+        let struct_type = NativeType::Struct(LogicalFields::from(&Fields::from(vec![
+            Field::new("name", DataType::Utf8, false),
+            Field::new("age", DataType::Int32, true),
+        ])));
         assert_snapshot!(struct_type, @r#"Struct("name": non-null String, "age": Int32)"#);
 
-        let map = NativeType::Map(Arc::new(LogicalField::from(
-            &Field::new("entries", DataType::Utf8, false),
-        )));
+        let map = NativeType::Map(Arc::new(LogicalField::from(&Field::new(
+            "entries",
+            DataType::Utf8,
+            false,
+        ))));
         assert_snapshot!(map, @"Map(non-null String)");
     }
 }

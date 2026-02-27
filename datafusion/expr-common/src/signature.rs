@@ -1486,7 +1486,7 @@ impl Signature {
 #[cfg(test)]
 mod tests {
     use datafusion_common::types::{
-        logical_float64, logical_int32, logical_int64, logical_string, NativeType,
+        NativeType, logical_float64, logical_int32, logical_int64, logical_string,
     };
 
     use super::*;

@@ -1829,9 +1829,7 @@ mod tests {
                     NativeType::Float64,
                 ),
                 Coercion::new_implicit(
-                    TypeSignatureClass::Native(
-                        datafusion_common::types::logical_int64(),
-                    ),
+                    TypeSignatureClass::Native(datafusion_common::types::logical_int64()),
                     vec![TypeSignatureClass::Integer],
                     NativeType::Int64,
                 ),
@@ -1865,9 +1863,7 @@ mod tests {
                     datafusion_common::types::logical_int64(),
                 )),
                 Coercion::new_implicit(
-                    TypeSignatureClass::Native(
-                        datafusion_common::types::logical_int64(),
-                    ),
+                    TypeSignatureClass::Native(datafusion_common::types::logical_int64()),
                     vec![TypeSignatureClass::Integer],
                     NativeType::Int64,
                 ),
@@ -1881,11 +1877,7 @@ mod tests {
         ])
         .expect("valid parameter names");
 
-        let msg = generate_signature_error_message(
-            "substr",
-            &sig,
-            &[DataType::Int32],
-        );
+        let msg = generate_signature_error_message("substr", &sig, &[DataType::Int32]);
         assert_snapshot!(msg, @r"
         No function matches the given name and argument types 'substr(Int32)'. You might need to add explicit type casts.
         	Candidate functions:

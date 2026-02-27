@@ -168,13 +168,12 @@ mod tests {
 
     #[test]
     fn test_logical_type_display_struct() {
-        let struct_type: Arc<dyn LogicalType> =
-            Arc::new(NativeType::Struct(LogicalFields::from(&Fields::from(
-                vec![
-                    Field::new("x", DataType::Float64, false),
-                    Field::new("y", DataType::Float64, false),
-                ],
-            ))));
+        let struct_type: Arc<dyn LogicalType> = Arc::new(NativeType::Struct(
+            LogicalFields::from(&Fields::from(vec![
+                Field::new("x", DataType::Float64, false),
+                Field::new("y", DataType::Float64, false),
+            ])),
+        ));
         assert_snapshot!(struct_type, @r#"Struct("x": non-null Float64, "y": non-null Float64)"#);
     }
 
