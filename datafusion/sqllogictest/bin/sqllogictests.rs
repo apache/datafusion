@@ -165,8 +165,11 @@ async fn run_tests() -> Result<()> {
     }
 
     let num_tests = test_files.len();
-    // For CI environments without TTY, print progress periodically
+    // For CI environments without TTY, print progress periodically unless
+    // deterministic timing summary output is requested.
     let is_ci = !stderr().is_terminal();
+    let print_periodic_progress =
+        is_ci && (!options.timing_summary || options.timing_summary_progress);
     let completed_count = Arc::new(AtomicUsize::new(0));
 
     let file_results: Vec<_> = futures::stream::iter(test_files)
@@ -286,7 +289,9 @@ async fn run_tests() -> Result<()> {
             move |_| {
                 let completed = completed_count.fetch_add(1, Ordering::Relaxed) + 1;
                 // In CI (no TTY), print progress every 10% or every 50 files
-                if is_ci && (completed.is_multiple_of(50) || completed == num_tests) {
+                if print_periodic_progress
+                    && (completed.is_multiple_of(50) || completed == num_tests)
+                {
                     eprintln!(
                         "Progress: {}/{} files completed ({:.0}%)",
                         completed,
@@ -906,6 +911,14 @@ struct Options {
         help = "Print deterministic per-file timing summary"
     )]
     timing_summary: bool,
+
+    #[clap(
+        long,
+        env = "SLT_TIMING_SUMMARY_PROGRESS",
+        default_value_t = false,
+        help = "When used with --timing-summary, keep periodic CI Progress: lines enabled"
+    )]
+    timing_summary_progress: bool,
 
     #[clap(
         long,
