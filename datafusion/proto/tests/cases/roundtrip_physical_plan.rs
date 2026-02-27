@@ -3565,10 +3565,7 @@ impl std::fmt::Debug for CustomExecWithExprs {
 }
 
 impl CustomExecWithExprs {
-    fn new(
-        exprs: Vec<Arc<dyn PhysicalExpr>>,
-        child: Arc<dyn ExecutionPlan>,
-    ) -> Self {
+    fn new(exprs: Vec<Arc<dyn PhysicalExpr>>, child: Arc<dyn ExecutionPlan>) -> Self {
         use datafusion_physical_expr::equivalence::EquivalenceProperties;
         use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
         let properties = datafusion::physical_plan::PlanProperties::new(
@@ -3640,15 +3637,13 @@ impl PhysicalExtensionCodec for CustomExecWithExprsCodec {
         ctx: &TaskContext,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let num_exprs =
-            u32::from_le_bytes(buf[0..4].try_into().unwrap()) as usize;
+        let num_exprs = u32::from_le_bytes(buf[0..4].try_into().unwrap()) as usize;
         let mut offset = 4;
 
         let mut exprs = Vec::with_capacity(num_exprs);
         for _ in 0..num_exprs {
             let expr_len =
-                u32::from_le_bytes(buf[offset..offset + 4].try_into().unwrap())
-                    as usize;
+                u32::from_le_bytes(buf[offset..offset + 4].try_into().unwrap()) as usize;
             offset += 4;
             let expr_proto = PhysicalExprNode::decode(&buf[offset..offset + expr_len])
                 .map_err(|e| {
@@ -3664,10 +3659,7 @@ impl PhysicalExtensionCodec for CustomExecWithExprsCodec {
             offset += expr_len;
         }
 
-        Ok(Arc::new(CustomExecWithExprs::new(
-            exprs,
-            inputs[0].clone(),
-        )))
+        Ok(Arc::new(CustomExecWithExprs::new(exprs, inputs[0].clone())))
     }
 
     fn try_encode(
@@ -3679,9 +3671,7 @@ impl PhysicalExtensionCodec for CustomExecWithExprsCodec {
         let custom = node
             .as_any()
             .downcast_ref::<CustomExecWithExprs>()
-            .ok_or_else(|| {
-                internal_datafusion_err!("Expected CustomExecWithExprs")
-            })?;
+            .ok_or_else(|| internal_datafusion_err!("Expected CustomExecWithExprs"))?;
 
         buf.extend_from_slice(&(custom.exprs.len() as u32).to_le_bytes());
         for expr in &custom.exprs {
@@ -3702,9 +3692,7 @@ impl PhysicalExtensionCodec for CustomExecWithExprsCodec {
 /// the inner_id should be preserved after roundtrip (proving dedup works).
 #[test]
 fn test_custom_node_with_dynamic_filter_dedup_roundtrip() -> Result<()> {
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Int64, false),
-    ]));
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
 
     // Create a dynamic filter expression
     let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
@@ -3724,9 +3712,10 @@ fn test_custom_node_with_dynamic_filter_dedup_roundtrip() -> Result<()> {
         vec![Arc::clone(&dynamic_filter_expr)],
         empty,
     ));
-    let filter_exec =
-        Arc::new(FilterExec::try_new(Arc::clone(&dynamic_filter_expr), custom_exec)?)
-            as Arc<dyn ExecutionPlan>;
+    let filter_exec = Arc::new(FilterExec::try_new(
+        Arc::clone(&dynamic_filter_expr),
+        custom_exec,
+    )?) as Arc<dyn ExecutionPlan>;
 
     // Roundtrip with DeduplicatingProtoConverter
     let codec = CustomExecWithExprsCodec {

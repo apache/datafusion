@@ -152,7 +152,12 @@ impl PhysicalExtensionCodec for ParentPhysicalExtensionCodec {
         }
     }
 
-    fn try_encode(&self, node: Arc<dyn ExecutionPlan>, buf: &mut Vec<u8>, _proto_converter: &dyn PhysicalProtoConverterExtension) -> Result<()> {
+    fn try_encode(
+        &self,
+        node: Arc<dyn ExecutionPlan>,
+        buf: &mut Vec<u8>,
+        _proto_converter: &dyn PhysicalProtoConverterExtension,
+    ) -> Result<()> {
         if node.as_any().downcast_ref::<ParentExec>().is_some() {
             buf.extend_from_slice("ParentExec".as_bytes());
             Ok(())
@@ -227,7 +232,12 @@ impl PhysicalExtensionCodec for ChildPhysicalExtensionCodec {
         }
     }
 
-    fn try_encode(&self, node: Arc<dyn ExecutionPlan>, buf: &mut Vec<u8>, _proto_converter: &dyn PhysicalProtoConverterExtension) -> Result<()> {
+    fn try_encode(
+        &self,
+        node: Arc<dyn ExecutionPlan>,
+        buf: &mut Vec<u8>,
+        _proto_converter: &dyn PhysicalProtoConverterExtension,
+    ) -> Result<()> {
         if node.as_any().downcast_ref::<ChildExec>().is_some() {
             buf.extend_from_slice("ChildExec".as_bytes());
             Ok(())
