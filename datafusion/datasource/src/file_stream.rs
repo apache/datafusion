@@ -115,9 +115,7 @@ impl FileStream {
                     self.file_stream_metrics.time_opening.start();
 
                     match self.start_next_file().transpose() {
-                        Ok(Some(future)) => {
-                            self.state = FileStreamState::Open { future }
-                        }
+                        Ok(Some(future)) => self.state = FileStreamState::Open { future },
                         Ok(None) => return Poll::Ready(None),
                         Err(e) => {
                             self.state = FileStreamState::Error;

@@ -48,8 +48,8 @@ use datafusion_common::{
 use datafusion_common::{HashMap, Statistics};
 use datafusion_common_runtime::{JoinSet, SpawnedTask};
 use datafusion_datasource::display::FileGroupDisplay;
-use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file::FileSource;
+use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::sink::{DataSink, DataSinkExec};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
@@ -544,14 +544,11 @@ impl FileFormat for ParquetFormat {
                 .file_groups
                 .iter()
                 .flat_map(|group| {
-                    group
-                        .iter()
-                        .map(|file| FileGroup::new(vec![file.clone()]))
+                    group.iter().map(|file| FileGroup::new(vec![file.clone()]))
                 })
                 .collect();
 
-            let target_partitions =
-                state.config_options().execution.target_partitions;
+            let target_partitions = state.config_options().execution.target_partitions;
 
             let conf = FileScanConfigBuilder::from(conf)
                 .with_source(Arc::new(source))

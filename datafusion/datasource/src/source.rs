@@ -327,10 +327,7 @@ impl ExecutionPlan for DataSourceExec {
         let data_source = self.data_source.with_fetch(limit)?;
         let cache = Arc::clone(&self.cache);
 
-        Some(Arc::new(Self {
-            data_source,
-            cache,
-        }))
+        Some(Arc::new(Self { data_source, cache }))
     }
 
     fn fetch(&self) -> Option<usize> {

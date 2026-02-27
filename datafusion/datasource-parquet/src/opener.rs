@@ -1056,10 +1056,7 @@ mod test {
     use std::sync::Arc;
 
     use super::{ConstantColumns, constant_columns_from_stats};
-    use crate::{
-        DefaultParquetFileReaderFactory, RowGroupAccess,
-        opener::ParquetOpener,
-    };
+    use crate::{DefaultParquetFileReaderFactory, RowGroupAccess, opener::ParquetOpener};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use bytes::{BufMut, BytesMut};
     use datafusion_common::{
@@ -2059,5 +2056,4 @@ mod test {
             "Reverse scan with non-contiguous row groups should correctly map RowSelection"
         );
     }
-
 }

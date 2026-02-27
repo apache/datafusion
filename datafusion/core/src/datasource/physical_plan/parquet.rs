@@ -2462,5 +2462,4 @@ mod tests {
         assert_eq!(calls.len(), 2);
         assert_eq!(calls, vec![Some(123), Some(456)]);
     }
-
 }

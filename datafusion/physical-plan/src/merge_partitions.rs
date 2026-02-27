@@ -22,12 +22,15 @@
 
 use std::any::Any;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
-use super::{DisplayAs, ExecutionPlanProperties, PlanProperties, SendableRecordBatchStream, Statistics};
+use super::{
+    DisplayAs, ExecutionPlanProperties, PlanProperties, SendableRecordBatchStream,
+    Statistics,
+};
 use crate::execution_plan::{CardinalityEffect, EvaluationType};
 use crate::filter_pushdown::{FilterDescription, FilterPushdownPhase};
 use crate::sort_pushdown::SortOrderPushdownResult;
@@ -36,8 +39,8 @@ use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::Result;
+use datafusion_common::config::ConfigOptions;
 use datafusion_execution::{RecordBatchStream, TaskContext};
 use datafusion_physical_expr::PhysicalExpr;
 
@@ -187,8 +190,7 @@ impl ExecutionPlan for MergePartitionsExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let total_input_partitions =
-            self.input.output_partitioning().partition_count();
+        let total_input_partitions = self.input.output_partitioning().partition_count();
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
 
         Ok(Box::pin(MergeStream {
@@ -236,10 +238,10 @@ impl ExecutionPlan for MergePartitionsExec {
 
         result
             .try_map(|new_input| {
-                Ok(Arc::new(MergePartitionsExec::new(
-                    new_input,
-                    self.output_partitions,
-                )) as Arc<dyn ExecutionPlan>)
+                Ok(
+                    Arc::new(MergePartitionsExec::new(new_input, self.output_partitions))
+                        as Arc<dyn ExecutionPlan>,
+                )
             })
             .map(|r| {
                 if has_multiple_partitions {
@@ -281,8 +283,7 @@ impl Stream for MergeStream {
                 let poll = stream.as_mut().poll_next(cx);
                 match ready!(poll) {
                     Some(Ok(batch)) => {
-                        this.baseline_metrics
-                            .record_output(batch.num_rows());
+                        this.baseline_metrics.record_output(batch.num_rows());
                         return Poll::Ready(Some(Ok(batch)));
                     }
                     Some(Err(e)) => {
@@ -297,18 +298,14 @@ impl Stream for MergeStream {
             }
 
             // Claim next input partition atomically
-            let partition_idx =
-                this.next_partition.fetch_add(1, Ordering::Relaxed);
+            let partition_idx = this.next_partition.fetch_add(1, Ordering::Relaxed);
             if partition_idx >= this.total_input_partitions {
                 this.done = true;
                 return Poll::Ready(None);
             }
 
             // Start new input stream (synchronous, lazy — actual I/O on poll)
-            match this
-                .input
-                .execute(partition_idx, Arc::clone(&this.context))
-            {
+            match this.input.execute(partition_idx, Arc::clone(&this.context)) {
                 Ok(stream) => {
                     this.current_stream = Some(stream);
                     // Loop back to poll the new stream
@@ -331,9 +328,8 @@ impl RecordBatchStream for MergeStream {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test;
     use crate::common;
-
+    use crate::test;
 
     #[tokio::test]
     async fn test_merge_10_to_3() -> Result<()> {
@@ -348,14 +344,10 @@ mod tests {
             num_input_partitions
         );
 
-        let merge =
-            MergePartitionsExec::new(input, num_output_partitions);
+        let merge = MergePartitionsExec::new(input, num_output_partitions);
 
         assert_eq!(
-            merge
-                .properties()
-                .output_partitioning()
-                .partition_count(),
+            merge.properties().output_partitioning().partition_count(),
             num_output_partitions
         );
 
@@ -364,8 +356,7 @@ mod tests {
         for partition in 0..num_output_partitions {
             let stream = merge.execute(partition, Arc::clone(&task_ctx))?;
             let batches = common::collect(stream).await?;
-            let rows: usize =
-                batches.iter().map(|batch| batch.num_rows()).sum();
+            let rows: usize = batches.iter().map(|batch| batch.num_rows()).sum();
             total_rows += rows;
         }
 
@@ -383,14 +374,10 @@ mod tests {
         let num_output_partitions = 5;
         let input = test::scan_partitioned(num_input_partitions);
 
-        let merge =
-            MergePartitionsExec::new(input, num_output_partitions);
+        let merge = MergePartitionsExec::new(input, num_output_partitions);
 
         assert_eq!(
-            merge
-                .properties()
-                .output_partitioning()
-                .partition_count(),
+            merge.properties().output_partitioning().partition_count(),
             num_output_partitions
         );
 
@@ -398,8 +385,7 @@ mod tests {
         for partition in 0..num_output_partitions {
             let stream = merge.execute(partition, Arc::clone(&task_ctx))?;
             let batches = common::collect(stream).await?;
-            let rows: usize =
-                batches.iter().map(|batch| batch.num_rows()).sum();
+            let rows: usize = batches.iter().map(|batch| batch.num_rows()).sum();
             total_rows += rows;
         }
 
