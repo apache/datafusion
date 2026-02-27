@@ -175,7 +175,7 @@ mod tests {
                     Field::new("y", DataType::Float64, false),
                 ],
             ))));
-        assert_snapshot!(struct_type, @r#"Struct("x": Float64, "y": Float64)"#);
+        assert_snapshot!(struct_type, @r#"Struct("x": non-null Float64, "y": non-null Float64)"#);
     }
 
     #[test]
@@ -188,7 +188,7 @@ mod tests {
             ))),
             3,
         ));
-        assert_snapshot!(fsl_type, @"FixedSizeList(3 x Float32)");
+        assert_snapshot!(fsl_type, @"FixedSizeList(3 x non-null Float32)");
     }
 
     #[test]
@@ -196,7 +196,7 @@ mod tests {
         let map_type: Arc<dyn LogicalType> = Arc::new(NativeType::Map(Arc::new(
             LogicalField::from(&Field::new("entries", DataType::Utf8, false)),
         )));
-        assert_snapshot!(map_type, @"Map(String)");
+        assert_snapshot!(map_type, @"Map(non-null String)");
     }
 
     #[test]
@@ -214,7 +214,7 @@ mod tests {
         let union_type: Arc<dyn LogicalType> = Arc::new(NativeType::Union(
             crate::types::LogicalUnionFields::from(&union_fields),
         ));
-        assert_snapshot!(union_type, @r#"Union(0: ("int_val": Int32), 1: ("str_val": String))"#);
+        assert_snapshot!(union_type, @r#"Union(0: ("int_val": non-null Int32), 1: ("str_val": String))"#);
     }
 
     #[test]
@@ -229,9 +229,8 @@ mod tests {
                 false,
             )))));
 
-        // Display delegates to NativeType which doesn't distinguish nullability
         assert_snapshot!(nullable_list, @"List(Int32)");
-        assert_snapshot!(non_nullable_list, @"List(Int32)");
+        assert_snapshot!(non_nullable_list, @"List(non-null Int32)");
     }
 
     #[test]

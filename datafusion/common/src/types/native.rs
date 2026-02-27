@@ -184,6 +184,13 @@ pub enum NativeType {
     Map(LogicalFieldRef),
 }
 
+/// Format a [`LogicalField`] for display, matching [`arrow::datatypes::DataType`]'s
+/// Display convention of showing a `"non-null "` prefix for non-nullable fields.
+fn format_logical_field(f: &mut std::fmt::Formatter<'_>, field: &LogicalField) -> std::fmt::Result {
+    let non_null = if field.nullable { "" } else { "non-null " };
+    write!(f, "{:?}: {non_null}{}", field.name, field.logical_type)
+}
+
 impl Display for NativeType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Match the format used by arrow::datatypes::DataType's Display impl
@@ -210,9 +217,13 @@ impl Display for NativeType {
             Self::Binary => write!(f, "Binary"),
             Self::FixedSizeBinary(size) => write!(f, "FixedSizeBinary({size})"),
             Self::String => write!(f, "String"),
-            Self::List(field) => write!(f, "List({})", field.logical_type),
+            Self::List(field) => {
+                let non_null = if field.nullable { "" } else { "non-null " };
+                write!(f, "List({non_null}{})", field.logical_type)
+            }
             Self::FixedSizeList(field, size) => {
-                write!(f, "FixedSizeList({size} x {})", field.logical_type)
+                let non_null = if field.nullable { "" } else { "non-null " };
+                write!(f, "FixedSizeList({size} x {non_null}{})", field.logical_type)
             }
             Self::Struct(fields) => {
                 write!(f, "Struct(")?;
@@ -220,7 +231,7 @@ impl Display for NativeType {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    write!(f, "{:?}: {}", field.name, field.logical_type)?;
+                    format_logical_field(f, field)?;
                 }
                 write!(f, ")")
             }
@@ -230,12 +241,17 @@ impl Display for NativeType {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    write!(f, "{type_id}: ({:?}: {})", field.name, field.logical_type)?;
+                    write!(f, "{type_id}: (")?;
+                    format_logical_field(f, field)?;
+                    write!(f, ")")?;
                 }
                 write!(f, ")")
             }
             Self::Decimal(precision, scale) => write!(f, "Decimal({precision}, {scale})"),
-            Self::Map(field) => write!(f, "Map({})", field.logical_type),
+            Self::Map(field) => {
+                let non_null = if field.nullable { "" } else { "non-null " };
+                write!(f, "Map({non_null}{})", field.logical_type)
+            }
         }
     }
 }
@@ -604,7 +620,7 @@ mod tests {
             )),
             3,
         );
-        assert_snapshot!(fixed_list, @"FixedSizeList(3 x Float64)");
+        assert_snapshot!(fixed_list, @"FixedSizeList(3 x non-null Float64)");
 
         let struct_type = NativeType::Struct(LogicalFields::from(
             &Fields::from(vec![
@@ -612,11 +628,11 @@ mod tests {
                 Field::new("age", DataType::Int32, true),
             ]),
         ));
-        assert_snapshot!(struct_type, @r#"Struct("name": String, "age": Int32)"#);
+        assert_snapshot!(struct_type, @r#"Struct("name": non-null String, "age": Int32)"#);
 
         let map = NativeType::Map(Arc::new(LogicalField::from(
             &Field::new("entries", DataType::Utf8, false),
         )));
-        assert_snapshot!(map, @"Map(String)");
+        assert_snapshot!(map, @"Map(non-null String)");
     }
 }
