@@ -181,8 +181,8 @@ fn map_deduplicate_keys(
         let num_keys_entries = *next_keys_offset as usize - cur_keys_offset;
         let num_values_entries = *next_values_offset as usize - cur_values_offset;
 
-        let mut keys_mask_one = [false].repeat(num_keys_entries);
-        let mut values_mask_one = [false].repeat(num_values_entries);
+        let mut keys_mask_one = vec![false; num_keys_entries];
+        let mut values_mask_one = vec![false; num_values_entries];
 
         let key_is_valid = keys_nulls.is_none_or(|buf| buf.is_valid(row_idx));
         let value_is_valid = values_nulls.is_none_or(|buf| buf.is_valid(row_idx));

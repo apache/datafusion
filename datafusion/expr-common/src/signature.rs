@@ -1416,7 +1416,7 @@ impl Signature {
             Arity::Variable => {
                 // For UserDefined signatures, allow parameter names
                 // The function implementer is responsible for validating the names match the actual arguments
-                if !matches!(self.type_signature, TypeSignature::UserDefined) {
+                if self.type_signature != TypeSignature::UserDefined {
                     return plan_err!(
                         "Cannot specify parameter names for variable arity signature: {:?}",
                         self.type_signature

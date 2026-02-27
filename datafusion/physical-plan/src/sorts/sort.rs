@@ -27,7 +27,9 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 
 use crate::common::spawn_buffered;
-use crate::execution_plan::{Boundedness, CardinalityEffect, EmissionType};
+use crate::execution_plan::{
+    Boundedness, CardinalityEffect, EmissionType, has_same_children_properties,
+};
 use crate::expressions::PhysicalSortExpr;
 use crate::filter_pushdown::{
     ChildFilterDescription, FilterDescription, FilterPushdownPhase,
@@ -37,6 +39,7 @@ use crate::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, SpillMetrics,
 };
 use crate::projection::{ProjectionExec, make_with_child, update_ordering};
+use crate::sorts::IncrementalSortIterator;
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::get_record_batch_memory_size;
 use crate::spill::in_progress_spill_file::InProgressSpillFile;
@@ -726,7 +729,6 @@ impl ExternalSorter {
 
             // Sort the batch immediately and get all output batches
             let sorted_batches = sort_batch_chunked(&batch, &expressions, batch_size)?;
-            drop(batch);
 
             // Free the old reservation and grow it to match the actual sorted output size
             reservation.free();
@@ -851,11 +853,13 @@ pub(crate) fn get_reserved_bytes_for_record_batch_size(
 /// Estimate how much memory is needed to sort a `RecordBatch`.
 /// This will just call `get_reserved_bytes_for_record_batch_size` with the
 /// memory size of the record batch and its sliced size.
-pub(super) fn get_reserved_bytes_for_record_batch(batch: &RecordBatch) -> Result<usize> {
-    Ok(get_reserved_bytes_for_record_batch_size(
-        get_record_batch_memory_size(batch),
-        batch.get_sliced_size()?,
-    ))
+pub(crate) fn get_reserved_bytes_for_record_batch(batch: &RecordBatch) -> Result<usize> {
+    batch.get_sliced_size().map(|sliced_size| {
+        get_reserved_bytes_for_record_batch_size(
+            get_record_batch_memory_size(batch),
+            sliced_size,
+        )
+    })
 }
 
 impl Debug for ExternalSorter {
@@ -898,38 +902,7 @@ pub fn sort_batch_chunked(
     expressions: &LexOrdering,
     batch_size: usize,
 ) -> Result<Vec<RecordBatch>> {
-    let sort_columns = expressions
-        .iter()
-        .map(|expr| expr.evaluate_to_sort_column(batch))
-        .collect::<Result<Vec<_>>>()?;
-
-    let indices = lexsort_to_indices(&sort_columns, None)?;
-
-    // Split indices into chunks of batch_size
-    let num_rows = indices.len();
-    let num_chunks = num_rows.div_ceil(batch_size);
-
-    let result_batches = (0..num_chunks)
-        .map(|chunk_idx| {
-            let start = chunk_idx * batch_size;
-            let end = (start + batch_size).min(num_rows);
-            let chunk_len = end - start;
-
-            // Create a slice of indices for this chunk
-            let chunk_indices = indices.slice(start, chunk_len);
-
-            // Take the columns using this chunk of indices
-            let columns = take_arrays(batch.columns(), &chunk_indices, None)?;
-
-            let options = RecordBatchOptions::new().with_row_count(Some(chunk_len));
-            let chunk_batch =
-                RecordBatch::try_new_with_options(batch.schema(), columns, &options)?;
-
-            Ok(chunk_batch)
-        })
-        .collect::<Result<Vec<RecordBatch>>>()?;
-
-    Ok(result_batches)
+    IncrementalSortIterator::new(batch.clone(), expressions.clone(), batch_size).collect()
 }
 
 /// Sort execution plan.
@@ -952,7 +925,7 @@ pub struct SortExec {
     /// Normalized common sort prefix between the input and the sort expressions (only used with fetch)
     common_sort_prefix: Vec<PhysicalSortExpr>,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
     /// Filter matching the state of the sort for dynamic filter pushdown.
     /// If `fetch` is `Some`, this will also be set and a TopK operator may be used.
     /// If `fetch` is `None`, this will be `None`.
@@ -974,7 +947,7 @@ impl SortExec {
             preserve_partitioning,
             fetch: None,
             common_sort_prefix: sort_prefix,
-            cache,
+            cache: Arc::new(cache),
             filter: None,
         }
     }
@@ -993,12 +966,8 @@ impl SortExec {
     /// input partitions producing a single, sorted partition.
     pub fn with_preserve_partitioning(mut self, preserve_partitioning: bool) -> Self {
         self.preserve_partitioning = preserve_partitioning;
-        self.cache = self
-            .cache
-            .with_partitioning(Self::output_partitioning_helper(
-                &self.input,
-                self.preserve_partitioning,
-            ));
+        Arc::make_mut(&mut self.cache).partitioning =
+            Self::output_partitioning_helper(&self.input, self.preserve_partitioning);
         self
     }
 
@@ -1022,7 +991,7 @@ impl SortExec {
             preserve_partitioning: self.preserve_partitioning,
             common_sort_prefix: self.common_sort_prefix.clone(),
             fetch: self.fetch,
-            cache: self.cache.clone(),
+            cache: Arc::clone(&self.cache),
             filter: self.filter.clone(),
         }
     }
@@ -1035,12 +1004,12 @@ impl SortExec {
     /// operation since rows that are not going to be included
     /// can be dropped.
     pub fn with_fetch(&self, fetch: Option<usize>) -> Self {
-        let mut cache = self.cache.clone();
+        let mut cache = PlanProperties::clone(&self.cache);
         // If the SortExec can emit incrementally (that means the sort requirements
         // and properties of the input match), the SortExec can generate its result
         // without scanning the entire input when a fetch value exists.
         let is_pipeline_friendly = matches!(
-            self.cache.emission_type,
+            cache.emission_type,
             EmissionType::Incremental | EmissionType::Both
         );
         if fetch.is_some() && is_pipeline_friendly {
@@ -1052,7 +1021,7 @@ impl SortExec {
         });
         let mut new_sort = self.cloned();
         new_sort.fetch = fetch;
-        new_sort.cache = cache;
+        new_sort.cache = cache.into();
         new_sort.filter = filter;
         new_sort
     }
@@ -1207,7 +1176,7 @@ impl ExecutionPlan for SortExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -1236,14 +1205,17 @@ impl ExecutionPlan for SortExec {
         let mut new_sort = self.cloned();
         assert_eq!(children.len(), 1, "SortExec should have exactly one child");
         new_sort.input = Arc::clone(&children[0]);
-        // Recompute the properties based on the new input since they may have changed
-        let (cache, sort_prefix) = Self::compute_properties(
-            &new_sort.input,
-            new_sort.expr.clone(),
-            new_sort.preserve_partitioning,
-        )?;
-        new_sort.cache = cache;
-        new_sort.common_sort_prefix = sort_prefix;
+
+        if !has_same_children_properties(&self, &children)? {
+            // Recompute the properties based on the new input since they may have changed
+            let (cache, sort_prefix) = Self::compute_properties(
+                &new_sort.input,
+                new_sort.expr.clone(),
+                new_sort.preserve_partitioning,
+            )?;
+            new_sort.cache = Arc::new(cache);
+            new_sort.common_sort_prefix = sort_prefix;
+        }
 
         Ok(Arc::new(new_sort))
     }
@@ -1411,7 +1383,7 @@ impl ExecutionPlan for SortExec {
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         config: &datafusion_common::config::ConfigOptions,
     ) -> Result<FilterDescription> {
-        if !matches!(phase, FilterPushdownPhase::Post) {
+        if phase != FilterPushdownPhase::Post {
             return FilterDescription::from_children(parent_filters, &self.children());
         }
 
@@ -1463,7 +1435,7 @@ mod tests {
     pub struct SortedUnboundedExec {
         schema: Schema,
         batch_size: u64,
-        cache: PlanProperties,
+        cache: Arc<PlanProperties>,
     }
 
     impl DisplayAs for SortedUnboundedExec {
@@ -1503,7 +1475,7 @@ mod tests {
             self
         }
 
-        fn properties(&self) -> &PlanProperties {
+        fn properties(&self) -> &Arc<PlanProperties> {
             &self.cache
         }
 
@@ -2271,7 +2243,9 @@ mod tests {
         let source = SortedUnboundedExec {
             schema: schema.clone(),
             batch_size: 2,
-            cache: SortedUnboundedExec::compute_properties(Arc::new(schema.clone())),
+            cache: Arc::new(SortedUnboundedExec::compute_properties(Arc::new(
+                schema.clone(),
+            ))),
         };
         let mut plan = SortExec::new(
             [PhysicalSortExpr::new_default(Arc::new(Column::new(

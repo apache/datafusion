@@ -347,21 +347,20 @@ fn array_to_string_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
     };
 
-    let mut null_string = String::from("");
-    let mut with_null_string = false;
-    if args.len() == 3 {
-        null_string = match args[2].data_type() {
-            Utf8 => args[2].as_string::<i32>().value(0).to_string(),
-            Utf8View => args[2].as_string_view().value(0).to_string(),
-            LargeUtf8 => args[2].as_string::<i64>().value(0).to_string(),
+    let null_strings = if args.len() == 3 {
+        Some(match args[2].data_type() {
+            Utf8 => args[2].as_string::<i32>().iter().collect(),
+            Utf8View => args[2].as_string_view().iter().collect(),
+            LargeUtf8 => args[2].as_string::<i64>().iter().collect(),
             other => {
                 return exec_err!(
-                    "unsupported type for second argument to array_to_string function as {other:?}"
+                    "unsupported type for third argument to array_to_string function as {other:?}"
                 );
             }
-        };
-        with_null_string = true;
-    }
+        })
+    } else {
+        None
+    };
 
     /// Creates a single string from single element of a ListArray (which is
     /// itself another Array)
@@ -469,18 +468,24 @@ fn array_to_string_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     fn generate_string_array<O: OffsetSizeTrait>(
         list_arr: &GenericListArray<O>,
         delimiters: &[Option<&str>],
-        null_string: &str,
-        with_null_string: bool,
+        null_strings: &Option<Vec<Option<&str>>>,
     ) -> Result<StringArray> {
         let mut res: Vec<Option<String>> = Vec::new();
-        for (arr, &delimiter) in list_arr.iter().zip(delimiters.iter()) {
+        for (i, (arr, &delimiter)) in list_arr.iter().zip(delimiters.iter()).enumerate() {
             if let (Some(arr), Some(delimiter)) = (arr, delimiter) {
+                let (null_string, with_null_string) = match null_strings {
+                    Some(ns) => match ns[i] {
+                        Some(s) => (s.to_string(), true),
+                        None => (String::new(), false),
+                    },
+                    None => (String::new(), false),
+                };
                 let mut arg = String::from("");
                 let s = compute_array_to_string(
                     &mut arg,
                     &arr,
                     delimiter.to_string(),
-                    null_string.to_string(),
+                    null_string,
                     with_null_string,
                 )?
                 .clone();
@@ -501,21 +506,11 @@ fn array_to_string_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let string_arr = match arr.data_type() {
         List(_) => {
             let list_array = as_list_array(&arr)?;
-            generate_string_array::<i32>(
-                list_array,
-                &delimiters,
-                &null_string,
-                with_null_string,
-            )?
+            generate_string_array::<i32>(list_array, &delimiters, &null_strings)?
         }
         LargeList(_) => {
             let list_array = as_large_list_array(&arr)?;
-            generate_string_array::<i64>(
-                list_array,
-                &delimiters,
-                &null_string,
-                with_null_string,
-            )?
+            generate_string_array::<i64>(list_array, &delimiters, &null_strings)?
         }
         // Signature guards against this arm
         _ => return exec_err!("array_to_string expects list as first argument"),

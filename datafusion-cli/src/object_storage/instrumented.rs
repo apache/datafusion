@@ -110,7 +110,7 @@ pub enum InstrumentedObjectStoreMode {
 }
 
 impl fmt::Display for InstrumentedObjectStoreMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{self:?}")
     }
 }
@@ -383,7 +383,7 @@ impl InstrumentedObjectStore {
 }
 
 impl fmt::Display for InstrumentedObjectStore {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mode: InstrumentedObjectStoreMode =
             self.instrument_mode.load(Ordering::Relaxed).into();
         write!(
@@ -490,7 +490,7 @@ pub enum Operation {
 }
 
 impl fmt::Display for Operation {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{self:?}")
     }
 }
@@ -508,7 +508,7 @@ pub struct RequestDetails {
 }
 
 impl fmt::Display for RequestDetails {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut output_parts = vec![format!(
             "{} operation={:?}",
             self.timestamp.to_rfc3339(),
