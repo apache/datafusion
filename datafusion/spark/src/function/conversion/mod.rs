@@ -15,11 +15,36 @@
 // specific language governing permissions and limitations
 // under the License.
 
+pub mod cast;
+pub mod cast_boolean;
+pub mod cast_complex;
+pub mod cast_datetime;
+pub mod cast_numeric;
+pub mod cast_string;
+pub mod cast_utils;
+
 use datafusion_expr::ScalarUDF;
+use datafusion_functions::make_udf_function;
 use std::sync::Arc;
 
-pub mod expr_fn {}
+make_udf_function!(cast::SparkCast, spark_cast);
+make_udf_function!(cast::SparkTryCast, spark_try_cast);
+
+pub mod expr_fn {
+    use datafusion_functions::export_functions;
+
+    export_functions!((
+        spark_cast,
+        "Casts expr to the target type using Spark-compatible semantics.",
+        arg1 arg2
+    ));
+    export_functions!((
+        spark_try_cast,
+        "Casts expr to the target type using Spark TRY_CAST semantics (returns NULL on error).",
+        arg1 arg2
+    ));
+}
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
-    vec![]
+    vec![spark_cast(), spark_try_cast()]
 }
