@@ -317,7 +317,7 @@ fn get_valid_types_with_udf<F: UDFCoercionExt>(
             Ok(coerced_types) => vec![coerced_types],
             Err(e) => {
                 return exec_err!(
-                    "Function '{}' user-defined coercion failed with {}",
+                    "Function '{}' user-defined coercion failed with: {}",
                     func.name(),
                     e.strip_backtrace()
                 );
