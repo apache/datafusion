@@ -47,18 +47,8 @@ pub fn simplify_regex_expr(
     op: Operator,
     right: Box<Expr>,
 ) -> Result<Transformed<Expr>> {
-    let right_scalar = match right.as_ref() {
-        Expr::Literal(scalar, _) => scalar,
-        _ => {
-            return Ok(Transformed::no(Expr::BinaryExpr(BinaryExpr {
-                left,
-                op,
-                right,
-            })));
-        }
-    };
-    // Check if the right operand is a string literal
-    let Some(string_scalar) = StringScalar::try_from_scalar(right_scalar) else {
+    // Check if the right operand is a supported string literal
+    let Some(string_scalar) = StringScalar::try_from_expr(right.as_ref()) else {
         return Ok(Transformed::no(Expr::BinaryExpr(BinaryExpr {
             left,
             op,
@@ -79,7 +69,7 @@ pub fn simplify_regex_expr(
     if pattern == ANY_CHAR_REGEX_PATTERN {
         let new_expr = if mode.not {
             // not empty
-            let empty_lit = Box::new(string_scalar.to_scalar(""));
+            let empty_lit = Box::new(string_scalar.to_expr(""));
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Operator::Eq,
@@ -350,16 +340,15 @@ fn lower_simple(
 ) -> Option<Expr> {
     match hir.kind() {
         HirKind::Empty => {
-            return Some(mode.expr(
-                Box::new(left.clone()),
-                Box::new(string_scalar.to_scalar("%")),
-            ));
+            return Some(
+                mode.expr(Box::new(left.clone()), Box::new(string_scalar.to_expr("%"))),
+            );
         }
         HirKind::Literal(l) => {
             let s = like_str_from_literal(l)?;
             return Some(mode.expr(
                 Box::new(left.clone()),
-                Box::new(string_scalar.to_scalar(&format!("%{s}%"))),
+                Box::new(string_scalar.to_expr(&format!("%{s}%"))),
             ));
         }
         HirKind::Concat(inner) if is_anchored_literal(inner) => {
@@ -377,7 +366,7 @@ fn lower_simple(
             {
                 return Some(mode.expr(
                     Box::new(left.clone()),
-                    Box::new(string_scalar.to_scalar(&pattern)),
+                    Box::new(string_scalar.to_expr(&pattern)),
                 ));
             }
         }

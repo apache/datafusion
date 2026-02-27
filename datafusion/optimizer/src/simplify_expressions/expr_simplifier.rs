@@ -1667,11 +1667,7 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 // `\` is implicit escape, see https://github.com/apache/datafusion/issues/13291
                 let escape_char = like.escape_char.unwrap_or('\\');
 
-                let pattern_scalar = match like.pattern.as_ref() {
-                    Expr::Literal(scalar, _) => scalar,
-                    _ => return Ok(Transformed::no(Expr::Like(like))),
-                };
-                match StringScalar::try_from_scalar(pattern_scalar) {
+                match StringScalar::try_from_expr(&like.pattern) {
                     Some(string_scalar) => {
                         let pattern_str = string_scalar.as_str();
                         match pattern_str {
@@ -1709,7 +1705,7 @@ impl TreeNodeRewriter for Simplifier<'_> {
                                     .to_string();
                                 Transformed::yes(Expr::Like(Like {
                                     pattern: Box::new(
-                                        string_scalar.to_scalar(&simplified_pattern),
+                                        string_scalar.to_expr(&simplified_pattern),
                                     ),
                                     ..like
                                 }))
@@ -2139,9 +2135,18 @@ pub(crate) enum StringScalar<'a> {
 }
 
 impl<'a> StringScalar<'a> {
+    /// Create a `StringScalar` view from an `Expr` if it is a supported string literal.
+    /// Returns `None` if the expression is not a string literal.
+    pub(crate) fn try_from_expr(expr: &'a Expr) -> Option<Self> {
+        match expr {
+            Expr::Literal(scalar, _) => Self::try_from_scalar(scalar),
+            _ => None,
+        }
+    }
+
     /// Create a `StringScalar` view from a `ScalarValue` if it is a supported string type.
     /// Returns `None` if the scalar value is not a supported string type.
-    pub(crate) fn try_from_scalar(scalar: &'a ScalarValue) -> Option<Self> {
+    fn try_from_scalar(scalar: &'a ScalarValue) -> Option<Self> {
         match scalar {
             ScalarValue::Utf8(_) => Some(Self::Utf8(scalar)),
             ScalarValue::LargeUtf8(_) => Some(Self::LargeUtf8(scalar)),
@@ -2160,7 +2165,7 @@ impl<'a> StringScalar<'a> {
     }
 
     /// Build a new `Expr` of the same string type with the given value.
-    pub(crate) fn to_scalar(&self, val: &str) -> Expr {
+    pub(crate) fn to_expr(&self, val: &str) -> Expr {
         match self {
             Self::Utf8(_) => Expr::Literal(ScalarValue::Utf8(Some(val.to_owned())), None),
             Self::LargeUtf8(_) => {
