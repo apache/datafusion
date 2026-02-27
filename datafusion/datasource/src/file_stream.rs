@@ -439,8 +439,7 @@ impl FileStreamMetrics {
         let file_scan_errors =
             MetricBuilder::new(metrics).counter("file_scan_errors", partition);
 
-        let files_opened =
-            MetricBuilder::new(metrics).counter("files_opened", partition);
+        let files_opened = MetricBuilder::new(metrics).counter("files_opened", partition);
 
         let files_scanned =
             MetricBuilder::new(metrics).counter("files_scanned", partition);
