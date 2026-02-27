@@ -44,7 +44,7 @@ use datafusion::common::runtime::SpawnedTask;
 use futures::FutureExt;
 use std::ffi::OsStr;
 use std::fs;
-use std::io::{IsTerminal, stderr, stdout};
+use std::io::{IsTerminal, Write, stderr, stdout};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -318,7 +318,7 @@ async fn run_tests() -> Result<()> {
             .then_with(|| a.relative_path.cmp(&b.relative_path))
     });
 
-    print_timing_summary(&options, &m, &file_timings)?;
+    print_timing_summary(&options, &file_timings)?;
 
     let errors: Vec<_> = file_results
         .into_iter()
@@ -380,22 +380,24 @@ async fn run_tests() -> Result<()> {
 
 fn print_timing_summary(
     options: &Options,
-    progress: &MultiProgress,
     file_timings: &[FileTiming],
 ) -> Result<()> {
     if !options.timing_summary || file_timings.is_empty() {
         return Ok(());
     }
 
-    progress.println("Per-file elapsed summary (deterministic):")?;
+    let mut output = stdout().lock();
+    writeln!(output, "Per-file elapsed summary (deterministic):")?;
     for (idx, timing) in file_timings.iter().enumerate() {
-        progress.println(format!(
+        writeln!(
+            output,
             "{:>3}. {:>8.3}s  {}",
             idx + 1,
             timing.elapsed.as_secs_f64(),
             timing.relative_path.display()
-        ))?;
+        )?;
     }
+    output.flush()?;
 
     Ok(())
 }
