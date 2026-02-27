@@ -327,4 +327,28 @@ mod tests {
         assert_eq!(string_array.value(2), "[null]");
         assert_eq!(string_array.value(3), "[]");
     }
+
+    #[test]
+    fn test_cast_i32_list_to_string() {
+        let values_array =
+            Int32Array::from(vec![Some(1), Some(2), Some(3), Some(1), None, None]);
+        let offsets_buffer = OffsetBuffer::<i32>::new(vec![0, 3, 5, 6, 6].into());
+        let item_field = Arc::new(Field::new("item", DataType::Int32, true));
+        let list_array = Arc::new(ListArray::new(
+            item_field,
+            offsets_buffer,
+            Arc::new(values_array),
+            None,
+        ));
+        let cast_opts = SparkCastOptions::new(
+            crate::function::conversion::cast_utils::EvalMode::Legacy,
+            "UTC",
+        );
+        let string_array = cast_array_to_string(&list_array, &cast_opts).unwrap();
+        let string_array = string_array.as_string::<i32>();
+        assert_eq!(string_array.value(0), "[1, 2, 3]");
+        assert_eq!(string_array.value(1), "[1, null]");
+        assert_eq!(string_array.value(2), "[null]");
+        assert_eq!(string_array.value(3), "[]");
+    }
 }

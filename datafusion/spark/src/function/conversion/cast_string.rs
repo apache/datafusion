@@ -1253,6 +1253,8 @@ fn parse_sign(bytes: &[u8]) -> Option<(bool, &[u8])> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::array::Decimal128Array;
+    use arrow::datatypes::{Decimal256Type, TimeUnit};
 
     fn cast_string_to_i8(str: &str, eval_mode: EvalMode) -> Result<Option<i8>> {
         match eval_mode {
@@ -1387,5 +1389,430 @@ mod tests {
         date32_array
             .iter()
             .for_each(|v| assert_eq!(v.unwrap(), 18262));
+    }
+
+    #[test]
+    fn test_timestamp_parser() {
+        let tz: arrow::array::timezone::Tz = "UTC".parse().unwrap();
+        // 2020 dates — all 7 timestamp format levels
+        assert_eq!(
+            timestamp_parser("2020", EvalMode::Legacy, &tz).unwrap(),
+            Some(1577836800000000)
+        );
+        assert_eq!(
+            timestamp_parser("2020-01", EvalMode::Legacy, &tz).unwrap(),
+            Some(1577836800000000)
+        );
+        assert_eq!(
+            timestamp_parser("2020-01-01", EvalMode::Legacy, &tz).unwrap(),
+            Some(1577836800000000)
+        );
+        assert_eq!(
+            timestamp_parser("2020-01-01T12", EvalMode::Legacy, &tz).unwrap(),
+            Some(1577880000000000)
+        );
+        assert_eq!(
+            timestamp_parser("2020-01-01T12:34", EvalMode::Legacy, &tz).unwrap(),
+            Some(1577882040000000)
+        );
+        assert_eq!(
+            timestamp_parser("2020-01-01T12:34:56", EvalMode::Legacy, &tz).unwrap(),
+            Some(1577882096000000)
+        );
+        assert_eq!(
+            timestamp_parser("2020-01-01T12:34:56.123456", EvalMode::Legacy, &tz)
+                .unwrap(),
+            Some(1577882096123456)
+        );
+        // 0100 dates
+        assert_eq!(
+            timestamp_parser("0100", EvalMode::Legacy, &tz).unwrap(),
+            Some(-59011459200000000)
+        );
+        assert_eq!(
+            timestamp_parser("0100-01", EvalMode::Legacy, &tz).unwrap(),
+            Some(-59011459200000000)
+        );
+        assert_eq!(
+            timestamp_parser("0100-01-01", EvalMode::Legacy, &tz).unwrap(),
+            Some(-59011459200000000)
+        );
+        assert_eq!(
+            timestamp_parser("0100-01-01T12", EvalMode::Legacy, &tz).unwrap(),
+            Some(-59011416000000000)
+        );
+        assert_eq!(
+            timestamp_parser("0100-01-01T12:34", EvalMode::Legacy, &tz).unwrap(),
+            Some(-59011413960000000)
+        );
+        assert_eq!(
+            timestamp_parser("0100-01-01T12:34:56", EvalMode::Legacy, &tz).unwrap(),
+            Some(-59011413904000000)
+        );
+        assert_eq!(
+            timestamp_parser("0100-01-01T12:34:56.123456", EvalMode::Legacy, &tz)
+                .unwrap(),
+            Some(-59011413903876544)
+        );
+        // 10000 dates
+        assert_eq!(
+            timestamp_parser("10000", EvalMode::Legacy, &tz).unwrap(),
+            Some(253402300800000000)
+        );
+        assert_eq!(
+            timestamp_parser("10000-01", EvalMode::Legacy, &tz).unwrap(),
+            Some(253402300800000000)
+        );
+        assert_eq!(
+            timestamp_parser("10000-01-01", EvalMode::Legacy, &tz).unwrap(),
+            Some(253402300800000000)
+        );
+        assert_eq!(
+            timestamp_parser("10000-01-01T12", EvalMode::Legacy, &tz).unwrap(),
+            Some(253402344000000000)
+        );
+        assert_eq!(
+            timestamp_parser("10000-01-01T12:34", EvalMode::Legacy, &tz).unwrap(),
+            Some(253402346040000000)
+        );
+        assert_eq!(
+            timestamp_parser("10000-01-01T12:34:56", EvalMode::Legacy, &tz).unwrap(),
+            Some(253402346096000000)
+        );
+        assert_eq!(
+            timestamp_parser("10000-01-01T12:34:56.123456", EvalMode::Legacy, &tz)
+                .unwrap(),
+            Some(253402346096123456)
+        );
+    }
+
+    #[test]
+    fn test_cast_string_to_timestamp_array() {
+        let array: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("2020-01-01T12:34:56.123456"),
+            Some("T2"),
+            Some("0100-01-01T12:34:56.123456"),
+            Some("10000-01-01T12:34:56.123456"),
+        ]));
+        let tz: arrow::array::timezone::Tz = "UTC".parse().unwrap();
+        let result = cast_string_to_timestamp(
+            &array,
+            &DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+            EvalMode::Legacy,
+            &tz,
+        )
+        .unwrap();
+        assert_eq!(
+            result.data_type(),
+            &DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
+        );
+        assert_eq!(result.len(), 4);
+    }
+
+    #[test]
+    fn test_cast_string_to_date_valid_with_whitespace() {
+        let array: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("-262143-12-31"),
+            Some("\n -262143-12-31 "),
+            Some("-262143-12-31T \t\n"),
+            Some("\n\t-262143-12-31T\r"),
+            Some("-262143-12-31T 123123123"),
+            Some("\r\n-262143-12-31T \r123123123"),
+            Some("\n -262143-12-31T \n\t"),
+        ]));
+
+        for eval_mode in &[EvalMode::Legacy, EvalMode::Try, EvalMode::Ansi] {
+            let result =
+                cast_string_to_date(&array, &DataType::Date32, *eval_mode).unwrap();
+            let date32_array = result
+                .as_any()
+                .downcast_ref::<arrow::array::Date32Array>()
+                .unwrap();
+            assert_eq!(result.len(), 7);
+            date32_array
+                .iter()
+                .for_each(|v| assert_eq!(v.unwrap(), -96464928));
+        }
+    }
+
+    #[test]
+    fn test_cast_string_to_date_invalid_formats() {
+        let array: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("2020"),
+            Some("2020-01"),
+            Some("2020-01-01"),
+            Some("2020-010-01T"),
+            Some("202"),
+            Some(" 202 "),
+            Some("\n 2020-\r8 "),
+            Some("2020-01-01T"),
+            Some("-4607172990231812908"),
+        ]));
+
+        for eval_mode in &[EvalMode::Legacy, EvalMode::Try] {
+            let result =
+                cast_string_to_date(&array, &DataType::Date32, *eval_mode).unwrap();
+            let date32_array = result
+                .as_any()
+                .downcast_ref::<arrow::array::Date32Array>()
+                .unwrap();
+            assert_eq!(
+                date32_array.iter().collect::<Vec<_>>(),
+                vec![
+                    Some(18262),
+                    Some(18262),
+                    Some(18262),
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(18262),
+                    None,
+                ]
+            );
+        }
+
+        let result = cast_string_to_date(&array, &DataType::Date32, EvalMode::Ansi);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("[CAST_INVALID_INPUT]"));
+    }
+
+    #[test]
+    fn test_cast_string_to_float32() {
+        // Normal values
+        let array: ArrayRef =
+            Arc::new(StringArray::from(vec![Some("1.5"), Some("-2.75")]));
+        let result = cast_string_to_float(&array, &DataType::Float32, EvalMode::Legacy)
+            .unwrap();
+        let arr = result
+            .as_any()
+            .downcast_ref::<PrimitiveArray<Float32Type>>()
+            .unwrap();
+        assert!((arr.value(0) - 1.5_f32).abs() < f32::EPSILON);
+        assert!((arr.value(1) - (-2.75_f32)).abs() < f32::EPSILON);
+
+        // NaN, Infinity
+        let array: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("NaN"),
+            Some("Infinity"),
+            Some("-Infinity"),
+        ]));
+        let result = cast_string_to_float(&array, &DataType::Float32, EvalMode::Legacy)
+            .unwrap();
+        let arr = result
+            .as_any()
+            .downcast_ref::<PrimitiveArray<Float32Type>>()
+            .unwrap();
+        assert!(arr.value(0).is_nan());
+        assert!(arr.value(1).is_infinite() && arr.value(1) > 0.0);
+        assert!(arr.value(2).is_infinite() && arr.value(2) < 0.0);
+
+        // D/F suffixes
+        let array: ArrayRef =
+            Arc::new(StringArray::from(vec![Some("1.5D"), Some("2.5F")]));
+        let result = cast_string_to_float(&array, &DataType::Float32, EvalMode::Legacy)
+            .unwrap();
+        let arr = result
+            .as_any()
+            .downcast_ref::<PrimitiveArray<Float32Type>>()
+            .unwrap();
+        assert!((arr.value(0) - 1.5_f32).abs() < f32::EPSILON);
+        assert!((arr.value(1) - 2.5_f32).abs() < f32::EPSILON);
+
+        // Empty string and whitespace → null in Legacy
+        let array: ArrayRef =
+            Arc::new(StringArray::from(vec![Some(""), Some("  ")]));
+        let result = cast_string_to_float(&array, &DataType::Float32, EvalMode::Legacy)
+            .unwrap();
+        let arr = result
+            .as_any()
+            .downcast_ref::<PrimitiveArray<Float32Type>>()
+            .unwrap();
+        assert!(arr.is_null(0));
+        assert!(arr.is_null(1));
+
+        // Invalid string → error in Ansi
+        let array: ArrayRef = Arc::new(StringArray::from(vec![Some("abc")]));
+        let result =
+            cast_string_to_float(&array, &DataType::Float32, EvalMode::Ansi);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("[CAST_INVALID_INPUT]"));
+    }
+
+    #[test]
+    fn test_cast_string_to_float64() {
+        let array: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("1.5"),
+            Some("NaN"),
+            Some("Infinity"),
+            Some("-Infinity"),
+            Some("1.5D"),
+            Some("2.5F"),
+            None,
+        ]));
+        let result = cast_string_to_float(&array, &DataType::Float64, EvalMode::Legacy)
+            .unwrap();
+        let arr = result
+            .as_any()
+            .downcast_ref::<PrimitiveArray<Float64Type>>()
+            .unwrap();
+        assert!((arr.value(0) - 1.5_f64).abs() < f64::EPSILON);
+        assert!(arr.value(1).is_nan());
+        assert!(arr.value(2).is_infinite() && arr.value(2) > 0.0);
+        assert!(arr.value(3).is_infinite() && arr.value(3) < 0.0);
+        assert!((arr.value(4) - 1.5_f64).abs() < f64::EPSILON);
+        assert!((arr.value(5) - 2.5_f64).abs() < f64::EPSILON);
+        assert!(arr.is_null(6));
+
+        // Invalid → null in Try, error in Ansi
+        let array: ArrayRef = Arc::new(StringArray::from(vec![Some("xyz")]));
+        let result = cast_string_to_float(&array, &DataType::Float64, EvalMode::Try)
+            .unwrap();
+        let arr = result
+            .as_any()
+            .downcast_ref::<PrimitiveArray<Float64Type>>()
+            .unwrap();
+        assert!(arr.is_null(0));
+
+        let array: ArrayRef = Arc::new(StringArray::from(vec![Some("xyz")]));
+        let result =
+            cast_string_to_float(&array, &DataType::Float64, EvalMode::Ansi);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cast_string_to_decimal128() {
+        // Integer string
+        let array: ArrayRef = Arc::new(StringArray::from(vec![Some("42")]));
+        let result = cast_string_to_decimal(
+            &array,
+            &DataType::Decimal128(10, 2),
+            &10,
+            &2,
+            EvalMode::Legacy,
+        )
+        .unwrap();
+        let arr = result.as_any().downcast_ref::<Decimal128Array>().unwrap();
+        assert_eq!(arr.value(0), 4200); // 42 * 10^2
+
+        // Decimal string
+        let array: ArrayRef = Arc::new(StringArray::from(vec![Some("3.14")]));
+        let result = cast_string_to_decimal(
+            &array,
+            &DataType::Decimal128(10, 2),
+            &10,
+            &2,
+            EvalMode::Legacy,
+        )
+        .unwrap();
+        let arr = result.as_any().downcast_ref::<Decimal128Array>().unwrap();
+        assert_eq!(arr.value(0), 314);
+
+        // Scientific notation
+        let array: ArrayRef = Arc::new(StringArray::from(vec![Some("1.5E2")]));
+        let result = cast_string_to_decimal(
+            &array,
+            &DataType::Decimal128(10, 2),
+            &10,
+            &2,
+            EvalMode::Legacy,
+        )
+        .unwrap();
+        let arr = result.as_any().downcast_ref::<Decimal128Array>().unwrap();
+        assert_eq!(arr.value(0), 15000); // 150.00 -> 15000
+
+        // Empty string → null in Legacy
+        let array: ArrayRef = Arc::new(StringArray::from(vec![Some("")]));
+        let result = cast_string_to_decimal(
+            &array,
+            &DataType::Decimal128(10, 2),
+            &10,
+            &2,
+            EvalMode::Legacy,
+        )
+        .unwrap();
+        let arr = result.as_any().downcast_ref::<Decimal128Array>().unwrap();
+        assert!(arr.is_null(0));
+
+        // Empty string → error in Ansi
+        let array: ArrayRef = Arc::new(StringArray::from(vec![Some("")]));
+        let result = cast_string_to_decimal(
+            &array,
+            &DataType::Decimal128(10, 2),
+            &10,
+            &2,
+            EvalMode::Ansi,
+        );
+        assert!(result.is_err());
+
+        // Value exceeding precision → error
+        let array: ArrayRef = Arc::new(StringArray::from(vec![Some("99999999999")]));
+        let result = cast_string_to_decimal(
+            &array,
+            &DataType::Decimal128(5, 0),
+            &5,
+            &0,
+            EvalMode::Ansi,
+        );
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("NUMERIC_VALUE_OUT_OF_RANGE"));
+    }
+
+    #[test]
+    fn test_cast_string_to_decimal256() {
+        let array: ArrayRef = Arc::new(StringArray::from(vec![Some("12345.67")]));
+        let result = cast_string_to_decimal(
+            &array,
+            &DataType::Decimal256(38, 2),
+            &38,
+            &2,
+            EvalMode::Legacy,
+        )
+        .unwrap();
+        let arr = result
+            .as_any()
+            .downcast_ref::<PrimitiveArray<Decimal256Type>>()
+            .unwrap();
+        assert_eq!(arr.value(0), i256::from_i128(1234567));
+
+        // High-precision value
+        let array: ArrayRef =
+            Arc::new(StringArray::from(vec![Some("99999999999999999999")]));
+        let result = cast_string_to_decimal(
+            &array,
+            &DataType::Decimal256(38, 0),
+            &38,
+            &0,
+            EvalMode::Legacy,
+        )
+        .unwrap();
+        let arr = result
+            .as_any()
+            .downcast_ref::<PrimitiveArray<Decimal256Type>>()
+            .unwrap();
+        assert_eq!(
+            arr.value(0),
+            i256::from_i128(99999999999999999999_i128)
+        );
+
+        // Null input
+        let array: ArrayRef = Arc::new(StringArray::from(vec![None::<&str>]));
+        let result = cast_string_to_decimal(
+            &array,
+            &DataType::Decimal256(38, 2),
+            &38,
+            &2,
+            EvalMode::Legacy,
+        )
+        .unwrap();
+        let arr = result
+            .as_any()
+            .downcast_ref::<PrimitiveArray<Decimal256Type>>()
+            .unwrap();
+        assert!(arr.is_null(0));
     }
 }

@@ -883,4 +883,208 @@ mod tests {
         assert!(casted.is_null(5)); // NaN
         assert!(casted.is_null(6)); // null
     }
+
+    #[test]
+    fn test_cast_float32_to_int_legacy() {
+        // Float32 -> Int8: truncation, NaN -> 0
+        let array: ArrayRef = Arc::new(Float32Array::from(vec![
+            Some(1.9_f32),
+            Some(-1.9_f32),
+            Some(f32::NAN),
+            Some(0.0_f32),
+            None,
+        ]));
+        let result = spark_cast_nonintegral_numeric_to_integral(
+            &array,
+            EvalMode::Legacy,
+            &DataType::Float32,
+            &DataType::Int8,
+        )
+        .unwrap();
+        let arr = result.as_any().downcast_ref::<Int8Array>().unwrap();
+        assert_eq!(arr.value(0), 1); // truncated
+        assert_eq!(arr.value(1), -1); // truncated
+        assert_eq!(arr.value(2), 0); // NaN -> 0 in legacy
+        assert_eq!(arr.value(3), 0);
+        assert!(arr.is_null(4));
+
+        // Float32 -> Int16
+        let result = spark_cast_nonintegral_numeric_to_integral(
+            &array,
+            EvalMode::Legacy,
+            &DataType::Float32,
+            &DataType::Int16,
+        )
+        .unwrap();
+        let arr = result.as_any().downcast_ref::<Int16Array>().unwrap();
+        assert_eq!(arr.value(0), 1);
+        assert_eq!(arr.value(1), -1);
+
+        // Float32 -> Int32
+        let result = spark_cast_nonintegral_numeric_to_integral(
+            &array,
+            EvalMode::Legacy,
+            &DataType::Float32,
+            &DataType::Int32,
+        )
+        .unwrap();
+        let arr = result.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(arr.value(0), 1);
+        assert_eq!(arr.value(1), -1);
+    }
+
+    #[test]
+    fn test_cast_float64_to_int_ansi_overflow() {
+        // NaN -> error
+        let array: ArrayRef = Arc::new(Float64Array::from(vec![Some(f64::NAN)]));
+        let result = spark_cast_nonintegral_numeric_to_integral(
+            &array,
+            EvalMode::Ansi,
+            &DataType::Float64,
+            &DataType::Int8,
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("[CAST_OVERFLOW]"));
+
+        // Infinity -> error
+        let array: ArrayRef = Arc::new(Float64Array::from(vec![Some(f64::INFINITY)]));
+        let result = spark_cast_nonintegral_numeric_to_integral(
+            &array,
+            EvalMode::Ansi,
+            &DataType::Float64,
+            &DataType::Int16,
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("[CAST_OVERFLOW]"));
+
+        // Value exceeding Int32 range
+        let array: ArrayRef = Arc::new(Float64Array::from(vec![Some(3e10)]));
+        let result = spark_cast_nonintegral_numeric_to_integral(
+            &array,
+            EvalMode::Ansi,
+            &DataType::Float64,
+            &DataType::Int32,
+        );
+        assert!(result.is_err());
+
+        // Value exceeding Int64 range
+        let array: ArrayRef = Arc::new(Float64Array::from(vec![Some(1e19)]));
+        let result = spark_cast_nonintegral_numeric_to_integral(
+            &array,
+            EvalMode::Ansi,
+            &DataType::Float64,
+            &DataType::Int64,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cast_decimal_to_int_legacy() {
+        // Decimal128(10, 2) -> Int8: truncation
+        let array: ArrayRef = Arc::new(
+            Decimal128Array::from(vec![Some(199), Some(-199), Some(0), None])
+                .with_precision_and_scale(10, 2)
+                .unwrap(),
+        );
+        let result = spark_cast_nonintegral_numeric_to_integral(
+            &array,
+            EvalMode::Legacy,
+            &DataType::Decimal128(10, 2),
+            &DataType::Int8,
+        )
+        .unwrap();
+        let arr = result.as_any().downcast_ref::<Int8Array>().unwrap();
+        assert_eq!(arr.value(0), 1); // 199/100=1
+        assert_eq!(arr.value(1), -1);
+        assert_eq!(arr.value(2), 0);
+        assert!(arr.is_null(3));
+
+        // Decimal128(10, 2) -> Int32
+        let result = spark_cast_nonintegral_numeric_to_integral(
+            &array,
+            EvalMode::Legacy,
+            &DataType::Decimal128(10, 2),
+            &DataType::Int32,
+        )
+        .unwrap();
+        let arr = result.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(arr.value(0), 1);
+        assert_eq!(arr.value(1), -1);
+
+        // Decimal128(10, 2) -> Int64
+        let result = spark_cast_nonintegral_numeric_to_integral(
+            &array,
+            EvalMode::Legacy,
+            &DataType::Decimal128(10, 2),
+            &DataType::Int64,
+        )
+        .unwrap();
+        let arr = result.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(arr.value(0), 1);
+        assert_eq!(arr.value(1), -1);
+    }
+
+    #[test]
+    fn test_cast_int_to_decimal_overflow_ansi() {
+        // Int64 value that exceeds Decimal128(5,0) precision
+        let array: ArrayRef = Arc::new(Int64Array::from(vec![Some(999999)]));
+        let result = cast_int_to_decimal128(
+            &array,
+            EvalMode::Ansi,
+            &DataType::Int64,
+            &DataType::Decimal128(5, 0),
+            5,
+            0,
+        );
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("NUMERIC_VALUE_OUT_OF_RANGE")
+        );
+    }
+
+    #[test]
+    fn test_cast_int_to_decimal_overflow_legacy() {
+        // Same value in Legacy → null
+        let array: ArrayRef = Arc::new(Int64Array::from(vec![Some(999999), Some(42)]));
+        let result = cast_int_to_decimal128(
+            &array,
+            EvalMode::Legacy,
+            &DataType::Int64,
+            &DataType::Decimal128(5, 0),
+            5,
+            0,
+        )
+        .unwrap();
+        let arr = result.as_any().downcast_ref::<Decimal128Array>().unwrap();
+        assert!(arr.is_null(0)); // overflow → null
+        assert_eq!(arr.value(1), 42); // fits
+    }
+
+    #[test]
+    fn test_cast_float32_to_string() {
+        let array: ArrayRef = Arc::new(Float32Array::from(vec![
+            Some(1e7_f32),
+            Some(0.001_f32),
+            Some(0.0_f32),
+            Some(f32::INFINITY),
+            Some(f32::NEG_INFINITY),
+            Some(f32::NAN),
+            None,
+        ]));
+        let result = spark_cast_float32_to_utf8::<i32>(&array, EvalMode::Legacy).unwrap();
+        let str_arr = result
+            .as_any()
+            .downcast_ref::<arrow::array::StringArray>()
+            .unwrap();
+        assert_eq!(str_arr.value(0), "1.0E7");
+        assert_eq!(str_arr.value(1), "0.001");
+        assert_eq!(str_arr.value(2), "0.0");
+        assert_eq!(str_arr.value(3), "Infinity");
+        assert_eq!(str_arr.value(4), "-Infinity");
+        assert_eq!(str_arr.value(5), "NaN");
+        assert!(str_arr.is_null(6));
+    }
 }

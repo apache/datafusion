@@ -602,8 +602,15 @@ fn is_datafusion_spark_compatible(from_type: &DataType, to_type: &DataType) -> b
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Int32Array, StringArray, StructArray};
-    use arrow::datatypes::Fields;
+    use arrow::array::{
+        BooleanArray, Decimal128Array, Float32Array, Float64Array, Int8Array,
+        Int16Array, Int32Array, Int64Array, PrimitiveArray, StringArray, StructArray,
+    };
+    use arrow::datatypes::{Fields, TimestampMicrosecondType, TimeUnit};
+
+    fn test_input_bool_array() -> ArrayRef {
+        Arc::new(BooleanArray::from(vec![Some(true), Some(false), None]))
+    }
 
     #[test]
     fn test_spark_cast_scalar_string_to_int() {
@@ -682,5 +689,156 @@ mod tests {
             &DataType::Boolean,
             &DataType::Decimal128(10, 2)
         ));
+    }
+
+    #[test]
+    fn test_cast_bool_to_int_types() {
+        let opts = SparkCastOptions::new(EvalMode::Legacy, "UTC");
+        let input = test_input_bool_array();
+
+        // Bool -> Int8
+        let result = cast_array(Arc::clone(&input), &DataType::Int8, &opts).unwrap();
+        let arr = result.as_any().downcast_ref::<Int8Array>().unwrap();
+        assert_eq!(arr.value(0), 1);
+        assert_eq!(arr.value(1), 0);
+        assert!(arr.is_null(2));
+
+        // Bool -> Int16
+        let result =
+            cast_array(Arc::clone(&input), &DataType::Int16, &opts).unwrap();
+        let arr = result.as_any().downcast_ref::<Int16Array>().unwrap();
+        assert_eq!(arr.value(0), 1);
+        assert_eq!(arr.value(1), 0);
+        assert!(arr.is_null(2));
+
+        // Bool -> Int32
+        let result =
+            cast_array(Arc::clone(&input), &DataType::Int32, &opts).unwrap();
+        let arr = result.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(arr.value(0), 1);
+        assert_eq!(arr.value(1), 0);
+        assert!(arr.is_null(2));
+
+        // Bool -> Int64
+        let result =
+            cast_array(Arc::clone(&input), &DataType::Int64, &opts).unwrap();
+        let arr = result.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(arr.value(0), 1);
+        assert_eq!(arr.value(1), 0);
+        assert!(arr.is_null(2));
+    }
+
+    #[test]
+    fn test_cast_bool_to_float_types() {
+        let opts = SparkCastOptions::new(EvalMode::Legacy, "UTC");
+        let input = test_input_bool_array();
+
+        // Bool -> Float32
+        let result =
+            cast_array(Arc::clone(&input), &DataType::Float32, &opts).unwrap();
+        let arr = result.as_any().downcast_ref::<Float32Array>().unwrap();
+        assert_eq!(arr.value(0), 1.0);
+        assert_eq!(arr.value(1), 0.0);
+        assert!(arr.is_null(2));
+
+        // Bool -> Float64
+        let result =
+            cast_array(Arc::clone(&input), &DataType::Float64, &opts).unwrap();
+        let arr = result.as_any().downcast_ref::<Float64Array>().unwrap();
+        assert_eq!(arr.value(0), 1.0);
+        assert_eq!(arr.value(1), 0.0);
+        assert!(arr.is_null(2));
+    }
+
+    #[test]
+    fn test_cast_bool_to_string() {
+        let opts = SparkCastOptions::new(EvalMode::Legacy, "UTC");
+        let input = test_input_bool_array();
+
+        let result = cast_array(input, &DataType::Utf8, &opts).unwrap();
+        let arr = result.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(arr.value(0), "true");
+        assert_eq!(arr.value(1), "false");
+        assert!(arr.is_null(2));
+    }
+
+    #[test]
+    fn test_cast_string_to_int_ansi_error() {
+        let array: ArrayRef =
+            Arc::new(StringArray::from(vec![Some("not_a_number")]));
+        let opts = SparkCastOptions::new(EvalMode::Ansi, "UTC");
+        let result = cast_array(array, &DataType::Int32, &opts);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("[CAST_INVALID_INPUT]"));
+    }
+
+    #[test]
+    fn test_cast_string_to_int_try_mode() {
+        let array: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("42"),
+            Some("invalid"),
+            Some(""),
+            None,
+        ]));
+        let opts = SparkCastOptions::new(EvalMode::Try, "UTC");
+        let result = cast_array(array, &DataType::Int32, &opts).unwrap();
+        let arr = result.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(arr.value(0), 42);
+        assert!(arr.is_null(1));
+        assert!(arr.is_null(2));
+        assert!(arr.is_null(3));
+    }
+
+    #[test]
+    fn test_cast_float_to_decimal_through_router() {
+        let array: ArrayRef = Arc::new(Float64Array::from(vec![
+            Some(42.0),
+            Some(-1.5),
+            Some(f64::NAN),
+            None,
+        ]));
+        let opts = SparkCastOptions::new(EvalMode::Legacy, "UTC");
+        let result =
+            cast_array(array, &DataType::Decimal128(10, 2), &opts).unwrap();
+        let arr = result.as_any().downcast_ref::<Decimal128Array>().unwrap();
+        assert_eq!(arr.value(0), 4200);
+        assert_eq!(arr.value(1), -150);
+        assert!(arr.is_null(2)); // NaN -> null
+        assert!(arr.is_null(3));
+    }
+
+    #[test]
+    fn test_cast_string_to_timestamp_through_router() {
+        let array: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("2020-01-01"),
+            Some("2020-01-01T12:34:56"),
+            None,
+        ]));
+        let opts = SparkCastOptions::new(EvalMode::Legacy, "UTC");
+        let to_type =
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()));
+        let result = cast_array(array, &to_type, &opts).unwrap();
+        let ts = result
+            .as_any()
+            .downcast_ref::<PrimitiveArray<TimestampMicrosecondType>>()
+            .unwrap();
+        assert_eq!(ts.len(), 3);
+        assert_eq!(ts.value(0), 1577836800000000_i64); // 2020-01-01 00:00:00
+        assert_eq!(ts.value(1), 1577882096000000_i64); // 2020-01-01T12:34:56
+        assert!(ts.is_null(2));
+    }
+
+    #[test]
+    fn test_cast_invalid_timezone() {
+        let dates: ArrayRef =
+            Arc::new(arrow::array::Date32Array::from(vec![Some(0)]));
+        let opts = SparkCastOptions::new(EvalMode::Legacy, "Not a valid timezone");
+        let result = cast_array(
+            dates,
+            &DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+            &opts,
+        );
+        assert!(result.is_err());
     }
 }
