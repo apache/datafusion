@@ -51,12 +51,16 @@ pub struct GroupValuesRows {
     /// Uses the raw API of hashbrown to avoid actually storing the
     /// keys (group values) in the table
     ///
-    /// keys: u64 hashes of the GroupValue
-    /// values: (hash, group_index)
-    map: HashTable<(u64, usize)>,
+    /// Hashes are stored separately in `group_hashes` to keep hash table
+    /// entries small (one `usize` per slot) for better cache utilization.
+    map: HashTable<usize>,
 
     /// The size of `map` in bytes
     map_size: usize,
+
+    /// Stored hashes for each group, indexed by group_index.
+    /// Used for rehashing and equality checks during probing.
+    group_hashes: Vec<u64>,
 
     /// The actual group by values, stored in arrow [`Row`] format.
     /// `group_values[i]` holds the group value for group_index `i`.
@@ -103,6 +107,7 @@ impl GroupValuesRows {
             row_converter,
             map,
             map_size: 0,
+            group_hashes: Vec::new(),
             group_values: None,
             hashes_buffer: Default::default(),
             rows_buffer,
@@ -134,31 +139,35 @@ impl GroupValues for GroupValuesRows {
         create_hashes(cols, &self.random_state, batch_hashes)?;
 
         for (row, &target_hash) in batch_hashes.iter().enumerate() {
-            let entry = self.map.find_mut(target_hash, |(exist_hash, group_idx)| {
+            let group_hashes = &self.group_hashes;
+            let entry = self.map.find_mut(target_hash, |&group_idx| {
                 // Somewhat surprisingly, this closure can be called even if the
                 // hash doesn't match, so check the hash first with an integer
                 // comparison first avoid the more expensive comparison with
                 // group value. https://github.com/apache/datafusion/pull/11718
-                target_hash == *exist_hash
+                target_hash == group_hashes[group_idx]
                     // verify that the group that we are inserting with hash is
                     // actually the same key value as the group in
                     // existing_idx  (aka group_values @ row)
-                    && group_rows.row(row) == group_values.row(*group_idx)
+                    && group_rows.row(row) == group_values.row(group_idx)
             });
 
             let group_idx = match entry {
                 // Existing group_index for this group value
-                Some((_hash, group_idx)) => *group_idx,
+                Some(group_idx) => *group_idx,
                 //  1.2 Need to create new entry for the group
                 None => {
                     // Add new entry to aggr_state and save newly created index
                     let group_idx = group_values.num_rows();
                     group_values.push(group_rows.row(row));
 
+                    self.group_hashes.push(target_hash);
+
                     // for hasher function, use precomputed hash value
+                    let group_hashes = &self.group_hashes;
                     self.map.insert_accounted(
-                        (target_hash, group_idx),
-                        |(hash, _group_index)| *hash,
+                        group_idx,
+                        |&idx| group_hashes[idx],
                         &mut self.map_size,
                     );
                     group_idx
@@ -177,6 +186,7 @@ impl GroupValues for GroupValuesRows {
         self.row_converter.size()
             + group_values_size
             + self.map_size
+            + self.group_hashes.allocated_size()
             + self.rows_buffer.size()
             + self.hashes_buffer.allocated_size()
     }
@@ -203,6 +213,7 @@ impl GroupValues for GroupValuesRows {
                 let output = self.row_converter.convert_rows(&group_values)?;
                 group_values.clear();
                 self.map.clear();
+                self.group_hashes.clear();
                 output
             }
             EmitTo::First(n) => {
@@ -216,7 +227,9 @@ impl GroupValues for GroupValuesRows {
                 }
                 std::mem::swap(&mut new_group_values, &mut group_values);
 
-                self.map.retain(|(_exists_hash, group_idx)| {
+                self.group_hashes.drain(0..n);
+
+                self.map.retain(|group_idx| {
                     // Decrement group index by n
                     match group_idx.checked_sub(n) {
                         // Group index was >= n, shift value down
@@ -250,7 +263,9 @@ impl GroupValues for GroupValuesRows {
         });
         self.map.clear();
         self.map.shrink_to(num_rows, |_| 0); // hasher does not matter since the map is cleared
-        self.map_size = self.map.capacity() * size_of::<(u64, usize)>();
+        self.map_size = self.map.capacity() * size_of::<usize>();
+        self.group_hashes.clear();
+        self.group_hashes.shrink_to(num_rows);
         self.hashes_buffer.clear();
         self.hashes_buffer.shrink_to(num_rows);
     }

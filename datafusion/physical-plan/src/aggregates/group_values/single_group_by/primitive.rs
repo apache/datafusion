@@ -80,17 +80,18 @@ hash_float!(f16, f32, f64);
 pub struct GroupValuesPrimitive<T: ArrowPrimitiveType> {
     /// The data type of the output array
     data_type: DataType,
-    /// Stores the `(group_index, hash)` based on the hash of its value
+    /// Stores the `group_index` based on the hash of its value
     ///
-    /// We also store `hash` is for reducing cost of rehashing. Such cost
-    /// is obvious in high cardinality group by situation.
-    /// More details can see:
-    /// <https://github.com/apache/datafusion/issues/15961>
-    map: HashTable<(usize, u64)>,
+    /// Hashes are stored separately in `group_hashes` to keep hash table
+    /// entries small (one `usize` per slot) for better cache utilization.
+    map: HashTable<usize>,
     /// The group index of the null value if any
     null_group: Option<usize>,
     /// The values for each group index
     values: Vec<T::Native>,
+    /// Stored hashes for each group, indexed by group_index.
+    /// Used for rehashing and equality checks during probing.
+    group_hashes: Vec<u64>,
     /// The random state used to generate hashes
     random_state: RandomState,
 }
@@ -102,6 +103,7 @@ impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
             data_type,
             map: HashTable::with_capacity(128),
             values: Vec::with_capacity(128),
+            group_hashes: Vec::with_capacity(128),
             null_group: None,
             random_state: crate::aggregates::AGGREGATION_HASH_SEED,
         }
@@ -126,20 +128,21 @@ where
                 Some(key) => {
                     let state = &self.random_state;
                     let hash = key.hash(state);
+                    let group_hashes = &self.group_hashes;
+                    let values = &self.values;
                     let insert = self.map.entry(
                         hash,
-                        |&(g, h)| unsafe {
-                            hash == h && self.values.get_unchecked(g).is_eq(key)
-                        },
-                        |&(_, h)| h,
+                        |&g| unsafe { values.get_unchecked(g).is_eq(key) },
+                        |&g| unsafe { *group_hashes.get_unchecked(g) },
                     );
 
                     match insert {
-                        hashbrown::hash_table::Entry::Occupied(o) => o.get().0,
+                        hashbrown::hash_table::Entry::Occupied(o) => *o.get(),
                         hashbrown::hash_table::Entry::Vacant(v) => {
                             let g = self.values.len();
-                            v.insert((g, hash));
+                            v.insert(g);
                             self.values.push(key);
+                            self.group_hashes.push(hash);
                             g
                         }
                     }
@@ -151,7 +154,9 @@ where
     }
 
     fn size(&self) -> usize {
-        self.map.capacity() * size_of::<(usize, u64)>() + self.values.allocated_size()
+        self.map.capacity() * size_of::<usize>()
+            + self.values.allocated_size()
+            + self.group_hashes.allocated_size()
     }
 
     fn is_empty(&self) -> bool {
@@ -181,16 +186,16 @@ where
         let array: PrimitiveArray<T> = match emit_to {
             EmitTo::All => {
                 self.map.clear();
+                self.group_hashes.clear();
                 build_primitive(std::mem::take(&mut self.values), self.null_group.take())
             }
             EmitTo::First(n) => {
                 self.map.retain(|entry| {
                     // Decrement group index by n
-                    let group_idx = entry.0;
-                    match group_idx.checked_sub(n) {
+                    match entry.checked_sub(n) {
                         // Group index was >= n, shift value down
                         Some(sub) => {
-                            entry.0 = sub;
+                            *entry = sub;
                             true
                         }
                         // Group index was < n, so remove from table
@@ -207,6 +212,8 @@ where
                 };
                 let mut split = self.values.split_off(n);
                 std::mem::swap(&mut self.values, &mut split);
+                let mut split_hashes = self.group_hashes.split_off(n);
+                std::mem::swap(&mut self.group_hashes, &mut split_hashes);
                 build_primitive(split, null_group)
             }
         };
@@ -217,6 +224,8 @@ where
     fn clear_shrink(&mut self, num_rows: usize) {
         self.values.clear();
         self.values.shrink_to(num_rows);
+        self.group_hashes.clear();
+        self.group_hashes.shrink_to(num_rows);
         self.map.clear();
         self.map.shrink_to(num_rows, |_| 0); // hasher does not matter since the map is cleared
     }
