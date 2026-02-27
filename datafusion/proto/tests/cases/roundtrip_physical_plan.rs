@@ -67,8 +67,8 @@ use datafusion::physical_plan::expressions::{
 };
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::{
-    HashJoinExec, HashTableLookupExpr, NestedLoopJoinExec, PartitionMode,
-    SortMergeJoinExec, StreamJoinPartitionMode, SymmetricHashJoinExec,
+    DynamicFilterRoutingMode, HashJoinExec, HashTableLookupExpr, NestedLoopJoinExec,
+    PartitionMode, SortMergeJoinExec, StreamJoinPartitionMode, SymmetricHashJoinExec,
 };
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion::physical_plan::metrics::MetricType;
@@ -3333,16 +3333,19 @@ fn test_hash_join_with_dynamic_filter_roundtrip() -> Result<()> {
         Arc::new(Column::new("col", 0)),
     )];
 
-    let hash_join = Arc::new(HashJoinExec::try_new(
-        left_child,
-        right_child,
-        on,
-        None,
-        &JoinType::Inner,
-        None,
-        PartitionMode::CollectLeft,
-        NullEquality::NullEqualsNothing,
-    )?) as Arc<dyn ExecutionPlan>;
+    let hash_join = Arc::new(
+        HashJoinExec::try_new(
+            left_child,
+            right_child,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+        )?
+        .with_dynamic_filter_routing_mode(DynamicFilterRoutingMode::PartitionIndex),
+    ) as Arc<dyn ExecutionPlan>;
 
     // Run the optimizer rule for filter pushdown.
     let optimizer = FilterPushdown::new_post_optimization();
@@ -3385,6 +3388,11 @@ fn test_hash_join_with_dynamic_filter_roundtrip() -> Result<()> {
         deserialized_hash_join_df.inner_id(),
         deserialized_predicate_df.inner_id(),
         "HashJoinExec's dynamic filter should share inner state with the probe side's predicate"
+    );
+    assert_eq!(
+        deserialized_join.dynamic_filter_routing_mode(),
+        DynamicFilterRoutingMode::PartitionIndex,
+        "HashJoinExec should preserve dynamic filter routing mode after roundtrip",
     );
 
     Ok(())

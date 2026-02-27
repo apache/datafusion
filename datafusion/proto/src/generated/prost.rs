@@ -1720,6 +1720,9 @@ pub struct HashJoinExecNode {
     /// Optional dynamic filter expression for pushing down to the probe side.
     #[prost(message, optional, tag = "10")]
     pub dynamic_filter: ::core::option::Option<PhysicalExprNode>,
+    /// Selected routing strategy for partitioned dynamic filter expressions.
+    #[prost(enumeration = "HashJoinDynamicFilterRoutingMode", tag = "11")]
+    pub dynamic_filter_routing_mode: i32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SymmetricHashJoinExecNode {
@@ -2336,6 +2339,32 @@ impl PartitionMode {
             "COLLECT_LEFT" => Some(Self::CollectLeft),
             "PARTITIONED" => Some(Self::Partitioned),
             "AUTO" => Some(Self::Auto),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum HashJoinDynamicFilterRoutingMode {
+    CaseHash = 0,
+    PartitionIndex = 1,
+}
+impl HashJoinDynamicFilterRoutingMode {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::CaseHash => "CASE_HASH",
+            Self::PartitionIndex => "PARTITION_INDEX",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "CASE_HASH" => Some(Self::CaseHash),
+            "PARTITION_INDEX" => Some(Self::PartitionIndex),
             _ => None,
         }
     }

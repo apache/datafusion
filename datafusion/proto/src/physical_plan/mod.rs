@@ -67,8 +67,8 @@ use datafusion_physical_plan::expressions::PhysicalSortExpr;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion_physical_plan::joins::{
-    CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
-    StreamJoinPartitionMode, SymmetricHashJoinExec,
+    CrossJoinExec, DynamicFilterRoutingMode, HashJoinExec, NestedLoopJoinExec,
+    PartitionMode, SortMergeJoinExec, StreamJoinPartitionMode, SymmetricHashJoinExec,
 };
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::memory::LazyMemoryExec;
@@ -1353,6 +1353,24 @@ impl protobuf::PhysicalPlanNode {
             protobuf::PartitionMode::Partitioned => PartitionMode::Partitioned,
             protobuf::PartitionMode::Auto => PartitionMode::Auto,
         };
+        let dynamic_filter_routing_mode =
+            protobuf::HashJoinDynamicFilterRoutingMode::try_from(
+                hashjoin.dynamic_filter_routing_mode,
+            )
+            .map_err(|_| {
+                proto_error(format!(
+                    "Received a HashJoinNode message with unknown HashJoinDynamicFilterRoutingMode {}",
+                    hashjoin.dynamic_filter_routing_mode
+                ))
+            })?;
+        let dynamic_filter_routing_mode = match dynamic_filter_routing_mode {
+            protobuf::HashJoinDynamicFilterRoutingMode::CaseHash => {
+                DynamicFilterRoutingMode::CaseHash
+            }
+            protobuf::HashJoinDynamicFilterRoutingMode::PartitionIndex => {
+                DynamicFilterRoutingMode::PartitionIndex
+            }
+        };
         let projection = if !hashjoin.projection.is_empty() {
             Some(
                 hashjoin
@@ -1388,6 +1406,8 @@ impl protobuf::PhysicalPlanNode {
                 hash_join = hash_join.with_dynamic_filter(df)?;
             }
         }
+        hash_join =
+            hash_join.with_dynamic_filter_routing_mode(dynamic_filter_routing_mode);
 
         Ok(Arc::new(hash_join))
     }
@@ -2432,6 +2452,14 @@ impl protobuf::PhysicalPlanNode {
                 proto_converter.physical_expr_to_proto(&df_expr, codec)
             })
             .transpose()?;
+        let dynamic_filter_routing_mode = match exec.dynamic_filter_routing_mode() {
+            DynamicFilterRoutingMode::CaseHash => {
+                protobuf::HashJoinDynamicFilterRoutingMode::CaseHash
+            }
+            DynamicFilterRoutingMode::PartitionIndex => {
+                protobuf::HashJoinDynamicFilterRoutingMode::PartitionIndex
+            }
+        };
 
         Ok(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::HashJoin(Box::new(
@@ -2447,6 +2475,7 @@ impl protobuf::PhysicalPlanNode {
                         v.iter().map(|x| *x as u32).collect::<Vec<u32>>()
                     }),
                     dynamic_filter,
+                    dynamic_filter_routing_mode: dynamic_filter_routing_mode.into(),
                 },
             ))),
         })
@@ -3820,12 +3849,6 @@ impl DeduplicatingSerializer {
     }
 }
 
-fn dedup_debug_enabled() -> bool {
-    std::env::var("DD_DF_PROTO_DEBUG")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
-}
-
 impl PhysicalProtoConverterExtension for DeduplicatingSerializer {
     fn proto_to_execution_plan(
         &self,
@@ -3878,12 +3901,6 @@ impl PhysicalProtoConverterExtension for DeduplicatingSerializer {
             proto.dynamic_filter_inner_id = Some(self.hash(dynamic_filter.inner_id()))
         }
         proto.expr_id = Some(self.hash(Arc::as_ptr(expr) as *const () as u64));
-        if dedup_debug_enabled() && proto.dynamic_filter_inner_id.is_some() {
-            eprintln!(
-                "[df-proto][ser] dynamic expr_id={:?} dynamic_filter_inner_id={:?} expr={expr}",
-                proto.expr_id, proto.dynamic_filter_inner_id
-            );
-        }
 
         Ok(proto)
     }
@@ -3936,24 +3953,12 @@ impl PhysicalProtoConverterExtension for DeduplicatingDeserializer {
         if let Some(expr_id) = proto.expr_id
             && let Some(cached) = self.cache.borrow().get(&expr_id)
         {
-            if dedup_debug_enabled() && proto.dynamic_filter_inner_id.is_some() {
-                eprintln!(
-                    "[df-proto][de] cache_hit expr_id={expr_id} dynamic_filter_inner_id={:?}",
-                    proto.dynamic_filter_inner_id
-                );
-            }
             return Ok(Arc::clone(cached));
         }
 
         // Cache miss, we must deserialize the expr.
         let mut expr =
             parse_physical_expr_with_converter(proto, ctx, input_schema, codec, self)?;
-        if dedup_debug_enabled() && proto.dynamic_filter_inner_id.is_some() {
-            eprintln!(
-                "[df-proto][de] cache_miss expr_id={:?} dynamic_filter_inner_id={:?}",
-                proto.expr_id, proto.dynamic_filter_inner_id
-            );
-        }
 
         // Check if we need to share inner state with a cached dynamic filter
         if let Some(dynamic_filter_id) = proto.dynamic_filter_inner_id {
@@ -3975,21 +3980,11 @@ impl PhysicalProtoConverterExtension for DeduplicatingDeserializer {
                     .map_err(|_| internal_datafusion_err!("dynamic_filter_id present in proto, but the expression was not a DynamicFilterPhysicalExpr"))?;
                 expr = Arc::new(dynamic_filter_expr.new_from_source(cached_df)?)
                     as Arc<dyn PhysicalExpr>;
-                if dedup_debug_enabled() {
-                    eprintln!(
-                        "[df-proto][de] relinked dynamic_filter_inner_id={dynamic_filter_id} from cached source"
-                    );
-                }
             } else {
                 // Cache it
                 self.dynamic_filter_cache
                     .borrow_mut()
                     .insert(dynamic_filter_id, Arc::clone(&expr));
-                if dedup_debug_enabled() {
-                    eprintln!(
-                        "[df-proto][de] seeded dynamic_filter_inner_id={dynamic_filter_id} into cache"
-                    );
-                }
             }
         };
 
@@ -4035,15 +4030,9 @@ impl PhysicalProtoConverterExtension for DeduplicatingProtoConverter {
         codec: &dyn PhysicalExtensionCodec,
         proto: &protobuf::PhysicalPlanNode,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if dedup_debug_enabled() {
-            eprintln!("[df-proto][plan-de] start");
-        }
         let deserializer = DeduplicatingDeserializer::default();
         let plan =
             proto.try_into_physical_plan_with_converter(ctx, codec, &deserializer)?;
-        if dedup_debug_enabled() {
-            eprintln!("[df-proto][plan-de] done plan={}", plan.name());
-        }
         Ok(plan)
     }
 
@@ -4055,18 +4044,12 @@ impl PhysicalProtoConverterExtension for DeduplicatingProtoConverter {
     where
         Self: Sized,
     {
-        if dedup_debug_enabled() {
-            eprintln!("[df-proto][plan-ser] start plan={}", plan.name());
-        }
         let serializer = DeduplicatingSerializer::new();
         let proto = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             Arc::clone(plan),
             codec,
             &serializer,
         )?;
-        if dedup_debug_enabled() {
-            eprintln!("[df-proto][plan-ser] done plan={}", plan.name());
-        }
         Ok(proto)
     }
 
