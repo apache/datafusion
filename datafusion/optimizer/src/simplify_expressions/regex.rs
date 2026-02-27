@@ -42,7 +42,7 @@ const ANY_CHAR_REGEX_PATTERN: &str = ".*";
 /// - partial anchored regex patterns (e.g. `^foo`) to `LIKE 'foo%'`
 /// - combinations (alternatives) of the above, will be concatenated with `OR` or `AND`
 /// - `EQ .*` to NotNull
-/// - `NE .*` means IS EMPTY
+/// - `NE .*` to false (.* matches any string, and NULL !~ results in NULL so NOT match can never be true)
 ///
 /// Dev note: unit tests of this function are in `expr_simplifier.rs`, case `test_simplify_regex`.
 pub fn simplify_regex_expr(
@@ -71,13 +71,8 @@ pub fn simplify_regex_expr(
     // Handle the special case for ".*" pattern
     if pattern == ANY_CHAR_REGEX_PATTERN {
         let new_expr = if mode.not {
-            // not empty
-            let empty_lit = Box::new(string_scalar.to_expr(""));
-            Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: Operator::Eq,
-                right: empty_lit,
-            })
+            // Always false.
+            lit(false)
         } else {
             // not null
             left.is_not_null()
@@ -100,13 +95,7 @@ pub fn simplify_regex_expr(
             (false, true) => left.is_not_null(),
             // not (contains(left, inner))
             (true, false) => Expr::Not(Box::new(contains(*left, lit(inner)))),
-            (true, true) => {
-                return Ok(Transformed::no(Expr::BinaryExpr(BinaryExpr {
-                    left,
-                    op,
-                    right,
-                })));
-            }
+            (true, true) => lit(false), // "!~ '.*'" is always false.
         };
         return Ok(Transformed::yes(new_expr));
     }
