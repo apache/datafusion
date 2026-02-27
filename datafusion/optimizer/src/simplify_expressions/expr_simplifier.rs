@@ -1672,7 +1672,7 @@ impl TreeNodeRewriter for Simplifier<'_> {
                         let pattern_str = string_scalar.as_str();
                         match pattern_str {
                             None => return Ok(Transformed::yes(lit_bool_null())),
-                            Some(pattern_str) if pattern_str == "%" => {
+                            Some("%") => {
                                 // exp LIKE '%' is
                                 //   - when exp is not NULL, it's true
                                 //   - when exp is NULL, it's NULL
