@@ -19,7 +19,7 @@ use crate::function::conversion::cast_utils::{
     cast_overflow, format_decimal_str, numeric_value_out_of_range, EvalMode,
 };
 use arrow::array::{
-    Array, ArrayRef, BooleanBuilder, Decimal128Array, Decimal128Builder, Float32Array,
+    Array, ArrayRef, AsArray, BooleanBuilder, Decimal128Array, Decimal128Builder, Float32Array,
     Float64Array, GenericStringArray, Int16Array, Int32Array, Int64Array, Int8Array,
     OffsetSizeTrait, PrimitiveArray,
 };
@@ -726,12 +726,12 @@ where
         }
 
         let input_value = input.value(i).as_();
-        if let Some(v) = (input_value * mul).round().to_i128() {
-            if is_validate_decimal_precision(v, precision) {
-                cast_array.append_value(v);
-                continue;
-            }
-        };
+        if let Some(v) = (input_value * mul).round().to_i128()
+            && is_validate_decimal_precision(v, precision)
+        {
+            cast_array.append_value(v);
+            continue;
+        }
 
         if eval_mode == EvalMode::Ansi {
             return Err(numeric_value_out_of_range(

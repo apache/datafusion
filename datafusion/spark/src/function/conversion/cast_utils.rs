@@ -21,7 +21,6 @@ use arrow::array::{
 use arrow::compute::unary;
 use arrow::datatypes::{DataType, Int64Type, TimeUnit, TimestampMicrosecondType};
 use arrow::error::ArrowError;
-use arrow::util::display::FormatOptions;
 use datafusion_common::cast::as_generic_string_array;
 use datafusion_common::{exec_err, DataFusionError, Result};
 use std::sync::Arc;
@@ -56,14 +55,6 @@ impl SparkCastOptions {
 pub(crate) const MICROS_PER_SECOND: i64 = 1_000_000;
 
 pub(crate) static TIMESTAMP_FORMAT: Option<&str> = Some("%Y-%m-%d %H:%M:%S%.f");
-
-pub(crate) static CAST_OPTIONS: arrow::compute::CastOptions<'static> =
-    arrow::compute::CastOptions {
-        safe: true,
-        format_options: FormatOptions::new()
-            .with_timestamp_tz_format(TIMESTAMP_FORMAT)
-            .with_timestamp_format(TIMESTAMP_FORMAT),
-    };
 
 /// Parse a Spark SQL type name string into an Arrow DataType.
 pub fn parse_spark_datatype(s: &str) -> Result<DataType> {
@@ -291,7 +282,7 @@ fn timestamp_ntz_to_timestamp(
     let ts_array = array.as_primitive::<TimestampMicrosecondType>();
     let result = ts_array
         .clone()
-        .with_timezone_opt(to_tz.map(|s| s.into()));
+        .with_timezone_opt(to_tz.map(|s| Arc::from(s) as Arc<str>));
     Ok(Arc::new(result) as ArrayRef)
 }
 

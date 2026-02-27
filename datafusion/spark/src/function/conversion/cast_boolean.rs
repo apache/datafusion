@@ -49,7 +49,7 @@ pub fn cast_boolean_to_decimal(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::BooleanArray;
+    use arrow::array::{Array, BooleanArray};
 
     #[test]
     fn test_is_df_cast_from_bool_spark_compatible() {

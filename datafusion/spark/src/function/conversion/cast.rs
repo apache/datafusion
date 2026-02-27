@@ -35,20 +35,21 @@ use crate::function::conversion::cast_string::{
 };
 use crate::function::conversion::cast_utils::{
     array_with_timezone, parse_spark_datatype, spark_cast_postprocess, EvalMode,
-    SparkCastOptions, CAST_OPTIONS, TIMESTAMP_FORMAT,
+    SparkCastOptions, TIMESTAMP_FORMAT,
 };
 use arrow::array::{
-    Array, ArrayRef, DictionaryArray, PrimitiveArray,
+    Array, ArrayRef, AsArray, DictionaryArray, PrimitiveArray,
 };
 use arrow::compute::{can_cast_types, cast_with_options, take, CastOptions};
 use arrow::datatypes::{
-    ArrowDictionaryKeyType, ArrowNativeType, DataType, Int32Type,
+    ArrowDictionaryKeyType, ArrowNativeType, DataType, Field, Int32Type,
 };
 use arrow::util::display::FormatOptions;
 use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignature, Volatility,
 };
 use std::any::Any;
 use std::sync::Arc;
@@ -97,35 +98,37 @@ impl ScalarUDFImpl for SparkCast {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!("return_type_from_args should be called instead")
+        internal_err!("return_field_from_args should be called instead")
     }
 
-    fn return_type_from_args(
+    fn return_field_from_args(
         &self,
-        args: datafusion_expr::ReturnTypeArgs,
-    ) -> Result<DataType> {
-        // The second argument should be a string literal specifying the target type
+        args: ReturnFieldArgs,
+    ) -> Result<Arc<Field>> {
         if args.scalar_arguments.len() != 2 {
             return internal_err!("spark_cast requires exactly 2 arguments");
         }
-        match &args.scalar_arguments[1] {
-            Some(ScalarValue::Utf8(Some(type_str)))
-            | Some(ScalarValue::LargeUtf8(Some(type_str))) => {
-                parse_spark_datatype(type_str)
+        let type_str = match args.scalar_arguments[1] {
+            Some(ScalarValue::Utf8(Some(s))) => s,
+            Some(ScalarValue::LargeUtf8(Some(s))) => s,
+            _ => {
+                return internal_err!(
+                    "spark_cast second argument must be a string literal type name"
+                );
             }
-            _ => internal_err!(
-                "spark_cast second argument must be a string literal type name"
-            ),
-        }
+        };
+        let dt = parse_spark_datatype(type_str)?;
+        Ok(Arc::new(Field::new(self.name(), dt, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let target_type = self.resolve_target_type(&args)?;
+        let target_type = resolve_target_type(&args)?;
         let timezone = args
             .config_options
             .execution
             .time_zone
-            .clone();
+            .clone()
+            .unwrap_or_else(|| "UTC".to_string());
 
         let eval_mode = if args.config_options.execution.enable_ansi_mode {
             EvalMode::Ansi
@@ -139,21 +142,6 @@ impl ScalarUDFImpl for SparkCast {
 
     fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
         Ok(input[0].sort_properties)
-    }
-}
-
-impl SparkCast {
-    fn resolve_target_type(&self, args: &ScalarFunctionArgs) -> Result<DataType> {
-        // The second argument must be a string literal
-        match &args.args[1] {
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some(type_str)))
-            | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(type_str))) => {
-                parse_spark_datatype(type_str)
-            }
-            _ => internal_err!(
-                "spark_cast second argument must be a string literal type name"
-            ),
-        }
     }
 }
 
@@ -199,34 +187,37 @@ impl ScalarUDFImpl for SparkTryCast {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!("return_type_from_args should be called instead")
+        internal_err!("return_field_from_args should be called instead")
     }
 
-    fn return_type_from_args(
+    fn return_field_from_args(
         &self,
-        args: datafusion_expr::ReturnTypeArgs,
-    ) -> Result<DataType> {
+        args: ReturnFieldArgs,
+    ) -> Result<Arc<Field>> {
         if args.scalar_arguments.len() != 2 {
             return internal_err!("spark_try_cast requires exactly 2 arguments");
         }
-        match &args.scalar_arguments[1] {
-            Some(ScalarValue::Utf8(Some(type_str)))
-            | Some(ScalarValue::LargeUtf8(Some(type_str))) => {
-                parse_spark_datatype(type_str)
+        let type_str = match args.scalar_arguments[1] {
+            Some(ScalarValue::Utf8(Some(s))) => s,
+            Some(ScalarValue::LargeUtf8(Some(s))) => s,
+            _ => {
+                return internal_err!(
+                    "spark_try_cast second argument must be a string literal type name"
+                );
             }
-            _ => internal_err!(
-                "spark_try_cast second argument must be a string literal type name"
-            ),
-        }
+        };
+        let dt = parse_spark_datatype(type_str)?;
+        Ok(Arc::new(Field::new(self.name(), dt, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let target_type = self.resolve_target_type(&args)?;
+        let target_type = resolve_target_type(&args)?;
         let timezone = args
             .config_options
             .execution
             .time_zone
-            .clone();
+            .clone()
+            .unwrap_or_else(|| "UTC".to_string());
 
         let cast_options = SparkCastOptions::new(EvalMode::Try, &timezone);
         spark_cast_inner(args.args.into_iter().next().unwrap(), &target_type, &cast_options)
@@ -237,17 +228,15 @@ impl ScalarUDFImpl for SparkTryCast {
     }
 }
 
-impl SparkTryCast {
-    fn resolve_target_type(&self, args: &ScalarFunctionArgs) -> Result<DataType> {
-        match &args.args[1] {
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some(type_str)))
-            | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(type_str))) => {
-                parse_spark_datatype(type_str)
-            }
-            _ => internal_err!(
-                "spark_try_cast second argument must be a string literal type name"
-            ),
+fn resolve_target_type(args: &ScalarFunctionArgs) -> Result<DataType> {
+    match &args.args[1] {
+        ColumnarValue::Scalar(ScalarValue::Utf8(Some(type_str)))
+        | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(type_str))) => {
+            parse_spark_datatype(type_str)
         }
+        _ => internal_err!(
+            "spark_cast/spark_try_cast second argument must be a string literal type name"
+        ),
     }
 }
 
@@ -385,11 +374,11 @@ pub(crate) fn cast_array(
     let eval_mode = cast_options.eval_mode;
 
     let cast_result = match (from_type, to_type) {
-        // String → Boolean
+        // String -> Boolean
         (Utf8, Boolean) => spark_cast_utf8_to_boolean::<i32>(&array, eval_mode),
         (LargeUtf8, Boolean) => spark_cast_utf8_to_boolean::<i64>(&array, eval_mode),
 
-        // String → Timestamp
+        // String -> Timestamp
         (Utf8, Timestamp(_, _)) => {
             let tz_str = if cast_options.timezone.is_empty() {
                 "UTC"
@@ -402,16 +391,22 @@ pub(crate) fn cast_array(
             cast_string_to_timestamp(&array, to_type, eval_mode, &tz)
         }
 
-        // String → Date
+        // String -> Date
         (Utf8, Date32) => cast_string_to_date(&array, to_type, eval_mode),
 
-        // Date → Int (reinterpret days as i32)
-        (Date32, Int32) => Ok(cast_with_options(&array, to_type, &CAST_OPTIONS)?),
+        // Date -> Int (reinterpret days as i32)
+        (Date32, Int32) => {
+            let cast_opts = CastOptions {
+                safe: true,
+                format_options: FormatOptions::default(),
+            };
+            Ok(cast_with_options(&array, to_type, &cast_opts)?)
+        }
 
-        // String → Float
+        // String -> Float
         (Utf8, Float32 | Float64) => cast_string_to_float(&array, to_type, eval_mode),
 
-        // String → Decimal
+        // String -> Decimal
         (Utf8 | LargeUtf8, Decimal128(precision, scale)) => {
             cast_string_to_decimal(&array, to_type, precision, scale, eval_mode)
         }
@@ -419,7 +414,7 @@ pub(crate) fn cast_array(
             cast_string_to_decimal(&array, to_type, precision, scale, eval_mode)
         }
 
-        // Int → Int narrowing (not Try mode)
+        // Int -> Int narrowing (not Try mode)
         (Int64, Int32)
         | (Int64, Int16)
         | (Int64, Int8)
@@ -431,12 +426,12 @@ pub(crate) fn cast_array(
             spark_cast_int_to_int(&array, eval_mode, from_type, to_type)
         }
 
-        // Int → Decimal
+        // Int -> Decimal
         (Int8 | Int16 | Int32 | Int64, Decimal128(precision, scale)) => {
             cast_int_to_decimal128(&array, eval_mode, from_type, to_type, *precision, *scale)
         }
 
-        // String → Int
+        // String -> Int
         (Utf8, Int8 | Int16 | Int32 | Int64) => {
             cast_string_to_int::<i32>(to_type, &array, eval_mode)
         }
@@ -444,13 +439,13 @@ pub(crate) fn cast_array(
             cast_string_to_int::<i64>(to_type, &array, eval_mode)
         }
 
-        // Float → String
+        // Float -> String
         (Float64, Utf8) => spark_cast_float64_to_utf8::<i32>(&array, eval_mode),
         (Float64, LargeUtf8) => spark_cast_float64_to_utf8::<i64>(&array, eval_mode),
         (Float32, Utf8) => spark_cast_float32_to_utf8::<i32>(&array, eval_mode),
         (Float32, LargeUtf8) => spark_cast_float32_to_utf8::<i64>(&array, eval_mode),
 
-        // Float → Decimal
+        // Float -> Decimal
         (Float32, Decimal128(precision, scale)) => {
             cast_float32_to_decimal128(&array, *precision, *scale, eval_mode)
         }
@@ -458,7 +453,7 @@ pub(crate) fn cast_array(
             cast_float64_to_decimal128(&array, *precision, *scale, eval_mode)
         }
 
-        // Float/Decimal → Int (not Try mode)
+        // Float/Decimal -> Int (not Try mode)
         (Float32, Int8)
         | (Float32, Int16)
         | (Float32, Int32)
@@ -476,54 +471,64 @@ pub(crate) fn cast_array(
             spark_cast_nonintegral_numeric_to_integral(&array, eval_mode, from_type, to_type)
         }
 
-        // Decimal → Boolean
+        // Decimal -> Boolean
         (Decimal128(_p, _s), Boolean) => spark_cast_decimal_to_boolean(&array),
 
-        // Utf8View → Utf8
-        (Utf8View, Utf8) => Ok(cast_with_options(&array, to_type, &CAST_OPTIONS)?),
-
-        // Struct → String
-        (Struct(_), Utf8) => {
-            Ok(casts_struct_to_string(array.as_struct(), cast_options)?)
+        // Utf8View -> Utf8
+        (Utf8View, Utf8) => {
+            let cast_opts = CastOptions {
+                safe: true,
+                format_options: FormatOptions::default(),
+            };
+            Ok(cast_with_options(&array, to_type, &cast_opts)?)
         }
 
-        // Struct → Struct
-        (Struct(_), Struct(_)) => Ok(cast_struct_to_struct(
+        // Struct -> String
+        (Struct(_), Utf8) => {
+            casts_struct_to_string(array.as_struct(), cast_options)
+        }
+
+        // Struct -> Struct
+        (Struct(_), Struct(_)) => cast_struct_to_struct(
             array.as_struct(),
             from_type,
             to_type,
             cast_options,
-        )?),
+        ),
 
-        // List → String
+        // List -> String
         (List(_), Utf8) => {
-            Ok(cast_array_to_string(array.as_list(), cast_options)?)
+            cast_array_to_string(array.as_list(), cast_options)
         }
 
-        // List → List (delegate to Arrow if supported)
+        // List -> List (delegate to Arrow if supported)
         (List(_), List(_)) if can_cast_types(from_type, to_type) => {
-            Ok(cast_with_options(&array, to_type, &CAST_OPTIONS)?)
+            let cast_opts = CastOptions {
+                safe: true,
+                format_options: FormatOptions::default(),
+            };
+            Ok(cast_with_options(&array, to_type, &cast_opts)?)
         }
 
-        // Binary → String
+        // Binary -> String
         (Binary, Utf8) => Ok(cast_binary_to_string::<i32>(&array, cast_options)?),
 
-        // Date → Timestamp
+        // Date -> Timestamp
         (Date32, Timestamp(_, tz)) => {
-            Ok(cast_date_to_timestamp(&array, cast_options, tz)?)
+            cast_date_to_timestamp(&array, cast_options, tz)
         }
 
-        // Int → Binary (Legacy mode only)
+        // Int -> Binary (Legacy mode only)
         (Int8 | Int16 | Int32 | Int64, Binary) if eval_mode == EvalMode::Legacy => {
             cast_int_to_binary(&array, from_type)
         }
 
-        // Boolean → Decimal
+        // Boolean -> Decimal
         (Boolean, Decimal128(precision, scale)) => {
             cast_boolean_to_decimal(&array, *precision, *scale)
         }
 
-        // Int → Timestamp
+        // Int -> Timestamp
         (Int8 | Int16 | Int32 | Int64, Timestamp(_, tz)) => {
             cast_int_to_timestamp(&array, tz)
         }
@@ -610,8 +615,8 @@ fn is_datafusion_spark_compatible(from_type: &DataType, to_type: &DataType) -> b
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Int32Array, StringArray, TimestampMicrosecondType};
-    use arrow::datatypes::{Field, Fields, TimeUnit};
+    use arrow::array::{Int32Array, StringArray, StructArray};
+    use arrow::datatypes::Fields;
 
     #[test]
     fn test_spark_cast_scalar_string_to_int() {
@@ -624,7 +629,7 @@ mod tests {
         .unwrap();
         match result {
             ColumnarValue::Scalar(ScalarValue::Int32(Some(42))) => {}
-            other => panic!("Expected ScalarValue::Int32(42), got {:?}", other),
+            other => panic!("Expected ScalarValue::Int32(42), got {other:?}"),
         }
     }
 
@@ -666,9 +671,9 @@ mod tests {
             &opts,
         )
         .unwrap();
-        if let ColumnarValue::Array(cast_array) = result {
-            assert_eq!(2, cast_array.len());
-            let a = cast_array.as_struct().column(0).as_string::<i32>();
+        if let ColumnarValue::Array(arr) = result {
+            assert_eq!(2, arr.len());
+            let a = arr.as_struct().column(0).as_string::<i32>();
             assert_eq!("1", a.value(0));
         } else {
             unreachable!()

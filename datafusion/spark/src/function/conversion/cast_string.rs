@@ -22,7 +22,6 @@ use arrow::array::{
     Array, ArrayRef, ArrowPrimitiveType, BooleanArray, Decimal128Builder, GenericStringArray,
     OffsetSizeTrait, PrimitiveArray, PrimitiveBuilder, StringArray,
 };
-use arrow::compute::DecimalCast;
 use arrow::datatypes::{
     i256, is_validate_decimal_precision, DataType, Date32Type, Decimal256Type, Float32Type,
     Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, TimestampMicrosecondType,
@@ -340,7 +339,7 @@ fn cast_string_to_decimal128_impl(
                         return Err(cast_invalid_input(
                             string_array.value(i),
                             "STRING",
-                            &format!("DECIMAL({},{})", precision, scale),
+                            &format!("DECIMAL({precision},{scale})"),
                         ));
                     }
                     decimal_builder.append_null();
@@ -395,7 +394,7 @@ fn cast_string_to_decimal256_impl(
                         return Err(cast_invalid_input(
                             str_value,
                             "STRING",
-                            &format!("DECIMAL({},{})", precision, scale),
+                            &format!("DECIMAL({precision},{scale})"),
                         ));
                     }
                     decimal_builder.append_null();
@@ -514,7 +513,7 @@ fn invalid_decimal_cast(
     cast_invalid_input(
         value,
         "STRING",
-        &format!("DECIMAL({},{})", precision, scale),
+        &format!("DECIMAL({precision},{scale})"),
     )
 }
 
@@ -738,9 +737,7 @@ fn date_parser(date_str: &str, eval_mode: EvalMode) -> Result<Option<i32>> {
                 .signed_duration_since(DateTime::UNIX_EPOCH.naive_utc().date())
                 .num_days();
             Ok(Some(
-                duration_since_epoch
-                    .try_into()
-                    .unwrap_or_else(|_| i32::MAX),
+                duration_since_epoch.try_into().unwrap_or(i32::MAX),
             ))
         }
         None => Ok(None),
@@ -906,6 +903,8 @@ fn parse_str_to_microsecond_timestamp<T: TimeZone>(
     get_timestamp_values(value, "microsecond", tz)
 }
 
+type TimestampPattern<T> = (&'static LazyLock<Regex>, fn(&str, &T) -> Result<Option<i64>>);
+
 fn timestamp_parser<T: TimeZone>(
     value: &str,
     eval_mode: EvalMode,
@@ -916,10 +915,7 @@ fn timestamp_parser<T: TimeZone>(
         return Ok(None);
     }
 
-    let patterns: &[(
-        &LazyLock<Regex>,
-        fn(&str, &T) -> Result<Option<i64>>,
-    )] = &[
+    let patterns: &[TimestampPattern<T>] = &[
         (&RE_YEAR, parse_str_to_year_timestamp),
         (&RE_MONTH, parse_str_to_month_timestamp),
         (&RE_DAY, parse_str_to_day_timestamp),
@@ -1311,16 +1307,16 @@ mod tests {
             spark_cast_utf8_to_boolean::<i32>(&array, EvalMode::Legacy).unwrap();
         let bool_arr = result.as_any().downcast_ref::<BooleanArray>().unwrap();
 
-        assert_eq!(bool_arr.value(0), true);
-        assert_eq!(bool_arr.value(1), false);
-        assert_eq!(bool_arr.value(2), true);
-        assert_eq!(bool_arr.value(3), false);
-        assert_eq!(bool_arr.value(4), true);
-        assert_eq!(bool_arr.value(5), false);
-        assert_eq!(bool_arr.value(6), true);
-        assert_eq!(bool_arr.value(7), false);
-        assert_eq!(bool_arr.value(8), true);
-        assert_eq!(bool_arr.value(9), false);
+        assert!(bool_arr.value(0));
+        assert!(!bool_arr.value(1));
+        assert!(bool_arr.value(2));
+        assert!(!bool_arr.value(3));
+        assert!(bool_arr.value(4));
+        assert!(!bool_arr.value(5));
+        assert!(bool_arr.value(6));
+        assert!(!bool_arr.value(7));
+        assert!(bool_arr.value(8));
+        assert!(!bool_arr.value(9));
         assert!(bool_arr.is_null(10)); // "invalid" -> null in Legacy
         assert!(bool_arr.is_null(11)); // null -> null
     }

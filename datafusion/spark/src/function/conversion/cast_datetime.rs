@@ -17,14 +17,13 @@
 
 use crate::function::conversion::cast_utils::{SparkCastOptions, MICROS_PER_SECOND};
 use arrow::array::{
-    Array, ArrayRef, TimestampMicrosecondBuilder,
+    Array, ArrayRef, AsArray, TimestampMicrosecondBuilder,
 };
 use arrow::datatypes::{
     DataType, Date32Type, Int16Type, Int32Type, Int64Type, Int8Type,
 };
 use chrono::{NaiveDate, TimeZone};
 use datafusion_common::Result;
-use std::str::FromStr;
 use std::sync::Arc;
 
 macro_rules! cast_int_to_timestamp_impl {
@@ -116,8 +115,8 @@ pub(crate) fn cast_date_to_timestamp(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Date32Array, Int8Array, Int16Array, Int32Array, Int64Array};
-    use arrow::datatypes::{TimestampMicrosecondType, TimeUnit};
+    use arrow::array::{Date32Array, Int8Array, Int64Array};
+    use arrow::datatypes::TimestampMicrosecondType;
 
     #[test]
     fn test_cast_int_to_timestamp() {

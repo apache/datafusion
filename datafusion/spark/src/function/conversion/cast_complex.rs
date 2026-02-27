@@ -19,8 +19,8 @@ use crate::function::conversion::cast::cast_array;
 use crate::function::conversion::cast_utils::SparkCastOptions;
 use arrow::array::builder::StringBuilder;
 use arrow::array::{
-    Array, ArrayRef, BinaryBuilder, GenericByteArray, GenericStringArray, Int8Array, Int16Array,
-    Int32Array, Int64Array, ListArray, OffsetSizeTrait, StringArray, StructArray,
+    Array, ArrayRef, AsArray, BinaryBuilder, GenericByteArray, GenericStringArray, Int8Array,
+    Int16Array, Int32Array, Int64Array, ListArray, OffsetSizeTrait, StringArray, StructArray,
 };
 use arrow::datatypes::{DataType, GenericBinaryType};
 use arrow::error::ArrowError;
