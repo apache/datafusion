@@ -305,29 +305,6 @@ pub trait FileOpener: Unpin + Send + Sync {
     /// Asynchronously open the specified file and return a stream
     /// of [`RecordBatch`]
     fn open(&self, partitioned_file: PartitionedFile) -> Result<FileOpenFuture>;
-
-    /// Optional: Split a file into smaller morsels for morsel-driven execution.
-    ///
-    /// By default, returns the file as a single morsel.
-    fn morselize(
-        &self,
-        file: PartitionedFile,
-    ) -> BoxFuture<'static, Result<Vec<PartitionedFile>>> {
-        Box::pin(futures::future::ready(Ok(vec![file])))
-    }
-
-    /// Returns `true` if `file` is already a leaf morsel that can be opened
-    /// directly without going through [`Self::morselize`].
-    ///
-    /// Returning `true` allows the [`FileStream`] to skip the async
-    /// `Morselizing` state and go straight to `Open`, and to prefetch the next
-    /// morsel while scanning the current one.
-    ///
-    /// The default implementation returns `false` (conservative — always
-    /// morselize).
-    fn is_leaf_morsel(&self, _file: &PartitionedFile) -> bool {
-        false
-    }
 }
 
 /// Represents the state of the next `FileOpenFuture`. Since we need to poll

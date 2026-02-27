@@ -56,7 +56,6 @@ use crate::sort::reverse_row_selection;
 use datafusion_common::config::EncryptionFactoryOptions;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_execution::parquet_encryption::EncryptionFactory;
-use futures::future::{BoxFuture, ready};
 use futures::{Stream, StreamExt, TryStreamExt, ready};
 use log::debug;
 use parquet::arrow::arrow_reader::metrics::ArrowReaderMetrics;
@@ -123,14 +122,6 @@ pub(super) struct ParquetOpener {
     pub max_predicate_cache_size: Option<usize>,
     /// Whether to read row groups in reverse order
     pub reverse_row_groups: bool,
-}
-
-/// A morsel of work for Parquet execution, containing cached metadata and an access plan.
-pub struct ParquetMorsel {
-    /// Cached Parquet metadata
-    pub metadata: Arc<ParquetMetaData>,
-    /// Access plan for this morsel (usually selecting a single row group)
-    pub access_plan: ParquetAccessPlan,
 }
 
 /// Represents a prepared access plan with optional row selection
@@ -229,259 +220,6 @@ impl ParquetOpener {
 }
 
 impl FileOpener for ParquetOpener {
-    fn is_leaf_morsel(&self, file: &PartitionedFile) -> bool {
-        file.extensions
-            .as_ref()
-            .map(|e| e.is::<ParquetMorsel>())
-            .unwrap_or(false)
-    }
-
-    fn morselize(
-        &self,
-        partitioned_file: PartitionedFile,
-    ) -> BoxFuture<'static, Result<Vec<PartitionedFile>>> {
-        if partitioned_file
-            .extensions
-            .as_ref()
-            .map(|e| e.is::<ParquetMorsel>())
-            .unwrap_or(false)
-        {
-            return Box::pin(ready(Ok(vec![partitioned_file])));
-        }
-
-        let file_metrics = ParquetFileMetrics::new(
-            self.partition_index,
-            partitioned_file.object_meta.location.as_ref(),
-            &self.metrics,
-        );
-        let file_name = partitioned_file.object_meta.location.to_string();
-        let file_range = partitioned_file.range.clone();
-        let extensions = partitioned_file.extensions.clone();
-
-        let metadata_size_hint = partitioned_file
-            .metadata_size_hint
-            .or(self.metadata_size_hint);
-
-        let mut async_file_reader: Box<dyn AsyncFileReader> =
-            match self.parquet_file_reader_factory.create_reader(
-                self.partition_index,
-                partitioned_file.clone(),
-                metadata_size_hint,
-                &self.metrics,
-            ) {
-                Ok(reader) => reader,
-                Err(e) => return Box::pin(ready(Err(e))),
-            };
-
-        let options = ArrowReaderOptions::new().with_page_index(false);
-        #[cfg(feature = "parquet_encryption")]
-        let encryption_context = self.get_encryption_context();
-
-        let expr_adapter_factory = Arc::clone(&self.expr_adapter_factory);
-        let table_schema = self.table_schema.clone();
-        let predicate = self.predicate.clone();
-        let metrics = self.metrics.clone();
-        let enable_row_group_stats_pruning = self.enable_row_group_stats_pruning;
-        let enable_bloom_filter = self.enable_bloom_filter;
-        let enable_page_index = self.enable_page_index;
-        let limit = self.limit;
-        let preserve_order = self.preserve_order;
-        let parquet_file_reader_factory = Arc::clone(&self.parquet_file_reader_factory);
-        let partition_index = self.partition_index;
-
-        Box::pin(async move {
-            #[cfg(feature = "parquet_encryption")]
-            let options = if let Some(fd_val) = encryption_context
-                .get_file_decryption_properties(&partitioned_file.object_meta.location)
-                .await?
-            {
-                options.with_file_decryption_properties(Arc::clone(&fd_val))
-            } else {
-                options
-            };
-
-            let predicate_creation_errors = MetricBuilder::new(&metrics)
-                .global_counter("num_predicate_creation_errors");
-
-            // Step: try to prune the file using file-level statistics before loading
-            // parquet metadata. This avoids the I/O cost of reading metadata when
-            // file-level stats (available from the catalog) indicate no rows can match.
-            if let Some(pred) = predicate.as_ref() {
-                let logical_file_schema = Arc::clone(table_schema.file_schema());
-                if let Some(mut file_pruner) = FilePruner::try_new(
-                    Arc::clone(pred),
-                    &logical_file_schema,
-                    &partitioned_file,
-                    predicate_creation_errors.clone(),
-                ) && file_pruner.should_prune()?
-                {
-                    file_metrics.files_ranges_pruned_statistics.add_pruned(1);
-                    return Ok(vec![]);
-                }
-            }
-
-            let mut _metadata_timer = file_metrics.metadata_load_time.timer();
-            let mut reader_metadata =
-                ArrowReaderMetadata::load_async(&mut async_file_reader, options.clone())
-                    .await?;
-            let num_row_groups = reader_metadata.metadata().num_row_groups();
-
-            // Adapt the physical schema to the file schema for pruning
-            let physical_file_schema = Arc::clone(reader_metadata.schema());
-            let logical_file_schema = table_schema.file_schema();
-            let rewriter = expr_adapter_factory.create(
-                Arc::clone(logical_file_schema),
-                Arc::clone(&physical_file_schema),
-            )?;
-            let simplifier = PhysicalExprSimplifier::new(&physical_file_schema);
-
-            // Replace partition column references with their literal values before rewriting.
-            // This mirrors what `open()` does. Without this, expressions like `val != part`
-            // (where `part` is a partition column) would cause `rewriter.rewrite` to fail
-            // since the partition column is not in the logical file schema.
-            let literal_columns: HashMap<String, ScalarValue> = table_schema
-                .table_partition_cols()
-                .iter()
-                .zip(partitioned_file.partition_values.iter())
-                .map(|(field, value)| (field.name().clone(), value.clone()))
-                .collect();
-
-            let adapted_predicate = predicate
-                .as_ref()
-                .map(|p| {
-                    let p = if !literal_columns.is_empty() {
-                        replace_columns_with_literals(Arc::clone(p), &literal_columns)?
-                    } else {
-                        Arc::clone(p)
-                    };
-                    simplifier.simplify(rewriter.rewrite(p)?)
-                })
-                .transpose()?;
-
-            let (pruning_predicate, page_pruning_predicate) = build_pruning_predicates(
-                adapted_predicate.as_ref(),
-                &physical_file_schema,
-                &predicate_creation_errors,
-            );
-
-            let mut row_groups = Self::build_row_group_access_filter(
-                &file_name,
-                extensions,
-                num_row_groups,
-                reader_metadata.metadata().row_groups(),
-                file_range.as_ref(),
-                pruning_predicate
-                    .as_deref()
-                    .filter(|_| enable_row_group_stats_pruning)
-                    .map(|predicate| RowGroupStatisticsPruningContext {
-                        physical_file_schema: &physical_file_schema,
-                        parquet_schema: reader_metadata.parquet_schema(),
-                        predicate,
-                        file_metrics: &file_metrics,
-                    }),
-            )?;
-
-            // Prune by limit if limit is set and order is not sensitive
-            if let (Some(limit), false) = (limit, preserve_order) {
-                row_groups.prune_by_limit(
-                    limit,
-                    reader_metadata.metadata().row_groups(),
-                    &file_metrics,
-                );
-            }
-
-            // Bloom filter pruning: done once per file here in morselize(), so that
-            // open() does not repeat it for each morsel (which would cause inflated metrics
-            // and unnecessary work).
-            //
-            // Note: the bloom filter builder takes ownership of `async_file_reader`.
-            // Page index loading happens afterward using a fresh reader so that we only
-            // pay for the page index I/O on the row groups that survive bloom filter pruning.
-            if let Some(predicate) = pruning_predicate.as_deref() {
-                if enable_bloom_filter && !row_groups.is_empty() {
-                    // Clone reader_metadata so it remains available for page
-                    // index loading after this builder is dropped.
-                    let mut builder = ParquetRecordBatchStreamBuilder::new_with_metadata(
-                        async_file_reader,
-                        reader_metadata.clone(),
-                    );
-                    row_groups
-                        .prune_by_bloom_filters(
-                            &physical_file_schema,
-                            &mut builder,
-                            predicate,
-                            &file_metrics,
-                        )
-                        .await;
-                } else {
-                    file_metrics
-                        .row_groups_pruned_bloom_filter
-                        .add_matched(row_groups.remaining_row_group_count());
-                }
-            }
-
-            // Load page index after bloom filter pruning so we skip it entirely if no
-            // row groups remain. Bloom filter building consumed `async_file_reader`, so
-            // we create a fresh reader here — reader creation is cheap (no I/O yet).
-            if should_enable_page_index(enable_page_index, &page_pruning_predicate)
-                && !row_groups.is_empty()
-            {
-                let mut fresh_reader: Box<dyn AsyncFileReader> =
-                    parquet_file_reader_factory.create_reader(
-                        partition_index,
-                        partitioned_file.clone(),
-                        metadata_size_hint,
-                        &metrics,
-                    )?;
-                reader_metadata = load_page_index(
-                    reader_metadata,
-                    &mut fresh_reader,
-                    options.with_page_index_policy(PageIndexPolicy::Optional),
-                )
-                .await?;
-            }
-
-            // Extract metadata after potentially loading the page index, so the cached
-            // metadata in each morsel includes the page index if it was loaded.
-            let metadata = Arc::clone(reader_metadata.metadata());
-
-            let mut access_plan = row_groups.build();
-
-            // Page pruning: done once per file here in morselize(), so that open()
-            // does not repeat it for each morsel.
-            if enable_page_index
-                && !access_plan.is_empty()
-                && let Some(p) = page_pruning_predicate
-            {
-                access_plan = p.prune_plan_with_page_index(
-                    access_plan,
-                    &physical_file_schema,
-                    metadata.file_metadata().schema_descr(),
-                    metadata.as_ref(),
-                    &file_metrics,
-                );
-            }
-
-            let mut morsels = Vec::with_capacity(access_plan.len());
-            for i in 0..num_row_groups {
-                if !access_plan.should_scan(i) {
-                    continue;
-                }
-                let mut morsel_access_plan = ParquetAccessPlan::new_none(num_row_groups);
-                // Transfer the page-pruned access (Scan or Selection) for this row group
-                morsel_access_plan.set(i, access_plan.inner()[i].clone());
-                let morsel = ParquetMorsel {
-                    metadata: Arc::clone(&metadata),
-                    access_plan: morsel_access_plan,
-                };
-                let mut f = partitioned_file.clone();
-                f.extensions = Some(Arc::new(morsel));
-                morsels.push(f);
-            }
-            Ok(morsels)
-        })
-    }
-
     fn open(&self, partitioned_file: PartitionedFile) -> Result<FileOpenFuture> {
         // -----------------------------------
         // Step: prepare configurations, etc.
@@ -581,11 +319,6 @@ impl FileOpener for ParquetOpener {
 
         let reverse_row_groups = self.reverse_row_groups;
         let preserve_order = self.preserve_order;
-        let is_morsel = partitioned_file
-            .extensions
-            .as_ref()
-            .map(|e| e.is::<ParquetMorsel>())
-            .unwrap_or(false);
 
         Ok(Box::pin(async move {
             #[cfg(feature = "parquet_encryption")]
@@ -665,20 +398,9 @@ impl FileOpener for ParquetOpener {
             // the returned metadata may actually include page indexes as some
             // readers may return page indexes even when not requested -- for
             // example when they are cached).
-            // If this is a morsel, we might already have the metadata cached.
-            let mut reader_metadata = if let Some(morsel) = partitioned_file
-                .extensions
-                .as_ref()
-                .and_then(|e| e.downcast_ref::<ParquetMorsel>())
-            {
-                ArrowReaderMetadata::try_new(
-                    Arc::clone(&morsel.metadata),
-                    options.clone(),
-                )?
-            } else {
+            let mut reader_metadata =
                 ArrowReaderMetadata::load_async(&mut async_file_reader, options.clone())
-                    .await?
-            };
+                    .await?;
 
             // Note about schemas: we are actually dealing with **3 different schemas** here:
             // - The table schema as defined by the TableProvider.
@@ -748,11 +470,7 @@ impl FileOpener for ParquetOpener {
             // The page index is not stored inline in the parquet footer so the
             // code above may not have read the page index structures yet. If we
             // need them for reading and they aren't yet loaded, we need to load them now.
-            // For morsels, the page index was already loaded (if needed) in morselize().
-            // Skip it here to avoid redundant I/O.
-            if should_enable_page_index(enable_page_index, &page_pruning_predicate)
-                && !is_morsel
-            {
+            if should_enable_page_index(enable_page_index, &page_pruning_predicate) {
                 reader_metadata = load_page_index(
                     reader_metadata,
                     &mut async_file_reader,
@@ -823,7 +541,7 @@ impl FileOpener for ParquetOpener {
                 rg_metadata,
                 file_range.as_ref(),
                 predicate
-                    .filter(|_| enable_row_group_stats_pruning && !is_morsel)
+                    .filter(|_| enable_row_group_stats_pruning)
                     .map(|predicate| RowGroupStatisticsPruningContext {
                         physical_file_schema: &physical_file_schema,
                         parquet_schema: builder.parquet_schema(),
@@ -848,25 +566,21 @@ impl FileOpener for ParquetOpener {
                     row_groups.prune_by_limit(limit, rg_metadata, &file_metrics);
                 }
 
-                // For morsels, bloom filter was already applied once in morselize().
-                // Skip it here to avoid double-counting metrics and redundant I/O.
-                if !is_morsel {
-                    if enable_bloom_filter && !row_groups.is_empty() {
-                        row_groups
-                            .prune_by_bloom_filters(
-                                &physical_file_schema,
-                                &mut builder,
-                                predicate,
-                                &file_metrics,
-                            )
-                            .await;
-                    } else {
-                        // Update metrics: bloom filter unavailable, so all row groups are
-                        // matched (not pruned)
-                        file_metrics
-                            .row_groups_pruned_bloom_filter
-                            .add_matched(row_groups.remaining_row_group_count());
-                    }
+                if enable_bloom_filter && !row_groups.is_empty() {
+                    row_groups
+                        .prune_by_bloom_filters(
+                            &physical_file_schema,
+                            &mut builder,
+                            predicate,
+                            &file_metrics,
+                        )
+                        .await;
+                } else {
+                    // Update metrics: bloom filter unavailable, so all row groups are
+                    // matched (not pruned)
+                    file_metrics
+                        .row_groups_pruned_bloom_filter
+                        .add_matched(row_groups.remaining_row_group_count());
                 }
             } else {
                 // Update metrics: no predicate, so all row groups are matched (not pruned)
@@ -887,11 +601,8 @@ impl FileOpener for ParquetOpener {
             // be ruled using page metadata, rows from other columns
             // with that range can be skipped as well
             // --------------------------------------------------------
-            // For morsels, page pruning was already applied once in morselize().
-            // Skip it here to avoid double-counting metrics and redundant work.
             if enable_page_index
                 && !access_plan.is_empty()
-                && !is_morsel
                 && let Some(p) = page_pruning_predicate
             {
                 access_plan = p.prune_plan_with_page_index(
@@ -1255,14 +966,6 @@ fn create_initial_plan(
 
             // check row group count matches the plan
             return Ok(access_plan.clone());
-        } else if let Some(morsel) = extensions.downcast_ref::<ParquetMorsel>() {
-            let plan_len = morsel.access_plan.len();
-            if plan_len != row_group_count {
-                return exec_err!(
-                    "Invalid ParquetMorsel AccessPlan for {file_name}. Specified {plan_len} row groups, but file has {row_group_count}"
-                );
-            }
-            return Ok(morsel.access_plan.clone());
         } else {
             debug!("DataSourceExec Ignoring unknown extension specified for {file_name}");
         }
@@ -1355,7 +1058,7 @@ mod test {
     use super::{ConstantColumns, constant_columns_from_stats};
     use crate::{
         DefaultParquetFileReaderFactory, RowGroupAccess,
-        opener::{ParquetMorsel, ParquetOpener},
+        opener::ParquetOpener,
     };
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use bytes::{BufMut, BytesMut};
@@ -2357,114 +2060,4 @@ mod test {
         );
     }
 
-    #[tokio::test]
-    async fn test_open_and_morselize_are_equivalent_except_for_morsels() {
-        use parquet::file::properties::WriterProperties;
-
-        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
-
-        let batch1 = record_batch!(("a", Int32, vec![Some(1), Some(2)])).unwrap();
-        let batch2 = record_batch!(("a", Int32, vec![Some(10), Some(11)])).unwrap();
-        let batch3 = record_batch!(("a", Int32, vec![Some(20), Some(21)])).unwrap();
-
-        let props = WriterProperties::builder()
-            .set_max_row_group_size(2)
-            .build();
-
-        let data_len = write_parquet_batches(
-            Arc::clone(&store),
-            "test.parquet",
-            vec![batch1.clone(), batch2.clone(), batch3.clone()],
-            Some(props),
-        )
-        .await;
-
-        let schema = batch1.schema();
-        let file = PartitionedFile::new(
-            "test.parquet".to_string(),
-            u64::try_from(data_len).unwrap(),
-        );
-
-        for enable_row_group_stats_pruning in [false, true] {
-            let expr = col("a").gt(lit(5)).and(col("a").lt(lit(20)));
-            let predicate = logical2physical(&expr, &schema);
-
-            let baseline_opener = ParquetOpenerBuilder::new()
-                .with_store(Arc::clone(&store))
-                .with_schema(Arc::clone(&schema))
-                .with_projection_indices(&[0])
-                .with_predicate(Arc::clone(&predicate))
-                .with_row_group_stats_pruning(enable_row_group_stats_pruning)
-                .build();
-
-            // Baseline: regular open path
-            let stream = baseline_opener.open(file.clone()).unwrap().await.unwrap();
-            let baseline_values = collect_int32_values(stream).await;
-            let baseline_stats_metrics = get_pruning_metric(
-                &baseline_opener.metrics,
-                "row_groups_pruned_statistics",
-            );
-            let baseline_bloom_metrics = get_pruning_metric(
-                &baseline_opener.metrics,
-                "row_groups_pruned_bloom_filter",
-            );
-
-            let morsel_opener = ParquetOpenerBuilder::new()
-                .with_store(Arc::clone(&store))
-                .with_schema(Arc::clone(&schema))
-                .with_projection_indices(&[0])
-                .with_predicate(predicate)
-                .with_row_group_stats_pruning(enable_row_group_stats_pruning)
-                .build();
-
-            // Morsel path: split into morsels and open each morsel
-            let morsels = morsel_opener.morselize(file.clone()).await.unwrap();
-            assert!(
-                !morsels.is_empty(),
-                "Expected at least one morsel for the selected row groups"
-            );
-
-            let mut morsel_values = vec![];
-            for morsel_file in morsels {
-                let morsel = morsel_file
-                    .extensions
-                    .as_ref()
-                    .and_then(|ext| ext.downcast_ref::<ParquetMorsel>())
-                    .expect("morselized file should carry ParquetMorsel extension");
-
-                assert_eq!(
-                    morsel.access_plan.row_group_indexes().len(),
-                    1,
-                    "each morsel should scan exactly one row group"
-                );
-
-                let stream = morsel_opener.open(morsel_file).unwrap().await.unwrap();
-                morsel_values.extend(collect_int32_values(stream).await);
-            }
-
-            let morsel_stats_metrics = get_pruning_metric(
-                &morsel_opener.metrics,
-                "row_groups_pruned_statistics",
-            );
-            let morsel_bloom_metrics = get_pruning_metric(
-                &morsel_opener.metrics,
-                "row_groups_pruned_bloom_filter",
-            );
-
-            assert_eq!(
-                baseline_values, morsel_values,
-                "open and morselize paths should scan equivalent data; morselize only changes work granularity"
-            );
-
-            assert_eq!(
-                baseline_stats_metrics, morsel_stats_metrics,
-                "row_groups_pruned_statistics should be equivalent for open vs morselize path (enable_row_group_stats_pruning={enable_row_group_stats_pruning})"
-            );
-
-            assert_eq!(
-                baseline_bloom_metrics, morsel_bloom_metrics,
-                "row_groups_pruned_bloom_filter should be equivalent for open vs morselize path (enable_row_group_stats_pruning={enable_row_group_stats_pruning})"
-            );
-        }
-    }
 }
