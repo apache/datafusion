@@ -21,9 +21,10 @@ use std::sync::Arc;
 use arrow::array::{Array, ArrayRef, BooleanArray, Float32Array, Float64Array};
 use arrow::datatypes::DataType;
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
+    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
+    Volatility,
 };
 
 /// Spark-compatible `isnan` expression
@@ -119,10 +120,7 @@ fn nulls_to_false(is_nan: BooleanArray) -> ArrayRef {
     match is_nan.nulls() {
         Some(nulls) => {
             let is_not_null = nulls.inner();
-            Arc::new(BooleanArray::new(
-                is_nan.values() & is_not_null,
-                None,
-            ))
+            Arc::new(BooleanArray::new(is_nan.values() & is_not_null, None))
         }
         None => Arc::new(is_nan),
     }
@@ -158,7 +156,13 @@ mod tests {
 
     #[test]
     fn test_isnan_float32() {
-        let input = Float32Array::from(vec![Some(f32::NAN), Some(1.0f32), None]);
+        let input = Float32Array::from(vec![
+            Some(1.0f32),
+            Some(f32::NAN),
+            None,
+            Some(f32::INFINITY),
+            Some(0.0f32),
+        ]);
         let args = vec![ColumnarValue::Array(Arc::new(input))];
         let result = spark_isnan(&args).unwrap();
         let result = match result {
@@ -166,7 +170,10 @@ mod tests {
             _ => panic!("Expected array"),
         };
         let result = result.as_any().downcast_ref::<BooleanArray>().unwrap();
-        let expected = BooleanArray::from(vec![true, false, false]);
+
+        assert!(!result.is_null(2));
+
+        let expected = BooleanArray::from(vec![false, true, false, false, false]);
         assert_eq!(result, &expected);
     }
 
@@ -175,20 +182,20 @@ mod tests {
         let result =
             spark_isnan(&[ColumnarValue::Scalar(ScalarValue::Float64(Some(f64::NAN)))])
                 .unwrap();
-        assert_eq!(
-            result,
-            ColumnarValue::Scalar(ScalarValue::Boolean(Some(true)))
-        );
+        match result {
+            ColumnarValue::Scalar(ScalarValue::Boolean(Some(v))) => assert!(v),
+            _ => panic!("Expected scalar boolean"),
+        }
     }
 
     #[test]
     fn test_isnan_scalar_null() {
         let result =
             spark_isnan(&[ColumnarValue::Scalar(ScalarValue::Float64(None))]).unwrap();
-        assert_eq!(
-            result,
-            ColumnarValue::Scalar(ScalarValue::Boolean(Some(false)))
-        );
+        match result {
+            ColumnarValue::Scalar(ScalarValue::Boolean(Some(v))) => assert!(!v),
+            _ => panic!("Expected scalar boolean"),
+        }
     }
 
     #[test]
@@ -196,9 +203,41 @@ mod tests {
         let result =
             spark_isnan(&[ColumnarValue::Scalar(ScalarValue::Float64(Some(1.0)))])
                 .unwrap();
-        assert_eq!(
-            result,
-            ColumnarValue::Scalar(ScalarValue::Boolean(Some(false)))
-        );
+        match result {
+            ColumnarValue::Scalar(ScalarValue::Boolean(Some(v))) => assert!(!v),
+            _ => panic!("Expected scalar boolean"),
+        }
+    }
+
+    #[test]
+    fn test_isnan_float32_scalar_nan() {
+        let result =
+            spark_isnan(&[ColumnarValue::Scalar(ScalarValue::Float32(Some(f32::NAN)))])
+                .unwrap();
+        match result {
+            ColumnarValue::Scalar(ScalarValue::Boolean(Some(v))) => assert!(v),
+            _ => panic!("Expected scalar boolean"),
+        }
+    }
+
+    #[test]
+    fn test_isnan_float32_scalar_null() {
+        let result =
+            spark_isnan(&[ColumnarValue::Scalar(ScalarValue::Float32(None))]).unwrap();
+        match result {
+            ColumnarValue::Scalar(ScalarValue::Boolean(Some(v))) => assert!(!v),
+            _ => panic!("Expected scalar boolean"),
+        }
+    }
+
+    #[test]
+    fn test_isnan_float32_scalar_normal() {
+        let result =
+            spark_isnan(&[ColumnarValue::Scalar(ScalarValue::Float32(Some(1.0f32)))])
+                .unwrap();
+        match result {
+            ColumnarValue::Scalar(ScalarValue::Boolean(Some(v))) => assert!(!v),
+            _ => panic!("Expected scalar boolean"),
+        }
     }
 }

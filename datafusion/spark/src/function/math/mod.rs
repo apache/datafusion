@@ -17,10 +17,10 @@
 
 pub mod abs;
 pub mod bin;
-pub mod ceil;
 pub mod expm1;
 pub mod factorial;
 pub mod hex;
+pub mod is_nan;
 pub mod modulus;
 pub mod negative;
 pub mod rint;
@@ -45,6 +45,7 @@ make_udf_function!(trigonometry::SparkCsc, csc);
 make_udf_function!(trigonometry::SparkSec, sec);
 make_udf_function!(negative::SparkNegative, negative);
 make_udf_function!(bin::SparkBin, bin);
+make_udf_function!(is_nan::SparkIsNaN, isnan);
 
 pub mod expr_fn {
     use datafusion_functions::export_functions;
@@ -78,6 +79,7 @@ pub mod expr_fn {
         "Returns the string representation of the long value represented in binary.",
         arg1
     ));
+    export_functions!((isnan, "Returns true if expr is NaN, false otherwise.", arg1));
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
@@ -95,5 +97,6 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         sec(),
         negative(),
         bin(),
+        isnan(),
     ]
 }
