@@ -17,6 +17,7 @@
 
 pub mod abs;
 pub mod bin;
+pub mod ceil;
 pub mod expm1;
 pub mod factorial;
 pub mod hex;
