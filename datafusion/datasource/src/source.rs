@@ -125,8 +125,19 @@ pub trait DataSource: Send + Sync + Debug {
         &self,
         partition: usize,
         context: Arc<TaskContext>,
-        shared_morsel_queue: Option<Arc<WorkQueue>>,
     ) -> Result<SendableRecordBatchStream>;
+
+    /// Set a shared morsel queue for morsel-driven execution.
+    ///
+    /// The default implementation is a no-op. Override this in
+    /// implementations that support morsel-driven scheduling (e.g.
+    /// [`FileScanConfig`]).
+    fn with_shared_morsel_queue(
+        &self,
+        _queue: Option<Arc<WorkQueue>>,
+    ) -> Arc<dyn DataSource> {
+        unimplemented!("with_shared_morsel_queue is not supported for this DataSource")
+    }
     fn as_any(&self) -> &dyn Any;
     /// Format this source for display in explain plans
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result;
@@ -346,11 +357,14 @@ impl ExecutionPlan for DataSourceExec {
             None
         };
 
-        let stream = self.data_source.open(
-            partition,
-            Arc::clone(&context),
-            shared_morsel_queue,
-        )?;
+        let data_source = if shared_morsel_queue.is_some() {
+            self.data_source
+                .with_shared_morsel_queue(shared_morsel_queue)
+        } else {
+            Arc::clone(&self.data_source)
+        };
+
+        let stream = data_source.open(partition, Arc::clone(&context))?;
         let batch_size = context.session_config().batch_size();
         log::debug!(
             "Batch splitting enabled for partition {partition}: batch_size={batch_size}"

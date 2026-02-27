@@ -211,6 +211,8 @@ pub struct FileScanConfig {
     /// When true, use morsel-driven execution to avoid data skew.
     /// This means all partitions share a single pool of work.
     pub morsel_driven: bool,
+    /// Shared morsel queue, set via [`DataSource::with_shared_morsel_queue`].
+    shared_morsel_queue: Option<Arc<WorkQueue>>,
 }
 
 /// A builder for [`FileScanConfig`]'s.
@@ -581,6 +583,7 @@ impl FileScanConfigBuilder {
             statistics,
             partitioned_by_file_group,
             morsel_driven,
+            shared_morsel_queue: None,
         }
     }
 }
@@ -610,7 +613,6 @@ impl DataSource for FileScanConfig {
         &self,
         partition: usize,
         context: Arc<TaskContext>,
-        shared_morsel_queue: Option<Arc<WorkQueue>>,
     ) -> Result<SendableRecordBatchStream> {
         let object_store = context.runtime_env().object_store(&self.object_store_url)?;
         let batch_size = self
@@ -626,9 +628,18 @@ impl DataSource for FileScanConfig {
             partition,
             opener,
             source.metrics(),
-            shared_morsel_queue,
+            self.shared_morsel_queue.clone(),
         )?;
         Ok(Box::pin(cooperative(stream)))
+    }
+
+    fn with_shared_morsel_queue(
+        &self,
+        queue: Option<Arc<WorkQueue>>,
+    ) -> Arc<dyn DataSource> {
+        let mut config = self.clone();
+        config.shared_morsel_queue = queue;
+        Arc::new(config)
     }
 
     fn as_any(&self) -> &dyn Any {

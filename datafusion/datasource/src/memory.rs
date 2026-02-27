@@ -24,7 +24,6 @@ use std::ops::Deref;
 use std::slice::from_ref;
 use std::sync::Arc;
 
-use crate::file_stream::WorkQueue;
 use crate::sink::DataSink;
 use crate::source::{DataSource, DataSourceExec};
 
@@ -81,7 +80,6 @@ impl DataSource for MemorySourceConfig {
         &self,
         partition: usize,
         _context: Arc<TaskContext>,
-        _shared_morsel_queue: Option<Arc<WorkQueue>>,
     ) -> Result<SendableRecordBatchStream> {
         Ok(Box::pin(cooperative(
             MemoryStream::try_new(
