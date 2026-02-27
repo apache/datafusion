@@ -2988,7 +2988,6 @@ mod tests {
 
     #[test]
     fn test_mssql_dialect_national_literal() -> Result<()> {
-
         struct MsSqlDialect;
 
         impl Dialect for MsSqlDialect {
