@@ -91,6 +91,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         modulus(),
         pmod(),
         rint(),
+        round(),
         unhex(),
         width_bucket(),
         csc(),
