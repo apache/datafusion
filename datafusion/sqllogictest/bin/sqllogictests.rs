@@ -169,6 +169,7 @@ async fn run_tests() -> Result<()> {
     // deterministic timing summary output is requested.
     let is_ci = !stderr().is_terminal();
     let print_periodic_progress = options.should_print_periodic_progress(is_ci);
+    let progress_interval = std::cmp::max(1, num_tests / 10);
     let completed_count = Arc::new(AtomicUsize::new(0));
 
     let file_results: Vec<_> = futures::stream::iter(test_files)
@@ -287,9 +288,11 @@ async fn run_tests() -> Result<()> {
             let completed_count = Arc::clone(&completed_count);
             move |_| {
                 let completed = completed_count.fetch_add(1, Ordering::Relaxed) + 1;
-                // In CI (no TTY), print progress every 50 files and at completion
+                // Print progress at 10% intervals, every 50 files, and completion.
                 if print_periodic_progress
-                    && (completed.is_multiple_of(50) || completed == num_tests)
+                    && (completed.is_multiple_of(progress_interval)
+                        || completed.is_multiple_of(50)
+                        || completed == num_tests)
                 {
                     eprintln!(
                         "Progress: {}/{} files completed ({:.0}%)",
@@ -914,7 +917,7 @@ struct Options {
         long,
         env = "SLT_TIMING_SUMMARY_KEEP_PROGRESS",
         default_value_t = false,
-        help = "When used with --timing-summary, keep periodic CI Progress: lines enabled"
+        help = "Keep periodic Progress: lines enabled"
     )]
     timing_summary_keep_progress: bool,
 
@@ -929,7 +932,7 @@ struct Options {
 
 impl Options {
     fn should_print_periodic_progress(&self, is_ci: bool) -> bool {
-        is_ci && (!self.timing_summary || self.timing_summary_keep_progress)
+        self.timing_summary_keep_progress || (is_ci && !self.timing_summary)
     }
 
     /// Because this test can be run as a cargo test, commands like

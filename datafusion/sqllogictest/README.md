@@ -79,7 +79,7 @@ Timing summary output is disabled by default and enabled with
 `--timing-summary` (or `SLT_TIMING_SUMMARY=1`).
 
 When timing summary is enabled, periodic `Progress:` lines are suppressed by
-default to keep output stable. To keep periodic progress lines in CI, also pass
+default to keep output stable. To keep periodic progress lines enabled, also pass
 `--timing-summary-keep-progress` (or set `SLT_TIMING_SUMMARY_KEEP_PROGRESS=1`).
 
 ```shell
@@ -93,7 +93,7 @@ cargo test --test sqllogictests -- --timing-summary | head -n 10
 ```
 
 ```shell
-# Keep periodic CI Progress: lines when timing summary is enabled
+# Keep periodic Progress: lines when timing summary is enabled
 cargo test --test sqllogictests -- --timing-summary --timing-summary-keep-progress
 ```
 
