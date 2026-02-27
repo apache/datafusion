@@ -288,7 +288,7 @@ async fn run_tests() -> Result<()> {
             let completed_count = Arc::clone(&completed_count);
             move |_| {
                 let completed = completed_count.fetch_add(1, Ordering::Relaxed) + 1;
-                // In CI (no TTY), print progress every 10% or every 50 files
+                // In CI (no TTY), print progress every 50 files and at completion
                 if print_periodic_progress
                     && (completed.is_multiple_of(50) || completed == num_tests)
                 {
