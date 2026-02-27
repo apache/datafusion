@@ -20,7 +20,7 @@ pub mod bin;
 pub mod expm1;
 pub mod factorial;
 pub mod hex;
-pub mod is_nan;
+pub mod isnan;
 pub mod modulus;
 pub mod negative;
 pub mod rint;
@@ -45,7 +45,7 @@ make_udf_function!(trigonometry::SparkCsc, csc);
 make_udf_function!(trigonometry::SparkSec, sec);
 make_udf_function!(negative::SparkNegative, negative);
 make_udf_function!(bin::SparkBin, bin);
-make_udf_function!(is_nan::SparkIsNaN, isnan);
+make_udf_function!(isnan::SparkIsNaN, isnan);
 
 pub mod expr_fn {
     use datafusion_functions::export_functions;
