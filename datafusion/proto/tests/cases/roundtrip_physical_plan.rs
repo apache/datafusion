@@ -83,7 +83,8 @@ use datafusion::physical_plan::windows::{
     create_udwf_window_expr,
 };
 use datafusion::physical_plan::{
-    ExecutionPlan, InputOrderMode, Partitioning, PhysicalExpr, Statistics, displayable,
+    DisplayAs, DisplayFormatType, ExecutionPlan, InputOrderMode, Partitioning,
+    PhysicalExpr, SendableRecordBatchStream, Statistics, displayable,
 };
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion::scalar::ScalarValue;
@@ -1056,6 +1057,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
             _buf: &[u8],
             _inputs: &[Arc<dyn ExecutionPlan>],
             _ctx: &TaskContext,
+            _proto_converter: &dyn PhysicalProtoConverterExtension,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             unreachable!()
         }
@@ -1064,6 +1066,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
             &self,
             _node: Arc<dyn ExecutionPlan>,
             _buf: &mut Vec<u8>,
+            _proto_converter: &dyn PhysicalProtoConverterExtension,
         ) -> Result<()> {
             unreachable!()
         }
@@ -1169,6 +1172,7 @@ impl PhysicalExtensionCodec for UDFExtensionCodec {
         _buf: &[u8],
         _inputs: &[Arc<dyn ExecutionPlan>],
         _ctx: &TaskContext,
+        _proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         not_impl_err!("No extension codec provided")
     }
@@ -1177,6 +1181,7 @@ impl PhysicalExtensionCodec for UDFExtensionCodec {
         &self,
         _node: Arc<dyn ExecutionPlan>,
         _buf: &mut Vec<u8>,
+        _proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<()> {
         not_impl_err!("No extension codec provided")
     }
@@ -3536,6 +3541,245 @@ fn test_sort_topk_with_dynamic_filter_roundtrip() -> Result<()> {
         deserialized_sort_df.inner_id(),
         deserialized_predicate_df.inner_id(),
         "SortExec's dynamic filter should share inner state with child's predicate"
+    );
+
+    Ok(())
+}
+
+/// A custom ExecutionPlan that stores `Vec<Arc<dyn PhysicalExpr>>` fields,
+/// simulating a custom scan node (like NumpangFileSource) that has dynamic
+/// filters pushed down during optimization.
+struct CustomExecWithExprs {
+    exprs: Vec<Arc<dyn PhysicalExpr>>,
+    child: Arc<dyn ExecutionPlan>,
+    properties: datafusion::physical_plan::PlanProperties,
+}
+
+impl std::fmt::Debug for CustomExecWithExprs {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CustomExecWithExprs")
+            .field("exprs", &self.exprs)
+            .field("child", &self.child)
+            .finish()
+    }
+}
+
+impl CustomExecWithExprs {
+    fn new(
+        exprs: Vec<Arc<dyn PhysicalExpr>>,
+        child: Arc<dyn ExecutionPlan>,
+    ) -> Self {
+        use datafusion_physical_expr::equivalence::EquivalenceProperties;
+        use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+        let properties = datafusion::physical_plan::PlanProperties::new(
+            EquivalenceProperties::new(child.schema()),
+            Partitioning::UnknownPartitioning(1),
+            EmissionType::Incremental,
+            Boundedness::Bounded,
+        );
+        Self {
+            exprs,
+            child,
+            properties,
+        }
+    }
+}
+
+impl DisplayAs for CustomExecWithExprs {
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+        write!(f, "CustomExecWithExprs")
+    }
+}
+
+impl ExecutionPlan for CustomExecWithExprs {
+    fn name(&self) -> &str {
+        "CustomExecWithExprs"
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn properties(&self) -> &datafusion::physical_plan::PlanProperties {
+        &self.properties
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.child]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        _children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        unreachable!()
+    }
+
+    fn execute(
+        &self,
+        _partition: usize,
+        _context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        unreachable!()
+    }
+}
+
+/// A PhysicalExtensionCodec that uses proto_converter to serialize/deserialize
+/// the PhysicalExpr fields stored in CustomExecWithExprs.
+#[derive(Debug)]
+struct CustomExecWithExprsCodec {
+    /// The schema used for expression deserialization (shared between encode/decode).
+    schema: Arc<Schema>,
+}
+
+impl PhysicalExtensionCodec for CustomExecWithExprsCodec {
+    fn try_decode(
+        &self,
+        buf: &[u8],
+        inputs: &[Arc<dyn ExecutionPlan>],
+        ctx: &TaskContext,
+        proto_converter: &dyn PhysicalProtoConverterExtension,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let num_exprs =
+            u32::from_le_bytes(buf[0..4].try_into().unwrap()) as usize;
+        let mut offset = 4;
+
+        let mut exprs = Vec::with_capacity(num_exprs);
+        for _ in 0..num_exprs {
+            let expr_len =
+                u32::from_le_bytes(buf[offset..offset + 4].try_into().unwrap())
+                    as usize;
+            offset += 4;
+            let expr_proto = PhysicalExprNode::decode(&buf[offset..offset + expr_len])
+                .map_err(|e| {
+                    internal_datafusion_err!("Failed to decode expression: {e}")
+                })?;
+            let expr = proto_converter.proto_to_physical_expr(
+                &expr_proto,
+                ctx,
+                &self.schema,
+                self,
+            )?;
+            exprs.push(expr);
+            offset += expr_len;
+        }
+
+        Ok(Arc::new(CustomExecWithExprs::new(
+            exprs,
+            inputs[0].clone(),
+        )))
+    }
+
+    fn try_encode(
+        &self,
+        node: Arc<dyn ExecutionPlan>,
+        buf: &mut Vec<u8>,
+        proto_converter: &dyn PhysicalProtoConverterExtension,
+    ) -> Result<()> {
+        let custom = node
+            .as_any()
+            .downcast_ref::<CustomExecWithExprs>()
+            .ok_or_else(|| {
+                internal_datafusion_err!("Expected CustomExecWithExprs")
+            })?;
+
+        buf.extend_from_slice(&(custom.exprs.len() as u32).to_le_bytes());
+        for expr in &custom.exprs {
+            let expr_proto = proto_converter.physical_expr_to_proto(expr, self)?;
+            let expr_bytes = expr_proto.encode_to_vec();
+            buf.extend_from_slice(&(expr_bytes.len() as u32).to_le_bytes());
+            buf.extend_from_slice(&expr_bytes);
+        }
+
+        Ok(())
+    }
+}
+
+/// Tests that a custom ExecutionPlan node storing PhysicalExpr fields can
+/// use the proto_converter parameter to serialize/deserialize those expressions
+/// with deduplication support. When the same DynamicFilterPhysicalExpr is shared
+/// between the custom node and another part of the plan (e.g., a FilterExec),
+/// the inner_id should be preserved after roundtrip (proving dedup works).
+#[test]
+fn test_custom_node_with_dynamic_filter_dedup_roundtrip() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int64, false),
+    ]));
+
+    // Create a dynamic filter expression
+    let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
+        vec![Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>],
+        lit(true),
+    ));
+    let dynamic_filter_expr = dynamic_filter.clone() as Arc<dyn PhysicalExpr>;
+
+    // Create the plan:
+    //   FilterExec(dynamic_filter)
+    //     -> CustomExecWithExprs(exprs: [dynamic_filter])
+    //         -> EmptyExec
+    //
+    // The same dynamic_filter Arc is stored in both the FilterExec and the custom node.
+    let empty = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+    let custom_exec = Arc::new(CustomExecWithExprs::new(
+        vec![Arc::clone(&dynamic_filter_expr)],
+        empty,
+    ));
+    let filter_exec =
+        Arc::new(FilterExec::try_new(Arc::clone(&dynamic_filter_expr), custom_exec)?)
+            as Arc<dyn ExecutionPlan>;
+
+    // Roundtrip with DeduplicatingProtoConverter
+    let codec = CustomExecWithExprsCodec {
+        schema: Arc::clone(&schema),
+    };
+    let converter = DeduplicatingProtoConverter {};
+
+    let bytes = physical_plan_to_bytes_with_proto_converter(
+        Arc::clone(&filter_exec),
+        &codec,
+        &converter,
+    )?;
+
+    let ctx = SessionContext::new();
+    let deser_converter = DeduplicatingProtoConverter {};
+    let deserialized = physical_plan_from_bytes_with_proto_converter(
+        bytes.as_ref(),
+        ctx.task_ctx().as_ref(),
+        &codec,
+        &deser_converter,
+    )?;
+
+    // Extract the deserialized FilterExec's dynamic filter
+    let deser_filter = deserialized
+        .as_any()
+        .downcast_ref::<FilterExec>()
+        .expect("Top-level should be FilterExec");
+    let deser_filter_df = deser_filter
+        .predicate()
+        .as_any()
+        .downcast_ref::<DynamicFilterPhysicalExpr>()
+        .expect("FilterExec predicate should be DynamicFilterPhysicalExpr");
+
+    // Extract the deserialized custom node's dynamic filter
+    let deser_custom = deser_filter
+        .input()
+        .as_any()
+        .downcast_ref::<CustomExecWithExprs>()
+        .expect("FilterExec child should be CustomExecWithExprs");
+    assert_eq!(deser_custom.exprs.len(), 1, "Should have one expression");
+    let deser_custom_df = deser_custom.exprs[0]
+        .as_any()
+        .downcast_ref::<DynamicFilterPhysicalExpr>()
+        .expect("Custom node expr should be DynamicFilterPhysicalExpr");
+
+    // After roundtrip with deduplication, both references should share the same
+    // inner state (same inner_id), proving that proto_converter was used correctly
+    // within the custom codec and deduplication was preserved across the plan boundary.
+    assert_eq!(
+        deser_filter_df.inner_id(),
+        deser_custom_df.inner_id(),
+        "FilterExec's dynamic filter and CustomExecWithExprs's dynamic filter \
+         should share the same inner state after roundtrip with deduplication"
     );
 
     Ok(())

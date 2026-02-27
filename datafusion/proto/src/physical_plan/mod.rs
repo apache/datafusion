@@ -548,7 +548,7 @@ impl protobuf::PhysicalPlanNode {
         }
 
         let mut buf: Vec<u8> = vec![];
-        match codec.try_encode(Arc::clone(&plan_clone), &mut buf) {
+        match codec.try_encode(Arc::clone(&plan_clone), &mut buf, proto_converter) {
             Ok(_) => {
                 let inputs: Vec<protobuf::PhysicalPlanNode> = plan_clone
                     .children()
@@ -1730,7 +1730,7 @@ impl protobuf::PhysicalPlanNode {
             .map(|i| proto_converter.proto_to_execution_plan(ctx, codec, i))
             .collect::<Result<_>>()?;
 
-        let extension_node = codec.try_decode(extension.node.as_slice(), &inputs, ctx)?;
+        let extension_node = codec.try_decode(extension.node.as_slice(), &inputs, ctx, proto_converter)?;
 
         Ok(extension_node)
     }
@@ -3621,9 +3621,15 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync {
         buf: &[u8],
         inputs: &[Arc<dyn ExecutionPlan>],
         ctx: &TaskContext,
+        proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>>;
 
-    fn try_encode(&self, node: Arc<dyn ExecutionPlan>, buf: &mut Vec<u8>) -> Result<()>;
+    fn try_encode(
+        &self,
+        node: Arc<dyn ExecutionPlan>,
+        buf: &mut Vec<u8>,
+        proto_converter: &dyn PhysicalProtoConverterExtension,
+    ) -> Result<()>;
 
     fn try_decode_udf(&self, name: &str, _buf: &[u8]) -> Result<Arc<ScalarUDF>> {
         not_impl_err!("PhysicalExtensionCodec is not provided for scalar function {name}")
@@ -3677,6 +3683,7 @@ impl PhysicalExtensionCodec for DefaultPhysicalExtensionCodec {
         _buf: &[u8],
         _inputs: &[Arc<dyn ExecutionPlan>],
         _ctx: &TaskContext,
+        _proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         not_impl_err!("PhysicalExtensionCodec is not provided")
     }
@@ -3685,6 +3692,7 @@ impl PhysicalExtensionCodec for DefaultPhysicalExtensionCodec {
         &self,
         _node: Arc<dyn ExecutionPlan>,
         _buf: &mut Vec<u8>,
+        _proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<()> {
         not_impl_err!("PhysicalExtensionCodec is not provided")
     }
@@ -4110,12 +4118,13 @@ impl PhysicalExtensionCodec for ComposedPhysicalExtensionCodec {
         buf: &[u8],
         inputs: &[Arc<dyn ExecutionPlan>],
         ctx: &TaskContext,
+        proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.decode_protobuf(buf, |codec, data| codec.try_decode(data, inputs, ctx))
+        self.decode_protobuf(buf, |codec, data| codec.try_decode(data, inputs, ctx, proto_converter))
     }
 
-    fn try_encode(&self, node: Arc<dyn ExecutionPlan>, buf: &mut Vec<u8>) -> Result<()> {
-        self.encode_protobuf(buf, |codec, data| codec.try_encode(Arc::clone(&node), data))
+    fn try_encode(&self, node: Arc<dyn ExecutionPlan>, buf: &mut Vec<u8>, proto_converter: &dyn PhysicalProtoConverterExtension) -> Result<()> {
+        self.encode_protobuf(buf, |codec, data| codec.try_encode(Arc::clone(&node), data, proto_converter))
     }
 
     fn try_decode_udf(&self, name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>> {
