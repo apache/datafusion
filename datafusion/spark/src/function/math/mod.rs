@@ -18,8 +18,8 @@
 pub mod abs;
 pub mod bin;
 pub mod expm1;
-pub mod floor;
 pub mod factorial;
+pub mod floor;
 pub mod hex;
 pub mod modulus;
 pub mod negative;
