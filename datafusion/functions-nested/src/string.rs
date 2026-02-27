@@ -33,7 +33,7 @@ use std::any::Any;
 use crate::utils::make_scalar_function;
 use arrow::array::{
     GenericStringArray, StringArrayType, StringViewArray,
-    builder::{ArrayBuilder, LargeStringBuilder, StringViewBuilder},
+    builder::{LargeStringBuilder, StringViewBuilder},
     cast::AsArray,
 };
 use arrow::compute::cast;
@@ -51,6 +51,7 @@ use datafusion_expr::{
     Volatility,
 };
 use datafusion_functions::downcast_arg;
+use datafusion_functions::strings::StringArrayBuilderType;
 use datafusion_macros::user_doc;
 use std::sync::Arc;
 
@@ -787,40 +788,4 @@ where
 
     let list_array = list_builder.finish();
     Ok(Arc::new(list_array) as ArrayRef)
-}
-
-trait StringArrayBuilderType: ArrayBuilder {
-    fn append_value(&mut self, val: &str);
-
-    fn append_null(&mut self);
-}
-
-impl StringArrayBuilderType for StringBuilder {
-    fn append_value(&mut self, val: &str) {
-        StringBuilder::append_value(self, val);
-    }
-
-    fn append_null(&mut self) {
-        StringBuilder::append_null(self);
-    }
-}
-
-impl StringArrayBuilderType for StringViewBuilder {
-    fn append_value(&mut self, val: &str) {
-        StringViewBuilder::append_value(self, val)
-    }
-
-    fn append_null(&mut self) {
-        StringViewBuilder::append_null(self)
-    }
-}
-
-impl StringArrayBuilderType for LargeStringBuilder {
-    fn append_value(&mut self, val: &str) {
-        LargeStringBuilder::append_value(self, val);
-    }
-
-    fn append_null(&mut self) {
-        LargeStringBuilder::append_null(self);
-    }
 }

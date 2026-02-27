@@ -18,8 +18,9 @@
 use std::mem::size_of;
 
 use arrow::array::{
-    Array, ArrayAccessor, ArrayDataBuilder, ByteView, LargeStringArray,
-    NullBufferBuilder, StringArray, StringViewArray, StringViewBuilder, make_view,
+    Array, ArrayAccessor, ArrayBuilder, ArrayDataBuilder, ByteView, LargeStringArray,
+    LargeStringBuilder, NullBufferBuilder, StringArray, StringBuilder, StringViewArray,
+    StringViewBuilder, make_view,
 };
 use arrow::buffer::{MutableBuffer, NullBuffer};
 use arrow::datatypes::DataType;
@@ -359,6 +360,42 @@ impl ColumnarValueRef<'_> {
             Self::NullableStringViewArray(array) => array.nulls().cloned(),
             Self::NullableLargeStringArray(array) => array.nulls().cloned(),
         }
+    }
+}
+
+pub trait StringArrayBuilderType: ArrayBuilder {
+    fn append_value(&mut self, val: &str);
+
+    fn append_null(&mut self);
+}
+
+impl StringArrayBuilderType for StringBuilder {
+    fn append_value(&mut self, val: &str) {
+        StringBuilder::append_value(self, val);
+    }
+
+    fn append_null(&mut self) {
+        StringBuilder::append_null(self);
+    }
+}
+
+impl StringArrayBuilderType for StringViewBuilder {
+    fn append_value(&mut self, val: &str) {
+        StringViewBuilder::append_value(self, val)
+    }
+
+    fn append_null(&mut self) {
+        StringViewBuilder::append_null(self)
+    }
+}
+
+impl StringArrayBuilderType for LargeStringBuilder {
+    fn append_value(&mut self, val: &str) {
+        LargeStringBuilder::append_value(self, val);
+    }
+
+    fn append_null(&mut self) {
+        LargeStringBuilder::append_null(self);
     }
 }
 
