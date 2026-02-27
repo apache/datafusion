@@ -1293,7 +1293,7 @@ impl Unparser<'_> {
             ScalarValue::Utf8(Some(str))
             | ScalarValue::Utf8View(Some(str))
             | ScalarValue::LargeUtf8(Some(str)) => {
-                if let Some(expr) = self.dialect.to_unicode_string_literal(str) {
+                if let Some(expr) = self.dialect.custom_string_literal_override(str) {
                     return Ok(expr);
                 }
                 Ok(ast::Expr::value(SingleQuotedString(str.to_string())))
@@ -1830,7 +1830,7 @@ mod tests {
     use std::ops::{Add, Sub};
     use std::{any::Any, sync::Arc, vec};
 
-    use crate::unparser::dialect::{MsSqlDialect, SqliteDialect};
+    use crate::unparser::dialect::SqliteDialect;
     use arrow::array::{LargeListArray, ListArray};
     use arrow::datatypes::{DataType::Int8, Field, Int32Type, Schema, TimeUnit};
     use ast::ObjectName;
@@ -2403,17 +2403,6 @@ mod tests {
 
         let expected = r#"('a' > 4)"#;
         assert_eq!(actual, expected);
-
-        let dialect = MsSqlDialect {};
-        let unparser = Unparser::new(&dialect);
-        let expr = col("a").gt(lit(4));
-        let ast = unparser.expr_to_sql(&expr)?;
-
-        let actual = format!("{ast}");
-
-        let expected = r#"([a] > 4)"#;
-        assert_eq!(actual, expected);
-
         Ok(())
     }
 
@@ -2999,7 +2988,26 @@ mod tests {
 
     #[test]
     fn test_mssql_dialect_national_literal() -> Result<()> {
-        let dialect = MsSqlDialect::default();
+
+        struct MsSqlDialect;
+
+        impl Dialect for MsSqlDialect {
+            fn identifier_quote_style(&self, _identifier: &str) -> Option<char> {
+                Some('[')
+            }
+
+            fn custom_string_literal_override(&self, s: &str) -> Option<ast::Expr> {
+                if !s.is_ascii() {
+                    Some(ast::Expr::value(ast::Value::NationalStringLiteral(
+                        s.to_string(),
+                    )))
+                } else {
+                    None
+                }
+            }
+        }
+
+        let dialect = MsSqlDialect;
         let unparser = Unparser::new(&dialect);
 
         let expr =
