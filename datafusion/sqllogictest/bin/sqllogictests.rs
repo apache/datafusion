@@ -911,12 +911,12 @@ struct Options {
     timing_summary: bool,
 
     #[clap(
-        long,
+        long = "timing-summary-progress",
         env = "SLT_TIMING_SUMMARY_PROGRESS",
         default_value_t = false,
         help = "When used with --timing-summary, keep periodic CI Progress: lines enabled"
     )]
-    timing_summary_progress: bool,
+    timing_summary_keep_progress: bool,
 
     #[clap(
         long,
@@ -929,7 +929,7 @@ struct Options {
 
 impl Options {
     fn should_print_periodic_progress(&self, is_ci: bool) -> bool {
-        is_ci && (!self.timing_summary || self.timing_summary_progress)
+        is_ci && (!self.timing_summary || self.timing_summary_keep_progress)
     }
 
     /// Because this test can be run as a cargo test, commands like
