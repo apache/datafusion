@@ -2028,15 +2028,21 @@ impl TreeNodeRewriter for Simplifier<'_> {
                     })));
                 }
 
-                if let PreimageResult::Range { interval, expr } =
-                    get_preimage(left.as_ref(), right.as_ref(), info)?
+                if let PreimageResult::Range {
+                    interval,
+                    expr,
+                    is_boundary,
+                } = get_preimage(left.as_ref(), right.as_ref(), info)?
                 {
-                    rewrite_with_preimage(*interval, op, expr)?
+                    rewrite_with_preimage(*interval, op, expr, is_boundary)?
                 } else if let Some(swapped) = op.swap() {
-                    if let PreimageResult::Range { interval, expr } =
-                        get_preimage(right.as_ref(), left.as_ref(), info)?
+                    if let PreimageResult::Range {
+                        interval,
+                        expr,
+                        is_boundary,
+                    } = get_preimage(right.as_ref(), left.as_ref(), info)?
                     {
-                        rewrite_with_preimage(*interval, swapped, expr)?
+                        rewrite_with_preimage(*interval, swapped, expr, is_boundary)?
                     } else {
                         Transformed::no(Expr::BinaryExpr(BinaryExpr { left, op, right }))
                     }
@@ -2064,8 +2070,11 @@ impl TreeNodeRewriter for Simplifier<'_> {
 
                 let mut rewritten: Option<Expr> = None;
                 for item in &list {
-                    let PreimageResult::Range { interval, expr } =
-                        get_preimage(expr.as_ref(), item, info)?
+                    let PreimageResult::Range {
+                        interval,
+                        expr,
+                        is_boundary,
+                    } = get_preimage(expr.as_ref(), item, info)?
                     else {
                         return Ok(Transformed::no(Expr::InList(InList {
                             expr,
@@ -2074,7 +2083,8 @@ impl TreeNodeRewriter for Simplifier<'_> {
                         })));
                     };
 
-                    let range_expr = rewrite_with_preimage(*interval, op, expr)?.data;
+                    let range_expr =
+                        rewrite_with_preimage(*interval, op, expr, is_boundary)?.data;
                     rewritten = Some(match rewritten {
                         None => range_expr,
                         Some(acc) => combiner(acc, range_expr),
