@@ -5148,7 +5148,8 @@ statement ok
 CREATE TABLE test_null_str_col AS VALUES
   (make_array(1, NULL, 3), ',', 'N/A'),
   (make_array(NULL, 5, NULL), ',', 'MISSING'),
-  (make_array(10, NULL, 12), '-', 'X');
+  (make_array(10, NULL, 12), '-', 'X'),
+  (make_array(20, NULL, 21), '-', NULL);
 
 query T
 SELECT array_to_string(column1, column2, column3) FROM test_null_str_col;
@@ -5156,6 +5157,7 @@ SELECT array_to_string(column1, column2, column3) FROM test_null_str_col;
 1,N/A,3
 MISSING,5,MISSING
 10-X-12
+20-21
 
 statement ok
 DROP TABLE test_null_str_col;
