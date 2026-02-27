@@ -17,12 +17,16 @@
 
 pub mod abs;
 pub mod bin;
+pub mod ceil;
 pub mod expm1;
 pub mod factorial;
+pub mod floor;
 pub mod hex;
+pub mod is_nan;
 pub mod modulus;
 pub mod negative;
 pub mod rint;
+pub mod round;
 pub mod trigonometry;
 pub mod unhex;
 pub mod width_bucket;
@@ -32,30 +36,41 @@ use datafusion_functions::make_udf_function;
 use std::sync::Arc;
 
 make_udf_function!(abs::SparkAbs, abs);
+make_udf_function!(ceil::SparkCeil, ceil);
 make_udf_function!(expm1::SparkExpm1, expm1);
 make_udf_function!(factorial::SparkFactorial, factorial);
+make_udf_function!(floor::SparkFloor, floor);
 make_udf_function!(hex::SparkHex, hex);
+make_udf_function!(is_nan::SparkIsNaN, isnan);
 make_udf_function!(modulus::SparkMod, modulus);
 make_udf_function!(modulus::SparkPmod, pmod);
+make_udf_function!(negative::SparkNegative, negative);
 make_udf_function!(rint::SparkRint, rint);
+make_udf_function!(round::SparkRound, round);
 make_udf_function!(unhex::SparkUnhex, unhex);
 make_udf_function!(width_bucket::SparkWidthBucket, width_bucket);
 make_udf_function!(trigonometry::SparkCsc, csc);
 make_udf_function!(trigonometry::SparkSec, sec);
-make_udf_function!(negative::SparkNegative, negative);
 make_udf_function!(bin::SparkBin, bin);
 
 pub mod expr_fn {
     use datafusion_functions::export_functions;
 
     export_functions!((abs, "Returns abs(expr)", arg1));
+    export_functions!((ceil, "Returns the smallest integer not less than expr.", arg1));
     export_functions!((expm1, "Returns exp(expr) - 1 as a Float64.", arg1));
     export_functions!((
         factorial,
         "Returns the factorial of expr. expr is [0..20]. Otherwise, null.",
         arg1
     ));
+    export_functions!((
+        floor,
+        "Returns the largest integer not greater than expr.",
+        arg1
+    ));
     export_functions!((hex, "Computes hex value of the given column.", arg1));
+    export_functions!((isnan, "Returns true if expr is NaN, false otherwise (including for NULL).", arg1));
     export_functions!((modulus, "Returns the remainder of division of the first argument by the second argument.", arg1 arg2));
     export_functions!((pmod, "Returns the positive remainder of division of the first argument by the second argument.", arg1 arg2));
     export_functions!((
@@ -63,6 +78,7 @@ pub mod expr_fn {
         "Returns the double value that is closest in value to the argument and is equal to a mathematical integer.",
         arg1
     ));
+    export_functions!((round, "Rounds expr to d decimal places using HALF_UP rounding mode.", arg1 arg2));
     export_functions!((unhex, "Converts hexadecimal string to binary.", arg1));
     export_functions!((width_bucket, "Returns the bucket number into which the value of this expression would fall after being evaluated.", arg1 arg2 arg3 arg4));
     export_functions!((csc, "Returns the cosecant of expr.", arg1));
@@ -82,17 +98,21 @@ pub mod expr_fn {
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
     vec![
         abs(),
+        ceil(),
         expm1(),
         factorial(),
+        floor(),
         hex(),
+        isnan(),
         modulus(),
         pmod(),
+        negative(),
         rint(),
+        round(),
         unhex(),
         width_bucket(),
         csc(),
         sec(),
-        negative(),
         bin(),
     ]
 }
