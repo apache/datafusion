@@ -1,0 +1,148 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Test push down filter
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+statement ok
+CREATE TABLE IF NOT EXISTS v AS VALUES(1,[1,2,3]),(2,[3,4,5]);
+
+query I
+select uc2 from (select unnest(column2) as uc2, column1 from v) where column1 = 2;
+----
+3
+4
+5
+
+# test push down filter for unnest with filter on non-unnest column
+# filter plan is pushed down into projection plan
+query TT
+explain select uc2 from (select unnest(column2) as uc2, column1 from v) where column1 = 2;
+----
+physical_plan
+01)ProjectionExec: expr=[__unnest_placeholder(v.column2,depth=1)@0 as uc2]
+02)--UnnestExec
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------ProjectionExec: expr=[column2@0 as __unnest_placeholder(v.column2)]
+05)--------FilterExec: column1@0 = 2, projection=[column2@1]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I
+select uc2 from (select unnest(column2) as uc2, column1 from v) where uc2 > 3;
+----
+4
+5
+
+# test push down filter for unnest with filter on unnest column
+query TT
+explain select uc2 from (select unnest(column2) as uc2, column1 from v) where uc2 > 3;
+----
+physical_plan
+01)ProjectionExec: expr=[__unnest_placeholder(v.column2,depth=1)@0 as uc2]
+02)--FilterExec: __unnest_placeholder(v.column2,depth=1)@0 > 3
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------UnnestExec
+05)--------ProjectionExec: expr=[column2@0 as __unnest_placeholder(v.column2)]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query II
+select uc2, column1 from  (select unnest(column2) as uc2, column1 from v) where uc2 > 3 AND column1 = 2;
+----
+4 2
+5 2
+
+# Could push the filter (column1 = 2) down below unnest
+query TT
+explain select uc2, column1 from  (select unnest(column2) as uc2, column1 from v) where uc2 > 3 AND column1 = 2;
+----
+physical_plan
+01)ProjectionExec: expr=[__unnest_placeholder(v.column2,depth=1)@0 as uc2, column1@1 as column1]
+02)--FilterExec: __unnest_placeholder(v.column2,depth=1)@0 > 3
+03)----UnnestExec
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------ProjectionExec: expr=[column2@1 as __unnest_placeholder(v.column2), column1@0 as column1]
+06)----------FilterExec: column1@0 = 2
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query II
+select uc2, column1 from  (select unnest(column2) as uc2, column1 from v) where uc2 > 3 OR column1 = 2;
+----
+3 2
+4 2
+5 2
+
+# only non-unnest filter in AND clause could be pushed down
+query TT
+explain select uc2, column1 from  (select unnest(column2) as uc2, column1 from v) where uc2 > 3 OR column1 = 2;
+----
+physical_plan
+01)ProjectionExec: expr=[__unnest_placeholder(v.column2,depth=1)@0 as uc2, column1@1 as column1]
+02)--FilterExec: __unnest_placeholder(v.column2,depth=1)@0 > 3 OR column1@1 = 2
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------UnnestExec
+05)--------ProjectionExec: expr=[column2@1 as __unnest_placeholder(v.column2), column1@0 as column1]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+drop table v;
+
+# test with unnest struct, should not push down filter
+statement ok
+CREATE TABLE d AS VALUES(1,[named_struct('a', 1, 'b', 2)]),(2,[named_struct('a', 3, 'b', 4), named_struct('a', 5, 'b', 6)]);
+
+query I?
+select * from (select column1, unnest(column2) as o from d) where o['a'] = 1;
+----
+1 {a: 1, b: 2}
+
+query TT
+explain select * from (select column1, unnest(column2) as o from d) where o['a'] = 1;
+----
+physical_plan
+01)ProjectionExec: expr=[column1@0 as column1, __unnest_placeholder(d.column2,depth=1)@1 as o]
+02)--FilterExec: __datafusion_extracted_1@0 = 1, projection=[column1@1, __unnest_placeholder(d.column2,depth=1)@2]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------ProjectionExec: expr=[get_field(__unnest_placeholder(d.column2,depth=1)@1, a) as __datafusion_extracted_1, column1@0 as column1, __unnest_placeholder(d.column2,depth=1)@1 as __unnest_placeholder(d.column2,depth=1)]
+05)--------UnnestExec
+06)----------ProjectionExec: expr=[column1@0 as column1, column2@1 as __unnest_placeholder(d.column2)]
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+drop table d;
+
+statement ok
+CREATE TABLE d AS VALUES (named_struct('a', 1, 'b', 2)), (named_struct('a', 3, 'b', 4)), (named_struct('a', 5, 'b', 6));
+
+query II
+select * from (select unnest(column1) from d) where "__unnest_placeholder(d.column1).b" > 5;
+----
+5 6
+
+query TT
+explain select * from (select unnest(column1) from d) where "__unnest_placeholder(d.column1).b" > 5;
+----
+physical_plan
+01)FilterExec: __unnest_placeholder(d.column1).b@1 > 5
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----UnnestExec
+04)------ProjectionExec: expr=[column1@0 as __unnest_placeholder(d.column1)]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+drop table d;
