@@ -1306,8 +1306,15 @@ pub fn ensure_distribution(
             // If repartitioning is not possible (a.k.a. None is returned from `ExecutionPlan::repartitioned`)
             // then no repartitioning will have occurred. As the default implementation returns None, it is only
             // specific physical plan nodes, such as certain datasources, which are repartitioned.
+            // Only repartition file scans when it would not reduce the
+            // child's partition count. When the child already has more
+            // partitions than target (e.g. under MergePartitionsExec),
+            // collapsing them would be counterproductive.
+            let would_reduce_partitions =
+                child.plan.output_partitioning().partition_count() > target_partitions;
             if repartition_file_scans
                 && roundrobin_beneficial_stats
+                && !would_reduce_partitions
                 && let Some(new_child) =
                     child.plan.repartitioned(target_partitions, config)?
             {
