@@ -77,8 +77,12 @@ mod test {
         create_table_sql: Option<&str>,
         target_partition: Option<usize>,
     ) -> Arc<dyn ExecutionPlan> {
-        let mut session_config = SessionConfig::new()
-            .with_collect_statistics(true);
+        let mut session_config = SessionConfig::new().with_collect_statistics(true);
+        session_config
+            .options_mut()
+            .execution
+            .parquet
+            .allow_morsel_driven = false;
         if let Some(partition) = target_partition {
             session_config = session_config.with_target_partitions(partition);
         }
