@@ -552,9 +552,8 @@ impl SelectivityTrackerInner {
         }
 
         // Sort all filters by:
-        // - Effectiveness (descending, higher = better) if available for both filters.
-        // - Bytes ratio (descending, higher = more expensive) if effectiveness is not available for either filter.
-        // - Original order (ascending) as a final tiebreaker for stability.
+        // - Effectiveness (descending, higher = more selective) if available for both filters.
+        // - Scan size (ascending, smaller = cheaper) as fallback when effectiveness is unavailable.
         let cmp_filters =
             |(id_a, expr_a): &(FilterId, Arc<dyn PhysicalExpr>),
              (id_b, expr_b): &(FilterId, Arc<dyn PhysicalExpr>)| {
@@ -567,7 +566,7 @@ impl SelectivityTrackerInner {
                 } else {
                     let size_a = filter_scan_size(expr_a, metadata);
                     let size_b = filter_scan_size(expr_b, metadata);
-                    size_b.cmp(&size_a)
+                    size_a.cmp(&size_b)
                 }
             };
         row_filters.sort_by(cmp_filters);
