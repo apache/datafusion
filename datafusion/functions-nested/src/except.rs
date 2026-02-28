@@ -20,7 +20,8 @@
 use crate::utils::{check_datatypes, make_scalar_function};
 use arrow::array::new_null_array;
 use arrow::array::{
-    Array, ArrayRef, GenericListArray, OffsetSizeTrait, UInt32Array, cast::AsArray,
+    Array, ArrayRef, GenericListArray, OffsetSizeTrait, UInt32Array, UInt64Array,
+    cast::AsArray,
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::compute::take;
@@ -182,7 +183,7 @@ fn general_except<OffsetSize: OffsetSizeTrait>(
     let mut offsets = Vec::<OffsetSize>::with_capacity(l.len() + 1);
     offsets.push(OffsetSize::usize_as(0));
 
-    let mut indices = Vec::with_capacity(l_values.num_rows());
+    let mut indices: Vec<usize> = Vec::with_capacity(l_values.num_rows());
     let mut dedup = HashSet::new();
 
     let nulls = NullBuffer::union(l.nulls(), r.nulls());
@@ -207,7 +208,7 @@ fn general_except<OffsetSize: OffsetSizeTrait>(
         for element_index in l_start.as_usize()..l_end.as_usize() {
             let left_row = l_values.row(element_index);
             if dedup.insert(left_row) {
-                indices.push(element_index as u32);
+                indices.push(element_index);
             }
         }
 
@@ -215,11 +216,16 @@ fn general_except<OffsetSize: OffsetSizeTrait>(
         dedup.clear();
     }
 
-    // Gather distinct left-side values by index
+    // Gather distinct left-side values by index.
+    // Use UInt64Array for LargeList to support values arrays exceeding u32::MAX.
     let values = if indices.is_empty() {
         arrow::array::new_empty_array(&l.value_type())
+    } else if OffsetSize::IS_LARGE {
+        let indices = UInt64Array::from(indices.into_iter().map(|i| i as u64).collect::<Vec<_>>());
+        take(l.values().as_ref(), &indices, None)?
     } else {
-        take(l.values().as_ref(), &UInt32Array::from(indices), None)?
+        let indices = UInt32Array::from(indices.into_iter().map(|i| i as u32).collect::<Vec<_>>());
+        take(l.values().as_ref(), &indices, None)?
     };
 
     Ok(GenericListArray::<OffsetSize>::new(
