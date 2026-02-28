@@ -494,10 +494,12 @@ fn generic_set_loop<OffsetSize: OffsetSizeTrait, const IS_UNION: bool>(
     let final_values = if indices.is_empty() {
         new_empty_array(&l.value_type())
     } else if OffsetSize::IS_LARGE {
-        let indices = UInt64Array::from(indices.into_iter().map(|i| i as u64).collect::<Vec<_>>());
+        let indices =
+            UInt64Array::from(indices.into_iter().map(|i| i as u64).collect::<Vec<_>>());
         take(combined_values.as_ref(), &indices, None)?
     } else {
-        let indices = UInt32Array::from(indices.into_iter().map(|i| i as u32).collect::<Vec<_>>());
+        let indices =
+            UInt32Array::from(indices.into_iter().map(|i| i as u32).collect::<Vec<_>>());
         take(combined_values.as_ref(), &indices, None)?
     };
 
@@ -596,10 +598,12 @@ fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
     let final_values = if indices.is_empty() {
         new_empty_array(&dt)
     } else if OffsetSize::IS_LARGE {
-        let indices = UInt64Array::from(indices.into_iter().map(|i| i as u64).collect::<Vec<_>>());
+        let indices =
+            UInt64Array::from(indices.into_iter().map(|i| i as u64).collect::<Vec<_>>());
         take(array.values().as_ref(), &indices, None)?
     } else {
-        let indices = UInt32Array::from(indices.into_iter().map(|i| i as u32).collect::<Vec<_>>());
+        let indices =
+            UInt32Array::from(indices.into_iter().map(|i| i as u32).collect::<Vec<_>>());
         take(array.values().as_ref(), &indices, None)?
     };
 

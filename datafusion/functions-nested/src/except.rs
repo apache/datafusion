@@ -221,10 +221,12 @@ fn general_except<OffsetSize: OffsetSizeTrait>(
     let values = if indices.is_empty() {
         arrow::array::new_empty_array(&l.value_type())
     } else if OffsetSize::IS_LARGE {
-        let indices = UInt64Array::from(indices.into_iter().map(|i| i as u64).collect::<Vec<_>>());
+        let indices =
+            UInt64Array::from(indices.into_iter().map(|i| i as u64).collect::<Vec<_>>());
         take(l.values().as_ref(), &indices, None)?
     } else {
-        let indices = UInt32Array::from(indices.into_iter().map(|i| i as u32).collect::<Vec<_>>());
+        let indices =
+            UInt32Array::from(indices.into_iter().map(|i| i as u32).collect::<Vec<_>>());
         take(l.values().as_ref(), &indices, None)?
     };
 
