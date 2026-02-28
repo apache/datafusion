@@ -23,5 +23,90 @@
 
 ## Original Query: SELECT round(2.5, 0);
 ## PySpark 3.5.5 Result: {'round(2.5, 0)': Decimal('3'), 'typeof(round(2.5, 0))': 'decimal(2,0)', 'typeof(2.5)': 'decimal(2,1)', 'typeof(0)': 'int'}
-#query
-#SELECT round(2.5::decimal(2,1), 0::int);
+query R
+SELECT round(2.5::decimal(2,1), 0::int);
+----
+3
+
+# Scalar input: float64 (single arg defaults to d=0, HALF_UP rounding)
+query RR
+SELECT round(2.5::DOUBLE), round(-2.5::DOUBLE);
+----
+3 -3
+
+# Scalar input: float64 with decimal places
+query RR
+SELECT round(2.25::DOUBLE, 1), round(125.0::DOUBLE, -1);
+----
+2.3 130
+
+# Scalar input: float64 NULL
+query R
+SELECT round(NULL::DOUBLE);
+----
+NULL
+
+# Scalar input: float32 (returns float32)
+query RR
+SELECT round(2.5::FLOAT), round(-2.5::FLOAT);
+----
+3 -3
+
+# Scalar input: integer types — d >= 0 is a no-op, preserves type
+query III
+SELECT round(42::BIGINT), round(-42::BIGINT), round(NULL::BIGINT);
+----
+42 -42 NULL
+
+# Scalar input: integer with d < 0 rounds to nearest 10^|d|
+query IIII
+SELECT round(1234::BIGINT, -2), round(1250::BIGINT, -2), round(-1234::BIGINT, -2), round(-1250::BIGINT, -2);
+----
+1200 1300 -1200 -1300
+
+# Scalar input: decimal128 with d >= 0
+query RRR
+SELECT round(1.235::DECIMAL(5, 3), 2), round(-1.235::DECIMAL(5, 3), 2), round(NULL::DECIMAL(5, 3), 2);
+----
+1.24 -1.24 NULL
+
+# Scalar input: decimal128 with d < 0 reduces scale to 0
+query RR
+SELECT round(123.456::DECIMAL(6, 3), -1), round(150.000::DECIMAL(6, 3), -2);
+----
+120 200
+
+# Spark ANSI mode: integer overflow on round with large negative d
+statement ok
+set datafusion.execution.enable_ansi_mode = true;
+
+query error DataFusion error: Arrow error: Compute error: \[ARITHMETIC_OVERFLOW\] integer overflow in round
+SELECT round(9223372036854775807::BIGINT, -1);
+
+statement ok
+set datafusion.execution.enable_ansi_mode = false;
+
+# Array input: float64
+query R
+SELECT round(a) FROM (VALUES (2.5::DOUBLE), (-2.5::DOUBLE), (NULL::DOUBLE)) AS t(a);
+----
+3
+-3
+NULL
+
+# Array input: integer with d < 0
+query I
+SELECT round(a, -2) FROM (VALUES (1234::BIGINT), (1250::BIGINT), (-1234::BIGINT), (NULL::BIGINT)) AS t(a);
+----
+1200
+1300
+-1200
+NULL
+
+# Array input: decimal128
+query R
+SELECT round(a, 2) FROM (VALUES (1.235::DECIMAL(5, 3)), (-1.235::DECIMAL(5, 3)), (NULL::DECIMAL(5, 3))) AS t(a);
+----
+1.24
+-1.24
+NULL

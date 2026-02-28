@@ -39,8 +39,10 @@ use datafusion_expr::{
 /// Differences with DataFusion round:
 ///  - Spark rounds integer types in-place (preserving the type) when `d` < 0,
 ///    with overflow checking in ANSI mode; DataFusion coerces integers to Float64
-///  - Spark adjusts Decimal128 precision/scale based on `d`;
-///    DataFusion preserves the original precision/scale
+///  - Spark recalculates Decimal128 precision as (p - s + new_s + 1) where
+///    new_s = min(s, d); DataFusion preserves the original precision while
+///    adjusting scale the same way
+///  - Spark only supports Decimal128; DataFusion also supports Decimal32/64/256
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkRound {
     signature: Signature,
