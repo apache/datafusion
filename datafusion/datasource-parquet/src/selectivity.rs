@@ -497,22 +497,24 @@ impl SelectivityTrackerInner {
                     .filter(|idx| !projection_columns.contains(idx))
                     .copied()
                     .collect();
-                let extra_bytes = crate::row_filter::total_compressed_bytes(
-                    &extra_columns,
-                    metadata,
-                );
+                let extra_bytes =
+                    crate::row_filter::total_compressed_bytes(&extra_columns, metadata);
                 let byte_ratio = extra_bytes as f64 / projection_scan_size as f64;
                 if byte_ratio <= config.byte_ratio_threshold {
                     debug!(
                         "FilterId {id}: New filter → Row filter via extra byte ratio {byte_ratio} <= threshold {} (extra_cols={}, filter_cols={}) — {expr}",
-                        config.byte_ratio_threshold, extra_columns.len(), filter_columns.len()
+                        config.byte_ratio_threshold,
+                        extra_columns.len(),
+                        filter_columns.len()
                     );
                     self.filter_states.insert(id, FilterState::RowFilter);
                     row_filters.push((id, expr));
                 } else {
                     debug!(
                         "FilterId {id}: New filter → Post-scan via extra byte ratio {byte_ratio} > threshold {} (extra_cols={}, filter_cols={}) — {expr}",
-                        config.byte_ratio_threshold, extra_columns.len(), filter_columns.len()
+                        config.byte_ratio_threshold,
+                        extra_columns.len(),
+                        filter_columns.len()
                     );
                     self.filter_states.insert(id, FilterState::PostScan);
                     post_scan_filters.push((id, expr));
@@ -1243,7 +1245,8 @@ mod tests {
             ];
 
             // First partition
-            let result1 = tracker.partition_filters(filters.clone(), 1000, &[], &metadata);
+            let result1 =
+                tracker.partition_filters(filters.clone(), 1000, &[], &metadata);
             assert!(result1.row_filters.len() + result1.post_scan.len() > 0);
 
             // Only add stats for filters 1 and 3, not 2
@@ -1266,7 +1269,8 @@ mod tests {
                 (3, col_expr("a", 2)),
             ];
 
-            let result1 = tracker.partition_filters(filters.clone(), 1000, &[], &metadata);
+            let result1 =
+                tracker.partition_filters(filters.clone(), 1000, &[], &metadata);
             let result2 = tracker.partition_filters(filters, 1000, &[], &metadata);
 
             // Without stats and with identical byte sizes, order should be stable
