@@ -31,8 +31,12 @@ use datafusion_expr::{
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#ceil>
 ///
 /// Differences with DataFusion ceil:
-///  - Spark's ceil returns Int64 for float/integer types
-///  - Spark's ceil adjusts precision for Decimal128 types
+///  - Spark's ceil returns Int64 for float and integer inputs; DataFusion preserves
+///    the input type (Float32→Float32, Float64→Float64, integers coerced to Float64)
+///  - Spark's ceil on Decimal128(p, s) returns Decimal128(p−s+1, 0), reducing scale
+///    to 0; DataFusion preserves the original precision and scale
+///  - Spark only supports Decimal128; DataFusion also supports Decimal32/64/256
+///  - Spark does not check for decimal overflow; DataFusion errors on overflow
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkCeil {
     signature: Signature,
