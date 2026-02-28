@@ -32,6 +32,35 @@ pub mod multi_group_by;
 
 mod row;
 mod single_group_by;
+
+// ---------------------------------------------------------------------------
+// Packed index helpers: 16-bit hash tag (top) + 48-bit group index (bottom)
+// ---------------------------------------------------------------------------
+
+/// Number of hash tag bits stored inline in each packed entry.
+const HASH_TAG_SHIFT: u32 = 48;
+
+/// Mask for the lower 48 bits (group index).
+pub(crate) const INDEX_MASK: u64 = (1u64 << HASH_TAG_SHIFT) - 1;
+
+/// Pack a group index and hash into a single u64.
+/// The top 16 bits store the hash tag; the bottom 48 bits store the index.
+#[inline]
+pub(crate) fn pack_index(group_index: usize, hash: u64) -> u64 {
+    (hash & !INDEX_MASK) | (group_index as u64)
+}
+
+/// Extract the group index from a packed u64.
+#[inline]
+pub(crate) fn unpack_index(packed: u64) -> usize {
+    (packed & INDEX_MASK) as usize
+}
+
+/// Check whether the inline hash tag of a packed entry matches the given hash.
+#[inline]
+pub(crate) fn hash_tag_matches(packed: u64, hash: u64) -> bool {
+    (packed ^ hash) & !INDEX_MASK == 0
+}
 use datafusion_physical_expr::binary_map::OutputType;
 use multi_group_by::GroupValuesColumn;
 use row::GroupValuesRows;

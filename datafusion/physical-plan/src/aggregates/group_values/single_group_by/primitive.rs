@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregates::group_values::GroupValues;
+use crate::aggregates::group_values::{
+    GroupValues, INDEX_MASK, hash_tag_matches, pack_index, unpack_index,
+};
 use ahash::RandomState;
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::{
@@ -80,11 +82,12 @@ hash_float!(f16, f32, f64);
 pub struct GroupValuesPrimitive<T: ArrowPrimitiveType> {
     /// The data type of the output array
     data_type: DataType,
-    /// Stores the `group_index` based on the hash of its value
+    /// Stores packed entries: top 16 bits = hash tag, bottom 48 bits = group index.
     ///
-    /// Hashes are stored separately in `group_hashes` to keep hash table
-    /// entries small (one `usize` per slot) for better cache utilization.
-    map: HashTable<usize>,
+    /// The inline hash tag enables fast filtering during probing without
+    /// accessing the separate `group_hashes` vec. Combined with the Swiss
+    /// table's 7-bit control byte, this gives 23 bits of hash filtering.
+    map: HashTable<u64>,
     /// The group index of the null value if any
     null_group: Option<usize>,
     /// The values for each group index
@@ -133,15 +136,22 @@ where
                     let values = &self.values;
                     let insert = self.map.entry(
                         hash,
-                        |&g| unsafe { values.get_unchecked(g).is_eq(key) },
-                        |&g| unsafe { *group_hashes.get_unchecked(g) },
+                        |&packed| unsafe {
+                            hash_tag_matches(packed, hash)
+                                && values.get_unchecked(unpack_index(packed)).is_eq(key)
+                        },
+                        |&packed| unsafe {
+                            *group_hashes.get_unchecked(unpack_index(packed))
+                        },
                     );
 
                     match insert {
-                        hashbrown::hash_table::Entry::Occupied(o) => *o.get(),
+                        hashbrown::hash_table::Entry::Occupied(o) => {
+                            unpack_index(*o.get())
+                        }
                         hashbrown::hash_table::Entry::Vacant(v) => {
                             let g = self.values.len();
-                            v.insert(g);
+                            v.insert(pack_index(g, hash));
                             self.values.push(key);
                             self.group_hashes.push(hash);
                             g
@@ -155,7 +165,7 @@ where
     }
 
     fn size(&self) -> usize {
-        self.map.capacity() * size_of::<usize>()
+        self.map.capacity() * size_of::<u64>()
             + self.values.allocated_size()
             + self.group_hashes.allocated_size()
     }
@@ -192,11 +202,11 @@ where
             }
             EmitTo::First(n) => {
                 self.map.retain(|entry| {
-                    // Decrement group index by n
-                    match entry.checked_sub(n) {
-                        // Group index was >= n, shift value down
+                    let idx = unpack_index(*entry);
+                    match idx.checked_sub(n) {
+                        // Group index was >= n, shift index down, keep hash tag
                         Some(sub) => {
-                            *entry = sub;
+                            *entry = (*entry & !INDEX_MASK) | (sub as u64);
                             true
                         }
                         // Group index was < n, so remove from table
