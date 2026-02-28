@@ -418,30 +418,62 @@
 -->
 <section id="api-health-policy">
 <h1>API health policy<a class="headerlink" href="#api-health-policy" title="Link to this heading">#</a></h1>
-<p>DataFusion is used extensively as a library and has a large public API, thus it
-is important that the API is well maintained. In general, we try to minimize
-breaking API changes, but they are sometimes necessary.</p>
-<p>When possible, rather than making breaking API changes, we prefer to deprecate
-APIs to give users time to adjust to the changes.</p>
-<section id="upgrade-guides">
-<h2>Upgrade Guides<a class="headerlink" href="#upgrade-guides" title="Link to this heading">#</a></h2>
-<p>When making changes that require DataFusion users to make changes to their code
-as part of an upgrade please consider adding documentation to the version
-specific <a class="reference internal" href="../library-user-guide/upgrading/index.html"><span class="doc std std-doc">Upgrade Guide</span></a></p>
-</section>
-<section id="breaking-changes">
-<h2>Breaking Changes<a class="headerlink" href="#breaking-changes" title="Link to this heading">#</a></h2>
-<p>In general, a function is part of the public API if it appears on the <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/index.html">docs.rs page</a></p>
+<p>DataFusion is used extensively as a library in other applications and has a
+large public API. We try to keep the API well maintained and minimize breaking
+changes to avoid issues for downstream users.</p>
+<section id="breaking-api-changes">
+<h2>Breaking API Changes<a class="headerlink" href="#breaking-api-changes" title="Link to this heading">#</a></h2>
+<section id="what-is-the-public-api-and-what-is-a-breaking-api-change">
+<h3>What is the public API and what is a breaking API change?<a class="headerlink" href="#what-is-the-public-api-and-what-is-a-breaking-api-change" title="Link to this heading">#</a></h3>
+<p>In general, an item is part of the public API if it appears on the <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/index.html">docs.rs page</a>.</p>
 <p>Breaking public API changes are those that <em>require</em> users to change their code
 for it to compile and execute, and are listed as “Major Changes” in the <a class="reference external" href="https://doc.rust-lang.org/cargo/reference/semver.html#change-categories">SemVer
-Compatibility Section of the cargo book</a>. Common examples of breaking changes:</p>
+Compatibility Section of the Cargo Book</a>. Common examples of breaking changes include:</p>
 <ul class="simple">
 <li><p>Adding new required parameters to a function (<code class="docutils literal notranslate"><span class="pre">foo(a:</span> <span class="pre">i32,</span> <span class="pre">b:</span> <span class="pre">i32)</span></code> -&gt; <code class="docutils literal notranslate"><span class="pre">foo(a:</span> <span class="pre">i32,</span> <span class="pre">b:</span> <span class="pre">i32,</span> <span class="pre">c:</span> <span class="pre">i32)</span></code>)</p></li>
 <li><p>Removing a <code class="docutils literal notranslate"><span class="pre">pub</span></code> function</p></li>
 <li><p>Changing the return type of a function</p></li>
+<li><p>Adding a new function to a <code class="docutils literal notranslate"><span class="pre">trait</span></code> without a default implementation</p></li>
 </ul>
-<p>When making breaking public API changes, please add the <code class="docutils literal notranslate"><span class="pre">api-change</span></code> label to
-the PR so we can highlight the changes in the release notes.</p>
+<p>Examples of non-breaking changes include:</p>
+<ul class="simple">
+<li><p>Marking a function as deprecated (<code class="docutils literal notranslate"><span class="pre">#[deprecated]</span></code>)</p></li>
+<li><p>Adding a new function to a <code class="docutils literal notranslate"><span class="pre">trait</span></code> with a default implementation</p></li>
+</ul>
+</section>
+<section id="when-to-make-breaking-api-changes">
+<h3>When to make breaking API changes?<a class="headerlink" href="#when-to-make-breaking-api-changes" title="Link to this heading">#</a></h3>
+<p>When possible, we prefer to avoid making breaking API changes. One common way to
+avoid such changes is to deprecate the old API, as described in the <a class="reference internal" href="#deprecation-guidelines">Deprecation
+Guidelines</a> section below.</p>
+<p>If you do want to propose a breaking API change, we must weigh the benefits of the
+change with the cost (impact on downstream users). It is often frustrating for
+downstream users to change their applications, and it is even more so if they
+do not gain improved capabilities.</p>
+<p>Examples of good reasons for making a breaking API change include:</p>
+<ul class="simple">
+<li><p>The change allows new use cases that were not possible before</p></li>
+<li><p>The change significantly enables improved performance</p></li>
+</ul>
+<p>Examples of potentially weak reasons for making breaking API changes include:</p>
+<ul class="simple">
+<li><p>The change is an internal refactor to make DataFusion more consistent</p></li>
+<li><p>The change is to remove an API that is not widely used but has not been marked as deprecated</p></li>
+</ul>
+</section>
+<section id="what-to-do-when-making-breaking-api-changes">
+<h3>What to do when making breaking API changes?<a class="headerlink" href="#what-to-do-when-making-breaking-api-changes" title="Link to this heading">#</a></h3>
+<p>When making breaking public API changes, please:</p>
+<ol class="arabic simple">
+<li><p>Add the <code class="docutils literal notranslate"><span class="pre">api-change</span></code> label to the PR so we can highlight the changes in the release notes.</p></li>
+<li><p>Consider adding documentation to the version-specific <a class="reference internal" href="../library-user-guide/upgrading/index.html"><span class="std std-doc">Upgrade Guide</span></a> if the required changes are non-trivial.</p></li>
+</ol>
+</section>
+</section>
+<section id="upgrade-guides">
+<h2>Upgrade Guides<a class="headerlink" href="#upgrade-guides" title="Link to this heading">#</a></h2>
+<p>When a change requires DataFusion users to modify their code as part of an
+upgrade, please consider documenting it in the version-specific <a class="reference internal" href="../library-user-guide/upgrading/index.html"><span class="std std-doc">Upgrade Guide</span></a>.</p>
 </section>
 <section id="deprecation-guidelines">
 <h2>Deprecation Guidelines<a class="headerlink" href="#deprecation-guidelines" title="Link to this heading">#</a></h2>
@@ -450,8 +482,8 @@ the PR so we can highlight the changes in the release notes.</p>
 <li><p>Mark the API as deprecated using <code class="docutils literal notranslate"><span class="pre">#[deprecated]</span></code> and specify the exact DataFusion version in which it was deprecated</p></li>
 <li><p>Concisely describe the preferred API to help the user transition</p></li>
 </ul>
-<p>The deprecated version is the next version which contains the deprecation. For
-example, if the current version listed in <a class="reference external" href="https://github.com/apache/datafusion/blob/main/Cargo.toml"><code class="docutils literal notranslate"><span class="pre">Cargo.toml</span></code></a> is <code class="docutils literal notranslate"><span class="pre">43.0.0</span></code> then the next
+<p>The deprecated version is the next version that introduces the deprecation. For
+example, if the current version listed in <a class="reference external" href="https://github.com/apache/datafusion/blob/main/Cargo.toml"><code class="docutils literal notranslate"><span class="pre">Cargo.toml</span></code></a> is <code class="docutils literal notranslate"><span class="pre">43.0.0</span></code>, then the next
 version will be <code class="docutils literal notranslate"><span class="pre">44.0.0</span></code>.</p>
 <p>To mark the API as deprecated, use the <code class="docutils literal notranslate"><span class="pre">#[deprecated(since</span> <span class="pre">=</span> <span class="pre">&quot;...&quot;,</span> <span class="pre">note</span> <span class="pre">=</span> <span class="pre">&quot;...&quot;)]</span></code> attribute.</p>
 <p>For example:</p>
@@ -460,7 +492,7 @@ version will be <code class="docutils literal notranslate"><span class="pre">44.
 </pre></div>
 </div>
 <p>Deprecated methods will remain in the codebase for a period of 6 major versions or 6 months, whichever is longer, to provide users ample time to transition away from them.</p>
-<p>Please refer to <a class="reference external" href="https://crates.io/crates/datafusion/versions">DataFusion releases</a> to plan ahead API migration</p>
+<p>Please refer to <a class="reference external" href="https://crates.io/crates/datafusion/versions">DataFusion releases</a> to plan API migration ahead of time.</p>
 </section>
 </section>
 
@@ -511,8 +543,13 @@ version will be <code class="docutils literal notranslate"><span class="pre">44.
   </div>
   <nav class="bd-toc-nav page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#breaking-api-changes">Breaking API Changes</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#what-is-the-public-api-and-what-is-a-breaking-api-change">What is the public API and what is a breaking API change?</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#when-to-make-breaking-api-changes">When to make breaking API changes?</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#what-to-do-when-making-breaking-api-changes">What to do when making breaking API changes?</a></li>
+</ul>
+</li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#upgrade-guides">Upgrade Guides</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#breaking-changes">Breaking Changes</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#deprecation-guidelines">Deprecation Guidelines</a></li>
 </ul>
   </nav></div>
