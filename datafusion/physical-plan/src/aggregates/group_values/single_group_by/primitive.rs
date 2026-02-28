@@ -209,9 +209,10 @@ where
         Ok(vec![Arc::new(array.with_data_type(self.data_type.clone()))])
     }
 
-    fn clear_shrink(&mut self, num_rows: usize) {
+    fn clear_shrink(&mut self, batch: &RecordBatch) {
+        let count = batch.num_rows();
         self.num_groups = 0;
         self.map.clear();
-        self.map.shrink_to(num_rows, |_| 0); // hasher does not matter since the map is cleared
+        self.map.shrink_to(count, |_| 0); // hasher does not matter since the map is cleared
     }
 }
