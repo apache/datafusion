@@ -3837,6 +3837,142 @@ mod tests {
         Ok(())
     }
 
+    /// Tests that when the memory pool is too small to accommodate the sort
+    /// reservation during spill, the error is properly propagated as
+    /// ResourcesExhausted rather than silently exceeding memory limits.
+    #[tokio::test]
+    async fn test_sort_reservation_fails_during_spill() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("g", DataType::Int64, false),
+            Field::new("a", DataType::Float64, false),
+            Field::new("b", DataType::Float64, false),
+            Field::new("c", DataType::Float64, false),
+            Field::new("d", DataType::Float64, false),
+            Field::new("e", DataType::Float64, false),
+        ]));
+
+        let batches = vec![vec![
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int64Array::from(vec![1])),
+                    Arc::new(Float64Array::from(vec![10.0])),
+                    Arc::new(Float64Array::from(vec![20.0])),
+                    Arc::new(Float64Array::from(vec![30.0])),
+                    Arc::new(Float64Array::from(vec![40.0])),
+                    Arc::new(Float64Array::from(vec![50.0])),
+                ],
+            )?,
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int64Array::from(vec![2])),
+                    Arc::new(Float64Array::from(vec![11.0])),
+                    Arc::new(Float64Array::from(vec![21.0])),
+                    Arc::new(Float64Array::from(vec![31.0])),
+                    Arc::new(Float64Array::from(vec![41.0])),
+                    Arc::new(Float64Array::from(vec![51.0])),
+                ],
+            )?,
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int64Array::from(vec![3])),
+                    Arc::new(Float64Array::from(vec![12.0])),
+                    Arc::new(Float64Array::from(vec![22.0])),
+                    Arc::new(Float64Array::from(vec![32.0])),
+                    Arc::new(Float64Array::from(vec![42.0])),
+                    Arc::new(Float64Array::from(vec![52.0])),
+                ],
+            )?,
+        ]];
+
+        let scan = TestMemoryExec::try_new(&batches, Arc::clone(&schema), None)?;
+
+        let aggr = Arc::new(AggregateExec::try_new(
+            AggregateMode::Single,
+            PhysicalGroupBy::new(
+                vec![(col("g", schema.as_ref())?, "g".to_string())],
+                vec![],
+                vec![vec![false]],
+                false,
+            ),
+            vec![
+                Arc::new(
+                    AggregateExprBuilder::new(
+                        avg_udaf(),
+                        vec![col("a", schema.as_ref())?],
+                    )
+                    .schema(Arc::clone(&schema))
+                    .alias("AVG(a)")
+                    .build()?,
+                ),
+                Arc::new(
+                    AggregateExprBuilder::new(
+                        avg_udaf(),
+                        vec![col("b", schema.as_ref())?],
+                    )
+                    .schema(Arc::clone(&schema))
+                    .alias("AVG(b)")
+                    .build()?,
+                ),
+                Arc::new(
+                    AggregateExprBuilder::new(
+                        avg_udaf(),
+                        vec![col("c", schema.as_ref())?],
+                    )
+                    .schema(Arc::clone(&schema))
+                    .alias("AVG(c)")
+                    .build()?,
+                ),
+                Arc::new(
+                    AggregateExprBuilder::new(
+                        avg_udaf(),
+                        vec![col("d", schema.as_ref())?],
+                    )
+                    .schema(Arc::clone(&schema))
+                    .alias("AVG(d)")
+                    .build()?,
+                ),
+                Arc::new(
+                    AggregateExprBuilder::new(
+                        avg_udaf(),
+                        vec![col("e", schema.as_ref())?],
+                    )
+                    .schema(Arc::clone(&schema))
+                    .alias("AVG(e)")
+                    .build()?,
+                ),
+            ],
+            vec![None, None, None, None, None],
+            Arc::new(scan) as Arc<dyn ExecutionPlan>,
+            Arc::clone(&schema),
+        )?);
+
+        // Pool must be large enough for accumulation to start but too small for
+        // sort_memory after clearing.
+        let task_ctx = new_spill_ctx(1, 500);
+        let result = collect(aggr.execute(0, Arc::clone(&task_ctx))?).await;
+
+        match &result {
+            Ok(_) => panic!("Expected ResourcesExhausted error but query succeeded"),
+            Err(e) => {
+                let root = e.find_root();
+                assert!(
+                    matches!(root, DataFusionError::ResourcesExhausted(_)),
+                    "Expected ResourcesExhausted, got: {root}",
+                );
+                let msg = root.to_string();
+                assert!(
+                    msg.contains("Failed to reserve memory for sort during spill"),
+                    "Expected sort reservation error, got: {msg}",
+                );
+            }
+        }
+
+        Ok(())
+    }
+
     /// Tests that PartialReduce mode:
     /// 1. Accepts state as input (like Final)
     /// 2. Produces state as output (like Partial)

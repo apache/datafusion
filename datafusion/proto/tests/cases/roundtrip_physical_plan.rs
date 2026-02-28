@@ -3055,3 +3055,48 @@ fn test_session_id_rotation_with_execution_plans() -> Result<()> {
 
     Ok(())
 }
+
+/// Tests that `lead` window function with offset and default value args
+/// survives a protobuf round-trip. This is a regression test for a bug
+/// where `expressions()` (used during serialization) returns only the
+/// column expression for lead/lag, silently dropping the offset and
+/// default value literal args.
+#[test]
+fn roundtrip_lead_with_default_value() -> Result<()> {
+    use datafusion::functions_window::lead_lag::lead_udwf;
+
+    let field_a = Field::new("a", DataType::Int64, false);
+    let field_b = Field::new("b", DataType::Int64, false);
+    let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+
+    // lead(a, 2, 42) — column a, offset 2, default value 42
+    let lead_window = create_udwf_window_expr(
+        &lead_udwf(),
+        &[col("a", &schema)?, lit(2i64), lit(42i64)],
+        schema.as_ref(),
+        "test lead with default".to_string(),
+        false,
+    )?;
+
+    let udwf_expr = Arc::new(StandardWindowExpr::new(
+        lead_window,
+        &[col("b", &schema)?],
+        &[PhysicalSortExpr {
+            expr: col("a", &schema)?,
+            options: SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+        }],
+        Arc::new(WindowFrame::new(None)),
+    ));
+
+    let input = Arc::new(EmptyExec::new(schema.clone()));
+
+    roundtrip_test(Arc::new(BoundedWindowAggExec::try_new(
+        vec![udwf_expr],
+        input,
+        InputOrderMode::Sorted,
+        true,
+    )?))
+}
