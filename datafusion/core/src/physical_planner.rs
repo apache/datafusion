@@ -530,8 +530,9 @@ impl DefaultPhysicalPlanner {
                     let plan = match maybe_plan {
                         Some(plan) => plan,
                         None => {
-                            return internal_err!(
-                                "TableSource was not DefaultTableSource"
+                            return plan_err!(
+                                "No installed planner was able to plan TableScan for custom TableSource: {:?}",
+                                scan.table_name
                             );
                         }
                     };
@@ -1682,7 +1683,7 @@ impl DefaultPhysicalPlanner {
                     ),
                 }?;
 
-                let context = format!("Extension planner for {:?}", node);
+                let context = format!("Extension planner for {node:?}");
                 self.ensure_schema_matches(node.schema(), &plan, &context)?;
                 plan
             }
