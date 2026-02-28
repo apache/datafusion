@@ -433,28 +433,9 @@ fn reach_end_int64(val: i64, end: i64, step: i64, include_end: bool) -> bool {
     }
 }
 
-fn validate_interval_step(
-    step: IntervalMonthDayNano,
-    start: i64,
-    end: i64,
-) -> Result<()> {
+fn validate_interval_step(step: IntervalMonthDayNano) -> Result<()> {
     if step.months == 0 && step.days == 0 && step.nanoseconds == 0 {
         return plan_err!("Step interval cannot be zero");
-    }
-
-    let step_is_positive = step.months > 0 || step.days > 0 || step.nanoseconds > 0;
-    let step_is_negative = step.months < 0 || step.days < 0 || step.nanoseconds < 0;
-
-    if start > end && step_is_positive {
-        return plan_err!(
-            "Start is bigger than end, but increment is positive: Cannot generate infinite series"
-        );
-    }
-
-    if start < end && step_is_negative {
-        return plan_err!(
-            "Start is smaller than end, but increment is negative: Cannot generate infinite series"
-        );
     }
 
     Ok(())
@@ -567,18 +548,6 @@ impl GenerateSeriesFuncImpl {
             }
         };
 
-        if start > end && step > 0 {
-            return plan_err!(
-                "Start is bigger than end, but increment is positive: Cannot generate infinite series"
-            );
-        }
-
-        if start < end && step < 0 {
-            return plan_err!(
-                "Start is smaller than end, but increment is negative: Cannot generate infinite series"
-            );
-        }
-
         if step == 0 {
             return plan_err!("Step cannot be zero");
         }
@@ -656,7 +625,7 @@ impl GenerateSeriesFuncImpl {
         };
 
         // Validate step interval
-        validate_interval_step(step, start, end)?;
+        validate_interval_step(step)?;
 
         Ok(Arc::new(GenerateSeriesTable {
             schema,
@@ -749,7 +718,7 @@ impl GenerateSeriesFuncImpl {
         let end_ts = end_date as i64 * NANOS_PER_DAY;
 
         // Validate step interval
-        validate_interval_step(step_interval, start_ts, end_ts)?;
+        validate_interval_step(step_interval)?;
 
         Ok(Arc::new(GenerateSeriesTable {
             schema,

@@ -334,5 +334,10 @@ true true
 false false
 false false
 
+query TT
+select * from regexp_test where regexp_like('f', regexp_replace((('v\r') like ('f_*sP6H1*')), '339629555', '-1459539013'));
+----
+
+
 statement ok
 drop table if exists dict_table;

@@ -182,13 +182,13 @@ impl QueryBuilder {
 
     /// Add max columns num in group by(default: 3), for example if it is set to 1,
     /// the generated sql will group by at most 1 column
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     pub fn with_max_group_by_columns(mut self, max_group_by_columns: usize) -> Self {
         self.max_group_by_columns = max_group_by_columns;
         self
     }
 
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     pub fn with_min_group_by_columns(mut self, min_group_by_columns: usize) -> Self {
         self.min_group_by_columns = min_group_by_columns;
         self
@@ -202,7 +202,7 @@ impl QueryBuilder {
     }
 
     /// Add if also test the no grouping aggregation case(default: true)
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     pub fn with_no_grouping(mut self, no_grouping: bool) -> Self {
         self.no_grouping = no_grouping;
         self

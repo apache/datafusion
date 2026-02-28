@@ -70,7 +70,7 @@ use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use object_store::buffered::BufWriter;
 use object_store::path::Path;
-use object_store::{ObjectMeta, ObjectStore};
+use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 use parquet::arrow::arrow_writer::{
     ArrowColumnChunk, ArrowColumnWriter, ArrowLeafColumn, ArrowRowGroupWriterFactory,
     ArrowWriterOptions, compute_leaves,
@@ -82,7 +82,9 @@ use parquet::basic::Type;
 use parquet::encryption::encrypt::FileEncryptionProperties;
 use parquet::errors::ParquetError;
 use parquet::file::metadata::{ParquetMetaData, SortingColumn};
-use parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
+use parquet::file::properties::{
+    DEFAULT_MAX_ROW_GROUP_ROW_COUNT, WriterProperties, WriterPropertiesBuilder,
+};
 use parquet::file::writer::SerializedFileWriter;
 use parquet::schema::types::SchemaDescriptor;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
@@ -391,7 +393,7 @@ impl FileFormat for ParquetFormat {
             })
             .boxed() // Workaround https://github.com/rust-lang/rust/issues/64552
             // fetch schemas concurrently, if requested
-            .buffered(state.config_options().execution.meta_fetch_concurrency)
+            .buffer_unordered(state.config_options().execution.meta_fetch_concurrency)
             .try_collect()
             .await?;
 
@@ -401,12 +403,10 @@ impl FileFormat for ParquetFormat {
         // is not deterministic. Thus, to ensure deterministic schema inference
         // sort the files first.
         // https://github.com/apache/datafusion/pull/6629
-        schemas.sort_by(|(location1, _), (location2, _)| location1.cmp(location2));
+        schemas
+            .sort_unstable_by(|(location1, _), (location2, _)| location1.cmp(location2));
 
-        let schemas = schemas
-            .into_iter()
-            .map(|(_, schema)| schema)
-            .collect::<Vec<_>>();
+        let schemas = schemas.into_iter().map(|(_, schema)| schema);
 
         let schema = if self.skip_metadata() {
             Schema::try_merge(clear_metadata(schemas))
@@ -1360,7 +1360,7 @@ impl FileSink for ParquetSink {
                         parquet_props.clone(),
                     )
                     .await?;
-                let mut reservation = MemoryConsumer::new(format!("ParquetSink[{path}]"))
+                let reservation = MemoryConsumer::new(format!("ParquetSink[{path}]"))
                     .register(context.memory_pool());
                 file_write_tasks.spawn(async move {
                     while let Some(batch) = rx.recv().await {
@@ -1465,7 +1465,7 @@ impl DataSink for ParquetSink {
 async fn column_serializer_task(
     mut rx: Receiver<ArrowLeafColumn>,
     mut writer: ArrowColumnWriter,
-    mut reservation: MemoryReservation,
+    reservation: MemoryReservation,
 ) -> Result<(ArrowColumnWriter, MemoryReservation)> {
     while let Some(col) = rx.recv().await {
         writer.write(&col)?;
@@ -1550,7 +1550,7 @@ fn spawn_rg_join_and_finalize_task(
     rg_rows: usize,
     pool: &Arc<dyn MemoryPool>,
 ) -> SpawnedTask<RBStreamSerializeResult> {
-    let mut rg_reservation =
+    let rg_reservation =
         MemoryConsumer::new("ParquetSink(SerializedRowGroupWriter)").register(pool);
 
     SpawnedTask::spawn(async move {
@@ -1589,7 +1589,9 @@ fn spawn_parquet_parallel_serialization_task(
 ) -> SpawnedTask<Result<(), DataFusionError>> {
     SpawnedTask::spawn(async move {
         let max_buffer_rb = parallel_options.max_buffered_record_batches_per_stream;
-        let max_row_group_rows = writer_props.max_row_group_size();
+        let max_row_group_rows = writer_props
+            .max_row_group_row_count()
+            .unwrap_or(DEFAULT_MAX_ROW_GROUP_ROW_COUNT);
         let mut row_group_index = 0;
         let col_writers =
             row_group_writer_factory.create_column_writers(row_group_index)?;
@@ -1682,12 +1684,12 @@ async fn concatenate_parallel_row_groups(
     mut object_store_writer: Box<dyn AsyncWrite + Send + Unpin>,
     pool: Arc<dyn MemoryPool>,
 ) -> Result<ParquetMetaData> {
-    let mut file_reservation =
+    let file_reservation =
         MemoryConsumer::new("ParquetSink(SerializedFileWriter)").register(&pool);
 
     while let Some(task) = serialize_rx.recv().await {
         let result = task.join_unwind().await;
-        let (serialized_columns, mut rg_reservation, _cnt) =
+        let (serialized_columns, rg_reservation, _cnt) =
             result.map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??;
 
         let mut rg_out = parquet_writer.next_row_group()?;

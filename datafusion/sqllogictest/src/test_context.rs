@@ -46,6 +46,7 @@ use datafusion::{
     datasource::{MemTable, TableProvider, TableType},
     prelude::{CsvReadOptions, SessionContext},
 };
+use datafusion_spark::SessionStateBuilderSpark;
 
 use crate::is_spark_path;
 use async_trait::async_trait;
@@ -84,21 +85,14 @@ impl TestContext {
 
         let mut state_builder = SessionStateBuilder::new()
             .with_config(config)
-            .with_runtime_env(runtime);
+            .with_runtime_env(runtime)
+            .with_default_features();
 
         if is_spark_path(relative_path) {
-            state_builder = state_builder.with_expr_planners(vec![Arc::new(
-                datafusion_spark::planner::SparkFunctionPlanner,
-            )]);
+            state_builder = state_builder.with_spark_features();
         }
 
-        let mut state = state_builder.with_default_features().build();
-
-        if is_spark_path(relative_path) {
-            info!("Registering Spark functions");
-            datafusion_spark::register_all(&mut state)
-                .expect("Can not register Spark functions");
-        }
+        let state = state_builder.build();
 
         let mut test_ctx = TestContext::new(SessionContext::new_with_state(state));
 

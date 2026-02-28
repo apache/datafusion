@@ -17,19 +17,13 @@
 
 //! [`CovarianceSample`]: covariance sample aggregations.
 
-use arrow::datatypes::FieldRef;
-use arrow::{
-    array::{ArrayRef, Float64Array, UInt64Array},
-    compute::kernels::cast,
-    datatypes::{DataType, Field},
-};
-use datafusion_common::{
-    Result, ScalarValue, downcast_value, plan_err, unwrap_or_internal_err,
-};
+use arrow::array::ArrayRef;
+use arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::cast::{as_float64_array, as_uint64_array};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
     function::{AccumulatorArgs, StateFieldsArgs},
-    type_coercion::aggregates::NUMERICS,
     utils::format_state_name,
 };
 use datafusion_functions_aggregate_common::stats::StatsType;
@@ -69,19 +63,10 @@ make_udaf_expr_and_func!(
     standard_argument(name = "expression1", prefix = "First"),
     standard_argument(name = "expression2", prefix = "Second")
 )]
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash, Debug)]
 pub struct CovarianceSample {
     signature: Signature,
     aliases: Vec<String>,
-}
-
-impl Debug for CovarianceSample {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.debug_struct("CovarianceSample")
-            .field("name", &self.name())
-            .field("signature", &self.signature)
-            .finish()
-    }
 }
 
 impl Default for CovarianceSample {
@@ -94,7 +79,10 @@ impl CovarianceSample {
     pub fn new() -> Self {
         Self {
             aliases: vec![String::from("covar")],
-            signature: Signature::uniform(2, NUMERICS.to_vec(), Volatility::Immutable),
+            signature: Signature::exact(
+                vec![DataType::Float64, DataType::Float64],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -112,11 +100,7 @@ impl AggregateUDFImpl for CovarianceSample {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if !arg_types[0].is_numeric() {
-            return plan_err!("Covariance requires numeric input types");
-        }
-
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Float64)
     }
 
@@ -165,18 +149,9 @@ impl AggregateUDFImpl for CovarianceSample {
     standard_argument(name = "expression1", prefix = "First"),
     standard_argument(name = "expression2", prefix = "Second")
 )]
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash, Debug)]
 pub struct CovariancePopulation {
     signature: Signature,
-}
-
-impl Debug for CovariancePopulation {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.debug_struct("CovariancePopulation")
-            .field("name", &self.name())
-            .field("signature", &self.signature)
-            .finish()
-    }
 }
 
 impl Default for CovariancePopulation {
@@ -188,7 +163,10 @@ impl Default for CovariancePopulation {
 impl CovariancePopulation {
     pub fn new() -> Self {
         Self {
-            signature: Signature::uniform(2, NUMERICS.to_vec(), Volatility::Immutable),
+            signature: Signature::exact(
+                vec![DataType::Float64, DataType::Float64],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -206,11 +184,7 @@ impl AggregateUDFImpl for CovariancePopulation {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if !arg_types[0].is_numeric() {
-            return plan_err!("Covariance requires numeric input types");
-        }
-
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Float64)
     }
 
@@ -304,30 +278,15 @@ impl Accumulator for CovarianceAccumulator {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let values1 = &cast(&values[0], &DataType::Float64)?;
-        let values2 = &cast(&values[1], &DataType::Float64)?;
+        let values1 = as_float64_array(&values[0])?;
+        let values2 = as_float64_array(&values[1])?;
 
-        let mut arr1 = downcast_value!(values1, Float64Array).iter().flatten();
-        let mut arr2 = downcast_value!(values2, Float64Array).iter().flatten();
-
-        for i in 0..values1.len() {
-            let value1 = if values1.is_valid(i) {
-                arr1.next()
-            } else {
-                None
-            };
-            let value2 = if values2.is_valid(i) {
-                arr2.next()
-            } else {
-                None
+        for (value1, value2) in values1.iter().zip(values2) {
+            let (value1, value2) = match (value1, value2) {
+                (Some(a), Some(b)) => (a, b),
+                _ => continue,
             };
 
-            if value1.is_none() || value2.is_none() {
-                continue;
-            }
-
-            let value1 = unwrap_or_internal_err!(value1);
-            let value2 = unwrap_or_internal_err!(value2);
             let new_count = self.count + 1;
             let delta1 = value1 - self.mean1;
             let new_mean1 = delta1 / new_count as f64 + self.mean1;
@@ -345,29 +304,14 @@ impl Accumulator for CovarianceAccumulator {
     }
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let values1 = &cast(&values[0], &DataType::Float64)?;
-        let values2 = &cast(&values[1], &DataType::Float64)?;
-        let mut arr1 = downcast_value!(values1, Float64Array).iter().flatten();
-        let mut arr2 = downcast_value!(values2, Float64Array).iter().flatten();
+        let values1 = as_float64_array(&values[0])?;
+        let values2 = as_float64_array(&values[1])?;
 
-        for i in 0..values1.len() {
-            let value1 = if values1.is_valid(i) {
-                arr1.next()
-            } else {
-                None
+        for (value1, value2) in values1.iter().zip(values2) {
+            let (value1, value2) = match (value1, value2) {
+                (Some(a), Some(b)) => (a, b),
+                _ => continue,
             };
-            let value2 = if values2.is_valid(i) {
-                arr2.next()
-            } else {
-                None
-            };
-
-            if value1.is_none() || value2.is_none() {
-                continue;
-            }
-
-            let value1 = unwrap_or_internal_err!(value1);
-            let value2 = unwrap_or_internal_err!(value2);
 
             let new_count = self.count - 1;
             let delta1 = self.mean1 - value1;
@@ -386,10 +330,10 @@ impl Accumulator for CovarianceAccumulator {
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        let counts = downcast_value!(states[0], UInt64Array);
-        let means1 = downcast_value!(states[1], Float64Array);
-        let means2 = downcast_value!(states[2], Float64Array);
-        let cs = downcast_value!(states[3], Float64Array);
+        let counts = as_uint64_array(&states[0])?;
+        let means1 = as_float64_array(&states[1])?;
+        let means2 = as_float64_array(&states[2])?;
+        let cs = as_float64_array(&states[3])?;
 
         for i in 0..counts.len() {
             let c = counts.value(i);

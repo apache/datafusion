@@ -28,7 +28,7 @@ use datafusion_common::{
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
-use datafusion_datasource::file_sink_config::FileSinkConfig;
+use datafusion_datasource::file_sink_config::{FileOutputMode, FileSinkConfig};
 #[expect(deprecated)]
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion_datasource::{
@@ -674,6 +674,7 @@ impl TableProvider for ListingTable {
             insert_op,
             keep_partition_by_columns,
             file_extension: self.options().format.get_ext(),
+            file_output_mode: FileOutputMode::Automatic,
         };
 
         // For writes, we only use user-specified ordering (no file groups to derive from)

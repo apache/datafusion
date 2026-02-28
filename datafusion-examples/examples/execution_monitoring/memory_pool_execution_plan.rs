@@ -38,7 +38,7 @@ use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::logical_expr::LogicalPlanBuilder;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, Statistics,
+    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
 };
 use datafusion::prelude::*;
 use futures::stream::{StreamExt, TryStreamExt};
@@ -199,7 +199,7 @@ impl ExternalBatchBufferer {
 struct BufferingExecutionPlan {
     schema: SchemaRef,
     input: Arc<dyn ExecutionPlan>,
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
 }
 
 impl BufferingExecutionPlan {
@@ -233,7 +233,7 @@ impl ExecutionPlan for BufferingExecutionPlan {
         self.schema.clone()
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 
@@ -295,9 +295,5 @@ impl ExecutionPlan for BufferingExecutionPlan {
                     })
             }),
         )))
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        Ok(Statistics::new_unknown(&self.schema))
     }
 }

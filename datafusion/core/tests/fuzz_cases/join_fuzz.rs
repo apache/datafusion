@@ -1087,7 +1087,7 @@ impl JoinFuzzTestCase {
     /// Files can be of different sizes
     /// The method can be useful to read partitions have been saved by `save_partitioned_batches_as_parquet`
     /// for test debugging purposes
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     async fn load_partitioned_batches_from_parquet(
         dir: &str,
     ) -> std::io::Result<Vec<RecordBatch>> {

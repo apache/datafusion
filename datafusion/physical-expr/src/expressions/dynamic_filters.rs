@@ -51,6 +51,10 @@ impl FilterState {
 /// Any `ExecutionPlan` that uses this expression and holds a reference to it internally should probably also
 /// implement `ExecutionPlan::reset_state` to remain compatible with recursive queries and other situations where
 /// the same `ExecutionPlan` is reused with different data.
+///
+/// For more background, please also see the [Dynamic Filters: Passing Information Between Operators During Execution for 25x Faster Queries blog]
+///
+/// [Dynamic Filters: Passing Information Between Operators During Execution for 25x Faster Queries blog]: https://datafusion.apache.org/blog/2025/09/10/dynamic-filters
 #[derive(Debug)]
 pub struct DynamicFilterPhysicalExpr {
     /// The original children of this PhysicalExpr, if any.
@@ -272,6 +276,10 @@ impl DynamicFilterPhysicalExpr {
     ///
     /// This method will return when [`Self::update`] is called and the generation increases.
     /// It does not guarantee that the filter is complete.
+    ///
+    /// Producers (e.g.) HashJoinExec may never update the expression or mark it as completed if there are no consumers.
+    /// If you call this method on a dynamic filter created by such a producer and there are no consumers registered this method would wait indefinitely.
+    /// This should not happen under normal operation and would indicate a programming error either in your producer or in DataFusion if the producer is a built in node.
     pub async fn wait_update(&self) {
         let mut rx = self.state_watch.subscribe();
         // Get the current generation
@@ -283,17 +291,16 @@ impl DynamicFilterPhysicalExpr {
 
     /// Wait asynchronously until this dynamic filter is marked as complete.
     ///
-    /// This method returns immediately if the filter is already complete or if the filter
-    /// is not being used by any consumers.
+    /// This method returns immediately if the filter is already complete.
     /// Otherwise, it waits until [`Self::mark_complete`] is called.
     ///
     /// Unlike [`Self::wait_update`], this method guarantees that when it returns,
     /// the filter is fully complete with no more updates expected.
-    pub async fn wait_complete(self: &Arc<Self>) {
-        if !self.is_used() {
-            return;
-        }
-
+    ///
+    /// Producers (e.g.) HashJoinExec may never update the expression or mark it as completed if there are no consumers.
+    /// If you call this method on a dynamic filter created by such a producer and there are no consumers registered this method would wait indefinitely.
+    /// This should not happen under normal operation and would indicate a programming error either in your producer or in DataFusion if the producer is a built in node.
+    pub async fn wait_complete(&self) {
         if self.inner.read().is_complete {
             return;
         }

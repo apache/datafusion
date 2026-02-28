@@ -31,7 +31,7 @@ use datafusion::common::{
 };
 use datafusion::execution::{FunctionRegistry, SessionState};
 use datafusion::logical_expr::{Expr, Extension, LogicalPlan};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use substrait::proto;
 use substrait::proto::expression as substrait_expression;
 use substrait::proto::expression::{
@@ -364,6 +364,26 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
         not_impl_err!("Dynamic Parameter expression not supported")
     }
 
+    // Outer Schema Stack
+    // These methods manage a stack of outer schemas for correlated subquery support.
+    // When entering a subquery, the enclosing query's schema is pushed onto the stack.
+    // Field references with OuterReference root_type use these to resolve columns.
+
+    /// Push an outer schema onto the stack when entering a subquery.
+    fn push_outer_schema(&self, _schema: Arc<DFSchema>) {}
+
+    /// Pop an outer schema from the stack when leaving a subquery.
+    fn pop_outer_schema(&self) {}
+
+    /// Get the outer schema at the given nesting depth.
+    /// `steps_out = 1` is the immediately enclosing query, `steps_out = 2`
+    /// is two levels out, etc. Returns `None` if `steps_out` is 0 or
+    /// exceeds the current nesting depth (the caller should treat this as
+    /// an error in the Substrait plan).
+    fn get_outer_schema(&self, _steps_out: usize) -> Option<Arc<DFSchema>> {
+        None
+    }
+
     // User-Defined Functionality
 
     // The details of extension relations, and how to handle them, are fully up to users to specify.
@@ -437,11 +457,16 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
 pub struct DefaultSubstraitConsumer<'a> {
     pub(super) extensions: &'a Extensions,
     pub(super) state: &'a SessionState,
+    outer_schemas: RwLock<Vec<Arc<DFSchema>>>,
 }
 
 impl<'a> DefaultSubstraitConsumer<'a> {
     pub fn new(extensions: &'a Extensions, state: &'a SessionState) -> Self {
-        DefaultSubstraitConsumer { extensions, state }
+        DefaultSubstraitConsumer {
+            extensions,
+            state,
+            outer_schemas: RwLock::new(Vec::new()),
+        }
     }
 }
 
@@ -463,6 +488,24 @@ impl SubstraitConsumer for DefaultSubstraitConsumer<'_> {
 
     fn get_function_registry(&self) -> &impl FunctionRegistry {
         self.state
+    }
+
+    fn push_outer_schema(&self, schema: Arc<DFSchema>) {
+        self.outer_schemas.write().unwrap().push(schema);
+    }
+
+    fn pop_outer_schema(&self) {
+        self.outer_schemas.write().unwrap().pop();
+    }
+
+    fn get_outer_schema(&self, steps_out: usize) -> Option<Arc<DFSchema>> {
+        let schemas = self.outer_schemas.read().unwrap();
+        // steps_out=1 → last element, steps_out=2 → second-to-last, etc.
+        // Returns None for steps_out=0 or steps_out > stack depth.
+        schemas
+            .len()
+            .checked_sub(steps_out)
+            .and_then(|idx| schemas.get(idx).cloned())
     }
 
     async fn consume_extension_leaf(
@@ -518,5 +561,81 @@ impl SubstraitConsumer for DefaultSubstraitConsumer<'_> {
         }
         let plan = plan.with_exprs_and_inputs(plan.expressions(), inputs)?;
         Ok(LogicalPlan::Extension(Extension { node: plan }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::logical_plan::consumer::utils::tests::test_consumer;
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+
+    fn make_schema(fields: &[(&str, DataType)]) -> Arc<DFSchema> {
+        let arrow_fields: Vec<Field> = fields
+            .iter()
+            .map(|(name, dt)| Field::new(*name, dt.clone(), true))
+            .collect();
+        Arc::new(
+            DFSchema::try_from(Schema::new(arrow_fields))
+                .expect("failed to create schema"),
+        )
+    }
+
+    #[test]
+    fn test_get_outer_schema_empty_stack() {
+        let consumer = test_consumer();
+
+        // No schemas pushed — any steps_out should return None
+        assert!(consumer.get_outer_schema(0).is_none());
+        assert!(consumer.get_outer_schema(1).is_none());
+        assert!(consumer.get_outer_schema(2).is_none());
+    }
+
+    #[test]
+    fn test_get_outer_schema_single_level() {
+        let consumer = test_consumer();
+
+        let schema_a = make_schema(&[("a", DataType::Int64)]);
+        consumer.push_outer_schema(Arc::clone(&schema_a));
+
+        // steps_out=1 returns the one pushed schema
+        let result = consumer.get_outer_schema(1).unwrap();
+        assert_eq!(result.fields().len(), 1);
+        assert_eq!(result.fields()[0].name(), "a");
+
+        // steps_out=0 and steps_out=2 are out of range
+        assert!(consumer.get_outer_schema(0).is_none());
+        assert!(consumer.get_outer_schema(2).is_none());
+
+        consumer.pop_outer_schema();
+        assert!(consumer.get_outer_schema(1).is_none());
+    }
+
+    #[test]
+    fn test_get_outer_schema_nested() {
+        let consumer = test_consumer();
+
+        let schema_a = make_schema(&[("a", DataType::Int64)]);
+        let schema_b = make_schema(&[("b", DataType::Utf8)]);
+
+        consumer.push_outer_schema(Arc::clone(&schema_a));
+        consumer.push_outer_schema(Arc::clone(&schema_b));
+
+        // steps_out=1 returns the most recent (schema_b)
+        let result = consumer.get_outer_schema(1).unwrap();
+        assert_eq!(result.fields()[0].name(), "b");
+
+        // steps_out=2 returns the grandparent (schema_a)
+        let result = consumer.get_outer_schema(2).unwrap();
+        assert_eq!(result.fields()[0].name(), "a");
+
+        // steps_out=3 exceeds depth
+        assert!(consumer.get_outer_schema(3).is_none());
+
+        // Pop one level — now steps_out=1 returns schema_a
+        consumer.pop_outer_schema();
+        let result = consumer.get_outer_schema(1).unwrap();
+        assert_eq!(result.fields()[0].name(), "a");
+        assert!(consumer.get_outer_schema(2).is_none());
     }
 }

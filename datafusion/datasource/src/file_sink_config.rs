@@ -32,6 +32,52 @@ use datafusion_expr::dml::InsertOp;
 use async_trait::async_trait;
 use object_store::ObjectStore;
 
+/// Determines how `FileSink` output paths are interpreted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FileOutputMode {
+    /// Infer output mode from the output URL (for example, by extension / trailing `/`).
+    #[default]
+    Automatic,
+    /// Write to a single output file at the exact output path.
+    SingleFile,
+    /// Write to a directory under the output path with generated filenames.
+    Directory,
+}
+
+impl FileOutputMode {
+    /// Resolve this mode into a `single_file_output` boolean for the demuxer.
+    pub fn single_file_output(self, base_output_path: &ListingTableUrl) -> bool {
+        match self {
+            Self::Automatic => {
+                !base_output_path.is_collection()
+                    && base_output_path.file_extension().is_some()
+            }
+            Self::SingleFile => true,
+            Self::Directory => false,
+        }
+    }
+}
+
+impl From<Option<bool>> for FileOutputMode {
+    fn from(value: Option<bool>) -> Self {
+        match value {
+            None => Self::Automatic,
+            Some(true) => Self::SingleFile,
+            Some(false) => Self::Directory,
+        }
+    }
+}
+
+impl From<FileOutputMode> for Option<bool> {
+    fn from(value: FileOutputMode) -> Self {
+        match value {
+            FileOutputMode::Automatic => None,
+            FileOutputMode::SingleFile => Some(true),
+            FileOutputMode::Directory => Some(false),
+        }
+    }
+}
+
 /// General behaviors for files that do `DataSink` operations
 #[async_trait]
 pub trait FileSink: DataSink {
@@ -112,6 +158,8 @@ pub struct FileSinkConfig {
     pub keep_partition_by_columns: bool,
     /// File extension without a dot(.)
     pub file_extension: String,
+    /// Determines how the output path is interpreted.
+    pub file_output_mode: FileOutputMode,
 }
 
 impl FileSinkConfig {

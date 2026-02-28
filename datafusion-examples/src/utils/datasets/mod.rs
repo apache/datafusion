@@ -18,8 +18,7 @@
 use std::path::PathBuf;
 
 use arrow_schema::SchemaRef;
-use datafusion::error::Result;
-use datafusion_common::DataFusionError;
+use datafusion::error::{DataFusionError, Result};
 
 pub mod cars;
 pub mod regex;
@@ -50,10 +49,11 @@ impl ExampleDataset {
     }
 
     pub fn path_str(&self) -> Result<String> {
-        self.path().to_str().map(String::from).ok_or_else(|| {
+        let path = self.path();
+        path.to_str().map(String::from).ok_or_else(|| {
             DataFusionError::Execution(format!(
                 "CSV directory path is not valid UTF-8: {}",
-                self.path().display()
+                path.display()
             ))
         })
     }

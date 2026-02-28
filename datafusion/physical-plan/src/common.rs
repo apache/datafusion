@@ -181,7 +181,7 @@ pub fn compute_record_batch_statistics(
 /// Checks if the given projection is valid for the given schema.
 pub fn can_project(
     schema: &arrow::datatypes::SchemaRef,
-    projection: Option<&Vec<usize>>,
+    projection: Option<&[usize]>,
 ) -> Result<()> {
     match projection {
         Some(columns) => {

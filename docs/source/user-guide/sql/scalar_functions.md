@@ -1225,7 +1225,7 @@ bit_length(str)
 
 ### `btrim`
 
-Trims the specified trim string from the start and end of a string. If no trim string is provided, all whitespace is removed from the start and end of the input string.
+Trims the specified trim string from the start and end of a string. If no trim string is provided, all spaces are removed from the start and end of the input string.
 
 ```sql
 btrim(str[, trim_str])
@@ -1234,7 +1234,7 @@ btrim(str[, trim_str])
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **trim_str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators. _Default is whitespace characters._
+- **trim_str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators. _Default is a space._
 
 #### Example
 
@@ -1592,7 +1592,7 @@ lpad(str, n[, padding_str])
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **n**: String length to pad to.
+- **n**: String length to pad to. If the input string is longer than this length, it is truncated (on the right).
 - **padding_str**: Optional string expression to pad with. Can be a constant, column, or function, and any combination of string operators. _Default is a space._
 
 #### Example
@@ -1612,7 +1612,7 @@ lpad(str, n[, padding_str])
 
 ### `ltrim`
 
-Trims the specified trim string from the beginning of a string. If no trim string is provided, all whitespace is removed from the start of the input string.
+Trims the specified trim string from the beginning of a string. If no trim string is provided, spaces are removed from the start of the input string.
 
 ```sql
 ltrim(str[, trim_str])
@@ -1621,7 +1621,7 @@ ltrim(str[, trim_str])
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **trim_str**: String expression to trim from the beginning of the input string. Can be a constant, column, or function, and any combination of arithmetic operators. _Default is whitespace characters._
+- **trim_str**: String expression to trim from the beginning of the input string. Can be a constant, column, or function, and any combination of arithmetic operators. _Default is a space._
 
 #### Example
 
@@ -1820,7 +1820,7 @@ rpad(str, n[, padding_str])
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **n**: String length to pad to.
+- **n**: String length to pad to. If the input string is longer than this length, it is truncated.
 - **padding_str**: String expression to pad with. Can be a constant, column, or function, and any combination of string operators. _Default is a space._
 
 #### Example
@@ -1840,7 +1840,7 @@ rpad(str, n[, padding_str])
 
 ### `rtrim`
 
-Trims the specified trim string from the end of a string. If no trim string is provided, all whitespace is removed from the end of the input string.
+Trims the specified trim string from the end of a string. If no trim string is provided, all spaces are removed from the end of the input string.
 
 ```sql
 rtrim(str[, trim_str])
@@ -1849,7 +1849,7 @@ rtrim(str[, trim_str])
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **trim_str**: String expression to trim from the end of the input string. Can be a constant, column, or function, and any combination of arithmetic operators. _Default is whitespace characters._
+- **trim_str**: String expression to trim from the end of the input string. Can be a constant, column, or function, and any combination of arithmetic operators. _Default is a space._
 
 #### Example
 
@@ -1891,7 +1891,7 @@ split_part(str, delimiter, pos)
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **delimiter**: String or character to split on.
-- **pos**: Position of the part to return.
+- **pos**: Position of the part to return (counting from 1). Negative values count backward from the end of the string.
 
 #### Example
 
@@ -2068,17 +2068,17 @@ to_hex(int)
 
 ### `translate`
 
-Translates characters in a string to specified translation characters.
+Performs character-wise substitution based on a mapping.
 
 ```sql
-translate(str, chars, translation)
+translate(str, from, to)
 ```
 
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **chars**: Characters to translate.
-- **translation**: Translation characters. Translation characters replace only characters at the same position in the **chars** string.
+- **from**: The characters to be replaced.
+- **to**: The characters to replace them with. Each character in **from** that is found in **str** is replaced by the character at the same index in **to**. Any characters in **from** that don't have a corresponding character in **to** are removed. If a character appears more than once in **from**, the first occurrence determines the mapping.
 
 #### Example
 
@@ -2175,7 +2175,7 @@ encode(expression, format)
 #### Arguments
 
 - **expression**: Expression containing string or binary data
-- **format**: Supported formats are: `base64`, `hex`
+- **format**: Supported formats are: `base64`, `base64pad`, `hex`
 
 **Related functions**:
 
@@ -2519,6 +2519,7 @@ date_part(part, expression)
 - **part**: Part of the date to return. The following date parts are supported:
 
   - year
+  - isoyear (ISO 8601 week-numbering year)
   - quarter (emits value in inclusive range [1, 4] based on which quartile of the year the date is in)
   - month
   - week (week of the year)
@@ -2879,7 +2880,8 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000<TZ>`) in the session time zone. Supports strings,
 integer, unsigned integer, and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
-if no [Chrono formats] are provided. Strings that parse without a time zone are treated as if they are in the
+if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided.
+Strings that parse without a time zone are treated as if they are in the
 session time zone, or UTC if no session time zone is set.
 Integers, unsigned integers, and doubles are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`).
 
@@ -2927,7 +2929,8 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000<TZ>`) in the session time zone. Supports strings,
 integer, unsigned integer, and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
-if no [Chrono formats] are provided. Strings that parse without a time zone are treated as if they are in the
+if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided.
+Strings that parse without a time zone are treated as if they are in the
 session time zone, or UTC if no session time zone is set.
 Integers, unsigned integers, and doubles are interpreted as microseconds since the unix epoch (`1970-01-01T00:00:00Z`).
 
@@ -2970,7 +2973,8 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000<TZ>`) in the session time zone. Supports strings,
 integer, unsigned integer, and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
-if no [Chrono formats] are provided. Strings that parse without a time zone are treated as if they are in the
+if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided.
+Strings that parse without a time zone are treated as if they are in the
 session time zone, or UTC if no session time zone is set.
 Integers, unsigned integers, and doubles are interpreted as milliseconds since the unix epoch (`1970-01-01T00:00:00Z`).
 
@@ -3013,7 +3017,8 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000000<TZ>`) in the session time zone. Supports strings,
 integer, unsigned integer, and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
-if no [Chrono formats] are provided. Strings that parse without a time zone are treated as if they are in the
+if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided.
+Strings that parse without a time zone are treated as if they are in the
 session time zone. Integers, unsigned integers, and doubles are interpreted as nanoseconds since the unix epoch (`1970-01-01T00:00:00Z`).
 
 The session time zone can be set using the statement `SET TIMEZONE = 'desired time zone'`.
@@ -3055,7 +3060,8 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00<TZ>`) in the session time zone. Supports strings,
 integer, unsigned integer, and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
-if no [Chrono formats] are provided. Strings that parse without a time zone are treated as if they are in the
+if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided.
+Strings that parse without a time zone are treated as if they are in the
 session time zone, or UTC if no session time zone is set.
 Integers, unsigned integers, and doubles are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`).
 
@@ -3096,7 +3102,11 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 
 ### `to_unixtime`
 
-Converts a value to seconds since the unix epoch (`1970-01-01T00:00:00`). Supports strings, dates, timestamps, integer, unsigned integer, and float types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided. Integers, unsigned integers, and floats are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00`).
+Converts a value to seconds since the unix epoch (`1970-01-01T00:00:00`).
+Supports strings, dates, timestamps, integer, unsigned integer, and float types as input.
+Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
+if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided.
+Integers, unsigned integers, and floats are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00`).
 
 ```sql
 to_unixtime(expression[, ..., format_n])
@@ -3173,6 +3183,7 @@ _Alias of [current_date](#current_date)._
 - [array_to_string](#array_to_string)
 - [array_union](#array_union)
 - [arrays_overlap](#arrays_overlap)
+- [arrays_zip](#arrays_zip)
 - [cardinality](#cardinality)
 - [empty](#empty)
 - [flatten](#flatten)
@@ -3218,6 +3229,7 @@ _Alias of [current_date](#current_date)._
 - [list_sort](#list_sort)
 - [list_to_string](#list_to_string)
 - [list_union](#list_union)
+- [list_zip](#list_zip)
 - [make_array](#make_array)
 - [make_list](#make_list)
 - [range](#range)
@@ -3533,16 +3545,16 @@ array_has_all(array, sub-array)
 
 ### `array_has_any`
 
-Returns true if any elements exist in both arrays.
+Returns true if the arrays have any elements in common.
 
 ```sql
-array_has_any(array, sub-array)
+array_has_any(array1, array2)
 ```
 
 #### Arguments
 
-- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
-- **sub-array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **array1**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **array2**: Array expression. Can be a constant, column, or function, and any combination of array operators.
 
 #### Example
 
@@ -3764,7 +3776,7 @@ array_pop_front(array)
 
 ### `array_position`
 
-Returns the position of the first occurrence of the specified element in the array, or NULL if not found.
+Returns the position of the first occurrence of the specified element in the array, or NULL if not found. Comparisons are done using `IS DISTINCT FROM` semantics, so NULL is considered to match NULL.
 
 ```sql
 array_position(array, element)
@@ -3774,7 +3786,7 @@ array_position(array, element, index)
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
-- **element**: Element to search for position in the array.
+- **element**: Element to search for in the array.
 - **index**: Index at which to start searching (1-indexed).
 
 #### Example
@@ -4221,7 +4233,7 @@ array_to_string(array, delimiter[, null_string])
 
 ### `array_union`
 
-Returns an array of elements that are present in both arrays (all elements from both arrays) with out duplicates.
+Returns an array of elements that are present in both arrays (all elements from both arrays) without duplicates.
 
 ```sql
 array_union(array1, array2)
@@ -4256,6 +4268,41 @@ array_union(array1, array2)
 ### `arrays_overlap`
 
 _Alias of [array_has_any](#array_has_any)._
+
+### `arrays_zip`
+
+Returns an array of structs created by combining the elements of each input array at the same index. If the arrays have different lengths, shorter arrays are padded with NULLs.
+
+```sql
+arrays_zip(array1, array2[, ..., array_n])
+```
+
+#### Arguments
+
+- **array1**: First array expression.
+- **array2**: Second array expression.
+- **array_n**: Subsequent array expressions.
+
+#### Example
+
+```sql
+> select arrays_zip([1, 2, 3], ['a', 'b', 'c']);
++---------------------------------------------------+
+| arrays_zip([1, 2, 3], ['a', 'b', 'c'])             |
++---------------------------------------------------+
+| [{c0: 1, c1: a}, {c0: 2, c1: b}, {c0: 3, c1: c}] |
++---------------------------------------------------+
+> select arrays_zip([1, 2], [3, 4, 5]);
++---------------------------------------------------+
+| arrays_zip([1, 2], [3, 4, 5])                       |
++---------------------------------------------------+
+| [{c0: 1, c1: 3}, {c0: 2, c1: 4}, {c0: , c1: 5}]  |
++---------------------------------------------------+
+```
+
+#### Aliases
+
+- list_zip
 
 ### `cardinality`
 
@@ -4525,6 +4572,10 @@ _Alias of [array_to_string](#array_to_string)._
 ### `list_union`
 
 _Alias of [array_union](#array_union)._
+
+### `list_zip`
+
+_Alias of [arrays_zip](#arrays_zip)._
 
 ### `make_array`
 

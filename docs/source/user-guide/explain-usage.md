@@ -226,6 +226,7 @@ Again, reading from bottom up:
 When predicate pushdown is enabled, `DataSourceExec` with `ParquetSource` gains the following metrics:
 
 - `page_index_rows_pruned`: number of rows evaluated by page index filters. The metric reports both how many rows were considered in total and how many matched (were not pruned).
+- `page_index_pages_pruned`: number of pages evaluated by page index filters. The metric reports both how many pages were considered in total and how many matched (were not pruned).
 - `row_groups_pruned_bloom_filter`: number of row groups evaluated by Bloom Filters, reporting both total checked groups and groups that matched.
 - `row_groups_pruned_statistics`: number of row groups evaluated by row-group statistics (min/max), reporting both total checked groups and groups that matched.
 - `limit_pruned_row_groups`: number of row groups pruned by the limit.

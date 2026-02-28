@@ -35,6 +35,7 @@ use datafusion_common::{
 };
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
+use datafusion_expr_common::placement::ExpressionPlacement;
 use datafusion_expr_common::sort_properties::ExprProperties;
 use datafusion_expr_common::statistics::Distribution;
 
@@ -429,6 +430,16 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     /// eat the cost of the breaking change and require all implementers to make a choice.
     fn is_volatile_node(&self) -> bool {
         false
+    }
+
+    /// Returns placement information for this expression.
+    ///
+    /// This is used by optimizers to make decisions about expression placement,
+    /// such as whether to push expressions down through projections.
+    ///
+    /// The default implementation returns [`ExpressionPlacement::KeepInPlace`].
+    fn placement(&self) -> ExpressionPlacement {
+        ExpressionPlacement::KeepInPlace
     }
 }
 

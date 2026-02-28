@@ -24,7 +24,7 @@ use arrow::array::{ArrayRef, AsArray, PrimitiveArray};
 use arrow::datatypes::DataType::{Float32, Float64};
 use arrow::datatypes::{DataType, Float32Type, Float64Type, Int64Type};
 use datafusion_common::ScalarValue::Int64;
-use datafusion_common::{Result, exec_err};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
@@ -110,7 +110,50 @@ impl ScalarUDFImpl for TruncFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(trunc, vec![])(&args.args)
+        // Extract precision from second argument (default 0)
+        let precision = match args.args.get(1) {
+            Some(ColumnarValue::Scalar(Int64(Some(p)))) => Some(*p),
+            Some(ColumnarValue::Scalar(Int64(None))) => None, // null precision
+            Some(ColumnarValue::Array(_)) => {
+                // Precision is an array - use array path
+                return make_scalar_function(trunc, vec![])(&args.args);
+            }
+            None => Some(0), // default precision
+            Some(cv) => {
+                return exec_err!(
+                    "trunc function requires precision to be Int64, got {:?}",
+                    cv.data_type()
+                );
+            }
+        };
+
+        // Scalar fast path using tuple matching for (value, precision)
+        match (&args.args[0], precision) {
+            // Null cases
+            (ColumnarValue::Scalar(sv), _) if sv.is_null() => {
+                ColumnarValue::Scalar(ScalarValue::Null).cast_to(args.return_type(), None)
+            }
+            (_, None) => {
+                ColumnarValue::Scalar(ScalarValue::Null).cast_to(args.return_type(), None)
+            }
+            // Scalar cases
+            (ColumnarValue::Scalar(ScalarValue::Float64(Some(v))), Some(p)) => Ok(
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(if p == 0 {
+                    v.trunc()
+                } else {
+                    compute_truncate64(*v, p)
+                }))),
+            ),
+            (ColumnarValue::Scalar(ScalarValue::Float32(Some(v))), Some(p)) => Ok(
+                ColumnarValue::Scalar(ScalarValue::Float32(Some(if p == 0 {
+                    v.trunc()
+                } else {
+                    compute_truncate32(*v, p)
+                }))),
+            ),
+            // Array path for everything else
+            _ => make_scalar_function(trunc, vec![])(&args.args),
+        }
     }
 
     fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {

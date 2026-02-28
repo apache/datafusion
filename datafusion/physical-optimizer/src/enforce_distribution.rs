@@ -36,7 +36,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_expr::logical_plan::JoinType;
+use datafusion_expr::logical_plan::{Aggregate, JoinType};
 use datafusion_physical_expr::expressions::{Column, NoOp};
 use datafusion_physical_expr::utils::map_columns_before_projection;
 use datafusion_physical_expr::{
@@ -286,18 +286,15 @@ pub fn adjust_input_keys_ordering(
 ) -> Result<Transformed<PlanWithKeyRequirements>> {
     let plan = Arc::clone(&requirements.plan);
 
-    if let Some(HashJoinExec {
-        left,
-        right,
-        on,
-        filter,
-        join_type,
-        projection,
-        mode,
-        null_equality,
-        null_aware,
-        ..
-    }) = plan.as_any().downcast_ref::<HashJoinExec>()
+    if let Some(
+        exec @ HashJoinExec {
+            left,
+            on,
+            join_type,
+            mode,
+            ..
+        },
+    ) = plan.as_any().downcast_ref::<HashJoinExec>()
     {
         match mode {
             PartitionMode::Partitioned => {
@@ -305,19 +302,10 @@ pub fn adjust_input_keys_ordering(
                     Vec<(PhysicalExprRef, PhysicalExprRef)>,
                     Vec<SortOptions>,
                 )| {
-                    HashJoinExec::try_new(
-                        Arc::clone(left),
-                        Arc::clone(right),
-                        new_conditions.0,
-                        filter.clone(),
-                        join_type,
-                        // TODO: although projection is not used in the join here, because projection pushdown is after enforce_distribution. Maybe we need to handle it later. Same as filter.
-                        projection.clone(),
-                        PartitionMode::Partitioned,
-                        *null_equality,
-                        *null_aware,
-                    )
-                    .map(|e| Arc::new(e) as _)
+                    exec.builder()
+                        .with_partition_mode(PartitionMode::Partitioned)
+                        .with_on(new_conditions.0)
+                        .build_exec()
                 };
                 return reorder_partitioned_join_keys(
                     requirements,
@@ -497,7 +485,7 @@ pub fn reorder_aggregate_keys(
         && !physical_exprs_equal(&output_exprs, parent_required)
         && let Some(positions) = expected_expr_positions(&output_exprs, parent_required)
         && let Some(agg_exec) = agg_exec.input().as_any().downcast_ref::<AggregateExec>()
-        && matches!(agg_exec.mode(), &AggregateMode::Partial)
+        && *agg_exec.mode() == AggregateMode::Partial
     {
         let group_exprs = agg_exec.group_expr().expr();
         let new_group_exprs = positions
@@ -611,20 +599,17 @@ pub fn reorder_join_keys_to_inputs(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let plan_any = plan.as_any();
-    if let Some(HashJoinExec {
-        left,
-        right,
-        on,
-        filter,
-        join_type,
-        projection,
-        mode,
-        null_equality,
-        null_aware,
-        ..
-    }) = plan_any.downcast_ref::<HashJoinExec>()
+    if let Some(
+        exec @ HashJoinExec {
+            left,
+            right,
+            on,
+            mode,
+            ..
+        },
+    ) = plan_any.downcast_ref::<HashJoinExec>()
     {
-        if matches!(mode, PartitionMode::Partitioned) {
+        if *mode == PartitionMode::Partitioned {
             let (join_keys, positions) = reorder_current_join_keys(
                 extract_join_keys(on),
                 Some(left.output_partitioning()),
@@ -638,17 +623,11 @@ pub fn reorder_join_keys_to_inputs(
                     right_keys,
                 } = join_keys;
                 let new_join_on = new_join_conditions(&left_keys, &right_keys);
-                return Ok(Arc::new(HashJoinExec::try_new(
-                    Arc::clone(left),
-                    Arc::clone(right),
-                    new_join_on,
-                    filter.clone(),
-                    join_type,
-                    projection.clone(),
-                    PartitionMode::Partitioned,
-                    *null_equality,
-                    *null_aware,
-                )?));
+                return exec
+                    .builder()
+                    .with_partition_mode(PartitionMode::Partitioned)
+                    .with_on(new_join_on)
+                    .build_exec();
             }
         }
     } else if let Some(SortMergeJoinExec {
@@ -1260,7 +1239,7 @@ pub fn ensure_distribution(
     let is_partitioned_join = plan
         .as_any()
         .downcast_ref::<HashJoinExec>()
-        .is_some_and(|join| matches!(join.mode, PartitionMode::Partitioned))
+        .is_some_and(|join| join.mode == PartitionMode::Partitioned)
         || plan.as_any().is::<SortMergeJoinExec>();
 
     let repartition_status_flags =
@@ -1301,10 +1280,25 @@ pub fn ensure_distribution(
             // Allow subset satisfaction when:
             // 1. Current partition count >= threshold
             // 2. Not a partitioned join since must use exact hash matching for joins
+            // 3. Not a grouping set aggregate (requires exact hash including __grouping_id)
             let current_partitions = child.plan.output_partitioning().partition_count();
+
+            // Check if the hash partitioning requirement includes __grouping_id column.
+            // Grouping set aggregates (ROLLUP, CUBE, GROUPING SETS) require exact hash
+            // partitioning on all group columns including __grouping_id to ensure partial
+            // aggregates from different partitions are correctly combined.
+            let requires_grouping_id = matches!(&requirement, Distribution::HashPartitioned(exprs)
+                if exprs.iter().any(|expr| {
+                    expr.as_any()
+                        .downcast_ref::<Column>()
+                        .is_some_and(|col| col.name() == Aggregate::INTERNAL_GROUPING_ID)
+                })
+            );
+
             let allow_subset_satisfy_partitioning = current_partitions
                 >= subset_satisfaction_threshold
-                && !is_partitioned_join;
+                && !is_partitioned_join
+                && !requires_grouping_id;
 
             // When `repartition_file_scans` is set, attempt to increase
             // parallelism at the source.

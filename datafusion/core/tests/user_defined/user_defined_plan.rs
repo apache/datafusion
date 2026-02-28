@@ -84,7 +84,7 @@ use datafusion::{
     physical_expr::EquivalenceProperties,
     physical_plan::{
         DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
-        PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
+        PlanProperties, RecordBatchStream, SendableRecordBatchStream,
     },
     physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner},
     prelude::{SessionConfig, SessionContext},
@@ -653,13 +653,17 @@ struct TopKExec {
     input: Arc<dyn ExecutionPlan>,
     /// The maximum number of values
     k: usize,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl TopKExec {
     fn new(input: Arc<dyn ExecutionPlan>, k: usize) -> Self {
         let cache = Self::compute_properties(input.schema());
-        Self { input, k, cache }
+        Self {
+            input,
+            k,
+            cache: Arc::new(cache),
+        }
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
@@ -704,7 +708,7 @@ impl ExecutionPlan for TopKExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -741,12 +745,6 @@ impl ExecutionPlan for TopKExec {
             done: false,
             state: BTreeMap::new(),
         }))
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        // to improve the optimizability of this plan
-        // better statistics inference could be provided
-        Ok(Statistics::new_unknown(&self.schema()))
     }
 }
 

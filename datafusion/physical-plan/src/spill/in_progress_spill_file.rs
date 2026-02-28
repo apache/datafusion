@@ -101,6 +101,13 @@ impl InProgressSpillFile {
         Ok(())
     }
 
+    pub fn flush(&mut self) -> Result<()> {
+        if let Some(writer) = &mut self.writer {
+            writer.flush()?;
+        }
+        Ok(())
+    }
+
     /// Returns a reference to the in-progress file, if it exists.
     /// This can be used to get the file path for creating readers before the file is finished.
     pub fn file(&self) -> Option<&RefCountedTempFile> {

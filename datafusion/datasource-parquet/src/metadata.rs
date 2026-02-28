@@ -21,7 +21,7 @@
 use crate::{
     ObjectStoreFetch, apply_file_schema_type_coercions, coerce_int96_to_resolution,
 };
-use arrow::array::{ArrayRef, BooleanArray};
+use arrow::array::{Array, ArrayRef, BooleanArray};
 use arrow::compute::and;
 use arrow::compute::kernels::cmp::eq;
 use arrow::compute::sum;
@@ -487,22 +487,40 @@ fn summarize_min_max_null_counts(
 
     if let Some(max_acc) = &mut accumulators.max_accs[logical_schema_index] {
         max_acc.update_batch(&[Arc::clone(&max_values)])?;
-        let mut cur_max_acc = max_acc.clone();
-        accumulators.is_max_value_exact[logical_schema_index] = has_any_exact_match(
-            &cur_max_acc.evaluate()?,
-            &max_values,
-            &is_max_value_exact_stat,
-        );
+
+        // handle the common special case when all row groups have exact statistics
+        let exactness = &is_max_value_exact_stat;
+        if !exactness.is_empty()
+            && exactness.null_count() == 0
+            && exactness.true_count() == exactness.len()
+        {
+            accumulators.is_max_value_exact[logical_schema_index] = Some(true);
+        } else if exactness.true_count() == 0 {
+            accumulators.is_max_value_exact[logical_schema_index] = Some(false);
+        } else {
+            let val = max_acc.evaluate()?;
+            accumulators.is_max_value_exact[logical_schema_index] =
+                has_any_exact_match(&val, &max_values, exactness);
+        }
     }
 
     if let Some(min_acc) = &mut accumulators.min_accs[logical_schema_index] {
         min_acc.update_batch(&[Arc::clone(&min_values)])?;
-        let mut cur_min_acc = min_acc.clone();
-        accumulators.is_min_value_exact[logical_schema_index] = has_any_exact_match(
-            &cur_min_acc.evaluate()?,
-            &min_values,
-            &is_min_value_exact_stat,
-        );
+
+        // handle the common special case when all row groups have exact statistics
+        let exactness = &is_min_value_exact_stat;
+        if !exactness.is_empty()
+            && exactness.null_count() == 0
+            && exactness.true_count() == exactness.len()
+        {
+            accumulators.is_min_value_exact[logical_schema_index] = Some(true);
+        } else if exactness.true_count() == 0 {
+            accumulators.is_min_value_exact[logical_schema_index] = Some(false);
+        } else {
+            let val = min_acc.evaluate()?;
+            accumulators.is_min_value_exact[logical_schema_index] =
+                has_any_exact_match(&val, &min_values, exactness);
+        }
     }
 
     accumulators.null_counts_array[logical_schema_index] = match sum(&null_counts) {
@@ -582,6 +600,15 @@ fn has_any_exact_match(
     array: &ArrayRef,
     exactness: &BooleanArray,
 ) -> Option<bool> {
+    if value.is_null() {
+        return Some(false);
+    }
+
+    // Shortcut for single row group
+    if array.len() == 1 {
+        return Some(exactness.is_valid(0) && exactness.value(0));
+    }
+
     let scalar_array = value.to_scalar().ok()?;
     let eq_mask = eq(&scalar_array, &array).ok()?;
     let combined_mask = and(&eq_mask, exactness).ok()?;

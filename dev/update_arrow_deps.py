@@ -19,7 +19,7 @@
 # Script that updates the arrow dependencies in datafusion locally
 #
 # installation:
-# pip install tomlkit requests
+# uv sync
 #
 # pin all arrow crates deps to a specific version:
 #

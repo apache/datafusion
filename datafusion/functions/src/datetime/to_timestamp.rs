@@ -42,7 +42,8 @@ use datafusion_macros::user_doc;
     description = r#"
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000<TZ>`) in the session time zone. Supports strings,
 integer, unsigned integer, and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
-if no [Chrono formats] are provided. Strings that parse without a time zone are treated as if they are in the
+if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided. 
+Strings that parse without a time zone are treated as if they are in the
 session time zone, or UTC if no session time zone is set.
 Integers, unsigned integers, and doubles are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`).
 
@@ -96,7 +97,8 @@ pub struct ToTimestampFunc {
     description = r#"
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00<TZ>`) in the session time zone. Supports strings,
 integer, unsigned integer, and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
-if no [Chrono formats] are provided. Strings that parse without a time zone are treated as if they are in the
+if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided. 
+Strings that parse without a time zone are treated as if they are in the
 session time zone, or UTC if no session time zone is set.
 Integers, unsigned integers, and doubles are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`).
 
@@ -145,7 +147,8 @@ pub struct ToTimestampSecondsFunc {
     description = r#"
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000<TZ>`) in the session time zone. Supports strings,
 integer, unsigned integer, and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
-if no [Chrono formats] are provided. Strings that parse without a time zone are treated as if they are in the
+if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided. 
+Strings that parse without a time zone are treated as if they are in the
 session time zone, or UTC if no session time zone is set.
 Integers, unsigned integers, and doubles are interpreted as milliseconds since the unix epoch (`1970-01-01T00:00:00Z`).
 
@@ -194,7 +197,8 @@ pub struct ToTimestampMillisFunc {
     description = r#"
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000<TZ>`) in the session time zone. Supports strings,
 integer, unsigned integer, and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
-if no [Chrono formats] are provided. Strings that parse without a time zone are treated as if they are in the
+if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided. 
+Strings that parse without a time zone are treated as if they are in the
 session time zone, or UTC if no session time zone is set.
 Integers, unsigned integers, and doubles are interpreted as microseconds since the unix epoch (`1970-01-01T00:00:00Z`).
 
@@ -243,7 +247,8 @@ pub struct ToTimestampMicrosFunc {
     description = r#"
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000000<TZ>`) in the session time zone. Supports strings,
 integer, unsigned integer, and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
-if no [Chrono formats] are provided. Strings that parse without a time zone are treated as if they are in the
+if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided. 
+Strings that parse without a time zone are treated as if they are in the
 session time zone. Integers, unsigned integers, and doubles are interpreted as nanoseconds since the unix epoch (`1970-01-01T00:00:00Z`).
 
 The session time zone can be set using the statement `SET TIMEZONE = 'desired time zone'`.
@@ -425,27 +430,56 @@ impl ScalarUDFImpl for ToTimestampFunc {
                 .cast_to(&Timestamp(Second, None), None)?
                 .cast_to(&Timestamp(Nanosecond, tz), None),
             Null | Timestamp(_, _) => args[0].cast_to(&Timestamp(Nanosecond, tz), None),
-            Float16 => {
-                let arr = args[0].to_array(1)?;
-                let f16_arr = downcast_arg!(&arr, Float16Array);
-                let result: TimestampNanosecondArray =
-                    f16_arr.unary(|x| (x.to_f64() * 1_000_000_000.0) as i64);
-                Ok(ColumnarValue::Array(Arc::new(result.with_timezone_opt(tz))))
-            }
-            Float32 => {
-                let arr = args[0].to_array(1)?;
-                let f32_arr = downcast_arg!(&arr, Float32Array);
-                let result: TimestampNanosecondArray =
-                    f32_arr.unary(|x| (x as f64 * 1_000_000_000.0) as i64);
-                Ok(ColumnarValue::Array(Arc::new(result.with_timezone_opt(tz))))
-            }
-            Float64 => {
-                let arr = args[0].to_array(1)?;
-                let f64_arr = downcast_arg!(&arr, Float64Array);
-                let result: TimestampNanosecondArray =
-                    f64_arr.unary(|x| (x * 1_000_000_000.0) as i64);
-                Ok(ColumnarValue::Array(Arc::new(result.with_timezone_opt(tz))))
-            }
+            Float16 => match &args[0] {
+                ColumnarValue::Scalar(ScalarValue::Float16(value)) => {
+                    let timestamp_nanos =
+                        value.map(|v| (v.to_f64() * 1_000_000_000.0) as i64);
+                    Ok(ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
+                        timestamp_nanos,
+                        tz,
+                    )))
+                }
+                ColumnarValue::Array(arr) => {
+                    let f16_arr = downcast_arg!(arr, Float16Array);
+                    let result: TimestampNanosecondArray =
+                        f16_arr.unary(|x| (x.to_f64() * 1_000_000_000.0) as i64);
+                    Ok(ColumnarValue::Array(Arc::new(result.with_timezone_opt(tz))))
+                }
+                _ => exec_err!("Invalid Float16 value for to_timestamp"),
+            },
+            Float32 => match &args[0] {
+                ColumnarValue::Scalar(ScalarValue::Float32(value)) => {
+                    let timestamp_nanos =
+                        value.map(|v| (v as f64 * 1_000_000_000.0) as i64);
+                    Ok(ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
+                        timestamp_nanos,
+                        tz,
+                    )))
+                }
+                ColumnarValue::Array(arr) => {
+                    let f32_arr = downcast_arg!(arr, Float32Array);
+                    let result: TimestampNanosecondArray =
+                        f32_arr.unary(|x| (x as f64 * 1_000_000_000.0) as i64);
+                    Ok(ColumnarValue::Array(Arc::new(result.with_timezone_opt(tz))))
+                }
+                _ => exec_err!("Invalid Float32 value for to_timestamp"),
+            },
+            Float64 => match &args[0] {
+                ColumnarValue::Scalar(ScalarValue::Float64(value)) => {
+                    let timestamp_nanos = value.map(|v| (v * 1_000_000_000.0) as i64);
+                    Ok(ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
+                        timestamp_nanos,
+                        tz,
+                    )))
+                }
+                ColumnarValue::Array(arr) => {
+                    let f64_arr = downcast_arg!(arr, Float64Array);
+                    let result: TimestampNanosecondArray =
+                        f64_arr.unary(|x| (x * 1_000_000_000.0) as i64);
+                    Ok(ColumnarValue::Array(Arc::new(result.with_timezone_opt(tz))))
+                }
+                _ => exec_err!("Invalid Float64 value for to_timestamp"),
+            },
             Decimal32(_, _) | Decimal64(_, _) | Decimal256(_, _) => {
                 let arg = args[0].cast_to(&Decimal128(38, 9), None)?;
                 decimal128_to_timestamp_nanos(&arg, tz)

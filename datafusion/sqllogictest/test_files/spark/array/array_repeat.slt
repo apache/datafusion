@@ -32,6 +32,26 @@ SELECT array_repeat('123', -1);
 []
 
 query ?
+SELECT array_repeat('123', CAST('2' AS INT));
+----
+[123, 123]
+
+query ?
+SELECT array_repeat(123, 3);
+----
+[123, 123, 123]
+
+query ?
+SELECT array_repeat('2001-09-28T01:00:00'::timestamp, 2);
+----
+[2001-09-28T01:00:00, 2001-09-28T01:00:00]
+
+query ?
+SELECT array_repeat(array_repeat('123', CAST('2' AS INT)), CAST('3' AS INT));
+----
+[[123, 123], [123, 123], [123, 123]]
+
+query ?
 SELECT array_repeat(['123'], 2);
 ----
 [[123], [123]]

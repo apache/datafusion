@@ -26,14 +26,30 @@
 //!
 //! Each subcommand runs a corresponding example:
 //! - `all` — run all examples included in this module
-//! - `analyzer_rule` — use a custom AnalyzerRule to change a query's semantics (row level access control)
-//! - `expr_api` — create, execute, simplify, analyze and coerce `Expr`s
-//! - `optimizer_rule` — use a custom OptimizerRule to replace certain predicates
-//! - `parse_sql_expr` — parse SQL text into DataFusion `Expr`
-//! - `plan_to_sql` — generate SQL from DataFusion `Expr` and `LogicalPlan`
-//! - `planner_api` — APIs to manipulate logical and physical plans
-//! - `pruning` — APIs to manipulate logical and physical plans
-//! - `thread_pools` — demonstrate TrackConsumersPool for memory tracking and debugging with enhanced error messages and shows how to implement memory-aware ExecutionPlan with memory reservation and spilling
+//!
+//! - `analyzer_rule`
+//!   (file: analyzer_rule.rs, desc: Custom AnalyzerRule to change query semantics)
+//!
+//! - `expr_api`
+//!   (file: expr_api.rs, desc: Create, execute, analyze, and coerce Exprs)
+//!
+//! - `optimizer_rule`
+//!   (file: optimizer_rule.rs, desc: Replace predicates via a custom OptimizerRule)
+//!
+//! - `parse_sql_expr`
+//!   (file: parse_sql_expr.rs, desc: Parse SQL into DataFusion Expr)
+//!
+//! - `plan_to_sql`
+//!   (file: plan_to_sql.rs, desc: Generate SQL from expressions or plans)
+//!
+//! - `planner_api`
+//!   (file: planner_api.rs, desc: APIs for logical and physical plan manipulation)
+//!
+//! - `pruning`
+//!   (file: pruning.rs, desc: Use pruning to skip irrelevant files)
+//!
+//! - `thread_pools`
+//!   (file: thread_pools.rs, desc: Configure custom thread pools for DataFusion execution)
 
 mod analyzer_rule;
 mod expr_api;

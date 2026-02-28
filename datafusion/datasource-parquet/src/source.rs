@@ -757,7 +757,7 @@ impl FileSource for ParquetSource {
     /// # Returns
     /// - `Inexact`: Created an optimized source (e.g., reversed scan) that approximates the order
     /// - `Unsupported`: Cannot optimize for this ordering
-    fn try_reverse_output(
+    fn try_pushdown_sort(
         &self,
         order: &[PhysicalSortExpr],
         eq_properties: &EquivalenceProperties,

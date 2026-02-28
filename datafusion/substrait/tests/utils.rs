@@ -484,6 +484,7 @@ pub mod test {
                 }
                 RexType::DynamicParameter(_) => {}
                 // Enum is deprecated
+                #[expect(deprecated)]
                 RexType::Enum(_) => {}
             }
             Ok(())

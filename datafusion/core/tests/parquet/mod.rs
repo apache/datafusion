@@ -576,9 +576,9 @@ fn make_uint_batches(start: u8, end: u8) -> RecordBatch {
         Field::new("u64", DataType::UInt64, true),
     ]));
     let v8: Vec<u8> = (start..end).collect();
-    let v16: Vec<u16> = (start as _..end as _).collect();
-    let v32: Vec<u32> = (start as _..end as _).collect();
-    let v64: Vec<u64> = (start as _..end as _).collect();
+    let v16: Vec<u16> = (start as u16..end as u16).collect();
+    let v32: Vec<u32> = (start as u32..end as u32).collect();
+    let v64: Vec<u64> = (start as u64..end as u64).collect();
     RecordBatch::try_new(
         schema,
         vec![
@@ -1148,7 +1148,7 @@ async fn make_test_file_rg(
         .expect("tempfile creation");
 
     let props = WriterProperties::builder()
-        .set_max_row_group_size(row_per_group)
+        .set_max_row_group_row_count(Some(row_per_group))
         .set_bloom_filter_enabled(true)
         .set_statistics_enabled(EnabledStatistics::Page)
         .build();

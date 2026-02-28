@@ -878,11 +878,8 @@ impl SessionState {
         &self.catalog_list
     }
 
-    /// set the catalog list
-    pub(crate) fn register_catalog_list(
-        &mut self,
-        catalog_list: Arc<dyn CatalogProviderList>,
-    ) {
+    /// Set the catalog list
+    pub fn register_catalog_list(&mut self, catalog_list: Arc<dyn CatalogProviderList>) {
         self.catalog_list = catalog_list;
     }
 
@@ -972,6 +969,7 @@ impl SessionState {
 /// be used for all values unless explicitly provided.
 ///
 /// See example on [`SessionState`]
+#[derive(Clone)]
 pub struct SessionStateBuilder {
     session_id: Option<String>,
     analyzer: Option<Analyzer>,
@@ -1843,9 +1841,14 @@ impl ContextProvider for SessionContextProvider<'_> {
                 self.state.execution_props().query_execution_start_time,
             );
         let simplifier = ExprSimplifier::new(simplify_context);
+        let schema = DFSchema::empty();
         let args = args
             .into_iter()
-            .map(|arg| simplifier.simplify(arg))
+            .map(|arg| {
+                simplifier
+                    .coerce(arg, &schema)
+                    .and_then(|e| simplifier.simplify(e))
+            })
             .collect::<datafusion_common::Result<Vec<_>>>()?;
         let provider = tbl_func.create_table_provider(&args)?;
 

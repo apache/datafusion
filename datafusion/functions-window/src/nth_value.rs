@@ -97,7 +97,7 @@ impl NthValue {
         Self {
             signature: Signature::one_of(
                 vec![
-                    TypeSignature::Any(0),
+                    TypeSignature::Nullary,
                     TypeSignature::Any(1),
                     TypeSignature::Any(2),
                 ],
@@ -269,7 +269,7 @@ impl WindowUDFImpl for NthValue {
             kind: self.kind,
         };
 
-        if !matches!(self.kind, NthValueKind::Nth) {
+        if self.kind != NthValueKind::Nth {
             return Ok(Box::new(NthValueEvaluator {
                 state,
                 ignore_nulls: partition_evaluator_args.ignore_nulls(),

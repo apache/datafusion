@@ -536,7 +536,7 @@ impl OddCounter {
         impl SimpleWindowUDF {
             fn new(test_state: Arc<TestState>) -> Self {
                 let signature =
-                    Signature::exact(vec![DataType::Float64], Volatility::Immutable);
+                    Signature::exact(vec![DataType::Int64], Volatility::Immutable);
                 Self {
                     signature,
                     test_state: test_state.into(),

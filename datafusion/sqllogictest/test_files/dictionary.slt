@@ -36,7 +36,7 @@ SELECT
     arrow_cast(column3, 'Utf8') as f2,
     arrow_cast(column4, 'Utf8') as f3,
     arrow_cast(column5, 'Float64') as f4,
-    arrow_cast(column6, 'Timestamp(Nanosecond, None)') as time
+    arrow_cast(column6, 'Timestamp(ns)') as time
 FROM (
     VALUES
     -- equivalent to the following line protocol data
@@ -111,7 +111,7 @@ SELECT
     arrow_cast(column1, 'Dictionary(Int32, Utf8)') as type,
     arrow_cast(column2, 'Dictionary(Int32, Utf8)') as tag_id,
     arrow_cast(column3, 'Float64') as f5,
-    arrow_cast(column4, 'Timestamp(Nanosecond, None)') as time
+    arrow_cast(column4, 'Timestamp(ns)') as time
 FROM (
     VALUES
     -- equivalent to the following line protocol data
