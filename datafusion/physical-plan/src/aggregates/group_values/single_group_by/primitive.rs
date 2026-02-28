@@ -110,10 +110,14 @@ where
 
         for v in cols[0].as_primitive::<T>() {
             let group_id = match v {
-                None => *self.null_group.get_or_insert_with(|| {
-                    let group_id = self.len();
-                    group_id
-                }),
+                None => match self.null_group {
+                    Some(idx) => idx,
+                    None => {
+                        let g = self.len();
+                        self.null_group = Some(g);
+                        g
+                    }
+                },
                 Some(key) => {
                     let state = &self.random_state;
                     let hash = key.hash(state);
