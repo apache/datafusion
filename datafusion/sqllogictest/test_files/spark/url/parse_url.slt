@@ -297,11 +297,11 @@ SELECT parse_url('https://example.com/path?query=1', NULL, 'key');
 ----
 NULL
 
-# NULL key with 3 args (valid URL and part)
+# NULL key with 3 args (valid URL and part) - Spark returns NULL when third arg is NULL
 query T
 SELECT parse_url('https://example.com/path?query=1', 'QUERY', NULL);
 ----
-query=1
+NULL
 
 # All three NULL
 query T

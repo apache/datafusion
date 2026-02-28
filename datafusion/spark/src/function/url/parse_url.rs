@@ -227,6 +227,7 @@ pub fn spark_handled_parse_url(
                     as_string_array(part)?,
                     as_string_array(key)?,
                     handler_err,
+                    true,
                 )
             }
             (DataType::Utf8View, DataType::Utf8View, DataType::Utf8View) => {
@@ -235,6 +236,7 @@ pub fn spark_handled_parse_url(
                     as_string_view_array(part)?,
                     as_string_view_array(key)?,
                     handler_err,
+                    true,
                 )
             }
             (DataType::LargeUtf8, DataType::LargeUtf8, DataType::LargeUtf8) => {
@@ -243,6 +245,7 @@ pub fn spark_handled_parse_url(
                     as_large_string_array(part)?,
                     as_large_string_array(key)?,
                     handler_err,
+                    true,
                 )
             }
             _ => exec_err!(
@@ -268,6 +271,7 @@ pub fn spark_handled_parse_url(
                     as_string_array(part)?,
                     &key,
                     handler_err,
+                    false,
                 )
             }
             (DataType::Utf8View, DataType::Utf8View) => {
@@ -276,6 +280,7 @@ pub fn spark_handled_parse_url(
                     as_string_view_array(part)?,
                     &key,
                     handler_err,
+                    false,
                 )
             }
             (DataType::LargeUtf8, DataType::LargeUtf8) => {
@@ -284,6 +289,7 @@ pub fn spark_handled_parse_url(
                     as_large_string_array(part)?,
                     &key,
                     handler_err,
+                    false,
                 )
             }
             _ => exec_err!(
@@ -300,6 +306,7 @@ fn process_parse_url<'a, A, B, C, T>(
     part_array: &'a B,
     key_array: &'a C,
     handle: impl Fn(Result<Option<String>>) -> Result<Option<String>>,
+    has_key_arg: bool,
 ) -> Result<ArrayRef>
 where
     &'a A: StringArrayType<'a>,
@@ -312,7 +319,11 @@ where
         .zip(part_array.iter())
         .zip(key_array.iter())
         .map(|((url, part), key)| {
-            if let (Some(url), Some(part), key) = (url, part, key) {
+            // Spark returns NULL when the third argument is explicitly NULL
+            if has_key_arg && key.is_none() {
+                return Ok(None);
+            }
+            if let (Some(url), Some(part)) = (url, part) {
                 handle(ParseUrl::parse(url, part, key))
             } else {
                 Ok(None)
