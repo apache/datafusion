@@ -117,6 +117,7 @@ where
                 Some(key) => {
                     let state = &self.random_state;
                     let hash = key.hash(state);
+                    let next_group_idx = self.len();
                     let insert = self.map.entry(
                         hash,
                         |entry| entry.0.is_eq(key),
@@ -126,9 +127,8 @@ where
                     match insert {
                         hashbrown::hash_table::Entry::Occupied(o) => o.get().1,
                         hashbrown::hash_table::Entry::Vacant(v) => {
-                            let g = self.len();
-                            v.insert((key, g));
-                            g
+                            v.insert((key, next_group_idx));
+                            next_group_idx
                         }
                     }
                 }
