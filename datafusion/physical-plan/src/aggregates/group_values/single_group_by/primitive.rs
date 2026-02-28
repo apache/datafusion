@@ -24,7 +24,6 @@ use arrow::array::{
 };
 use arrow::datatypes::{DataType, i256};
 use datafusion_common::Result;
-use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::EmitTo;
 use half::f16;
 use hashbrown::hash_table::HashTable;
@@ -85,8 +84,8 @@ pub struct GroupValuesPrimitive<T: ArrowPrimitiveType> {
     map: HashTable<(T::Native, usize)>,
     /// The group index of the null value if any
     null_group: Option<usize>,
-    /// The values for each group index
-    values: Vec<T::Native>,
+    /// The number of groups (including null if present)
+    num_groups: usize,
     /// The random state used to generate hashes
     random_state: RandomState,
 }
@@ -97,8 +96,8 @@ impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
         Self {
             data_type,
             map: HashTable::with_capacity(128),
-            values: Vec::with_capacity(128),
             null_group: None,
+            num_groups: 0,
             random_state: crate::aggregates::AGGREGATION_HASH_SEED,
         }
     }
@@ -115,8 +114,8 @@ where
         for v in cols[0].as_primitive::<T>() {
             let group_id = match v {
                 None => *self.null_group.get_or_insert_with(|| {
-                    let group_id = self.values.len();
-                    self.values.push(Default::default());
+                    let group_id = self.num_groups;
+                    self.num_groups += 1;
                     group_id
                 }),
                 Some(key) => {
@@ -131,9 +130,9 @@ where
                     match insert {
                         hashbrown::hash_table::Entry::Occupied(o) => o.get().1,
                         hashbrown::hash_table::Entry::Vacant(v) => {
-                            let g = self.values.len();
+                            let g = self.num_groups;
+                            self.num_groups += 1;
                             v.insert((key, g));
-                            self.values.push(key);
                             g
                         }
                     }
@@ -146,15 +145,14 @@ where
 
     fn size(&self) -> usize {
         self.map.capacity() * size_of::<(T::Native, usize)>()
-            + self.values.allocated_size()
     }
 
     fn is_empty(&self) -> bool {
-        self.values.is_empty()
+        self.num_groups == 0
     }
 
     fn len(&self) -> usize {
-        self.values.len()
+        self.num_groups
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
@@ -175,19 +173,27 @@ where
 
         let array: PrimitiveArray<T> = match emit_to {
             EmitTo::All => {
+                let mut values = vec![T::Native::default(); self.num_groups];
+                for &(value, group_idx) in self.map.iter() {
+                    values[group_idx] = value;
+                }
                 self.map.clear();
-                build_primitive(std::mem::take(&mut self.values), self.null_group.take())
+                let null_group = self.null_group.take();
+                self.num_groups = 0;
+                build_primitive(values, null_group)
             }
             EmitTo::First(n) => {
+                let mut values = vec![T::Native::default(); n];
                 self.map.retain(|entry| {
-                    match entry.1.checked_sub(n) {
-                        Some(sub) => {
-                            entry.1 = sub;
-                            true
-                        }
-                        None => false,
+                    if entry.1 < n {
+                        values[entry.1] = entry.0;
+                        false
+                    } else {
+                        entry.1 -= n;
+                        true
                     }
                 });
+                self.num_groups -= n;
                 let null_group = match &mut self.null_group {
                     Some(v) if *v >= n => {
                         *v -= n;
@@ -196,9 +202,7 @@ where
                     Some(_) => self.null_group.take(),
                     None => None,
                 };
-                let mut split = self.values.split_off(n);
-                std::mem::swap(&mut self.values, &mut split);
-                build_primitive(split, null_group)
+                build_primitive(values, null_group)
             }
         };
 
@@ -206,8 +210,7 @@ where
     }
 
     fn clear_shrink(&mut self, num_rows: usize) {
-        self.values.clear();
-        self.values.shrink_to(num_rows);
+        self.num_groups = 0;
         self.map.clear();
         self.map.shrink_to(num_rows, |_| 0); // hasher does not matter since the map is cleared
     }
