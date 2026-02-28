@@ -3951,7 +3951,7 @@ mod tests {
 
         // Pool must be large enough for accumulation to start but too small for
         // sort_memory after clearing.
-        let task_ctx = new_spill_ctx(1, 500);
+        let task_ctx = new_spill_ctx(1, 300);
         let result = collect(aggr.execute(0, Arc::clone(&task_ctx))?).await;
 
         match &result {
