@@ -18,14 +18,19 @@
 //! Defines `SUM` and `SUM DISTINCT` aggregate accumulators
 
 use ahash::RandomState;
-use arrow::array::{Array, ArrayRef, ArrowNativeTypeOp, ArrowNumericType, AsArray};
+use arrow::array::{
+    Array, ArrayRef, ArrowNativeTypeOp, ArrowNumericType, AsArray, BooleanArray,
+    PrimitiveArray,
+};
+use arrow::buffer::NullBuffer;
+use arrow::compute;
 use arrow::datatypes::Field;
 use arrow::datatypes::{
-    ArrowNativeType, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION,
-    DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DataType, Decimal32Type,
-    Decimal64Type, Decimal128Type, Decimal256Type, DurationMicrosecondType,
-    DurationMillisecondType, DurationNanosecondType, DurationSecondType, FieldRef,
-    Float64Type, Int64Type, TimeUnit, UInt64Type,
+    ArrowNativeType, ArrowPrimitiveType, DECIMAL32_MAX_PRECISION,
+    DECIMAL64_MAX_PRECISION, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
+    DataType, Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type,
+    DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
+    DurationSecondType, FieldRef, Float64Type, Int64Type, TimeUnit, UInt64Type,
 };
 use datafusion_common::types::{
     NativeType, logical_float64, logical_int8, logical_int16, logical_int32,
@@ -35,15 +40,16 @@ use datafusion_common::{HashMap, Result, ScalarValue, exec_err, not_impl_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::{AggregateOrderSensitivity, format_state_name};
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Coercion, Documentation, Expr, GroupsAccumulator,
-    ReversedUDAF, SetMonotonicity, Signature, TypeSignature, TypeSignatureClass,
-    Volatility,
+    Accumulator, AggregateUDFImpl, Coercion, Documentation, EmitTo, Expr,
+    GroupsAccumulator, ReversedUDAF, SetMonotonicity, Signature, TypeSignature,
+    TypeSignatureClass, Volatility,
 };
-use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::NullState;
 use datafusion_functions_aggregate_common::aggregate::sum_distinct::DistinctSumAccumulator;
 use datafusion_macros::user_doc;
 use std::any::Any;
-use std::mem::size_of_val;
+use std::mem::{size_of, size_of_val};
+use std::sync::Arc;
 
 make_udaf_expr_and_func!(
     Sum,
@@ -291,10 +297,7 @@ impl AggregateUDFImpl for Sum {
     ) -> Result<Box<dyn GroupsAccumulator>> {
         macro_rules! helper {
             ($t:ty, $dt:expr) => {
-                Ok(Box::new(PrimitiveGroupsAccumulator::<$t, _>::new(
-                    &$dt,
-                    |x, y| *x = x.add_wrapping(y),
-                )))
+                Ok(Box::new(SumGroupsAccumulator::<$t>::new($dt)))
             };
         }
         downcast_sum!(args, helper)
@@ -348,6 +351,131 @@ impl AggregateUDFImpl for Sum {
     }
 }
 
+/// Specialized groups accumulator for SUM that uses [`accumulate_add`] directly
+/// instead of going through a generic closure, allowing LLVM to see the
+/// `add_wrapping` operation and optimize accordingly.
+#[derive(Debug)]
+struct SumGroupsAccumulator<T: ArrowPrimitiveType> {
+    /// values per group, stored as the native type
+    values: Vec<T::Native>,
+
+    /// The output type (needed for Decimal precision and scale)
+    data_type: DataType,
+
+    /// Track nulls in the input / filters
+    null_state: NullState,
+}
+
+impl<T: ArrowPrimitiveType> SumGroupsAccumulator<T>
+where
+    T::Native: ArrowNativeTypeOp,
+{
+    fn new(data_type: DataType) -> Self {
+        Self {
+            values: vec![],
+            data_type,
+            null_state: NullState::new(),
+        }
+    }
+}
+
+impl<T: ArrowPrimitiveType> GroupsAccumulator for SumGroupsAccumulator<T>
+where
+    T: ArrowPrimitiveType + Send,
+    T::Native: ArrowNativeTypeOp,
+{
+    fn update_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        opt_filter: Option<&BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        assert_eq!(values.len(), 1, "single argument to update_batch");
+        let values = values[0].as_primitive::<T>();
+        self.values.resize(total_num_groups, T::default_value());
+        self.null_state.accumulate_add(
+            group_indices,
+            values,
+            opt_filter,
+            total_num_groups,
+            &mut self.values,
+        );
+        Ok(())
+    }
+
+    fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
+        let values = emit_to.take_needed(&mut self.values);
+        let nulls = self.null_state.build(emit_to);
+        let values = PrimitiveArray::<T>::new(values.into(), nulls)
+            .with_data_type(self.data_type.clone());
+        Ok(Arc::new(values))
+    }
+
+    fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
+        self.evaluate(emit_to).map(|arr| vec![arr])
+    }
+
+    fn merge_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        opt_filter: Option<&BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        self.update_batch(values, group_indices, opt_filter, total_num_groups)
+    }
+
+    fn convert_to_state(
+        &self,
+        values: &[ArrayRef],
+        opt_filter: Option<&BooleanArray>,
+    ) -> Result<Vec<ArrayRef>> {
+        let values = values[0].as_primitive::<T>().clone();
+
+        let initial_state =
+            PrimitiveArray::<T>::from_value(T::default_value(), values.len());
+
+        let values = match opt_filter {
+            None => values,
+            Some(filter) => {
+                let (filter_values, filter_nulls) = filter.clone().into_parts();
+                let filter_bool = match filter_nulls {
+                    Some(filter_nulls) => filter_nulls.inner() & &filter_values,
+                    None => filter_values,
+                };
+                let filter_nulls = NullBuffer::from(filter_bool);
+
+                let (dt, values_buf, original_nulls) = values.into_parts();
+                let nulls_buf =
+                    NullBuffer::union(original_nulls.as_ref(), Some(&filter_nulls));
+                PrimitiveArray::<T>::new(values_buf, nulls_buf).with_data_type(dt)
+            }
+        };
+
+        let state_values =
+            compute::binary_mut(initial_state, &values, |x, y| x.add_wrapping(y));
+        let state_values = state_values
+            .map_err(|_| {
+                datafusion_common::internal_datafusion_err!(
+                    "initial_values underlying buffer must not be shared"
+                )
+            })?
+            .map_err(datafusion_common::DataFusionError::from)?
+            .with_data_type(self.data_type.clone());
+
+        Ok(vec![Arc::new(state_values)])
+    }
+
+    fn supports_convert_to_state(&self) -> bool {
+        true
+    }
+
+    fn size(&self) -> usize {
+        self.values.capacity() * size_of::<T::Native>() + self.null_state.size()
+    }
+}
+
 /// This accumulator computes SUM incrementally
 struct SumAccumulator<T: ArrowNumericType> {
     sum: Option<T::Native>,
@@ -376,7 +504,7 @@ impl<T: ArrowNumericType> Accumulator for SumAccumulator<T> {
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = values[0].as_primitive::<T>();
-        if let Some(x) = arrow::compute::sum(values) {
+        if let Some(x) = compute::sum(values) {
             let v = self.sum.get_or_insert_with(|| T::Native::usize_as(0));
             *v = v.add_wrapping(x);
         }
@@ -429,7 +557,7 @@ impl<T: ArrowNumericType> Accumulator for SlidingSumAccumulator<T> {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = values[0].as_primitive::<T>();
         self.count += (values.len() - values.null_count()) as u64;
-        if let Some(x) = arrow::compute::sum(values) {
+        if let Some(x) = compute::sum(values) {
             self.sum = self.sum.add_wrapping(x)
         }
         Ok(())
@@ -437,10 +565,10 @@ impl<T: ArrowNumericType> Accumulator for SlidingSumAccumulator<T> {
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         let values = states[0].as_primitive::<T>();
-        if let Some(x) = arrow::compute::sum(values) {
+        if let Some(x) = compute::sum(values) {
             self.sum = self.sum.add_wrapping(x)
         }
-        if let Some(x) = arrow::compute::sum(states[1].as_primitive::<UInt64Type>()) {
+        if let Some(x) = compute::sum(states[1].as_primitive::<UInt64Type>()) {
             self.count += x;
         }
         Ok(())
@@ -457,7 +585,7 @@ impl<T: ArrowNumericType> Accumulator for SlidingSumAccumulator<T> {
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = values[0].as_primitive::<T>();
-        if let Some(x) = arrow::compute::sum(values) {
+        if let Some(x) = compute::sum(values) {
             self.sum = self.sum.sub_wrapping(x)
         }
         self.count -= (values.len() - values.null_count()) as u64;

@@ -19,7 +19,9 @@
 //!
 //! [`GroupsAccumulator`]: datafusion_expr_common::groups_accumulator::GroupsAccumulator
 
-use arrow::array::{Array, BooleanArray, BooleanBufferBuilder, PrimitiveArray};
+use arrow::array::{
+    Array, ArrowNativeTypeOp, BooleanArray, BooleanBufferBuilder, PrimitiveArray,
+};
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::ArrowPrimitiveType;
 
@@ -185,6 +187,45 @@ impl NullState {
         accumulate(group_indices, values, opt_filter, |group_index, value| {
             seen_values.set_bit(group_index, true);
             value_fn(group_index, value);
+        });
+    }
+
+    /// Specialized scatter-add accumulator: performs
+    /// `target[gi] = target[gi].add_wrapping(values[i])` for each non-null,
+    /// non-filtered row, while tracking which groups have seen values.
+    ///
+    /// Uses [`accumulate_add`] on the fast path (no nulls, no filter, no
+    /// previous nulls seen) and falls back to the closure-based [`accumulate`]
+    /// for the slow path.
+    pub fn accumulate_add<T: ArrowPrimitiveType + Send>(
+        &mut self,
+        group_indices: &[usize],
+        values: &PrimitiveArray<T>,
+        opt_filter: Option<&BooleanArray>,
+        total_num_groups: usize,
+        target: &mut [T::Native],
+    ) where
+        T::Native: ArrowNativeTypeOp,
+    {
+        // Fast path: no nulls, no filter, no previous nulls seen
+        if let SeenValues::All { num_values } = &mut self.seen_values
+            && opt_filter.is_none()
+            && values.null_count() == 0
+        {
+            accumulate_add(group_indices, values, None, target);
+            *num_values = total_num_groups;
+            return;
+        }
+
+        // Slow path: fall back to general accumulate with closure
+        // (this already handles seen_values correctly)
+        let seen_values = self.seen_values.get_builder(total_num_groups);
+        accumulate(group_indices, values, opt_filter, |gi, v| {
+            seen_values.set_bit(gi, true);
+            unsafe {
+                let t = target.get_unchecked_mut(gi);
+                *t = t.add_wrapping(v);
+            }
         });
     }
 
@@ -669,6 +710,261 @@ pub fn accumulate_indices<F>(
                         index_fn(group_index)
                     }
                 });
+        }
+    }
+}
+
+/// Specialized scatter-add: `target[gi] = target[gi].add_wrapping(data[i])`
+/// for each non-null, non-filtered row.
+///
+/// This is equivalent to calling [`accumulate`] with a closure that does
+/// `add_wrapping`, but avoids closure indirection so that LLVM can see the
+/// operation directly and all paths use 64-bit chunk iteration.
+pub fn accumulate_add<T: ArrowPrimitiveType>(
+    group_indices: &[usize],
+    values: &PrimitiveArray<T>,
+    opt_filter: Option<&BooleanArray>,
+    target: &mut [T::Native],
+) where
+    T::Native: ArrowNativeTypeOp,
+{
+    let data: &[T::Native] = values.values();
+    assert_eq!(data.len(), group_indices.len());
+
+    match (values.null_count() > 0, opt_filter) {
+        (false, None) => {
+            for (&gi, &v) in group_indices.iter().zip(data.iter()) {
+                // SAFETY: gi is guaranteed to be in bounds by the caller
+                unsafe {
+                    let t = target.get_unchecked_mut(gi);
+                    *t = t.add_wrapping(v);
+                }
+            }
+        }
+        (true, None) => {
+            let nulls = values.nulls().unwrap();
+            let gi_chunks = group_indices.chunks_exact(64);
+            let data_chunks = data.chunks_exact(64);
+            let bit_chunks = nulls.inner().bit_chunks();
+            let gi_remainder = gi_chunks.remainder();
+            let data_remainder = data_chunks.remainder();
+
+            gi_chunks.zip(data_chunks).zip(bit_chunks.iter()).for_each(
+                |((gi_chunk, data_chunk), mask)| {
+                    let mut index_mask = 1u64;
+                    for (&gi, &v) in gi_chunk.iter().zip(data_chunk.iter()) {
+                        if (mask & index_mask) != 0 {
+                            unsafe {
+                                let t = target.get_unchecked_mut(gi);
+                                *t = t.add_wrapping(v);
+                            }
+                        }
+                        index_mask <<= 1;
+                    }
+                },
+            );
+
+            let remainder_bits = bit_chunks.remainder_bits();
+            for (i, (&gi, &v)) in
+                gi_remainder.iter().zip(data_remainder.iter()).enumerate()
+            {
+                if remainder_bits & (1 << i) != 0 {
+                    unsafe {
+                        let t = target.get_unchecked_mut(gi);
+                        *t = t.add_wrapping(v);
+                    }
+                }
+            }
+        }
+        (false, Some(filter)) => {
+            assert_eq!(filter.len(), group_indices.len());
+            let gi_chunks = group_indices.chunks_exact(64);
+            let data_chunks = data.chunks_exact(64);
+            let filter_chunks = filter.values().bit_chunks();
+            let gi_remainder = gi_chunks.remainder();
+            let data_remainder = data_chunks.remainder();
+
+            gi_chunks
+                .zip(data_chunks)
+                .zip(filter_chunks.iter())
+                .for_each(|((gi_chunk, data_chunk), mask)| {
+                    let mut index_mask = 1u64;
+                    for (&gi, &v) in gi_chunk.iter().zip(data_chunk.iter()) {
+                        if (mask & index_mask) != 0 {
+                            unsafe {
+                                let t = target.get_unchecked_mut(gi);
+                                *t = t.add_wrapping(v);
+                            }
+                        }
+                        index_mask <<= 1;
+                    }
+                });
+
+            let remainder_bits = filter_chunks.remainder_bits();
+            for (i, (&gi, &v)) in
+                gi_remainder.iter().zip(data_remainder.iter()).enumerate()
+            {
+                if remainder_bits & (1 << i) != 0 {
+                    unsafe {
+                        let t = target.get_unchecked_mut(gi);
+                        *t = t.add_wrapping(v);
+                    }
+                }
+            }
+        }
+        (true, Some(filter)) => {
+            assert_eq!(filter.len(), group_indices.len());
+            let nulls = values.nulls().unwrap();
+            // Pre-combine all bitmasks: nulls AND filter_values AND filter_nulls
+            // filter.nulls() being None means all filter entries are non-null
+            let mut combined_filter = nulls.inner() & filter.values();
+            if let Some(filter_nulls) = filter.nulls() {
+                combined_filter = &combined_filter & filter_nulls.inner();
+            }
+            let gi_chunks = group_indices.chunks_exact(64);
+            let data_chunks = data.chunks_exact(64);
+            let bit_chunks = combined_filter.bit_chunks();
+            let gi_remainder = gi_chunks.remainder();
+            let data_remainder = data_chunks.remainder();
+
+            gi_chunks.zip(data_chunks).zip(bit_chunks.iter()).for_each(
+                |((gi_chunk, data_chunk), mask)| {
+                    let mut index_mask = 1u64;
+                    for (&gi, &v) in gi_chunk.iter().zip(data_chunk.iter()) {
+                        if (mask & index_mask) != 0 {
+                            unsafe {
+                                let t = target.get_unchecked_mut(gi);
+                                *t = t.add_wrapping(v);
+                            }
+                        }
+                        index_mask <<= 1;
+                    }
+                },
+            );
+
+            let remainder_bits = bit_chunks.remainder_bits();
+            for (i, (&gi, &v)) in
+                gi_remainder.iter().zip(data_remainder.iter()).enumerate()
+            {
+                if remainder_bits & (1 << i) != 0 {
+                    unsafe {
+                        let t = target.get_unchecked_mut(gi);
+                        *t = t.add_wrapping(v);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Specialized scatter-increment: `counts[gi] += 1` for each valid row.
+///
+/// This is equivalent to calling [`accumulate_indices`] with a closure that
+/// does `+= 1`, but avoids closure indirection.
+pub fn accumulate_count(
+    group_indices: &[usize],
+    nulls: Option<&NullBuffer>,
+    opt_filter: Option<&BooleanArray>,
+    counts: &mut [i64],
+) {
+    match (nulls, opt_filter) {
+        (None, None) => {
+            for &gi in group_indices {
+                // SAFETY: gi is guaranteed to be in bounds by the caller
+                unsafe {
+                    *counts.get_unchecked_mut(gi) += 1;
+                }
+            }
+        }
+        (Some(valids), None) => {
+            let gi_chunks = group_indices.chunks_exact(64);
+            let bit_chunks = valids.inner().bit_chunks();
+            let gi_remainder = gi_chunks.remainder();
+
+            gi_chunks
+                .zip(bit_chunks.iter())
+                .for_each(|(gi_chunk, mask)| {
+                    let mut index_mask = 1u64;
+                    for &gi in gi_chunk.iter() {
+                        if (mask & index_mask) != 0 {
+                            unsafe {
+                                *counts.get_unchecked_mut(gi) += 1;
+                            }
+                        }
+                        index_mask <<= 1;
+                    }
+                });
+
+            let remainder_bits = bit_chunks.remainder_bits();
+            for (i, &gi) in gi_remainder.iter().enumerate() {
+                if remainder_bits & (1 << i) != 0 {
+                    unsafe {
+                        *counts.get_unchecked_mut(gi) += 1;
+                    }
+                }
+            }
+        }
+        (None, Some(filter)) => {
+            assert_eq!(filter.len(), group_indices.len());
+            let gi_chunks = group_indices.chunks_exact(64);
+            let filter_chunks = filter.values().bit_chunks();
+            let gi_remainder = gi_chunks.remainder();
+
+            gi_chunks
+                .zip(filter_chunks.iter())
+                .for_each(|(gi_chunk, mask)| {
+                    let mut index_mask = 1u64;
+                    for &gi in gi_chunk.iter() {
+                        if (mask & index_mask) != 0 {
+                            unsafe {
+                                *counts.get_unchecked_mut(gi) += 1;
+                            }
+                        }
+                        index_mask <<= 1;
+                    }
+                });
+
+            let remainder_bits = filter_chunks.remainder_bits();
+            for (i, &gi) in gi_remainder.iter().enumerate() {
+                if remainder_bits & (1 << i) != 0 {
+                    unsafe {
+                        *counts.get_unchecked_mut(gi) += 1;
+                    }
+                }
+            }
+        }
+        (Some(valids), Some(filter)) => {
+            assert_eq!(filter.len(), group_indices.len());
+            let gi_chunks = group_indices.chunks_exact(64);
+            let valid_chunks = valids.inner().bit_chunks();
+            let filter_chunks = filter.values().bit_chunks();
+            let gi_remainder = gi_chunks.remainder();
+
+            gi_chunks
+                .zip(valid_chunks.iter())
+                .zip(filter_chunks.iter())
+                .for_each(|((gi_chunk, valid_mask), filter_mask)| {
+                    let mask = valid_mask & filter_mask;
+                    let mut index_mask = 1u64;
+                    for &gi in gi_chunk.iter() {
+                        if (mask & index_mask) != 0 {
+                            unsafe {
+                                *counts.get_unchecked_mut(gi) += 1;
+                            }
+                        }
+                        index_mask <<= 1;
+                    }
+                });
+
+            let remainder_valid_bits = valid_chunks.remainder_bits();
+            let remainder_filter_bits = filter_chunks.remainder_bits();
+            for (i, &gi) in gi_remainder.iter().enumerate() {
+                if remainder_valid_bits & remainder_filter_bits & (1 << i) != 0 {
+                    unsafe {
+                        *counts.get_unchecked_mut(gi) += 1;
+                    }
+                }
+            }
         }
     }
 }

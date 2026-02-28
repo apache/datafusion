@@ -47,7 +47,7 @@ use datafusion_functions_aggregate_common::aggregate::{
     count_distinct::DictionaryCountAccumulator,
     count_distinct::FloatDistinctCountAccumulator,
     count_distinct::PrimitiveDistinctCountAccumulator,
-    groups_accumulator::accumulate::accumulate_indices,
+    groups_accumulator::accumulate::{accumulate_add, accumulate_count},
 };
 use datafusion_macros::user_doc;
 use datafusion_physical_expr::expressions;
@@ -584,15 +584,11 @@ impl GroupsAccumulator for CountGroupsAccumulator {
         // Add one to each group's counter for each non null, non
         // filtered value
         self.counts.resize(total_num_groups, 0);
-        accumulate_indices(
+        accumulate_count(
             group_indices,
             values.logical_nulls().as_ref(),
             opt_filter,
-            |group_index| {
-                // SAFETY: group_index is guaranteed to be in bounds
-                let count = unsafe { self.counts.get_unchecked_mut(group_index) };
-                *count += 1;
-            },
+            &mut self.counts,
         );
 
         Ok(())
@@ -612,14 +608,14 @@ impl GroupsAccumulator for CountGroupsAccumulator {
 
         // intermediate counts are always created as non null
         assert_eq!(partial_counts.null_count(), 0);
-        let partial_counts = partial_counts.values();
 
         // Adds the counts with the partial counts
         self.counts.resize(total_num_groups, 0);
-        group_indices.iter().zip(partial_counts.iter()).for_each(
-            |(&group_index, partial_count)| {
-                self.counts[group_index] += partial_count;
-            },
+        accumulate_add::<Int64Type>(
+            group_indices,
+            partial_counts,
+            None,
+            &mut self.counts,
         );
 
         Ok(())
