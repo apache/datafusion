@@ -28,9 +28,9 @@ use arrow::datatypes::DataType::{
 };
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{
-    DataType, Date32Type, Date64Type, Field, FieldRef, IntervalUnit as ArrowIntervalUnit,
-    TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType,
+    ArrowTimestampType, DataType, Date32Type, Date64Type, Field, FieldRef,
+    IntervalUnit as ArrowIntervalUnit, TimeUnit, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
 use chrono::{Datelike, NaiveDate};
 use datafusion_common::types::{NativeType, logical_date};
@@ -329,23 +329,32 @@ fn date_to_scalar(date: NaiveDate, target_type: &DataType) -> Option<ScalarValue
 
         Timestamp(unit, tz_opt) => {
             let naive_midnight = date.and_hms_opt(0, 0, 0)?;
-            let tz: Option<Tz> = tz_opt.and_then(|s| s.parse().ok());
+            let tz: Option<Tz> = tz_opt.clone().and_then(|s| s.parse().ok());
 
             match unit {
                 Second => ScalarValue::TimestampSecond(
-                    TimestampSecondType::from_naive_datetime(naive_midnight, tz_opt),
+                    TimestampSecondType::from_naive_datetime(naive_midnight, tz.as_ref()),
                     tz_opt.clone(),
                 ),
                 Millisecond => ScalarValue::TimestampMillisecond(
-                    TimestampMillisecondType::from_naive_datetime(naive_midnight, tz_opt),
+                    TimestampMillisecondType::from_naive_datetime(
+                        naive_midnight,
+                        tz.as_ref(),
+                    ),
                     tz_opt.clone(),
                 ),
                 Microsecond => ScalarValue::TimestampMicrosecond(
-                    TimestampMicrosecondType::from_naive_datetime(naive_midnight, tz_opt),
+                    TimestampMicrosecondType::from_naive_datetime(
+                        naive_midnight,
+                        tz.as_ref(),
+                    ),
                     tz_opt.clone(),
                 ),
                 Nanosecond => ScalarValue::TimestampNanosecond(
-                    TimestampNanosecondType::from_naive_datetime(naive_midnight, tz_opt),
+                    TimestampNanosecondType::from_naive_datetime(
+                        naive_midnight,
+                        tz.as_ref(),
+                    ),
                     tz_opt.clone(),
                 ),
             }
