@@ -88,7 +88,7 @@ struct FileTiming {
 /// Tests not listed here will run after the listed tests in an arbitrary order.
 ///
 /// You can find the top longest running tests by running `--timing-summary` mode.
-/// For exmaple
+/// For example
 ///
 /// ```shell
 /// $  cargo test --profile=ci  --test sqllogictests -- --timing-summary top
