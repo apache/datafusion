@@ -186,7 +186,7 @@ impl TrackerConfig {
     pub fn new() -> Self {
         Self {
             min_bytes_per_sec: f64::INFINITY,
-            byte_ratio_threshold: 0.2,
+            byte_ratio_threshold: 0.05,
             confidence_z: 2.0,
         }
     }
@@ -320,11 +320,13 @@ impl SelectivityTracker {
         &self,
         filters: Vec<(FilterId, Arc<dyn PhysicalExpr>)>,
         projection_scan_size: usize,
+        projection_columns: &[usize],
         metadata: &ParquetMetaData,
     ) -> PartitionedFilters {
         self.inner.write().partition_filters(
             filters,
             projection_scan_size,
+            projection_columns,
             metadata,
             &self.config,
         )
@@ -431,6 +433,7 @@ impl SelectivityTrackerInner {
         &mut self,
         filters: Vec<(FilterId, Arc<dyn PhysicalExpr>)>,
         projection_scan_size: usize,
+        projection_columns: &[usize],
         metadata: &ParquetMetaData,
         config: &TrackerConfig,
     ) -> PartitionedFilters {
@@ -474,23 +477,42 @@ impl SelectivityTrackerInner {
             let state = self.filter_states.get(&id).copied();
 
             let Some(state) = state else {
-                // New filter: decide initial placement based on byte ratio threshold if stats are available.
-                // Byte ratio is calculated as (bytes required to evaluate the filter) / (total bytes in projection).
-                // Thus a higher byte ratio means the filter is more expensive to evaluate, and should initially be placed post-scan.
-                // A lower byte ratio means the filter is cheaper to evaluate, and should be placed at row-level immediately.
-                let filter_size = filter_scan_size(&expr, metadata);
-                let byte_ratio = filter_size as f64 / projection_scan_size as f64;
+                // New filter: decide initial placement based on byte ratio threshold.
+                //
+                // We compute the "extra bytes" — the bytes of filter columns that are
+                // NOT already in the projection. If a filter's columns are entirely
+                // contained in the projection, post-scan has zero extra I/O cost
+                // (those bytes are read regardless). But as a row filter, it enables
+                // late materialization which skips reading OTHER projected columns for
+                // pruned rows — so we still prefer row-level for potential savings.
+                //
+                // The ratio is: extra_filter_bytes / projection_bytes.
+                // Filters with extra bytes > threshold start post-scan; otherwise row-level.
+                let filter_columns: Vec<usize> = collect_columns(&expr)
+                    .iter()
+                    .map(|col| col.index())
+                    .collect();
+                let extra_columns: Vec<usize> = filter_columns
+                    .iter()
+                    .filter(|idx| !projection_columns.contains(idx))
+                    .copied()
+                    .collect();
+                let extra_bytes = crate::row_filter::total_compressed_bytes(
+                    &extra_columns,
+                    metadata,
+                );
+                let byte_ratio = extra_bytes as f64 / projection_scan_size as f64;
                 if byte_ratio <= config.byte_ratio_threshold {
                     debug!(
-                        "FilterId {id}: New filter → Row filter via byte ratio {byte_ratio} <= threshold {} — {expr}",
-                        config.byte_ratio_threshold
+                        "FilterId {id}: New filter → Row filter via extra byte ratio {byte_ratio} <= threshold {} (extra_cols={}, filter_cols={}) — {expr}",
+                        config.byte_ratio_threshold, extra_columns.len(), filter_columns.len()
                     );
                     self.filter_states.insert(id, FilterState::RowFilter);
                     row_filters.push((id, expr));
                 } else {
                     debug!(
-                        "FilterId {id}: New filter → Post-scan via byte ratio {byte_ratio} > threshold {} — {expr}",
-                        config.byte_ratio_threshold
+                        "FilterId {id}: New filter → Post-scan via extra byte ratio {byte_ratio} > threshold {} (extra_cols={}, filter_cols={}) — {expr}",
+                        config.byte_ratio_threshold, extra_columns.len(), filter_columns.len()
                     );
                     self.filter_states.insert(id, FilterState::PostScan);
                     post_scan_filters.push((id, expr));
@@ -530,31 +552,35 @@ impl SelectivityTrackerInner {
                         self.promote(id, expr, &mut row_filters);
                         continue;
                     }
-                    // Should we drop this filter based on CI upper bound?
-                    // Since this is a post-scan filter it cannot be demoted.
-                    // But if it is an optional filter and the upper bound is below threshold, we can drop it entirely.
+                    // Should we drop this filter if it's optional and ineffective?
+                    // Non-optional filters must stay as post-scan regardless.
                     if let Some(stats) = self.stats.get(&id)
                         && let Some(ub) = stats.confidence_upper_bound(confidence_z)
                         && ub < config.min_bytes_per_sec
+                        && expr
+                            .as_any()
+                            .downcast_ref::<OptionalFilterPhysicalExpr>()
+                            .is_some()
                     {
                         debug!(
                             "FilterId {id}: Post-scan → Dropped via CI upper bound {ub} < {} bytes/sec — {expr}",
                             config.min_bytes_per_sec
                         );
-                        self.demote_or_drop(id, &expr, &mut post_scan_filters);
+                        self.filter_states.insert(id, FilterState::Dropped);
                         continue;
                     }
-                    // If not promoted or dropped, keep as post-scan filter.
+                    // Keep as post-scan filter (don't reset stats for mandatory filters).
                     post_scan_filters.push((id, expr));
                 }
                 FilterState::Dropped => continue,
             }
         }
 
-        // Sort all filters by:
-        // - Effectiveness (descending, higher = more selective) if available for both filters.
-        // - Scan size (ascending, smaller = cheaper) as fallback when effectiveness is unavailable.
-        let cmp_filters =
+        // Sort row filters by:
+        // - Effectiveness (descending, higher = better) if available for both filters.
+        // - Scan size (ascending, cheapest first) as fallback — cheap filters prune
+        //   rows before expensive ones, reducing downstream evaluation cost.
+        let cmp_row_filters =
             |(id_a, expr_a): &(FilterId, Arc<dyn PhysicalExpr>),
              (id_b, expr_b): &(FilterId, Arc<dyn PhysicalExpr>)| {
                 let eff_a = self.get_effectiveness_by_id(*id_a);
@@ -569,8 +595,10 @@ impl SelectivityTrackerInner {
                     size_a.cmp(&size_b)
                 }
             };
-        row_filters.sort_by(cmp_filters);
-        post_scan_filters.sort_by(cmp_filters);
+        row_filters.sort_by(cmp_row_filters);
+        // Post-scan filters: same logic (cheaper post-scan filters first to reduce
+        // the batch size for subsequent filters).
+        post_scan_filters.sort_by(cmp_row_filters);
 
         debug!(
             "Partitioned filters: {} row-level, {} post-scan",
@@ -854,7 +882,7 @@ mod tests {
             let config = TrackerConfig::default();
 
             assert!(config.min_bytes_per_sec.is_infinite());
-            assert_eq!(config.byte_ratio_threshold, 0.2);
+            assert_eq!(config.byte_ratio_threshold, 0.05);
             assert_eq!(config.confidence_z, 2.0);
         }
 
@@ -919,7 +947,7 @@ mod tests {
             let expr = col_expr("a", 0);
             let filters = vec![(1, expr)];
 
-            let result = tracker.partition_filters(filters, 1000, &metadata);
+            let result = tracker.partition_filters(filters, 1000, &[], &metadata);
 
             // With 100% byte ratio, should go to post-scan
             assert_eq!(result.row_filters.len(), 0);
@@ -941,7 +969,7 @@ mod tests {
             let expr = col_expr("a", 0);
             let filters = vec![(1, expr)];
 
-            let result = tracker.partition_filters(filters, 1000, &metadata);
+            let result = tracker.partition_filters(filters, 1000, &[], &metadata);
 
             // With 10% byte ratio, should go to row-filter
             assert_eq!(result.row_filters.len(), 1);
@@ -958,7 +986,7 @@ mod tests {
             let expr = col_expr("a", 0);
             let filters = vec![(1, expr)];
 
-            let result = tracker.partition_filters(filters, 1000, &metadata);
+            let result = tracker.partition_filters(filters, 1000, &[], &metadata);
 
             // All filters should go to post_scan when min_bytes_per_sec is INFINITY
             assert_eq!(result.row_filters.len(), 0);
@@ -973,7 +1001,7 @@ mod tests {
             let expr = col_expr("a", 0);
             let filters = vec![(1, expr)];
 
-            let result = tracker.partition_filters(filters, 1000, &metadata);
+            let result = tracker.partition_filters(filters, 1000, &[], &metadata);
 
             // All filters should be promoted to row_filters when min_bytes_per_sec is 0
             assert_eq!(result.row_filters.len(), 1);
@@ -993,7 +1021,7 @@ mod tests {
             let filters = vec![(1, expr.clone())];
 
             // First partition: goes to PostScan (high byte ratio)
-            let result = tracker.partition_filters(filters.clone(), 1000, &metadata);
+            let result = tracker.partition_filters(filters.clone(), 1000, &[], &metadata);
             assert_eq!(result.post_scan.len(), 1);
             assert_eq!(result.row_filters.len(), 0);
 
@@ -1003,7 +1031,7 @@ mod tests {
             }
 
             // Second partition: should be promoted to RowFilter
-            let result = tracker.partition_filters(filters, 1000, &metadata);
+            let result = tracker.partition_filters(filters, 1000, &[], &metadata);
             assert_eq!(result.row_filters.len(), 1);
             assert_eq!(result.post_scan.len(), 0);
         }
@@ -1021,7 +1049,7 @@ mod tests {
             let filters = vec![(1, expr.clone())];
 
             // First partition: goes to RowFilter (low byte ratio)
-            let result = tracker.partition_filters(filters.clone(), 1000, &metadata);
+            let result = tracker.partition_filters(filters.clone(), 1000, &[], &metadata);
             assert_eq!(result.row_filters.len(), 1);
             assert_eq!(result.post_scan.len(), 0);
 
@@ -1031,7 +1059,7 @@ mod tests {
             }
 
             // Second partition: should be demoted to PostScan
-            let result = tracker.partition_filters(filters, 1000, &metadata);
+            let result = tracker.partition_filters(filters, 1000, &[], &metadata);
             assert_eq!(result.row_filters.len(), 0);
             assert_eq!(result.post_scan.len(), 1);
         }
@@ -1049,14 +1077,14 @@ mod tests {
             let filters = vec![(1, expr.clone())];
 
             // Start as RowFilter
-            tracker.partition_filters(filters.clone(), 1000, &metadata);
+            tracker.partition_filters(filters.clone(), 1000, &[], &metadata);
 
             // Add stats
             tracker.update(1, 100, 100, 100_000, 1000);
             tracker.update(1, 100, 100, 100_000, 1000);
 
             // Demote
-            tracker.partition_filters(filters.clone(), 1000, &metadata);
+            tracker.partition_filters(filters.clone(), 1000, &[], &metadata);
 
             // Stats should be cleared, so on next update it starts fresh
             assert_eq!(tracker.inner.read().stats.len(), 0);
@@ -1075,7 +1103,7 @@ mod tests {
             let filters = vec![(1, expr.clone())];
 
             // Start as PostScan
-            tracker.partition_filters(filters.clone(), 1000, &metadata);
+            tracker.partition_filters(filters.clone(), 1000, &[], &metadata);
 
             // Add stats
             for _ in 0..3 {
@@ -1083,7 +1111,7 @@ mod tests {
             }
 
             // Promote
-            tracker.partition_filters(filters.clone(), 1000, &metadata);
+            tracker.partition_filters(filters.clone(), 1000, &[], &metadata);
 
             // Stats should be cleared after promotion
             assert_eq!(tracker.inner.read().stats.len(), 0);
@@ -1102,7 +1130,7 @@ mod tests {
             let filters = vec![(1, expr.clone())];
 
             // Start as PostScan
-            tracker.partition_filters(filters.clone(), 1000, &metadata);
+            tracker.partition_filters(filters.clone(), 1000, &[], &metadata);
 
             // Feed poor effectiveness stats
             for _ in 0..5 {
@@ -1110,7 +1138,7 @@ mod tests {
             }
 
             // Next partition: should stay as PostScan (not dropped because not optional)
-            let result = tracker.partition_filters(filters, 1000, &metadata);
+            let result = tracker.partition_filters(filters, 1000, &[], &metadata);
             assert_eq!(result.post_scan.len(), 1);
             assert_eq!(result.row_filters.len(), 0);
         }
@@ -1134,7 +1162,7 @@ mod tests {
                 .insert(1, FilterState::Dropped);
 
             // On next partition, dropped filters should not reappear
-            let result = tracker.partition_filters(filters, 1000, &metadata);
+            let result = tracker.partition_filters(filters, 1000, &[], &metadata);
             assert_eq!(result.row_filters.len(), 0);
             assert_eq!(result.post_scan.len(), 0);
         }
@@ -1158,7 +1186,7 @@ mod tests {
             ];
 
             // Partition should process all filters
-            let result = tracker.partition_filters(filters.clone(), 1000, &metadata);
+            let result = tracker.partition_filters(filters.clone(), 1000, &[], &metadata);
 
             // With min_bytes_per_sec=1.0, filters should be partitioned
             assert!(result.row_filters.len() + result.post_scan.len() > 0);
@@ -1168,7 +1196,7 @@ mod tests {
             tracker.update(2, 10, 100, 1_000_000, 100);
             tracker.update(3, 40, 100, 1_000_000, 100);
 
-            let result2 = tracker.partition_filters(filters, 1000, &metadata);
+            let result2 = tracker.partition_filters(filters, 1000, &[], &metadata);
 
             // Filters should still be partitioned
             assert!(result2.row_filters.len() + result2.post_scan.len() > 0);
@@ -1189,13 +1217,13 @@ mod tests {
             ];
 
             // First partition - no stats yet
-            let result = tracker.partition_filters(filters.clone(), 1000, &metadata);
+            let result = tracker.partition_filters(filters.clone(), 1000, &[], &metadata);
 
             // All filters should be processed (partitioned into row/post-scan)
             assert!(result.row_filters.len() + result.post_scan.len() > 0);
 
             // Filters should be consistent on repeated calls
-            let result2 = tracker.partition_filters(filters, 1000, &metadata);
+            let result2 = tracker.partition_filters(filters, 1000, &[], &metadata);
             assert_eq!(
                 result.row_filters.len() + result.post_scan.len(),
                 result2.row_filters.len() + result2.post_scan.len()
@@ -1215,7 +1243,7 @@ mod tests {
             ];
 
             // First partition
-            let result1 = tracker.partition_filters(filters.clone(), 1000, &metadata);
+            let result1 = tracker.partition_filters(filters.clone(), 1000, &[], &metadata);
             assert!(result1.row_filters.len() + result1.post_scan.len() > 0);
 
             // Only add stats for filters 1 and 3, not 2
@@ -1223,7 +1251,7 @@ mod tests {
             tracker.update(3, 60, 100, 1_000_000, 100);
 
             // Second partition with partial stats
-            let result2 = tracker.partition_filters(filters, 1000, &metadata);
+            let result2 = tracker.partition_filters(filters, 1000, &[], &metadata);
             assert!(result2.row_filters.len() + result2.post_scan.len() > 0);
         }
 
@@ -1238,8 +1266,8 @@ mod tests {
                 (3, col_expr("a", 2)),
             ];
 
-            let result1 = tracker.partition_filters(filters.clone(), 1000, &metadata);
-            let result2 = tracker.partition_filters(filters, 1000, &metadata);
+            let result1 = tracker.partition_filters(filters.clone(), 1000, &[], &metadata);
+            let result2 = tracker.partition_filters(filters, 1000, &[], &metadata);
 
             // Without stats and with identical byte sizes, order should be stable
             assert_eq!(result1.row_filters[0].0, result2.row_filters[0].0);
@@ -1266,7 +1294,7 @@ mod tests {
             let expr1 = col_expr("a", 0);
             let filters1 = vec![(1, expr1)];
 
-            tracker.partition_filters(filters1, 1000, &metadata);
+            tracker.partition_filters(filters1, 1000, &[], &metadata);
             tracker.update(1, 50, 100, 100_000, 1000);
 
             // Generation 0 doesn't trigger state reset
@@ -1335,7 +1363,7 @@ mod tests {
             // First partition: goes to RowFilter
             let expr = col_expr("a", 0);
             let filters = vec![(1, expr)];
-            tracker.partition_filters(filters.clone(), 1000, &metadata);
+            tracker.partition_filters(filters.clone(), 1000, &[], &metadata);
 
             let state_before = tracker.inner.read().filter_states.get(&1).copied();
             assert_eq!(state_before, Some(FilterState::RowFilter));
@@ -1386,7 +1414,7 @@ mod tests {
             let filters = vec![(1, expr.clone())];
 
             // Step 1: Initial placement (PostScan)
-            let result = tracker.partition_filters(filters.clone(), 1000, &metadata);
+            let result = tracker.partition_filters(filters.clone(), 1000, &[], &metadata);
             assert_eq!(result.post_scan.len(), 1);
             assert_eq!(result.row_filters.len(), 0);
 
@@ -1396,12 +1424,12 @@ mod tests {
             }
 
             // Step 3: Promotion should occur
-            let result = tracker.partition_filters(filters.clone(), 1000, &metadata);
+            let result = tracker.partition_filters(filters.clone(), 1000, &[], &metadata);
             assert_eq!(result.row_filters.len(), 1);
             assert_eq!(result.post_scan.len(), 0);
 
             // Step 4: Continue to partition without additional updates
-            let result = tracker.partition_filters(filters, 1000, &metadata);
+            let result = tracker.partition_filters(filters, 1000, &[], &metadata);
             assert_eq!(result.row_filters.len(), 1);
             assert_eq!(result.post_scan.len(), 0);
         }
@@ -1419,7 +1447,7 @@ mod tests {
             let filters = vec![(1, expr.clone())];
 
             // Step 1: Initial placement (RowFilter)
-            let result = tracker.partition_filters(filters.clone(), 1000, &metadata);
+            let result = tracker.partition_filters(filters.clone(), 1000, &[], &metadata);
             assert_eq!(result.row_filters.len(), 1);
             assert_eq!(result.post_scan.len(), 0);
 
@@ -1429,12 +1457,12 @@ mod tests {
             }
 
             // Step 3: Demotion should occur
-            let result = tracker.partition_filters(filters.clone(), 1000, &metadata);
+            let result = tracker.partition_filters(filters.clone(), 1000, &[], &metadata);
             assert_eq!(result.row_filters.len(), 0);
             assert_eq!(result.post_scan.len(), 1);
 
             // Step 4: Continue to partition without additional updates
-            let result = tracker.partition_filters(filters, 1000, &metadata);
+            let result = tracker.partition_filters(filters, 1000, &[], &metadata);
             assert_eq!(result.row_filters.len(), 0);
             assert_eq!(result.post_scan.len(), 1);
         }
@@ -1451,7 +1479,7 @@ mod tests {
             let filters = vec![(1, col_expr("a", 0)), (2, col_expr("a", 1))];
 
             // Initial partition: both go to PostScan (500/1000 = 0.5 > 0.4)
-            let result = tracker.partition_filters(filters.clone(), 1000, &metadata);
+            let result = tracker.partition_filters(filters.clone(), 1000, &[], &metadata);
             assert_eq!(result.post_scan.len(), 2);
 
             // Filter 1: high effectiveness (promote)
@@ -1465,7 +1493,7 @@ mod tests {
             }
 
             // Next partition: Filter 1 promoted, Filter 2 stays PostScan
-            let result = tracker.partition_filters(filters, 1000, &metadata);
+            let result = tracker.partition_filters(filters, 1000, &[], &metadata);
             assert_eq!(result.row_filters.len(), 1);
             assert_eq!(result.post_scan.len(), 1);
             assert_eq!(result.row_filters[0].0, 1);
@@ -1478,7 +1506,7 @@ mod tests {
             let metadata = create_test_metadata(vec![(100, vec![1000])]);
             let filters = vec![];
 
-            let result = tracker.partition_filters(filters, 1000, &metadata);
+            let result = tracker.partition_filters(filters, 1000, &[], &metadata);
 
             assert_eq!(result.row_filters.len(), 0);
             assert_eq!(result.post_scan.len(), 0);
@@ -1492,7 +1520,7 @@ mod tests {
             let expr = col_expr("a", 0);
             let filters = vec![(1, expr)];
 
-            let result = tracker.partition_filters(filters, 1000, &metadata);
+            let result = tracker.partition_filters(filters, 1000, &[], &metadata);
 
             assert_eq!(result.row_filters.len(), 1);
             assert_eq!(result.post_scan.len(), 0);
@@ -1511,7 +1539,7 @@ mod tests {
             let filters = vec![(1, expr.clone())];
 
             // Start as RowFilter
-            tracker.partition_filters(filters.clone(), 1000, &metadata);
+            tracker.partition_filters(filters.clone(), 1000, &[], &metadata);
 
             // All rows match (zero effectiveness)
             for _ in 0..5 {
@@ -1519,7 +1547,7 @@ mod tests {
             }
 
             // Should demote due to CI upper bound being 0
-            let result = tracker.partition_filters(filters, 1000, &metadata);
+            let result = tracker.partition_filters(filters, 1000, &[], &metadata);
             assert_eq!(result.row_filters.len(), 0);
             assert_eq!(result.post_scan.len(), 1);
         }

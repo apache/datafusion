@@ -625,13 +625,15 @@ impl FileOpener for ParquetOpener {
             } = if pushdown_filters {
                 if let Some(conjuncts) = predicate_conjuncts.clone() {
                     if !conjuncts.is_empty() {
+                        let proj_cols = projection.column_indices();
                         let projection_size = row_filter::total_compressed_bytes(
-                            &projection.column_indices(),
+                            &proj_cols,
                             builder.metadata(),
                         );
                         selectivity_tracker.partition_filters(
                             conjuncts,
                             projection_size,
+                            &proj_cols,
                             builder.metadata(),
                         )
                     } else {

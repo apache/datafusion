@@ -763,13 +763,15 @@ config_namespace! {
         /// threshold is ignored.
         pub filter_pushdown_min_bytes_per_sec: f64, default = 104_857_600.0
 
-        /// (reading) Byte-ratio threshold (filter_bytes / projected_bytes) for
-        /// applying filters one at a time (iterative pruning; aka row-level) vs. all at once (post-scan).
-        /// Filters whose columns consume a smaller fraction than this threshold of the projected
-        /// bytes are placed as row filters.
-        /// Filters whose columns consume a larger fraction than this threshold are placed as post-scan filters.
-        /// Default: 0.15 meaning filters that consume less than 15% of the projected bytes are placed as row filters,
-        /// and filters that consume more than 15% of the projected bytes are placed as post-scan filters.
+        /// (reading) Byte-ratio threshold for applying filters one at a time
+        /// (iterative pruning; aka row-level) vs. all at once (post-scan).
+        /// The ratio is computed as: (extra filter bytes not in projection) / (projected bytes).
+        /// Filters whose extra columns consume a smaller fraction than this threshold are placed as row filters.
+        /// Filters whose extra columns consume a larger fraction are placed as post-scan filters.
+        /// Note: filter columns that are already in the query projection have zero extra cost,
+        /// so such filters always start as row filters regardless of this threshold.
+        /// Default: 0.05 meaning filters that require less than 5% additional bytes beyond the projection
+        /// are placed as row filters.
         /// Set to INF to place all filters as row filters (skip byte-ratio check).
         /// Set to 0 to place all filters as post-scan filters (no filter passes the ratio check).
         ///
