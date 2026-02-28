@@ -376,16 +376,27 @@ fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
     let rows_r = converter.convert_columns(&[Arc::clone(r.values())])?;
 
     // Combine value arrays so indices from both sides share a single index space.
-    let combined_values =
-        concat(&[l.values().as_ref(), r.values().as_ref()])?;
+    let combined_values = concat(&[l.values().as_ref(), r.values().as_ref()])?;
     let r_offset = l.values().len();
 
     match set_op {
         SetOp::Union => generic_set_loop::<OffsetSize, true>(
-            l, r, &rows_l, &rows_r, field, &combined_values, r_offset,
+            l,
+            r,
+            &rows_l,
+            &rows_r,
+            field,
+            &combined_values,
+            r_offset,
         ),
         SetOp::Intersect => generic_set_loop::<OffsetSize, false>(
-            l, r, &rows_l, &rows_r, field, &combined_values, r_offset,
+            l,
+            r,
+            &rows_l,
+            &rows_r,
+            field,
+            &combined_values,
+            r_offset,
         ),
     }
 }
