@@ -34,9 +34,12 @@ use std::sync::Arc;
 /// Sentinel value indicating no group has been assigned to a slot.
 const NO_GROUP: usize = usize::MAX;
 
-/// Maximum flat map size for the adaptive builder.
-/// At 8 bytes per `usize` slot, 16,777,216 slots = 128 MB.
-const MAX_ADAPTIVE_FLAT_RANGE: usize = 16_777_216;
+/// Maximum ratio of flat map slots to distinct groups (or non-null rows
+/// when the distinct count is not yet known). If the fill rate drops
+/// below `1 / MAX_ADAPTIVE_FLAT_SPARSITY` we migrate to hash, since
+/// the flat map wastes memory on empty slots while a hash table scales
+/// with the actual number of groups.
+const MAX_ADAPTIVE_FLAT_SPARSITY: usize = 4;
 
 /// A [`GroupValues`] for a single primitive column that adaptively chooses
 /// between flat (direct-indexed) and hash-based group tracking at runtime.
@@ -45,8 +48,9 @@ const MAX_ADAPTIVE_FLAT_RANGE: usize = 16_777_216;
 /// require column statistics. Instead it observes the actual data:
 ///
 /// 1. On the first batch, computes min/max and starts in flat mode if the
-///    range fits within [`MAX_ADAPTIVE_FLAT_RANGE`].
-/// 2. If a later batch expands the range beyond the threshold, all existing
+///    range is not too sparse relative to the number of rows.
+/// 2. If a later batch makes the map too sparse (range exceeds
+///    [`MAX_ADAPTIVE_FLAT_SPARSITY`] × distinct groups), all existing
 ///    groups are migrated to a [`GroupValuesPrimitive`] hash table and
 ///    subsequent lookups use hashing.
 ///
@@ -163,16 +167,18 @@ where
     }
 
     /// Ensure the flat map can hold values in `[new_min, new_max]`.
-    /// Returns `false` if the resulting range would exceed the threshold,
-    /// meaning the caller should migrate to hash instead.
+    /// Returns `false` if the resulting range would be too sparse
+    /// relative to the number of distinct groups, meaning the caller
+    /// should migrate to hash instead.
     fn ensure_flat_range(
         map: &mut Vec<usize>,
         min: &mut T::Native,
+        num_groups: usize,
         new_min: T::Native,
         new_max: T::Native,
     ) -> bool {
         let new_range = new_max.index_from(new_min).saturating_add(1);
-        if new_range > MAX_ADAPTIVE_FLAT_RANGE {
+        if num_groups > 0 && new_range > MAX_ADAPTIVE_FLAT_SPARSITY * num_groups {
             return false;
         }
 
@@ -262,7 +268,9 @@ where
             AdaptiveState::Initial => {
                 if let Some((batch_min, batch_max)) = Self::compute_min_max(arr) {
                     let range = batch_max.index_from(batch_min).saturating_add(1);
-                    if range <= MAX_ADAPTIVE_FLAT_RANGE {
+                    // Use non-null row count as upper bound for distinct groups.
+                    let non_null_rows = arr.len() - arr.null_count();
+                    if range <= MAX_ADAPTIVE_FLAT_SPARSITY * non_null_rows {
                         self.state = AdaptiveState::Flat {
                             map: vec![NO_GROUP; range],
                             min: batch_min,
@@ -317,7 +325,13 @@ where
                             )
                         };
 
-                        if !Self::ensure_flat_range(map, min, new_min, new_max) {
+                        if !Self::ensure_flat_range(
+                            map,
+                            min,
+                            values.len(),
+                            new_min,
+                            new_max,
+                        ) {
                             // Range too large – migrate to hash.
                             let mut hash = Self::migrate_flat_to_hash(
                                 &self.data_type,
@@ -332,6 +346,23 @@ where
                 }
 
                 Self::intern_flat(map, *min, null_group, values, arr, groups);
+
+                // Check fill rate: if the map is large but very sparsely
+                // populated, a hash table (sized by distinct count) is more
+                // memory-efficient. Skip tiny maps where the ratio is noisy.
+                if map.len() > 32768
+                    && map.len() > MAX_ADAPTIVE_FLAT_SPARSITY * values.len()
+                {
+                    let hash = Self::migrate_flat_to_hash(
+                        &self.data_type,
+                        std::mem::take(values),
+                        *null_group,
+                    );
+                    // groups were already populated by intern_flat above;
+                    // just switch state for future batches.
+                    self.state = AdaptiveState::Hash(hash);
+                }
+
                 Ok(())
             }
 
@@ -458,8 +489,8 @@ mod tests {
         let mut gv = GroupValuesPrimitiveAdaptive::<Int32Type>::new(DataType::Int32);
         let mut groups = vec![];
 
-        // Small range → should stay flat
-        let arr: ArrayRef = Arc::new(Int32Array::from(vec![10, 20, 10, 30]));
+        // Dense range (4 rows, range=4) → should stay flat
+        let arr: ArrayRef = Arc::new(Int32Array::from(vec![10, 12, 10, 13]));
         gv.intern(&[arr], &mut groups).unwrap();
         assert_eq!(groups, vec![0, 1, 0, 2]);
         assert_eq!(gv.len(), 3);
@@ -471,17 +502,18 @@ mod tests {
         let mut gv = GroupValuesPrimitiveAdaptive::<Int32Type>::new(DataType::Int32);
         let mut groups = vec![];
 
-        let arr: ArrayRef = Arc::new(Int32Array::from(vec![100, 200]));
+        // Dense initial batch (range=3, 3 rows)
+        let arr: ArrayRef = Arc::new(Int32Array::from(vec![100, 101, 102]));
         gv.intern(&[arr], &mut groups).unwrap();
-        assert_eq!(groups, vec![0, 1]);
+        assert_eq!(groups, vec![0, 1, 2]);
 
         // New batch with values outside initial range (below min)
-        let arr: ArrayRef = Arc::new(Int32Array::from(vec![50, 100, 300]));
+        let arr: ArrayRef = Arc::new(Int32Array::from(vec![99, 100, 103]));
         gv.intern(&[arr], &mut groups).unwrap();
-        assert_eq!(groups, vec![2, 0, 3]); // 50 is new, 100 is group 0, 300 is new
+        assert_eq!(groups, vec![3, 0, 4]); // 99 is new, 100 is group 0, 103 is new
 
         assert!(matches!(gv.state, AdaptiveState::Flat { .. }));
-        assert_eq!(gv.len(), 4);
+        assert_eq!(gv.len(), 5);
     }
 
     #[test]

@@ -21,16 +21,12 @@ mod boolean;
 mod bytes;
 pub mod bytes_view;
 pub mod primitive;
-pub mod primitive_adaptive;
-pub mod primitive_flat;
-
 use std::mem::{self, size_of};
 
 use crate::aggregates::group_values::GroupValues;
 use crate::aggregates::group_values::multi_group_by::{
     boolean::BooleanGroupValueBuilder, bytes::ByteGroupValueBuilder,
     bytes_view::ByteViewGroupValueBuilder, primitive::PrimitiveGroupValueBuilder,
-    primitive_adaptive::PrimitiveGroupValueBuilderAdaptive,
 };
 use ahash::RandomState;
 use arrow::array::{Array, ArrayRef};
@@ -891,25 +887,6 @@ macro_rules! instantiate_primitive {
     };
 }
 
-/// Like `instantiate_primitive!` but creates a `PrimitiveGroupValueBuilderAdaptive`
-/// that starts in flat (u32-indexed) mode and migrates to native if the data
-/// range exceeds u32. No statistics required.
-macro_rules! instantiate_primitive_adaptive {
-    ($v:expr, $nullable:expr, $t:ty, $data_type:ident) => {
-        if $nullable {
-            let b = PrimitiveGroupValueBuilderAdaptive::<$t, true>::new(
-                $data_type.to_owned(),
-            );
-            $v.push(Box::new(b) as _)
-        } else {
-            let b = PrimitiveGroupValueBuilderAdaptive::<$t, false>::new(
-                $data_type.to_owned(),
-            );
-            $v.push(Box::new(b) as _)
-        }
-    };
-}
-
 impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
         if self.group_values.is_empty() {
@@ -920,34 +897,28 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
                 let data_type = f.data_type();
                 match data_type {
                     &DataType::Int8 => {
-                        instantiate_primitive_adaptive!(v, nullable, Int8Type, data_type)
+                        instantiate_primitive!(v, nullable, Int8Type, data_type)
                     }
                     &DataType::Int16 => {
-                        instantiate_primitive_adaptive!(v, nullable, Int16Type, data_type)
+                        instantiate_primitive!(v, nullable, Int16Type, data_type)
                     }
                     &DataType::Int32 => {
-                        instantiate_primitive_adaptive!(v, nullable, Int32Type, data_type)
+                        instantiate_primitive!(v, nullable, Int32Type, data_type)
                     }
                     &DataType::Int64 => {
-                        instantiate_primitive_adaptive!(v, nullable, Int64Type, data_type)
+                        instantiate_primitive!(v, nullable, Int64Type, data_type)
                     }
                     &DataType::UInt8 => {
-                        instantiate_primitive_adaptive!(v, nullable, UInt8Type, data_type)
+                        instantiate_primitive!(v, nullable, UInt8Type, data_type)
                     }
                     &DataType::UInt16 => {
-                        instantiate_primitive_adaptive!(
-                            v, nullable, UInt16Type, data_type
-                        )
+                        instantiate_primitive!(v, nullable, UInt16Type, data_type)
                     }
                     &DataType::UInt32 => {
-                        instantiate_primitive_adaptive!(
-                            v, nullable, UInt32Type, data_type
-                        )
+                        instantiate_primitive!(v, nullable, UInt32Type, data_type)
                     }
                     &DataType::UInt64 => {
-                        instantiate_primitive_adaptive!(
-                            v, nullable, UInt64Type, data_type
-                        )
+                        instantiate_primitive!(v, nullable, UInt64Type, data_type)
                     }
                     &DataType::Float32 => {
                         instantiate_primitive!(v, nullable, Float32Type, data_type)
@@ -956,18 +927,14 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
                         instantiate_primitive!(v, nullable, Float64Type, data_type)
                     }
                     &DataType::Date32 => {
-                        instantiate_primitive_adaptive!(
-                            v, nullable, Date32Type, data_type
-                        )
+                        instantiate_primitive!(v, nullable, Date32Type, data_type)
                     }
                     &DataType::Date64 => {
-                        instantiate_primitive_adaptive!(
-                            v, nullable, Date64Type, data_type
-                        )
+                        instantiate_primitive!(v, nullable, Date64Type, data_type)
                     }
                     &DataType::Time32(t) => match t {
                         TimeUnit::Second => {
-                            instantiate_primitive_adaptive!(
+                            instantiate_primitive!(
                                 v,
                                 nullable,
                                 Time32SecondType,
@@ -975,7 +942,7 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
                             )
                         }
                         TimeUnit::Millisecond => {
-                            instantiate_primitive_adaptive!(
+                            instantiate_primitive!(
                                 v,
                                 nullable,
                                 Time32MillisecondType,
@@ -986,7 +953,7 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
                     },
                     &DataType::Time64(t) => match t {
                         TimeUnit::Microsecond => {
-                            instantiate_primitive_adaptive!(
+                            instantiate_primitive!(
                                 v,
                                 nullable,
                                 Time64MicrosecondType,
@@ -994,7 +961,7 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
                             )
                         }
                         TimeUnit::Nanosecond => {
-                            instantiate_primitive_adaptive!(
+                            instantiate_primitive!(
                                 v,
                                 nullable,
                                 Time64NanosecondType,
@@ -1005,7 +972,7 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
                     },
                     &DataType::Timestamp(t, _) => match t {
                         TimeUnit::Second => {
-                            instantiate_primitive_adaptive!(
+                            instantiate_primitive!(
                                 v,
                                 nullable,
                                 TimestampSecondType,
@@ -1013,7 +980,7 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
                             )
                         }
                         TimeUnit::Millisecond => {
-                            instantiate_primitive_adaptive!(
+                            instantiate_primitive!(
                                 v,
                                 nullable,
                                 TimestampMillisecondType,
@@ -1021,7 +988,7 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
                             )
                         }
                         TimeUnit::Microsecond => {
-                            instantiate_primitive_adaptive!(
+                            instantiate_primitive!(
                                 v,
                                 nullable,
                                 TimestampMicrosecondType,
@@ -1029,7 +996,7 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
                             )
                         }
                         TimeUnit::Nanosecond => {
-                            instantiate_primitive_adaptive!(
+                            instantiate_primitive!(
                                 v,
                                 nullable,
                                 TimestampNanosecondType,
