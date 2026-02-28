@@ -19,9 +19,11 @@
 
 use crate::utils::make_scalar_function;
 use arrow::array::{
-    Array, ArrayRef, GenericListArray, OffsetSizeTrait, new_empty_array, new_null_array,
+    Array, ArrayRef, GenericListArray, OffsetSizeTrait, UInt32Array, new_empty_array,
+    new_null_array,
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer};
+use arrow::compute::take;
 use arrow::datatypes::DataType::{LargeList, List, Null};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use arrow::row::{RowConverter, SortField};
@@ -539,7 +541,7 @@ fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
     // Convert all values to row format in a single batch for performance
     let converter = RowConverter::new(vec![SortField::new(dt.clone())])?;
     let rows = converter.convert_columns(&[Arc::clone(array.values())])?;
-    let mut final_rows = Vec::with_capacity(rows.num_rows());
+    let mut indices = Vec::with_capacity(rows.num_rows());
     let mut seen = HashSet::new();
     for i in 0..array.len() {
         let last_offset = *offsets.last().unwrap();
@@ -559,18 +561,17 @@ fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
         for idx in start..end {
             let row = rows.row(idx);
             if seen.insert(row) {
-                final_rows.push(row);
+                indices.push(idx as u32);
             }
         }
         offsets.push(last_offset + OffsetSize::usize_as(seen.len()));
     }
 
-    // Convert all collected distinct rows back
-    let final_values = if final_rows.is_empty() {
+    // Gather distinct values in a single pass, using the computed `indices`.
+    let final_values = if indices.is_empty() {
         new_empty_array(&dt)
     } else {
-        let arrays = converter.convert_rows(final_rows)?;
-        Arc::clone(&arrays[0])
+        take(array.values().as_ref(), &UInt32Array::from(indices), None)?
     };
 
     Ok(Arc::new(GenericListArray::<OffsetSize>::try_new(
