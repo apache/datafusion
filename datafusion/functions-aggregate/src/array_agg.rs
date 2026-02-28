@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use arrow::array::{
     Array, ArrayRef, AsArray, BooleanArray, ListArray, NullBufferBuilder, StructArray,
-    new_empty_array,
+    UInt32Array, new_empty_array,
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::compute::{SortOptions, filter};
@@ -458,6 +458,88 @@ impl ArrayAggGroupsAccumulator {
             num_groups: 0,
         }
     }
+
+    fn clear_state(&mut self) {
+        // `size()` measures Vec capacity rather than len, so allocate new
+        // buffers instead of using `clear()`.
+        self.batches = Vec::new();
+        self.batch_entries = Vec::new();
+        self.num_groups = 0;
+    }
+
+    fn compact_retained_state(&mut self, emit_groups: usize) -> Result<()> {
+        // EmitTo::First is used to recover from memory pressure. Simply
+        // removing emitted entries in place is not enough because mixed batches
+        // would continue to pin their original Array arrays, even if only a few
+        // retained rows remain.
+        //
+        // Rebuild the retained state from scratch so fully emitted batches are
+        // dropped, mixed batches are compacted to arrays containing only the
+        // surviving rows, and retained metadata is right-sized.
+        let emit_groups = emit_groups as u32;
+        let old_batches = take(&mut self.batches);
+        let old_batch_entries = take(&mut self.batch_entries);
+
+        let mut batches = Vec::new();
+        let mut batch_entries = Vec::new();
+
+        for (batch, entries) in old_batches.into_iter().zip(old_batch_entries) {
+            let retained_len = entries.iter().filter(|(g, _)| *g >= emit_groups).count();
+
+            if retained_len == 0 {
+                continue;
+            }
+
+            if retained_len == entries.len() {
+                // Nothing was emitted from this batch, so we keep the existing
+                // array and only renumber the remaining group IDs so that they
+                // start from 0.
+                let mut retained_entries = entries;
+                for (g, _) in &mut retained_entries {
+                    *g -= emit_groups;
+                }
+                retained_entries.shrink_to_fit();
+                batches.push(batch);
+                batch_entries.push(retained_entries);
+                continue;
+            }
+
+            let mut retained_entries = Vec::with_capacity(retained_len);
+            let mut retained_rows = Vec::with_capacity(retained_len);
+
+            for (g, r) in entries {
+                if g >= emit_groups {
+                    // Compute the new `(group_idx, row_idx)` pair for a
+                    // retained row. `group_idx` is renumbered to start from
+                    // 0, and `row_idx` points into the new dense batch we are
+                    // building.
+                    retained_entries.push((g - emit_groups, retained_rows.len() as u32));
+                    retained_rows.push(r);
+                }
+            }
+
+            debug_assert_eq!(retained_entries.len(), retained_len);
+            debug_assert_eq!(retained_rows.len(), retained_len);
+
+            let batch = if retained_len == batch.len() {
+                batch
+            } else {
+                // Compact mixed batches so retained rows no longer pin the
+                // original array.
+                let retained_rows = UInt32Array::from(retained_rows);
+                arrow::compute::take(batch.as_ref(), &retained_rows, None)?
+            };
+
+            batches.push(batch);
+            batch_entries.push(retained_entries);
+        }
+
+        self.batches = batches;
+        self.batch_entries = batch_entries;
+        self.num_groups -= emit_groups as usize;
+
+        Ok(())
+    }
 }
 
 impl GroupsAccumulator for ArrayAggGroupsAccumulator {
@@ -576,31 +658,9 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
         };
 
         // Step 4: Release state for emitted groups.
-        if emit_to == EmitTo::All {
-            self.batches.clear();
-            self.batch_entries.clear();
-            self.num_groups = 0;
-        } else {
-            // EmitTo::First(n): remove entries for emitted groups and
-            // renumber the remaining group indices to start from 0.
-            // Replace unreferenced batch arrays with empty arrays to
-            // allow their memory to be released.
-            let empty = new_empty_array(&self.datatype);
-            for (batch_idx, entries) in self.batch_entries.iter_mut().enumerate() {
-                let emit_groups = emit_groups as u32;
-                entries.retain_mut(|&mut (ref mut g, _)| {
-                    if *g < emit_groups {
-                        false // emitted
-                    } else {
-                        *g -= emit_groups;
-                        true
-                    }
-                });
-                if entries.is_empty() {
-                    self.batches[batch_idx] = Arc::clone(&empty);
-                }
-            }
-            self.num_groups -= emit_groups;
+        match emit_to {
+            EmitTo::All => self.clear_state(),
+            EmitTo::First(_) => self.compact_retained_state(emit_groups)?,
         }
 
         let offsets = OffsetBuffer::new(ScalarBuffer::from(offsets));
@@ -1589,7 +1649,8 @@ mod tests {
     fn groups_accumulator_emit_first_frees_batches() -> Result<()> {
         // Batch 0 has rows only for group 0; batch 1 has rows for
         // both groups. After emitting group 0, batch 0 should be
-        // replaced with an empty array.
+        // dropped entirely and batch 1 should be compacted to the
+        // retained row(s).
         let mut acc = ArrayAggGroupsAccumulator::new(DataType::Int32, false);
 
         let batch0: ArrayRef = Arc::new(Int32Array::from(vec![10, 20]));
@@ -1598,26 +1659,80 @@ mod tests {
         let batch1: ArrayRef = Arc::new(Int32Array::from(vec![30, 40]));
         acc.update_batch(&[batch1], &[0, 1], None, 2)?;
 
-        // Before emit: 2 batches, both non-empty
         assert_eq!(acc.batches.len(), 2);
         assert!(!acc.batches[0].is_empty());
         assert!(!acc.batches[1].is_empty());
 
-        // Emit group 0 — batch 0 is only referenced by group 0, so
-        // it should be replaced with an empty array. Batch 1
-        // is still referenced by group 1 and should be retained.
+        // Emit group 0. Batch 0 is only referenced by group 0, so it
+        // should be removed. Batch 1 is mixed, so it should be compacted
+        // to contain only the retained row for group 1.
         let vals = eval_i32_lists(&mut acc, EmitTo::First(1))?;
         assert_eq!(vals[0], Some(vec![Some(10), Some(20), Some(30)]));
 
-        assert_eq!(acc.batches.len(), 2);
-        assert_eq!(acc.batches[0].len(), 0); // freed
-        assert!(!acc.batches[1].is_empty()); // still referenced
+        assert_eq!(acc.batches.len(), 1);
+        let retained = acc.batches[0]
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(retained.values(), &[40]);
+        assert_eq!(acc.batch_entries, vec![vec![(0, 0)]]);
 
         // Emit remaining group 1
         let vals = eval_i32_lists(&mut acc, EmitTo::All)?;
         assert_eq!(vals[0], Some(vec![Some(40)]));
 
         assert!(acc.batches.is_empty());
+        assert_eq!(acc.size(), 0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn groups_accumulator_emit_first_compacts_mixed_batches() -> Result<()> {
+        let mut acc = ArrayAggGroupsAccumulator::new(DataType::Int32, false);
+
+        let batch: ArrayRef = Arc::new(Int32Array::from(vec![10, 20, 30, 40]));
+        acc.update_batch(&[batch], &[0, 1, 0, 1], None, 2)?;
+
+        let size_before = acc.size();
+        let vals = eval_i32_lists(&mut acc, EmitTo::First(1))?;
+        assert_eq!(vals[0], Some(vec![Some(10), Some(30)]));
+
+        assert_eq!(acc.num_groups, 1);
+        assert_eq!(acc.batches.len(), 1);
+        let retained = acc.batches[0]
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(retained.values(), &[20, 40]);
+        assert_eq!(acc.batch_entries, vec![vec![(0, 0), (0, 1)]]);
+        assert!(acc.size() < size_before);
+
+        let vals = eval_i32_lists(&mut acc, EmitTo::All)?;
+        assert_eq!(vals[0], Some(vec![Some(20), Some(40)]));
+        assert_eq!(acc.size(), 0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn groups_accumulator_emit_all_releases_capacity() -> Result<()> {
+        let mut acc = ArrayAggGroupsAccumulator::new(DataType::Int32, false);
+
+        let batch: ArrayRef = Arc::new(Int32Array::from_iter_values(0..64));
+        acc.update_batch(
+            &[batch],
+            &(0..64).map(|i| i % 4).collect::<Vec<_>>(),
+            None,
+            4,
+        )?;
+
+        assert!(acc.size() > 0);
+        let _ = eval_i32_lists(&mut acc, EmitTo::All)?;
+
+        assert_eq!(acc.size(), 0);
+        assert_eq!(acc.batches.capacity(), 0);
+        assert_eq!(acc.batch_entries.capacity(), 0);
 
         Ok(())
     }
