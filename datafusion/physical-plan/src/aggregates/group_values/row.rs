@@ -15,9 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregates::group_values::{
-    GroupValues, INDEX_MASK, hash_tag_matches, pack_index, unpack_index,
-};
+use crate::aggregates::group_values::GroupValues;
 use ahash::RandomState;
 use arrow::array::{Array, ArrayRef, ListArray, StructArray};
 use arrow::compute::cast;
@@ -53,12 +51,9 @@ pub struct GroupValuesRows {
     /// Uses the raw API of hashbrown to avoid actually storing the
     /// keys (group values) in the table
     ///
-    /// Stores packed entries: top 16 bits = hash tag, bottom 48 bits = group index.
-    ///
-    /// The inline hash tag enables fast filtering during probing without
-    /// accessing the separate `group_hashes` vec. Combined with the Swiss
-    /// table's 7-bit control byte, this gives 23 bits of hash filtering.
-    map: HashTable<u64>,
+    /// Hashes are stored separately in `group_hashes` to keep hash table
+    /// entries small (one `usize` per slot) for better cache utilization.
+    map: HashTable<usize>,
 
     /// The size of `map` in bytes
     map_size: usize,
@@ -144,16 +139,22 @@ impl GroupValues for GroupValuesRows {
         create_hashes(cols, &self.random_state, batch_hashes)?;
 
         for (row, &target_hash) in batch_hashes.iter().enumerate() {
-            let entry = self.map.find_mut(target_hash, |&packed| {
-                // Check inline hash tag first (same cache line, no extra access),
-                // then verify actual row equality.
-                hash_tag_matches(packed, target_hash)
-                    && group_rows.row(row) == group_values.row(unpack_index(packed))
+            let group_hashes = &self.group_hashes;
+            let entry = self.map.find_mut(target_hash, |&group_idx| {
+                // Somewhat surprisingly, this closure can be called even if the
+                // hash doesn't match, so check the hash first with an integer
+                // comparison first avoid the more expensive comparison with
+                // group value. https://github.com/apache/datafusion/pull/11718
+                target_hash == group_hashes[group_idx]
+                    // verify that the group that we are inserting with hash is
+                    // actually the same key value as the group in
+                    // existing_idx  (aka group_values @ row)
+                    && group_rows.row(row) == group_values.row(group_idx)
             });
 
             let group_idx = match entry {
                 // Existing group_index for this group value
-                Some(packed) => unpack_index(*packed),
+                Some(group_idx) => *group_idx,
                 //  1.2 Need to create new entry for the group
                 None => {
                     // Add new entry to aggr_state and save newly created index
@@ -165,8 +166,8 @@ impl GroupValues for GroupValuesRows {
                     // for hasher function, use precomputed hash value
                     let group_hashes = &self.group_hashes;
                     self.map.insert_accounted(
-                        pack_index(group_idx, target_hash),
-                        |&packed| group_hashes[unpack_index(packed)],
+                        group_idx,
+                        |&idx| group_hashes[idx],
                         &mut self.map_size,
                     );
                     group_idx
@@ -228,12 +229,12 @@ impl GroupValues for GroupValuesRows {
 
                 self.group_hashes.drain(0..n);
 
-                self.map.retain(|packed| {
-                    let idx = unpack_index(*packed);
-                    match idx.checked_sub(n) {
-                        // Group index was >= n, shift index down, keep hash tag
+                self.map.retain(|group_idx| {
+                    // Decrement group index by n
+                    match group_idx.checked_sub(n) {
+                        // Group index was >= n, shift value down
                         Some(sub) => {
-                            *packed = (*packed & !INDEX_MASK) | (sub as u64);
+                            *group_idx = sub;
                             true
                         }
                         // Group index was < n, so remove from table
@@ -262,7 +263,7 @@ impl GroupValues for GroupValuesRows {
         });
         self.map.clear();
         self.map.shrink_to(num_rows, |_| 0); // hasher does not matter since the map is cleared
-        self.map_size = self.map.capacity() * size_of::<u64>();
+        self.map_size = self.map.capacity() * size_of::<usize>();
         self.group_hashes.clear();
         self.group_hashes.shrink_to(num_rows);
         self.hashes_buffer.clear();
