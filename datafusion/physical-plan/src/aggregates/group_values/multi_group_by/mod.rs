@@ -937,8 +937,17 @@ const MAX_FLAT_GROUP_COLUMN_RANGE: usize = 65_536;
 /// Maximum fill rate for flat-indexed multi-column builders.
 const MAX_FLAT_GROUP_COLUMN_FILL_RATE: usize = 4;
 
+/// Absolute cap on the range when using fill-rate-based flat indexing.
+/// Limits memory per column builder to approximately 64 MB
+/// (16,777,216 slots × 4 bytes per `u32` slot = 64 MB).
+const MAX_FLAT_GROUP_COLUMN_RANGE_ABSOLUTE: usize = 16_777_216;
+
 /// Try to extract the minimum value for flat indexing from column statistics.
 /// Returns `Some(min)` if the value range is small enough for flat indexing.
+///
+/// Both `Exact` and `Inexact` statistics are accepted because inexact bounds
+/// (e.g. after filter narrowing) are always conservative — the actual values
+/// are guaranteed to fall within the reported range.
 fn try_extract_flat_min<T: ArrowPrimitiveType>(
     stats: Option<&ColumnStatistics>,
     num_rows: Option<usize>,
@@ -949,17 +958,20 @@ where
 {
     let stats = stats?;
     let min = match &stats.min_value {
-        Precision::Exact(sv) => extract(sv)?,
+        Precision::Exact(sv) | Precision::Inexact(sv) => extract(sv)?,
         _ => return None,
     };
     let max = match &stats.max_value {
-        Precision::Exact(sv) => extract(sv)?,
+        Precision::Exact(sv) | Precision::Inexact(sv) => extract(sv)?,
         _ => return None,
     };
     let range = max.index_from(min).checked_add(1)?;
     let use_flat = range <= MAX_FLAT_GROUP_COLUMN_RANGE
-        || num_rows
-            .is_some_and(|n| n > 0 && range <= n * MAX_FLAT_GROUP_COLUMN_FILL_RATE);
+        || num_rows.is_some_and(|n| {
+            n > 0
+                && range <= n * MAX_FLAT_GROUP_COLUMN_FILL_RATE
+                && range <= MAX_FLAT_GROUP_COLUMN_RANGE_ABSOLUTE
+        });
     if use_flat { Some(min) } else { None }
 }
 

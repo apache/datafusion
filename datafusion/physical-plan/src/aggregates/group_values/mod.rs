@@ -130,12 +130,17 @@ const MAX_FLAT_GROUP_RANGE: usize = 65_536;
 /// still worthwhile to avoid hashing overhead.
 const MAX_FLAT_FILL_RATE: usize = 4;
 
+/// Absolute cap on the range when using fill-rate-based flat indexing.
+/// Limits memory usage to approximately 128 MB per flat array
+/// (128 MB / 8 bytes per `usize` slot = 16,777,216 slots).
+const MAX_FLAT_RANGE_ABSOLUTE: usize = 16_777_216;
+
 /// Return a specialized implementation of [`GroupValues`] for the given schema.
 ///
 /// [`GroupValues`] implementations choosing logic:
 ///
 ///   - If group by single column with a small integer type (i8/u8/i16/u16),
-///     or a larger integer type with exact statistics showing a small range
+///     or a larger integer type with statistics showing a small range
 ///     or a low fill rate (range / num_rows < 4),
 ///     [`GroupValuesPrimitiveFlat`] will be chosen for O(1) direct-indexed
 ///     lookups.
@@ -320,13 +325,18 @@ fn try_create_flat_group_values(
     }
 }
 
-/// Try to create a flat [`GroupValues`] from exact column statistics.
+/// Try to create a flat [`GroupValues`] from column statistics.
 ///
 /// Uses flat indexing when either:
 /// - The value range is ≤ [`MAX_FLAT_GROUP_RANGE`] (always worth it), or
-/// - The fill rate (`range / num_rows`) is < [`MAX_FLAT_FILL_RATE`], meaning
-///   the flat map is only a small constant factor larger than the number of
-///   input rows, making it still cheaper than hashing.
+/// - The fill rate (`range / num_rows`) is < [`MAX_FLAT_FILL_RATE`] and the
+///   range does not exceed [`MAX_FLAT_RANGE_ABSOLUTE`], meaning the flat map
+///   is only a small constant factor larger than the number of input rows,
+///   making it still cheaper than hashing.
+///
+/// Both `Exact` and `Inexact` statistics are accepted because inexact bounds
+/// (e.g. after filter narrowing) are always conservative — the actual values
+/// are guaranteed to fall within the reported range.
 fn try_flat_from_stats<T: ArrowPrimitiveType>(
     data_type: &DataType,
     stats: Option<&ColumnStatistics>,
@@ -338,17 +348,19 @@ where
 {
     let stats = stats?;
     let min = match &stats.min_value {
-        Precision::Exact(sv) => extract(sv)?,
+        Precision::Exact(sv) | Precision::Inexact(sv) => extract(sv)?,
         _ => return None,
     };
     let max = match &stats.max_value {
-        Precision::Exact(sv) => extract(sv)?,
+        Precision::Exact(sv) | Precision::Inexact(sv) => extract(sv)?,
         _ => return None,
     };
     let range = max.index_from(min).checked_add(1)?;
 
     let use_flat = range <= MAX_FLAT_GROUP_RANGE
-        || num_rows.is_some_and(|n| n > 0 && range <= n * MAX_FLAT_FILL_RATE);
+        || num_rows.is_some_and(|n| {
+            n > 0 && range <= n * MAX_FLAT_FILL_RATE && range <= MAX_FLAT_RANGE_ABSOLUTE
+        });
 
     if use_flat {
         Some(Box::new(GroupValuesPrimitiveFlat::<T>::new(

@@ -38,7 +38,7 @@ use crate::{RecordBatchStream, SendableRecordBatchStream};
 
 use arrow::array::*;
 use arrow::datatypes::SchemaRef;
-use datafusion_common::stats::{ColumnStatistics, Precision};
+use datafusion_common::stats::ColumnStatistics;
 use datafusion_common::{
     DataFusionError, Result, assert_eq_or_internal_err, assert_or_internal_err,
     internal_err,
@@ -607,10 +607,7 @@ impl GroupedHashAggregateStream {
                         }
                     })
                     .collect();
-                let num_rows = match input_stats.num_rows {
-                    Precision::Exact(n) => Some(n),
-                    _ => None,
-                };
+                let num_rows = input_stats.num_rows.get_value().copied();
                 (col_stats, num_rows)
             } else {
                 (vec![], None)
