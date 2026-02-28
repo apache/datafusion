@@ -46,6 +46,7 @@ use crate::projection::{
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     PlanProperties, RecordBatchStream, SendableRecordBatchStream,
+    check_if_same_properties,
 };
 
 use arrow::array::{
@@ -198,7 +199,7 @@ pub struct NestedLoopJoinExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 /// Helps to build [`NestedLoopJoinExec`].
@@ -276,7 +277,7 @@ impl NestedLoopJoinExecBuilder {
             column_indices,
             projection,
             metrics: Default::default(),
-            cache,
+            cache: Arc::new(cache),
         })
     }
 }
@@ -462,6 +463,27 @@ impl NestedLoopJoinExec {
 
         Ok(plan)
     }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        let left = children.swap_remove(0);
+        let right = children.swap_remove(0);
+
+        Self {
+            left,
+            right,
+            metrics: ExecutionPlanMetricsSet::new(),
+            build_side_data: Default::default(),
+            cache: Arc::clone(&self.cache),
+            filter: self.filter.clone(),
+            join_type: self.join_type,
+            join_schema: Arc::clone(&self.join_schema),
+            column_indices: self.column_indices.clone(),
+            projection: self.projection.clone(),
+        }
+    }
 }
 
 impl DisplayAs for NestedLoopJoinExec {
@@ -516,7 +538,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -539,6 +561,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        check_if_same_properties!(self, children);
         Ok(Arc::new(
             NestedLoopJoinExecBuilder::new(
                 Arc::clone(&children[0]),
@@ -2011,9 +2034,10 @@ fn build_row_join_batch(
             // Broadcast the single build-side row to match the filtered
             // probe-side batch length
             let original_left_array = build_side_batch.column(column_index.index);
-            // Avoid using `ScalarValue::to_array_of_size()` for `List(Utf8View)` to avoid
-            // deep copies for buffers inside `Utf8View` array. See below for details.
-            // https://github.com/apache/datafusion/issues/18159
+
+            // Use `arrow::compute::take` directly for `List(Utf8View)` rather
+            // than going through `ScalarValue::to_array_of_size()`, which
+            // avoids some intermediate allocations.
             //
             // In other cases, `to_array_of_size()` is faster.
             match original_left_array.data_type() {

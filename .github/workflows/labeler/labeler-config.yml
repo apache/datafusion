@@ -62,7 +62,7 @@ datasource:
 
 functions:
   - changed-files:
-      - any-glob-to-any-file: ['datafusion/functions/**/*', 'datafusion/functions-aggregate/**/*', 'datafusion/functions-aggregate-common', 'datafusion/functions-nested', 'datafusion/functions-table/**/*', 'datafusion/functions-window/**/*', 'datafusion/functions-window-common/**/*']
+      - any-glob-to-any-file: ['datafusion/functions/**/*', 'datafusion/functions-aggregate/**/*', 'datafusion/functions-aggregate-common/**/*', 'datafusion/functions-nested/**/*', 'datafusion/functions-table/**/*', 'datafusion/functions-window/**/*', 'datafusion/functions-window-common/**/*']
 
 
 optimizer:

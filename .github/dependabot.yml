@@ -45,6 +45,23 @@ updates:
         patterns:
           - "prost*"
           - "pbjson*"
+
+        # Catch-all: group only minor/patch into a single PR,
+        # excluding deps we want always separate (and excluding arrow/parquet which have their own group)
+      all-other-cargo-deps:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "arrow*"
+          - "parquet"
+          - "object_store"
+          - "sqlparser"
+          - "prost*"
+          - "pbjson*"
+        update-types:
+          - "minor"
+          - "patch"
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
