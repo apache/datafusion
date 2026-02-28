@@ -109,7 +109,7 @@ mod tests {
                 "double_col: Float64",
                 "date_string_col: Binary",
                 "string_col: Binary",
-                "timestamp_col: Timestamp(µs)",
+                "timestamp_col: Timestamp(µs, \"+00:00\")",
             ],
             x
         );
