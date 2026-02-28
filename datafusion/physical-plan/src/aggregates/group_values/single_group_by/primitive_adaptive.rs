@@ -294,62 +294,39 @@ where
                 null_group,
                 values,
             } => {
-                // Quick range check: if the map is non-empty, test a few
-                // sample values to see if the batch likely fits. This avoids
-                // a full O(n) min/max scan on every batch.
-                let current_range = map.len();
-                let needs_full_check = if current_range == 0 {
-                    // Empty map (all-nulls so far) — need to check for
-                    // non-null values to establish the range.
-                    arr.null_count() < arr.len()
-                } else if arr.null_count() == arr.len() {
-                    false
-                } else {
-                    let vals = arr.values();
-                    let current_min = *min;
-                    // Check first, last, and middle values as a fast heuristic
-                    let check = |v: T::Native| -> bool {
-                        v < current_min || v.index_from(current_min) >= current_range
+                if let Some((batch_min, batch_max)) = Self::compute_min_max(arr) {
+                    let current_range = map.len();
+                    let needs_resize = if current_range == 0 {
+                        true
+                    } else {
+                        let current_min = *min;
+                        batch_min < current_min
+                            || batch_max.index_from(current_min) >= current_range
                     };
-                    check(vals[0])
-                        || check(vals[vals.len() - 1])
-                        || (vals.len() > 2 && check(vals[vals.len() / 2]))
-                };
 
-                if needs_full_check {
-                    if let Some((batch_min, batch_max)) = Self::compute_min_max(arr) {
-                        let needs_resize = if current_range == 0 {
-                            true
+                    if needs_resize {
+                        let (new_min, new_max) = if current_range == 0 {
+                            (batch_min, batch_max)
                         } else {
                             let current_min = *min;
-                            batch_min < current_min
-                                || batch_max.index_from(current_min) >= current_range
+                            let current_max =
+                                T::Native::from_index(current_range - 1, current_min);
+                            (
+                                std::cmp::min(current_min, batch_min),
+                                std::cmp::max(current_max, batch_max),
+                            )
                         };
 
-                        if needs_resize {
-                            let (new_min, new_max) = if current_range == 0 {
-                                (batch_min, batch_max)
-                            } else {
-                                let current_min = *min;
-                                let current_max =
-                                    T::Native::from_index(current_range - 1, current_min);
-                                (
-                                    std::cmp::min(current_min, batch_min),
-                                    std::cmp::max(current_max, batch_max),
-                                )
-                            };
-
-                            if !Self::ensure_flat_range(map, min, new_min, new_max) {
-                                // Range too large – migrate to hash.
-                                let mut hash = Self::migrate_flat_to_hash(
-                                    &self.data_type,
-                                    std::mem::take(values),
-                                    *null_group,
-                                );
-                                hash.intern(cols, groups)?;
-                                self.state = AdaptiveState::Hash(hash);
-                                return Ok(());
-                            }
+                        if !Self::ensure_flat_range(map, min, new_min, new_max) {
+                            // Range too large – migrate to hash.
+                            let mut hash = Self::migrate_flat_to_hash(
+                                &self.data_type,
+                                std::mem::take(values),
+                                *null_group,
+                            );
+                            hash.intern(cols, groups)?;
+                            self.state = AdaptiveState::Hash(hash);
+                            return Ok(());
                         }
                     }
                 }
