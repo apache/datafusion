@@ -135,6 +135,7 @@ struct DatafusionArrowPredicate {
 
 impl DatafusionArrowPredicate {
     /// Create a new `DatafusionArrowPredicate` from a `FilterCandidate`
+    #[allow(clippy::too_many_arguments)]
     fn try_new(
         candidate: FilterCandidate,
         metadata: &ParquetMetaData,
@@ -151,22 +152,12 @@ impl DatafusionArrowPredicate {
         // Compute bytes-per-row for projected columns NOT in this filter.
         // This represents the actual savings from late materialization:
         // for each pruned row we avoid decoding these other columns.
-        let filter_col_indices: Vec<usize> = candidate
-            .projection
-            .leaf_indices
-            .iter()
-            .copied()
-            .collect();
+        let filter_col_indices: Vec<usize> = candidate.projection.leaf_indices.to_vec();
         let filter_compressed_bytes =
             total_compressed_bytes(&filter_col_indices, metadata);
-        let total_rows: i64 = metadata
-            .row_groups()
-            .iter()
-            .map(|rg| rg.num_rows())
-            .sum();
+        let total_rows: i64 = metadata.row_groups().iter().map(|rg| rg.num_rows()).sum();
         let other_projected_bytes_per_row = if total_rows > 0 {
-            (projection_compressed_bytes.saturating_sub(filter_compressed_bytes))
-                as f64
+            (projection_compressed_bytes.saturating_sub(filter_compressed_bytes)) as f64
                 / total_rows as f64
         } else {
             0.0
@@ -203,8 +194,7 @@ impl ArrowPredicate for DatafusionArrowPredicate {
         // Report "other projected bytes" — the bytes of non-filter columns
         // that late materialization saves by pruning rows. This makes the
         // effectiveness metric consistent with post-scan reporting.
-        let other_bytes =
-            (self.other_projected_bytes_per_row * input_rows as f64) as u64;
+        let other_bytes = (self.other_projected_bytes_per_row * input_rows as f64) as u64;
         let start = Instant::now();
 
         self.physical_expr

@@ -372,9 +372,7 @@ impl SelectivityTrackerInner {
                 // its state. Only un-drop Dropped filters back to PostScan
                 // so they get another chance with the new selectivity.
                 if current_state == Some(FilterState::Dropped) {
-                    debug!(
-                        "FilterId {id} generation changed, un-dropping to PostScan"
-                    );
+                    debug!("FilterId {id} generation changed, un-dropping to PostScan");
                     self.filter_states.insert(id, FilterState::PostScan);
                 } else {
                     debug!(

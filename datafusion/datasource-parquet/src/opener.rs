@@ -620,10 +620,8 @@ impl FileOpener for ParquetOpener {
             let arrow_reader_metrics = ArrowReaderMetrics::enabled();
 
             let proj_cols = projection.column_indices();
-            let projection_size = row_filter::total_compressed_bytes(
-                &proj_cols,
-                builder.metadata(),
-            );
+            let projection_size =
+                row_filter::total_compressed_bytes(&proj_cols, builder.metadata());
 
             let PartitionedFilters {
                 row_filters,
@@ -832,11 +830,7 @@ fn apply_post_scan_filters_with_stats(
         // report and represents the actual late-materialization savings.
         let filter_bytes: u64 = collect_columns(expr)
             .iter()
-            .map(|col| {
-                batch
-                    .column(col.index())
-                    .get_array_memory_size() as u64
-            })
+            .map(|col| batch.column(col.index()).get_array_memory_size() as u64)
             .sum();
         let other_bytes = batch_bytes.saturating_sub(filter_bytes);
         tracker.update(id, num_matched, input_rows, nanos, other_bytes);
