@@ -97,3 +97,7 @@ name = "array_repeat"
 [[bench]]
 harness = false
 name = "array_set_ops"
+
+[[bench]]
+harness = false
+name = "array_position"
