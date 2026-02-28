@@ -427,6 +427,13 @@
 *in this section pertains to features and changes that have already been merged
 *to the main branch and are awaiting release in this version. See <a class="reference external" href="https://github.com/apache/datafusion/issues/19692">#19692</a> for
 *more details.</p>
+<section id="upgrade-arrow-parquet-to-58-0-0-and-object-store-to-0-13-0">
+<h3>Upgrade arrow/parquet to 58.0.0 and object_store to 0.13.0<a class="headerlink" href="#upgrade-arrow-parquet-to-58-0-0-and-object-store-to-0-13-0" title="Link to this heading">#</a></h3>
+<p>DataFusion 53.0.0 uses <code class="docutils literal notranslate"><span class="pre">arrow</span></code> and <code class="docutils literal notranslate"><span class="pre">parquet</span></code> 58.0.0, and <code class="docutils literal notranslate"><span class="pre">object_store</span></code> 0.13.0.
+This may require updates to your Cargo.toml if you have direct dependencies on
+these crates.</p>
+<p>See the <a class="reference external" href="https://github.com/apache/arrow-rs/releases/tag/58.0.0">Arrow 58.0.0 release notes</a> and the <a class="reference external" href="https://github.com/apache/arrow-rs/releases/tag/58.0.0">object_store 0.13.0 upgrade guide</a> for details on breaking changes in those versions.</p>
+</section>
 <section id="executionplan-properties-now-returns-arc-planproperties">
 <h3><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::properties</span></code> now returns <code class="docutils literal notranslate"><span class="pre">&amp;Arc&lt;PlanProperties&gt;</span></code><a class="headerlink" href="#executionplan-properties-now-returns-arc-planproperties" title="Link to this heading">#</a></h3>
 <p>Now <code class="docutils literal notranslate"><span class="pre">ExecutionPlan::properties()</span></code> returns <code class="docutils literal notranslate"><span class="pre">&amp;Arc&lt;PlanProperties&gt;</span></code> instead of a
@@ -837,6 +844,7 @@ This behavior is consistent with systems like PostgreSQL.</p>
   <nav class="bd-toc-nav page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-53-0-0">DataFusion 53.0.0</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#upgrade-arrow-parquet-to-58-0-0-and-object-store-to-0-13-0">Upgrade arrow/parquet to 58.0.0 and object_store to 0.13.0</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#executionplan-properties-now-returns-arc-planproperties"><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::properties</span></code> now returns <code class="docutils literal notranslate"><span class="pre">&amp;Arc&lt;PlanProperties&gt;</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#plannercontext-outer-query-schema-api-now-uses-a-stack"><code class="docutils literal notranslate"><span class="pre">PlannerContext</span></code> outer query schema API now uses a stack</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#filesinkconfig-adds-file-output-mode"><code class="docutils literal notranslate"><span class="pre">FileSinkConfig</span></code> adds <code class="docutils literal notranslate"><span class="pre">file_output_mode</span></code></a></li>
