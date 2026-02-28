@@ -84,8 +84,6 @@ pub struct GroupValuesPrimitive<T: ArrowPrimitiveType> {
     map: HashTable<(T::Native, usize)>,
     /// The group index of the null value if any
     null_group: Option<usize>,
-    /// The number of groups (including null if present)
-    num_groups: usize,
     /// The random state used to generate hashes
     random_state: RandomState,
 }
@@ -97,7 +95,6 @@ impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
             data_type,
             map: HashTable::with_capacity(128),
             null_group: None,
-            num_groups: 0,
             random_state: crate::aggregates::AGGREGATION_HASH_SEED,
         }
     }
@@ -114,8 +111,7 @@ where
         for v in cols[0].as_primitive::<T>() {
             let group_id = match v {
                 None => *self.null_group.get_or_insert_with(|| {
-                    let group_id = self.num_groups;
-                    self.num_groups += 1;
+                    let group_id = self.len();
                     group_id
                 }),
                 Some(key) => {
@@ -130,8 +126,7 @@ where
                     match insert {
                         hashbrown::hash_table::Entry::Occupied(o) => o.get().1,
                         hashbrown::hash_table::Entry::Vacant(v) => {
-                            let g = self.num_groups;
-                            self.num_groups += 1;
+                            let g = self.len();
                             v.insert((key, g));
                             g
                         }
@@ -148,11 +143,11 @@ where
     }
 
     fn is_empty(&self) -> bool {
-        self.num_groups == 0
+        self.map.is_empty() && self.null_group.is_none()
     }
 
     fn len(&self) -> usize {
-        self.num_groups
+        self.map.len() + self.null_group.is_some() as usize
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
@@ -173,13 +168,12 @@ where
 
         let array: PrimitiveArray<T> = match emit_to {
             EmitTo::All => {
-                let mut values = vec![T::Native::default(); self.num_groups];
+                let mut values = vec![T::Native::default(); self.len()];
                 for &(value, group_idx) in self.map.iter() {
                     values[group_idx] = value;
                 }
                 self.map.clear();
                 let null_group = self.null_group.take();
-                self.num_groups = 0;
                 build_primitive(values, null_group)
             }
             EmitTo::First(n) => {
@@ -193,7 +187,6 @@ where
                         true
                     }
                 });
-                self.num_groups -= n;
                 let null_group = match &mut self.null_group {
                     Some(v) if *v >= n => {
                         *v -= n;
@@ -210,7 +203,7 @@ where
     }
 
     fn clear_shrink(&mut self, count: usize) {
-        self.num_groups = 0;
+        self.null_group = None;
         self.map.clear();
         self.map.shrink_to(count, |_| 0); // hasher does not matter since the map is cleared
     }
