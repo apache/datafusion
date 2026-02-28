@@ -69,8 +69,8 @@ use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeRecursion, TreeNodeVisitor,
 };
 use datafusion_common::{
-    DFSchema, ScalarValue, exec_err, internal_datafusion_err, internal_err, not_impl_err,
-    plan_err,
+    DFSchema, DFSchemaRef, ScalarValue, exec_err, internal_datafusion_err, internal_err,
+    not_impl_err, plan_err,
 };
 use datafusion_common::{
     TableReference, assert_eq_or_internal_err, assert_or_internal_err,
@@ -308,6 +308,24 @@ impl DefaultPhysicalPlanner {
         Self { extension_planners }
     }
 
+    fn ensure_schema_matches(
+        &self,
+        logical_schema: &DFSchemaRef,
+        physical_plan: &Arc<dyn ExecutionPlan>,
+        context: &str,
+    ) -> Result<()> {
+        if !logical_schema.matches_arrow_schema(&physical_plan.schema()) {
+            return plan_err!(
+                "{} created an ExecutionPlan with mismatched schema. \
+                    LogicalPlan schema: {:?}, ExecutionPlan schema: {:?}",
+                context,
+                logical_schema,
+                physical_plan.schema()
+            );
+        }
+        Ok(())
+    }
+
     /// Create a physical plan from a logical plan
     async fn create_initial_plan(
         &self,
@@ -477,33 +495,51 @@ impl DefaultPhysicalPlanner {
         let exec_node: Arc<dyn ExecutionPlan> = match node {
             // Leaves (no children)
             LogicalPlan::TableScan(scan) => {
-                for planner in &self.extension_planners {
-                    if let Some(plan) =
-                        planner.plan_table_scan(self, scan, session_state).await?
-                    {
-                        return Ok(plan);
-                    }
-                }
-
                 let TableScan {
                     source,
                     projection,
                     filters,
                     fetch,
+                    projected_schema,
                     ..
                 } = scan;
-                let source = source_as_provider(source)?;
-                // Remove all qualifiers from the scan as the provider
-                // doesn't know (nor should care) how the relation was
-                // referred to in the query
-                let filters = unnormalize_cols(filters.iter().cloned());
-                let filters_vec = filters.into_iter().collect::<Vec<_>>();
-                let opts = ScanArgs::default()
-                    .with_projection(projection.as_deref())
-                    .with_filters(Some(&filters_vec))
-                    .with_limit(*fetch);
-                let res = source.scan_with_args(session_state, opts).await?;
-                Arc::clone(res.plan())
+
+                if let Ok(source) = source_as_provider(source) {
+                    // Remove all qualifiers from the scan as the provider
+                    // doesn't know (nor should care) how the relation was
+                    // referred to in the query
+                    let filters = unnormalize_cols(filters.iter().cloned());
+                    let filters_vec = filters.into_iter().collect::<Vec<_>>();
+                    let opts = ScanArgs::default()
+                        .with_projection(projection.as_deref())
+                        .with_filters(Some(&filters_vec))
+                        .with_limit(*fetch);
+                    let res = source.scan_with_args(session_state, opts).await?;
+                    Arc::clone(res.plan())
+                } else {
+                    let mut maybe_plan = None;
+                    for planner in &self.extension_planners {
+                        if maybe_plan.is_some() {
+                            break;
+                        }
+
+                        maybe_plan =
+                            planner.plan_table_scan(self, scan, session_state).await?;
+                    }
+
+                    let plan = match maybe_plan {
+                        Some(plan) => plan,
+                        None => {
+                            return internal_err!(
+                                "TableSource was not DefaultTableSource"
+                            );
+                        }
+                    };
+                    let context =
+                        format!("Extension planner for table scan {}", scan.table_name);
+                    self.ensure_schema_matches(projected_schema, &plan, &context)?;
+                    plan
+                }
             }
             LogicalPlan::Values(Values { values, schema }) => {
                 let exprs = values
@@ -1646,20 +1682,9 @@ impl DefaultPhysicalPlanner {
                     ),
                 }?;
 
-                // Ensure the ExecutionPlan's schema matches the
-                // declared logical schema to catch and warn about
-                // logic errors when creating user defined plans.
-                if !node.schema().matches_arrow_schema(&plan.schema()) {
-                    return plan_err!(
-                        "Extension planner for {:?} created an ExecutionPlan with mismatched schema. \
-                            LogicalPlan schema: {:?}, ExecutionPlan schema: {:?}",
-                        node,
-                        node.schema(),
-                        plan.schema()
-                    );
-                } else {
-                    plan
-                }
+                let context = format!("Extension planner for {:?}", node);
+                self.ensure_schema_matches(node.schema(), &plan, &context)?;
+                plan
             }
 
             // Other
