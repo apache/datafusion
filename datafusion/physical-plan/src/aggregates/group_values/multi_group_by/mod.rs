@@ -21,6 +21,7 @@ mod boolean;
 mod bytes;
 pub mod bytes_view;
 pub mod primitive;
+pub mod primitive_adaptive;
 pub mod primitive_flat;
 
 use std::mem::{self, size_of};
@@ -29,11 +30,10 @@ use crate::aggregates::group_values::GroupValues;
 use crate::aggregates::group_values::multi_group_by::{
     boolean::BooleanGroupValueBuilder, bytes::ByteGroupValueBuilder,
     bytes_view::ByteViewGroupValueBuilder, primitive::PrimitiveGroupValueBuilder,
-    primitive_flat::PrimitiveGroupValueBuilderFlat,
+    primitive_adaptive::PrimitiveGroupValueBuilderAdaptive,
 };
-use crate::aggregates::group_values::single_group_by::primitive_flat::FlatIndex;
 use ahash::RandomState;
-use arrow::array::{Array, ArrayRef, ArrowPrimitiveType};
+use arrow::array::{Array, ArrayRef};
 use arrow::compute::cast;
 use arrow::datatypes::{
     BinaryViewType, DataType, Date32Type, Date64Type, Decimal128Type, Float32Type,
@@ -44,8 +44,7 @@ use arrow::datatypes::{
     UInt64Type,
 };
 use datafusion_common::hash_utils::create_hashes;
-use datafusion_common::stats::{ColumnStatistics, Precision};
-use datafusion_common::{Result, ScalarValue, internal_datafusion_err, not_impl_err};
+use datafusion_common::{Result, internal_datafusion_err, not_impl_err};
 use datafusion_execution::memory_pool::proxy::{HashTableAllocExt, VecAllocExt};
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr::binary_map::OutputType;
@@ -224,14 +223,6 @@ pub struct GroupValuesColumn<const STREAMING: bool> {
 
     /// Random state for creating hashes
     random_state: RandomState,
-
-    /// Per-column statistics, used to select flat-indexed builders
-    /// for columns with small value ranges
-    column_statistics: Vec<ColumnStatistics>,
-
-    /// Number of input rows (exact), used for fill-rate based flat builder
-    /// selection
-    num_rows: Option<usize>,
 }
 
 /// Buffers to store intermediate results in `vectorized_append`
@@ -272,11 +263,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
     // ========================================================================
 
     /// Create a new instance of GroupValuesColumn if supported for the specified schema
-    pub fn try_new(
-        schema: SchemaRef,
-        column_statistics: Vec<ColumnStatistics>,
-        num_rows: Option<usize>,
-    ) -> Result<Self> {
+    pub fn try_new(schema: SchemaRef) -> Result<Self> {
         let map = HashTable::with_capacity(0);
         Ok(Self {
             schema,
@@ -288,8 +275,6 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             group_values: vec![],
             hashes_buffer: Default::default(),
             random_state: crate::aggregates::AGGREGATION_HASH_SEED,
-            column_statistics,
-            num_rows,
         })
     }
 
@@ -906,73 +891,23 @@ macro_rules! instantiate_primitive {
     };
 }
 
-/// Instantiates a flat-indexed [`PrimitiveGroupValueBuilderFlat`] if the
-/// column statistics indicate a small value range, otherwise falls back to
-/// the regular [`PrimitiveGroupValueBuilder`].
-macro_rules! instantiate_primitive_flat {
-    ($v:expr, $nullable:expr, $t:ty, $data_type:ident, $stats:expr, $num_rows:expr, $extract:expr) => {
-        if let Some(min) = try_extract_flat_min::<$t>($stats, $num_rows, $extract) {
-            if $nullable {
-                let b = PrimitiveGroupValueBuilderFlat::<$t, true>::new(
-                    $data_type.to_owned(),
-                    min,
-                );
-                $v.push(Box::new(b) as _)
-            } else {
-                let b = PrimitiveGroupValueBuilderFlat::<$t, false>::new(
-                    $data_type.to_owned(),
-                    min,
-                );
-                $v.push(Box::new(b) as _)
-            }
+/// Instantiates an adaptive [`PrimitiveGroupValueBuilderAdaptive`] that
+/// observes the actual data range at runtime and uses flat (u32-indexed)
+/// storage when the range is small, falling back to native storage otherwise.
+macro_rules! instantiate_primitive_adaptive {
+    ($v:expr, $nullable:expr, $t:ty, $data_type:ident) => {
+        if $nullable {
+            let b = PrimitiveGroupValueBuilderAdaptive::<$t, true>::new(
+                $data_type.to_owned(),
+            );
+            $v.push(Box::new(b) as _)
         } else {
-            instantiate_primitive!($v, $nullable, $t, $data_type)
+            let b = PrimitiveGroupValueBuilderAdaptive::<$t, false>::new(
+                $data_type.to_owned(),
+            );
+            $v.push(Box::new(b) as _)
         }
     };
-}
-
-/// Maximum value range for flat-indexed multi-column builders.
-const MAX_FLAT_GROUP_COLUMN_RANGE: usize = 65_536;
-
-/// Maximum fill rate for flat-indexed multi-column builders.
-const MAX_FLAT_GROUP_COLUMN_FILL_RATE: usize = 4;
-
-/// Absolute cap on the range when using fill-rate-based flat indexing.
-/// Limits memory per column builder to approximately 64 MB
-/// (16,777,216 slots × 4 bytes per `u32` slot = 64 MB).
-const MAX_FLAT_GROUP_COLUMN_RANGE_ABSOLUTE: usize = 16_777_216;
-
-/// Try to extract the minimum value for flat indexing from column statistics.
-/// Returns `Some(min)` if the value range is small enough for flat indexing.
-///
-/// Both `Exact` and `Inexact` statistics are accepted because inexact bounds
-/// (e.g. after filter narrowing) are always conservative — the actual values
-/// are guaranteed to fall within the reported range.
-fn try_extract_flat_min<T: ArrowPrimitiveType>(
-    stats: Option<&ColumnStatistics>,
-    num_rows: Option<usize>,
-    extract: impl Fn(&ScalarValue) -> Option<T::Native>,
-) -> Option<T::Native>
-where
-    T::Native: FlatIndex,
-{
-    let stats = stats?;
-    let min = match &stats.min_value {
-        Precision::Exact(sv) | Precision::Inexact(sv) => extract(sv)?,
-        _ => return None,
-    };
-    let max = match &stats.max_value {
-        Precision::Exact(sv) | Precision::Inexact(sv) => extract(sv)?,
-        _ => return None,
-    };
-    let range = max.index_from(min).checked_add(1)?;
-    let use_flat = range <= MAX_FLAT_GROUP_COLUMN_RANGE
-        || num_rows.is_some_and(|n| {
-            n > 0
-                && range <= n * MAX_FLAT_GROUP_COLUMN_FILL_RATE
-                && range <= MAX_FLAT_GROUP_COLUMN_RANGE_ABSOLUTE
-        });
-    if use_flat { Some(min) } else { None }
 }
 
 impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
@@ -980,122 +915,38 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
         if self.group_values.is_empty() {
             let mut v = Vec::with_capacity(cols.len());
 
-            for (col_idx, f) in self.schema.fields().iter().enumerate() {
+            for f in self.schema.fields().iter() {
                 let nullable = f.is_nullable();
                 let data_type = f.data_type();
-                let stats = self.column_statistics.get(col_idx);
-                let num_rows = self.num_rows;
                 match data_type {
                     &DataType::Int8 => {
-                        instantiate_primitive_flat!(
-                            v,
-                            nullable,
-                            Int8Type,
-                            data_type,
-                            stats,
-                            num_rows,
-                            |sv| match sv {
-                                ScalarValue::Int8(Some(v)) => Some(*v),
-                                _ => None,
-                            }
-                        )
+                        instantiate_primitive_adaptive!(v, nullable, Int8Type, data_type)
                     }
                     &DataType::Int16 => {
-                        instantiate_primitive_flat!(
-                            v,
-                            nullable,
-                            Int16Type,
-                            data_type,
-                            stats,
-                            num_rows,
-                            |sv| match sv {
-                                ScalarValue::Int16(Some(v)) => Some(*v),
-                                _ => None,
-                            }
-                        )
+                        instantiate_primitive_adaptive!(v, nullable, Int16Type, data_type)
                     }
                     &DataType::Int32 => {
-                        instantiate_primitive_flat!(
-                            v,
-                            nullable,
-                            Int32Type,
-                            data_type,
-                            stats,
-                            num_rows,
-                            |sv| match sv {
-                                ScalarValue::Int32(Some(v)) => Some(*v),
-                                _ => None,
-                            }
-                        )
+                        instantiate_primitive_adaptive!(v, nullable, Int32Type, data_type)
                     }
                     &DataType::Int64 => {
-                        instantiate_primitive_flat!(
-                            v,
-                            nullable,
-                            Int64Type,
-                            data_type,
-                            stats,
-                            num_rows,
-                            |sv| match sv {
-                                ScalarValue::Int64(Some(v)) => Some(*v),
-                                _ => None,
-                            }
-                        )
+                        instantiate_primitive_adaptive!(v, nullable, Int64Type, data_type)
                     }
                     &DataType::UInt8 => {
-                        instantiate_primitive_flat!(
-                            v,
-                            nullable,
-                            UInt8Type,
-                            data_type,
-                            stats,
-                            num_rows,
-                            |sv| match sv {
-                                ScalarValue::UInt8(Some(v)) => Some(*v),
-                                _ => None,
-                            }
-                        )
+                        instantiate_primitive_adaptive!(v, nullable, UInt8Type, data_type)
                     }
                     &DataType::UInt16 => {
-                        instantiate_primitive_flat!(
-                            v,
-                            nullable,
-                            UInt16Type,
-                            data_type,
-                            stats,
-                            num_rows,
-                            |sv| match sv {
-                                ScalarValue::UInt16(Some(v)) => Some(*v),
-                                _ => None,
-                            }
+                        instantiate_primitive_adaptive!(
+                            v, nullable, UInt16Type, data_type
                         )
                     }
                     &DataType::UInt32 => {
-                        instantiate_primitive_flat!(
-                            v,
-                            nullable,
-                            UInt32Type,
-                            data_type,
-                            stats,
-                            num_rows,
-                            |sv| match sv {
-                                ScalarValue::UInt32(Some(v)) => Some(*v),
-                                _ => None,
-                            }
+                        instantiate_primitive_adaptive!(
+                            v, nullable, UInt32Type, data_type
                         )
                     }
                     &DataType::UInt64 => {
-                        instantiate_primitive_flat!(
-                            v,
-                            nullable,
-                            UInt64Type,
-                            data_type,
-                            stats,
-                            num_rows,
-                            |sv| match sv {
-                                ScalarValue::UInt64(Some(v)) => Some(*v),
-                                _ => None,
-                            }
+                        instantiate_primitive_adaptive!(
+                            v, nullable, UInt64Type, data_type
                         )
                     }
                     &DataType::Float32 => {
@@ -1105,31 +956,13 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
                         instantiate_primitive!(v, nullable, Float64Type, data_type)
                     }
                     &DataType::Date32 => {
-                        instantiate_primitive_flat!(
-                            v,
-                            nullable,
-                            Date32Type,
-                            data_type,
-                            stats,
-                            num_rows,
-                            |sv| match sv {
-                                ScalarValue::Date32(Some(v)) => Some(*v),
-                                _ => None,
-                            }
+                        instantiate_primitive_adaptive!(
+                            v, nullable, Date32Type, data_type
                         )
                     }
                     &DataType::Date64 => {
-                        instantiate_primitive_flat!(
-                            v,
-                            nullable,
-                            Date64Type,
-                            data_type,
-                            stats,
-                            num_rows,
-                            |sv| match sv {
-                                ScalarValue::Date64(Some(v)) => Some(*v),
-                                _ => None,
-                            }
+                        instantiate_primitive_adaptive!(
+                            v, nullable, Date64Type, data_type
                         )
                     }
                     &DataType::Time32(t) => match t {
@@ -1467,7 +1300,7 @@ mod tests {
     fn test_intern_for_vectorized_group_values() {
         let data_set = VectorizedTestDataSet::new();
         let mut group_values =
-            GroupValuesColumn::<false>::try_new(data_set.schema(), vec![], None).unwrap();
+            GroupValuesColumn::<false>::try_new(data_set.schema()).unwrap();
 
         data_set.load_to_group_values(&mut group_values);
         let actual_batch = group_values.emit(EmitTo::All).unwrap();
@@ -1480,7 +1313,7 @@ mod tests {
     fn test_emit_first_n_for_vectorized_group_values() {
         let data_set = VectorizedTestDataSet::new();
         let mut group_values =
-            GroupValuesColumn::<false>::try_new(data_set.schema(), vec![], None).unwrap();
+            GroupValuesColumn::<false>::try_new(data_set.schema()).unwrap();
 
         // 1~num_rows times to emit the groups
         let num_rows = data_set.expected_batch.num_rows();
@@ -1531,8 +1364,7 @@ mod tests {
 
         let field = Field::new_list_field(DataType::Int32, true);
         let schema = Arc::new(Schema::new_with_metadata(vec![field], HashMap::new()));
-        let mut group_values =
-            GroupValuesColumn::<false>::try_new(schema, vec![], None).unwrap();
+        let mut group_values = GroupValuesColumn::<false>::try_new(schema).unwrap();
 
         // Insert group index views and check if success to insert
         insert_inline_group_index_view(&mut group_values, 0, 0);

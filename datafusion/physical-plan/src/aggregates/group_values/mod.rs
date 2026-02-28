@@ -23,11 +23,9 @@ use arrow::array::types::{
     TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
     TimestampSecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
-use arrow::array::{ArrayRef, ArrowPrimitiveType, downcast_primitive};
+use arrow::array::{ArrayRef, downcast_primitive};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use datafusion_common::Result;
-use datafusion_common::ScalarValue;
-use datafusion_common::stats::{ColumnStatistics, Precision};
 
 use datafusion_expr::EmitTo;
 
@@ -38,7 +36,8 @@ mod single_group_by;
 use datafusion_physical_expr::binary_map::OutputType;
 use multi_group_by::GroupValuesColumn;
 use row::GroupValuesRows;
-use single_group_by::primitive_flat::{FlatIndex, GroupValuesPrimitiveFlat};
+use single_group_by::primitive_adaptive::GroupValuesPrimitiveAdaptive;
+use single_group_by::primitive_flat::GroupValuesPrimitiveFlat;
 
 pub(crate) use single_group_by::primitive::HashValue;
 
@@ -119,22 +118,6 @@ pub trait GroupValues: Send {
     fn clear_shrink(&mut self, num_rows: usize);
 }
 
-/// Maximum value range for which flat (direct-indexed) group values are
-/// unconditionally used instead of a hash table, regardless of fill rate.
-/// At 8 bytes per slot, 65536 slots = 512KB.
-const MAX_FLAT_GROUP_RANGE: usize = 65_536;
-
-/// Maximum fill rate (range / num_rows) for which flat group values are used
-/// with larger ranges. A fill rate below this threshold means the flat map
-/// is at most this many times larger than a perfectly dense map, which is
-/// still worthwhile to avoid hashing overhead.
-const MAX_FLAT_FILL_RATE: usize = 4;
-
-/// Absolute cap on the range when using fill-rate-based flat indexing.
-/// Limits memory usage to approximately 128 MB per flat array
-/// (128 MB / 8 bytes per `usize` slot = 16,777,216 slots).
-const MAX_FLAT_RANGE_ABSOLUTE: usize = 16_777_216;
-
 /// Return a specialized implementation of [`GroupValues`] for the given schema.
 ///
 /// [`GroupValues`] implementations choosing logic:
@@ -160,16 +143,12 @@ const MAX_FLAT_RANGE_ABSOLUTE: usize = 16_777_216;
 pub fn new_group_values(
     schema: SchemaRef,
     group_ordering: &GroupOrdering,
-    column_statistics: &[ColumnStatistics],
-    num_rows: Option<usize>,
 ) -> Result<Box<dyn GroupValues>> {
     if schema.fields.len() == 1 {
         let d = schema.fields[0].data_type();
 
         // Try flat (direct-indexed) implementation first
-        if let Some(flat) =
-            try_create_flat_group_values(d, column_statistics.first(), num_rows)
-        {
+        if let Some(flat) = try_create_flat_group_values(d) {
             return Ok(flat);
         }
 
@@ -236,15 +215,10 @@ pub fn new_group_values(
     }
 
     if multi_group_by::supported_schema(schema.as_ref()) {
-        let stats = column_statistics.to_vec();
         if matches!(group_ordering, GroupOrdering::None) {
-            Ok(Box::new(GroupValuesColumn::<false>::try_new(
-                schema, stats, num_rows,
-            )?))
+            Ok(Box::new(GroupValuesColumn::<false>::try_new(schema)?))
         } else {
-            Ok(Box::new(GroupValuesColumn::<true>::try_new(
-                schema, stats, num_rows,
-            )?))
+            Ok(Box::new(GroupValuesColumn::<true>::try_new(schema)?))
         }
     } else {
         Ok(Box::new(GroupValuesRows::try_new(schema)?))
@@ -253,12 +227,13 @@ pub fn new_group_values(
 
 /// Try to create a flat (direct-indexed) [`GroupValues`] implementation for a
 /// single primitive column. Returns `None` if the type doesn't support flat
-/// indexing or the statistics don't indicate a small enough value range.
-fn try_create_flat_group_values(
-    data_type: &DataType,
-    stats: Option<&ColumnStatistics>,
-    num_rows: Option<usize>,
-) -> Option<Box<dyn GroupValues>> {
+/// indexing.
+///
+/// For small types (i8/u8/i16/u16) the full type range is always flat-indexed.
+/// For larger integer types an adaptive implementation is used that observes
+/// the actual data range at runtime and transparently falls back to hashing
+/// if the range exceeds the threshold.
+fn try_create_flat_group_values(data_type: &DataType) -> Option<Box<dyn GroupValues>> {
     match data_type {
         // Small integer types: always use flat indexing (full type range)
         DataType::Int8 => Some(Box::new(GroupValuesPrimitiveFlat::<Int8Type>::new(
@@ -282,93 +257,28 @@ fn try_create_flat_group_values(
             65536,
         ))),
 
-        // Larger integer types: use flat indexing when exact statistics show
-        // either a small value range or a low fill rate (range / num_rows)
-        DataType::Int32 => {
-            try_flat_from_stats::<Int32Type>(data_type, stats, num_rows, |sv| match sv {
-                ScalarValue::Int32(Some(v)) => Some(*v),
-                _ => None,
-            })
-        }
-        DataType::UInt32 => {
-            try_flat_from_stats::<UInt32Type>(data_type, stats, num_rows, |sv| match sv {
-                ScalarValue::UInt32(Some(v)) => Some(*v),
-                _ => None,
-            })
-        }
-        DataType::Int64 => {
-            try_flat_from_stats::<Int64Type>(data_type, stats, num_rows, |sv| match sv {
-                ScalarValue::Int64(Some(v)) => Some(*v),
-                _ => None,
-            })
-        }
-        DataType::UInt64 => {
-            try_flat_from_stats::<UInt64Type>(data_type, stats, num_rows, |sv| match sv {
-                ScalarValue::UInt64(Some(v)) => Some(*v),
-                _ => None,
-            })
-        }
-        DataType::Date32 => {
-            try_flat_from_stats::<Date32Type>(data_type, stats, num_rows, |sv| match sv {
-                ScalarValue::Date32(Some(v)) => Some(*v),
-                _ => None,
-            })
-        }
-        DataType::Date64 => {
-            try_flat_from_stats::<Date64Type>(data_type, stats, num_rows, |sv| match sv {
-                ScalarValue::Date64(Some(v)) => Some(*v),
-                _ => None,
-            })
-        }
+        // Larger integer types: adaptive flat → hash fallback at runtime.
+        // No statistics required — the implementation observes the actual
+        // data range and switches to hashing if it exceeds the threshold.
+        DataType::Int32 => Some(Box::new(
+            GroupValuesPrimitiveAdaptive::<Int32Type>::new(data_type.clone()),
+        )),
+        DataType::UInt32 => Some(Box::new(
+            GroupValuesPrimitiveAdaptive::<UInt32Type>::new(data_type.clone()),
+        )),
+        DataType::Int64 => Some(Box::new(
+            GroupValuesPrimitiveAdaptive::<Int64Type>::new(data_type.clone()),
+        )),
+        DataType::UInt64 => Some(Box::new(
+            GroupValuesPrimitiveAdaptive::<UInt64Type>::new(data_type.clone()),
+        )),
+        DataType::Date32 => Some(Box::new(
+            GroupValuesPrimitiveAdaptive::<Date32Type>::new(data_type.clone()),
+        )),
+        DataType::Date64 => Some(Box::new(
+            GroupValuesPrimitiveAdaptive::<Date64Type>::new(data_type.clone()),
+        )),
 
         _ => None,
-    }
-}
-
-/// Try to create a flat [`GroupValues`] from column statistics.
-///
-/// Uses flat indexing when either:
-/// - The value range is ≤ [`MAX_FLAT_GROUP_RANGE`] (always worth it), or
-/// - The fill rate (`range / num_rows`) is < [`MAX_FLAT_FILL_RATE`] and the
-///   range does not exceed [`MAX_FLAT_RANGE_ABSOLUTE`], meaning the flat map
-///   is only a small constant factor larger than the number of input rows,
-///   making it still cheaper than hashing.
-///
-/// Both `Exact` and `Inexact` statistics are accepted because inexact bounds
-/// (e.g. after filter narrowing) are always conservative — the actual values
-/// are guaranteed to fall within the reported range.
-fn try_flat_from_stats<T: ArrowPrimitiveType>(
-    data_type: &DataType,
-    stats: Option<&ColumnStatistics>,
-    num_rows: Option<usize>,
-    extract: impl Fn(&ScalarValue) -> Option<T::Native>,
-) -> Option<Box<dyn GroupValues>>
-where
-    T::Native: FlatIndex,
-{
-    let stats = stats?;
-    let min = match &stats.min_value {
-        Precision::Exact(sv) | Precision::Inexact(sv) => extract(sv)?,
-        _ => return None,
-    };
-    let max = match &stats.max_value {
-        Precision::Exact(sv) | Precision::Inexact(sv) => extract(sv)?,
-        _ => return None,
-    };
-    let range = max.index_from(min).checked_add(1)?;
-
-    let use_flat = range <= MAX_FLAT_GROUP_RANGE
-        || num_rows.is_some_and(|n| {
-            n > 0 && range <= n * MAX_FLAT_FILL_RATE && range <= MAX_FLAT_RANGE_ABSOLUTE
-        });
-
-    if use_flat {
-        Some(Box::new(GroupValuesPrimitiveFlat::<T>::new(
-            data_type.clone(),
-            min,
-            range,
-        )))
-    } else {
-        None
     }
 }
