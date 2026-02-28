@@ -117,10 +117,14 @@ fn scan_with_predicate(
 
     let builder = if pushdown {
         let tracker = Arc::new(SelectivityTracker::new());
+        let projection_bytes: usize = (0..metadata.row_groups().first().map_or(0, |rg| rg.num_columns()))
+            .map(|i| metadata.row_groups().iter().map(|rg| rg.column(i).compressed_size() as usize).sum::<usize>())
+            .sum();
         if let Some(result) = build_row_filter(
             vec![(0, Arc::clone(predicate))],
             file_schema,
             &metadata,
+            projection_bytes,
             &file_metrics,
             &tracker,
         )? {

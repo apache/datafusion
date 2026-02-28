@@ -34,7 +34,7 @@ use arrow::datatypes::DataType;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_physical_expr::conjunction;
 use datafusion_physical_expr::projection::ProjectionExprs;
-use datafusion_physical_expr::utils::reassign_expr_columns;
+use datafusion_physical_expr::utils::{collect_columns, reassign_expr_columns};
 use datafusion_physical_expr_adapter::replace_columns_with_literals;
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -619,17 +619,18 @@ impl FileOpener for ParquetOpener {
             // Metrics from the arrow reader itself
             let arrow_reader_metrics = ArrowReaderMetrics::enabled();
 
+            let proj_cols = projection.column_indices();
+            let projection_size = row_filter::total_compressed_bytes(
+                &proj_cols,
+                builder.metadata(),
+            );
+
             let PartitionedFilters {
                 row_filters,
                 mut post_scan,
             } = if pushdown_filters {
                 if let Some(conjuncts) = predicate_conjuncts.clone() {
                     if !conjuncts.is_empty() {
-                        let proj_cols = projection.column_indices();
-                        let projection_size = row_filter::total_compressed_bytes(
-                            &proj_cols,
-                            builder.metadata(),
-                        );
                         selectivity_tracker.partition_filters(
                             conjuncts,
                             projection_size,
@@ -652,6 +653,7 @@ impl FileOpener for ParquetOpener {
                     row_filters,
                     &physical_file_schema,
                     builder.metadata(),
+                    projection_size,
                     &file_metrics,
                     &selectivity_tracker,
                 );
@@ -674,7 +676,7 @@ impl FileOpener for ParquetOpener {
             let mask = {
                 let mut all_indices: Vec<usize> = projection.column_indices();
                 for (_, filter) in &post_scan {
-                    for col in datafusion_physical_expr::utils::collect_columns(filter) {
+                    for col in collect_columns(filter) {
                         let idx = col.index();
                         if !all_indices.contains(&idx) {
                             all_indices.push(idx);
@@ -825,7 +827,19 @@ fn apply_post_scan_filters_with_stats(
         let nanos = start.elapsed().as_nanos() as u64;
         let num_matched = bool_arr.true_count() as u64;
 
-        tracker.update(id, num_matched, input_rows, nanos, batch_bytes);
+        // Report "other projected bytes" — batch bytes minus this filter's
+        // column bytes. This is consistent with what row-level filters
+        // report and represents the actual late-materialization savings.
+        let filter_bytes: u64 = collect_columns(expr)
+            .iter()
+            .map(|col| {
+                batch
+                    .column(col.index())
+                    .get_array_memory_size() as u64
+            })
+            .sum();
+        let other_bytes = batch_bytes.saturating_sub(filter_bytes);
+        tracker.update(id, num_matched, input_rows, nanos, other_bytes);
 
         if num_matched < input_rows {
             combined_mask = Some(match combined_mask {

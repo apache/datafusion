@@ -362,11 +362,25 @@ impl SelectivityTrackerInner {
             Some(&prev_generation) if prev_generation == generation => {}
             Some(_) => {
                 let current_state = self.filter_states.get(&id).copied();
-                debug!(
-                    "FilterId {id} generation changed, resetting stats (state={current_state:?})"
-                );
+                // Always reset stats since selectivity changed with new generation.
                 self.stats.remove(&id);
                 self.snapshot_generations.insert(id, generation);
+
+                // Optional/dynamic filters only get more selective over time
+                // (hash join build side accumulates more values). So if the
+                // filter was already working (RowFilter or PostScan), preserve
+                // its state. Only un-drop Dropped filters back to PostScan
+                // so they get another chance with the new selectivity.
+                if current_state == Some(FilterState::Dropped) {
+                    debug!(
+                        "FilterId {id} generation changed, un-dropping to PostScan"
+                    );
+                    self.filter_states.insert(id, FilterState::PostScan);
+                } else {
+                    debug!(
+                        "FilterId {id} generation changed, resetting stats but preserving state {current_state:?}"
+                    );
+                }
             }
             None => {
                 self.snapshot_generations.insert(id, generation);
@@ -477,17 +491,38 @@ impl SelectivityTrackerInner {
             let state = self.filter_states.get(&id).copied();
 
             let Some(state) = state else {
-                // New filter: decide initial placement based on byte ratio threshold.
+                // New filter: decide initial placement.
+
+                // Optional/dynamic filters (e.g. hash join pushdown) always start
+                // PostScan because their selectivity is unknown and they can be
+                // dropped if ineffective. This is especially important for
+                // single-file tables where there's no second file to adapt.
+                let is_optional = expr
+                    .as_any()
+                    .downcast_ref::<OptionalFilterPhysicalExpr>()
+                    .is_some();
+                if is_optional {
+                    debug!(
+                        "FilterId {id}: New optional filter → Post-scan (conservative) — {expr}"
+                    );
+                    self.filter_states.insert(id, FilterState::PostScan);
+                    post_scan_filters.push((id, expr));
+                    continue;
+                }
+
+                // Static filters: compare I/O cost of row-filter vs post-scan.
                 //
-                // We compute the "extra bytes" — the bytes of filter columns that are
-                // NOT already in the projection. If a filter's columns are entirely
-                // contained in the projection, post-scan has zero extra I/O cost
-                // (those bytes are read regardless). But as a row filter, it enables
-                // late materialization which skips reading OTHER projected columns for
-                // pruned rows — so we still prefer row-level for potential savings.
+                // Post-scan I/O cost: 0 if filter columns are already in the
+                // projection (they're decoded anyway), otherwise the extra column bytes.
                 //
-                // The ratio is: extra_filter_bytes / projection_bytes.
-                // Filters with extra bytes > threshold start post-scan; otherwise row-level.
+                // Row-filter I/O cost: same column bytes, but enables late
+                // materialization (skipping other projected columns for pruned rows).
+                // However, late materialization has overhead for surviving rows.
+                //
+                // When extra_bytes == 0, post-scan has no I/O penalty, so it's the
+                // safe default — the adaptive system promotes if effective.
+                // When extra_bytes > 0 but small relative to projection, row-filter
+                // is worth trying since the extra I/O is cheap and pruning may help.
                 let filter_columns: Vec<usize> = collect_columns(&expr)
                     .iter()
                     .map(|col| col.index())
@@ -499,25 +534,37 @@ impl SelectivityTrackerInner {
                     .collect();
                 let extra_bytes =
                     crate::row_filter::total_compressed_bytes(&extra_columns, metadata);
-                let byte_ratio = extra_bytes as f64 / projection_scan_size as f64;
-                if byte_ratio <= config.byte_ratio_threshold {
+
+                if extra_bytes == 0 {
+                    // Filter columns are entirely in the projection — no extra I/O
+                    // for post-scan. Start PostScan; adaptive system promotes if
+                    // row-level pruning proves effective.
                     debug!(
-                        "FilterId {id}: New filter → Row filter via extra byte ratio {byte_ratio} <= threshold {} (extra_cols={}, filter_cols={}) — {expr}",
-                        config.byte_ratio_threshold,
-                        extra_columns.len(),
-                        filter_columns.len()
-                    );
-                    self.filter_states.insert(id, FilterState::RowFilter);
-                    row_filters.push((id, expr));
-                } else {
-                    debug!(
-                        "FilterId {id}: New filter → Post-scan via extra byte ratio {byte_ratio} > threshold {} (extra_cols={}, filter_cols={}) — {expr}",
-                        config.byte_ratio_threshold,
-                        extra_columns.len(),
-                        filter_columns.len()
+                        "FilterId {id}: New filter → Post-scan (filter columns in projection, zero extra I/O) — {expr}"
                     );
                     self.filter_states.insert(id, FilterState::PostScan);
                     post_scan_filters.push((id, expr));
+                } else {
+                    let byte_ratio = extra_bytes as f64 / projection_scan_size as f64;
+                    if byte_ratio <= config.byte_ratio_threshold {
+                        debug!(
+                            "FilterId {id}: New filter → Row filter via extra byte ratio {byte_ratio} <= threshold {} (extra_cols={}, filter_cols={}) — {expr}",
+                            config.byte_ratio_threshold,
+                            extra_columns.len(),
+                            filter_columns.len()
+                        );
+                        self.filter_states.insert(id, FilterState::RowFilter);
+                        row_filters.push((id, expr));
+                    } else {
+                        debug!(
+                            "FilterId {id}: New filter → Post-scan via extra byte ratio {byte_ratio} > threshold {} (extra_cols={}, filter_cols={}) — {expr}",
+                            config.byte_ratio_threshold,
+                            extra_columns.len(),
+                            filter_columns.len()
+                        );
+                        self.filter_states.insert(id, FilterState::PostScan);
+                        post_scan_filters.push((id, expr));
+                    }
                 }
                 continue;
             };
@@ -534,8 +581,6 @@ impl SelectivityTrackerInner {
                             config.min_bytes_per_sec
                         );
                         self.demote_or_drop(id, &expr, &mut post_scan_filters);
-                        // Note: demote_or_drop already pushes to post_scan if mandatory,
-                        // or sets state to Dropped if optional. No need to push again.
                         continue;
                     }
                     // If not demoted, keep as row filter.
@@ -952,6 +997,27 @@ mod tests {
             let result = tracker.partition_filters(filters, 1000, &[], &metadata);
 
             // With 100% byte ratio, should go to post-scan
+            assert_eq!(result.row_filters.len(), 0);
+            assert_eq!(result.post_scan.len(), 1);
+        }
+
+        #[test]
+        fn test_initial_placement_filter_in_projection_starts_postscan() {
+            let tracker = TrackerConfig::new()
+                .with_min_bytes_per_sec(1000.0)
+                .with_byte_ratio_threshold(0.5)
+                .build();
+
+            // Create metadata: 1 row group, 100 rows, 100 bytes for column
+            let metadata = create_test_metadata(vec![(100, vec![100])]);
+
+            // Filter using column 0 which IS in the projection
+            let expr = col_expr("a", 0);
+            let filters = vec![(1, expr)];
+
+            // projection_columns includes col 0 → extra_bytes = 0 → PostScan
+            let result = tracker.partition_filters(filters, 1000, &[0], &metadata);
+
             assert_eq!(result.row_filters.len(), 0);
             assert_eq!(result.post_scan.len(), 1);
         }
@@ -1378,6 +1444,29 @@ mod tests {
             // State should be preserved despite stats being cleared
             let state_after = tracker.inner.read().filter_states.get(&1).copied();
             assert_eq!(state_after, Some(FilterState::RowFilter));
+        }
+
+        #[test]
+        fn test_generation_change_undrops_dropped_filter() {
+            let tracker = TrackerConfig::new()
+                .with_min_bytes_per_sec(1000.0)
+                .with_byte_ratio_threshold(0.1)
+                .build();
+
+            // Manually set filter state to Dropped
+            tracker
+                .inner
+                .write()
+                .filter_states
+                .insert(1, FilterState::Dropped);
+            tracker.inner.write().note_generation(1, 100);
+
+            // Simulate generation change
+            tracker.inner.write().note_generation(1, 101);
+
+            // Dropped filter should be un-dropped to PostScan
+            let state_after = tracker.inner.read().filter_states.get(&1).copied();
+            assert_eq!(state_after, Some(FilterState::PostScan));
         }
 
         #[test]

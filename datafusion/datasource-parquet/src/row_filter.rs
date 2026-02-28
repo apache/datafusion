@@ -122,6 +122,9 @@ struct DatafusionArrowPredicate {
     filter_id: FilterId,
     /// Tracker for dynamic filter effectiveness
     selectivity_tracker: Arc<SelectivityTracker>,
+    /// Estimated compressed bytes per row for columns NOT used by this filter
+    /// but in the projection — the bytes late materialization actually saves.
+    other_projected_bytes_per_row: f64,
     /// how many rows were filtered out by this predicate
     rows_pruned: metrics::Count,
     /// how many rows passed this predicate
@@ -135,6 +138,7 @@ impl DatafusionArrowPredicate {
     fn try_new(
         candidate: FilterCandidate,
         metadata: &ParquetMetaData,
+        projection_compressed_bytes: usize,
         filter_id: FilterId,
         selectivity_tracker: Arc<SelectivityTracker>,
         rows_pruned: metrics::Count,
@@ -143,6 +147,30 @@ impl DatafusionArrowPredicate {
     ) -> Result<Self> {
         let physical_expr =
             reassign_expr_columns(candidate.expr, &candidate.filter_schema)?;
+
+        // Compute bytes-per-row for projected columns NOT in this filter.
+        // This represents the actual savings from late materialization:
+        // for each pruned row we avoid decoding these other columns.
+        let filter_col_indices: Vec<usize> = candidate
+            .projection
+            .leaf_indices
+            .iter()
+            .copied()
+            .collect();
+        let filter_compressed_bytes =
+            total_compressed_bytes(&filter_col_indices, metadata);
+        let total_rows: i64 = metadata
+            .row_groups()
+            .iter()
+            .map(|rg| rg.num_rows())
+            .sum();
+        let other_projected_bytes_per_row = if total_rows > 0 {
+            (projection_compressed_bytes.saturating_sub(filter_compressed_bytes))
+                as f64
+                / total_rows as f64
+        } else {
+            0.0
+        };
 
         Ok(Self {
             physical_expr,
@@ -155,6 +183,7 @@ impl DatafusionArrowPredicate {
             ),
             filter_id,
             selectivity_tracker,
+            other_projected_bytes_per_row,
             rows_pruned,
             rows_matched,
             time,
@@ -170,8 +199,12 @@ impl ArrowPredicate for DatafusionArrowPredicate {
     fn evaluate(&mut self, batch: RecordBatch) -> ArrowResult<BooleanArray> {
         // scoped timer updates on drop
         let mut timer = self.time.timer();
-        let batch_bytes = batch.get_array_memory_size();
         let input_rows = batch.num_rows() as u64;
+        // Report "other projected bytes" — the bytes of non-filter columns
+        // that late materialization saves by pruning rows. This makes the
+        // effectiveness metric consistent with post-scan reporting.
+        let other_bytes =
+            (self.other_projected_bytes_per_row * input_rows as f64) as u64;
         let start = Instant::now();
 
         self.physical_expr
@@ -187,14 +220,15 @@ impl ArrowPredicate for DatafusionArrowPredicate {
 
                 timer.stop();
 
-                // Report GBps pruned to SelectivityTracker
+                // Report effectiveness to SelectivityTracker using other-column
+                // bytes (the actual savings from late materialization).
                 let nanos = start.elapsed().as_nanos() as u64;
                 self.selectivity_tracker.update(
                     self.filter_id,
                     num_matched as u64,
                     input_rows,
                     nanos,
-                    batch_bytes as u64,
+                    other_bytes,
                 );
 
                 Ok(bool_arr)
@@ -570,6 +604,7 @@ pub fn build_row_filter(
     exprs: Vec<(FilterId, Arc<dyn PhysicalExpr>)>,
     file_schema: &SchemaRef,
     metadata: &ParquetMetaData,
+    projection_compressed_bytes: usize,
     file_metrics: &ParquetFileMetrics,
     selectivity_tracker: &Arc<SelectivityTracker>,
 ) -> Result<Option<RowFilterWithMetrics>> {
@@ -619,6 +654,7 @@ pub fn build_row_filter(
             DatafusionArrowPredicate::try_new(
                 candidate,
                 metadata,
+                projection_compressed_bytes,
                 filter_id,
                 Arc::clone(selectivity_tracker),
                 rows_pruned.clone(),
@@ -748,6 +784,7 @@ mod test {
         let mut row_filter = DatafusionArrowPredicate::try_new(
             candidate,
             &metadata,
+            0, // projection_compressed_bytes (not relevant for this test)
             0, // filter_id
             selectivity_tracker,
             Count::new(),
@@ -791,6 +828,7 @@ mod test {
         let mut row_filter = DatafusionArrowPredicate::try_new(
             candidate,
             &metadata,
+            0, // projection_compressed_bytes
             0, // filter_id
             selectivity_tracker,
             Count::new(),
@@ -942,10 +980,15 @@ mod test {
 
         let selectivity_tracker = Arc::new(SelectivityTracker::new());
         let exprs = vec![(0, expr)]; // Single filter with ID 0
+        let projection_bytes = total_compressed_bytes(
+            &(0..file_schema.fields().len()).collect::<Vec<_>>(),
+            &metadata,
+        );
         let row_filter_with_metrics = build_row_filter(
             exprs,
             &file_schema,
             &metadata,
+            projection_bytes,
             &file_metrics,
             &selectivity_tracker,
         )
