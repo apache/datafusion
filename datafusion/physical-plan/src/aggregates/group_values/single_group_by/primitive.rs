@@ -15,9 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregates::group_values::{
-    GroupValues, INDEX_MASK, hash_tag_matches, pack_index, unpack_index,
-};
+use crate::aggregates::group_values::GroupValues;
 use ahash::RandomState;
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::{
@@ -82,12 +80,9 @@ hash_float!(f16, f32, f64);
 pub struct GroupValuesPrimitive<T: ArrowPrimitiveType> {
     /// The data type of the output array
     data_type: DataType,
-    /// Stores packed entries: top 16 bits = hash tag, bottom 48 bits = group index.
-    ///
-    /// The inline hash tag enables fast filtering during probing without
-    /// needing stored hashes. Combined with the Swiss table's 7-bit control
-    /// byte, this gives 23 bits of hash filtering.
-    map: HashTable<u64>,
+    /// Stores (value, group_index) pairs directly.
+    /// Values are compared directly during probing without indirection.
+    map: HashTable<(T::Native, usize)>,
     /// The group index of the null value if any
     null_group: Option<usize>,
     /// The values for each group index
@@ -127,25 +122,17 @@ where
                 Some(key) => {
                     let state = &self.random_state;
                     let hash = key.hash(state);
-                    let values = &self.values;
                     let insert = self.map.entry(
                         hash,
-                        |&packed| unsafe {
-                            hash_tag_matches(packed, hash)
-                                && values.get_unchecked(unpack_index(packed)).is_eq(key)
-                        },
-                        |&packed| unsafe {
-                            values.get_unchecked(unpack_index(packed)).hash(state)
-                        },
+                        |entry| entry.0.is_eq(key),
+                        |entry| entry.0.hash(state),
                     );
 
                     match insert {
-                        hashbrown::hash_table::Entry::Occupied(o) => {
-                            unpack_index(*o.get())
-                        }
+                        hashbrown::hash_table::Entry::Occupied(o) => o.get().1,
                         hashbrown::hash_table::Entry::Vacant(v) => {
                             let g = self.values.len();
-                            v.insert(pack_index(g, hash));
+                            v.insert((key, g));
                             self.values.push(key);
                             g
                         }
@@ -158,7 +145,8 @@ where
     }
 
     fn size(&self) -> usize {
-        self.map.capacity() * size_of::<u64>() + self.values.allocated_size()
+        self.map.capacity() * size_of::<(T::Native, usize)>()
+            + self.values.allocated_size()
     }
 
     fn is_empty(&self) -> bool {
@@ -192,14 +180,11 @@ where
             }
             EmitTo::First(n) => {
                 self.map.retain(|entry| {
-                    let idx = unpack_index(*entry);
-                    match idx.checked_sub(n) {
-                        // Group index was >= n, shift index down, keep hash tag
+                    match entry.1.checked_sub(n) {
                         Some(sub) => {
-                            *entry = (*entry & !INDEX_MASK) | (sub as u64);
+                            entry.1 = sub;
                             true
                         }
-                        // Group index was < n, so remove from table
                         None => false,
                     }
                 });
