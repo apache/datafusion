@@ -135,7 +135,7 @@ struct DatafusionArrowPredicate {
 
 impl DatafusionArrowPredicate {
     /// Create a new `DatafusionArrowPredicate` from a `FilterCandidate`
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn try_new(
         candidate: FilterCandidate,
         metadata: &ParquetMetaData,
