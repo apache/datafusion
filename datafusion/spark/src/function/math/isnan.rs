@@ -30,8 +30,10 @@ use datafusion_expr::{
 /// Spark-compatible `isnan` expression
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#isnan>
 ///
-/// Differences with standard SQL:
-///  - Returns `false` for NULL inputs (not NULL)
+/// Differences with DataFusion isnan:
+///  - Spark returns `false` for NULL inputs; DataFusion propagates NULL
+///  - Spark only accepts Float32 and Float64; DataFusion accepts all numeric
+///    types (returning false for integers and decimals, which are never NaN)
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkIsNaN {
     signature: Signature,
