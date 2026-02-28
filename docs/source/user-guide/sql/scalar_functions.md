@@ -3545,16 +3545,16 @@ array_has_all(array, sub-array)
 
 ### `array_has_any`
 
-Returns true if any elements exist in both arrays.
+Returns true if the arrays have any elements in common.
 
 ```sql
-array_has_any(array, sub-array)
+array_has_any(array1, array2)
 ```
 
 #### Arguments
 
-- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
-- **sub-array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **array1**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **array2**: Array expression. Can be a constant, column, or function, and any combination of array operators.
 
 #### Example
 
@@ -3776,7 +3776,7 @@ array_pop_front(array)
 
 ### `array_position`
 
-Returns the position of the first occurrence of the specified element in the array, or NULL if not found.
+Returns the position of the first occurrence of the specified element in the array, or NULL if not found. Comparisons are done using `IS DISTINCT FROM` semantics, so NULL is considered to match NULL.
 
 ```sql
 array_position(array, element)
@@ -3786,7 +3786,7 @@ array_position(array, element, index)
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
-- **element**: Element to search for position in the array.
+- **element**: Element to search for in the array.
 - **index**: Index at which to start searching (1-indexed).
 
 #### Example

@@ -618,7 +618,7 @@ impl InferredPredicates {
     fn new(join_type: JoinType) -> Self {
         Self {
             predicates: vec![],
-            is_inner_join: matches!(join_type, JoinType::Inner),
+            is_inner_join: join_type == JoinType::Inner,
         }
     }
 

@@ -490,7 +490,7 @@ fn resolve_classic_join(
             // If we find a match we append all indices and move to the next stream row index
             match operator {
                 Operator::Gt | Operator::Lt => {
-                    if matches!(compare, Ordering::Less) {
+                    if compare == Ordering::Less {
                         batch_process_state.found = true;
                         let count = buffered_len - buffer_idx;
 

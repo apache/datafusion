@@ -98,7 +98,7 @@ pub struct OutputRequirementExec {
     input: Arc<dyn ExecutionPlan>,
     order_requirement: Option<OrderingRequirements>,
     dist_requirement: Distribution,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
     fetch: Option<usize>,
 }
 
@@ -114,7 +114,7 @@ impl OutputRequirementExec {
             input,
             order_requirement: requirements,
             dist_requirement,
-            cache,
+            cache: Arc::new(cache),
             fetch,
         }
     }
@@ -200,7 +200,7 @@ impl ExecutionPlan for OutputRequirementExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 

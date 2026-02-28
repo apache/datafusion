@@ -96,9 +96,7 @@ impl ScalarUDFImpl for MapFromArrays {
 fn map_from_arrays_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [keys, values] = take_function_args("map_from_arrays", args)?;
 
-    if matches!(keys.data_type(), DataType::Null)
-        || matches!(values.data_type(), DataType::Null)
-    {
+    if *keys.data_type() == DataType::Null || *values.data_type() == DataType::Null {
         return Ok(cast(
             &NullArray::new(keys.len()),
             &map_type_from_key_value_types(
