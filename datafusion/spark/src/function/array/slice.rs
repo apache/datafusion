@@ -20,7 +20,7 @@ use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cast::{as_int64_array, as_list_array};
 use datafusion_common::utils::ListCoercion;
 use datafusion_common::{
-    DataFusionError, Result, exec_err, internal_err, utils::take_function_args,
+    Result, ScalarValue, exec_err, internal_err, utils::take_function_args,
 };
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, ReturnFieldArgs,
@@ -91,8 +91,10 @@ impl ScalarUDFImpl for SparkSlice {
         &self,
         mut func_args: ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        if func_args.args[0].data_type() == DataType::Null {
-            return Ok(func_args.args[0].clone());
+        if func_args.args[0].data_type() == DataType::Null
+            && let Some(result) = check_null_types(&func_args.args[0])
+        {
+            return Ok(result);
         }
 
         let array_len = func_args
@@ -126,6 +128,16 @@ impl ScalarUDFImpl for SparkSlice {
             return_field: func_args.return_field,
             config_options: func_args.config_options,
         })
+    }
+}
+
+fn check_null_types(cv: &ColumnarValue) -> Option<ColumnarValue> {
+    match cv {
+        ColumnarValue::Scalar(ScalarValue::Null) => {
+            Some(ColumnarValue::create_null_array(1))
+        }
+        ColumnarValue::Array(_) => Some(cv.clone()),
+        _ => None,
     }
 }
 
@@ -205,6 +217,6 @@ mod tests {
         };
         let slice = SparkSlice::new();
         let result = slice.invoke_with_args(args).unwrap();
-        assert_eq!(result.to_array(1).unwrap(), Arc::new(NullArray::new(1)));
+        assert_eq!(*result.to_array(1).unwrap(), *Arc::new(NullArray::new(1)));
     }
 }
