@@ -85,16 +85,13 @@ pub struct GroupValuesPrimitive<T: ArrowPrimitiveType> {
     /// Stores packed entries: top 16 bits = hash tag, bottom 48 bits = group index.
     ///
     /// The inline hash tag enables fast filtering during probing without
-    /// accessing the separate `group_hashes` vec. Combined with the Swiss
-    /// table's 7-bit control byte, this gives 23 bits of hash filtering.
+    /// needing stored hashes. Combined with the Swiss table's 7-bit control
+    /// byte, this gives 23 bits of hash filtering.
     map: HashTable<u64>,
     /// The group index of the null value if any
     null_group: Option<usize>,
     /// The values for each group index
     values: Vec<T::Native>,
-    /// Stored hashes for each group, indexed by group_index.
-    /// Used for rehashing and equality checks during probing.
-    group_hashes: Vec<u64>,
     /// The random state used to generate hashes
     random_state: RandomState,
 }
@@ -106,7 +103,6 @@ impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
             data_type,
             map: HashTable::with_capacity(128),
             values: Vec::with_capacity(128),
-            group_hashes: Vec::with_capacity(128),
             null_group: None,
             random_state: crate::aggregates::AGGREGATION_HASH_SEED,
         }
@@ -126,13 +122,11 @@ where
                 None => *self.null_group.get_or_insert_with(|| {
                     let group_id = self.values.len();
                     self.values.push(Default::default());
-                    self.group_hashes.push(0);
                     group_id
                 }),
                 Some(key) => {
                     let state = &self.random_state;
                     let hash = key.hash(state);
-                    let group_hashes = &self.group_hashes;
                     let values = &self.values;
                     let insert = self.map.entry(
                         hash,
@@ -141,7 +135,7 @@ where
                                 && values.get_unchecked(unpack_index(packed)).is_eq(key)
                         },
                         |&packed| unsafe {
-                            *group_hashes.get_unchecked(unpack_index(packed))
+                            values.get_unchecked(unpack_index(packed)).hash(state)
                         },
                     );
 
@@ -153,7 +147,6 @@ where
                             let g = self.values.len();
                             v.insert(pack_index(g, hash));
                             self.values.push(key);
-                            self.group_hashes.push(hash);
                             g
                         }
                     }
@@ -165,9 +158,7 @@ where
     }
 
     fn size(&self) -> usize {
-        self.map.capacity() * size_of::<u64>()
-            + self.values.allocated_size()
-            + self.group_hashes.allocated_size()
+        self.map.capacity() * size_of::<u64>() + self.values.allocated_size()
     }
 
     fn is_empty(&self) -> bool {
@@ -197,7 +188,6 @@ where
         let array: PrimitiveArray<T> = match emit_to {
             EmitTo::All => {
                 self.map.clear();
-                self.group_hashes.clear();
                 build_primitive(std::mem::take(&mut self.values), self.null_group.take())
             }
             EmitTo::First(n) => {
@@ -223,8 +213,6 @@ where
                 };
                 let mut split = self.values.split_off(n);
                 std::mem::swap(&mut self.values, &mut split);
-                let mut split_hashes = self.group_hashes.split_off(n);
-                std::mem::swap(&mut self.group_hashes, &mut split_hashes);
                 build_primitive(split, null_group)
             }
         };
@@ -235,8 +223,6 @@ where
     fn clear_shrink(&mut self, num_rows: usize) {
         self.values.clear();
         self.values.shrink_to(num_rows);
-        self.group_hashes.clear();
-        self.group_hashes.shrink_to(num_rows);
         self.map.clear();
         self.map.shrink_to(num_rows, |_| 0); // hasher does not matter since the map is cleared
     }
