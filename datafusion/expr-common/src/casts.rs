@@ -74,6 +74,7 @@ fn is_supported_numeric_type(data_type: &DataType) -> bool {
             | DataType::Decimal64(_, _)
             | DataType::Decimal128(_, _)
             | DataType::Timestamp(_, _)
+            | DataType::Date32
     )
 }
 
@@ -117,6 +118,7 @@ fn try_cast_numeric_literal(
         | DataType::Int32
         | DataType::Int64 => 1_i128,
         DataType::Timestamp(_, _) => 1_i128,
+        DataType::Date32 => 1_i128,
         DataType::Decimal32(_, scale) => 10_i128.pow(*scale as u32),
         DataType::Decimal64(_, scale) => 10_i128.pow(*scale as u32),
         DataType::Decimal128(_, scale) => 10_i128.pow(*scale as u32),
@@ -132,6 +134,7 @@ fn try_cast_numeric_literal(
         DataType::Int32 => (i32::MIN as i128, i32::MAX as i128),
         DataType::Int64 => (i64::MIN as i128, i64::MAX as i128),
         DataType::Timestamp(_, _) => (i64::MIN as i128, i64::MAX as i128),
+        DataType::Date32 => (i32::MIN as i128, i32::MAX as i128),
         DataType::Decimal32(precision, _) => (
             // Different precision for decimal32 can store different range of value.
             // For example, the precision is 3, the max of value is `999` and the min
@@ -168,6 +171,7 @@ fn try_cast_numeric_literal(
         ScalarValue::TimestampMillisecond(Some(v), _) => (*v as i128).checked_mul(mul),
         ScalarValue::TimestampMicrosecond(Some(v), _) => (*v as i128).checked_mul(mul),
         ScalarValue::TimestampNanosecond(Some(v), _) => (*v as i128).checked_mul(mul),
+        ScalarValue::Date32(Some(v)) => (*v as i128).checked_mul(mul),
         ScalarValue::Decimal32(Some(v), _, scale) => {
             let v = *v as i128;
             let lit_scale_mul = 10_i128.pow(*scale as u32);
@@ -277,6 +281,7 @@ fn try_cast_numeric_literal(
                         );
                         ScalarValue::TimestampNanosecond(value, tz.clone())
                     }
+                    DataType::Date32 => ScalarValue::Date32(Some(value as i32)),
                     DataType::Decimal32(p, s) => {
                         ScalarValue::Decimal32(Some(value as i32), *p, *s)
                     }
@@ -1194,6 +1199,7 @@ mod tests {
             TimeUnit::Nanosecond,
             None
         )));
+        assert!(is_supported_numeric_type(&DataType::Date32));
         assert!(!is_supported_numeric_type(&DataType::Float32));
         assert!(!is_supported_numeric_type(&DataType::Float64));
 
@@ -1287,6 +1293,46 @@ mod tests {
             ScalarValue::Int32(Some(123)),
             bad_dict,
             ExpectedCast::NoValue,
+        );
+    }
+
+    #[test]
+    fn test_try_cast_date32() {
+        // Int32 -> Date32
+        expect_cast(
+            ScalarValue::Int32(Some(15887)),
+            DataType::Date32,
+            ExpectedCast::Value(ScalarValue::Date32(Some(15887))),
+        );
+
+        // Date32 -> Int32
+        expect_cast(
+            ScalarValue::Date32(Some(15887)),
+            DataType::Int32,
+            ExpectedCast::Value(ScalarValue::Int32(Some(15887))),
+        );
+
+        // Date32 -> Int64
+        expect_cast(
+            ScalarValue::Date32(Some(15887)),
+            DataType::Int64,
+            ExpectedCast::Value(ScalarValue::Int64(Some(15887))),
+        );
+
+        // Date32 -> UInt16 (out of range, negative value)
+        // Arrow doesn't support Date32->UInt16 cast, so test via try_cast_literal_to_type directly
+        assert!(
+            try_cast_literal_to_type(&ScalarValue::Date32(Some(-1)), &DataType::UInt16)
+                .is_none()
+        );
+
+        // Date32 -> UInt16 (out of range, too large)
+        assert!(
+            try_cast_literal_to_type(
+                &ScalarValue::Date32(Some(70000)),
+                &DataType::UInt16
+            )
+            .is_none()
         );
     }
 }

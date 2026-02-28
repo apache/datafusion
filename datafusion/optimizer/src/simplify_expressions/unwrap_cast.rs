@@ -586,6 +586,16 @@ mod tests {
         assert_eq!(optimize_test(expr_lt, &schema), expected);
     }
 
+    #[test]
+    fn test_unwrap_cast_date32() {
+        let schema = expr_test_schema();
+        // cast(c1 as Date32) >= Date32(15887) -> c1 >= Int32(15887)
+        let expr_input = cast(col("c1"), DataType::Date32)
+            .gt_eq(lit(ScalarValue::Date32(Some(15887))));
+        let expected = col("c1").gt_eq(lit(15887i32));
+        assert_eq!(optimize_test(expr_input, &schema), expected);
+    }
+
     fn optimize_test(expr: Expr, schema: &DFSchemaRef) -> Expr {
         let simplifier = ExprSimplifier::new(
             SimplifyContext::default().with_schema(Arc::clone(schema)),
