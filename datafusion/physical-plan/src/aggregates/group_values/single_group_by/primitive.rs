@@ -121,18 +121,15 @@ where
                 Some(key) => {
                     let state = &self.random_state;
                     let hash = key.hash(state);
-                    let next_group_idx = self.len();
-                    let insert = self.map.entry(
-                        hash,
-                        |entry| entry.0.is_eq(key),
-                        |entry| entry.0.hash(state),
-                    );
-
-                    match insert {
-                        hashbrown::hash_table::Entry::Occupied(o) => o.get().1,
-                        hashbrown::hash_table::Entry::Vacant(v) => {
-                            v.insert((key, next_group_idx));
-                            next_group_idx
+                    match self.map.find_entry(hash, |entry| entry.0.is_eq(key)) {
+                        Ok(occupied) => occupied.get().1,
+                        Err(absent) => {
+                            let table = absent.into_table();
+                            let g = table.len() + self.null_group.is_some() as usize;
+                            table.insert_unique(hash, (key, g), |entry| {
+                                entry.0.hash(state)
+                            });
+                            g
                         }
                     }
                 }
