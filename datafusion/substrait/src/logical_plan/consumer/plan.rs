@@ -35,10 +35,7 @@ pub async fn from_substrait_plan(
         return not_impl_err!("Type variation extensions are not supported");
     }
 
-    let consumer = DefaultSubstraitConsumer {
-        extensions: &extensions,
-        state,
-    };
+    let consumer = DefaultSubstraitConsumer::new(&extensions, state);
     from_substrait_plan_with_consumer(&consumer, plan).await
 }
 

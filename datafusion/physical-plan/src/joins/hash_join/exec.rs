@@ -23,7 +23,7 @@ use std::sync::{Arc, OnceLock};
 use std::{any::Any, vec};
 
 use crate::ExecutionPlanProperties;
-use crate::execution_plan::{EmissionType, boundedness_from_children};
+use crate::execution_plan::{EmissionType, boundedness_from_children, stub_properties};
 use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
@@ -67,7 +67,7 @@ use arrow::compute::concat_batches;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
-use arrow_schema::DataType;
+use arrow_schema::{DataType, Schema};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
@@ -249,21 +249,20 @@ impl JoinLeftData {
 }
 
 /// Helps to build [`HashJoinExec`].
+///
+/// Builder can be created from an existing [`HashJoinExec`] using [`From::from`].
+/// In this case, all its fields are inherited. If a field that affects the node's
+/// properties is modified, they will be automatically recomputed during the build.
+///
+/// # Adding setters
+///
+/// When adding a new setter, it is necessary to ensure that the `preserve_properties`
+/// flag is set to false if modifying the field requires a recomputation of the plan's
+/// properties.
+///
 pub struct HashJoinExecBuilder {
-    left: Arc<dyn ExecutionPlan>,
-    right: Arc<dyn ExecutionPlan>,
-    on: Vec<(PhysicalExprRef, PhysicalExprRef)>,
-    join_type: JoinType,
-    filter: Option<JoinFilter>,
-    projection: Option<ProjectionRef>,
-    partition_mode: PartitionMode,
-    null_equality: NullEquality,
-    null_aware: bool,
-    /// Maximum number of rows to return
-    ///
-    /// If the operator produces `< fetch` rows, it returns all available rows.
-    /// If it produces `>= fetch` rows, it returns exactly `fetch` rows and stops early.
-    fetch: Option<usize>,
+    exec: HashJoinExec,
+    preserve_properties: bool,
 }
 
 impl HashJoinExecBuilder {
@@ -275,17 +274,37 @@ impl HashJoinExecBuilder {
         join_type: JoinType,
     ) -> Self {
         Self {
-            left,
-            right,
-            on,
-            filter: None,
-            projection: None,
-            partition_mode: PartitionMode::Auto,
-            join_type,
-            null_equality: NullEquality::NullEqualsNothing,
-            null_aware: false,
-            fetch: None,
+            exec: HashJoinExec {
+                left,
+                right,
+                on,
+                filter: None,
+                join_type,
+                left_fut: Default::default(),
+                random_state: HASH_JOIN_SEED,
+                mode: PartitionMode::Auto,
+                fetch: None,
+                metrics: ExecutionPlanMetricsSet::new(),
+                projection: None,
+                column_indices: vec![],
+                null_equality: NullEquality::NullEqualsNothing,
+                null_aware: false,
+                dynamic_filter: None,
+                // Will be computed at when plan will be built.
+                cache: stub_properties(),
+                join_schema: Arc::new(Schema::empty()),
+            },
+            // As `exec` is initialized with stub properties,
+            // they will be properly computed when plan will be built.
+            preserve_properties: false,
         }
+    }
+
+    /// Set join type.
+    pub fn with_type(mut self, join_type: JoinType) -> Self {
+        self.exec.join_type = join_type;
+        self.preserve_properties = false;
+        self
     }
 
     /// Set projection from the vector.
@@ -295,70 +314,99 @@ impl HashJoinExecBuilder {
 
     /// Set projection from the shared reference.
     pub fn with_projection_ref(mut self, projection: Option<ProjectionRef>) -> Self {
-        self.projection = projection;
+        self.exec.projection = projection;
+        self.preserve_properties = false;
         self
     }
 
     /// Set optional filter.
     pub fn with_filter(mut self, filter: Option<JoinFilter>) -> Self {
-        self.filter = filter;
+        self.exec.filter = filter;
+        self
+    }
+
+    /// Set expressions to join on.
+    pub fn with_on(mut self, on: Vec<(PhysicalExprRef, PhysicalExprRef)>) -> Self {
+        self.exec.on = on;
+        self.preserve_properties = false;
         self
     }
 
     /// Set partition mode.
     pub fn with_partition_mode(mut self, mode: PartitionMode) -> Self {
-        self.partition_mode = mode;
+        self.exec.mode = mode;
+        self.preserve_properties = false;
         self
     }
 
     /// Set null equality property.
     pub fn with_null_equality(mut self, null_equality: NullEquality) -> Self {
-        self.null_equality = null_equality;
+        self.exec.null_equality = null_equality;
         self
     }
 
     /// Set null aware property.
     pub fn with_null_aware(mut self, null_aware: bool) -> Self {
-        self.null_aware = null_aware;
+        self.exec.null_aware = null_aware;
         self
     }
 
-    /// Set fetch limit.
+    /// Set fetch property.
     pub fn with_fetch(mut self, fetch: Option<usize>) -> Self {
-        self.fetch = fetch;
+        self.exec.fetch = fetch;
         self
+    }
+
+    /// Require to recompute plan properties.
+    pub fn recompute_properties(mut self) -> Self {
+        self.preserve_properties = false;
+        self
+    }
+
+    /// Replace children.
+    pub fn with_new_children(
+        mut self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Self> {
+        assert_or_internal_err!(
+            children.len() == 2,
+            "wrong number of children passed into `HashJoinExecBuilder`"
+        );
+        self.exec.right = children.swap_remove(1);
+        self.exec.left = children.swap_remove(0);
+        self.preserve_properties = false;
+        Ok(self)
+    }
+
+    /// Reset runtime state.
+    pub fn reset_state(mut self) -> Self {
+        self.exec.left_fut = Default::default();
+        self.exec.dynamic_filter = None;
+        self.exec.metrics = ExecutionPlanMetricsSet::new();
+        self
+    }
+
+    /// Build result as a dyn execution plan.
+    pub fn build_exec(self) -> Result<Arc<dyn ExecutionPlan>> {
+        self.build().map(|p| Arc::new(p) as _)
     }
 
     /// Build resulting execution plan.
     pub fn build(self) -> Result<HashJoinExec> {
         let Self {
-            left,
-            right,
-            on,
-            join_type,
-            filter,
-            projection,
-            partition_mode,
-            null_equality,
-            null_aware,
-            fetch,
+            exec,
+            preserve_properties,
         } = self;
 
-        let left_schema = left.schema();
-        let right_schema = right.schema();
-        if on.is_empty() {
-            return plan_err!("On constraints in HashJoinExec should be non-empty");
-        }
-
-        check_join_is_valid(&left_schema, &right_schema, &on)?;
-
         // Validate null_aware flag
-        if null_aware {
+        if exec.null_aware {
+            let join_type = exec.join_type();
             if !matches!(join_type, JoinType::LeftAnti) {
                 return plan_err!(
                     "null_aware can only be true for LeftAnti joins, got {join_type}"
                 );
             }
+            let on = exec.on();
             if on.len() != 1 {
                 return plan_err!(
                     "null_aware anti join only supports single column join key, got {} columns",
@@ -367,14 +415,44 @@ impl HashJoinExecBuilder {
             }
         }
 
+        if preserve_properties {
+            return Ok(exec);
+        }
+
+        let HashJoinExec {
+            left,
+            right,
+            on,
+            filter,
+            join_type,
+            left_fut,
+            random_state,
+            mode,
+            metrics,
+            projection,
+            null_equality,
+            null_aware,
+            dynamic_filter,
+            fetch,
+            // Recomputed.
+            join_schema: _,
+            column_indices: _,
+            cache: _,
+        } = exec;
+
+        let left_schema = left.schema();
+        let right_schema = right.schema();
+        if on.is_empty() {
+            return plan_err!("On constraints in HashJoinExec should be non-empty");
+        }
+
+        check_join_is_valid(&left_schema, &right_schema, &on)?;
         let (join_schema, column_indices) =
             build_join_schema(&left_schema, &right_schema, &join_type);
 
-        let random_state = HASH_JOIN_SEED;
-
         let join_schema = Arc::new(join_schema);
 
-        //  check if the projection is valid
+        // Check if the projection is valid.
         can_project(&join_schema, projection.as_deref())?;
 
         let cache = HashJoinExec::compute_properties(
@@ -383,12 +461,9 @@ impl HashJoinExecBuilder {
             &join_schema,
             join_type,
             &on,
-            partition_mode,
+            mode,
             projection.as_deref(),
         )?;
-
-        // Initialize both dynamic filter and bounds accumulator to None
-        // They will be set later if dynamic filtering is enabled
 
         Ok(HashJoinExec {
             left,
@@ -397,34 +472,49 @@ impl HashJoinExecBuilder {
             filter,
             join_type,
             join_schema,
-            left_fut: Default::default(),
+            left_fut,
             random_state,
-            mode: partition_mode,
-            metrics: ExecutionPlanMetricsSet::new(),
+            mode,
+            metrics,
             projection,
             column_indices,
             null_equality,
             null_aware,
-            cache,
-            dynamic_filter: None,
+            cache: Arc::new(cache),
+            dynamic_filter,
             fetch,
         })
+    }
+
+    fn with_dynamic_filter(mut self, filter: Option<HashJoinExecDynamicFilter>) -> Self {
+        self.exec.dynamic_filter = filter;
+        self
     }
 }
 
 impl From<&HashJoinExec> for HashJoinExecBuilder {
     fn from(exec: &HashJoinExec) -> Self {
         Self {
-            left: Arc::clone(exec.left()),
-            right: Arc::clone(exec.right()),
-            on: exec.on.clone(),
-            join_type: exec.join_type,
-            filter: exec.filter.clone(),
-            projection: exec.projection.clone(),
-            partition_mode: exec.mode,
-            null_equality: exec.null_equality,
-            null_aware: exec.null_aware,
-            fetch: exec.fetch,
+            exec: HashJoinExec {
+                left: Arc::clone(exec.left()),
+                right: Arc::clone(exec.right()),
+                on: exec.on.clone(),
+                filter: exec.filter.clone(),
+                join_type: exec.join_type,
+                join_schema: Arc::clone(&exec.join_schema),
+                left_fut: Arc::clone(&exec.left_fut),
+                random_state: exec.random_state.clone(),
+                mode: exec.mode,
+                metrics: exec.metrics.clone(),
+                projection: exec.projection.clone(),
+                column_indices: exec.column_indices.clone(),
+                null_equality: exec.null_equality,
+                null_aware: exec.null_aware,
+                cache: Arc::clone(&exec.cache),
+                dynamic_filter: exec.dynamic_filter.clone(),
+                fetch: exec.fetch,
+            },
+            preserve_properties: true,
         }
     }
 }
@@ -657,7 +747,7 @@ pub struct HashJoinExec {
     /// Flag to indicate if this is a null-aware anti join
     pub null_aware: bool,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
     /// Dynamic filter for pushing down to the probe side
     /// Set when dynamic filter pushdown is detected in handle_child_pushdown_result.
     /// HashJoinExec also needs to keep a shared bounds accumulator for coordinating updates.
@@ -704,7 +794,7 @@ impl EmbeddedProjection for HashJoinExec {
 }
 
 impl HashJoinExec {
-    /// Tries to create a new [HashJoinExec].
+    /// Tries to create a new [`HashJoinExec`].
     ///
     /// # Error
     /// This function errors when it is not possible to join the left and right sides on keys `on`.
@@ -727,6 +817,15 @@ impl HashJoinExec {
             .with_null_equality(null_equality)
             .with_null_aware(null_aware)
             .build()
+    }
+
+    /// Create a builder based on the existing [`HashJoinExec`].
+    ///
+    /// Returned builder preserves all existing fields. If a field requiring properties
+    /// recomputation is modified, this will be done automatically during the node build.
+    ///
+    pub fn builder(&self) -> HashJoinExecBuilder {
+        self.into()
     }
 
     fn create_dynamic_filter(on: &JoinOn) -> Arc<DynamicFilterPhysicalExpr> {
@@ -842,9 +941,7 @@ impl HashJoinExec {
         can_project(&self.schema(), projection.as_deref())?;
         let projection =
             combine_projections(projection.as_ref(), self.projection.as_ref())?;
-        HashJoinExecBuilder::from(self)
-            .with_projection_ref(projection)
-            .build()
+        self.builder().with_projection_ref(projection).build()
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
@@ -950,27 +1047,25 @@ impl HashJoinExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let left = self.left();
         let right = self.right();
-        let new_join = HashJoinExecBuilder::new(
-            Arc::clone(right),
-            Arc::clone(left),
-            self.on()
-                .iter()
-                .map(|(l, r)| (Arc::clone(r), Arc::clone(l)))
-                .collect(),
-            self.join_type().swap(),
-        )
-        .with_filter(self.filter().map(JoinFilter::swap))
-        .with_projection(swap_join_projection(
-            left.schema().fields().len(),
-            right.schema().fields().len(),
-            self.projection.as_deref(),
-            self.join_type(),
-        ))
-        .with_partition_mode(partition_mode)
-        .with_null_equality(self.null_equality())
-        .with_null_aware(self.null_aware)
-        .with_fetch(self.fetch)
-        .build()?;
+        let new_join = self
+            .builder()
+            .with_type(self.join_type.swap())
+            .with_new_children(vec![Arc::clone(right), Arc::clone(left)])?
+            .with_on(
+                self.on()
+                    .iter()
+                    .map(|(l, r)| (Arc::clone(r), Arc::clone(l)))
+                    .collect(),
+            )
+            .with_filter(self.filter().map(JoinFilter::swap))
+            .with_projection(swap_join_projection(
+                left.schema().fields().len(),
+                right.schema().fields().len(),
+                self.projection.as_deref(),
+                self.join_type(),
+            ))
+            .with_partition_mode(partition_mode)
+            .build()?;
         // In case of anti / semi joins or if there is embedded projection in HashJoinExec, output column order is preserved, no need to add projection again
         if matches!(
             self.join_type(),
@@ -1016,7 +1111,7 @@ impl DisplayAs for HashJoinExec {
                     "".to_string()
                 };
                 let display_null_equality =
-                    if matches!(self.null_equality(), NullEquality::NullEqualsNull) {
+                    if self.null_equality() == NullEquality::NullEqualsNull {
                         ", NullsEqual: true"
                     } else {
                         ""
@@ -1058,7 +1153,7 @@ impl DisplayAs for HashJoinExec {
 
                 writeln!(f, "on={on}")?;
 
-                if matches!(self.null_equality(), NullEquality::NullEqualsNull) {
+                if self.null_equality() == NullEquality::NullEqualsNull {
                     writeln!(f, "NullsEqual: true")?;
                 }
 
@@ -1085,7 +1180,7 @@ impl ExecutionPlan for HashJoinExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -1146,58 +1241,11 @@ impl ExecutionPlan for HashJoinExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(HashJoinExec {
-            left: Arc::clone(&children[0]),
-            right: Arc::clone(&children[1]),
-            on: self.on.clone(),
-            filter: self.filter.clone(),
-            join_type: self.join_type,
-            join_schema: Arc::clone(&self.join_schema),
-            left_fut: Arc::clone(&self.left_fut),
-            random_state: self.random_state.clone(),
-            mode: self.mode,
-            metrics: ExecutionPlanMetricsSet::new(),
-            projection: self.projection.clone(),
-            column_indices: self.column_indices.clone(),
-            null_equality: self.null_equality,
-            null_aware: self.null_aware,
-            cache: Self::compute_properties(
-                &children[0],
-                &children[1],
-                &self.join_schema,
-                self.join_type,
-                &self.on,
-                self.mode,
-                self.projection.as_deref(),
-            )?,
-            // Keep the dynamic filter, bounds accumulator will be reset
-            dynamic_filter: self.dynamic_filter.clone(),
-            fetch: self.fetch,
-        }))
+        self.builder().with_new_children(children)?.build_exec()
     }
 
     fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(HashJoinExec {
-            left: Arc::clone(&self.left),
-            right: Arc::clone(&self.right),
-            on: self.on.clone(),
-            filter: self.filter.clone(),
-            join_type: self.join_type,
-            join_schema: Arc::clone(&self.join_schema),
-            // Reset the left_fut to allow re-execution
-            left_fut: Arc::new(OnceAsync::default()),
-            random_state: self.random_state.clone(),
-            mode: self.mode,
-            metrics: ExecutionPlanMetricsSet::new(),
-            projection: self.projection.clone(),
-            column_indices: self.column_indices.clone(),
-            null_equality: self.null_equality,
-            null_aware: self.null_aware,
-            cache: self.cache.clone(),
-            // Reset dynamic filter and bounds accumulator to initial state
-            dynamic_filter: None,
-            fetch: self.fetch,
-        }))
+        self.builder().reset_state().build_exec()
     }
 
     fn execute(
@@ -1415,22 +1463,17 @@ impl ExecutionPlan for HashJoinExec {
             &schema,
             self.filter(),
         )? {
-            Ok(Some(Arc::new(
-                HashJoinExecBuilder::new(
+            self.builder()
+                .with_new_children(vec![
                     Arc::new(projected_left_child),
                     Arc::new(projected_right_child),
-                    join_on,
-                    *self.join_type(),
-                )
+                ])?
+                .with_on(join_on)
                 .with_filter(join_filter)
                 // Returned early if projection is not None
                 .with_projection(None)
-                .with_partition_mode(*self.partition_mode())
-                .with_null_equality(self.null_equality)
-                .with_null_aware(self.null_aware)
-                .with_fetch(self.fetch)
-                .build()?,
-            )))
+                .build_exec()
+                .map(Some)
         } else {
             try_embed_projection(projection, self)
         }
@@ -1545,7 +1588,7 @@ impl ExecutionPlan for HashJoinExec {
         };
 
         // Add dynamic filters in Post phase if enabled
-        if matches!(phase, FilterPushdownPhase::Post)
+        if phase == FilterPushdownPhase::Post
             && self.allow_join_dynamic_filter_pushdown(config)
         {
             // Add actual dynamic filter to right side (probe side)
@@ -1576,29 +1619,14 @@ impl ExecutionPlan for HashJoinExec {
                 Arc::downcast::<DynamicFilterPhysicalExpr>(predicate)
             {
                 // We successfully pushed down our self filter - we need to make a new node with the dynamic filter
-                let new_node = Arc::new(HashJoinExec {
-                    left: Arc::clone(&self.left),
-                    right: Arc::clone(&self.right),
-                    on: self.on.clone(),
-                    filter: self.filter.clone(),
-                    join_type: self.join_type,
-                    join_schema: Arc::clone(&self.join_schema),
-                    left_fut: Arc::clone(&self.left_fut),
-                    random_state: self.random_state.clone(),
-                    mode: self.mode,
-                    metrics: ExecutionPlanMetricsSet::new(),
-                    projection: self.projection.clone(),
-                    column_indices: self.column_indices.clone(),
-                    null_equality: self.null_equality,
-                    null_aware: self.null_aware,
-                    cache: self.cache.clone(),
-                    dynamic_filter: Some(HashJoinExecDynamicFilter {
+                let new_node = self
+                    .builder()
+                    .with_dynamic_filter(Some(HashJoinExecDynamicFilter {
                         filter: dynamic_filter,
                         build_accumulator: OnceLock::new(),
-                    }),
-                    fetch: self.fetch,
-                });
-                result = result.with_updated_node(new_node as Arc<dyn ExecutionPlan>);
+                    }))
+                    .build_exec()?;
+                result = result.with_updated_node(new_node);
             }
         }
         Ok(result)
@@ -1616,7 +1644,7 @@ impl ExecutionPlan for HashJoinExec {
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
-        HashJoinExecBuilder::from(self)
+        self.builder()
             .with_fetch(limit)
             .build()
             .ok()

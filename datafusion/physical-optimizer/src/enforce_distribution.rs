@@ -49,7 +49,7 @@ use datafusion_physical_plan::aggregates::{
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::execution_plan::EmissionType;
 use datafusion_physical_plan::joins::{
-    CrossJoinExec, HashJoinExec, HashJoinExecBuilder, PartitionMode, SortMergeJoinExec,
+    CrossJoinExec, HashJoinExec, PartitionMode, SortMergeJoinExec,
 };
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::repartition::RepartitionExec;
@@ -286,18 +286,15 @@ pub fn adjust_input_keys_ordering(
 ) -> Result<Transformed<PlanWithKeyRequirements>> {
     let plan = Arc::clone(&requirements.plan);
 
-    if let Some(HashJoinExec {
-        left,
-        right,
-        on,
-        filter,
-        join_type,
-        projection,
-        mode,
-        null_equality,
-        null_aware,
-        ..
-    }) = plan.as_any().downcast_ref::<HashJoinExec>()
+    if let Some(
+        exec @ HashJoinExec {
+            left,
+            on,
+            join_type,
+            mode,
+            ..
+        },
+    ) = plan.as_any().downcast_ref::<HashJoinExec>()
     {
         match mode {
             PartitionMode::Partitioned => {
@@ -305,20 +302,10 @@ pub fn adjust_input_keys_ordering(
                     Vec<(PhysicalExprRef, PhysicalExprRef)>,
                     Vec<SortOptions>,
                 )| {
-                    HashJoinExecBuilder::new(
-                        Arc::clone(left),
-                        Arc::clone(right),
-                        new_conditions.0,
-                        *join_type,
-                    )
-                    .with_filter(filter.clone())
-                    // TODO: although projection is not used in the join here, because projection pushdown is after enforce_distribution. Maybe we need to handle it later. Same as filter.
-                    .with_projection_ref(projection.clone())
-                    .with_partition_mode(PartitionMode::Partitioned)
-                    .with_null_equality(*null_equality)
-                    .with_null_aware(*null_aware)
-                    .build()
-                    .map(|e| Arc::new(e) as _)
+                    exec.builder()
+                        .with_partition_mode(PartitionMode::Partitioned)
+                        .with_on(new_conditions.0)
+                        .build_exec()
                 };
                 return reorder_partitioned_join_keys(
                     requirements,
@@ -498,7 +485,7 @@ pub fn reorder_aggregate_keys(
         && !physical_exprs_equal(&output_exprs, parent_required)
         && let Some(positions) = expected_expr_positions(&output_exprs, parent_required)
         && let Some(agg_exec) = agg_exec.input().as_any().downcast_ref::<AggregateExec>()
-        && matches!(agg_exec.mode(), &AggregateMode::Partial)
+        && *agg_exec.mode() == AggregateMode::Partial
     {
         let group_exprs = agg_exec.group_expr().expr();
         let new_group_exprs = positions
@@ -612,20 +599,17 @@ pub fn reorder_join_keys_to_inputs(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let plan_any = plan.as_any();
-    if let Some(HashJoinExec {
-        left,
-        right,
-        on,
-        filter,
-        join_type,
-        projection,
-        mode,
-        null_equality,
-        null_aware,
-        ..
-    }) = plan_any.downcast_ref::<HashJoinExec>()
+    if let Some(
+        exec @ HashJoinExec {
+            left,
+            right,
+            on,
+            mode,
+            ..
+        },
+    ) = plan_any.downcast_ref::<HashJoinExec>()
     {
-        if matches!(mode, PartitionMode::Partitioned) {
+        if *mode == PartitionMode::Partitioned {
             let (join_keys, positions) = reorder_current_join_keys(
                 extract_join_keys(on),
                 Some(left.output_partitioning()),
@@ -639,20 +623,11 @@ pub fn reorder_join_keys_to_inputs(
                     right_keys,
                 } = join_keys;
                 let new_join_on = new_join_conditions(&left_keys, &right_keys);
-                return Ok(Arc::new(
-                    HashJoinExecBuilder::new(
-                        Arc::clone(left),
-                        Arc::clone(right),
-                        new_join_on,
-                        *join_type,
-                    )
-                    .with_filter(filter.clone())
-                    .with_projection_ref(projection.clone())
+                return exec
+                    .builder()
                     .with_partition_mode(PartitionMode::Partitioned)
-                    .with_null_equality(*null_equality)
-                    .with_null_aware(*null_aware)
-                    .build()?,
-                ));
+                    .with_on(new_join_on)
+                    .build_exec();
             }
         }
     } else if let Some(SortMergeJoinExec {
@@ -1264,7 +1239,7 @@ pub fn ensure_distribution(
     let is_partitioned_join = plan
         .as_any()
         .downcast_ref::<HashJoinExec>()
-        .is_some_and(|join| matches!(join.mode, PartitionMode::Partitioned))
+        .is_some_and(|join| join.mode == PartitionMode::Partitioned)
         || plan.as_any().is::<SortMergeJoinExec>();
 
     let repartition_status_flags =

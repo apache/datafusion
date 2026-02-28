@@ -713,8 +713,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLDataType::Timestamp(precision, tz_info)
                 if precision.is_none() || [0, 3, 6, 9].contains(&precision.unwrap()) =>
             {
-                let tz = if matches!(tz_info, TimezoneInfo::Tz)
-                    || matches!(tz_info, TimezoneInfo::WithTimeZone)
+                let tz = if *tz_info == TimezoneInfo::Tz
+                    || *tz_info == TimezoneInfo::WithTimeZone
                 {
                     // Timestamp With Time Zone
                     // INPUT : [SQLDataType]   TimestampTz + [Config] Time Zone
@@ -735,8 +735,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
             SQLDataType::Date => Ok(DataType::Date32),
             SQLDataType::Time(None, tz_info) => {
-                if matches!(tz_info, TimezoneInfo::None)
-                    || matches!(tz_info, TimezoneInfo::WithoutTimeZone)
+                if *tz_info == TimezoneInfo::None
+                    || *tz_info == TimezoneInfo::WithoutTimeZone
                 {
                     Ok(DataType::Time64(TimeUnit::Nanosecond))
                 } else {

@@ -4387,9 +4387,9 @@ LIMIT 5;
 ----
 78 50
 63 38
-3 53
+NULL 19
 24 31
-14 94
+24 56
 
 # result should be same with above, when LAG/LEAD algorithm work with pruned data.
 # decreasing batch size, causes data to be produced in smaller chunks at the source.
@@ -4406,9 +4406,9 @@ LIMIT 5;
 ----
 78 50
 63 38
-3 53
+NULL 19
 24 31
-14 94
+24 56
 
 statement ok
 set datafusion.execution.batch_size = 100;

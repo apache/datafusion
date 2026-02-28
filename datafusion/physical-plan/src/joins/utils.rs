@@ -739,7 +739,7 @@ fn max_distinct_count(
             {
                 let range_dc = range_dc as usize;
                 // Note that the `unwrap` calls in the below statement are safe.
-                return if matches!(result, Precision::Absent)
+                return if result == Precision::Absent
                     || &range_dc < result.get_value().unwrap()
                 {
                     if stats.min_value.is_exact().unwrap()

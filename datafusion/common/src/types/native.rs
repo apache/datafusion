@@ -499,7 +499,7 @@ impl NativeType {
 
     #[inline]
     pub fn is_date(&self) -> bool {
-        matches!(self, NativeType::Date)
+        *self == NativeType::Date
     }
 
     #[inline]
@@ -524,7 +524,7 @@ impl NativeType {
 
     #[inline]
     pub fn is_null(&self) -> bool {
-        matches!(self, NativeType::Null)
+        *self == NativeType::Null
     }
 
     #[inline]
