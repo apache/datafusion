@@ -212,6 +212,9 @@ where
 pub(crate) trait FlatIndex: Copy + Default + Send + Sync + 'static {
     /// Convert this value to a zero-based index: `self - min` as usize.
     fn index_from(self, min: Self) -> usize;
+
+    /// Reconstruct the value from a zero-based index and the minimum value.
+    fn from_index(index: usize, min: Self) -> Self;
 }
 
 macro_rules! impl_flat_index_signed {
@@ -220,6 +223,11 @@ macro_rules! impl_flat_index_signed {
             #[inline]
             fn index_from(self, min: Self) -> usize {
                 self.wrapping_sub(min) as $unsigned as usize
+            }
+
+            #[inline]
+            fn from_index(index: usize, min: Self) -> Self {
+                min.wrapping_add(index as $unsigned as $signed)
             }
         }
     };
@@ -231,6 +239,11 @@ macro_rules! impl_flat_index_unsigned {
             #[inline]
             fn index_from(self, min: Self) -> usize {
                 (self.wrapping_sub(min)) as usize
+            }
+
+            #[inline]
+            fn from_index(index: usize, min: Self) -> Self {
+                min.wrapping_add(index as $unsigned)
             }
         }
     };
