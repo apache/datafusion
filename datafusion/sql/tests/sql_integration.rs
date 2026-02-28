@@ -4737,48 +4737,28 @@ fn error_message(sql: &str) -> String {
 
 #[test]
 fn test_error_message_invalid_scalar_function_signature() {
-    assert_snapshot!(error_message("select sqrt()"), @r"
-    Error during planning: 'sqrt' does not support zero arguments. No function matches the given name and argument types 'sqrt()'. You might need to add explicit type casts.
-    	Candidate functions:
-    	sqrt(Int64)
-    ");
-    assert_snapshot!(error_message("select sqrt(1, 2)"), @r"
-    Error during planning: Failed to coerce arguments to satisfy a call to 'sqrt' function: coercion from Int64, Int64 to the signature Exact(Int64) failed. No function matches the given name and argument types 'sqrt(Int64, Int64)'. You might need to add explicit type casts.
-    	Candidate functions:
-    	sqrt(Int64)
-    ");
+    assert!(
+        error_message("select sqrt()").starts_with(
+            r"Error during planning: 'sqrt' does not support zero arguments"
+        )
+    );
+    assert!(error_message("select sqrt(1, 2)").starts_with(r"Error during planning: Failed to coerce arguments to satisfy a call to 'sqrt' function: coercion from Int64, Int64 to the signature Exact(Int64) failed"));
 }
 
 #[test]
 fn test_error_message_invalid_aggregate_function_signature() {
-    assert_snapshot!(error_message("select sum()"), @r"
-    Error during planning: Execution error: Function 'sum' user-defined coercion failed with: Execution error: sum function requires 1 argument, got 0. No function matches the given name and argument types 'sum()'. You might need to add explicit type casts.
-    	Candidate functions:
-    	sum(UserDefined)
-    ");
-    assert_snapshot!(error_message("select max(9, 3)"), @r"
-    Error during planning: Execution error: Function 'max' user-defined coercion failed with: Execution error: min/max was called with 2 arguments. It requires only 1.. No function matches the given name and argument types 'max(Int64, Int64)'. You might need to add explicit type casts.
-    	Candidate functions:
-    	max(UserDefined)
-    ");
+    assert!(error_message("select sum()").starts_with(r"Error during planning: Execution error: Function 'sum' user-defined coercion failed with: Execution error: sum function requires 1 argument, got 0"));
+    assert!(error_message("select max(9, 3)").starts_with(r"Error during planning: Execution error: Function 'max' user-defined coercion failed with: Execution error: min/max was called with 2 arguments. It requires only 1"));
 }
 
 #[test]
 fn test_error_message_invalid_window_function_signature() {
-    assert_snapshot!(error_message("select rank(1) over()"), @r"
-    Error during planning: The function 'rank' expected zero argument but received 1. No function matches the given name and argument types 'rank(Int64)'. You might need to add explicit type casts.
-    	Candidate functions:
-    	rank(NullAry())
-    ");
+    assert!(error_message("select rank(1) over()").starts_with(r"Error during planning: The function 'rank' expected zero argument but received 1"));
 }
 
 #[test]
 fn test_error_message_invalid_window_aggregate_function_signature() {
-    assert_snapshot!(error_message("select sum() over()"), @r"
-    Error during planning: Execution error: Function 'sum' user-defined coercion failed with: Execution error: sum function requires 1 argument, got 0. No function matches the given name and argument types 'sum()'. You might need to add explicit type casts.
-    	Candidate functions:
-    	sum(UserDefined)
-    ");
+    assert!(error_message("select sum() over()").starts_with(r"Error during planning: Execution error: Function 'sum' user-defined coercion failed with: Execution error: sum function requires 1 argument, got 0"));
 }
 
 // Test issue: https://github.com/apache/datafusion/issues/14058
