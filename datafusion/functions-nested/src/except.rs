@@ -19,8 +19,11 @@
 
 use crate::utils::{check_datatypes, make_scalar_function};
 use arrow::array::new_null_array;
-use arrow::array::{Array, ArrayRef, GenericListArray, OffsetSizeTrait, cast::AsArray};
+use arrow::array::{
+    Array, ArrayRef, GenericListArray, OffsetSizeTrait, UInt32Array, cast::AsArray,
+};
 use arrow::buffer::{NullBuffer, OffsetBuffer};
+use arrow::compute::take;
 use arrow::datatypes::{DataType, FieldRef};
 use arrow::row::{RowConverter, SortField};
 use datafusion_common::utils::{ListCoercion, take_function_args};
@@ -179,7 +182,7 @@ fn general_except<OffsetSize: OffsetSizeTrait>(
     let mut offsets = Vec::<OffsetSize>::with_capacity(l.len() + 1);
     offsets.push(OffsetSize::usize_as(0));
 
-    let mut rows = Vec::with_capacity(l_values.num_rows());
+    let mut indices = Vec::with_capacity(l_values.num_rows());
     let mut dedup = HashSet::new();
 
     let nulls = NullBuffer::union(l.nulls(), r.nulls());
@@ -193,7 +196,7 @@ fn general_except<OffsetSize: OffsetSizeTrait>(
             .as_ref()
             .is_some_and(|nulls| nulls.is_null(list_index))
         {
-            offsets.push(OffsetSize::usize_as(rows.len()));
+            offsets.push(OffsetSize::usize_as(indices.len()));
             continue;
         }
 
@@ -204,22 +207,25 @@ fn general_except<OffsetSize: OffsetSizeTrait>(
         for element_index in l_start.as_usize()..l_end.as_usize() {
             let left_row = l_values.row(element_index);
             if dedup.insert(left_row) {
-                rows.push(left_row);
+                indices.push(element_index as u32);
             }
         }
 
-        offsets.push(OffsetSize::usize_as(rows.len()));
+        offsets.push(OffsetSize::usize_as(indices.len()));
         dedup.clear();
     }
 
-    if let Some(values) = converter.convert_rows(rows)?.first() {
-        Ok(GenericListArray::<OffsetSize>::new(
-            field.to_owned(),
-            OffsetBuffer::new(offsets.into()),
-            values.to_owned(),
-            nulls,
-        ))
+    // Gather distinct left-side values by index
+    let values = if indices.is_empty() {
+        arrow::array::new_empty_array(&l.value_type())
     } else {
-        internal_err!("array_except failed to convert rows")
-    }
+        take(l.values().as_ref(), &UInt32Array::from(indices), None)?
+    };
+
+    Ok(GenericListArray::<OffsetSize>::new(
+        field.to_owned(),
+        OffsetBuffer::new(offsets.into()),
+        values,
+        nulls,
+    ))
 }
