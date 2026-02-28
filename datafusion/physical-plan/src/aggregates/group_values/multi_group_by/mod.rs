@@ -891,9 +891,9 @@ macro_rules! instantiate_primitive {
     };
 }
 
-/// Instantiates an adaptive [`PrimitiveGroupValueBuilderAdaptive`] that
-/// observes the actual data range at runtime and uses flat (u32-indexed)
-/// storage when the range is small, falling back to native storage otherwise.
+/// Like `instantiate_primitive!` but creates a `PrimitiveGroupValueBuilderAdaptive`
+/// that starts in flat (u32-indexed) mode and migrates to native if the data
+/// range exceeds u32. No statistics required.
 macro_rules! instantiate_primitive_adaptive {
     ($v:expr, $nullable:expr, $t:ty, $data_type:ident) => {
         if $nullable {
@@ -967,7 +967,7 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
                     }
                     &DataType::Time32(t) => match t {
                         TimeUnit::Second => {
-                            instantiate_primitive!(
+                            instantiate_primitive_adaptive!(
                                 v,
                                 nullable,
                                 Time32SecondType,
@@ -975,7 +975,7 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
                             )
                         }
                         TimeUnit::Millisecond => {
-                            instantiate_primitive!(
+                            instantiate_primitive_adaptive!(
                                 v,
                                 nullable,
                                 Time32MillisecondType,
@@ -986,7 +986,7 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
                     },
                     &DataType::Time64(t) => match t {
                         TimeUnit::Microsecond => {
-                            instantiate_primitive!(
+                            instantiate_primitive_adaptive!(
                                 v,
                                 nullable,
                                 Time64MicrosecondType,
@@ -994,7 +994,7 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
                             )
                         }
                         TimeUnit::Nanosecond => {
-                            instantiate_primitive!(
+                            instantiate_primitive_adaptive!(
                                 v,
                                 nullable,
                                 Time64NanosecondType,
@@ -1005,7 +1005,7 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
                     },
                     &DataType::Timestamp(t, _) => match t {
                         TimeUnit::Second => {
-                            instantiate_primitive!(
+                            instantiate_primitive_adaptive!(
                                 v,
                                 nullable,
                                 TimestampSecondType,
@@ -1013,7 +1013,7 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
                             )
                         }
                         TimeUnit::Millisecond => {
-                            instantiate_primitive!(
+                            instantiate_primitive_adaptive!(
                                 v,
                                 nullable,
                                 TimestampMillisecondType,
@@ -1021,7 +1021,7 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
                             )
                         }
                         TimeUnit::Microsecond => {
-                            instantiate_primitive!(
+                            instantiate_primitive_adaptive!(
                                 v,
                                 nullable,
                                 TimestampMicrosecondType,
@@ -1029,7 +1029,7 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
                             )
                         }
                         TimeUnit::Nanosecond => {
-                            instantiate_primitive!(
+                            instantiate_primitive_adaptive!(
                                 v,
                                 nullable,
                                 TimestampNanosecondType,

@@ -3453,10 +3453,7 @@ mod tests {
         // Add a batch with duplicates of earlier keys
         batches.push(create_record_batch(
             &schema,
-            (
-                vec![0, 1, 2, 3, 4],
-                vec![100.0, 100.0, 100.0, 100.0, 100.0],
-            ),
+            (vec![0, 1, 2, 3, 4], vec![100.0, 100.0, 100.0, 100.0, 100.0]),
         )?);
         let plan: Arc<dyn ExecutionPlan> =
             TestMemoryExec::try_new_exec(&[batches], Arc::clone(&schema), None)?;
