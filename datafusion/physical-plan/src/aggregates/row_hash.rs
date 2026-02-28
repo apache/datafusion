@@ -38,6 +38,7 @@ use crate::{RecordBatchStream, SendableRecordBatchStream};
 
 use arrow::array::*;
 use arrow::datatypes::SchemaRef;
+use datafusion_common::stats::{ColumnStatistics, Precision};
 use datafusion_common::{
     DataFusionError, Result, assert_eq_or_internal_err, assert_or_internal_err,
     internal_err,
@@ -586,7 +587,40 @@ impl GroupedHashAggregateStream {
             _ => OutOfMemoryMode::ReportError,
         };
 
-        let group_values = new_group_values(group_schema, &group_ordering)?;
+        // Derive column statistics for group-by columns from the input plan's
+        // statistics. This enables flat (direct-indexed) group values when a
+        // single integer group column has a small value range or low fill rate.
+        let (group_column_stats, num_rows) =
+            if let Ok(input_stats) = agg.input.partition_statistics(None) {
+                let col_stats = agg_group_by
+                    .expr()
+                    .iter()
+                    .map(|(expr, _name)| {
+                        if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+                            input_stats
+                                .column_statistics
+                                .get(col.index())
+                                .cloned()
+                                .unwrap_or_default()
+                        } else {
+                            ColumnStatistics::new_unknown()
+                        }
+                    })
+                    .collect();
+                let num_rows = match input_stats.num_rows {
+                    Precision::Exact(n) => Some(n),
+                    _ => None,
+                };
+                (col_stats, num_rows)
+            } else {
+                (vec![], None)
+            };
+        let group_values = new_group_values(
+            group_schema,
+            &group_ordering,
+            &group_column_stats,
+            num_rows,
+        )?;
         let reservation = MemoryConsumer::new(name)
             // We interpret 'can spill' as 'can handle memory back pressure'.
             // This value needs to be set to true for the default memory pool implementations
