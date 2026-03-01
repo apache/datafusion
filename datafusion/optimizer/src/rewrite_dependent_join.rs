@@ -29,15 +29,15 @@ use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
 use datafusion_common::{
-    internal_datafusion_err, internal_err, not_impl_err, Column, HashMap, Result,
+    Column, HashMap, Result, internal_datafusion_err, internal_err, not_impl_err,
 };
 use datafusion_expr::{
-    col, lit, Aggregate, CorrelatedColumnInfo, Expr, Filter, Join, LogicalPlan,
-    LogicalPlanBuilder, Projection, SubqueryAlias,
+    Aggregate, CorrelatedColumnInfo, Expr, Filter, Join, LogicalPlan, LogicalPlanBuilder,
+    Projection, SubqueryAlias, col, lit,
 };
 
-use indexmap::map::Entry;
 use indexmap::IndexMap;
+use indexmap::map::Entry;
 use itertools::Itertools;
 
 pub struct DependentJoinRewriter {
@@ -53,11 +53,7 @@ pub struct DependentJoinRewriter {
     all_outer_ref_columns: IndexMap<Column, Vec<ColumnAccess>>,
     alias_generator: Arc<AliasGenerator>,
     // this is used to decorrelation optimizor later
-    // to construct delim scan node
-    // table providers can be
-    // subquery alias of a really complex logical plan
-    // that can even be a correlated subquery (unsupported for now)
-    // or an alias of a uncorrelated subquery
+    // to construct delim scan node.
     pub domain_columns_provider_nodes: IndexMap<usize, LogicalPlan>,
 }
 
@@ -65,6 +61,7 @@ pub struct DependentJoinRewriter {
 struct StackItem {
     node_id: usize,
     // is set if the node is an alias node
+    // TODO: remove me
     alias: Option<SubqueryAlias>,
 }
 #[derive(Debug, Hash, PartialEq, PartialOrd, Eq, Clone)]
@@ -78,7 +75,7 @@ struct ColumnAccess {
     subquery_depth: usize,
     // the reference to the delim scan node map
     // this is usedful to construct delim scan operator later
-    delim_scan_node_id: usize,
+    provider_node_id: usize,
 }
 
 impl DependentJoinRewriter {
@@ -158,7 +155,7 @@ impl DependentJoinRewriter {
                     col: ac.col.clone(),
                     field: ac.field.clone(),
                     depth: ac.subquery_depth,
-                    delim_scan_node_id: ac.delim_scan_node_id,
+                    delim_scan_node_id: ac.provider_node_id,
                 })
                 .unique()
                 .collect();
@@ -310,7 +307,8 @@ impl DependentJoinRewriter {
             [first, second] => (first, second),
             _ => {
                 return internal_err!(
-                "transform group and aggr exprs does not return vector of 2 Vec<Expr>")
+                    "transform group and aggr exprs does not return vector of 2 Vec<Expr>"
+                );
             }
         };
 
@@ -346,7 +344,7 @@ impl DependentJoinRewriter {
                 col: ac.col.clone(),
                 field: ac.field.clone(),
                 depth: ac.subquery_depth,
-                delim_scan_node_id: ac.delim_scan_node_id,
+                delim_scan_node_id: ac.provider_node_id,
             })
             .unique()
             .collect();
@@ -502,9 +500,14 @@ impl DependentJoinRewriter {
     // because the column providers are visited after column-accessor
     // (function visit_with_subqueries always visit the subquery before visiting the other children)
     // we can always infer the LCA inside this function, by getting the deepest common parent
-    fn conclude_lowest_dependent_join_node_if_any(&mut self, col: &Column,delim_scan_node_id: usize) -> Result<()> {
-        if let Some(accesses) = self.all_outer_ref_columns.get(col) {
-            for access in accesses.iter() {
+    fn check_matching_column_provider(
+        &mut self,
+        col: &Column,
+        provider_node_id: usize,
+    ) -> Result<bool> {
+        let mut is_table_provider = false;
+        if let Some(accesses) = self.all_outer_ref_columns.get_mut(col) {
+            accesses.retain(|access| {
                 let cur_stack = self.stack.clone();
 
                 if let Some((dependent_join_node_id, subquery_node_id)) =
@@ -525,12 +528,19 @@ impl DependentJoinRewriter {
                         stack: access.stack.clone(),
                         field: access.field.clone(),
                         subquery_depth: access.subquery_depth,
-                        delim_scan_node_id,
+                        provider_node_id,
                     });
+                    is_table_provider = true;
+                    return true;
                 }
+                return false;
+            });
+            // if all the accesses are resolved, remove the column from the map
+            if accesses.len() == 0 {
+                self.all_outer_ref_columns.remove(col);
             }
         }
-        Ok(())
+        Ok(is_table_provider)
     }
 
     fn mark_outer_column_access(
@@ -550,7 +560,7 @@ impl DependentJoinRewriter {
                 col: col.clone(),
                 field: field.clone(),
                 subquery_depth: self.subquery_depth,
-                delim_scan_node_id: 0,
+                provider_node_id: 0,
             });
     }
 
@@ -713,7 +723,21 @@ impl TreeNodeRewriter for DependentJoinRewriter {
         // for each node, find which column it is accessing, which column it is providing
         // Set of columns current node access
         let mut subquery_types = VecDeque::new();
-        // let mut stop = false;
+
+        // If this current node is the provider of any accessed columns,
+        // try annotate more metadata.
+        // TODO: what if the current node is transformed by some optimizer later
+        // or even decorrelated? then node.clone() will only store the snapshot
+        // we need some form of in place rewrite here
+        if node
+            .schema()
+            .columns()
+            .iter()
+            .try_for_each(|col| self.check_matching_column_provider(col, new_id))?
+        {
+            self.domain_columns_provider_nodes
+                .insert(new_id, node.clone());
+        };
         match &node {
             LogicalPlan::Filter(f) => {
                 collect_subquery_types(
@@ -889,26 +913,6 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                         Ok(TreeNodeRecursion::Continue)
                     })?;
                 }
-            }
-            // TODO: maybe there are more logical plan that provides columns
-            // aside from TableScan
-            LogicalPlan::TableScan(tbl_scan) => {
-                self.domain_columns_provider_nodes.insert(new_id,node.clone());
-                tbl_scan
-                    .projected_schema
-                    .columns()
-                    .iter()
-                    .try_for_each(|col| {
-                        self.conclude_lowest_dependent_join_node_if_any(col,new_id)
-                    })?;
-            }
-            // Similar to TableScan, this node may provide column names which
-            // is referenced inside some subqueries
-            LogicalPlan::SubqueryAlias(alias) => {
-                self.domain_columns_provider_nodes.insert(new_id,node.clone());
-                alias.schema.columns().iter().try_for_each(|col| {
-                    self.conclude_lowest_dependent_join_node_if_any(col,new_id)
-                })?;
             }
             _ => {}
         };
@@ -1168,11 +1172,11 @@ mod tests {
 
     use crate::test::{test_table_scan_with_name, test_table_with_columns};
     use arrow::datatypes::{DataType, TimeUnit};
-    use datafusion_common::{alias::AliasGenerator, Result, Spans};
+    use datafusion_common::{Result, Spans, alias::AliasGenerator};
     use datafusion_expr::{
+        Expr, JoinType, LogicalPlan, LogicalPlanBuilder, Operator, SortExpr, Subquery,
         and, binary_expr, exists, expr::InSubquery, expr_fn::col, in_subquery, lit,
-        not_exists, out_ref_col, scalar_subquery, Expr, JoinType, LogicalPlan,
-        LogicalPlanBuilder, Operator, SortExpr, Subquery,
+        not_exists, out_ref_col, scalar_subquery,
     };
     use datafusion_functions_aggregate::{count::count, sum::sum};
     use insta::assert_snapshot;
@@ -1716,7 +1720,7 @@ mod tests {
                         ),
                 )?
                 .project(vec![
-                    out_ref_col(DataType::UInt32, "outer_table.b").alias("outer_b_alias")
+                    out_ref_col(DataType::UInt32, "outer_table.b").alias("outer_b_alias"),
                 ])?
                 .build()?,
         );
@@ -1837,7 +1841,7 @@ mod tests {
                         ),
                 )?
                 .project(vec![
-                    out_ref_col(DataType::UInt32, "outer_table.b").alias("outer_b_alias")
+                    out_ref_col(DataType::UInt32, "outer_table.b").alias("outer_b_alias"),
                 ])?
                 .build()?,
         );
@@ -2175,8 +2179,10 @@ mod tests {
             .alias("t1")?
             .aggregate(
                 vec![col("t1.a")], // GROUP BY a
-                vec![sum(scalar_subquery(scalar_sub)) // SUM((SELECT b ...))
-                    .alias("sum_scalar")],
+                vec![
+                    sum(scalar_subquery(scalar_sub)) // SUM((SELECT b ...))
+                        .alias("sum_scalar"),
+                ],
             )?
             .build()?;
 

@@ -2006,6 +2006,9 @@ impl LogicalPlan {
         impl Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
                 match self.0 {
+                    LogicalPlan::DelimGet(DelimGet { .. }) => {
+                        write!(f, "DelimGet:")
+                    }
                     LogicalPlan::EmptyRelation(EmptyRelation {
                         produce_one_row,
                         schema: _,

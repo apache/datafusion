@@ -1001,12 +1001,13 @@ impl LogicalPlanBuilder {
         join_keys: (Vec<impl Into<Column>>, Vec<impl Into<Column>>),
         filter: Option<Expr>,
     ) -> Result<Self> {
-        self.join_detailed_with_options(
+        self.join_detailed_with_options_and_join_kind(
             right,
             join_type,
             join_keys,
             filter,
             NullEquality::NullEqualsNothing,
+            false,
             JoinKind::DelimJoin,
         )
     }
@@ -1115,7 +1116,6 @@ impl LogicalPlanBuilder {
         filter: Option<Expr>,
         null_equality: NullEquality,
         null_aware: bool,
-        join_kind: JoinKind,
     ) -> Result<Self> {
         self.join_detailed_with_options_and_join_kind(
             right,
@@ -1254,7 +1254,7 @@ impl LogicalPlanBuilder {
             join_constraint: JoinConstraint::On,
             schema: DFSchemaRef::new(join_schema),
             null_equality,
-            join_kind: JoinKind::ComparisonJoin,
+            join_kind,
             null_aware,
         })))
     }

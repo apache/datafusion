@@ -27,7 +27,7 @@ use datafusion_expr::logical_plan::{
     Filter, Join, JoinConstraint, JoinType, LogicalPlan, Projection,
 };
 use datafusion_expr::utils::{can_hash, find_valid_equijoin_key_pair};
-use datafusion_expr::{and, build_join_schema, ExprSchemable, Operator};
+use datafusion_expr::{ExprSchemable, JoinKind, Operator, and, build_join_schema};
 
 #[derive(Default, Debug)]
 pub struct EliminateCrossJoin;
