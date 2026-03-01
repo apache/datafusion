@@ -73,7 +73,7 @@ impl ScalarUDFImpl for SparkMakeValidUtf8 {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         internal_err!("return_field_from_args should be used instead")
     }
 
