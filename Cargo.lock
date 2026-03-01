@@ -1756,6 +1756,7 @@ dependencies = [
  "datafusion-session",
  "datafusion-sql",
  "doc-comment",
+ "encoding_rs",
  "env_logger",
  "flate2",
  "futures",
