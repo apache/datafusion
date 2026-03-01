@@ -20,7 +20,9 @@
 use std::any::Any;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
-use std::sync::{Arc, Mutex};
+use std::pin::Pin;
+use std::sync::{Arc, Mutex, Weak};
+use std::task::{Context, Poll};
 
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_plan::execution_plan::{
@@ -37,15 +39,18 @@ use itertools::Itertools;
 
 use crate::file_scan_config::FileScanConfig;
 use crate::file_stream::WorkQueue;
+use arrow::datatypes::SchemaRef;
+use arrow::record_batch::RecordBatch;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Constraints, Result, Statistics};
-use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_plan::SortOrderPushdownResult;
 use datafusion_physical_plan::filter_pushdown::{
     ChildPushdownResult, FilterPushdownPhase, FilterPushdownPropagation, PushedDown,
 };
+use futures::Stream;
 
 /// A source of data, typically a list of files or memory
 ///
@@ -127,26 +132,6 @@ pub trait DataSource: Send + Sync + Debug {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream>;
 
-    /// Inject a shared morsel queue for morsel-driven execution.
-    ///
-    /// **Internal use only.** This is called by [`DataSourceExec::execute`] on
-    /// [`FileScanConfig`] instances to distribute work across partitions. Custom
-    /// [`DataSource`] implementations do not need to override this method — it is
-    /// never called on non-[`FileScanConfig`] sources because [`DataSourceExec`]
-    /// only activates morsel-driven scheduling after a successful
-    /// `downcast_ref::<FileScanConfig>()`.
-    ///
-    /// The default panics to catch accidental misuse.
-    #[doc(hidden)]
-    fn with_shared_morsel_queue(
-        &self,
-        _queue: Option<Arc<WorkQueue>>,
-    ) -> Arc<dyn DataSource> {
-        panic!(
-            "with_shared_morsel_queue called on a DataSource that does not support it. \
-             This is an internal method only called on FileScanConfig by DataSourceExec."
-        )
-    }
     fn as_any(&self) -> &dyn Any;
     /// Format this source for display in explain plans
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result;
@@ -253,15 +238,10 @@ pub struct DataSourceExec {
     data_source: Arc<dyn DataSource>,
     /// Cached plan properties such as sort order
     cache: Arc<PlanProperties>,
-    /// Shared morsel queue for current execution lifecycle.
-    morsel_state: Arc<Mutex<MorselState>>,
-}
-
-#[derive(Debug, Default)]
-struct MorselState {
-    queue: Option<Arc<WorkQueue>>,
-    streams_opened: usize,
-    expected_streams: usize,
+    /// Weak reference to the current morsel queue. When all
+    /// [`DataSourceExecStream`]s from an execution cycle are dropped the
+    /// strong count reaches zero and the next cycle creates a fresh queue.
+    morsel_queue: Arc<Mutex<Weak<WorkQueue>>>,
 }
 
 impl DisplayAs for DataSourceExec {
@@ -331,67 +311,49 @@ impl ExecutionPlan for DataSourceExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let shared_morsel_queue = if let Some(config) =
-            self.data_source.as_any().downcast_ref::<FileScanConfig>()
-        {
-            if config.morsel_driven {
-                let mut state = self.morsel_state.lock().unwrap();
+        let morsel_config = self
+            .data_source
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .filter(|c| c.morsel_driven);
 
-                // Start a new cycle once all expected partition streams for the
-                // previous cycle have been opened.
-                //
-                // Limitation: this heuristic assumes every execution opens all
-                // `file_groups.len()` partitions. If a caller opens only a subset
-                // (e.g. partition 0 of 2 and then abandons the rest), the state
-                // remains stuck and the next execution reuses the stale queue.
-                // In normal DataFusion query execution all partitions are opened,
-                // so this is acceptable in practice.
-                if state.expected_streams > 0
-                    && state.streams_opened >= state.expected_streams
-                {
-                    state.queue = None;
-                    state.streams_opened = 0;
-                    state.expected_streams = 0;
+        let (stream, queue) = if let Some(config) = morsel_config {
+            let queue = {
+                let mut guard = self.morsel_queue.lock().unwrap();
+                match guard.upgrade() {
+                    Some(q) => q,
+                    None => {
+                        let all_files = config
+                            .file_groups
+                            .iter()
+                            .flat_map(|g| g.files().iter().cloned())
+                            .collect();
+                        let q = Arc::new(WorkQueue::new(all_files));
+                        *guard = Arc::downgrade(&q);
+                        q
+                    }
                 }
-
-                if state.queue.is_none() {
-                    let all_files = config
-                        .file_groups
-                        .iter()
-                        .flat_map(|g| g.files().iter().cloned())
-                        .collect();
-                    state.queue = Some(Arc::new(WorkQueue::new(all_files)));
-                    state.expected_streams = config.file_groups.len();
-                }
-
-                state.streams_opened += 1;
-                state.queue.as_ref().cloned()
-            } else {
-                None
-            }
+            };
+            let stream =
+                config.open_with_queue(partition, &context, Some(Arc::clone(&queue)))?;
+            (stream, Some(queue))
         } else {
-            None
+            (
+                self.data_source.open(partition, Arc::clone(&context))?,
+                None,
+            )
         };
 
-        let data_source = if shared_morsel_queue.is_some() {
-            self.data_source
-                .with_shared_morsel_queue(shared_morsel_queue)
-        } else {
-            Arc::clone(&self.data_source)
-        };
-
-        let stream = data_source.open(partition, Arc::clone(&context))?;
         let batch_size = context.session_config().batch_size();
         log::debug!(
             "Batch splitting enabled for partition {partition}: batch_size={batch_size}"
         );
         let metrics = self.data_source.metrics();
         let split_metrics = SplitMetrics::new(&metrics, partition);
-        Ok(Box::pin(BatchSplitStream::new(
-            stream,
-            batch_size,
-            split_metrics,
-        )))
+        Ok(Box::pin(DataSourceExecStream {
+            inner: Box::pin(BatchSplitStream::new(stream, batch_size, split_metrics)),
+            _shared_queue: queue,
+        }))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -409,7 +371,7 @@ impl ExecutionPlan for DataSourceExec {
         Some(Arc::new(Self {
             data_source,
             cache,
-            morsel_state: Arc::new(Mutex::new(MorselState::default())),
+            morsel_queue: Arc::new(Mutex::new(Weak::new())),
         }))
     }
 
@@ -454,9 +416,7 @@ impl ExecutionPlan for DataSourceExec {
                 // Re-compute properties since we have new filters which will impact equivalence info
                 new_node.cache =
                     Arc::new(Self::compute_properties(&new_node.data_source));
-                // Reset morsel state so this new plan node has its own independent
-                // queue lifecycle and does not share state with the original node.
-                new_node.morsel_state = Arc::new(Mutex::new(MorselState::default()));
+                new_node.morsel_queue = Arc::new(Mutex::new(Weak::new()));
 
                 Ok(FilterPushdownPropagation {
                     filters: res.filters,
@@ -496,6 +456,30 @@ impl ExecutionPlan for DataSourceExec {
     }
 }
 
+struct DataSourceExecStream {
+    inner: SendableRecordBatchStream,
+    /// Holds a strong reference to the morsel queue so it stays alive
+    /// as long as any partition stream exists.
+    _shared_queue: Option<Arc<WorkQueue>>,
+}
+
+impl Stream for DataSourceExecStream {
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        self.inner.as_mut().poll_next(cx)
+    }
+}
+
+impl RecordBatchStream for DataSourceExecStream {
+    fn schema(&self) -> SchemaRef {
+        self.inner.schema()
+    }
+}
+
 impl DataSourceExec {
     pub fn from_data_source(data_source: impl DataSource + 'static) -> Arc<Self> {
         Arc::new(Self::new(Arc::new(data_source)))
@@ -507,7 +491,7 @@ impl DataSourceExec {
         Self {
             data_source,
             cache: Arc::new(cache),
-            morsel_state: Arc::new(Mutex::new(MorselState::default())),
+            morsel_queue: Arc::new(Mutex::new(Weak::new())),
         }
     }
 
@@ -519,7 +503,7 @@ impl DataSourceExec {
     pub fn with_data_source(mut self, data_source: Arc<dyn DataSource>) -> Self {
         self.cache = Arc::new(Self::compute_properties(&data_source));
         self.data_source = data_source;
-        self.morsel_state = Arc::new(Mutex::new(MorselState::default()));
+        self.morsel_queue = Arc::new(Mutex::new(Weak::new()));
         self
     }
 

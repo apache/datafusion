@@ -211,8 +211,6 @@ pub struct FileScanConfig {
     /// When true, use morsel-driven execution to avoid data skew.
     /// This means all partitions share a single pool of work.
     pub morsel_driven: bool,
-    /// Shared morsel queue, set via [`DataSource::with_shared_morsel_queue`].
-    shared_morsel_queue: Option<Arc<WorkQueue>>,
 }
 
 /// A builder for [`FileScanConfig`]'s.
@@ -583,7 +581,6 @@ impl FileScanConfigBuilder {
             statistics,
             partitioned_by_file_group,
             morsel_driven,
-            shared_morsel_queue: None,
         }
     }
 }
@@ -608,11 +605,13 @@ impl From<FileScanConfig> for FileScanConfigBuilder {
     }
 }
 
-impl DataSource for FileScanConfig {
-    fn open(
+impl FileScanConfig {
+    /// Open a partition stream with an optional shared morsel queue.
+    pub(crate) fn open_with_queue(
         &self,
         partition: usize,
-        context: Arc<TaskContext>,
+        context: &Arc<TaskContext>,
+        queue: Option<Arc<WorkQueue>>,
     ) -> Result<SendableRecordBatchStream> {
         let object_store = context.runtime_env().object_store(&self.object_store_url)?;
         let batch_size = self
@@ -620,26 +619,20 @@ impl DataSource for FileScanConfig {
             .unwrap_or_else(|| context.session_config().batch_size());
 
         let source = self.file_source.with_batch_size(batch_size);
-
         let opener = source.create_file_opener(object_store, self, partition)?;
 
-        let stream = FileStream::new(
-            self,
-            partition,
-            opener,
-            source.metrics(),
-            self.shared_morsel_queue.clone(),
-        )?;
+        let stream = FileStream::new(self, partition, opener, source.metrics(), queue)?;
         Ok(Box::pin(cooperative(stream)))
     }
+}
 
-    fn with_shared_morsel_queue(
+impl DataSource for FileScanConfig {
+    fn open(
         &self,
-        queue: Option<Arc<WorkQueue>>,
-    ) -> Arc<dyn DataSource> {
-        let mut config = self.clone();
-        config.shared_morsel_queue = queue;
-        Arc::new(config)
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        self.open_with_queue(partition, &context, None)
     }
 
     fn as_any(&self) -> &dyn Any {
