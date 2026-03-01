@@ -354,6 +354,13 @@ impl ExternalSorter {
                 self.sort_and_spill_in_mem_batches().await?;
             }
 
+            // Transfer the pre-reserved merge memory to the streaming merge
+            // using `take()` instead of `new_empty()`. This ensures the merge
+            // stream starts with `sort_spill_reservation_bytes` already
+            // allocated, preventing starvation when concurrent sort partitions
+            // compete for pool memory. `take()` moves the bytes atomically
+            // without releasing them back to the pool, so other partitions
+            // cannot race to consume the freed memory.
             StreamingMergeBuilder::new()
                 .with_sorted_spill_files(std::mem::take(&mut self.finished_spill_files))
                 .with_spill_manager(self.spill_manager.clone())
@@ -362,7 +369,7 @@ impl ExternalSorter {
                 .with_metrics(self.metrics.baseline.clone())
                 .with_batch_size(self.batch_size)
                 .with_fetch(None)
-                .with_reservation(self.merge_reservation.new_empty())
+                .with_reservation(self.merge_reservation.take())
                 .build()
         } else {
             self.in_mem_sort_stream(self.metrics.baseline.clone())
@@ -2698,6 +2705,111 @@ mod tests {
 
         // The reserved memory for the sliced batch should be less than that of the full batch
         assert!(reserved > sliced_reserved);
+
+        Ok(())
+    }
+
+    /// Test that concurrent sort partitions sharing a tight memory pool
+    /// don't starve during the merge phase.
+    ///
+    /// This reproduces the starvation scenario where:
+    /// 1. Multiple ExternalSorter instances share a single GreedyMemoryPool
+    /// 2. Each reserves `sort_spill_reservation_bytes` for its merge phase
+    /// 3. After spilling, the merge must proceed using the pre-reserved bytes
+    ///    without additional pool allocation
+    ///
+    /// Without the fix (using `take()` + smart tracking), the merge's
+    /// `new_empty()` reservation starts at 0 bytes and the pre-reserved bytes
+    /// sit unused in ExternalSorter's merge_reservation. When other partitions
+    /// consume the freed memory, the merge starves.
+    ///
+    /// With the fix, the pre-reserved bytes are atomically transferred to the
+    /// merge stream and used for spill file buffer reservations, preventing
+    /// starvation.
+    #[tokio::test]
+    async fn test_sort_merge_no_starvation_with_concurrent_partitions() -> Result<()> {
+        use futures::TryStreamExt;
+
+        let sort_spill_reservation_bytes: usize = 10 * 1024; // 10 KB per partition
+        let num_partitions: usize = 4;
+
+        // Pool: each partition needs sort_spill_reservation_bytes for its merge,
+        // plus a small amount for data accumulation before spilling.
+        // Total: 4 * 10KB + 8KB = 48KB -- very tight.
+        let memory_limit =
+            sort_spill_reservation_bytes * num_partitions + 8 * 1024;
+
+        let session_config = SessionConfig::new()
+            .with_batch_size(128)
+            .with_sort_spill_reservation_bytes(sort_spill_reservation_bytes);
+
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(memory_limit, 1.0)
+            .build_arc()?;
+
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(session_config)
+                .with_runtime(runtime),
+        );
+
+        // Create multiple batches per partition to force spilling.
+        // Each batch: 100 rows of Int32 ≈ 400 bytes.
+        // 20 batches per partition ≈ 8KB per partition.
+        // With only ~2KB of pool headroom per partition, this forces spilling.
+        let batches_per_partition = 20;
+        let rows_per_batch: i32 = 100;
+
+        let all_partitions: Vec<Vec<RecordBatch>> = (0..num_partitions)
+            .map(|_| {
+                (0..batches_per_partition)
+                    .map(|_| make_partition(rows_per_batch))
+                    .collect()
+            })
+            .collect();
+
+        let schema = all_partitions[0][0].schema();
+        let input = TestMemoryExec::try_new_exec(&all_partitions, schema.clone(), None)?;
+
+        let sort_exec = Arc::new(
+            SortExec::new(
+                [PhysicalSortExpr {
+                    expr: col("i", &schema)?,
+                    options: SortOptions::default(),
+                }]
+                .into(),
+                input,
+            )
+            .with_preserve_partitioning(true),
+        );
+
+        // Execute all partitions concurrently -- they share the same pool.
+        let mut tasks = Vec::new();
+        for partition in 0..num_partitions {
+            let sort = Arc::clone(&sort_exec);
+            let ctx = Arc::clone(&task_ctx);
+            tasks.push(tokio::spawn(async move {
+                let stream = sort.execute(partition, ctx)?;
+                let batches: Vec<RecordBatch> = stream.try_collect().await?;
+                let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+                Ok::<usize, DataFusionError>(total_rows)
+            }));
+        }
+
+        let mut total_rows = 0;
+        for task in tasks {
+            total_rows += task.await.unwrap()?;
+        }
+
+        let expected_rows =
+            num_partitions * batches_per_partition * (rows_per_batch as usize);
+        assert_eq!(total_rows, expected_rows);
+
+        assert_eq!(
+            task_ctx.runtime_env().memory_pool.reserved(),
+            0,
+            "All memory should be returned to the pool after sort completes"
+        );
 
         Ok(())
     }
