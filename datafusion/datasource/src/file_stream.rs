@@ -224,6 +224,7 @@ impl FileStream {
                                 // so these row groups get processed next,
                                 // preserving I/O locality within the file.
                                 queue.push_morsels(morsels);
+                                self.file_stream_metrics.time_opening.stop();
                                 self.state = FileStreamState::Idle;
                             }
                         }
