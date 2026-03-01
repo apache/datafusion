@@ -61,9 +61,7 @@ async fn search_accounts(
     filter: Option<Expr>,
     expected_result_length: usize,
 ) -> Result<()> {
-    let config = SessionConfig::new()
-        .set_bool("datafusion.execution.parquet.allow_morsel_driven", false);
-    let ctx = SessionContext::new_with_config(config);
+    let ctx = SessionContext::new();
     // create logical plan composed of a single TableScan
     let logical_plan = LogicalPlanBuilder::scan_with_filters(
         "accounts",
