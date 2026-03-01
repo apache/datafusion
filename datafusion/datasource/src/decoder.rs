@@ -174,7 +174,7 @@ pub fn deserialize_stream<'a>(
     futures::stream::poll_fn(move |cx| {
         loop {
             match ready!(input.poll_next_unpin(cx)).transpose()? {
-                Some(b) => _ = deserializer.digest(b),
+                Some(b) => deserializer.digest(b),
                 None => deserializer.finish(),
             };
 
@@ -192,7 +192,7 @@ pub fn deserialize_stream<'a>(
 /// and deserializes them using the provided decoder.
 pub fn deserialize_reader<'a>(
     mut reader: impl BufRead + Send + 'a,
-    mut decoder: impl Decoder + Send + 'a,
+    mut decoder: impl Decoder + 'a,
 ) -> Box<dyn Iterator<Item = Result<RecordBatch, ArrowError>> + Send + 'a> {
     let mut read = move || {
         loop {

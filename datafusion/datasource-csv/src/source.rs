@@ -185,10 +185,6 @@ impl CsvSource {
 }
 
 impl CsvSource {
-    fn open<R: Read>(&self, reader: R) -> Result<csv::Reader<R>> {
-        Ok(self.builder().build(reader)?)
-    }
-
     fn builder(&self) -> csv::ReaderBuilder {
         let mut builder =
             csv::ReaderBuilder::new(Arc::clone(self.table_schema.file_schema()))
