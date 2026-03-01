@@ -409,7 +409,7 @@ fn get_test_data() -> TestData {
         .expect("tempfile creation");
 
     let props = WriterProperties::builder()
-        .set_max_row_group_size(row_per_group)
+        .set_max_row_group_row_count(Some(row_per_group))
         .build();
 
     let batches = create_data_batch(scenario);
