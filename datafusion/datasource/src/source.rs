@@ -358,7 +358,7 @@ impl ExecutionPlan for DataSourceExec {
                     let all_files = config
                         .file_groups
                         .iter()
-                        .flat_map(|g| g.files().to_vec())
+                        .flat_map(|g| g.files().iter().cloned())
                         .collect();
                     state.queue = Some(Arc::new(WorkQueue::new(all_files)));
                     state.expected_streams = config.file_groups.len();
@@ -454,6 +454,9 @@ impl ExecutionPlan for DataSourceExec {
                 // Re-compute properties since we have new filters which will impact equivalence info
                 new_node.cache =
                     Arc::new(Self::compute_properties(&new_node.data_source));
+                // Reset morsel state so this new plan node has its own independent
+                // queue lifecycle and does not share state with the original node.
+                new_node.morsel_state = Arc::new(Mutex::new(MorselState::default()));
 
                 Ok(FilterPushdownPropagation {
                     filters: res.filters,

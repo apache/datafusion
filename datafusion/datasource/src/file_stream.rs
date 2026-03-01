@@ -62,8 +62,6 @@ pub struct FileStream {
     file_iter: VecDeque<PartitionedFile>,
     /// Shared work queue for morsel-driven execution.
     shared_queue: Option<Arc<WorkQueue>>,
-    /// Whether to use morsel-driven execution.
-    morsel_driven: bool,
     /// The stream schema (file schema including partition columns and after
     /// projection).
     projected_schema: SchemaRef,
@@ -105,7 +103,6 @@ impl FileStream {
         Ok(Self {
             file_iter,
             shared_queue,
-            morsel_driven: config.morsel_driven,
             projected_schema,
             remain: config.limit,
             file_opener,
@@ -136,7 +133,7 @@ impl FileStream {
     /// async morselization are left in the queue for the normal Idle →
     /// Morselizing path).
     fn start_next_file(&mut self) -> Option<Result<FileOpenFuture>> {
-        if self.morsel_driven {
+        if self.shared_queue.is_some() {
             // In morsel-driven don't "prefetch"
             return None;
         }
@@ -150,8 +147,7 @@ impl FileStream {
                 FileStreamState::Idle => {
                     self.file_stream_metrics.time_opening.start();
 
-                    if self.morsel_driven {
-                        let queue = self.shared_queue.as_ref().expect("shared queue");
+                    if let Some(queue) = self.shared_queue.as_ref() {
                         match queue.pull() {
                             WorkStatus::Work(part_file) => {
                                 if self.file_opener.is_leaf_morsel(&part_file) {
@@ -160,7 +156,7 @@ impl FileStream {
                                     // increment that pull() did since we won't be
                                     // morselizing.
                                     queue.stop_morselizing();
-                                    match self.file_opener.open(*part_file) {
+                                    match self.file_opener.open(part_file) {
                                         Ok(future) => {
                                             self.state = FileStreamState::Open { future }
                                         }
@@ -175,7 +171,7 @@ impl FileStream {
                                         queue: Arc::clone(queue),
                                     });
                                     self.state = FileStreamState::Morselizing {
-                                        future: self.file_opener.morselize(*part_file),
+                                        future: self.file_opener.morselize(part_file),
                                     };
                                 }
                             }
@@ -216,11 +212,16 @@ impl FileStream {
                             // Take the guard to decrement morselizing_count
                             let _guard = self.morsel_guard.take();
 
-                            if morsels.len() > 1 {
+                            if morsels.is_empty() {
+                                self.file_stream_metrics.time_opening.stop();
+                                // No morsels returned, skip this file
+                                self.state = FileStreamState::Idle;
+                            } else {
                                 // Keep the first morsel for this worker; push the rest
                                 // back so other workers can pick them up immediately.
                                 // This avoids a round-trip through Idle just to re-claim
                                 // one of the morsels we just created.
+                                // push_many is a no-op when given an empty iterator (len == 1).
                                 let mut iter = morsels.into_iter();
                                 let first = iter.next().unwrap();
                                 queue.push_many(iter.collect());
@@ -236,23 +237,6 @@ impl FileStream {
                                         return Poll::Ready(Some(Err(e)));
                                     }
                                 }
-                            } else if morsels.len() == 1 {
-                                // No further expansion possible. Proceed to open.
-                                let morsel = morsels.into_iter().next().unwrap();
-                                match self.file_opener.open(morsel) {
-                                    Ok(future) => {
-                                        self.state = FileStreamState::Open { future }
-                                    }
-                                    Err(e) => {
-                                        self.file_stream_metrics.time_opening.stop();
-                                        self.state = FileStreamState::Error;
-                                        return Poll::Ready(Some(Err(e)));
-                                    }
-                                }
-                            } else {
-                                self.file_stream_metrics.time_opening.stop();
-                                // No morsels returned, skip this file
-                                self.state = FileStreamState::Idle;
                             }
                         }
                         Err(e) => {
@@ -360,7 +344,7 @@ impl FileStream {
                                         }
                                     }
                                     None => {
-                                        if self.morsel_driven {
+                                        if self.shared_queue.is_some() {
                                             self.state = FileStreamState::Idle;
                                         } else {
                                             return Poll::Ready(None);
@@ -395,7 +379,7 @@ impl FileStream {
                                     }
                                 }
                                 None => {
-                                    if self.morsel_driven {
+                                    if self.shared_queue.is_some() {
                                         self.state = FileStreamState::Idle;
                                     } else {
                                         return Poll::Ready(None);
@@ -437,7 +421,7 @@ impl RecordBatchStream for FileStream {
 #[derive(Debug)]
 pub enum WorkStatus {
     /// A morsel is available
-    Work(Box<PartitionedFile>),
+    Work(PartitionedFile),
     /// No morsel available now, but others are morselizing
     Wait,
     /// No more work available
@@ -471,7 +455,7 @@ impl WorkQueue {
             // Relaxed: the increment is done by the same task that will later call
             // stop_morselizing(), so program order ensures the decrement sees it.
             self.morselizing_count.fetch_add(1, Ordering::Relaxed);
-            WorkStatus::Work(Box::new(file))
+            WorkStatus::Work(file)
         } else if self.morselizing_count.load(Ordering::Acquire) > 0 {
             // Acquire: stop_morselizing() uses AcqRel (a Release write) without
             // holding the queue mutex, so we need Acquire here to synchronize with

@@ -245,17 +245,11 @@ impl RunQueryResult {
         batches
             .iter()
             .map(|b| {
-                let schema = b.schema();
                 let indices: Vec<usize> = cols
                     .iter()
-                    .filter_map(|c| schema.index_of(c).ok())
+                    .filter_map(|c| b.schema().index_of(c).ok())
                     .collect();
-                let columns: Vec<_> =
-                    indices.iter().map(|&i| Arc::clone(b.column(i))).collect();
-                let fields: Vec<_> =
-                    indices.iter().map(|&i| schema.field(i).clone()).collect();
-                let new_schema = Arc::new(Schema::new(fields));
-                RecordBatch::try_new(new_schema, columns).unwrap()
+                b.project(&indices).unwrap()
             })
             .collect()
     }
