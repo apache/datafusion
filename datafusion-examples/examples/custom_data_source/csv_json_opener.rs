@@ -80,12 +80,8 @@ async fn csv_opener() -> Result<()> {
             .create_file_opener(object_store, &scan_config, 0)?;
 
     let mut result = vec![];
-    let mut stream = FileStream::new(
-        &scan_config,
-        0,
-        opener,
-        &ExecutionPlanMetricsSet::new(),
-    )?;
+    let mut stream =
+        FileStream::new(&scan_config, 0, opener, &ExecutionPlanMetricsSet::new())?;
     while let Some(batch) = stream.next().await.transpose()? {
         result.push(batch);
     }

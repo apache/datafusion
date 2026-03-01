@@ -21,7 +21,7 @@ use std::any::Any;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use datafusion_physical_expr::projection::ProjectionExprs;
@@ -238,10 +238,6 @@ pub struct DataSourceExec {
     data_source: Arc<dyn DataSource>,
     /// Cached plan properties such as sort order
     cache: Arc<PlanProperties>,
-    /// Shared morsel queue and remaining partition count for the current
-    /// execution cycle. A fresh queue is created once all expected
-    /// partitions have been opened (remaining reaches 0).
-    morsel_queue: Arc<Mutex<Option<(Arc<WorkQueue>, usize)>>>,
 }
 
 impl DisplayAs for DataSourceExec {
@@ -318,26 +314,15 @@ impl ExecutionPlan for DataSourceExec {
             .filter(|c| c.morsel_driven);
 
         let (stream, queue) = if let Some(config) = morsel_config {
-            let queue = {
-                let mut guard = self.morsel_queue.lock().unwrap();
-                match guard.as_mut() {
-                    Some((q, remaining)) if *remaining > 0 => {
-                        *remaining -= 1;
-                        Arc::clone(q)
-                    }
-                    _ => {
-                        let all_files = config
-                            .file_groups
-                            .iter()
-                            .flat_map(|g| g.files().iter().cloned())
-                            .collect();
-                        let q = Arc::new(WorkQueue::new(all_files));
-                        let remaining = config.file_groups.len().saturating_sub(1);
-                        *guard = Some((Arc::clone(&q), remaining));
-                        q
-                    }
-                }
-            };
+            let key = Arc::as_ptr(&self.data_source) as *const () as usize;
+            let queue = context.get_or_insert_shared_state(key, || {
+                let all_files = config
+                    .file_groups
+                    .iter()
+                    .flat_map(|g| g.files().iter().cloned())
+                    .collect();
+                WorkQueue::new(all_files)
+            });
             let stream =
                 config.open_with_queue(partition, &context, Some(Arc::clone(&queue)))?;
             (stream, Some(queue))
@@ -372,11 +357,7 @@ impl ExecutionPlan for DataSourceExec {
         let data_source = self.data_source.with_fetch(limit)?;
         let cache = Arc::clone(&self.cache);
 
-        Some(Arc::new(Self {
-            data_source,
-            cache,
-            morsel_queue: Arc::new(Mutex::new(None)),
-        }))
+        Some(Arc::new(Self { data_source, cache }))
     }
 
     fn fetch(&self) -> Option<usize> {
@@ -420,7 +401,6 @@ impl ExecutionPlan for DataSourceExec {
                 // Re-compute properties since we have new filters which will impact equivalence info
                 new_node.cache =
                     Arc::new(Self::compute_properties(&new_node.data_source));
-                new_node.morsel_queue = Arc::new(Mutex::new(None));
 
                 Ok(FilterPushdownPropagation {
                     filters: res.filters,
@@ -495,7 +475,6 @@ impl DataSourceExec {
         Self {
             data_source,
             cache: Arc::new(cache),
-            morsel_queue: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -507,7 +486,6 @@ impl DataSourceExec {
     pub fn with_data_source(mut self, data_source: Arc<dyn DataSource>) -> Self {
         self.cache = Arc::new(Self::compute_properties(&data_source));
         self.data_source = data_source;
-        self.morsel_queue = Arc::new(Mutex::new(None));
         self
     }
 

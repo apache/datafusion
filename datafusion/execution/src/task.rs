@@ -22,8 +22,24 @@ use crate::{
 use datafusion_common::{Result, internal_datafusion_err, plan_datafusion_err};
 use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
+use std::any::Any;
 use std::collections::HashSet;
+use std::fmt;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{collections::HashMap, sync::Arc};
+
+static NEXT_QUERY_ID: AtomicUsize = AtomicUsize::new(0);
+
+/// Type-erased shared state map used by execution plan nodes to share
+/// state across partitions within the same query execution.
+struct SharedState(Mutex<HashMap<usize, Arc<dyn Any + Send + Sync>>>);
+
+impl fmt::Debug for SharedState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SharedState")
+    }
+}
 
 /// Task Execution Context
 ///
@@ -38,6 +54,9 @@ pub struct TaskContext {
     session_id: String,
     /// Optional Task Identify
     task_id: Option<String>,
+    /// Unique identifier for this query execution, used to detect
+    /// execution cycle boundaries in morsel-driven scheduling.
+    query_id: usize,
     /// Session configuration
     session_config: SessionConfig,
     /// Scalar functions associated with this task context
@@ -48,6 +67,10 @@ pub struct TaskContext {
     window_functions: HashMap<String, Arc<WindowUDF>>,
     /// Runtime environment associated with this task context
     runtime: Arc<RuntimeEnv>,
+    /// Shared state for execution plan nodes within this query execution.
+    /// Keyed by a caller-chosen identifier (e.g. pointer address of a plan
+    /// node's `Arc`).
+    shared_state: SharedState,
 }
 
 impl Default for TaskContext {
@@ -58,11 +81,13 @@ impl Default for TaskContext {
         Self {
             session_id: "DEFAULT".to_string(),
             task_id: None,
+            query_id: NEXT_QUERY_ID.fetch_add(1, Ordering::Relaxed),
             session_config: SessionConfig::new(),
             scalar_functions: HashMap::new(),
             aggregate_functions: HashMap::new(),
             window_functions: HashMap::new(),
             runtime,
+            shared_state: SharedState(Mutex::new(HashMap::new())),
         }
     }
 }
@@ -85,11 +110,13 @@ impl TaskContext {
         Self {
             task_id,
             session_id,
+            query_id: NEXT_QUERY_ID.fetch_add(1, Ordering::Relaxed),
             session_config,
             scalar_functions,
             aggregate_functions,
             window_functions,
             runtime,
+            shared_state: SharedState(Mutex::new(HashMap::new())),
         }
     }
 
@@ -106,6 +133,15 @@ impl TaskContext {
     /// Return the `task_id` of this [TaskContext]
     pub fn task_id(&self) -> Option<String> {
         self.task_id.clone()
+    }
+
+    /// Return the `query_id` of this [TaskContext].
+    ///
+    /// Each [`TaskContext`] is assigned a unique query ID at construction.
+    /// All partitions of the same query execution share the same
+    /// [`TaskContext`] (via `Arc`), so the ID is stable within one cycle.
+    pub fn query_id(&self) -> usize {
+        self.query_id
     }
 
     /// Return the [`MemoryPool`] associated with this [TaskContext]
@@ -134,6 +170,27 @@ impl TaskContext {
     pub fn with_session_config(mut self, session_config: SessionConfig) -> Self {
         self.session_config = session_config;
         self
+    }
+
+    /// Get or create shared state for a given key.
+    ///
+    /// Execution plan nodes use this to share state (e.g. work queues)
+    /// across partitions within the same query execution. The key is
+    /// typically derived from a stable pointer (e.g. `Arc::as_ptr`).
+    pub fn get_or_insert_shared_state<T: Any + Send + Sync>(
+        &self,
+        key: usize,
+        create: impl FnOnce() -> T,
+    ) -> Arc<T> {
+        let mut map = self.shared_state.0.lock().unwrap();
+        if let Some(existing) = map.get(&key) {
+            if let Ok(typed) = Arc::clone(existing).downcast::<T>() {
+                return typed;
+            }
+        }
+        let value = Arc::new(create());
+        map.insert(key, Arc::clone(&value) as Arc<dyn Any + Send + Sync>);
+        value
     }
 
     /// Update the [`RuntimeEnv`]
