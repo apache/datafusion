@@ -223,13 +223,12 @@ impl FileStream {
                                 self.state = FileStreamState::Idle;
                             } else {
                                 // Keep the first morsel for this worker; push the rest
-                                // back so other workers can pick them up immediately.
-                                // This avoids a round-trip through Idle just to re-claim
-                                // one of the morsels we just created.
-                                // push_many is a no-op when given an empty iterator (len == 1).
+                                // to the front of the queue so the same (or nearby)
+                                // worker picks them up next, preserving I/O locality
+                                // for row groups from the same file.
                                 let mut iter = morsels.into_iter();
                                 let first = iter.next().unwrap();
-                                queue.push_many(iter.collect());
+                                queue.push_front_many(iter.collect());
                                 // Don't stop time_opening here — it will be stopped
                                 // naturally when we transition Open → Scan.
                                 match self.file_opener.open(first) {
@@ -479,14 +478,20 @@ impl WorkQueue {
         !queue.is_empty() || self.morselizing_count.load(Ordering::Acquire) == 0
     }
 
-    /// Push many files back to the queue.
+    /// Push morsels to the front of the queue, preserving their order.
     ///
-    /// This is used when a file is expanded into multiple morsels.
-    pub fn push_many(&self, files: Vec<PartitionedFile>) {
+    /// Morsels from the same file are kept together at the front so that
+    /// the next worker to pull gets row groups from the same file,
+    /// improving I/O locality (page-cache stays warm for that file).
+    pub fn push_front_many(&self, files: Vec<PartitionedFile>) {
         if files.is_empty() {
             return;
         }
-        self.queue.lock().unwrap().extend(files);
+        let n = files.len();
+        let mut queue = self.queue.lock().unwrap();
+        queue.extend(files);
+        queue.rotate_right(n);
+        drop(queue);
         self.notify.notify_waiters();
     }
 
@@ -494,7 +499,7 @@ impl WorkQueue {
     /// count reaches zero, since that is the point at which they may need to
     /// re-evaluate whether all work is done. When count is still > 0, any new
     /// morsels pushed to the queue already triggered a notification via
-    /// `push_many`, so no additional wakeup is needed here.
+    /// `push_front_many`, so no additional wakeup is needed here.
     pub fn stop_morselizing(&self) {
         let prev = self.morselizing_count.fetch_sub(1, Ordering::AcqRel);
         if prev == 1 {
