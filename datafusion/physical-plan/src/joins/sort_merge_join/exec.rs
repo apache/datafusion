@@ -39,7 +39,7 @@ use crate::projection::{
 };
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
-    PlanProperties, SendableRecordBatchStream, Statistics,
+    PlanProperties, SendableRecordBatchStream, Statistics, check_if_same_properties,
 };
 
 use arrow::compute::SortOptions;
@@ -127,7 +127,7 @@ pub struct SortMergeJoinExec {
     /// Defines the null equality for the join.
     pub null_equality: NullEquality,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl SortMergeJoinExec {
@@ -198,7 +198,7 @@ impl SortMergeJoinExec {
             right_sort_exprs,
             sort_options,
             null_equality,
-            cache,
+            cache: Arc::new(cache),
         })
     }
 
@@ -340,6 +340,20 @@ impl SortMergeJoinExec {
             reorder_output_after_swap(Arc::new(new_join), &left.schema(), &right.schema())
         }
     }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        let left = children.swap_remove(0);
+        let right = children.swap_remove(0);
+        Self {
+            left,
+            right,
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(self)
+        }
+    }
 }
 
 impl DisplayAs for SortMergeJoinExec {
@@ -353,7 +367,7 @@ impl DisplayAs for SortMergeJoinExec {
                     .collect::<Vec<String>>()
                     .join(", ");
                 let display_null_equality =
-                    if matches!(self.null_equality(), NullEquality::NullEqualsNull) {
+                    if self.null_equality() == NullEquality::NullEqualsNull {
                         ", NullsEqual: true"
                     } else {
                         ""
@@ -386,7 +400,7 @@ impl DisplayAs for SortMergeJoinExec {
                 }
                 writeln!(f, "on={on}")?;
 
-                if matches!(self.null_equality(), NullEquality::NullEqualsNull) {
+                if self.null_equality() == NullEquality::NullEqualsNull {
                     writeln!(f, "NullsEqual: true")?;
                 }
 
@@ -405,7 +419,7 @@ impl ExecutionPlan for SortMergeJoinExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -440,6 +454,7 @@ impl ExecutionPlan for SortMergeJoinExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        check_if_same_properties!(self, children);
         match &children[..] {
             [left, right] => Ok(Arc::new(SortMergeJoinExec::try_new(
                 Arc::clone(left),

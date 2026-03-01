@@ -17,13 +17,6 @@
 
 //! Simple iterator over batches for use in testing
 
-use std::{
-    any::Any,
-    pin::Pin,
-    sync::{Arc, Weak},
-    task::{Context, Poll},
-};
-
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
     RecordBatchStream, SendableRecordBatchStream, Statistics, common,
@@ -32,6 +25,13 @@ use crate::{
 use crate::{
     execution_plan::EmissionType,
     stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter},
+};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::{
+    any::Any,
+    pin::Pin,
+    sync::{Arc, Weak},
+    task::{Context, Poll},
 };
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -125,7 +125,7 @@ pub struct MockExec {
     /// if true (the default), sends data using a separate task to ensure the
     /// batches are not available without this stream yielding first
     use_task: bool,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl MockExec {
@@ -142,7 +142,7 @@ impl MockExec {
             data,
             schema,
             use_task: true,
-            cache,
+            cache: Arc::new(cache),
         }
     }
 
@@ -192,7 +192,7 @@ impl ExecutionPlan for MockExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -294,29 +294,91 @@ pub struct BarrierExec {
     schema: SchemaRef,
 
     /// all streams wait on this barrier to produce
-    barrier: Arc<Barrier>,
-    cache: PlanProperties,
+    start_data_barrier: Option<Arc<Barrier>>,
+
+    /// the stream wait for this to return Poll::Ready(None)
+    finish_barrier: Option<Arc<(Barrier, AtomicUsize)>>,
+
+    cache: Arc<PlanProperties>,
+
+    log: bool,
 }
 
 impl BarrierExec {
     /// Create a new exec with some number of partitions.
     pub fn new(data: Vec<Vec<RecordBatch>>, schema: SchemaRef) -> Self {
         // wait for all streams and the input
-        let barrier = Arc::new(Barrier::new(data.len() + 1));
+        let barrier = Some(Arc::new(Barrier::new(data.len() + 1)));
         let cache = Self::compute_properties(Arc::clone(&schema), &data);
         Self {
             data,
             schema,
-            barrier,
-            cache,
+            start_data_barrier: barrier,
+            cache: Arc::new(cache),
+            finish_barrier: None,
+            log: true,
         }
+    }
+
+    pub fn with_log(mut self, log: bool) -> Self {
+        self.log = log;
+        self
+    }
+
+    pub fn without_start_barrier(mut self) -> Self {
+        self.start_data_barrier = None;
+        self
+    }
+
+    pub fn with_finish_barrier(mut self) -> Self {
+        let barrier = Arc::new((
+            // wait for all streams and the input
+            Barrier::new(self.data.len() + 1),
+            AtomicUsize::new(0),
+        ));
+
+        self.finish_barrier = Some(barrier);
+        self
     }
 
     /// wait until all the input streams and this function is ready
     pub async fn wait(&self) {
-        println!("BarrierExec::wait waiting on barrier");
-        self.barrier.wait().await;
-        println!("BarrierExec::wait done waiting");
+        let barrier = &self
+            .start_data_barrier
+            .as_ref()
+            .expect("Must only be called when having a start barrier");
+        if self.log {
+            println!("BarrierExec::wait waiting on barrier");
+        }
+        barrier.wait().await;
+        if self.log {
+            println!("BarrierExec::wait done waiting");
+        }
+    }
+
+    pub async fn wait_finish(&self) {
+        let (barrier, _) = &self
+            .finish_barrier
+            .as_deref()
+            .expect("Must only be called when having a finish barrier");
+
+        if self.log {
+            println!("BarrierExec::wait_finish waiting on barrier");
+        }
+        barrier.wait().await;
+        if self.log {
+            println!("BarrierExec::wait_finish done waiting");
+        }
+    }
+
+    /// Return true if the finish barrier has been reached in all partitions
+    pub fn is_finish_barrier_reached(&self) -> bool {
+        let (_, reached_finish) = self
+            .finish_barrier
+            .as_deref()
+            .expect("Must only be called when having finish barrier");
+
+        reached_finish.load(Ordering::Relaxed) == self.data.len()
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
@@ -360,7 +422,7 @@ impl ExecutionPlan for BarrierExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -387,16 +449,31 @@ impl ExecutionPlan for BarrierExec {
 
         // task simply sends data in order after barrier is reached
         let data = self.data[partition].clone();
-        let b = Arc::clone(&self.barrier);
+        let start_barrier = self.start_data_barrier.as_ref().map(Arc::clone);
+        let finish_barrier = self.finish_barrier.as_ref().map(Arc::clone);
+        let log = self.log;
         let tx = builder.tx();
         builder.spawn(async move {
-            println!("Partition {partition} waiting on barrier");
-            b.wait().await;
+            if let Some(barrier) = start_barrier {
+                if log {
+                    println!("Partition {partition} waiting on barrier");
+                }
+                barrier.wait().await;
+            }
             for batch in data {
-                println!("Partition {partition} sending batch");
+                if log {
+                    println!("Partition {partition} sending batch");
+                }
                 if let Err(e) = tx.send(Ok(batch)).await {
                     println!("ERROR batch via barrier stream stream: {e}");
                 }
+            }
+            if let Some((barrier, reached_finish)) = finish_barrier.as_deref() {
+                if log {
+                    println!("Partition {partition} waiting on finish barrier");
+                }
+                reached_finish.fetch_add(1, Ordering::Relaxed);
+                barrier.wait().await;
             }
 
             Ok(())
@@ -421,7 +498,7 @@ impl ExecutionPlan for BarrierExec {
 /// A mock execution plan that errors on a call to execute
 #[derive(Debug)]
 pub struct ErrorExec {
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl Default for ErrorExec {
@@ -438,7 +515,9 @@ impl ErrorExec {
             true,
         )]));
         let cache = Self::compute_properties(schema);
-        Self { cache }
+        Self {
+            cache: Arc::new(cache),
+        }
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
@@ -479,7 +558,7 @@ impl ExecutionPlan for ErrorExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -509,7 +588,7 @@ impl ExecutionPlan for ErrorExec {
 pub struct StatisticsExec {
     stats: Statistics,
     schema: Arc<Schema>,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 impl StatisticsExec {
     pub fn new(stats: Statistics, schema: Schema) -> Self {
@@ -522,7 +601,7 @@ impl StatisticsExec {
         Self {
             stats,
             schema: Arc::new(schema),
-            cache,
+            cache: Arc::new(cache),
         }
     }
 
@@ -569,7 +648,7 @@ impl ExecutionPlan for StatisticsExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -611,7 +690,7 @@ pub struct BlockingExec {
 
     /// Ref-counting helper to check if the plan and the produced stream are still in memory.
     refs: Arc<()>,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl BlockingExec {
@@ -621,7 +700,7 @@ impl BlockingExec {
         Self {
             schema,
             refs: Default::default(),
-            cache,
+            cache: Arc::new(cache),
         }
     }
 
@@ -672,7 +751,7 @@ impl ExecutionPlan for BlockingExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -754,7 +833,7 @@ pub struct PanicExec {
     /// Number of output partitions. Each partition will produce this
     /// many empty output record batches prior to panicking
     batches_until_panics: Vec<usize>,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl PanicExec {
@@ -766,7 +845,7 @@ impl PanicExec {
         Self {
             schema,
             batches_until_panics,
-            cache,
+            cache: Arc::new(cache),
         }
     }
 
@@ -818,7 +897,7 @@ impl ExecutionPlan for PanicExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 

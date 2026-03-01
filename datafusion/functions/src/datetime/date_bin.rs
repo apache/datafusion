@@ -295,7 +295,15 @@ impl ScalarUDFImpl for DateBinFunc {
 const NANOS_PER_MICRO: i64 = 1_000;
 const NANOS_PER_MILLI: i64 = 1_000_000;
 const NANOS_PER_SEC: i64 = NANOSECONDS;
-
+/// Function type for binning timestamps into intervals
+///
+/// Arguments:
+/// * `stride` - Interval width (nanoseconds for time-based, months for month-based)
+/// * `source` - Timestamp to bin (nanoseconds since epoch)
+/// * `origin` - Origin timestamp (nanoseconds since epoch)
+///
+/// Returns: Binned timestamp in nanoseconds, or error if out of range
+type BinFunction = fn(i64, i64, i64) -> Result<i64>;
 enum Interval {
     Nanoseconds(i64),
     Months(i64),
@@ -310,7 +318,7 @@ impl Interval {
     /// `source` is the timestamp being binned
     ///
     /// `origin`  is the time, in nanoseconds, where windows are measured from
-    fn bin_fn(&self) -> (i64, fn(i64, i64, i64) -> i64) {
+    fn bin_fn(&self) -> (i64, BinFunction) {
         match self {
             Interval::Nanoseconds(nanos) => (*nanos, date_bin_nanos_interval),
             Interval::Months(months) => (*months, date_bin_months_interval),
@@ -319,13 +327,13 @@ impl Interval {
 }
 
 // return time in nanoseconds that the source timestamp falls into based on the stride and origin
-fn date_bin_nanos_interval(stride_nanos: i64, source: i64, origin: i64) -> i64 {
+fn date_bin_nanos_interval(stride_nanos: i64, source: i64, origin: i64) -> Result<i64> {
     let time_diff = source - origin;
 
     // distance from origin to bin
     let time_delta = compute_distance(time_diff, stride_nanos);
 
-    origin + time_delta
+    Ok(origin + time_delta)
 }
 
 // distance from origin to bin
@@ -341,10 +349,10 @@ fn compute_distance(time_diff: i64, stride: i64) -> i64 {
 }
 
 // return time in nanoseconds that the source timestamp falls into based on the stride and origin
-fn date_bin_months_interval(stride_months: i64, source: i64, origin: i64) -> i64 {
+fn date_bin_months_interval(stride_months: i64, source: i64, origin: i64) -> Result<i64> {
     // convert source and origin to DateTime<Utc>
-    let source_date = to_utc_date_time(source);
-    let origin_date = to_utc_date_time(origin);
+    let source_date = to_utc_date_time(source)?;
+    let origin_date = to_utc_date_time(origin)?;
 
     // calculate the number of months between the source and origin
     let month_diff = (source_date.year() - origin_date.year()) * 12
@@ -355,9 +363,17 @@ fn date_bin_months_interval(stride_months: i64, source: i64, origin: i64) -> i64
     let month_delta = compute_distance(month_diff as i64, stride_months);
 
     let mut bin_time = if month_delta < 0 {
-        origin_date - Months::new(month_delta.unsigned_abs() as u32)
+        match origin_date
+            .checked_sub_months(Months::new(month_delta.unsigned_abs() as u32))
+        {
+            Some(dt) => dt,
+            None => return exec_err!("DATE_BIN month subtraction out of range"),
+        }
     } else {
-        origin_date + Months::new(month_delta as u32)
+        match origin_date.checked_add_months(Months::new(month_delta as u32)) {
+            Some(dt) => dt,
+            None => return exec_err!("DATE_BIN month addition out of range"),
+        }
     };
 
     // If origin is not midnight of first date of the month, the bin_time may be larger than the source
@@ -365,19 +381,32 @@ fn date_bin_months_interval(stride_months: i64, source: i64, origin: i64) -> i64
     if bin_time > source_date {
         let month_delta = month_delta - stride_months;
         bin_time = if month_delta < 0 {
-            origin_date - Months::new(month_delta.unsigned_abs() as u32)
+            match origin_date
+                .checked_sub_months(Months::new(month_delta.unsigned_abs() as u32))
+            {
+                Some(dt) => dt,
+                None => return exec_err!("DATE_BIN month subtraction out of range"),
+            }
         } else {
-            origin_date + Months::new(month_delta as u32)
+            match origin_date.checked_add_months(Months::new(month_delta as u32)) {
+                Some(dt) => dt,
+                None => return exec_err!("DATE_BIN month addition out of range"),
+            }
         };
     }
-
-    bin_time.timestamp_nanos_opt().unwrap()
+    match bin_time.timestamp_nanos_opt() {
+        Some(nanos) => Ok(nanos),
+        None => exec_err!("DATE_BIN result timestamp out of range"),
+    }
 }
 
-fn to_utc_date_time(nanos: i64) -> DateTime<Utc> {
+fn to_utc_date_time(nanos: i64) -> Result<DateTime<Utc>> {
     let secs = nanos / NANOS_PER_SEC;
     let nsec = (nanos % NANOS_PER_SEC) as u32;
-    DateTime::from_timestamp(secs, nsec).unwrap()
+    match DateTime::from_timestamp(secs, nsec) {
+        Some(dt) => Ok(dt),
+        None => exec_err!("Invalid timestamp value"),
+    }
 }
 
 // Supported intervals:
@@ -392,6 +421,12 @@ fn date_bin_impl(
     origin: &ColumnarValue,
 ) -> Result<ColumnarValue> {
     let stride = match stride {
+        ColumnarValue::Scalar(s) if s.is_null() => {
+            // NULL stride -> NULL result (standard SQL NULL propagation)
+            return Ok(ColumnarValue::Scalar(ScalarValue::try_from(
+                array.data_type(),
+            )?));
+        }
         ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(v))) => {
             let (days, ms) = IntervalDayTimeType::to_parts(*v);
             let nanos = (TimeDelta::try_days(days as i64).unwrap()
@@ -546,15 +581,18 @@ fn date_bin_impl(
     fn stride_map_fn<T: ArrowTimestampType>(
         origin: i64,
         stride: i64,
-        stride_fn: fn(i64, i64, i64) -> i64,
-    ) -> impl Fn(i64) -> i64 {
+        stride_fn: BinFunction,
+    ) -> impl Fn(i64) -> Result<i64> {
         let scale = match T::UNIT {
             Nanosecond => 1,
             Microsecond => NANOS_PER_MICRO,
             Millisecond => NANOS_PER_MILLI,
             Second => NANOSECONDS,
         };
-        move |x: i64| stride_fn(stride, x * scale, origin) / scale
+        move |x: i64| match stride_fn(stride, x * scale, origin) {
+            Ok(result) => Ok(result / scale),
+            Err(e) => Err(e),
+        }
     }
 
     Ok(match array {
@@ -562,7 +600,7 @@ fn date_bin_impl(
             let apply_stride_fn =
                 stride_map_fn::<TimestampNanosecondType>(origin, stride, stride_fn);
             ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
-                v.map(apply_stride_fn),
+                v.and_then(|val| apply_stride_fn(val).ok()),
                 tz_opt.clone(),
             ))
         }
@@ -570,7 +608,7 @@ fn date_bin_impl(
             let apply_stride_fn =
                 stride_map_fn::<TimestampMicrosecondType>(origin, stride, stride_fn);
             ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
-                v.map(apply_stride_fn),
+                v.and_then(|val| apply_stride_fn(val).ok()),
                 tz_opt.clone(),
             ))
         }
@@ -578,7 +616,7 @@ fn date_bin_impl(
             let apply_stride_fn =
                 stride_map_fn::<TimestampMillisecondType>(origin, stride, stride_fn);
             ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(
-                v.map(apply_stride_fn),
+                v.and_then(|val| apply_stride_fn(val).ok()),
                 tz_opt.clone(),
             ))
         }
@@ -586,7 +624,7 @@ fn date_bin_impl(
             let apply_stride_fn =
                 stride_map_fn::<TimestampSecondType>(origin, stride, stride_fn);
             ColumnarValue::Scalar(ScalarValue::TimestampSecond(
-                v.map(apply_stride_fn),
+                v.and_then(|val| apply_stride_fn(val).ok()),
                 tz_opt.clone(),
             ))
         }
@@ -594,50 +632,61 @@ fn date_bin_impl(
             if !is_time {
                 return exec_err!("DATE_BIN with Time32 source requires Time32 origin");
             }
-            let apply_stride_fn = move |x: i32| {
-                let binned_nanos = stride_fn(stride, x as i64 * NANOS_PER_MILLI, origin);
-                let nanos = binned_nanos % (NANOSECONDS_IN_DAY);
-                (nanos / NANOS_PER_MILLI) as i32
-            };
-            ColumnarValue::Scalar(ScalarValue::Time32Millisecond(v.map(apply_stride_fn)))
+            let result = v.and_then(|x| {
+                match stride_fn(stride, x as i64 * NANOS_PER_MILLI, origin) {
+                    Ok(binned_nanos) => {
+                        let nanos = binned_nanos % (NANOSECONDS_IN_DAY);
+                        Some((nanos / NANOS_PER_MILLI) as i32)
+                    }
+                    Err(_) => None,
+                }
+            });
+            ColumnarValue::Scalar(ScalarValue::Time32Millisecond(result))
         }
         ColumnarValue::Scalar(ScalarValue::Time32Second(v)) => {
             if !is_time {
                 return exec_err!("DATE_BIN with Time32 source requires Time32 origin");
             }
-            let apply_stride_fn = move |x: i32| {
-                let binned_nanos = stride_fn(stride, x as i64 * NANOS_PER_SEC, origin);
-                let nanos = binned_nanos % (NANOSECONDS_IN_DAY);
-                (nanos / NANOS_PER_SEC) as i32
-            };
-            ColumnarValue::Scalar(ScalarValue::Time32Second(v.map(apply_stride_fn)))
+            let result = v.and_then(|x| {
+                match stride_fn(stride, x as i64 * NANOS_PER_SEC, origin) {
+                    Ok(binned_nanos) => {
+                        let nanos = binned_nanos % (NANOSECONDS_IN_DAY);
+                        Some((nanos / NANOS_PER_SEC) as i32)
+                    }
+                    Err(_) => None,
+                }
+            });
+            ColumnarValue::Scalar(ScalarValue::Time32Second(result))
         }
         ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(v)) => {
             if !is_time {
                 return exec_err!("DATE_BIN with Time64 source requires Time64 origin");
             }
-            let apply_stride_fn = move |x: i64| {
-                let binned_nanos = stride_fn(stride, x, origin);
-                binned_nanos % (NANOSECONDS_IN_DAY)
-            };
-            ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(v.map(apply_stride_fn)))
+            let result = v.and_then(|x| match stride_fn(stride, x, origin) {
+                Ok(binned_nanos) => Some(binned_nanos % (NANOSECONDS_IN_DAY)),
+                Err(_) => None,
+            });
+            ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(result))
         }
         ColumnarValue::Scalar(ScalarValue::Time64Microsecond(v)) => {
             if !is_time {
                 return exec_err!("DATE_BIN with Time64 source requires Time64 origin");
             }
-            let apply_stride_fn = move |x: i64| {
-                let binned_nanos = stride_fn(stride, x * NANOS_PER_MICRO, origin);
-                let nanos = binned_nanos % (NANOSECONDS_IN_DAY);
-                nanos / NANOS_PER_MICRO
-            };
-            ColumnarValue::Scalar(ScalarValue::Time64Microsecond(v.map(apply_stride_fn)))
+            let result =
+                v.and_then(|x| match stride_fn(stride, x * NANOS_PER_MICRO, origin) {
+                    Ok(binned_nanos) => {
+                        let nanos = binned_nanos % (NANOSECONDS_IN_DAY);
+                        Some(nanos / NANOS_PER_MICRO)
+                    }
+                    Err(_) => None,
+                });
+            ColumnarValue::Scalar(ScalarValue::Time64Microsecond(result))
         }
         ColumnarValue::Array(array) => {
             fn transform_array_with_stride<T>(
                 origin: i64,
                 stride: i64,
-                stride_fn: fn(i64, i64, i64) -> i64,
+                stride_fn: BinFunction,
                 array: &ArrayRef,
                 tz_opt: &Option<Arc<str>>,
             ) -> Result<ColumnarValue>
@@ -645,11 +694,22 @@ fn date_bin_impl(
                 T: ArrowTimestampType,
             {
                 let array = as_primitive_array::<T>(array)?;
-                let apply_stride_fn = stride_map_fn::<T>(origin, stride, stride_fn);
-                let array: PrimitiveArray<T> = array
-                    .unary(apply_stride_fn)
-                    .with_timezone_opt(tz_opt.clone());
+                let scale = match T::UNIT {
+                    Nanosecond => 1,
+                    Microsecond => NANOS_PER_MICRO,
+                    Millisecond => NANOS_PER_MILLI,
+                    Second => NANOSECONDS,
+                };
 
+                let result: PrimitiveArray<T> = array.try_unary(|val| {
+                    stride_fn(stride, val * scale, origin)
+                        .map(|binned| binned / scale)
+                        .map_err(|e| {
+                            arrow::error::ArrowError::ComputeError(e.to_string())
+                        })
+                })?;
+
+                let array = result.with_timezone_opt(tz_opt.clone());
                 Ok(ColumnarValue::Array(Arc::new(array)))
             }
 
@@ -681,15 +741,18 @@ fn date_bin_impl(
                         );
                     }
                     let array = array.as_primitive::<Time32MillisecondType>();
-                    let apply_stride_fn = move |x: i32| {
-                        let binned_nanos =
-                            stride_fn(stride, x as i64 * NANOS_PER_MILLI, origin);
-                        let nanos = binned_nanos % (NANOSECONDS_IN_DAY);
-                        (nanos / NANOS_PER_MILLI) as i32
-                    };
-                    let array: PrimitiveArray<Time32MillisecondType> =
-                        array.unary(apply_stride_fn);
-                    ColumnarValue::Array(Arc::new(array))
+                    let result: PrimitiveArray<Time32MillisecondType> =
+                        array.try_unary(|x| {
+                            stride_fn(stride, x as i64 * NANOS_PER_MILLI, origin)
+                                .map(|binned_nanos| {
+                                    let nanos = binned_nanos % (NANOSECONDS_IN_DAY);
+                                    (nanos / NANOS_PER_MILLI) as i32
+                                })
+                                .map_err(|e| {
+                                    arrow::error::ArrowError::ComputeError(e.to_string())
+                                })
+                        })?;
+                    ColumnarValue::Array(Arc::new(result))
                 }
                 Time32(Second) => {
                     if !is_time {
@@ -698,15 +761,18 @@ fn date_bin_impl(
                         );
                     }
                     let array = array.as_primitive::<Time32SecondType>();
-                    let apply_stride_fn = move |x: i32| {
-                        let binned_nanos =
-                            stride_fn(stride, x as i64 * NANOS_PER_SEC, origin);
-                        let nanos = binned_nanos % (NANOSECONDS_IN_DAY);
-                        (nanos / NANOS_PER_SEC) as i32
-                    };
-                    let array: PrimitiveArray<Time32SecondType> =
-                        array.unary(apply_stride_fn);
-                    ColumnarValue::Array(Arc::new(array))
+                    let result: PrimitiveArray<Time32SecondType> =
+                        array.try_unary(|x| {
+                            stride_fn(stride, x as i64 * NANOS_PER_SEC, origin)
+                                .map(|binned_nanos| {
+                                    let nanos = binned_nanos % (NANOSECONDS_IN_DAY);
+                                    (nanos / NANOS_PER_SEC) as i32
+                                })
+                                .map_err(|e| {
+                                    arrow::error::ArrowError::ComputeError(e.to_string())
+                                })
+                        })?;
+                    ColumnarValue::Array(Arc::new(result))
                 }
                 Time64(Microsecond) => {
                     if !is_time {
@@ -715,14 +781,18 @@ fn date_bin_impl(
                         );
                     }
                     let array = array.as_primitive::<Time64MicrosecondType>();
-                    let apply_stride_fn = move |x: i64| {
-                        let binned_nanos = stride_fn(stride, x * NANOS_PER_MICRO, origin);
-                        let nanos = binned_nanos % (NANOSECONDS_IN_DAY);
-                        nanos / NANOS_PER_MICRO
-                    };
-                    let array: PrimitiveArray<Time64MicrosecondType> =
-                        array.unary(apply_stride_fn);
-                    ColumnarValue::Array(Arc::new(array))
+                    let result: PrimitiveArray<Time64MicrosecondType> =
+                        array.try_unary(|x| {
+                            stride_fn(stride, x * NANOS_PER_MICRO, origin)
+                                .map(|binned_nanos| {
+                                    let nanos = binned_nanos % (NANOSECONDS_IN_DAY);
+                                    nanos / NANOS_PER_MICRO
+                                })
+                                .map_err(|e| {
+                                    arrow::error::ArrowError::ComputeError(e.to_string())
+                                })
+                        })?;
+                    ColumnarValue::Array(Arc::new(result))
                 }
                 Time64(Nanosecond) => {
                     if !is_time {
@@ -731,13 +801,15 @@ fn date_bin_impl(
                         );
                     }
                     let array = array.as_primitive::<Time64NanosecondType>();
-                    let apply_stride_fn = move |x: i64| {
-                        let binned_nanos = stride_fn(stride, x, origin);
-                        binned_nanos % (NANOSECONDS_IN_DAY)
-                    };
-                    let array: PrimitiveArray<Time64NanosecondType> =
-                        array.unary(apply_stride_fn);
-                    ColumnarValue::Array(Arc::new(array))
+                    let result: PrimitiveArray<Time64NanosecondType> =
+                        array.try_unary(|x| {
+                            stride_fn(stride, x, origin)
+                                .map(|binned_nanos| binned_nanos % (NANOSECONDS_IN_DAY))
+                                .map_err(|e| {
+                                    arrow::error::ArrowError::ComputeError(e.to_string())
+                                })
+                        })?;
+                    ColumnarValue::Array(Arc::new(result))
                 }
                 _ => {
                     return exec_err!(
@@ -1193,7 +1265,7 @@ mod tests {
                 let origin1 = string_to_timestamp_nanos(origin).unwrap();
 
                 let expected1 = string_to_timestamp_nanos(expected).unwrap();
-                let result = date_bin_nanos_interval(stride1, source1, origin1);
+                let result = date_bin_nanos_interval(stride1, source1, origin1).unwrap();
                 assert_eq!(result, expected1, "{source} = {expected}");
             })
     }
@@ -1221,8 +1293,55 @@ mod tests {
             let source1 = string_to_timestamp_nanos(source).unwrap();
 
             let expected1 = string_to_timestamp_nanos(expected).unwrap();
-            let result = date_bin_nanos_interval(stride1, source1, 0);
+            let result = date_bin_nanos_interval(stride1, source1, 0).unwrap();
             assert_eq!(result, expected1, "{source} = {expected}");
         })
+    }
+
+    #[test]
+    fn test_date_bin_out_of_range() {
+        let return_field = &Arc::new(Field::new(
+            "f",
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            true,
+        ));
+        let args = vec![
+            ColumnarValue::Scalar(ScalarValue::new_interval_mdn(1637426858, 0, 0)),
+            ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(
+                Some(1040292460),
+                None,
+            )),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
+                Some(string_to_timestamp_nanos("1984-01-07 00:00:00").unwrap()),
+                None,
+            )),
+        ];
+
+        let result = invoke_date_bin_with_args(args, 1, return_field);
+        assert!(result.is_ok());
+        if let ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(val, _)) =
+            result.unwrap()
+        {
+            assert!(val.is_none(), "Expected None for out of range operation");
+        }
+        let args = vec![
+            ColumnarValue::Scalar(ScalarValue::new_interval_mdn(1637426858, 0, 0)),
+            ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(
+                Some(-1040292460),
+                None,
+            )),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
+                Some(string_to_timestamp_nanos("1984-01-07 00:00:00").unwrap()),
+                None,
+            )),
+        ];
+
+        let result = invoke_date_bin_with_args(args, 1, return_field);
+        assert!(result.is_ok());
+        if let ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(val, _)) =
+            result.unwrap()
+        {
+            assert!(val.is_none(), "Expected None for out of range operation");
+        }
     }
 }

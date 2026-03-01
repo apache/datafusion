@@ -70,7 +70,9 @@ DataFusion's SQL implementation is tested using [sqllogictest](https://github.co
 cargo test --profile=ci --test sqllogictests
 # Run a specific test file
 cargo test --profile=ci --test sqllogictests -- aggregate.slt
-# Run and update expected outputs
+# Run a specific test file and update expected outputs
+cargo test --profile=ci --test sqllogictests -- aggregate.slt --complete
+# Run and update expected outputs for all test files
 cargo test --profile=ci --test sqllogictests -- --complete
 ```
 

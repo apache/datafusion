@@ -239,6 +239,11 @@ SELECT translate('12345', '143', NULL)
 ----
 NULL
 
+query T
+SELECT translate(arrow_cast('12345', 'LargeUtf8'), '143', 'ax')
+----
+a2x5
+
 statement ok
 CREATE TABLE test(
   c1 VARCHAR
@@ -535,6 +540,15 @@ query T
 SELECT trim(arrow_cast('  foo  ', 'Dictionary(Int32, Utf8)'))
 ----
 foo
+
+# Verify that trim, ltrim, and rtrim only strip spaces by default,
+# not other whitespace characters (tabs, newlines, etc.)
+query III
+SELECT length(trim(chr(9) || 'foo' || chr(10))),
+       length(ltrim(chr(9) || 'foo')),
+       length(rtrim('foo' || chr(10)))
+----
+5 4 4
 
 query I
 SELECT bit_length('foo')
