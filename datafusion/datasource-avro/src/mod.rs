@@ -30,18 +30,68 @@
 pub mod file_format;
 pub mod source;
 
-use arrow::datatypes::Schema;
+use arrow::datatypes::{DataType, Field, Fields, Schema};
 pub use arrow_avro;
 use arrow_avro::reader::ReaderBuilder;
 pub use file_format::*;
 use std::io::{BufReader, Read};
+use std::sync::Arc;
 
 /// Read Avro schema given a reader
 pub fn read_avro_schema_from_reader<R: Read>(
     reader: &mut R,
 ) -> datafusion_common::Result<Schema> {
     let avro_reader = ReaderBuilder::new().build(BufReader::new(reader))?;
-    Ok(avro_reader.schema().as_ref().clone())
+    // Avro readers perform strict schema resolution rules (e.g. record identity checks)
+    // that are stricter than DataFusion's table schema handling needs for inferred schemas.
+    // Drop metadata from inferred schemas so runtime batches and inferred table schemas
+    // compare consistently without requiring strict Avro metadata identity.
+    Ok(strip_metadata_from_schema(avro_reader.schema().as_ref().clone()))
+}
+
+fn strip_metadata_from_schema(schema: Schema) -> Schema {
+    let fields = schema
+        .fields
+        .into_iter()
+        .map(|f| Arc::new(strip_metadata_from_field(f.as_ref())))
+        .collect::<Fields>();
+    // Intentionally drop schema-level metadata
+    Schema::new(fields)
+}
+
+fn strip_metadata_from_field(field: &Field) -> Field {
+    // Intentionally drop field-level metadata
+    Field::new(
+        field.name(),
+        strip_metadata_from_data_type(field.data_type()),
+        field.is_nullable(),
+    )
+}
+
+fn strip_metadata_from_data_type(data_type: &DataType) -> DataType {
+    match data_type {
+        DataType::Struct(fields) => DataType::Struct(
+            fields
+                .iter()
+                .map(|f| Arc::new(strip_metadata_from_field(f.as_ref())))
+                .collect(),
+        ),
+        DataType::List(field) => {
+            DataType::List(Arc::new(strip_metadata_from_field(field.as_ref())))
+        }
+        DataType::LargeList(field) => {
+            DataType::LargeList(Arc::new(strip_metadata_from_field(field.as_ref())))
+        }
+        DataType::FixedSizeList(field, size) => DataType::FixedSizeList(
+            Arc::new(strip_metadata_from_field(field.as_ref())),
+            *size,
+        ),
+        DataType::Map(field, sorted) => DataType::Map(
+            Arc::new(strip_metadata_from_field(field.as_ref())),
+            *sorted,
+        ),
+        _ => data_type.clone(),
+    }
 }
 
 #[cfg(test)]

@@ -21,7 +21,6 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow_avro::reader::{Reader, ReaderBuilder};
-use arrow_avro::schema::AvroSchema;
 use datafusion_common::error::Result;
 use datafusion_datasource::TableSchema;
 use datafusion_datasource::file::FileSource;
@@ -56,9 +55,6 @@ impl AvroSource {
 
     fn open<R: std::io::BufRead>(&self, reader: R) -> Result<Reader<R>> {
         ReaderBuilder::new()
-            .with_reader_schema(
-                AvroSchema::try_from(self.table_schema.file_schema().as_ref()).unwrap(),
-            )
             .with_batch_size(self.batch_size.expect("Batch size must set before open"))
             .with_projection(self.projection.file_indices.clone())
             .build(reader)

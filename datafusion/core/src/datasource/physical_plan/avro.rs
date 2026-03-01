@@ -172,35 +172,18 @@ mod tests {
             .execute(0, state.task_ctx())
             .expect("plan execution failed");
 
-        let batch = results
+        // Avro follows the file's writer schema for projection. Referencing a
+        // non-existent file column should fail instead of being NULL-padded.
+        let err = results
             .next()
             .await
             .expect("plan iterator empty")
-            .expect("plan iterator returned an error");
-
-        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&[batch]), @r"
-        +----+----------+-------------+-------------+
-        | id | bool_col | tinyint_col | missing_col |
-        +----+----------+-------------+-------------+
-        | 4  | true     | 0           |             |
-        | 5  | false    | 1           |             |
-        | 6  | true     | 0           |             |
-        | 7  | false    | 1           |             |
-        | 2  | true     | 0           |             |
-        | 3  | false    | 1           |             |
-        | 0  | true     | 0           |             |
-        | 1  | false    | 1           |             |
-        +----+----------+-------------+-------------+
-        ");}
-
-        let batch = results.next().await;
-        assert!(batch.is_none());
-
-        let batch = results.next().await;
-        assert!(batch.is_none());
-
-        let batch = results.next().await;
-        assert!(batch.is_none());
+            .expect_err("missing projected column should error");
+        let err_msg = err.to_string();
+        assert!(
+            err_msg.contains("Projection index") && err_msg.contains("out of bounds"),
+            "unexpected error: {err_msg}"
+        );
 
         Ok(())
     }
