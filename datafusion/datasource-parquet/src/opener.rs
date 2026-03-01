@@ -273,7 +273,8 @@ impl FileOpener for ParquetOpener {
                 Err(e) => return Box::pin(ready(Err(e))),
             };
 
-        let options = ArrowReaderOptions::new().with_page_index(false);
+        let options =
+            ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Skip);
         #[cfg(feature = "parquet_encryption")]
         let encryption_context = self.get_encryption_context();
 
@@ -2369,7 +2370,7 @@ mod test {
         let batch3 = record_batch!(("a", Int32, vec![Some(20), Some(21)])).unwrap();
 
         let props = WriterProperties::builder()
-            .set_max_row_group_size(2)
+            .set_max_row_group_row_count(Some(2))
             .build();
 
         let data_len = write_parquet_batches(

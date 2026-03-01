@@ -79,7 +79,7 @@ mod tests {
     use insta::assert_snapshot;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
-    use object_store::{ObjectMeta, ObjectStore};
+    use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
     use parquet::arrow::ArrowWriter;
     use parquet::file::properties::WriterProperties;
     use tempfile::TempDir;
@@ -2477,7 +2477,7 @@ mod tests {
 
         let mut out = Vec::new();
         let props = WriterProperties::builder()
-            .set_max_row_group_size(10)
+            .set_max_row_group_row_count(Some(10))
             .build();
         {
             let mut writer =
