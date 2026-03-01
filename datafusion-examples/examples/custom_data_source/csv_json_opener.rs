@@ -85,7 +85,6 @@ async fn csv_opener() -> Result<()> {
         0,
         opener,
         &ExecutionPlanMetricsSet::new(),
-        None,
     )?;
     while let Some(batch) = stream.next().await.transpose()? {
         result.push(batch);
@@ -147,7 +146,6 @@ async fn json_opener() -> Result<()> {
         0,
         Arc::new(opener),
         &ExecutionPlanMetricsSet::new(),
-        None,
     )?;
     let mut result = vec![];
     while let Some(batch) = stream.next().await.transpose()? {

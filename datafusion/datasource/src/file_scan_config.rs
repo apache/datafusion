@@ -621,7 +621,11 @@ impl FileScanConfig {
         let source = self.file_source.with_batch_size(batch_size);
         let opener = source.create_file_opener(object_store, self, partition)?;
 
-        let stream = FileStream::new(self, partition, opener, source.metrics(), queue)?;
+        let stream = FileStream::new(self, partition, opener, source.metrics())?;
+        let stream = match queue {
+            Some(q) => stream.with_shared_queue(q),
+            None => stream,
+        };
         Ok(Box::pin(cooperative(stream)))
     }
 }

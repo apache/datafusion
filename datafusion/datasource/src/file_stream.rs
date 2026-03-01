@@ -89,20 +89,19 @@ impl FileStream {
         partition: usize,
         file_opener: Arc<dyn FileOpener>,
         metrics: &ExecutionPlanMetricsSet,
-        shared_queue: Option<Arc<WorkQueue>>,
     ) -> Result<Self> {
         let projected_schema = config.projected_schema()?;
 
-        let (file_iter, shared_queue) = if config.morsel_driven {
-            (VecDeque::new(), shared_queue)
+        let file_iter = if config.morsel_driven {
+            VecDeque::new()
         } else {
             let file_group = config.file_groups[partition].clone();
-            (file_group.into_inner().into_iter().collect(), None)
+            file_group.into_inner().into_iter().collect()
         };
 
         Ok(Self {
             file_iter,
-            shared_queue,
+            shared_queue: None,
             projected_schema,
             remain: config.limit,
             file_opener,
@@ -112,6 +111,12 @@ impl FileStream {
             on_error: OnError::Fail,
             morsel_guard: None,
         })
+    }
+
+    /// Set the shared work queue for morsel-driven execution.
+    pub fn with_shared_queue(mut self, queue: Arc<WorkQueue>) -> Self {
+        self.shared_queue = Some(queue);
+        self
     }
 
     /// Specify the behavior when an error occurs opening or scanning a file
@@ -841,7 +846,7 @@ mod tests {
             .build();
             let metrics_set = ExecutionPlanMetricsSet::new();
             let file_stream =
-                FileStream::new(&config, 0, Arc::new(self.opener), &metrics_set, None)
+                FileStream::new(&config, 0, Arc::new(self.opener), &metrics_set)
                     .unwrap()
                     .with_on_error(on_error);
 
