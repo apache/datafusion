@@ -161,6 +161,12 @@ pub trait ExtensionPlanner {
     /// Create a physical plan for a [`LogicalPlan::TableScan`].
     ///
     /// This is useful for planning valid [`TableSource`]s that are not [`TableProvider`]s.
+    ///
+    /// Returns:
+    /// * `Ok(Some(plan))` if the planner knows how to plan the `scan`
+    /// * `Ok(None)` if the planner does not know how to plan the `scan` and wants to delegate the planning to another [`ExtensionPlanner`]
+    /// * `Err` if the planner knows how to plan the `scan` but errors while doing so
+    ///
     /// # Example
     ///
     /// ```rust,ignore
@@ -214,10 +220,6 @@ pub trait ExtensionPlanner {
     ///     }
     /// }
     /// ```
-    /// Returns:
-    /// * `Ok(Some(plan))` if the planner knows how to plan the `scan`
-    /// * `Ok(None)` if the planner does not know how to plan the `scan` and wants to delegate the planning to another [`ExtensionPlanner`]
-    /// * `Err` if the planner knows how to plan the `scan` but errors while doing so
     ///
     /// [`TableSource`]: datafusion_expr::TableSource
     /// [`TableProvider`]: datafusion_catalog::TableProvider
