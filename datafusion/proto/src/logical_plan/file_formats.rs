@@ -526,7 +526,7 @@ mod parquet {
             max_predicate_cache_size: proto.max_predicate_cache_size_opt.as_ref().map(|opt| match opt {
                 parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(size) => *size as usize,
             }),
-                field_id_enabled: false,
+            field_id_enabled: proto.field_id_enabled,
         }
         }
     }
