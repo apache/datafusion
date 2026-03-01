@@ -54,11 +54,15 @@ impl AvroSource {
     }
 
     fn open<R: std::io::BufRead>(&self, reader: R) -> Result<Reader<R>> {
-        ReaderBuilder::new()
-            .with_batch_size(self.batch_size.expect("Batch size must set before open"))
-            .with_projection(self.projection.file_indices.clone())
-            .build(reader)
-            .map_err(Into::into)
+        let mut builder = ReaderBuilder::new()
+            .with_batch_size(self.batch_size.expect("Batch size must set before open"));
+
+        // Avoid pushing an empty projection into arrow-avro.
+        if !self.projection.file_indices.is_empty() {
+            builder = builder.with_projection(self.projection.file_indices.clone());
+        }
+
+        builder.build(reader).map_err(Into::into)
     }
 }
 

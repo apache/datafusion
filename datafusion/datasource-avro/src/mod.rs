@@ -46,7 +46,9 @@ pub fn read_avro_schema_from_reader<R: Read>(
     // that are stricter than DataFusion's table schema handling needs for inferred schemas.
     // Drop metadata from inferred schemas so runtime batches and inferred table schemas
     // compare consistently without requiring strict Avro metadata identity.
-    Ok(strip_metadata_from_schema(avro_reader.schema().as_ref().clone()))
+    Ok(strip_metadata_from_schema(
+        avro_reader.schema().as_ref().clone(),
+    ))
 }
 
 fn strip_metadata_from_schema(schema: Schema) -> Schema {
@@ -86,10 +88,9 @@ fn strip_metadata_from_data_type(data_type: &DataType) -> DataType {
             Arc::new(strip_metadata_from_field(field.as_ref())),
             *size,
         ),
-        DataType::Map(field, sorted) => DataType::Map(
-            Arc::new(strip_metadata_from_field(field.as_ref())),
-            *sorted,
-        ),
+        DataType::Map(field, sorted) => {
+            DataType::Map(Arc::new(strip_metadata_from_field(field.as_ref())), *sorted)
+        }
         _ => data_type.clone(),
     }
 }
