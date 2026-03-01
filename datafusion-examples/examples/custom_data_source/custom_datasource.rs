@@ -61,7 +61,9 @@ async fn search_accounts(
     filter: Option<Expr>,
     expected_result_length: usize,
 ) -> Result<()> {
+    // create local execution context
     let ctx = SessionContext::new();
+
     // create logical plan composed of a single TableScan
     let logical_plan = LogicalPlanBuilder::scan_with_filters(
         "accounts",

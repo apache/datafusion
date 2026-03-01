@@ -26,7 +26,6 @@ use std::any::Any;
 use std::collections::HashSet;
 use std::fmt;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{collections::HashMap, sync::Arc};
 
 /// Type-erased shared state map used by execution plan nodes to share
@@ -126,15 +125,6 @@ impl TaskContext {
     /// Return the `task_id` of this [TaskContext]
     pub fn task_id(&self) -> Option<String> {
         self.task_id.clone()
-    }
-
-    /// Return the `query_id` of this [TaskContext].
-    ///
-    /// Each [`TaskContext`] is assigned a unique query ID at construction.
-    /// All partitions of the same query execution share the same
-    /// [`TaskContext`] (via `Arc`), so the ID is stable within one cycle.
-    pub fn query_id(&self) -> usize {
-        self.query_id
     }
 
     /// Return the [`MemoryPool`] associated with this [TaskContext]
