@@ -45,6 +45,7 @@ impl CsvOptionsProto {
                 terminator: options.terminator.map_or(vec![], |v| vec![v]),
                 escape: options.escape.map_or(vec![], |v| vec![v]),
                 double_quote: options.double_quote.map_or(vec![], |v| vec![v as u8]),
+                encoding: options.encoding.clone().unwrap_or_default(),
                 compression: options.compression as i32,
                 schema_infer_max_rec: options.schema_infer_max_rec.map(|v| v as u64),
                 date_format: options.date_format.clone().unwrap_or_default(),
@@ -92,6 +93,11 @@ impl From<&CsvOptionsProto> for CsvOptions {
             },
             double_quote: if !proto.double_quote.is_empty() {
                 Some(proto.double_quote[0] != 0)
+            } else {
+                None
+            },
+            encoding: if !proto.encoding.is_empty() {
+                Some(proto.encoding.clone())
             } else {
                 None
             },

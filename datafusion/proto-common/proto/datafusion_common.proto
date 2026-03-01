@@ -476,6 +476,7 @@ message CsvOptions {
   bytes terminator = 17; // Optional terminator character as a byte
   bytes truncated_rows = 18; // Indicates if truncated rows are allowed
   optional uint32 compression_level = 19; // Optional compression level
+  string encoding = 20; // Optional character encoding
 }
 
 // Options controlling CSV format

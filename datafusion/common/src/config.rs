@@ -2921,6 +2921,7 @@ config_namespace! {
         ///
         /// The default behaviour depends on the `datafusion.catalog.newlines_in_values` setting.
         pub newlines_in_values: Option<bool>, default = None
+        pub encoding: Option<String>, default = None
         pub compression: CompressionTypeVariant, default = CompressionTypeVariant::UNCOMPRESSED
         /// Compression level for the output file. The valid range depends on the
         /// compression algorithm:
