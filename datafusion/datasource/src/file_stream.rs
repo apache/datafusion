@@ -468,10 +468,14 @@ impl WorkQueue {
     pub fn pull(&self) -> WorkStatus {
         let mut queue = self.queue.lock().unwrap();
         if let Some(file) = queue.pop_front() {
-            // Relaxed: we hold the mutex, which provides the necessary memory barrier.
+            // Relaxed: the increment is done by the same task that will later call
+            // stop_morselizing(), so program order ensures the decrement sees it.
             self.morselizing_count.fetch_add(1, Ordering::Relaxed);
             WorkStatus::Work(Box::new(file))
-        } else if self.morselizing_count.load(Ordering::Relaxed) > 0 {
+        } else if self.morselizing_count.load(Ordering::Acquire) > 0 {
+            // Acquire: stop_morselizing() uses AcqRel (a Release write) without
+            // holding the queue mutex, so we need Acquire here to synchronize with
+            // it on weakly-ordered architectures (e.g. ARM).
             WorkStatus::Wait
         } else {
             WorkStatus::Done
@@ -481,8 +485,9 @@ impl WorkQueue {
     /// Returns true if there is work in the queue or if all morselizing is done.
     pub fn has_work_or_done(&self) -> bool {
         let queue = self.queue.lock().unwrap();
-        // Relaxed: we hold the mutex, which provides the necessary memory barrier.
-        !queue.is_empty() || self.morselizing_count.load(Ordering::Relaxed) == 0
+        // Acquire: stop_morselizing() writes morselizing_count with AcqRel outside
+        // the queue mutex, so Acquire is needed to synchronize with that Release.
+        !queue.is_empty() || self.morselizing_count.load(Ordering::Acquire) == 0
     }
 
     /// Push many files back to the queue.
