@@ -29,8 +29,6 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{collections::HashMap, sync::Arc};
 
-static NEXT_QUERY_ID: AtomicUsize = AtomicUsize::new(0);
-
 /// Type-erased shared state map used by execution plan nodes to share
 /// state across partitions within the same query execution.
 struct SharedState(Mutex<HashMap<usize, Arc<dyn Any + Send + Sync>>>);
@@ -54,9 +52,6 @@ pub struct TaskContext {
     session_id: String,
     /// Optional Task Identify
     task_id: Option<String>,
-    /// Unique identifier for this query execution, used to detect
-    /// execution cycle boundaries in morsel-driven scheduling.
-    query_id: usize,
     /// Session configuration
     session_config: SessionConfig,
     /// Scalar functions associated with this task context
@@ -81,7 +76,6 @@ impl Default for TaskContext {
         Self {
             session_id: "DEFAULT".to_string(),
             task_id: None,
-            query_id: NEXT_QUERY_ID.fetch_add(1, Ordering::Relaxed),
             session_config: SessionConfig::new(),
             scalar_functions: HashMap::new(),
             aggregate_functions: HashMap::new(),
@@ -110,7 +104,6 @@ impl TaskContext {
         Self {
             task_id,
             session_id,
-            query_id: NEXT_QUERY_ID.fetch_add(1, Ordering::Relaxed),
             session_config,
             scalar_functions,
             aggregate_functions,
