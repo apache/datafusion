@@ -222,25 +222,13 @@ impl FileStream {
                                 // No morsels returned, skip this file
                                 self.state = FileStreamState::Idle;
                             } else {
-                                // Keep the first morsel for this worker; push the rest
-                                // to the front of the queue so the same (or nearby)
-                                // worker picks them up next, preserving I/O locality
-                                // for row groups from the same file.
-                                let mut iter = morsels.into_iter();
-                                let first = iter.next().unwrap();
-                                queue.push_front_many(iter.collect());
-                                // Don't stop time_opening here — it will be stopped
-                                // naturally when we transition Open → Scan.
-                                match self.file_opener.open(first) {
-                                    Ok(future) => {
-                                        self.state = FileStreamState::Open { future }
-                                    }
-                                    Err(e) => {
-                                        self.file_stream_metrics.time_opening.stop();
-                                        self.state = FileStreamState::Error;
-                                        return Poll::Ready(Some(Err(e)));
-                                    }
-                                }
+                                // Push all morsels to the front of the queue so
+                                // this worker (or a nearby one) picks them up next,
+                                // preserving I/O locality for row groups from the
+                                // same file. Go back to Idle to pull the first one
+                                // through the normal path.
+                                queue.push_front_many(morsels);
+                                self.state = FileStreamState::Idle;
                             }
                         }
                         Err(e) => {
