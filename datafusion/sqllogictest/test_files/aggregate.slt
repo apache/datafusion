@@ -2985,6 +2985,53 @@ SELECT count(distinct c1, c2) FROM test
 ----
 2
 
+# test count(distinct) multi column
+statement ok
+CREATE TABLE count_distinct_multi (
+    grp INT,
+    a INT,
+    b VARCHAR,
+    c INT
+) AS VALUES
+    (1, 1, 'x', 10),
+    (1, 1, 'x', 10),
+    (1, 1, 'y', 10),
+    (1, 2, 'x', 20),
+    (1, NULL, 'x', 10),
+    (2, 1, 'x', 10),
+    (2, 1, 'x', 30),
+    (2, NULL, NULL, NULL),
+    (2, 3, 'z', 10);
+
+query I
+SELECT count(distinct a, b, c) FROM count_distinct_multi
+----
+5
+
+query I
+SELECT count(distinct grp, a, b, c) FROM count_distinct_multi
+----
+6
+
+# count(distinct a, a) — duplicate column hits optimizer bug
+statement error
+SELECT count(distinct a, a) FROM count_distinct_multi
+
+query II
+SELECT grp, count(distinct a, b) FROM count_distinct_multi GROUP BY grp ORDER BY grp
+----
+1 3
+2 2
+
+query III
+SELECT grp, count(distinct a, b), count(distinct a, b, c) FROM count_distinct_multi GROUP BY grp ORDER BY grp
+----
+1 3 3
+2 2 3
+
+statement ok
+DROP TABLE count_distinct_multi;
+
 # count_null
 query III
 SELECT count(null), count(null, null), count(distinct null) FROM test
