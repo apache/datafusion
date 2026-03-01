@@ -164,31 +164,25 @@ This is a list of DataFusion related blog posts, articles, and other resources. 
 
 ## 📅 Release Notes & Updates
 
-- **2025-03-24** [Apache DataFusion 46.0.0 Released](https://datafusion.apache.org/blog/2025/03/24/datafusion-46.0.0/)
-
-- **2024-09-14** [Apache DataFusion Python 43.1.0 Released](https://datafusion.apache.org/blog/2024/12/14/datafusion-python-43.1.0/)
-
-- **2024-08-24** [Apache DataFusion Python 40.1.0 Released, Significant usability updates](https://datafusion.apache.org/blog/2024/08/20/python-datafusion-40.0.0/)
-
-- **2024-07-24** [DataFusion 40.0.0 Release](https://datafusion.apache.org/blog/2024/07/24/datafusion-40.0.0/)
-
-- **2024-01-19** [DataFusion 34.0.0 Release](https://datafusion.apache.org/blog/2024/01/19/datafusion-34.0.0/)
-
-- **2023-06-24** [DataFusion 25.0.0 Release](https://arrow.apache.org/blog/2023/06/24/datafusion-25.0.0/)
-
-- **2023-01-19** [DataFusion 16.0.0 Release](https://arrow.apache.org/blog/2023/01/19/datafusion-16.0.0/)
-
-- **2022-10-25** [DataFusion 13.0.0 Release](https://arrow.apache.org/blog/2022/10/25/datafusion-13.0.0/)
-
-- **2022-05-16** [DataFusion 8.0.0 Release](https://arrow.apache.org/blog/2022/05/16/datafusion-8.0.0/)
-
-- **2022-02-28** [DataFusion 7.0.0 Release](https://arrow.apache.org/blog/2022/02/28/datafusion-7.0.0/)
-
-- **2021-11-19** [DataFusion 6.0.0 Release](https://arrow.apache.org/blog/2021/11/19/datafusion-6.0.0/)
-
-- **2021-08-18** [DataFusion 5.0.0 Release](https://arrow.apache.org/blog/2021/08/18/datafusion-5.0.0/)
-
-- **2019-09-22** [DataFusion 0.15.0 Release Notes](https://andygrove.io/2019/09/datafusion-0.15.0-release-notes/)
+- **2026-01-30** [Apache DataFusion Comet 0.13.0 Release](https://datafusion.apache.org/blog/2026/01/30/datafusion-comet-0.13.0)
+- **2026-01-12** [Apache DataFusion 52.0.0 Released](https://datafusion.apache.org/blog/2026/01/12/datafusion-52.0.0)
+- **2025-12-04** [Apache DataFusion Comet 0.12.0 Release](https://datafusion.apache.org/blog/2025/12/04/datafusion-comet-0.12.0)
+- **2025-11-25** [Apache DataFusion 51.0.0 Released](https://datafusion.apache.org/blog/2025/11/25/datafusion-51.0.0)
+- **2025-10-21** [Apache DataFusion Comet 0.11.0 Release](https://datafusion.apache.org/blog/2025/10/21/datafusion-comet-0.11.0)
+- **2025-09-29** [Apache DataFusion 50.0.0 Released](https://datafusion.apache.org/blog/2025/09/29/datafusion-50.0.0)
+- **2025-09-16** [Apache DataFusion Comet 0.10.0 Release](https://datafusion.apache.org/blog/2025/09/16/datafusion-comet-0.10.0)
+- **2025-07-28** [Apache DataFusion 49.0.0 Released](https://datafusion.apache.org/blog/2025/07/28/datafusion-49.0.0)
+- **2025-07-16** [Apache DataFusion 48.0.0 Released](https://datafusion.apache.org/blog/2025/07/16/datafusion-48.0.0)
+- **2025-07-11** [Apache DataFusion 47.0.0 Released](https://datafusion.apache.org/blog/2025/07/11/datafusion-47.0.0)
+- **2025-07-01** [Apache DataFusion Comet 0.9.0 Release](https://datafusion.apache.org/blog/2025/07/01/datafusion-comet-0.9.0)
+- **2025-05-06** [Apache DataFusion Comet 0.8.0 Release](https://datafusion.apache.org/blog/2025/05/06/datafusion-comet-0.8.0)
+- **2025-03-30** [Apache DataFusion Python 46.0.0 Released](https://datafusion.apache.org/blog/2025/03/30/datafusion-python-46.0.0)
+- **2025-03-24** [Apache DataFusion 46.0.0 Released](https://datafusion.apache.org/blog/2025/03/24/datafusion-46.0.0)
+- **2025-03-20** [Apache DataFusion Comet 0.7.0 Release](https://datafusion.apache.org/blog/2025/03/20/datafusion-comet-0.7.0)
+- **2025-02-20** [Apache DataFusion 45.0.0 Released](https://datafusion.apache.org/blog/2025/02/20/datafusion-45.0.0)
+- **2025-02-17** [Apache DataFusion Comet 0.6.0 Release](https://datafusion.apache.org/blog/2025/02/17/datafusion-comet-0.6.0)
+- **2025-02-02** [Apache DataFusion Ballista 43.0.0 Released](https://datafusion.apache.org/blog/2025/02/02/datafusion-ballista-43.0.0)
+- **2025-01-17** [Apache DataFusion Comet 0.5.0 Release](https://datafusion.apache.org/blog/2025/01/17/datafusion-comet-0.5.0)
 
 # 🌎 Community Events
 
