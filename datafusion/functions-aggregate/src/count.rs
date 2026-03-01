@@ -438,6 +438,16 @@ impl AggregateUDFImpl for Count {
         args: AccumulatorArgs,
     ) -> Result<Box<dyn Accumulator>> {
         if args.is_distinct {
+            if args.exprs.len() > 1 {
+                let data_types: Vec<DataType> = args
+                    .expr_fields
+                    .iter()
+                    .map(|field| field.data_type().clone())
+                    .collect();
+                return Ok(Box::new(MultiColumnDistinctCountAccumulator::try_new(
+                    data_types,
+                )?));
+            }
             let acc =
                 SlidingDistinctCountAccumulator::try_new(args.return_field.data_type())?;
             Ok(Box::new(acc))
@@ -873,7 +883,10 @@ impl Accumulator for DistinctCountAccumulator {
 
 #[derive(Debug)]
 struct MultiColumnDistinctCountAccumulator {
-    values: HashSet<OwnedRow, RandomState>,
+    /// Maps each distinct row to its reference count.
+    /// The count is used by `retract_batch` to support sliding windows;
+    /// for non-sliding aggregation the counts are always 1.
+    values: HashMap<OwnedRow, usize, RandomState>,
     row_converter: RowConverter,
     state_data_types: Vec<DataType>,
 }
@@ -886,7 +899,7 @@ impl MultiColumnDistinctCountAccumulator {
             .collect();
         let row_converter = RowConverter::new(sort_fields)?;
         Ok(Self {
-            values: HashSet::default(),
+            values: HashMap::default(),
             row_converter,
             state_data_types,
         })
@@ -911,7 +924,7 @@ impl Accumulator for MultiColumnDistinctCountAccumulator {
                 .collect());
         }
 
-        let rows_iter = self.values.iter().map(|owned| owned.row());
+        let rows_iter = self.values.keys().map(|owned| owned.row());
         let columns = self.row_converter.convert_rows(rows_iter)?;
 
         Ok(columns
@@ -936,10 +949,34 @@ impl Accumulator for MultiColumnDistinctCountAccumulator {
         let rows = self.row_converter.convert_columns(values)?;
         for i in 0..rows.num_rows() {
             if !values.iter().any(|arr| arr.is_null(i)) {
-                self.values.insert(rows.row(i).owned());
+                *self.values.entry(rows.row(i).owned()).or_default() += 1;
             }
         }
         Ok(())
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        if values.is_empty() {
+            return Ok(());
+        }
+
+        let rows = self.row_converter.convert_columns(values)?;
+        for i in 0..rows.num_rows() {
+            if !values.iter().any(|arr| arr.is_null(i)) {
+                let row = rows.row(i).owned();
+                if let Some(cnt) = self.values.get_mut(&row) {
+                    *cnt -= 1;
+                    if *cnt == 0 {
+                        self.values.remove(&row);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
@@ -971,7 +1008,7 @@ impl Accumulator for MultiColumnDistinctCountAccumulator {
             // `update_batch` already excludes rows with nulls.
             let rows = self.row_converter.convert_columns(&col_values)?;
             for i in 0..rows.num_rows() {
-                self.values.insert(rows.row(i).owned());
+                *self.values.entry(rows.row(i).owned()).or_default() += 1;
             }
         }
 
@@ -987,10 +1024,10 @@ impl Accumulator for MultiColumnDistinctCountAccumulator {
             + self.row_converter.size()
             + self
                 .values
-                .iter()
-                .map(|r| size_of::<OwnedRow>() + r.as_ref().len())
+                .keys()
+                .map(|r| size_of::<OwnedRow>() + r.as_ref().len() + size_of::<usize>())
                 .sum::<usize>()
-            + size_of::<OwnedRow>()
+            + (size_of::<OwnedRow>() + size_of::<usize>())
                 * self.values.capacity().saturating_sub(self.values.len())
             + size_of::<DataType>() * self.state_data_types.capacity()
     }
@@ -1485,6 +1522,91 @@ mod tests {
         ])?;
         merged.merge_batch(&state_arrs)?;
         assert_eq!(merged.evaluate()?, ScalarValue::Int64(Some(0)));
+        Ok(())
+    }
+
+    #[test]
+    fn multi_column_accumulator_sliding_window() -> Result<()> {
+        let mut acc = MultiColumnDistinctCountAccumulator::try_new(vec![
+            DataType::Int32,
+            DataType::Utf8,
+        ])?;
+        assert!(acc.supports_retract_batch());
+
+        // Window frame 1: (1,"a"), (1,"b"), (2,"a")
+        let col1 =
+            Arc::new(Int32Array::from(vec![Some(1), Some(1), Some(2)])) as ArrayRef;
+        let col2 = Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("a")]))
+            as ArrayRef;
+        acc.update_batch(&[col1, col2])?;
+        // 3 distinct tuples: (1,a), (1,b), (2,a)
+        assert_eq!(acc.evaluate()?, ScalarValue::Int64(Some(3)));
+
+        // Slide: retract (1,"a"), add (2,"b")
+        let retract_c1 = Arc::new(Int32Array::from(vec![Some(1)])) as ArrayRef;
+        let retract_c2 = Arc::new(StringArray::from(vec![Some("a")])) as ArrayRef;
+        acc.retract_batch(&[retract_c1, retract_c2])?;
+        // (1,a) had count 1, now removed → {(1,b), (2,a)}
+        assert_eq!(acc.evaluate()?, ScalarValue::Int64(Some(2)));
+
+        let add_c1 = Arc::new(Int32Array::from(vec![Some(2)])) as ArrayRef;
+        let add_c2 = Arc::new(StringArray::from(vec![Some("b")])) as ArrayRef;
+        acc.update_batch(&[add_c1, add_c2])?;
+        // {(1,b), (2,a), (2,b)}
+        assert_eq!(acc.evaluate()?, ScalarValue::Int64(Some(3)));
+
+        // Retract a duplicate: add (2,"b") again, then retract once
+        acc.update_batch(&[
+            Arc::new(Int32Array::from(vec![Some(2)])) as ArrayRef,
+            Arc::new(StringArray::from(vec![Some("b")])) as ArrayRef,
+        ])?;
+        // (2,b) count is now 2
+        assert_eq!(acc.evaluate()?, ScalarValue::Int64(Some(3)));
+        acc.retract_batch(&[
+            Arc::new(Int32Array::from(vec![Some(2)])) as ArrayRef,
+            Arc::new(StringArray::from(vec![Some("b")])) as ArrayRef,
+        ])?;
+        // (2,b) count back to 1, still present
+        assert_eq!(acc.evaluate()?, ScalarValue::Int64(Some(3)));
+        acc.retract_batch(&[
+            Arc::new(Int32Array::from(vec![Some(2)])) as ArrayRef,
+            Arc::new(StringArray::from(vec![Some("b")])) as ArrayRef,
+        ])?;
+        // (2,b) count 0, removed → {(1,b), (2,a)}
+        assert_eq!(acc.evaluate()?, ScalarValue::Int64(Some(2)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn multi_column_accumulator_sliding_window_nulls() -> Result<()> {
+        let mut acc = MultiColumnDistinctCountAccumulator::try_new(vec![
+            DataType::Int32,
+            DataType::Utf8,
+        ])?;
+
+        // Rows with nulls should be ignored in both update and retract
+        let col1 = Arc::new(Int32Array::from(vec![Some(1), None, Some(2)])) as ArrayRef;
+        let col2 =
+            Arc::new(StringArray::from(vec![Some("a"), Some("b"), None])) as ArrayRef;
+        acc.update_batch(&[col1, col2])?;
+        // Only (1,"a") is non-null in both columns
+        assert_eq!(acc.evaluate()?, ScalarValue::Int64(Some(1)));
+
+        // Retract a row with null — should be a no-op
+        acc.retract_batch(&[
+            Arc::new(Int32Array::from(vec![None])) as ArrayRef,
+            Arc::new(StringArray::from(vec![Some("b")])) as ArrayRef,
+        ])?;
+        assert_eq!(acc.evaluate()?, ScalarValue::Int64(Some(1)));
+
+        // Retract the only valid row
+        acc.retract_batch(&[
+            Arc::new(Int32Array::from(vec![Some(1)])) as ArrayRef,
+            Arc::new(StringArray::from(vec![Some("a")])) as ArrayRef,
+        ])?;
+        assert_eq!(acc.evaluate()?, ScalarValue::Int64(Some(0)));
+
         Ok(())
     }
 }

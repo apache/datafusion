@@ -3035,6 +3035,20 @@ SELECT grp, count(distinct a, b), count(distinct a, b, c) FROM count_distinct_mu
 1 3 3
 2 2 3
 
+# count(distinct) multi-column with sliding window
+query IITI
+SELECT grp, a, b, count(distinct a, b) OVER (PARTITION BY grp ORDER BY a NULLS LAST ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) as cd FROM count_distinct_multi ORDER BY grp, a NULLS LAST, b
+----
+1 1 x 1
+1 1 x 1
+1 1 y 2
+1 2 x 2
+1 NULL x 1
+2 1 x 1
+2 1 x 1
+2 3 z 2
+2 NULL NULL 1
+
 statement ok
 DROP TABLE count_distinct_multi;
 
