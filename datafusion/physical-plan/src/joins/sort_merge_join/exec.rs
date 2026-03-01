@@ -22,7 +22,7 @@
 use std::any::Any;
 use std::fmt::Formatter;
 use std::sync::Arc;
-
+use std::sync::atomic::Ordering;
 use crate::execution_plan::{EmissionType, boundedness_from_children};
 use crate::expressions::PhysicalSortExpr;
 use crate::joins::sort_merge_join::metrics::SortMergeJoinMetrics;
@@ -44,6 +44,7 @@ use crate::{
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::SchemaRef;
+use futures::TryStreamExt;
 use datafusion_common::{
     JoinSide, JoinType, NullEquality, Result, assert_eq_or_internal_err, internal_err,
     plan_err,
@@ -53,6 +54,7 @@ use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr_common::physical_expr::{PhysicalExprRef, fmt_sql};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
+use crate::stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter};
 
 /// Join execution plan that executes equi-join predicates on multiple partitions using Sort-Merge
 /// join algorithm and applies an optional filter post join. Can be used to join arbitrarily large
@@ -506,6 +508,31 @@ impl ExecutionPlan for SortMergeJoinExec {
 
         // create output buffer
         let batch_size = context.session_config().batch_size();
+
+        if self.join_type == JoinType::Inner && self.filter.is_none() {
+            let mut builder = RecordBatchReceiverStream::builder(self.schema(), 2);
+            let schema = self.schema();
+
+            let sort_options = self.sort_options.clone();
+            let null_equality = self.null_equality;
+            let tx = builder.tx();
+            builder.spawn(async move {
+                super::join_types::inner_join::inner_join(
+                    schema,
+                    batch_size,
+                    streamed,
+                    on_streamed,
+                    buffered,
+                    on_buffered,
+                    tx,
+                    sort_options,
+                    null_equality
+                ).await
+            });
+
+            // returned stream simply reads off the rx stream
+            return Ok(builder.build())
+        }
 
         // create memory reservation
         let reservation = MemoryConsumer::new(format!("SMJStream[{partition}]"))
