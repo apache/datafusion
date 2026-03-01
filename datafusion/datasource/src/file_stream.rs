@@ -126,7 +126,12 @@ impl FileStream {
                     Ok(reader) => {
                         // include time needed to start opening in `start_next_file`
                         self.file_stream_metrics.time_opening.stop();
-                        let next = self.start_next_file().transpose();
+                        let next = {
+                            let scanning_total_metric =
+                                self.file_stream_metrics.time_scanning_total.metrics.clone();
+                            let _timer = scanning_total_metric.timer();
+                            self.start_next_file().transpose()
+                        };
                         self.file_stream_metrics.time_scanning_until_data.start();
                         self.file_stream_metrics.time_scanning_total.start();
 
