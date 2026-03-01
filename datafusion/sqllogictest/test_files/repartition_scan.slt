@@ -55,7 +55,7 @@ select * from parquet_table;
 4
 5
 
-## Expect to see the scan read the file as "4" groups with even sizes (offsets)
+## Expect to see the scan with whole files distributed across groups (morsel-driven handles load balancing)
 query TT
 EXPLAIN SELECT column1 FROM parquet_table WHERE column1 <> 42;
 ----
@@ -64,13 +64,13 @@ logical_plan
 02)--TableScan: parquet_table projection=[column1], partial_filters=[parquet_table.column1 != Int32(42)]
 physical_plan
 01)FilterExec: column1@0 != 42
-02)--DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_scan/parquet_table/2.parquet:0..135], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_scan/parquet_table/2.parquet:135..270], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_scan/parquet_table/2.parquet:270..405], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_scan/parquet_table/2.parquet:405..537]]}, projection=[column1], file_type=parquet, predicate=column1@0 != 42, pruning_predicate=column1_null_count@2 != row_count@3 AND (column1_min@0 != 42 OR 42 != column1_max@1), required_guarantees=[column1 not in (42)]
+02)--DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_scan/parquet_table/2.parquet], [], [], []]}, projection=[column1], file_type=parquet, predicate=column1@0 != 42, pruning_predicate=column1_null_count@2 != row_count@3 AND (column1_min@0 != 42 OR 42 != column1_max@1), required_guarantees=[column1 not in (42)]
 
 # disable round robin repartitioning
 statement ok
 set datafusion.optimizer.enable_round_robin_repartition = false;
 
-## Expect to see the scan read the file as "4" groups with even sizes (offsets) again
+## Expect to see the same plan (morsel-driven doesn't depend on round robin)
 query TT
 EXPLAIN SELECT column1 FROM parquet_table WHERE column1 <> 42;
 ----
@@ -79,7 +79,7 @@ logical_plan
 02)--TableScan: parquet_table projection=[column1], partial_filters=[parquet_table.column1 != Int32(42)]
 physical_plan
 01)FilterExec: column1@0 != 42
-02)--DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_scan/parquet_table/2.parquet:0..135], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_scan/parquet_table/2.parquet:135..270], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_scan/parquet_table/2.parquet:270..405], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_scan/parquet_table/2.parquet:405..537]]}, projection=[column1], file_type=parquet, predicate=column1@0 != 42, pruning_predicate=column1_null_count@2 != row_count@3 AND (column1_min@0 != 42 OR 42 != column1_max@1), required_guarantees=[column1 not in (42)]
+02)--DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_scan/parquet_table/2.parquet], [], [], []]}, projection=[column1], file_type=parquet, predicate=column1@0 != 42, pruning_predicate=column1_null_count@2 != row_count@3 AND (column1_min@0 != 42 OR 42 != column1_max@1), required_guarantees=[column1 not in (42)]
 
 # enable round robin repartitioning again
 statement ok
@@ -90,8 +90,7 @@ statement ok
 COPY  (VALUES (100), (200)) TO 'test_files/scratch/repartition_scan/parquet_table/1.parquet'
 STORED AS PARQUET;
 
-## Still expect to see the scan read the file as "4" groups with even sizes. One group should read
-## parts of both files.
+## Expect to see whole files distributed round-robin across groups
 query TT
 EXPLAIN SELECT column1 FROM parquet_table WHERE column1 <> 42 ORDER BY column1;
 ----
@@ -103,7 +102,7 @@ physical_plan
 01)SortPreservingMergeExec: [column1@0 ASC NULLS LAST]
 02)--SortExec: expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[true]
 03)----FilterExec: column1@0 != 42
-04)------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_scan/parquet_table/1.parquet:0..266], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_scan/parquet_table/1.parquet:266..526, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_scan/parquet_table/2.parquet:0..6], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_scan/parquet_table/2.parquet:6..272], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_scan/parquet_table/2.parquet:272..537]]}, projection=[column1], file_type=parquet, predicate=column1@0 != 42, pruning_predicate=column1_null_count@2 != row_count@3 AND (column1_min@0 != 42 OR 42 != column1_max@1), required_guarantees=[column1 not in (42)]
+04)------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_scan/parquet_table/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_scan/parquet_table/2.parquet], [], []]}, projection=[column1], file_type=parquet, predicate=column1@0 != 42, pruning_predicate=column1_null_count@2 != row_count@3 AND (column1_min@0 != 42 OR 42 != column1_max@1), required_guarantees=[column1 not in (42)]
 
 
 ## Read the files as though they are ordered
