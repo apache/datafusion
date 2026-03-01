@@ -18,8 +18,7 @@
 //! Module containing helper methods for the various file formats
 //! See write.rs for write related helper methods
 
-use ::arrow::array::RecordBatch;
-
+use arrow::array::RecordBatch;
 use arrow::error::ArrowError;
 use bytes::Buf;
 use bytes::Bytes;
@@ -29,7 +28,27 @@ use futures::stream::BoxStream;
 use futures::{Stream, ready};
 use std::collections::VecDeque;
 use std::fmt;
+use std::io::BufRead;
 use std::task::Poll;
+
+/// Trait defining a scheme for deserializing byte streams into structured data.
+/// Implementors of this trait are responsible for converting raw bytes into
+/// `RecordBatch` objects.
+pub trait BatchDeserializer<T>: Send + fmt::Debug {
+    /// Feeds a message for deserialization, updating the internal state of
+    /// this `BatchDeserializer`. Note that one can call this function multiple
+    /// times before calling `next`, which will queue multiple messages for
+    /// deserialization.
+    fn digest(&mut self, message: T);
+
+    /// Attempts to deserialize any pending messages and returns a
+    /// `DeserializerOutput` to indicate progress.
+    fn next(&mut self) -> Result<DeserializerOutput, ArrowError>;
+
+    /// Informs the deserializer that no more messages will be provided for
+    /// deserialization.
+    fn finish(&mut self);
+}
 
 /// Possible outputs of a [`BatchDeserializer`].
 #[derive(Debug, PartialEq)]
@@ -40,25 +59,6 @@ pub enum DeserializerOutput {
     RequiresMoreData,
     /// The input data has been exhausted.
     InputExhausted,
-}
-
-/// Trait defining a scheme for deserializing byte streams into structured data.
-/// Implementors of this trait are responsible for converting raw bytes into
-/// `RecordBatch` objects.
-pub trait BatchDeserializer<T>: Send + fmt::Debug {
-    /// Feeds a message for deserialization, updating the internal state of
-    /// this `BatchDeserializer`. Note that one can call this function multiple
-    /// times before calling `next`, which will queue multiple messages for
-    /// deserialization. Returns the number of bytes consumed.
-    fn digest(&mut self, message: T) -> usize;
-
-    /// Attempts to deserialize any pending messages and returns a
-    /// `DeserializerOutput` to indicate progress.
-    fn next(&mut self) -> Result<DeserializerOutput, ArrowError>;
-
-    /// Informs the deserializer that no more messages will be provided for
-    /// deserialization.
-    fn finish(&mut self);
 }
 
 /// A general interface for decoders such as [`arrow::json::reader::Decoder`] and
@@ -86,24 +86,37 @@ pub trait Decoder: Send + fmt::Debug {
     fn can_flush_early(&self) -> bool;
 }
 
-impl<T: Decoder> fmt::Debug for DecoderDeserializer<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Deserializer")
-            .field("buffered_queue", &self.buffered_queue)
-            .field("finalized", &self.finalized)
-            .finish()
+/// A generic, decoder-based deserialization scheme for processing encoded data.
+///
+/// This struct is responsible for converting a stream of bytes, which represent
+/// encoded data, into a stream of `RecordBatch` objects, following the specified
+/// schema and formatting options. It also handles any buffering necessary to satisfy
+/// the `Decoder` interface.
+pub struct DecoderDeserializer<T: Decoder> {
+    /// The underlying decoder used for deserialization
+    pub(crate) decoder: T,
+    /// The buffer used to store the remaining bytes to be decoded
+    pub(crate) buffered_queue: VecDeque<Bytes>,
+    /// Whether the input stream has been fully consumed
+    pub(crate) finalized: bool,
+}
+
+impl<T: Decoder> DecoderDeserializer<T> {
+    /// Creates a new `DecoderDeserializer` with the provided decoder.
+    pub fn new(decoder: T) -> Self {
+        DecoderDeserializer {
+            decoder,
+            buffered_queue: VecDeque::new(),
+            finalized: false,
+        }
     }
 }
 
 impl<T: Decoder> BatchDeserializer<Bytes> for DecoderDeserializer<T> {
-    fn digest(&mut self, message: Bytes) -> usize {
-        if message.is_empty() {
-            return 0;
+    fn digest(&mut self, message: Bytes) {
+        if !message.is_empty() {
+            self.buffered_queue.push_back(message);
         }
-
-        let consumed = message.len();
-        self.buffered_queue.push_back(message);
-        consumed
     }
 
     fn next(&mut self) -> Result<DeserializerOutput, ArrowError> {
@@ -139,29 +152,12 @@ impl<T: Decoder> BatchDeserializer<Bytes> for DecoderDeserializer<T> {
     }
 }
 
-/// A generic, decoder-based deserialization scheme for processing encoded data.
-///
-/// This struct is responsible for converting a stream of bytes, which represent
-/// encoded data, into a stream of `RecordBatch` objects, following the specified
-/// schema and formatting options. It also handles any buffering necessary to satisfy
-/// the `Decoder` interface.
-pub struct DecoderDeserializer<T: Decoder> {
-    /// The underlying decoder used for deserialization
-    pub(crate) decoder: T,
-    /// The buffer used to store the remaining bytes to be decoded
-    pub(crate) buffered_queue: VecDeque<Bytes>,
-    /// Whether the input stream has been fully consumed
-    pub(crate) finalized: bool,
-}
-
-impl<T: Decoder> DecoderDeserializer<T> {
-    /// Creates a new `DecoderDeserializer` with the provided decoder.
-    pub fn new(decoder: T) -> Self {
-        DecoderDeserializer {
-            decoder,
-            buffered_queue: VecDeque::new(),
-            finalized: false,
-        }
+impl<T: Decoder> fmt::Debug for DecoderDeserializer<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Deserializer")
+            .field("buffered_queue", &self.buffered_queue)
+            .field("finalized", &self.finalized)
+            .finish()
     }
 }
 
@@ -190,4 +186,28 @@ pub fn deserialize_stream<'a>(
         }
     })
     .boxed()
+}
+
+/// Creates an iterator of [`RecordBatch`]es that consumes bytes from an inner [`BufRead`]
+/// and deserializes them using the provided decoder.
+pub fn deserialize_reader<'a>(
+    mut reader: impl BufRead + Send + 'a,
+    mut decoder: impl Decoder + Send + 'a,
+) -> Box<dyn Iterator<Item = Result<RecordBatch, ArrowError>> + Send + 'a> {
+    let mut read = move || {
+        loop {
+            let buf = reader.fill_buf()?;
+
+            let decoded = decoder.decode(buf)?;
+            reader.consume(decoded);
+
+            if decoded == 0 || decoder.can_flush_early() {
+                break;
+            }
+        }
+
+        decoder.flush()
+    };
+
+    Box::new(std::iter::from_fn(move || read().transpose()))
 }
