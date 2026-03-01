@@ -21,7 +21,7 @@ use std::any::Any;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::pin::Pin;
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
 use datafusion_physical_expr::projection::ProjectionExprs;
@@ -238,10 +238,10 @@ pub struct DataSourceExec {
     data_source: Arc<dyn DataSource>,
     /// Cached plan properties such as sort order
     cache: Arc<PlanProperties>,
-    /// Weak reference to the current morsel queue. When all
-    /// [`DataSourceExecStream`]s from an execution cycle are dropped the
-    /// strong count reaches zero and the next cycle creates a fresh queue.
-    morsel_queue: Arc<Mutex<Weak<WorkQueue>>>,
+    /// Shared morsel queue for the current execution cycle. A fresh queue
+    /// is created when `Arc::strong_count` is 1 (only this field holds it),
+    /// meaning all previous [`DataSourceExecStream`]s have been dropped.
+    morsel_queue: Arc<Mutex<Option<Arc<WorkQueue>>>>,
 }
 
 impl DisplayAs for DataSourceExec {
@@ -320,16 +320,19 @@ impl ExecutionPlan for DataSourceExec {
         let (stream, queue) = if let Some(config) = morsel_config {
             let queue = {
                 let mut guard = self.morsel_queue.lock().unwrap();
-                match guard.upgrade() {
-                    Some(q) => q,
-                    None => {
+                match &*guard {
+                    // Reuse the queue if other streams still hold references.
+                    Some(q) if Arc::strong_count(q) > 1 => Arc::clone(q),
+                    // No queue yet, or all previous streams have been dropped
+                    // (strong_count == 1, only this field holds it) — create fresh.
+                    _ => {
                         let all_files = config
                             .file_groups
                             .iter()
                             .flat_map(|g| g.files().iter().cloned())
                             .collect();
                         let q = Arc::new(WorkQueue::new(all_files));
-                        *guard = Arc::downgrade(&q);
+                        *guard = Some(Arc::clone(&q));
                         q
                     }
                 }
@@ -371,7 +374,7 @@ impl ExecutionPlan for DataSourceExec {
         Some(Arc::new(Self {
             data_source,
             cache,
-            morsel_queue: Arc::new(Mutex::new(Weak::new())),
+            morsel_queue: Arc::new(Mutex::new(None)),
         }))
     }
 
@@ -416,7 +419,7 @@ impl ExecutionPlan for DataSourceExec {
                 // Re-compute properties since we have new filters which will impact equivalence info
                 new_node.cache =
                     Arc::new(Self::compute_properties(&new_node.data_source));
-                new_node.morsel_queue = Arc::new(Mutex::new(Weak::new()));
+                new_node.morsel_queue = Arc::new(Mutex::new(None));
 
                 Ok(FilterPushdownPropagation {
                     filters: res.filters,
@@ -491,7 +494,7 @@ impl DataSourceExec {
         Self {
             data_source,
             cache: Arc::new(cache),
-            morsel_queue: Arc::new(Mutex::new(Weak::new())),
+            morsel_queue: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -503,7 +506,7 @@ impl DataSourceExec {
     pub fn with_data_source(mut self, data_source: Arc<dyn DataSource>) -> Self {
         self.cache = Arc::new(Self::compute_properties(&data_source));
         self.data_source = data_source;
-        self.morsel_queue = Arc::new(Mutex::new(Weak::new()));
+        self.morsel_queue = Arc::new(Mutex::new(None));
         self
     }
 
