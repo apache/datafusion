@@ -238,10 +238,10 @@ pub struct DataSourceExec {
     data_source: Arc<dyn DataSource>,
     /// Cached plan properties such as sort order
     cache: Arc<PlanProperties>,
-    /// Shared morsel queue for the current execution cycle. A fresh queue
-    /// is created when `Arc::strong_count` is 1 (only this field holds it),
-    /// meaning all previous [`DataSourceExecStream`]s have been dropped.
-    morsel_queue: Arc<Mutex<Option<Arc<WorkQueue>>>>,
+    /// Shared morsel queue and remaining partition count for the current
+    /// execution cycle. A fresh queue is created once all expected
+    /// partitions have been opened (remaining reaches 0).
+    morsel_queue: Arc<Mutex<Option<(Arc<WorkQueue>, usize)>>>,
 }
 
 impl DisplayAs for DataSourceExec {
@@ -320,11 +320,11 @@ impl ExecutionPlan for DataSourceExec {
         let (stream, queue) = if let Some(config) = morsel_config {
             let queue = {
                 let mut guard = self.morsel_queue.lock().unwrap();
-                match &*guard {
-                    // Reuse the queue if other streams still hold references.
-                    Some(q) if Arc::strong_count(q) > 1 => Arc::clone(q),
-                    // No queue yet, or all previous streams have been dropped
-                    // (strong_count == 1, only this field holds it) — create fresh.
+                match guard.as_mut() {
+                    Some((q, remaining)) if *remaining > 0 => {
+                        *remaining -= 1;
+                        Arc::clone(q)
+                    }
                     _ => {
                         let all_files = config
                             .file_groups
@@ -332,7 +332,8 @@ impl ExecutionPlan for DataSourceExec {
                             .flat_map(|g| g.files().iter().cloned())
                             .collect();
                         let q = Arc::new(WorkQueue::new(all_files));
-                        *guard = Some(Arc::clone(&q));
+                        let remaining = config.file_groups.len().saturating_sub(1);
+                        *guard = Some((Arc::clone(&q), remaining));
                         q
                     }
                 }
