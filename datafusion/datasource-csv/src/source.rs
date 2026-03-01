@@ -17,11 +17,12 @@
 
 //! Execution plan for reading CSV files
 
+use datafusion_datasource::decoder::deserialize_reader;
 use datafusion_datasource::projection::{ProjectionOpener, SplitProjection};
 use datafusion_physical_plan::projection::ProjectionExprs;
 use std::any::Any;
 use std::fmt;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::sync::Arc;
 use std::task::Poll;
 
@@ -46,6 +47,8 @@ use datafusion_physical_plan::{
     DisplayFormatType, ExecutionPlan, ExecutionPlanProperties,
 };
 
+#[cfg(feature = "encoding_rs")]
+use crate::encoding::CharsetDecoder;
 use crate::file_format::CsvDecoder;
 use futures::{StreamExt, TryStreamExt};
 use object_store::buffered::BufWriter;
@@ -234,6 +237,30 @@ impl CsvOpener {
             partition_index: 0,
         }
     }
+
+    #[cfg(feature = "encoding_rs")]
+    fn encoding(&self) -> Result<Option<&'static encoding_rs::Encoding>> {
+        match self.config.options.encoding.as_ref() {
+            Some(enc) => match encoding_rs::Encoding::for_label(enc.as_bytes()) {
+                Some(enc) => Ok(Some(enc)),
+                None => Err(DataFusionError::Configuration(format!(
+                    "Unknown character set '{enc}'"
+                )))?,
+            },
+            None => Ok(None),
+        }
+    }
+
+    #[cfg(not(feature = "encoding_rs"))]
+    fn encoding(&self) -> Result<Option<core::convert::Infallible>> {
+        match &self.config.options.encoding {
+            Some(_) => Err(DataFusionError::NotImplemented(
+                "The 'encoding_rs' feature must be enabled to decode non-UTF-8 encodings"
+                    .to_owned(),
+            ))?,
+            None => Ok(None),
+        }
+    }
 }
 
 impl From<CsvSource> for Arc<dyn FileSource> {
@@ -371,6 +398,7 @@ impl FileOpener for CsvOpener {
         config.options.truncated_rows = Some(config.truncate_rows());
 
         let file_compression_type = self.file_compression_type.to_owned();
+        let encoding = self.encoding()?;
 
         if partitioned_file.range.is_some() {
             assert!(
@@ -410,43 +438,59 @@ impl FileOpener for CsvOpener {
                 .get_opts(&partitioned_file.object_meta.location, options)
                 .await?;
 
+            let decoder = config.builder().build_decoder();
+            let decoder = CsvDecoder::new(decoder);
+
             match result.payload {
                 #[cfg(not(target_arch = "wasm32"))]
                 GetResultPayload::File(mut file, _) => {
                     let is_whole_file_scanned = partitioned_file.range.is_none();
-                    let decoder = if is_whole_file_scanned {
-                        // Don't seek if no range as breaks FIFO files
+                    let reader = if is_whole_file_scanned {
+                        // Don't seek if no range as that would break FIFO files
                         file_compression_type.convert_read(file)?
                     } else {
-                        file.seek(SeekFrom::Start(result.range.start as _))?;
-                        file_compression_type.convert_read(
-                            file.take((result.range.end - result.range.start) as u64),
-                        )?
+                        let bytes = (result.range.end - result.range.start) as u64;
+                        file.seek(SeekFrom::Start(result.range.start as u64))?;
+                        file_compression_type.convert_read(file.take(bytes))?
                     };
 
-                    let mut reader = config.open(decoder)?;
+                    let reader = BufReader::new(reader);
+
+                    let mut reader = match encoding {
+                        #[cfg(feature = "encoding_rs")]
+                        Some(enc) => {
+                            let decoder = CharsetDecoder::new(decoder, enc);
+                            deserialize_reader(reader, decoder)
+                        }
+                        None => deserialize_reader(reader, decoder),
+                    };
 
                     // Use std::iter::from_fn to wrap execution of iterator's next() method.
                     let iterator = std::iter::from_fn(move || {
                         let mut timer = baseline_metrics.elapsed_compute().timer();
                         let result = reader.next();
                         timer.stop();
-                        result
+                        result.map(|r| r.map_err(Into::into))
                     });
 
-                    Ok(futures::stream::iter(iterator)
-                        .map(|r| r.map_err(Into::into))
-                        .boxed())
+                    Ok(futures::stream::iter(iterator).boxed())
                 }
-                GetResultPayload::Stream(s) => {
-                    let decoder = config.builder().build_decoder();
-                    let s = s.map_err(DataFusionError::from);
-                    let input = file_compression_type.convert_stream(s.boxed())?.fuse();
+                GetResultPayload::Stream(stream) => {
+                    let stream = stream.map_err(DataFusionError::from).boxed();
 
-                    let stream = deserialize_stream(
-                        input,
-                        DecoderDeserializer::new(CsvDecoder::new(decoder)),
-                    );
+                    let stream = file_compression_type.convert_stream(stream)?.fuse();
+
+                    let stream = match encoding {
+                        #[cfg(feature = "encoding_rs")]
+                        Some(enc) => {
+                            let decoder = CharsetDecoder::new(decoder, enc);
+                            deserialize_stream(stream, DecoderDeserializer::new(decoder))
+                        }
+                        None => {
+                            deserialize_stream(stream, DecoderDeserializer::new(decoder))
+                        }
+                    };
+
                     Ok(stream.map_err(Into::into).boxed())
                 }
             }
