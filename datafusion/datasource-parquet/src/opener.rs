@@ -654,7 +654,8 @@ impl FileOpener for ParquetOpener {
             // unnecessary I/O. We decide later if it is needed to evaluate the
             // pruning predicates. Thus default to not requesting it from the
             // underlying reader.
-            let mut options = ArrowReaderOptions::new().with_page_index(false);
+            let mut options =
+                ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Skip);
             #[cfg(feature = "parquet_encryption")]
             if let Some(fd_val) = file_decryption_properties {
                 options = options.with_file_decryption_properties(Arc::clone(&fd_val));
@@ -1376,7 +1377,7 @@ mod test {
     };
     use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricValue};
     use futures::{Stream, StreamExt};
-    use object_store::{ObjectStore, memory::InMemory, path::Path};
+    use object_store::{ObjectStore, ObjectStoreExt, memory::InMemory, path::Path};
     use parquet::arrow::ArrowWriter;
     use parquet::file::properties::WriterProperties;
 
@@ -2086,7 +2087,7 @@ mod test {
         // Write parquet file with multiple row groups
         // Force small row groups by setting max_row_group_size
         let props = WriterProperties::builder()
-            .set_max_row_group_size(3) // Force each batch into its own row group
+            .set_max_row_group_row_count(Some(3)) // Force each batch into its own row group
             .build();
 
         let data_len = write_parquet_batches(
@@ -2186,7 +2187,7 @@ mod test {
                 .unwrap(); // 4 rows
 
         let props = WriterProperties::builder()
-            .set_max_row_group_size(4)
+            .set_max_row_group_row_count(Some(4))
             .build();
 
         let data_len = write_parquet_batches(
@@ -2273,7 +2274,7 @@ mod test {
         let batch3 = record_batch!(("a", Int32, vec![Some(7), Some(8)])).unwrap();
 
         let props = WriterProperties::builder()
-            .set_max_row_group_size(2)
+            .set_max_row_group_row_count(Some(2))
             .build();
 
         let data_len = write_parquet_batches(
