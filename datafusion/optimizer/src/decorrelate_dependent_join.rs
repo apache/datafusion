@@ -1533,7 +1533,7 @@ impl OptimizerRule for DecorrelateDependentJoin {
                 "dependent join plan\n{}",
                 rewrite_result.data.display_indent()
             );
-            let mut decorrelator = DependentJoinDecorrelator::new_root(transformer.delim_scan_nodes.clone());
+            let mut decorrelator = DependentJoinDecorrelator::new_root(transformer.domain_columns_provider_nodes.clone());
             let ret = decorrelator.decorrelate(&rewrite_result.data, true, 0)?;
 
             debug_println!("decorrelated plan\n{}", ret.display_indent(),);

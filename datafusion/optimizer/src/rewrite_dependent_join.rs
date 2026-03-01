@@ -58,7 +58,7 @@ pub struct DependentJoinRewriter {
     // subquery alias of a really complex logical plan
     // that can even be a correlated subquery (unsupported for now)
     // or an alias of a uncorrelated subquery
-    pub delim_scan_nodes: IndexMap<usize, LogicalPlan>,
+    pub domain_columns_provider_nodes: IndexMap<usize, LogicalPlan>,
 }
 
 #[derive(Debug, Hash, PartialEq, PartialOrd, Eq, Clone)]
@@ -571,7 +571,7 @@ impl DependentJoinRewriter {
             stack: vec![],
             all_outer_ref_columns: IndexMap::new(),
             subquery_depth: 0,
-            delim_scan_nodes: IndexMap::new(),
+            domain_columns_provider_nodes: IndexMap::new(),
         }
     }
 }
@@ -893,7 +893,7 @@ impl TreeNodeRewriter for DependentJoinRewriter {
             // TODO: maybe there are more logical plan that provides columns
             // aside from TableScan
             LogicalPlan::TableScan(tbl_scan) => {
-                self.delim_scan_nodes.insert(new_id,node.clone());
+                self.domain_columns_provider_nodes.insert(new_id,node.clone());
                 tbl_scan
                     .projected_schema
                     .columns()
@@ -905,7 +905,7 @@ impl TreeNodeRewriter for DependentJoinRewriter {
             // Similar to TableScan, this node may provide column names which
             // is referenced inside some subqueries
             LogicalPlan::SubqueryAlias(alias) => {
-                self.delim_scan_nodes.insert(new_id,node.clone());
+                self.domain_columns_provider_nodes.insert(new_id,node.clone());
                 alias.schema.columns().iter().try_for_each(|col| {
                     self.conclude_lowest_dependent_join_node_if_any(col,new_id)
                 })?;
