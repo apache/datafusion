@@ -634,7 +634,10 @@ impl ExecutionPlan for InterleaveExec {
         let stats = self
             .inputs
             .iter()
-            .map(|stat| stat.partition_statistics(partition).map(Arc::unwrap_or_clone))
+            .map(|stat| {
+                stat.partition_statistics(partition)
+                    .map(Arc::unwrap_or_clone)
+            })
             .collect::<Result<Vec<_>>>()?;
 
         Ok(Arc::new(

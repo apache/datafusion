@@ -1497,7 +1497,10 @@ mod tests {
             unimplemented!()
         }
 
-        fn partition_statistics(&self, _partition: Option<usize>) -> Result<Arc<Statistics>> {
+        fn partition_statistics(
+            &self,
+            _partition: Option<usize>,
+        ) -> Result<Arc<Statistics>> {
             unimplemented!()
         }
     }
@@ -1560,7 +1563,10 @@ mod tests {
             unimplemented!()
         }
 
-        fn partition_statistics(&self, _partition: Option<usize>) -> Result<Arc<Statistics>> {
+        fn partition_statistics(
+            &self,
+            _partition: Option<usize>,
+        ) -> Result<Arc<Statistics>> {
             unimplemented!()
         }
     }

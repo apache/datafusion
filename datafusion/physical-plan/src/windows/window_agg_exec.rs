@@ -273,7 +273,8 @@ impl ExecutionPlan for WindowAggExec {
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        let input_stat = Arc::unwrap_or_clone(self.input.partition_statistics(partition)?);
+        let input_stat =
+            Arc::unwrap_or_clone(self.input.partition_statistics(partition)?);
         let win_cols = self.window_expr.len();
         let input_cols = self.input.schema().fields().len();
         // TODO stats: some windowing function will maintain invariants such as min, max...

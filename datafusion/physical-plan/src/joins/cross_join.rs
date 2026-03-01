@@ -359,7 +359,8 @@ impl ExecutionPlan for CrossJoinExec {
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         // Get the all partitions statistics of the left
         let left_stats = Arc::unwrap_or_clone(self.left.partition_statistics(None)?);
-        let right_stats = Arc::unwrap_or_clone(self.right.partition_statistics(partition)?);
+        let right_stats =
+            Arc::unwrap_or_clone(self.right.partition_statistics(partition)?);
 
         Ok(Arc::new(stats_cartesian_product(left_stats, right_stats)))
     }

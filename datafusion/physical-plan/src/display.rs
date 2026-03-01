@@ -1176,7 +1176,10 @@ mod tests {
             todo!()
         }
 
-        fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+        fn partition_statistics(
+            &self,
+            partition: Option<usize>,
+        ) -> Result<Arc<Statistics>> {
             if partition.is_some() {
                 return Ok(Arc::new(Statistics::new_unknown(self.schema().as_ref())));
             }
