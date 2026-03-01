@@ -124,7 +124,7 @@ impl FileStream {
                 }
                 FileStreamState::Open { future } => match ready!(future.poll_unpin(cx)) {
                     Ok(reader) => {
-                        self.file_stream_metrics.files_opened.add(1);
+                        self.file_stream_metrics.files_processed.add(1);
                         // include time needed to start opening in `start_next_file`
                         self.file_stream_metrics.time_opening.stop();
                         let next = self.start_next_file().transpose();
@@ -180,6 +180,13 @@ impl FileStream {
                                         batch
                                     } else {
                                         let batch = batch.slice(0, *remain);
+                                        // Count the prefetched next file (if any) and
+                                        // all remaining files we will never open.
+                                        let unprocessed = self.file_iter.len()
+                                            + usize::from(next.is_some());
+                                        self.file_stream_metrics
+                                            .files_processed
+                                            .add(unprocessed);
                                         self.state = FileStreamState::Limit;
                                         *remain = 0;
                                         batch
@@ -401,8 +408,10 @@ pub struct FileStreamMetrics {
     /// If using `OnError::Skip` this will provide a count of the number of files
     /// which were skipped and will not be included in the scan results.
     pub file_scan_errors: Count,
-    /// Count of files successfully opened.
-    pub files_opened: Count,
+    /// Count of files processed (opened, pruned, or skipped due to limit).
+    /// When the stream completes, this equals the total number of files
+    /// assigned to this partition.
+    pub files_processed: Count,
     /// Count of files completely scanned (reader stream fully consumed).
     pub files_scanned: Count,
 }
@@ -439,7 +448,8 @@ impl FileStreamMetrics {
         let file_scan_errors =
             MetricBuilder::new(metrics).counter("file_scan_errors", partition);
 
-        let files_opened = MetricBuilder::new(metrics).counter("files_opened", partition);
+        let files_processed =
+            MetricBuilder::new(metrics).counter("files_processed", partition);
 
         let files_scanned =
             MetricBuilder::new(metrics).counter("files_scanned", partition);
@@ -451,7 +461,7 @@ impl FileStreamMetrics {
             time_processing,
             file_open_errors,
             file_scan_errors,
-            files_opened,
+            files_processed,
             files_scanned,
         }
     }
