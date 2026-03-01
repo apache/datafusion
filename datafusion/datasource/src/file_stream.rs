@@ -468,35 +468,21 @@ impl WorkQueue {
     pub fn pull(&self) -> WorkStatus {
         let mut queue = self.queue.lock().unwrap();
         if let Some(file) = queue.pop_front() {
-            self.morselizing_count.fetch_add(1, Ordering::SeqCst);
+            // Relaxed: we hold the mutex, which provides the necessary memory barrier.
+            self.morselizing_count.fetch_add(1, Ordering::Relaxed);
             WorkStatus::Work(Box::new(file))
-        } else if self.morselizing_count.load(Ordering::SeqCst) > 0 {
+        } else if self.morselizing_count.load(Ordering::Relaxed) > 0 {
             WorkStatus::Wait
         } else {
             WorkStatus::Done
         }
     }
 
-    /// Pull the front file from the queue only if `predicate` returns true for it.
-    ///
-    /// Does **not** increment `morselizing_count` — the caller must open the file
-    /// directly without going through the morselization state.
-    pub fn pull_if<F: FnOnce(&PartitionedFile) -> bool>(
-        &self,
-        predicate: F,
-    ) -> Option<PartitionedFile> {
-        let mut queue = self.queue.lock().unwrap();
-        if queue.front().map(predicate).unwrap_or(false) {
-            queue.pop_front()
-        } else {
-            None
-        }
-    }
-
     /// Returns true if there is work in the queue or if all morselizing is done.
     pub fn has_work_or_done(&self) -> bool {
         let queue = self.queue.lock().unwrap();
-        !queue.is_empty() || self.morselizing_count.load(Ordering::SeqCst) == 0
+        // Relaxed: we hold the mutex, which provides the necessary memory barrier.
+        !queue.is_empty() || self.morselizing_count.load(Ordering::Relaxed) == 0
     }
 
     /// Push many files back to the queue.
@@ -510,11 +496,6 @@ impl WorkQueue {
         self.notify.notify_waiters();
     }
 
-    /// Increment the morselizing count.
-    pub fn start_morselizing(&self) {
-        self.morselizing_count.fetch_add(1, Ordering::SeqCst);
-    }
-
     /// Decrement the morselizing count. Notifies waiting workers only when the
     /// count reaches zero, since that is the point at which they may need to
     /// re-evaluate whether all work is done. When count is still > 0, any new
@@ -525,16 +506,6 @@ impl WorkQueue {
         if prev == 1 {
             self.notify.notify_waiters();
         }
-    }
-
-    /// Return true if any worker is currently morselizing.
-    pub fn is_morselizing(&self) -> bool {
-        self.morselizing_count.load(Ordering::SeqCst) > 0
-    }
-
-    /// Return a future that resolves when work is added or morselizing finishes.
-    pub async fn wait_for_work(&self) {
-        self.notify.notified().await;
     }
 }
 

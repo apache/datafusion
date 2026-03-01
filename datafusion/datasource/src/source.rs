@@ -127,16 +127,25 @@ pub trait DataSource: Send + Sync + Debug {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream>;
 
-    /// Set a shared morsel queue for morsel-driven execution.
+    /// Inject a shared morsel queue for morsel-driven execution.
     ///
-    /// The default implementation is a no-op. Override this in
-    /// implementations that support morsel-driven scheduling (e.g.
-    /// [`FileScanConfig`]).
+    /// **Internal use only.** This is called by [`DataSourceExec::execute`] on
+    /// [`FileScanConfig`] instances to distribute work across partitions. Custom
+    /// [`DataSource`] implementations do not need to override this method — it is
+    /// never called on non-[`FileScanConfig`] sources because [`DataSourceExec`]
+    /// only activates morsel-driven scheduling after a successful
+    /// `downcast_ref::<FileScanConfig>()`.
+    ///
+    /// The default panics to catch accidental misuse.
+    #[doc(hidden)]
     fn with_shared_morsel_queue(
         &self,
         _queue: Option<Arc<WorkQueue>>,
     ) -> Arc<dyn DataSource> {
-        unimplemented!("with_shared_morsel_queue is not supported for this DataSource")
+        panic!(
+            "with_shared_morsel_queue called on a DataSource that does not support it. \
+             This is an internal method only called on FileScanConfig by DataSourceExec."
+        )
     }
     fn as_any(&self) -> &dyn Any;
     /// Format this source for display in explain plans
@@ -330,6 +339,13 @@ impl ExecutionPlan for DataSourceExec {
 
                 // Start a new cycle once all expected partition streams for the
                 // previous cycle have been opened.
+                //
+                // Limitation: this heuristic assumes every execution opens all
+                // `file_groups.len()` partitions. If a caller opens only a subset
+                // (e.g. partition 0 of 2 and then abandons the rest), the state
+                // remains stuck and the next execution reuses the stale queue.
+                // In normal DataFusion query execution all partitions are opened,
+                // so this is acceptable in practice.
                 if state.expected_streams > 0
                     && state.streams_opened >= state.expected_streams
                 {

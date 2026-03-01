@@ -320,7 +320,7 @@ impl FileOpener for ParquetOpener {
                 }
             }
 
-            let mut _metadata_timer = file_metrics.metadata_load_time.timer();
+            let _metadata_timer = file_metrics.metadata_load_time.timer();
             let mut reader_metadata =
                 ArrowReaderMetadata::load_async(&mut async_file_reader, options.clone())
                     .await?;

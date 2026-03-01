@@ -93,6 +93,11 @@ pub async fn json_shredding() -> Result<()> {
     // Set up query execution
     let mut cfg = SessionConfig::new();
     cfg.options_mut().execution.parquet.pushdown_filters = true;
+    // Morsel-driven execution is disabled here because the example uses a small
+    // single-partition file with `set_max_row_group_size(2)`. Enabling it would
+    // split the file into per-row-group morsels that could be consumed by any
+    // partition, changing the output row order and breaking the deterministic
+    // `assert_batches_eq!` assertions below.
     cfg.options_mut().execution.parquet.allow_morsel_driven = false;
     let ctx = SessionContext::new_with_config(cfg);
     ctx.runtime_env().register_object_store(

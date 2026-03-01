@@ -272,8 +272,15 @@ impl RunQueryResult {
         // filter pushdown may legitimately return different tied rows.
         //
         // The dynamic filter must not change the *sort-key values* of the top-k
-        // result. We verify correctness by projecting both results down to only
-        // the ORDER BY columns and comparing those.
+        // result. We verify correctness by:
+        // 1. Checking the row counts match (wrong count is always a bug).
+        // 2. Projecting both results down to only the ORDER BY columns and
+        //    comparing those (tied rows may differ, but the sort-key values must not).
+        let expected_rows: usize = self.expected.iter().map(|b| b.num_rows()).sum();
+        let result_rows: usize = self.result.iter().map(|b| b.num_rows()).sum();
+        if expected_rows != result_rows {
+            return false;
+        }
         let sort_cols = self.sort_columns();
         let expected_keys = Self::project_columns(&self.expected, &sort_cols);
         let result_keys = Self::project_columns(&self.result, &sort_cols);

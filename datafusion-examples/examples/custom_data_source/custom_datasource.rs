@@ -61,7 +61,6 @@ async fn search_accounts(
     filter: Option<Expr>,
     expected_result_length: usize,
 ) -> Result<()> {
-    // create local execution context
     let config = SessionConfig::new()
         .set_bool("datafusion.execution.parquet.allow_morsel_driven", false);
     let ctx = SessionContext::new_with_config(config);
