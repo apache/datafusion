@@ -131,11 +131,17 @@ pub(crate) async fn inner_join(
             // left < right
             Ordering::Less => {
                 // If left is less than right
-                left_join_key.advance();
+                // TODO - optimization - advance left until not less than right join key
+                left_join_key.try_skip_while(|left| {
+                    left.get_ord(right_join_key, null_equality, sort_options.as_slice()).map(|ord| ord == Ordering::Less)
+                })?;
             }
             // left > right
             Ordering::Greater => {
-                right_join_key.advance();
+                // TODO - optimization - advance right until not less than left join key
+                right_join_key.try_skip_while(|right| {
+                    left_join_key.get_ord(right, null_equality, sort_options.as_slice()).map(|ord| ord == Ordering::Greater)
+                })?;
             }
             // left == right
             Ordering::Equal => {
