@@ -161,7 +161,59 @@ pub trait ExtensionPlanner {
     /// Create a physical plan for a [`LogicalPlan::TableScan`].
     ///
     /// This is useful for planning valid [`TableSource`]s that are not [`TableProvider`]s.
+    /// # Example
     ///
+    /// ```rust,ignore
+    /// use std::sync::Arc;
+    /// use datafusion::physical_plan::ExecutionPlan;
+    /// use datafusion::logical_expr::TableScan;
+    /// use datafusion::execution::context::SessionState;
+    /// use datafusion::error::Result;
+    /// use datafusion_physical_planner::{ExtensionPlanner, PhysicalPlanner};
+    /// use async_trait::async_trait;
+    ///
+    /// // Your custom table source type
+    /// struct MyCustomTableSource { /* ... */ }
+    ///
+    /// // Your custom execution plan
+    /// struct MyCustomExec { /* ... */ }
+    ///
+    /// struct MyExtensionPlanner;
+    ///
+    /// #[async_trait]
+    /// impl ExtensionPlanner for MyExtensionPlanner {
+    ///     async fn plan_extension(
+    ///         &self,
+    ///         _planner: &dyn PhysicalPlanner,
+    ///         _node: &dyn UserDefinedLogicalNode,
+    ///         _logical_inputs: &[&LogicalPlan],
+    ///         _physical_inputs: &[Arc<dyn ExecutionPlan>],
+    ///         _session_state: &SessionState,
+    ///     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    ///         Ok(None)
+    ///     }
+    ///
+    ///     async fn plan_table_scan(
+    ///         &self,
+    ///         _planner: &dyn PhysicalPlanner,
+    ///         scan: &TableScan,
+    ///         _session_state: &SessionState,
+    ///     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    ///         // Check if this is your custom table source
+    ///         if scan.source.as_any().is::<MyCustomTableSource>() {
+    ///             // Create a custom execution plan for your table source
+    ///             let exec = MyCustomExec::new(
+    ///                 scan.table_name.clone(),
+    ///                 Arc::clone(scan.projected_schema.inner()),
+    ///             );
+    ///             Ok(Some(Arc::new(exec)))
+    ///         } else {
+    ///             // Return None to let other extension planners handle it
+    ///             Ok(None)
+    ///         }
+    ///     }
+    /// }
+    /// ```
     /// Returns:
     /// * `Ok(Some(plan))` if the planner knows how to plan the `scan`
     /// * `Ok(None)` if the planner does not know how to plan the `scan` and wants to delegate the planning to another [`ExtensionPlanner`]
