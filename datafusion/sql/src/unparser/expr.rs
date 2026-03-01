@@ -1094,6 +1094,7 @@ impl Unparser<'_> {
             Operator::Question => Ok(BinaryOperator::Question),
             Operator::QuestionAnd => Ok(BinaryOperator::QuestionAnd),
             Operator::QuestionPipe => Ok(BinaryOperator::QuestionPipe),
+            Operator::Colon => Ok(BinaryOperator::Custom(":".to_owned())),
         }
     }
 
