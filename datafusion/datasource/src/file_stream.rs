@@ -156,11 +156,7 @@ impl FileStream {
                         match queue.pull() {
                             WorkStatus::Work(part_file) => {
                                 if self.file_opener.is_leaf_morsel(&part_file) {
-                                    // Fast path: already a leaf morsel — skip the
-                                    // Morselizing state entirely.  Undo the count
-                                    // increment that pull() did since we won't be
-                                    // morselizing.
-                                    queue.stop_morselizing();
+                                    // Leaf morsel from the morsel queue — open directly.
                                     match self.file_opener.open(part_file) {
                                         Ok(future) => {
                                             self.state = FileStreamState::Open { future }
@@ -172,6 +168,7 @@ impl FileStream {
                                         }
                                     }
                                 } else {
+                                    // Whole file from the file queue — morselize it.
                                     self.morsel_guard = Some(MorselizingGuard {
                                         queue: Arc::clone(queue),
                                     });
@@ -222,12 +219,11 @@ impl FileStream {
                                 // No morsels returned, skip this file
                                 self.state = FileStreamState::Idle;
                             } else {
-                                // Push all morsels to the front of the queue so
-                                // this worker (or a nearby one) picks them up next,
-                                // preserving I/O locality for row groups from the
-                                // same file. Go back to Idle to pull the first one
-                                // through the normal path.
-                                queue.push_front_many(morsels);
+                                // Push morsels to the morsel queue. Workers
+                                // drain that queue before pulling new files,
+                                // so these row groups get processed next,
+                                // preserving I/O locality within the file.
+                                queue.push_morsels(morsels);
                                 self.state = FileStreamState::Idle;
                             }
                         }
@@ -421,9 +417,18 @@ pub enum WorkStatus {
 }
 
 /// A shared queue of [`PartitionedFile`] morsels for morsel-driven execution.
+///
+/// Internally keeps two queues: one for whole files that still need
+/// morselizing and one for already-morselized leaf morsels (e.g. row
+/// groups). Workers drain the morsel queue first, which keeps I/O
+/// sequential within a file because freshly produced morsels are
+/// consumed before the next file is opened.
 #[derive(Debug)]
 pub struct WorkQueue {
-    queue: Mutex<VecDeque<PartitionedFile>>,
+    /// Whole files waiting to be morselized.
+    files: Mutex<VecDeque<PartitionedFile>>,
+    /// Already-morselized leaf morsels ready to be opened directly.
+    morsels: Mutex<VecDeque<PartitionedFile>>,
     /// Number of workers currently morselizing a file.
     morselizing_count: AtomicUsize,
     /// Notify waiters when work is added or morselizing finishes.
@@ -431,55 +436,62 @@ pub struct WorkQueue {
 }
 
 impl WorkQueue {
-    /// Create a new `WorkQueue` with the given initial files
+    /// Create a new `WorkQueue` with the given initial files.
     pub fn new(initial_files: Vec<PartitionedFile>) -> Self {
         Self {
-            queue: Mutex::new(VecDeque::from(initial_files)),
+            files: Mutex::new(VecDeque::from(initial_files)),
+            morsels: Mutex::new(VecDeque::new()),
             morselizing_count: AtomicUsize::new(0),
             notify: Notify::new(),
         }
     }
 
-    /// Pull a file from the queue.
+    /// Pull a work item from the queue.
+    ///
+    /// Prefers already-morselized morsels (for I/O locality) over whole
+    /// files that still need morselizing.
     pub fn pull(&self) -> WorkStatus {
-        let mut queue = self.queue.lock().unwrap();
-        if let Some(file) = queue.pop_front() {
+        // First try the morsel queue — these are ready to open immediately
+        // and preserve locality with the file that was just morselized.
+        if let Some(morsel) = self.morsels.lock().unwrap().pop_front() {
+            return WorkStatus::Work(morsel);
+        }
+        // Fall back to whole files that need morselizing.
+        let mut files = self.files.lock().unwrap();
+        if let Some(file) = files.pop_front() {
             // Relaxed: the increment is done by the same task that will later call
             // stop_morselizing(), so program order ensures the decrement sees it.
             self.morselizing_count.fetch_add(1, Ordering::Relaxed);
             WorkStatus::Work(file)
         } else if self.morselizing_count.load(Ordering::Acquire) > 0 {
             // Acquire: stop_morselizing() uses AcqRel (a Release write) without
-            // holding the queue mutex, so we need Acquire here to synchronize with
+            // holding the files mutex, so we need Acquire here to synchronize with
             // it on weakly-ordered architectures (e.g. ARM).
             WorkStatus::Wait
         } else {
-            WorkStatus::Done
+            // Check the morsel queue one more time — a morselizer may have
+            // pushed work between our first check and reaching this point.
+            if self.morsels.lock().unwrap().is_empty() {
+                WorkStatus::Done
+            } else {
+                WorkStatus::Wait
+            }
         }
     }
 
-    /// Returns true if there is work in the queue or if all morselizing is done.
+    /// Returns true if there is work in either queue or if all morselizing is done.
     pub fn has_work_or_done(&self) -> bool {
-        let queue = self.queue.lock().unwrap();
-        // Acquire: stop_morselizing() writes morselizing_count with AcqRel outside
-        // the queue mutex, so Acquire is needed to synchronize with that Release.
-        !queue.is_empty() || self.morselizing_count.load(Ordering::Acquire) == 0
+        !self.morsels.lock().unwrap().is_empty()
+            || !self.files.lock().unwrap().is_empty()
+            || self.morselizing_count.load(Ordering::Acquire) == 0
     }
 
-    /// Push morsels to the front of the queue, preserving their order.
-    ///
-    /// Morsels from the same file are kept together at the front so that
-    /// the next worker to pull gets row groups from the same file,
-    /// improving I/O locality (page-cache stays warm for that file).
-    pub fn push_front_many(&self, files: Vec<PartitionedFile>) {
-        if files.is_empty() {
+    /// Push morselized leaf morsels to the morsel queue.
+    pub fn push_morsels(&self, morsels: Vec<PartitionedFile>) {
+        if morsels.is_empty() {
             return;
         }
-        let n = files.len();
-        let mut queue = self.queue.lock().unwrap();
-        queue.extend(files);
-        queue.rotate_right(n);
-        drop(queue);
+        self.morsels.lock().unwrap().extend(morsels);
         self.notify.notify_waiters();
     }
 
@@ -487,7 +499,7 @@ impl WorkQueue {
     /// count reaches zero, since that is the point at which they may need to
     /// re-evaluate whether all work is done. When count is still > 0, any new
     /// morsels pushed to the queue already triggered a notification via
-    /// `push_front_many`, so no additional wakeup is needed here.
+    /// `push_morsels`, so no additional wakeup is needed here.
     pub fn stop_morselizing(&self) {
         let prev = self.morselizing_count.fetch_sub(1, Ordering::AcqRel);
         if prev == 1 {
