@@ -16,6 +16,7 @@
 // under the License.
 
 pub mod abs;
+pub mod bin;
 pub mod expm1;
 pub mod factorial;
 pub mod hex;
@@ -42,6 +43,7 @@ make_udf_function!(width_bucket::SparkWidthBucket, width_bucket);
 make_udf_function!(trigonometry::SparkCsc, csc);
 make_udf_function!(trigonometry::SparkSec, sec);
 make_udf_function!(negative::SparkNegative, negative);
+make_udf_function!(bin::SparkBin, bin);
 
 pub mod expr_fn {
     use datafusion_functions::export_functions;
@@ -70,6 +72,11 @@ pub mod expr_fn {
         "Returns the negation of expr (unary minus).",
         arg1
     ));
+    export_functions!((
+        bin,
+        "Returns the string representation of the long value represented in binary.",
+        arg1
+    ));
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
@@ -86,5 +93,6 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         csc(),
         sec(),
         negative(),
+        bin(),
     ]
 }

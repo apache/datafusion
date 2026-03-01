@@ -34,8 +34,8 @@ use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
+use hashbrown::HashSet;
 use std::any::Any;
-use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
