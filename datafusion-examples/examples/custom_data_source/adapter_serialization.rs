@@ -69,7 +69,7 @@ use datafusion_proto::protobuf::{
 };
 use object_store::memory::InMemory;
 use object_store::path::Path;
-use object_store::{ObjectStore, PutPayload};
+use object_store::{ObjectStore, ObjectStoreExt, PutPayload};
 use serde::{Deserialize, Serialize};
 
 /// Example showing how to preserve custom adapter information during plan serialization.

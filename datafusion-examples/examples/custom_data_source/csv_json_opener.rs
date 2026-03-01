@@ -36,7 +36,7 @@ use datafusion::{
 use datafusion::datasource::physical_plan::FileScanConfigBuilder;
 use datafusion_examples::utils::datasets::ExampleDataset;
 use futures::StreamExt;
-use object_store::{ObjectStore, local::LocalFileSystem, memory::InMemory};
+use object_store::{ObjectStoreExt, local::LocalFileSystem, memory::InMemory};
 
 /// This example demonstrates using the low level [`FileStream`] / [`FileOpener`] APIs to directly
 /// read data from (CSV/JSON) into Arrow RecordBatches.
