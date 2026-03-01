@@ -5157,6 +5157,33 @@ select array_to_string(arrow_cast(make_array('h', NULL, NULL, NULL, 'o'), 'Fixed
 ----
 h,-,-,-,o nil-2-nil-4-5 1|0|3
 
+# array_to_string float formatting: special values and longer decimals
+query TTT
+select
+  array_to_string(make_array(CAST('NaN' AS DOUBLE), CAST('Infinity' AS DOUBLE), CAST('-Infinity' AS DOUBLE), CAST('0.30000000000000004' AS DOUBLE), CAST('1.2345678901234567' AS DOUBLE)), '|'),
+  array_to_string(arrow_cast(make_array(CAST('NaN' AS DOUBLE), CAST('Infinity' AS DOUBLE), CAST('-Infinity' AS DOUBLE), CAST('0.30000000000000004' AS DOUBLE), CAST('1.2345678901234567' AS DOUBLE)), 'LargeList(Float64)'), '|'),
+  array_to_string(arrow_cast(make_array(CAST('NaN' AS DOUBLE), CAST('Infinity' AS DOUBLE), CAST('-Infinity' AS DOUBLE), CAST('0.30000000000000004' AS DOUBLE), CAST('1.2345678901234567' AS DOUBLE)), 'FixedSizeList(5, Float64)'), '|');
+----
+NaN|inf|-inf|0.30000000000000004|1.2345678901234567 NaN|inf|-inf|0.30000000000000004|1.2345678901234567 NaN|inf|-inf|0.30000000000000004|1.2345678901234567
+
+# array_to_string float formatting: scientific-notation inputs
+query T
+select array_to_string(
+  make_array(
+    CAST('1E20' AS DOUBLE),
+    CAST('-1e+20' AS DOUBLE),
+    CAST('6.02214076e23' AS DOUBLE),
+    CAST('1.2345e6' AS DOUBLE),
+    CAST('1e-5' AS DOUBLE),
+    CAST('-1e-5' AS DOUBLE),
+    CAST('9.1093837015e-31' AS DOUBLE),
+    CAST('-2.5e-4' AS DOUBLE)
+  ),
+  '|'
+);
+----
+100000000000000000000|-100000000000000000000|602214076000000000000000|1234500|0.00001|-0.00001|0.00000000000000000000000000000091093837015|-0.00025
+
 query T
 select array_to_string(arrow_cast([arrow_cast([NULL, 'a'], 'FixedSizeList(2, Utf8)'), NULL], 'FixedSizeList(2, FixedSizeList(2, Utf8))'), ',', '-');
 ----
@@ -5266,6 +5293,68 @@ MISSING,5,MISSING
 
 statement ok
 DROP TABLE test_null_str_col;
+
+# array_to_string with decimal values
+query T
+select array_to_string(arrow_cast(make_array(1.5, NULL, 3.14), 'List(Decimal128(10, 2))'), ',', 'N');
+----
+1.50,N,3.14
+
+# array_to_string with date values
+query T
+select array_to_string(arrow_cast(make_array('2024-01-15', '2024-06-30', '2024-12-25'), 'List(Date32)'), ',');
+----
+2024-01-15,2024-06-30,2024-12-25
+
+query T
+select array_to_string(arrow_cast(make_array('2024-01-15', NULL, '2024-12-25'), 'List(Date32)'), ',', 'N');
+----
+2024-01-15,N,2024-12-25
+
+# array_to_string with timestamp values
+query T
+select array_to_string(make_array(arrow_cast('2024-01-15T10:30:00', 'Timestamp(Second, None)'), arrow_cast('2024-06-30T15:45:00', 'Timestamp(Second, None)')), '|');
+----
+2024-01-15T10:30:00|2024-06-30T15:45:00
+
+query T
+select array_to_string(make_array(arrow_cast('2024-01-15T10:30:00', 'Timestamp(Millisecond, None)'), arrow_cast('2024-06-30T15:45:00', 'Timestamp(Millisecond, None)')), '|');
+----
+2024-01-15T10:30:00|2024-06-30T15:45:00
+
+query T
+select array_to_string(make_array(arrow_cast('2024-01-15T10:30:00', 'Timestamp(Microsecond, None)'), arrow_cast('2024-06-30T15:45:00', 'Timestamp(Microsecond, None)')), '|');
+----
+2024-01-15T10:30:00|2024-06-30T15:45:00
+
+query T
+select array_to_string(make_array(arrow_cast('2024-01-15T10:30:00', 'Timestamp(Nanosecond, None)'), arrow_cast('2024-06-30T15:45:00', 'Timestamp(Nanosecond, None)')), '|');
+----
+2024-01-15T10:30:00|2024-06-30T15:45:00
+
+# array_to_string with time values
+query T
+select array_to_string(make_array(arrow_cast('10:30:00', 'Time32(Second)'), arrow_cast('15:45:00', 'Time32(Second)')), ',');
+----
+10:30:00,15:45:00
+
+query T
+select array_to_string(make_array(arrow_cast('10:30:00', 'Time64(Microsecond)'), arrow_cast('15:45:00', 'Time64(Microsecond)')), ',');
+----
+10:30:00,15:45:00
+
+# array_to_string with interval values
+query T
+select array_to_string(make_array(interval '1 year 2 months', interval '3 days 4 hours'), ',');
+----
+14 mons,3 days 4 hours
+
+# array_to_string with duration values
+query T
+select array_to_string(make_array(arrow_cast(1000, 'Duration(Millisecond)'), arrow_cast(2000, 'Duration(Millisecond)')), ',');
+----
+PT1S,PT2S
+
 
 ## cardinality
 
