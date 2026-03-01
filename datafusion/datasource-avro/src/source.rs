@@ -118,6 +118,11 @@ impl FileSource for AvroSource {
     fn file_type(&self) -> &str {
         "avro"
     }
+
+    fn supports_repartitioning(&self) -> bool {
+        // Avro OCF does not support safe byte-range splitting in this reader path.
+        false
+    }
 }
 
 mod private {
