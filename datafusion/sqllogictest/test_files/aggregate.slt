@@ -3013,9 +3013,15 @@ SELECT count(distinct grp, a, b, c) FROM count_distinct_multi
 ----
 6
 
-# count(distinct a, a) — duplicate column hits optimizer bug
-statement error
+query I
 SELECT count(distinct a, a) FROM count_distinct_multi
+----
+3
+
+query I
+SELECT count(distinct a, a, b, b) FROM count_distinct_multi
+----
+4
 
 query II
 SELECT grp, count(distinct a, b) FROM count_distinct_multi GROUP BY grp ORDER BY grp

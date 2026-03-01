@@ -22,9 +22,7 @@ use std::sync::Arc;
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 
-use datafusion_common::{
-    DataFusionError, HashSet, Result, assert_eq_or_internal_err, tree_node::Transformed,
-};
+use datafusion_common::{DataFusionError, HashSet, Result, tree_node::Transformed};
 use datafusion_expr::builder::project;
 use datafusion_expr::expr::AggregateFunctionParams;
 use datafusion_expr::{
@@ -192,11 +190,15 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                 },
                         }) => {
                             if distinct {
-                                assert_eq_or_internal_err!(
-                                    args.len(),
-                                    1,
-                                    "DISTINCT aggregate should have exactly one argument"
-                                );
+                                // De-duplicate args so that e.g. count(distinct c, c)
+                                // is treated as count(distinct c).
+                                // is_single_distinct_agg already verified that all
+                                // unique distinct args across aggregates refer to the
+                                // same single field.
+                                let mut seen = HashSet::new();
+                                args.retain(|arg| {
+                                    seen.insert(arg.schema_name().to_string())
+                                });
                                 let arg = args.swap_remove(0);
 
                                 if group_fields_set.insert(arg.schema_name().to_string())
@@ -749,6 +751,35 @@ mod tests {
             @r"
         Aggregate: groupBy=[[test.c]], aggr=[[sum(test.a), count(DISTINCT test.a) FILTER (WHERE test.a > Int32(5)) ORDER BY [test.a ASC NULLS LAST]]] [c:UInt32, sum(test.a):UInt64;N, count(DISTINCT test.a) FILTER (WHERE test.a > Int32(5)) ORDER BY [test.a ASC NULLS LAST]:Int64]
           TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    fn single_distinct_with_duplicate_args() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        // count(DISTINCT b, b) — duplicate args de-duplicated to count(DISTINCT b)
+        let expr = Expr::AggregateFunction(AggregateFunction::new_udf(
+            count_udaf(),
+            vec![col("b"), col("b")],
+            true,
+            None,
+            vec![],
+            None,
+        ));
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![col("a")], vec![expr])?
+            .build()?;
+
+        // Should work — duplicate args are de-duplicated
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a, count(alias1) AS count(DISTINCT test.b,test.b) [a:UInt32, count(DISTINCT test.b,test.b):Int64]
+          Aggregate: groupBy=[[test.a]], aggr=[[count(alias1)]] [a:UInt32, count(alias1):Int64]
+            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[]] [a:UInt32, alias1:UInt32]
+              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
