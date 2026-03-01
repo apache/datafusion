@@ -31,7 +31,7 @@ use arrow::array::{
 };
 use arrow::compute::{self, concat_batches, filter_record_batch};
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{JoinSide, JoinType, Result};
+use datafusion_common::{JoinSide, JoinType, Result, internal_datafusion_err, internal_err};
 
 use crate::joins::utils::JoinFilter;
 
@@ -405,6 +405,9 @@ pub fn get_corrected_filter_mask(
             // Inner joins don't need deferred filtering
             None
         }
+        JoinType::LeftSingle => {
+            unreachable!("LeftSingle join type is not supported for SortMergeJoin")
+        }
     }
 }
 
@@ -508,6 +511,9 @@ pub fn filter_record_batch_by_join_type(
             )?)
         }
         JoinType::Inner => Ok(filtered_record_batch),
+        JoinType::LeftSingle => {
+            internal_err!("LeftSingle join type is not supported for SortMergeJoin")
+        }
     }
 }
 

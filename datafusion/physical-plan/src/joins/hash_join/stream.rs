@@ -805,7 +805,6 @@ impl HashJoinStream {
             }
         }
 
-        self.join_metrics.output_batches.add(1);
         timer.done();
 
         // If limit reached, finish and move to Completed state
