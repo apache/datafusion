@@ -20,9 +20,10 @@ use std::sync::Arc;
 use arrow::array::{Int32Array, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use async_trait::async_trait;
-use datafusion::prelude::*;
+use datafusion::dataframe::DataFrame;
+use datafusion::execution::context::SessionContext;
+use datafusion_common::Result;
 use datafusion_common::test_util::format_batches;
-use datafusion_common::{Result, assert_batches_eq};
 use datafusion_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
@@ -66,24 +67,24 @@ fn register_table_and_udf() -> Result<SessionContext> {
 async fn test_async_udf_with_non_modular_batch_size() -> Result<()> {
     let ctx = register_table_and_udf()?;
 
-    let df = ctx
+    let df: DataFrame = ctx
         .sql("SELECT id, test_async_udf(prompt) as result FROM test_table")
         .await?;
 
-    let result = df.collect().await?;
+    let result: Vec<RecordBatch> = df.collect().await?;
 
-    assert_batches_eq!(
-        &[
-            "+----+---------+",
-            "| id | result  |",
-            "+----+---------+",
-            "| 0  | prompt0 |",
-            "| 1  | prompt1 |",
-            "| 2  | prompt2 |",
-            "+----+---------+"
-        ],
-        &result
-    );
+    let result_str = format_batches(&result)?.to_string();
+    let expected = [
+        "+----+---------+",
+        "| id | result  |",
+        "+----+---------+",
+        "| 0  | prompt0 |",
+        "| 1  | prompt1 |",
+        "| 2  | prompt2 |",
+        "+----+---------+",
+    ]
+    .join("\n");
+    assert_eq!(result_str.trim(), expected.trim());
 
     Ok(())
 }
@@ -93,13 +94,13 @@ async fn test_async_udf_with_non_modular_batch_size() -> Result<()> {
 async fn test_async_udf_metrics() -> Result<()> {
     let ctx = register_table_and_udf()?;
 
-    let df = ctx
+    let df: DataFrame = ctx
         .sql(
             "EXPLAIN ANALYZE SELECT id, test_async_udf(prompt) as result FROM test_table",
         )
         .await?;
 
-    let result = df.collect().await?;
+    let result: Vec<RecordBatch> = df.collect().await?;
 
     let explain_analyze_str = format_batches(&result)?.to_string();
     let async_func_exec_without_metrics =
@@ -109,6 +110,43 @@ async fn test_async_udf_metrics() -> Result<()> {
         });
 
     assert!(!async_func_exec_without_metrics);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_nested_async_udf() -> Result<()> {
+    let ctx = register_table_and_udf()?;
+
+    let df: DataFrame = ctx
+        .sql(
+            "SELECT id, test_async_udf(test_async_udf(prompt)) as result FROM test_table",
+        )
+        .await?;
+
+    let result: Result<Vec<RecordBatch>> = df.collect().await;
+
+    // This is expected to succeed now
+    match &result {
+        Ok(batches) => {
+            // Check results
+            let result_str = format_batches(batches)?.to_string();
+            let expected = [
+                "+----+---------+",
+                "| id | result  |",
+                "+----+---------+",
+                "| 0  | prompt0 |",
+                "| 1  | prompt1 |",
+                "| 2  | prompt2 |",
+                "+----+---------+",
+            ]
+            .join("\n");
+            assert_eq!(result_str.trim(), expected.trim());
+        }
+        Err(e) => {
+            panic!("Nested async UDF failed: {e}");
+        }
+    }
 
     Ok(())
 }
