@@ -1309,8 +1309,6 @@ mod tests {
 
     #[test]
     fn multi_column_accumulator_different_datatypes() -> Result<()> {
-        // Mix of Int32, Float64, Boolean, Utf8, Date32,
-        // Timestamp(Microsecond, None), and Decimal128(10, 2).
         let mut acc = MultiColumnDistinctCountAccumulator::try_new(vec![
             DataType::Int32,
             DataType::Float64,
@@ -1321,19 +1319,14 @@ mod tests {
             DataType::Decimal128(10, 2),
         ])?;
 
-        // Row layout: (i32, f64, bool, utf8, date32, ts_us, dec128)
-        //
-        // Decimal128(10,2) stores values as i128 with scale 2:
-        //   100 → 1.00, 200 → 2.00
-        //
         // row 0: (1, 1.0, true,  "a", 19000, 1_000_000, 100)
-        // row 1: (1, 1.0, true,  "a", 19000, 1_000_000, 100)  dup of 0
-        // row 2: (1, 1.0, false, "a", 19000, 1_000_000, 100)  bool
-        // row 3: (1, 1.0, true,  "b", 19000, 1_000_000, 100)  utf8
-        // row 4: (1, 1.0, true,  "a", 19001, 1_000_000, 100)  date
-        // row 5: (1, 1.0, true,  "a", 19000, 2_000_000, 100)  ts
-        // row 6: (2, 2.5, true,  "a", 19000, 1_000_000, 100)  i32+f64
-        // row 7: (1, 1.0, true,  "a", 19000, 1_000_000, 200)  dec128
+        // row 1: (1, 1.0, true,  "a", 19000, 1_000_000, 100)  duplicate of 0
+        // row 2: (1, 1.0, false, "a", 19000, 1_000_000, 100)
+        // row 3: (1, 1.0, true,  "b", 19000, 1_000_000, 100)
+        // row 4: (1, 1.0, true,  "a", 19001, 1_000_000, 100)
+        // row 5: (1, 1.0, true,  "a", 19000, 2_000_000, 100)
+        // row 6: (2, 2.5, true,  "a", 19000, 1_000_000, 100)
+        // row 7: (1, 1.0, true,  "a", 19000, 1_000_000, 200)
         let c_i32 = Arc::new(Int32Array::from(vec![1, 1, 1, 1, 1, 1, 2, 1]));
         let c_f64 = Arc::new(Float64Array::from(vec![
             1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 2.5, 1.0,
@@ -1368,21 +1361,21 @@ mod tests {
             DataType::Int32,
             DataType::Utf8,
         ])?;
-        let ints = Arc::new(Int32Array::from(vec![1, 2, 1, 2, 3]));
-        let strs = Arc::new(StringArray::from(vec!["x", "x", "y", "y", "x"])) as ArrayRef;
-        acc_ab.update_batch(&[ints.clone(), strs.clone()])?;
+        let ints = Arc::new(Int32Array::from(vec![1, 2, 1, 2, 3])) as _;
+        let strs = Arc::new(StringArray::from(vec!["x", "x", "y", "y", "x"])) as _;
+        acc_ab.update_batch(&[Arc::clone(&ints), Arc::clone(&strs)])?;
         // Tuples (int, str):
         //   (1,x), (2,x), (1,y), (2,y), (3,x) → 5 distinct
         assert_eq!(acc_ab.evaluate()?, ScalarValue::Int64(Some(5)));
 
-        // --- Reversed order: (str, int) — same arrays, swapped ---
+        // (str, int)
         let mut acc_ba = MultiColumnDistinctCountAccumulator::try_new(vec![
             DataType::Utf8,
             DataType::Int32,
         ])?;
-        acc_ba.update_batch(&[strs.clone(), ints.clone()])?;
+        acc_ba.update_batch(&[Arc::clone(&strs), Arc::clone(&ints)])?;
         // Tuples (str, int):
-        //   (x,1), (x,2), (y,1), (y,2), (x,3) → still 5 distinct
+        //   (x,1), (x,2), (y,1), (y,2), (x,3) → 5 distinct
         assert_eq!(acc_ba.evaluate()?, ScalarValue::Int64(Some(5)));
 
         Ok(())
@@ -1405,8 +1398,8 @@ mod tests {
             None,
             Some(3),
             Some(2),
-        ]));
-        acc.update_batch(&[col.clone(), col])?;
+        ])) as _;
+        acc.update_batch(&[Arc::clone(&col), col])?;
         // Null rows (NULL,NULL) are skipped.
         // Non-null: (1,1),(2,2),(1,1),(3,3),(2,2)
         //   → distinct {(1,1),(2,2),(3,3)} = 3
@@ -1432,7 +1425,7 @@ mod tests {
             Some(1),
             Some(2),
             Some(1),
-        ]));
+        ])) as _;
         let b = Arc::new(StringArray::from(vec![
             Some("x"),
             Some("y"),
@@ -1441,7 +1434,7 @@ mod tests {
             None,
         ])) as ArrayRef;
 
-        acc.update_batch(&[a.clone(), a, b.clone(), b])?;
+        acc.update_batch(&[Arc::clone(&a), a, Arc::clone(&b), b])?;
         // Skipped: row 1 (a=NULL), row 4 (b=NULL)
         // Non-null: (1,1,x,x), (1,1,y,y), (2,2,x,x) → all distinct = 3
         assert_eq!(acc.evaluate()?, ScalarValue::Int64(Some(3)));
