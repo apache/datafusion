@@ -1341,6 +1341,9 @@ impl FileSink for ParquetSink {
     ) -> Result<u64> {
         let rows_written_counter =
             MetricBuilder::new(&self.metrics).global_counter("rows_written");
+        // Note: bytes_written is the sum of compressed row group sizes, which
+        // may differ slightly from the actual on-disk file size (excludes footer,
+        // page indexes, and other Parquet metadata overhead).
         let bytes_written_counter =
             MetricBuilder::new(&self.metrics).global_counter("bytes_written");
         let elapsed_compute = MetricBuilder::new(&self.metrics).elapsed_compute(0);

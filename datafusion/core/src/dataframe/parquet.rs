@@ -127,6 +127,19 @@ mod tests {
     use tempfile::TempDir;
     use url::Url;
 
+    /// Helper to extract a metric value by name from aggregated metrics.
+    fn metric_usize(
+        aggregated: &datafusion_physical_expr_common::metrics::MetricsSet,
+        name: &str,
+    ) -> usize {
+        aggregated
+            .iter()
+            .find(|m| m.value().name() == name)
+            .unwrap_or_else(|| panic!("should have {name} metric"))
+            .value()
+            .as_usize()
+    }
+
     #[tokio::test]
     async fn filter_pushdown_dataframe() -> Result<()> {
         let ctx = SessionContext::new();
@@ -482,36 +495,22 @@ mod tests {
         let aggregated = metrics.aggregate_by_name();
 
         // rows_written should be 100
-        let rows_written = aggregated
-            .iter()
-            .find(|m| m.value().name() == "rows_written")
-            .expect("should have rows_written metric");
         assert_eq!(
-            rows_written.value().as_usize(),
+            metric_usize(&aggregated, "rows_written"),
             100,
             "expected 100 rows written"
         );
 
         // bytes_written should be > 0
-        let bytes_written = aggregated
-            .iter()
-            .find(|m| m.value().name() == "bytes_written")
-            .expect("should have bytes_written metric");
+        let bytes_written = metric_usize(&aggregated, "bytes_written");
         assert!(
-            bytes_written.value().as_usize() > 0,
-            "expected bytes_written > 0, got {}",
-            bytes_written.value().as_usize()
+            bytes_written > 0,
+            "expected bytes_written > 0, got {bytes_written}"
         );
 
         // elapsed_compute should be > 0
-        let elapsed = aggregated
-            .iter()
-            .find(|m| m.value().name() == "elapsed_compute")
-            .expect("should have elapsed_compute metric");
-        assert!(
-            elapsed.value().as_usize() > 0,
-            "expected elapsed_compute > 0"
-        );
+        let elapsed = metric_usize(&aggregated, "elapsed_compute");
+        assert!(elapsed > 0, "expected elapsed_compute > 0");
 
         Ok(())
     }
@@ -558,17 +557,8 @@ mod tests {
         let metrics = plan.metrics().expect("DataSinkExec should return metrics");
         let aggregated = metrics.aggregate_by_name();
 
-        let rows_written = aggregated
-            .iter()
-            .find(|m| m.value().name() == "rows_written")
-            .expect("should have rows_written metric");
-        assert_eq!(rows_written.value().as_usize(), 50);
-
-        let bytes_written = aggregated
-            .iter()
-            .find(|m| m.value().name() == "bytes_written")
-            .expect("should have bytes_written metric");
-        assert!(bytes_written.value().as_usize() > 0);
+        assert_eq!(metric_usize(&aggregated, "rows_written"), 50);
+        assert!(metric_usize(&aggregated, "bytes_written") > 0);
 
         Ok(())
     }
