@@ -438,17 +438,7 @@ pub struct WorkQueue {
 
 impl WorkQueue {
     /// Create a new `WorkQueue` with the given initial files.
-    ///
-    /// Files are sorted by estimated row count (smallest first) so that
-    /// smaller / more-selective files are morselized earlier, helping
-    /// dynamic filters tighten sooner.
-    pub fn new(mut initial_files: Vec<PartitionedFile>) -> Self {
-        initial_files.sort_by_key(|f| {
-            f.statistics
-                .as_ref()
-                .and_then(|s| s.num_rows.get_value().copied())
-                .unwrap_or(usize::MAX)
-        });
+    pub fn new(initial_files: Vec<PartitionedFile>) -> Self {
         Self {
             files: Mutex::new(VecDeque::from(initial_files)),
             morsels: Mutex::new(VecDeque::new()),
@@ -498,23 +488,11 @@ impl WorkQueue {
     }
 
     /// Push morselized leaf morsels to the morsel queue.
-    ///
-    /// The queue is kept sorted by estimated row count (smallest first)
-    /// so that more-selective morsels are processed earlier, helping
-    /// dynamic filters tighten sooner.
     pub fn push_morsels(&self, morsels: Vec<PartitionedFile>) {
         if morsels.is_empty() {
             return;
         }
-        let mut queue = self.morsels.lock().unwrap();
-        queue.extend(morsels);
-        queue.make_contiguous().sort_by_key(|f| {
-            f.statistics
-                .as_ref()
-                .and_then(|s| s.num_rows.get_value().copied())
-                .unwrap_or(usize::MAX)
-        });
-        drop(queue);
+        self.morsels.lock().unwrap().extend(morsels);
         self.notify.notify_waiters();
     }
 
