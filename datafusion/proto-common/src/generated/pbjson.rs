@@ -1701,7 +1701,7 @@ impl serde::Serialize for CsvOptions {
         if self.compression_level.is_some() {
             len += 1;
         }
-        if !self.encoding.is_empty() {
+        if !self.charset.is_empty() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion_common.CsvOptions", len)?;
@@ -1784,8 +1784,8 @@ impl serde::Serialize for CsvOptions {
         if let Some(v) = self.compression_level.as_ref() {
             struct_ser.serialize_field("compressionLevel", v)?;
         }
-        if !self.encoding.is_empty() {
-            struct_ser.serialize_field("encoding", &self.encoding)?;
+        if !self.charset.is_empty() {
+            struct_ser.serialize_field("charset", &self.charset)?;
         }
         struct_ser.end()
     }
@@ -1829,7 +1829,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
             "truncatedRows",
             "compression_level",
             "compressionLevel",
-            "encoding",
+            "charset",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -1853,7 +1853,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
             Terminator,
             TruncatedRows,
             CompressionLevel,
-            Encoding,
+            Charset,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -1894,7 +1894,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                             "terminator" => Ok(GeneratedField::Terminator),
                             "truncatedRows" | "truncated_rows" => Ok(GeneratedField::TruncatedRows),
                             "compressionLevel" | "compression_level" => Ok(GeneratedField::CompressionLevel),
-                            "encoding" => Ok(GeneratedField::Encoding),
+                            "charset" => Ok(GeneratedField::Charset),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -1933,7 +1933,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                 let mut terminator__ = None;
                 let mut truncated_rows__ = None;
                 let mut compression_level__ = None;
-                let mut encoding__ = None;
+                let mut charset__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::HasHeader => {
@@ -2072,11 +2072,11 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                                 map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
-                        GeneratedField::Encoding => {
-                            if encoding__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("encoding"));
+                        GeneratedField::Charset => {
+                            if charset__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("charset"));
                             }
-                            encoding__ = Some(map_.next_value()?);
+                            charset__ = Some(map_.next_value()?);
                         }
                     }
                 }
@@ -2100,7 +2100,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                     terminator: terminator__.unwrap_or_default(),
                     truncated_rows: truncated_rows__.unwrap_or_default(),
                     compression_level: compression_level__,
-                    encoding: encoding__.unwrap_or_default(),
+                    charset: charset__.unwrap_or_default(),
                 })
             }
         }
