@@ -344,7 +344,7 @@ fn generate_string_array<O: OffsetSizeTrait>(
 }
 
 fn compute_array_to_string(
-    buf: &mut impl Write,
+    w: &mut impl Write,
     arr: &ArrayRef,
     delimiter: &str,
     null_string: Option<&str>,
@@ -356,7 +356,7 @@ fn compute_array_to_string(
             for i in 0..$list_array.len() {
                 if !$list_array.is_null(i) {
                     compute_array_to_string(
-                        buf,
+                        w,
                         &$list_array.value(i),
                         delimiter,
                         null_string,
@@ -366,9 +366,9 @@ fn compute_array_to_string(
                     if *first {
                         *first = false;
                     } else {
-                        buf.write_str(delimiter)?;
+                        w.write_str(delimiter)?;
                     }
-                    buf.write_str(ns)?;
+                    w.write_str(ns)?;
                 }
             }
         };
@@ -397,35 +397,35 @@ fn compute_array_to_string(
                 DataFusionError::from(e)
                     .context("Casting dictionary to values in compute_array_to_string")
             })?;
-            compute_array_to_string(buf, &values, delimiter, null_string, first)
+            compute_array_to_string(w, &values, delimiter, null_string, first)
         }
         Null => Ok(()),
         data_type => {
             macro_rules! str_leaf {
                 ($ARRAY_TYPE:ident) => {
                     write_leaf_to_string(
-                        buf,
+                        w,
                         downcast_arg!(arr, $ARRAY_TYPE),
                         delimiter,
                         null_string,
                         first,
-                        |buf, x: &str| buf.write_str(x),
+                        |w, x: &str| w.write_str(x),
                     )?
                 };
             }
             macro_rules! bool_leaf {
                 ($ARRAY_TYPE:ident) => {
                     write_leaf_to_string(
-                        buf,
+                        w,
                         downcast_arg!(arr, $ARRAY_TYPE),
                         delimiter,
                         null_string,
                         first,
-                        |buf, x: bool| {
+                        |w, x: bool| {
                             if x {
-                                buf.write_str("true")
+                                w.write_str("true")
                             } else {
-                                buf.write_str("false")
+                                w.write_str("false")
                             }
                         },
                     )?
@@ -434,14 +434,14 @@ fn compute_array_to_string(
             macro_rules! int_leaf {
                 ($ARRAY_TYPE:ident) => {
                     write_leaf_to_string(
-                        buf,
+                        w,
                         downcast_arg!(arr, $ARRAY_TYPE),
                         delimiter,
                         null_string,
                         first,
-                        |buf, x| {
+                        |w, x| {
                             let mut itoa_buf = itoa::Buffer::new();
-                            buf.write_str(itoa_buf.format(x))
+                            w.write_str(itoa_buf.format(x))
                         },
                     )?
                 };
@@ -449,7 +449,7 @@ fn compute_array_to_string(
             macro_rules! float_leaf {
                 ($ARRAY_TYPE:ident) => {
                     write_leaf_to_string(
-                        buf,
+                        w,
                         downcast_arg!(arr, $ARRAY_TYPE),
                         delimiter,
                         null_string,
@@ -458,7 +458,7 @@ fn compute_array_to_string(
                         // floating point display library (e.g., ryu). This
                         // might result in some differences in the output
                         // format, however.
-                        |buf, x| write!(buf, "{}", x),
+                        |w, x| write!(w, "{}", x),
                     )?
                 };
             }
@@ -483,7 +483,7 @@ fn compute_array_to_string(
                             .context("Casting to string in array_to_string")
                     })?;
                     return compute_array_to_string(
-                        buf,
+                        w,
                         &str_arr,
                         delimiter,
                         null_string,
@@ -502,11 +502,11 @@ fn compute_array_to_string(
 }
 
 /// Appends the string representation of each element in a leaf (non-list)
-/// array to `buf`, separated by `delimiter`. Null elements are rendered
+/// array to `w`, separated by `delimiter`. Null elements are rendered
 /// using `null_string` if provided, or skipped otherwise. The `append`
-/// closure controls how each non-null element is written to the buffer.
+/// closure controls how each non-null element is written.
 fn write_leaf_to_string<'a, W: Write, A, T>(
-    buf: &mut W,
+    w: &mut W,
     arr: &'a A,
     delimiter: &str,
     null_string: Option<&str>,
@@ -525,12 +525,12 @@ where
         if *first {
             *first = false;
         } else {
-            buf.write_str(delimiter)?;
+            w.write_str(delimiter)?;
         }
 
         match x {
-            Some(x) => append(buf, x)?,
-            None => buf.write_str(null_string.unwrap())?,
+            Some(x) => append(w, x)?,
+            None => w.write_str(null_string.unwrap())?,
         }
     }
     Ok(())
