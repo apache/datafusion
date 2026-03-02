@@ -224,7 +224,7 @@ pub trait Dialect: Send + Sync {
     ///
     /// This is useful for dialects that need to modify the alias based on specific conditions. For example,
     /// in Snowflake, when using the FLATTEN function, the alias of the derived table needs to be adjusted
-    /// to match the output columns of the FLATTEN function. It can be used with [`unparse_unnest_table_factor`] to achieve this.
+    /// to match the output columns of the FLATTEN function. It can be used with [`Dialect::unparse_unnest_table_factor`] to achieve this.
     /// See [`SnowflakeDialect`] implementation for an example.
     fn relation_alias_overrides(
         &self,
@@ -804,27 +804,23 @@ impl Dialect for SnowflakeDialect {
         // to the flattened value, which we will alias to the desired output column name.
         if let Some(TableFactorBuilder::TableFunction(rel_builder)) =
             relation_builder.relation.as_mut()
+            && let Some(value) = &alias
+            && let Some(alias) = rel_builder.alias.as_mut()
+            && alias
+                .name
+                .value
+                .starts_with(UNNAMED_SNOWFLAKE_FLATTEN_SUBQUERY_PREFIX)
+            && value.columns.len() == 1
         {
-            if let Some(value) = &alias {
-                if let Some(alias) = rel_builder.alias.as_mut() {
-                    if alias
-                        .name
-                        .value
-                        .starts_with(UNNAMED_SNOWFLAKE_FLATTEN_SUBQUERY_PREFIX)
-                        && value.columns.len() == 1
-                    {
-                        let mut new_columns = alias.columns.clone();
-                        new_columns[FLATTEN_VALUE_COLUMN_IDX] = value.columns[0].clone();
-                        let new_alias = ast::TableAlias {
-                            name: value.name.clone(),
-                            columns: new_columns,
-                            explicit: true,
-                        };
-                        rel_builder.alias = Some(new_alias);
-                        return true;
-                    }
-                }
-            }
+            let mut new_columns = alias.columns.clone();
+            new_columns[FLATTEN_VALUE_COLUMN_IDX] = value.columns[0].clone();
+            let new_alias = ast::TableAlias {
+                name: value.name.clone(),
+                columns: new_columns,
+                explicit: true,
+            };
+            rel_builder.alias = Some(new_alias);
+            return true;
         }
         false
     }

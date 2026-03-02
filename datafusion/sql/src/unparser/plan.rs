@@ -400,33 +400,30 @@ impl Unparser<'_> {
                     vec![]
                 };
 
-                if self.dialect.unnest_as_table_factor() && unnest_input_type.is_some() {
-                    if let LogicalPlan::Unnest(unnest) = &p.input.as_ref() {
-                        if let Some(table_factor) =
-                            self.unparse_unnest_table_factor(unnest, &columns)?
-                        {
-                            match table_factor {
-                                TableFactorBuilder::Unnest(unnest) => {
-                                    relation.unnest(unnest)
-                                }
-                                TableFactorBuilder::TableFunction(table_function) => {
-                                    relation.table_function(table_function)
-                                }
-                                _ => {
-                                    return internal_err!(
-                                        "Unexpected table factor type for unnest"
-                                    );
-                                }
-                            };
-
-                            return self.select_to_sql_recursively(
-                                p.input.as_ref(),
-                                query,
-                                select,
-                                relation,
+                if self.dialect.unnest_as_table_factor()
+                    && unnest_input_type.is_some()
+                    && let LogicalPlan::Unnest(unnest) = &p.input.as_ref()
+                    && let Some(table_factor) =
+                        self.unparse_unnest_table_factor(unnest, &columns)?
+                {
+                    match table_factor {
+                        TableFactorBuilder::Unnest(unnest) => relation.unnest(unnest),
+                        TableFactorBuilder::TableFunction(table_function) => {
+                            relation.table_function(table_function)
+                        }
+                        _ => {
+                            return internal_err!(
+                                "Unexpected table factor type for unnest"
                             );
                         }
-                    }
+                    };
+
+                    return self.select_to_sql_recursively(
+                        p.input.as_ref(),
+                        query,
+                        select,
+                        relation,
+                    );
                 }
 
                 // Projection can be top-level plan for derived table
