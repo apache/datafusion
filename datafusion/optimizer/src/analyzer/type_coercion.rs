@@ -954,10 +954,6 @@ fn coerce_arguments_for_signature<F: UDFCoercionExt>(
     schema: &DFSchema,
     func: &F,
 ) -> Result<Vec<Expr>> {
-    if expressions.is_empty() {
-        return Ok(expressions);
-    }
-
     let current_fields = expressions
         .iter()
         .map(|e| e.to_field(schema).map(|(_, f)| f))

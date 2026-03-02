@@ -147,7 +147,7 @@ mod private {
     use bytes::Buf;
     use datafusion_datasource::{PartitionedFile, file_stream::FileOpenFuture};
     use futures::StreamExt;
-    use object_store::{GetResultPayload, ObjectStore};
+    use object_store::{GetResultPayload, ObjectStore, ObjectStoreExt};
 
     pub struct AvroOpener {
         pub config: Arc<AvroSource>,
