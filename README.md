@@ -131,6 +131,7 @@ Optional features:
 
 - `avro`: support for reading the [Apache Avro] format
 - `backtrace`: include backtrace information in error messages
+- `encoding_rs`: support for reading files with character encodings other than UTF-8
 - `parquet_encryption`: support for using [Parquet Modular Encryption]
 - `serde`: enable arrow-schema's `serde` feature
 
