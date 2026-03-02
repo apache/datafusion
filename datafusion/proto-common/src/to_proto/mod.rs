@@ -986,7 +986,7 @@ impl TryFrom<&CsvOptions> for protobuf::CsvOptions {
             newlines_in_values: opts
                 .newlines_in_values
                 .map_or_else(Vec::new, |h| vec![h as u8]),
-            encoding: opts.charset.clone().unwrap_or_default(),
+            charset: opts.charset.clone().unwrap_or_default(),
             compression: compression.into(),
             schema_infer_max_rec: opts.schema_infer_max_rec.map(|h| h as u64),
             date_format: opts.date_format.clone().unwrap_or_default(),
