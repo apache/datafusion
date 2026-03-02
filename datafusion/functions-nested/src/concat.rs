@@ -24,9 +24,9 @@ use crate::make_array::make_array_inner;
 use crate::utils::{align_array_dimensions, check_datatypes, make_scalar_function};
 use arrow::array::{
     Array, ArrayData, ArrayRef, Capacities, GenericListArray, MutableArrayData,
-    NullBufferBuilder, OffsetSizeTrait,
+    OffsetSizeTrait,
 };
-use arrow::buffer::OffsetBuffer;
+use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::Result;
 use datafusion_common::utils::{
@@ -413,25 +413,35 @@ fn concat_internal<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     );
     let mut offsets: Vec<O> = Vec::with_capacity(row_count + 1);
     offsets.push(O::zero());
-    let mut valid = NullBufferBuilder::new(row_count);
+
+    // Compute the output null buffer: a row is null only if null in ALL input
+    // arrays. This is the bitwise OR of validity bits (valid if valid in ANY
+    // input). If any array has no null buffer (all valid), no output row can be
+    // null.
+    let nulls = list_arrays
+        .iter()
+        .filter_map(|la| la.nulls())
+        .collect::<Vec<_>>();
+    let valid = if nulls.len() == list_arrays.len() {
+        nulls
+            .iter()
+            .map(|n| n.inner().clone())
+            .reduce(|a, b| &a | &b)
+            .map(NullBuffer::new)
+    } else {
+        None
+    };
 
     for row_idx in 0..row_count {
-        let mut row_has_values = false;
         for (arr_idx, list_array) in list_arrays.iter().enumerate() {
             if list_array.is_null(row_idx) {
                 continue;
             }
-            row_has_values = true;
             let start = list_array.offsets()[row_idx].to_usize().unwrap();
             let end = list_array.offsets()[row_idx + 1].to_usize().unwrap();
             if start < end {
                 mutable.extend(arr_idx, start, end);
             }
-        }
-        if row_has_values {
-            valid.append_non_null();
-        } else {
-            valid.append_null();
         }
         offsets.push(O::usize_as(mutable.len()));
     }
@@ -443,7 +453,7 @@ fn concat_internal<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         Arc::new(Field::new_list_field(data_type, true)),
         OffsetBuffer::new(offsets.into()),
         arrow::array::make_array(data),
-        valid.finish(),
+        valid,
     )?))
 }
 
