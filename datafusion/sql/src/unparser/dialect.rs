@@ -1019,7 +1019,6 @@ pub struct CustomDialectBuilder {
     window_func_support_window_frame: bool,
     full_qualified_col: bool,
     unnest_as_table_factor: bool,
-    unnest_to_flattened_table_factor: bool,
 }
 
 impl Default for CustomDialectBuilder {
@@ -1054,7 +1053,6 @@ impl CustomDialectBuilder {
             window_func_support_window_frame: true,
             full_qualified_col: false,
             unnest_as_table_factor: false,
-            unnest_to_flattened_table_factor: false,
         }
     }
 
@@ -1219,14 +1217,6 @@ impl CustomDialectBuilder {
 
     pub fn with_unnest_as_table_factor(mut self, unnest_as_table_factor: bool) -> Self {
         self.unnest_as_table_factor = unnest_as_table_factor;
-        self
-    }
-
-    pub fn with_unnest_to_flattened_table_factor(
-        mut self,
-        unnest_to_flattened_table_factor: bool,
-    ) -> Self {
-        self.unnest_to_flattened_table_factor = unnest_to_flattened_table_factor;
         self
     }
 }
