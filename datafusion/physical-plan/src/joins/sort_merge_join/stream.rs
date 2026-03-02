@@ -1753,7 +1753,7 @@ impl BufferedData {
 }
 
 /// Get join array refs of given batch and join columns
-fn join_arrays(batch: &RecordBatch, on_column: &[PhysicalExprRef]) -> Vec<ArrayRef> {
+pub(super) fn join_arrays(batch: &RecordBatch, on_column: &[PhysicalExprRef]) -> Vec<ArrayRef> {
     on_column
         .iter()
         .map(|c| {
@@ -1766,7 +1766,7 @@ fn join_arrays(batch: &RecordBatch, on_column: &[PhysicalExprRef]) -> Vec<ArrayR
 
 /// A faster version of compare_join_arrays() that only output whether
 /// the given two rows are equal
-fn is_join_arrays_equal(
+pub(super) fn is_join_arrays_equal(
     left_arrays: &[ArrayRef],
     left: usize,
     right_arrays: &[ArrayRef],

@@ -24,5 +24,6 @@ mod filter;
 mod metrics;
 mod stream;
 
+mod join_types;
 #[cfg(test)]
 mod tests;
