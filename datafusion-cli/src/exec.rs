@@ -196,6 +196,7 @@ pub async fn exec_from_repl(
             }
             Err(ReadlineError::Interrupted) => {
                 println!("^C");
+                rl.helper().unwrap().reset_hint();
                 continue;
             }
             Err(ReadlineError::Eof) => {
