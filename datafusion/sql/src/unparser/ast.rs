@@ -433,6 +433,7 @@ pub struct RelationBuilder {
 
 #[derive(Clone)]
 #[expect(clippy::large_enum_variant)]
+#[non_exhaustive]
 pub enum TableFactorBuilder {
     Table(TableRelationBuilder),
     Derived(DerivedRelationBuilder),
