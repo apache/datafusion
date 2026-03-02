@@ -187,9 +187,7 @@ impl FileStream {
                                         let done = 1
                                             + self.file_iter.len()
                                             + usize::from(next.is_some());
-                                        self.file_stream_metrics
-                                            .files_closed
-                                            .add(done);
+                                        self.file_stream_metrics.files_closed.add(done);
                                         self.state = FileStreamState::Limit;
                                         *remain = 0;
                                         batch
@@ -457,11 +455,9 @@ impl FileStreamMetrics {
         let file_scan_errors =
             MetricBuilder::new(metrics).counter("file_scan_errors", partition);
 
-        let files_opened =
-            MetricBuilder::new(metrics).counter("files_opened", partition);
+        let files_opened = MetricBuilder::new(metrics).counter("files_opened", partition);
 
-        let files_closed =
-            MetricBuilder::new(metrics).counter("files_closed", partition);
+        let files_closed = MetricBuilder::new(metrics).counter("files_closed", partition);
 
         let files_scanned =
             MetricBuilder::new(metrics).counter("files_scanned", partition);
