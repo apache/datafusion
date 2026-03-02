@@ -24,7 +24,7 @@ use crate::{CatalogProviderList, SchemaProvider, TableProvider};
 use arrow::array::builder::{BooleanBuilder, UInt8Builder};
 use arrow::{
     array::{StringBuilder, UInt64Builder},
-    datatypes::{DataType, Field, Schema, SchemaRef},
+    datatypes::{DataType, Field, FieldRef, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
 use async_trait::async_trait;
@@ -34,7 +34,10 @@ use datafusion_common::error::Result;
 use datafusion_common::types::NativeType;
 use datafusion_execution::TaskContext;
 use datafusion_execution::runtime_env::RuntimeEnv;
-use datafusion_expr::{AggregateUDF, ScalarUDF, Signature, TypeSignature, WindowUDF};
+use datafusion_expr::function::WindowUDFFieldArgs;
+use datafusion_expr::{
+    AggregateUDF, ReturnFieldArgs, ScalarUDF, Signature, TypeSignature, WindowUDF,
+};
 use datafusion_expr::{TableType, Volatility};
 use datafusion_physical_plan::SendableRecordBatchStream;
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
@@ -421,10 +424,24 @@ fn get_udf_args_and_return_types(
         Ok(arg_types
             .into_iter()
             .map(|arg_types| {
-                // only handle the function which implemented [`ScalarUDFImpl::return_type`] method
+                let arg_fields: Vec<FieldRef> = arg_types
+                    .iter()
+                    .enumerate()
+                    .map(|(i, t)| {
+                        Arc::new(Field::new(format!("arg_{i}"), t.clone(), true))
+                    })
+                    .collect();
+                let scalar_arguments = vec![None; arg_fields.len()];
                 let return_type = udf
-                    .return_type(&arg_types)
-                    .map(|t| remove_native_type_prefix(&NativeType::from(t)))
+                    .return_field_from_args(ReturnFieldArgs {
+                        arg_fields: &arg_fields,
+                        scalar_arguments: &scalar_arguments,
+                    })
+                    .map(|f| {
+                        remove_native_type_prefix(&NativeType::from(
+                            f.data_type().clone(),
+                        ))
+                    })
                     .ok();
                 let arg_types = arg_types
                     .into_iter()
@@ -447,11 +464,21 @@ fn get_udaf_args_and_return_types(
         Ok(arg_types
             .into_iter()
             .map(|arg_types| {
-                // only handle the function which implemented [`ScalarUDFImpl::return_type`] method
+                let arg_fields: Vec<FieldRef> = arg_types
+                    .iter()
+                    .enumerate()
+                    .map(|(i, t)| {
+                        Arc::new(Field::new(format!("arg_{i}"), t.clone(), true))
+                    })
+                    .collect();
                 let return_type = udaf
-                    .return_type(&arg_types)
-                    .ok()
-                    .map(|t| remove_native_type_prefix(&NativeType::from(t)));
+                    .return_field(&arg_fields)
+                    .map(|f| {
+                        remove_native_type_prefix(&NativeType::from(
+                            f.data_type().clone(),
+                        ))
+                    })
+                    .ok();
                 let arg_types = arg_types
                     .into_iter()
                     .map(|t| remove_native_type_prefix(&NativeType::from(t)))
@@ -473,12 +500,26 @@ fn get_udwf_args_and_return_types(
         Ok(arg_types
             .into_iter()
             .map(|arg_types| {
-                // only handle the function which implemented [`ScalarUDFImpl::return_type`] method
+                let arg_fields: Vec<FieldRef> = arg_types
+                    .iter()
+                    .enumerate()
+                    .map(|(i, t)| {
+                        Arc::new(Field::new(format!("arg_{i}"), t.clone(), true))
+                    })
+                    .collect();
+                let return_type = udwf
+                    .field(WindowUDFFieldArgs::new(&arg_fields, udwf.name()))
+                    .map(|f| {
+                        remove_native_type_prefix(&NativeType::from(
+                            f.data_type().clone(),
+                        ))
+                    })
+                    .ok();
                 let arg_types = arg_types
                     .into_iter()
                     .map(|t| remove_native_type_prefix(&NativeType::from(t)))
                     .collect::<Vec<_>>();
-                (arg_types, None)
+                (arg_types, return_type)
             })
             .collect::<BTreeSet<_>>())
     }

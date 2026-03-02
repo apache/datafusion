@@ -37,7 +37,7 @@ use std::sync::Arc;
 
 use crate::map::map_udf;
 use crate::{
-    array_has::{array_has_all, array_has_udf},
+    array_has::array_has_all,
     expr_fn::{array_append, array_concat, array_prepend},
     extract::{array_element, array_slice},
     make_array::make_array,
@@ -119,20 +119,6 @@ impl ExprPlanner for NestedFunctionPlanner {
         Ok(PlannerResult::Planned(Expr::ScalarFunction(
             ScalarFunction::new_udf(map_udf(), vec![keys, values]),
         )))
-    }
-
-    fn plan_any(&self, expr: RawBinaryExpr) -> Result<PlannerResult<RawBinaryExpr>> {
-        if expr.op == BinaryOperator::Eq {
-            Ok(PlannerResult::Planned(Expr::ScalarFunction(
-                ScalarFunction::new_udf(
-                    array_has_udf(),
-                    // left and right are reversed here so `needle=any(haystack)` -> `array_has(haystack, needle)`
-                    vec![expr.right, expr.left],
-                ),
-            )))
-        } else {
-            plan_err!("Unsupported AnyOp: '{}', only '=' is supported", expr.op)
-        }
     }
 }
 

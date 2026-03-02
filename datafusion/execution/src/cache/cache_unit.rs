@@ -302,6 +302,68 @@ mod tests {
     }
 
     #[test]
+    fn test_ordering_cache_invalidation_on_file_modification() {
+        let cache = DefaultFileStatisticsCache::default();
+        let path = Path::from("test.parquet");
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+
+        // Cache with original metadata and ordering
+        let meta_v1 = ObjectMeta {
+            location: path.clone(),
+            last_modified: DateTime::parse_from_rfc3339("2022-09-27T22:36:00+02:00")
+                .unwrap()
+                .into(),
+            size: 100,
+            e_tag: None,
+            version: None,
+        };
+        let ordering_v1 = ordering();
+        let cached_v1 = CachedFileMetadata::new(
+            meta_v1.clone(),
+            Arc::new(Statistics::new_unknown(&schema)),
+            Some(ordering_v1),
+        );
+        cache.put(&path, cached_v1);
+
+        // Verify cached ordering is valid
+        let cached = cache.get(&path).unwrap();
+        assert!(cached.is_valid_for(&meta_v1));
+        assert!(cached.ordering.is_some());
+
+        // File modified (size changed)
+        let meta_v2 = ObjectMeta {
+            location: path.clone(),
+            last_modified: DateTime::parse_from_rfc3339("2022-09-28T10:00:00+02:00")
+                .unwrap()
+                .into(),
+            size: 200, // Changed
+            e_tag: None,
+            version: None,
+        };
+
+        // Cache entry exists but should be invalid for new metadata
+        let cached = cache.get(&path).unwrap();
+        assert!(!cached.is_valid_for(&meta_v2));
+
+        // Cache new version with different ordering
+        let ordering_v2 = ordering(); // New ordering instance
+        let cached_v2 = CachedFileMetadata::new(
+            meta_v2.clone(),
+            Arc::new(Statistics::new_unknown(&schema)),
+            Some(ordering_v2),
+        );
+        cache.put(&path, cached_v2);
+
+        // Old metadata should be invalid
+        let cached = cache.get(&path).unwrap();
+        assert!(!cached.is_valid_for(&meta_v1));
+
+        // New metadata should be valid
+        assert!(cached.is_valid_for(&meta_v2));
+        assert!(cached.ordering.is_some());
+    }
+
+    #[test]
     fn test_list_entries() {
         let cache = DefaultFileStatisticsCache::default();
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);

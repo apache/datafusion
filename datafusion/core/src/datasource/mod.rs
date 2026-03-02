@@ -149,10 +149,10 @@ mod tests {
             &self,
             _logical_file_schema: SchemaRef,
             physical_file_schema: SchemaRef,
-        ) -> Arc<dyn PhysicalExprAdapter> {
-            Arc::new(TestPhysicalExprAdapter {
+        ) -> Result<Arc<dyn PhysicalExprAdapter>> {
+            Ok(Arc::new(TestPhysicalExprAdapter {
                 physical_file_schema,
-            })
+            }))
         }
     }
 

@@ -94,7 +94,6 @@ mod unix_test {
     /// This function creates a writing task for the FIFO file. To verify
     /// incremental processing, it waits for a signal to continue writing after
     /// a certain number of lines are written.
-    #[allow(clippy::disallowed_methods)]
     fn create_writing_task(
         file_path: PathBuf,
         header: String,
@@ -105,6 +104,7 @@ mod unix_test {
         // Timeout for a long period of BrokenPipe error
         let broken_pipe_timeout = Duration::from_secs(10);
         // Spawn a new task to write to the FIFO file
+        #[expect(clippy::disallowed_methods)]
         tokio::spawn(async move {
             let mut file = tokio::fs::OpenOptions::new()
                 .write(true)
@@ -357,7 +357,7 @@ mod unix_test {
             (sink_fifo_path.clone(), sink_fifo_path.display());
 
         // Spawn a new thread to read sink EXTERNAL TABLE.
-        #[allow(clippy::disallowed_methods)] // spawn allowed only in tests
+        #[expect(clippy::disallowed_methods)] // spawn allowed only in tests
         tasks.push(spawn_blocking(move || {
             let file = File::open(sink_fifo_path_thread).unwrap();
             let schema = Arc::new(Schema::new(vec![

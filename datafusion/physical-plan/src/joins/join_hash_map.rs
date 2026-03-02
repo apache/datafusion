@@ -121,10 +121,10 @@ pub trait JoinHashMapType: Send + Sync {
         &self,
         hash_values: &[u64],
         limit: usize,
-        offset: JoinHashMapOffset,
+        offset: MapOffset,
         input_indices: &mut Vec<u32>,
         match_indices: &mut Vec<u64>,
-    ) -> Option<JoinHashMapOffset>;
+    ) -> Option<MapOffset>;
 
     /// Returns a BooleanArray indicating which of the provided hashes exist in the map.
     fn contain_hashes(&self, hash_values: &[u64]) -> BooleanArray;
@@ -186,10 +186,10 @@ impl JoinHashMapType for JoinHashMapU32 {
         &self,
         hash_values: &[u64],
         limit: usize,
-        offset: JoinHashMapOffset,
+        offset: MapOffset,
         input_indices: &mut Vec<u32>,
         match_indices: &mut Vec<u64>,
-    ) -> Option<JoinHashMapOffset> {
+    ) -> Option<MapOffset> {
         get_matched_indices_with_limit_offset::<u32>(
             &self.map,
             &self.next,
@@ -264,10 +264,10 @@ impl JoinHashMapType for JoinHashMapU64 {
         &self,
         hash_values: &[u64],
         limit: usize,
-        offset: JoinHashMapOffset,
+        offset: MapOffset,
         input_indices: &mut Vec<u32>,
         match_indices: &mut Vec<u64>,
-    ) -> Option<JoinHashMapOffset> {
+    ) -> Option<MapOffset> {
         get_matched_indices_with_limit_offset::<u64>(
             &self.map,
             &self.next,
@@ -292,54 +292,8 @@ impl JoinHashMapType for JoinHashMapU64 {
     }
 }
 
-// Type of offsets for obtaining indices from JoinHashMap.
-pub(crate) type JoinHashMapOffset = (usize, Option<u64>);
-
-/// Traverses the chain of matching indices, collecting results up to the remaining limit.
-/// Returns `Some(offset)` if the limit was reached and there are more results to process,
-/// or `None` if the chain was fully traversed.
-#[inline(always)]
-fn traverse_chain<T>(
-    next_chain: &[T],
-    input_idx: usize,
-    start_chain_idx: T,
-    remaining: &mut usize,
-    input_indices: &mut Vec<u32>,
-    match_indices: &mut Vec<u64>,
-    is_last_input: bool,
-) -> Option<JoinHashMapOffset>
-where
-    T: Copy + TryFrom<usize> + PartialOrd + Into<u64> + Sub<Output = T>,
-    <T as TryFrom<usize>>::Error: Debug,
-    T: ArrowNativeType,
-{
-    let zero = T::usize_as(0);
-    let one = T::usize_as(1);
-    let mut match_row_idx = start_chain_idx - one;
-
-    loop {
-        match_indices.push(match_row_idx.into());
-        input_indices.push(input_idx as u32);
-        *remaining -= 1;
-
-        let next = next_chain[match_row_idx.into() as usize];
-
-        if *remaining == 0 {
-            // Limit reached - return offset for next call
-            return if is_last_input && next == zero {
-                // Finished processing the last input row
-                None
-            } else {
-                Some((input_idx, Some(next.into())))
-            };
-        }
-        if next == zero {
-            // End of chain
-            return None;
-        }
-        match_row_idx = next - one;
-    }
-}
+use crate::joins::MapOffset;
+use crate::joins::chain::traverse_chain;
 
 pub fn update_from_iter<'a, T>(
     map: &mut HashTable<(u64, T)>,
@@ -427,10 +381,10 @@ pub fn get_matched_indices_with_limit_offset<T>(
     next_chain: &[T],
     hash_values: &[u64],
     limit: usize,
-    offset: JoinHashMapOffset,
+    offset: MapOffset,
     input_indices: &mut Vec<u32>,
     match_indices: &mut Vec<u64>,
-) -> Option<JoinHashMapOffset>
+) -> Option<MapOffset>
 where
     T: Copy + TryFrom<usize> + PartialOrd + Into<u64> + Sub<Output = T>,
     <T as TryFrom<usize>>::Error: Debug,

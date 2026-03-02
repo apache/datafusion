@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use crate::datasource::file_format::file_type_to_format;
 use crate::datasource::listing::ListingTableUrl;
-use crate::datasource::physical_plan::FileSinkConfig;
+use crate::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
 use crate::datasource::{DefaultTableSource, source_as_provider};
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::{ExecutionProps, SessionState};
@@ -39,7 +39,7 @@ use crate::physical_expr::{create_physical_expr, create_physical_exprs};
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::analyze::AnalyzeExec;
 use crate::physical_plan::explain::ExplainExec;
-use crate::physical_plan::filter::FilterExec;
+use crate::physical_plan::filter::FilterExecBuilder;
 use crate::physical_plan::joins::utils as join_utils;
 use crate::physical_plan::joins::{
     CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
@@ -69,8 +69,8 @@ use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeRecursion, TreeNodeVisitor,
 };
 use datafusion_common::{
-    DFSchema, ScalarValue, exec_err, internal_datafusion_err, internal_err, not_impl_err,
-    plan_err,
+    DFSchema, DFSchemaRef, ScalarValue, exec_err, internal_datafusion_err, internal_err,
+    not_impl_err, plan_err,
 };
 use datafusion_common::{
     TableReference, assert_eq_or_internal_err, assert_or_internal_err,
@@ -157,6 +157,80 @@ pub trait ExtensionPlanner {
         physical_inputs: &[Arc<dyn ExecutionPlan>],
         session_state: &SessionState,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>>;
+
+    /// Create a physical plan for a [`LogicalPlan::TableScan`].
+    ///
+    /// This is useful for planning valid [`TableSource`]s that are not [`TableProvider`]s.
+    ///
+    /// Returns:
+    /// * `Ok(Some(plan))` if the planner knows how to plan the `scan`
+    /// * `Ok(None)` if the planner does not know how to plan the `scan` and wants to delegate the planning to another [`ExtensionPlanner`]
+    /// * `Err` if the planner knows how to plan the `scan` but errors while doing so
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use std::sync::Arc;
+    /// use datafusion::physical_plan::ExecutionPlan;
+    /// use datafusion::logical_expr::TableScan;
+    /// use datafusion::execution::context::SessionState;
+    /// use datafusion::error::Result;
+    /// use datafusion_physical_planner::{ExtensionPlanner, PhysicalPlanner};
+    /// use async_trait::async_trait;
+    ///
+    /// // Your custom table source type
+    /// struct MyCustomTableSource { /* ... */ }
+    ///
+    /// // Your custom execution plan
+    /// struct MyCustomExec { /* ... */ }
+    ///
+    /// struct MyExtensionPlanner;
+    ///
+    /// #[async_trait]
+    /// impl ExtensionPlanner for MyExtensionPlanner {
+    ///     async fn plan_extension(
+    ///         &self,
+    ///         _planner: &dyn PhysicalPlanner,
+    ///         _node: &dyn UserDefinedLogicalNode,
+    ///         _logical_inputs: &[&LogicalPlan],
+    ///         _physical_inputs: &[Arc<dyn ExecutionPlan>],
+    ///         _session_state: &SessionState,
+    ///     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    ///         Ok(None)
+    ///     }
+    ///
+    ///     async fn plan_table_scan(
+    ///         &self,
+    ///         _planner: &dyn PhysicalPlanner,
+    ///         scan: &TableScan,
+    ///         _session_state: &SessionState,
+    ///     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    ///         // Check if this is your custom table source
+    ///         if scan.source.as_any().is::<MyCustomTableSource>() {
+    ///             // Create a custom execution plan for your table source
+    ///             let exec = MyCustomExec::new(
+    ///                 scan.table_name.clone(),
+    ///                 Arc::clone(scan.projected_schema.inner()),
+    ///             );
+    ///             Ok(Some(Arc::new(exec)))
+    ///         } else {
+    ///             // Return None to let other extension planners handle it
+    ///             Ok(None)
+    ///         }
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// [`TableSource`]: datafusion_expr::TableSource
+    /// [`TableProvider`]: datafusion_catalog::TableProvider
+    async fn plan_table_scan(
+        &self,
+        _planner: &dyn PhysicalPlanner,
+        _scan: &TableScan,
+        _session_state: &SessionState,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        Ok(None)
+    }
 }
 
 /// Default single node physical query planner that converts a
@@ -278,13 +352,32 @@ struct LogicalNode<'a> {
 
 impl DefaultPhysicalPlanner {
     /// Create a physical planner that uses `extension_planners` to
-    /// plan user-defined logical nodes [`LogicalPlan::Extension`].
+    /// plan user-defined logical nodes [`LogicalPlan::Extension`]
+    /// or user-defined table sources in [`LogicalPlan::TableScan`].
     /// The planner uses the first [`ExtensionPlanner`] to return a non-`None`
     /// plan.
     pub fn with_extension_planners(
         extension_planners: Vec<Arc<dyn ExtensionPlanner + Send + Sync>>,
     ) -> Self {
         Self { extension_planners }
+    }
+
+    fn ensure_schema_matches(
+        &self,
+        logical_schema: &DFSchemaRef,
+        physical_plan: &Arc<dyn ExecutionPlan>,
+        context: &str,
+    ) -> Result<()> {
+        if !logical_schema.matches_arrow_schema(&physical_plan.schema()) {
+            return plan_err!(
+                "{} created an ExecutionPlan with mismatched schema. \
+                    LogicalPlan schema: {:?}, ExecutionPlan schema: {:?}",
+                context,
+                logical_schema,
+                physical_plan.schema()
+            );
+        }
+        Ok(())
     }
 
     /// Create a physical plan from a logical plan
@@ -455,25 +548,53 @@ impl DefaultPhysicalPlanner {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let exec_node: Arc<dyn ExecutionPlan> = match node {
             // Leaves (no children)
-            LogicalPlan::TableScan(TableScan {
-                source,
-                projection,
-                filters,
-                fetch,
-                ..
-            }) => {
-                let source = source_as_provider(source)?;
-                // Remove all qualifiers from the scan as the provider
-                // doesn't know (nor should care) how the relation was
-                // referred to in the query
-                let filters = unnormalize_cols(filters.iter().cloned());
-                let filters_vec = filters.into_iter().collect::<Vec<_>>();
-                let opts = ScanArgs::default()
-                    .with_projection(projection.as_deref())
-                    .with_filters(Some(&filters_vec))
-                    .with_limit(*fetch);
-                let res = source.scan_with_args(session_state, opts).await?;
-                Arc::clone(res.plan())
+            LogicalPlan::TableScan(scan) => {
+                let TableScan {
+                    source,
+                    projection,
+                    filters,
+                    fetch,
+                    projected_schema,
+                    ..
+                } = scan;
+
+                if let Ok(source) = source_as_provider(source) {
+                    // Remove all qualifiers from the scan as the provider
+                    // doesn't know (nor should care) how the relation was
+                    // referred to in the query
+                    let filters = unnormalize_cols(filters.iter().cloned());
+                    let filters_vec = filters.into_iter().collect::<Vec<_>>();
+                    let opts = ScanArgs::default()
+                        .with_projection(projection.as_deref())
+                        .with_filters(Some(&filters_vec))
+                        .with_limit(*fetch);
+                    let res = source.scan_with_args(session_state, opts).await?;
+                    Arc::clone(res.plan())
+                } else {
+                    let mut maybe_plan = None;
+                    for planner in &self.extension_planners {
+                        if maybe_plan.is_some() {
+                            break;
+                        }
+
+                        maybe_plan =
+                            planner.plan_table_scan(self, scan, session_state).await?;
+                    }
+
+                    let plan = match maybe_plan {
+                        Some(plan) => plan,
+                        None => {
+                            return plan_err!(
+                                "No installed planner was able to plan TableScan for custom TableSource: {:?}",
+                                scan.table_name
+                            );
+                        }
+                    };
+                    let context =
+                        format!("Extension planner for table scan {}", scan.table_name);
+                    self.ensure_schema_matches(projected_schema, &plan, &context)?;
+                    plan
+                }
             }
             LogicalPlan::Values(Values { values, schema }) => {
                 let exprs = values
@@ -549,8 +670,30 @@ impl DefaultPhysicalPlanner {
                     }
                 };
 
+                // Parse single_file_output option if explicitly set
+                let file_output_mode = match source_option_tuples
+                    .get("single_file_output")
+                    .map(|v| v.trim())
+                {
+                    None => FileOutputMode::Automatic,
+                    Some("true") => FileOutputMode::SingleFile,
+                    Some("false") => FileOutputMode::Directory,
+                    Some(value) => {
+                        return Err(DataFusionError::Configuration(format!(
+                            "provided value for 'single_file_output' was not recognized: \"{value}\""
+                        )));
+                    }
+                };
+
+                // Filter out sink-related options that are not format options
+                let format_options: HashMap<String, String> = source_option_tuples
+                    .iter()
+                    .filter(|(k, _)| k.as_str() != "single_file_output")
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+
                 let sink_format = file_type_to_format(file_type)?
-                    .create(session_state, source_option_tuples)?;
+                    .create(session_state, &format_options)?;
 
                 // Determine extension based on format extension and compression
                 let file_extension = match sink_format.compression_type() {
@@ -571,6 +714,7 @@ impl DefaultPhysicalPlanner {
                     insert_op: InsertOp::Append,
                     keep_partition_by_columns,
                     file_extension,
+                    file_output_mode,
                 };
 
                 let ordering = input_exec.properties().output_ordering().cloned();
@@ -648,6 +792,30 @@ impl DefaultPhysicalPlanner {
                         .await
                         .map_err(|e| {
                             e.context(format!("UPDATE operation on table '{table_name}'"))
+                        })?
+                } else {
+                    return exec_err!(
+                        "Table source can't be downcasted to DefaultTableSource"
+                    );
+                }
+            }
+            LogicalPlan::Dml(DmlStatement {
+                table_name,
+                target,
+                op: WriteOp::Truncate,
+                ..
+            }) => {
+                if let Some(provider) =
+                    target.as_any().downcast_ref::<DefaultTableSource>()
+                {
+                    provider
+                        .table_provider
+                        .truncate(session_state)
+                        .await
+                        .map_err(|e| {
+                            e.context(format!(
+                                "TRUNCATE operation on table '{table_name}'"
+                            ))
                         })?
                 } else {
                     return exec_err!(
@@ -938,8 +1106,12 @@ impl DefaultPhysicalPlanner {
                     input_schema.as_arrow(),
                 )? {
                     PlanAsyncExpr::Sync(PlannedExprResult::Expr(runtime_expr)) => {
-                        FilterExec::try_new(Arc::clone(&runtime_expr[0]), physical_input)?
-                            .with_batch_size(session_state.config().batch_size())?
+                        FilterExecBuilder::new(
+                            Arc::clone(&runtime_expr[0]),
+                            physical_input,
+                        )
+                        .with_batch_size(session_state.config().batch_size())
+                        .build()?
                     }
                     PlanAsyncExpr::Async(
                         async_map,
@@ -949,16 +1121,17 @@ impl DefaultPhysicalPlanner {
                             async_map.async_exprs,
                             physical_input,
                         )?;
-                        FilterExec::try_new(
+                        FilterExecBuilder::new(
                             Arc::clone(&runtime_expr[0]),
                             Arc::new(async_exec),
-                        )?
+                        )
                         // project the output columns excluding the async functions
                         // The async functions are always appended to the end of the schema.
-                        .with_projection(Some(
-                            (0..input.schema().fields().len()).collect(),
+                        .apply_projection(Some(
+                            (0..input.schema().fields().len()).collect::<Vec<_>>(),
                         ))?
-                        .with_batch_size(session_state.config().batch_size())?
+                        .with_batch_size(session_state.config().batch_size())
+                        .build()?
                     }
                     _ => {
                         return internal_err!(
@@ -1091,6 +1264,7 @@ impl DefaultPhysicalPlanner {
                 filter,
                 join_type,
                 null_equality,
+                null_aware,
                 schema: join_schema,
                 ..
             }) => {
@@ -1342,7 +1516,7 @@ impl DefaultPhysicalPlanner {
 
                 // TODO: Allow PWMJ to deal with residual equijoin conditions
                 let join: Arc<dyn ExecutionPlan> = if join_on.is_empty() {
-                    if join_filter.is_none() && matches!(join_type, JoinType::Inner) {
+                    if join_filter.is_none() && *join_type == JoinType::Inner {
                         // cross join if there is no join conditions and no join filter set
                         Arc::new(CrossJoinExec::new(physical_left, physical_right))
                     } else if num_range_filters == 1
@@ -1417,9 +1591,7 @@ impl DefaultPhysicalPlanner {
 
                         let left_side = side_of(lhs_logical)?;
                         let right_side = side_of(rhs_logical)?;
-                        if matches!(left_side, Side::Both)
-                            || matches!(right_side, Side::Both)
-                        {
+                        if left_side == Side::Both || right_side == Side::Both {
                             return Ok(Arc::new(NestedLoopJoinExec::try_new(
                                 physical_left,
                                 physical_right,
@@ -1487,6 +1659,8 @@ impl DefaultPhysicalPlanner {
                 } else if session_state.config().target_partitions() > 1
                     && session_state.config().repartition_joins()
                     && prefer_hash_join
+                    && !*null_aware
+                // Null-aware joins must use CollectLeft
                 {
                     Arc::new(HashJoinExec::try_new(
                         physical_left,
@@ -1497,6 +1671,7 @@ impl DefaultPhysicalPlanner {
                         None,
                         PartitionMode::Auto,
                         *null_equality,
+                        *null_aware,
                     )?)
                 } else {
                     Arc::new(HashJoinExec::try_new(
@@ -1508,6 +1683,7 @@ impl DefaultPhysicalPlanner {
                         None,
                         PartitionMode::CollectLeft,
                         *null_equality,
+                        *null_aware,
                     )?)
                 };
 
@@ -1561,20 +1737,9 @@ impl DefaultPhysicalPlanner {
                     ),
                 }?;
 
-                // Ensure the ExecutionPlan's schema matches the
-                // declared logical schema to catch and warn about
-                // logic errors when creating user defined plans.
-                if !node.schema().matches_arrow_schema(&plan.schema()) {
-                    return plan_err!(
-                        "Extension planner for {:?} created an ExecutionPlan with mismatched schema. \
-                            LogicalPlan schema: {:?}, ExecutionPlan schema: {:?}",
-                        node,
-                        node.schema(),
-                        plan.schema()
-                    );
-                } else {
-                    plan
-                }
+                let context = format!("Extension planner for {node:?}");
+                self.ensure_schema_matches(node.schema(), &plan, &context)?;
+                plan
             }
 
             // Other
@@ -2719,7 +2884,7 @@ impl<'a> OptimizationInvariantChecker<'a> {
             && !is_allowed_schema_change(previous_schema.as_ref(), plan.schema().as_ref())
         {
             internal_err!(
-                "PhysicalOptimizer rule '{}' failed. Schema mismatch. Expected original schema: {:?}, got new schema: {:?}",
+                "PhysicalOptimizer rule '{}' failed. Schema mismatch. Expected original schema: {}, got new schema: {}",
                 self.rule.name(),
                 previous_schema,
                 plan.schema()
@@ -2834,7 +2999,9 @@ mod tests {
     use datafusion_execution::TaskContext;
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_expr::builder::subquery_alias;
-    use datafusion_expr::{LogicalPlanBuilder, UserDefinedLogicalNodeCore, col, lit};
+    use datafusion_expr::{
+        LogicalPlanBuilder, TableSource, UserDefinedLogicalNodeCore, col, lit,
+    };
     use datafusion_functions_aggregate::count::count_all;
     use datafusion_functions_aggregate::expr_fn::sum;
     use datafusion_physical_expr::EquivalenceProperties;
@@ -3496,12 +3663,12 @@ mod tests {
             assert!(
                 stringified_plans
                     .iter()
-                    .any(|p| matches!(p.plan_type, PlanType::FinalLogicalPlan))
+                    .any(|p| p.plan_type == PlanType::FinalLogicalPlan)
             );
             assert!(
                 stringified_plans
                     .iter()
-                    .any(|p| matches!(p.plan_type, PlanType::InitialPhysicalPlan))
+                    .any(|p| p.plan_type == PlanType::InitialPhysicalPlan)
             );
             assert!(
                 stringified_plans.iter().any(|p| matches!(
@@ -3512,7 +3679,7 @@ mod tests {
             assert!(
                 stringified_plans
                     .iter()
-                    .any(|p| matches!(p.plan_type, PlanType::FinalPhysicalPlan))
+                    .any(|p| p.plan_type == PlanType::FinalPhysicalPlan)
             );
         } else {
             panic!(
@@ -3656,13 +3823,15 @@ mod tests {
 
     #[derive(Debug)]
     struct NoOpExecutionPlan {
-        cache: PlanProperties,
+        cache: Arc<PlanProperties>,
     }
 
     impl NoOpExecutionPlan {
         fn new(schema: SchemaRef) -> Self {
             let cache = Self::compute_properties(schema);
-            Self { cache }
+            Self {
+                cache: Arc::new(cache),
+            }
         }
 
         /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
@@ -3700,7 +3869,7 @@ mod tests {
             self
         }
 
-        fn properties(&self) -> &PlanProperties {
+        fn properties(&self) -> &Arc<PlanProperties> {
             &self.cache
         }
 
@@ -3854,7 +4023,7 @@ digraph {
         fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
             self.0.iter().collect::<Vec<_>>()
         }
-        fn properties(&self) -> &PlanProperties {
+        fn properties(&self) -> &Arc<PlanProperties> {
             unimplemented!()
         }
         fn execute(
@@ -3903,7 +4072,7 @@ digraph {
         fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
             unimplemented!()
         }
-        fn properties(&self) -> &PlanProperties {
+        fn properties(&self) -> &Arc<PlanProperties> {
             unimplemented!()
         }
         fn execute(
@@ -4024,7 +4193,7 @@ digraph {
         fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
             vec![]
         }
-        fn properties(&self) -> &PlanProperties {
+        fn properties(&self) -> &Arc<PlanProperties> {
             unimplemented!()
         }
         fn execute(
@@ -4355,5 +4524,77 @@ digraph {
         assert_contains!(&err_str, "field data type at index");
         assert_contains!(&err_str, "field nullability at index");
         assert_contains!(&err_str, "field metadata at index");
+    }
+
+    #[derive(Debug)]
+    struct MockTableSource {
+        schema: SchemaRef,
+    }
+
+    impl TableSource for MockTableSource {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn schema(&self) -> SchemaRef {
+            Arc::clone(&self.schema)
+        }
+    }
+
+    struct MockTableScanExtensionPlanner;
+
+    #[async_trait]
+    impl ExtensionPlanner for MockTableScanExtensionPlanner {
+        async fn plan_extension(
+            &self,
+            _planner: &dyn PhysicalPlanner,
+            _node: &dyn UserDefinedLogicalNode,
+            _logical_inputs: &[&LogicalPlan],
+            _physical_inputs: &[Arc<dyn ExecutionPlan>],
+            _session_state: &SessionState,
+        ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+            Ok(None)
+        }
+
+        async fn plan_table_scan(
+            &self,
+            _planner: &dyn PhysicalPlanner,
+            scan: &TableScan,
+            _session_state: &SessionState,
+        ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+            if scan.source.as_any().is::<MockTableSource>() {
+                Ok(Some(Arc::new(EmptyExec::new(Arc::clone(
+                    scan.projected_schema.inner(),
+                )))))
+            } else {
+                Ok(None)
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_table_scan_extension_planner() {
+        let session_state = make_session_state();
+        let planner = Arc::new(MockTableScanExtensionPlanner);
+        let physical_planner =
+            DefaultPhysicalPlanner::with_extension_planners(vec![planner]);
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+
+        let table_source = Arc::new(MockTableSource {
+            schema: Arc::clone(&schema),
+        });
+        let logical_plan = LogicalPlanBuilder::scan("test", table_source, None)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let plan = physical_planner
+            .create_physical_plan(&logical_plan, &session_state)
+            .await
+            .unwrap();
+
+        assert_eq!(plan.schema(), schema);
+        assert!(plan.as_any().is::<EmptyExec>());
     }
 }

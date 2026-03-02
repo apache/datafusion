@@ -115,10 +115,20 @@ pub trait SchemaMapper: Debug + Send + Sync {
 
 /// Deprecated: Default [`SchemaAdapterFactory`] for mapping schemas.
 ///
-/// This struct has been removed. Use [`PhysicalExprAdapterFactory`] instead.
+/// This struct has been removed.
+///
+/// Use [`PhysicalExprAdapterFactory`] instead to customize scans via
+/// [`FileScanConfigBuilder`], i.e. if you had implemented a custom [`SchemaAdapter`]
+/// and passed that into [`FileScanConfigBuilder`] / [`ParquetSource`].
+/// Use [`BatchAdapter`] if you want to map a stream of [`RecordBatch`]es
+/// between one schema and another, i.e. if you were calling [`SchemaMapper::map_batch`] manually.
+///
 /// See `upgrading.md` for more details.
 ///
 /// [`PhysicalExprAdapterFactory`]: datafusion_physical_expr_adapter::PhysicalExprAdapterFactory
+/// [`FileScanConfigBuilder`]: crate::file_scan_config::FileScanConfigBuilder
+/// [`ParquetSource`]: https://docs.rs/datafusion-datasource-parquet/latest/datafusion_datasource_parquet/source/struct.ParquetSource.html
+/// [`BatchAdapter`]: datafusion_physical_expr_adapter::BatchAdapter
 #[deprecated(
     since = "52.0.0",
     note = "DefaultSchemaAdapterFactory has been removed. Use PhysicalExprAdapterFactory instead. See upgrading.md for more details."
@@ -178,10 +188,20 @@ impl SchemaAdapter for DeprecatedSchemaAdapter {
 
 /// Deprecated: The SchemaMapping struct held a mapping from the file schema to the table schema.
 ///
-/// This struct has been removed. Use [`PhysicalExprAdapterFactory`] instead.
+/// This struct has been removed.
+///
+/// Use [`PhysicalExprAdapterFactory`] instead to customize scans via
+/// [`FileScanConfigBuilder`], i.e. if you had implemented a custom [`SchemaAdapter`]
+/// and passed that into [`FileScanConfigBuilder`] / [`ParquetSource`].
+/// Use [`BatchAdapter`] if you want to map a stream of [`RecordBatch`]es
+/// between one schema and another, i.e. if you were calling [`SchemaMapper::map_batch`] manually.
+///
 /// See `upgrading.md` for more details.
 ///
 /// [`PhysicalExprAdapterFactory`]: datafusion_physical_expr_adapter::PhysicalExprAdapterFactory
+/// [`FileScanConfigBuilder`]: crate::file_scan_config::FileScanConfigBuilder
+/// [`ParquetSource`]: https://docs.rs/datafusion-datasource-parquet/latest/datafusion_datasource_parquet/source/struct.ParquetSource.html
+/// [`BatchAdapter`]: datafusion_physical_expr_adapter::BatchAdapter
 #[deprecated(
     since = "52.0.0",
     note = "SchemaMapping has been removed. Use PhysicalExprAdapterFactory instead. See upgrading.md for more details."

@@ -67,6 +67,7 @@ hashbrown = { workspace = true }
 indexmap = { workspace = true }
 itertools = { workspace = true, features = ["use_std"] }
 log = { workspace = true }
+num-traits = { workspace = true }
 parking_lot = { workspace = true }
 pin-project-lite = "^0.2.7"
 tokio = { workspace = true }
@@ -96,6 +97,11 @@ name = "spill_io"
 [[bench]]
 harness = false
 name = "sort_preserving_merge"
+
+[[bench]]
+harness = false
+name = "sort_merge_join"
+required-features = ["test_utils"]
 
 [[bench]]
 harness = false

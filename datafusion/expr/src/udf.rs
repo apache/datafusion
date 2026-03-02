@@ -19,6 +19,7 @@
 
 use crate::async_udf::AsyncScalarUDF;
 use crate::expr::schema_name_from_exprs_comma_separated_without_space;
+use crate::preimage::PreimageResult;
 use crate::simplify::{ExprSimplifyResult, SimplifyContext};
 use crate::sort_properties::{ExprProperties, SortProperties};
 use crate::udf_eq::UdfEq;
@@ -30,6 +31,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::{ExprSchema, Result, ScalarValue, not_impl_err};
 use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
 use datafusion_expr_common::interval_arithmetic::Interval;
+use datafusion_expr_common::placement::ExpressionPlacement;
 use std::any::Any;
 use std::cmp::Ordering;
 use std::fmt::Debug;
@@ -232,6 +234,18 @@ impl ScalarUDF {
         self.inner.is_nullable(args, schema)
     }
 
+    /// Return a preimage
+    ///
+    /// See [`ScalarUDFImpl::preimage`] for more details.
+    pub fn preimage(
+        &self,
+        args: &[Expr],
+        lit_expr: &Expr,
+        info: &SimplifyContext,
+    ) -> Result<PreimageResult> {
+        self.inner.preimage(args, lit_expr, info)
+    }
+
     /// Invoke the function on `args`, returning the appropriate result.
     ///
     /// See [`ScalarUDFImpl::invoke_with_args`] for details.
@@ -347,6 +361,13 @@ impl ScalarUDF {
     /// Return true if this function is an async function
     pub fn as_async(&self) -> Option<&AsyncScalarUDF> {
         self.inner().as_any().downcast_ref::<AsyncScalarUDF>()
+    }
+
+    /// Returns placement information for this function.
+    ///
+    /// See [`ScalarUDFImpl::placement`] for more details.
+    pub fn placement(&self, args: &[ExpressionPlacement]) -> ExpressionPlacement {
+        self.inner.placement(args)
     }
 }
 
@@ -696,6 +717,111 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
         Ok(ExprSimplifyResult::Original(args))
     }
 
+    /// Returns a single contiguous preimage for this function and the specified
+    /// scalar expression, if any.
+    ///
+    /// Currently only applies to `=, !=, >, >=, <, <=, is distinct from, is not distinct from` predicates
+    /// # Return Value
+    ///
+    /// Implementations should return a half-open interval: inclusive lower
+    /// bound and exclusive upper bound. This is slightly different from normal
+    /// [`Interval`] semantics where the upper bound is closed (inclusive).
+    /// Typically this means the upper endpoint must be adjusted to the next
+    /// value not included in the preimage. See the Half-Open Intervals section
+    /// below for more details.
+    ///
+    /// # Background
+    ///
+    /// Inspired by the [ClickHouse Paper], a "preimage rewrite" transforms a
+    /// predicate containing a function call into a predicate containing an
+    /// equivalent set of input literal (constant) values. The resulting
+    /// predicate can often be further optimized by other rewrites (see
+    /// Examples).
+    ///
+    /// From the paper:
+    ///
+    /// > some functions can compute the preimage of a given function result.
+    /// > This is used to replace comparisons of constants with function calls
+    /// > on the key columns by comparing the key column value with the preimage.
+    /// > For example, `toYear(k) = 2024` can be replaced by
+    /// > `k >= 2024-01-01 && k < 2025-01-01`
+    ///
+    /// For example, given an expression like
+    /// ```sql
+    /// date_part('YEAR', k) = 2024
+    /// ```
+    ///
+    /// The interval `[2024-01-01, 2025-12-31`]` contains all possible input
+    /// values (preimage values) for which the function `date_part(YEAR, k)`
+    /// produces the output value `2024` (image value). Returning the interval
+    /// (note upper bound adjusted up) `[2024-01-01, 2025-01-01]` the expression
+    /// can be rewritten to
+    ///
+    /// ```sql
+    /// k >= '2024-01-01' AND k < '2025-01-01'
+    /// ```
+    ///
+    /// which is a simpler and a more canonical form, making it easier for other
+    /// optimizer passes to recognize and apply further transformations.
+    ///
+    /// # Examples
+    ///
+    /// Case 1:
+    ///
+    /// Original:
+    /// ```sql
+    /// date_part('YEAR', k) = 2024 AND k >= '2024-06-01'
+    /// ```
+    ///
+    /// After preimage rewrite:
+    /// ```sql
+    /// k >= '2024-01-01' AND k < '2025-01-01' AND k >= '2024-06-01'
+    /// ```
+    ///
+    /// Since this form is much simpler, the optimizer can combine and simplify
+    /// sub-expressions further into:
+    /// ```sql
+    /// k >= '2024-06-01' AND k < '2025-01-01'
+    /// ```
+    ///
+    /// Case 2:
+    ///
+    /// For min/max pruning, simpler predicates such as:
+    /// ```sql
+    /// k >= '2024-01-01' AND k < '2025-01-01'
+    /// ```
+    /// are much easier for the pruner to reason about. See [PruningPredicate]
+    /// for the backgrounds of predicate pruning.
+    ///
+    /// The trade-off with the preimage rewrite is that evaluating the rewritten
+    /// form might be slightly more expensive than evaluating the original
+    /// expression. In practice, this cost is usually outweighed by the more
+    /// aggressive optimization opportunities it enables.
+    ///
+    /// # Half-Open Intervals
+    ///
+    /// The preimage API uses half-open intervals, which makes the rewrite
+    /// easier to implement by avoiding calculations to adjust the upper bound.
+    /// For example, if a function returns its input unchanged and the desired
+    /// output is the single value `5`, a closed interval could be represented
+    /// as `[5, 5]`, but then the rewrite would require adjusting the upper
+    /// bound to `6` to create a proper range predicate. With a half-open
+    /// interval, the same range is represented as `[5, 6)`, which already
+    /// forms a valid predicate.
+    ///
+    /// [PruningPredicate]: https://docs.rs/datafusion/latest/datafusion/physical_optimizer/pruning/struct.PruningPredicate.html
+    /// [ClickHouse Paper]:  https://www.vldb.org/pvldb/vol17/p3731-schulze.pdf
+    /// [image]: https://en.wikipedia.org/wiki/Image_(mathematics)#Image_of_an_element
+    /// [preimage]: https://en.wikipedia.org/wiki/Image_(mathematics)#Inverse_image
+    fn preimage(
+        &self,
+        _args: &[Expr],
+        _lit_expr: &Expr,
+        _info: &SimplifyContext,
+    ) -> Result<PreimageResult> {
+        Ok(PreimageResult::None)
+    }
+
     /// Returns true if some of this `exprs` subexpressions may not be evaluated
     /// and thus any side effects (like divide by zero) may not be encountered.
     ///
@@ -846,6 +972,20 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     fn documentation(&self) -> Option<&Documentation> {
         None
     }
+
+    /// Returns placement information for this function.
+    ///
+    /// This is used by optimizers to make decisions about expression placement,
+    /// such as whether to push expressions down through projections.
+    ///
+    /// The default implementation returns [`ExpressionPlacement::KeepInPlace`],
+    /// meaning the expression should be kept where it is in the plan.
+    ///
+    /// Override this method to indicate that the function can be pushed down
+    /// closer to the data source.
+    fn placement(&self, _args: &[ExpressionPlacement]) -> ExpressionPlacement {
+        ExpressionPlacement::KeepInPlace
+    }
 }
 
 /// ScalarUDF that adds an alias to the underlying function. It is better to
@@ -926,6 +1066,15 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         self.inner.simplify(args, info)
     }
 
+    fn preimage(
+        &self,
+        args: &[Expr],
+        lit_expr: &Expr,
+        info: &SimplifyContext,
+    ) -> Result<PreimageResult> {
+        self.inner.preimage(args, lit_expr, info)
+    }
+
     fn conditional_arguments<'a>(
         &self,
         args: &'a [Expr],
@@ -963,6 +1112,10 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.inner.documentation()
+    }
+
+    fn placement(&self, args: &[ExpressionPlacement]) -> ExpressionPlacement {
+        self.inner.placement(args)
     }
 }
 

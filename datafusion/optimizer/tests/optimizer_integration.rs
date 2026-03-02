@@ -543,7 +543,7 @@ fn recursive_cte_projection_pushdown() -> Result<()> {
       RecursiveQuery: is_distinct=false
         Projection: test.col_int32 AS id
           TableScan: test projection=[col_int32]
-        Projection: CAST(CAST(nodes.id AS Int64) + Int64(1) AS Int32) AS id
+        Projection: CAST(CAST(nodes.id AS Int64) + Int64(1) AS Int32)
           Filter: nodes.id < Int32(3)
             TableScan: nodes projection=[id]
     "
@@ -567,7 +567,7 @@ fn recursive_cte_with_aliased_self_reference() -> Result<()> {
       RecursiveQuery: is_distinct=false
         Projection: test.col_int32 AS id
           TableScan: test projection=[col_int32]
-        Projection: CAST(CAST(child.id AS Int64) + Int64(1) AS Int32) AS id
+        Projection: CAST(CAST(child.id AS Int64) + Int64(1) AS Int32)
           SubqueryAlias: child
             Filter: nodes.id < Int32(3)
               TableScan: nodes projection=[id]
@@ -630,7 +630,7 @@ fn recursive_cte_projection_pushdown_baseline() -> Result<()> {
         Projection: test.col_int32 AS n
           Filter: test.col_int32 = Int32(5)
             TableScan: test projection=[col_int32]
-        Projection: CAST(CAST(countdown.n AS Int64) - Int64(1) AS Int32) AS n
+        Projection: CAST(CAST(countdown.n AS Int64) - Int64(1) AS Int32)
           Filter: countdown.n > Int32(1)
             TableScan: countdown projection=[n]
     "

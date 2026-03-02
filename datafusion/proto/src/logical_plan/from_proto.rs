@@ -239,6 +239,7 @@ impl From<protobuf::dml_node::Type> for WriteOp {
             }
             protobuf::dml_node::Type::InsertReplace => WriteOp::Insert(InsertOp::Replace),
             protobuf::dml_node::Type::Ctas => WriteOp::Ctas,
+            protobuf::dml_node::Type::Truncate => WriteOp::Truncate,
         }
     }
 }

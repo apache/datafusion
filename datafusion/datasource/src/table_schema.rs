@@ -20,13 +20,13 @@
 use arrow::datatypes::{FieldRef, SchemaBuilder, SchemaRef};
 use std::sync::Arc;
 
-/// Helper to hold table schema information for partitioned data sources.
+/// The overall schema for potentially partitioned data sources.
 ///
-/// When reading partitioned data (such as Hive-style partitioning), a table's schema
+/// When reading partitioned data (such as Hive-style partitioning), a [`TableSchema`]
 /// consists of two parts:
 /// 1. **File schema**: The schema of the actual data files on disk
-/// 2. **Partition columns**: Columns that are encoded in the directory structure,
-///    not stored in the files themselves
+/// 2. **Partition columns**: Columns whose values are encoded in the directory structure,
+///    but not stored in the files themselves
 ///
 /// # Example: Partitioned Table
 ///

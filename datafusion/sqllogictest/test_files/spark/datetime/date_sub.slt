@@ -45,6 +45,16 @@ SELECT date_sub('2016-07-30'::date, 0::int);
 ----
 2016-07-30
 
+query I
+SELECT date_sub('1969-01-01'::date, 2147483647::int)::int;
+----
+2147483284
+
+query D
+SELECT date_sub('2016-07-30'::date, 100000::int);
+----
+1742-10-15
+
 # Test with negative day values (should add days)
 query D
 SELECT date_sub('2016-07-30'::date, -1::int);

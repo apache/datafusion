@@ -113,3 +113,30 @@ logical_plan
 05)--------TableScan: t2
 06)----TableScan: t1
 physical_plan_error This feature is not implemented: Physical plan does not support logical expression InSubquery(InSubquery { expr: Column(Column { relation: Some(Bare { table: "t1" }), name: "a" }), subquery: <subquery>, negated: false })
+
+
+# Delete with limit
+
+query TT
+explain delete from t1 limit 10
+----
+logical_plan
+01)Dml: op=[Delete] table=[t1]
+02)--Limit: skip=0, fetch=10
+03)----TableScan: t1
+physical_plan
+01)CooperativeExec
+02)--DmlResultExec: rows_affected=0
+
+
+query TT
+explain delete from t1 where a = 1 and b = '2' limit 10
+----
+logical_plan
+01)Dml: op=[Delete] table=[t1]
+02)--Limit: skip=0, fetch=10
+03)----Filter: CAST(t1.a AS Int64) = Int64(1) AND t1.b = CAST(Utf8("2") AS Utf8View)
+04)------TableScan: t1
+physical_plan
+01)CooperativeExec
+02)--DmlResultExec: rows_affected=0

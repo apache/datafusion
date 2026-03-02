@@ -38,7 +38,8 @@ pub struct SyntaxHighlighter {
 
 impl SyntaxHighlighter {
     pub fn new(dialect: &config::Dialect) -> Self {
-        let dialect = dialect_from_str(dialect).unwrap_or(Box::new(GenericDialect {}));
+        let dialect =
+            dialect_from_str(dialect).unwrap_or_else(|| Box::new(GenericDialect {}));
         Self { dialect }
     }
 }
@@ -80,15 +81,19 @@ impl Highlighter for SyntaxHighlighter {
 }
 
 /// Convenient utility to return strings with [ANSI color](https://gist.github.com/JBlond/2fea43a3049b38287e5e9cefc87b2124).
-struct Color {}
+pub(crate) struct Color {}
 
 impl Color {
-    fn green(s: impl Display) -> String {
+    pub(crate) fn green(s: impl Display) -> String {
         format!("\x1b[92m{s}\x1b[0m")
     }
 
-    fn red(s: impl Display) -> String {
+    pub(crate) fn red(s: impl Display) -> String {
         format!("\x1b[91m{s}\x1b[0m")
+    }
+
+    pub(crate) fn gray(s: impl Display) -> String {
+        format!("\x1b[90m{s}\x1b[0m")
     }
 }
 

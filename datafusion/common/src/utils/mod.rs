@@ -70,10 +70,10 @@ use std::thread::available_parallelism;
 /// ```
 pub fn project_schema(
     schema: &SchemaRef,
-    projection: Option<&Vec<usize>>,
+    projection: Option<&impl AsRef<[usize]>>,
 ) -> Result<SchemaRef> {
     let schema = match projection {
-        Some(columns) => Arc::new(schema.project(columns)?),
+        Some(columns) => Arc::new(schema.project(columns.as_ref())?),
         None => Arc::clone(schema),
     };
     Ok(schema)
@@ -516,6 +516,7 @@ impl SingleRowListArrayBuilder {
 /// );
 ///
 /// assert_eq!(list_arr, expected);
+/// ```
 pub fn arrays_into_list_array(
     arr: impl IntoIterator<Item = ArrayRef>,
 ) -> Result<ListArray> {
@@ -587,6 +588,7 @@ pub enum ListCoercion {
 /// let base_type = DataType::Float64;
 /// let coerced_type = coerced_type_with_base_type_only(&data_type, &base_type, None);
 /// assert_eq!(coerced_type, DataType::List(Arc::new(Field::new_list_field(DataType::Float64, true))));
+/// ```
 pub fn coerced_type_with_base_type_only(
     data_type: &DataType,
     base_type: &DataType,

@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
@@ -25,10 +26,10 @@ use arrow::array::{
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::{
     array::{Array, ArrayRef, AsArray},
-    datatypes::{
-        ArrowNativeType, DataType, Field, FieldRef, Float16Type, Float32Type, Float64Type,
-    },
+    datatypes::{DataType, Field, FieldRef, Float16Type, Float32Type, Float64Type},
 };
+
+use num_traits::AsPrimitive;
 
 use arrow::array::ArrowNativeTypeOp;
 use datafusion_common::internal_err;
@@ -52,7 +53,7 @@ use datafusion_expr::{
 };
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::accumulate;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::filtered_null_mask;
-use datafusion_functions_aggregate_common::utils::GenericDistinctBuffer;
+use datafusion_functions_aggregate_common::utils::{GenericDistinctBuffer, Hashable};
 use datafusion_macros::user_doc;
 
 use crate::utils::validate_percentile_expr;
@@ -67,7 +68,10 @@ use crate::utils::validate_percentile_expr;
 /// The interpolation formula: `lower + (upper - lower) * fraction`
 /// is computed as: `lower + ((upper - lower) * (fraction * PRECISION)) / PRECISION`
 /// to avoid floating-point operations on integer types while maintaining precision.
-const INTERPOLATION_PRECISION: usize = 1_000_000;
+///
+/// The interpolation arithmetic is performed in f64 and then cast back to the
+/// native type to avoid overflowing Float16 intermediates.
+const INTERPOLATION_PRECISION: f64 = 1_000_000.0;
 
 create_func!(PercentileCont, percentile_cont_udaf);
 
@@ -388,7 +392,12 @@ impl<T: ArrowNumericType + Debug> PercentileContAccumulator<T> {
     }
 }
 
-impl<T: ArrowNumericType + Debug> Accumulator for PercentileContAccumulator<T> {
+impl<T> Accumulator for PercentileContAccumulator<T>
+where
+    T: ArrowNumericType + Debug,
+    T::Native: Copy + AsPrimitive<f64>,
+    f64: AsPrimitive<T::Native>,
+{
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
         // Convert `all_values` to `ListArray` and return a single List ScalarValue
 
@@ -427,13 +436,47 @@ impl<T: ArrowNumericType + Debug> Accumulator for PercentileContAccumulator<T> {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let d = std::mem::take(&mut self.all_values);
-        let value = calculate_percentile::<T>(d, self.percentile);
+        let value = calculate_percentile::<T>(&mut self.all_values, self.percentile);
         ScalarValue::new_primitive::<T>(value, &T::DATA_TYPE)
     }
 
     fn size(&self) -> usize {
         size_of_val(self) + self.all_values.capacity() * size_of::<T::Native>()
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let mut to_remove: HashMap<ScalarValue, usize> = HashMap::new();
+        for i in 0..values[0].len() {
+            let v = ScalarValue::try_from_array(&values[0], i)?;
+            if !v.is_null() {
+                *to_remove.entry(v).or_default() += 1;
+            }
+        }
+
+        let mut i = 0;
+        while i < self.all_values.len() {
+            let k =
+                ScalarValue::new_primitive::<T>(Some(self.all_values[i]), &T::DATA_TYPE)?;
+            if let Some(count) = to_remove.get_mut(&k)
+                && *count > 0
+            {
+                self.all_values.swap_remove(i);
+                *count -= 1;
+                if *count == 0 {
+                    to_remove.remove(&k);
+                    if to_remove.is_empty() {
+                        break;
+                    }
+                }
+            } else {
+                i += 1;
+            }
+        }
+        Ok(())
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
     }
 }
 
@@ -458,8 +501,11 @@ impl<T: ArrowNumericType + Send> PercentileContGroupsAccumulator<T> {
     }
 }
 
-impl<T: ArrowNumericType + Send> GroupsAccumulator
-    for PercentileContGroupsAccumulator<T>
+impl<T> GroupsAccumulator for PercentileContGroupsAccumulator<T>
+where
+    T: ArrowNumericType + Send,
+    T::Native: Copy + AsPrimitive<f64>,
+    f64: AsPrimitive<T::Native>,
 {
     fn update_batch(
         &mut self,
@@ -549,13 +595,13 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
         // Emit values
-        let emit_group_values = emit_to.take_needed(&mut self.group_values);
+        let mut emit_group_values = emit_to.take_needed(&mut self.group_values);
 
         // Calculate percentile for each group
         let mut evaluate_result_builder =
             PrimitiveBuilder::<T>::with_capacity(emit_group_values.len());
-        for values in emit_group_values {
-            let value = calculate_percentile::<T>(values, self.percentile);
+        for values in &mut emit_group_values {
+            let value = calculate_percentile::<T>(values.as_mut_slice(), self.percentile);
             evaluate_result_builder.append_option(value);
         }
 
@@ -638,7 +684,12 @@ impl<T: ArrowNumericType + Debug> DistinctPercentileContAccumulator<T> {
     }
 }
 
-impl<T: ArrowNumericType + Debug> Accumulator for DistinctPercentileContAccumulator<T> {
+impl<T> Accumulator for DistinctPercentileContAccumulator<T>
+where
+    T: ArrowNumericType + Debug,
+    T::Native: Copy + AsPrimitive<f64>,
+    f64: AsPrimitive<T::Native>,
+{
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
         self.distinct_values.state()
     }
@@ -652,16 +703,30 @@ impl<T: ArrowNumericType + Debug> Accumulator for DistinctPercentileContAccumula
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let d = std::mem::take(&mut self.distinct_values.values)
-            .into_iter()
-            .map(|v| v.0)
-            .collect::<Vec<_>>();
-        let value = calculate_percentile::<T>(d, self.percentile);
+        let mut values: Vec<T::Native> =
+            self.distinct_values.values.iter().map(|v| v.0).collect();
+        let value = calculate_percentile::<T>(&mut values, self.percentile);
         ScalarValue::new_primitive::<T>(value, &T::DATA_TYPE)
     }
 
     fn size(&self) -> usize {
         size_of_val(self) + self.distinct_values.size()
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        if values.is_empty() {
+            return Ok(());
+        }
+
+        let arr = values[0].as_primitive::<T>();
+        for value in arr.iter().flatten() {
+            self.distinct_values.values.remove(&Hashable(value));
+        }
+        Ok(())
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
     }
 }
 
@@ -672,10 +737,18 @@ impl<T: ArrowNumericType + Debug> Accumulator for DistinctPercentileContAccumula
 /// For percentile p and n values:
 /// - If p * (n-1) is an integer, return the value at that position
 /// - Otherwise, interpolate between the two closest values
+///
+/// Note: This function takes a mutable slice and sorts it in place, but does not
+/// consume the data. This is important for window frame queries where evaluate()
+/// may be called multiple times on the same accumulator state.
 fn calculate_percentile<T: ArrowNumericType>(
-    mut values: Vec<T::Native>,
+    values: &mut [T::Native],
     percentile: f64,
-) -> Option<T::Native> {
+) -> Option<T::Native>
+where
+    T::Native: Copy + AsPrimitive<f64>,
+    f64: AsPrimitive<T::Native>,
+{
     let cmp = |x: &T::Native, y: &T::Native| x.compare(*y);
 
     let len = values.len();
@@ -719,22 +792,47 @@ fn calculate_percentile<T: ArrowNumericType>(
             let (_, upper_value, _) = values.select_nth_unstable_by(upper_index, cmp);
             let upper_value = *upper_value;
 
-            // Linear interpolation using wrapping arithmetic
-            // We use wrapping operations here (matching the approach in median.rs) because:
-            // 1. Both values come from the input data, so diff is bounded by the value range
-            // 2. fraction is between 0 and 1, and INTERPOLATION_PRECISION is small enough
-            //    to prevent overflow when combined with typical numeric ranges
-            // 3. The result is guaranteed to be between lower_value and upper_value
-            // 4. For floating-point types, wrapping ops behave the same as standard ops
+            // Linear interpolation.
+            // We compute a quantized interpolation weight using `INTERPOLATION_PRECISION` because:
+            // 1. Both values come from the input data, so (upper - lower) is bounded by the value range
+            // 2. fraction is between 0 and 1; quantizing it provides stable, predictable results
+            // 3. The result is guaranteed to be between lower_value and upper_value (modulo cast rounding)
+            // 4. Arithmetic is performed in f64 and cast back to avoid overflowing Float16 intermediates
             let fraction = index - (lower_index as f64);
-            let diff = upper_value.sub_wrapping(lower_value);
-            let interpolated = lower_value.add_wrapping(
-                diff.mul_wrapping(T::Native::usize_as(
-                    (fraction * INTERPOLATION_PRECISION as f64) as usize,
-                ))
-                .div_wrapping(T::Native::usize_as(INTERPOLATION_PRECISION)),
-            );
-            Some(interpolated)
+            let scaled = (fraction * INTERPOLATION_PRECISION) as usize;
+            let weight = scaled as f64 / INTERPOLATION_PRECISION;
+
+            let lower_f: f64 = lower_value.as_();
+            let upper_f: f64 = upper_value.as_();
+            let interpolated_f = lower_f + (upper_f - lower_f) * weight;
+            Some(interpolated_f.as_())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::calculate_percentile;
+    use half::f16;
+
+    #[test]
+    fn f16_interpolation_does_not_overflow_to_nan() {
+        // Regression test for https://github.com/apache/datafusion/issues/18945
+        // Interpolating between 0 and the max finite f16 value previously overflowed
+        // intermediate f16 computations and produced NaN.
+        let mut values = vec![f16::from_f32(0.0), f16::from_f32(65504.0)];
+        let result =
+            calculate_percentile::<arrow::datatypes::Float16Type>(&mut values, 0.5)
+                .expect("non-empty input");
+        let result_f = result.to_f32();
+        assert!(
+            !result_f.is_nan(),
+            "expected non-NaN result, got {result_f}"
+        );
+        // 0.5 percentile should be close to midpoint
+        assert!(
+            (result_f - 32752.0).abs() < 1.0,
+            "unexpected result {result_f}"
+        );
     }
 }

@@ -82,12 +82,13 @@ hex = { workspace = true, optional = true }
 itertools = { workspace = true }
 log = { workspace = true }
 md-5 = { version = "^0.10.0", optional = true }
+memchr = { workspace = true }
 num-traits = { workspace = true }
 rand = { workspace = true }
 regex = { workspace = true, optional = true }
-sha2 = { version = "^0.10.9", optional = true }
+sha2 = { workspace = true, optional = true }
 unicode-segmentation = { version = "^1.7.1", optional = true }
-uuid = { version = "1.19", features = ["v4"], optional = true }
+uuid = { workspace = true, features = ["v4"], optional = true }
 
 [dev-dependencies]
 arrow = { workspace = true, features = ["test_utils"] }
@@ -109,6 +110,11 @@ required-features = ["string_expressions"]
 
 [[bench]]
 harness = false
+name = "concat_ws"
+required-features = ["string_expressions"]
+
+[[bench]]
+harness = false
 name = "to_timestamp"
 required-features = ["datetime_expressions"]
 
@@ -125,6 +131,11 @@ required-features = ["string_expressions"]
 [[bench]]
 harness = false
 name = "gcd"
+required-features = ["math_expressions"]
+
+[[bench]]
+harness = false
+name = "nanvl"
 required-features = ["math_expressions"]
 
 [[bench]]
@@ -179,6 +190,11 @@ required-features = ["math_expressions"]
 [[bench]]
 harness = false
 name = "signum"
+required-features = ["math_expressions"]
+
+[[bench]]
+harness = false
+name = "atan2"
 required-features = ["math_expressions"]
 
 [[bench]]
@@ -303,10 +319,20 @@ required-features = ["string_expressions"]
 
 [[bench]]
 harness = false
-name = "left"
+name = "left_right"
 required-features = ["unicode_expressions"]
 
 [[bench]]
 harness = false
 name = "factorial"
+required-features = ["math_expressions"]
+
+[[bench]]
+harness = false
+name = "floor_ceil"
+required-features = ["math_expressions"]
+
+[[bench]]
+harness = false
+name = "round"
 required-features = ["math_expressions"]

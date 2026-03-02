@@ -15,23 +15,189 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# This file was originally created by a porting script from:
-#   https://github.com/lakehq/sail/tree/43b6ed8221de5c4c4adbedbb267ae1351158b43c/crates/sail-spark-connect/tests/gold_data/function
-# This file is part of the implementation of the datafusion-spark function library.
-# For more information, please see:
-#   https://github.com/apache/datafusion/issues/15914
 
-## Original Query: SELECT substring('Spark SQL', -3);
-## PySpark 3.5.5 Result: {'substring(Spark SQL, -3, 2147483647)': 'SQL', 'typeof(substring(Spark SQL, -3, 2147483647))': 'string', 'typeof(Spark SQL)': 'string', 'typeof(-3)': 'int'}
-#query
-#SELECT substring('Spark SQL'::string, -3::int);
+query T
+SELECT substring('Spark SQL'::string, 0::int);
+----
+Spark SQL
 
-## Original Query: SELECT substring('Spark SQL', 5);
-## PySpark 3.5.5 Result: {'substring(Spark SQL, 5, 2147483647)': 'k SQL', 'typeof(substring(Spark SQL, 5, 2147483647))': 'string', 'typeof(Spark SQL)': 'string', 'typeof(5)': 'int'}
-#query
-#SELECT substring('Spark SQL'::string, 5::int);
+query T
+SELECT substring('Spark SQL'::string, 5::int);
+----
+k SQL
 
-## Original Query: SELECT substring('Spark SQL', 5, 1);
-## PySpark 3.5.5 Result: {'substring(Spark SQL, 5, 1)': 'k', 'typeof(substring(Spark SQL, 5, 1))': 'string', 'typeof(Spark SQL)': 'string', 'typeof(5)': 'int', 'typeof(1)': 'int'}
-#query
-#SELECT substring('Spark SQL'::string, 5::int, 1::int);
+query T
+SELECT substring('Spark SQL'::string, 3::int, 1::int);
+----
+a
+
+# Test negative start
+query T
+SELECT substring('Spark SQL'::string, -3::int);
+----
+SQL
+
+query T
+SELECT substring('Spark SQL'::string, -3::int, 2::int);
+----
+SQ
+
+# Test length exceeding string length
+query T
+SELECT substring('Spark SQL'::string, 2::int, 700::int);
+----
+park SQL
+
+# Test start position beyond string length
+query T
+SELECT substring('Spark SQL'::string, 30::int);
+----
+(empty)
+
+query T
+SELECT substring('Spark SQL'::string, -30::int);
+----
+Spark SQL
+
+# Test negative length
+query T
+SELECT substring('Spark SQL'::string, 3::int, -1::int);
+----
+(empty)
+
+query T
+SELECT substring('Spark SQL'::string, 3::int, 0::int);
+----
+(empty)
+
+# Test unicode strings
+query T
+SELECT substring('joséésoj'::string, 5::int);
+----
+ésoj
+
+query T
+SELECT substring('joséésoj'::string, 5::int, 2::int);
+----
+és
+
+# NULL handling
+query T
+SELECT substring('Spark SQL'::string, NULL::int);
+----
+NULL
+
+query T
+SELECT substring(NULL::string, 5::int);
+----
+NULL
+
+query T
+SELECT substring(NULL::string, 3::int, 1::int);
+----
+NULL
+
+query T
+SELECT substring('Spark SQL'::string, NULL::int, 1::int);
+----
+NULL
+
+query T
+SELECT substring('Spark SQL'::string, 3::int, NULL::int);
+----
+NULL
+
+query T
+SELECT substring(column1, column2)
+FROM VALUES
+('Spark SQL'::string, 0::int),
+('Spark SQL'::string, 5::int),
+('Spark SQL'::string, -3::int),
+('Spark SQL'::string, 500::int),
+('Spark SQL'::string, -300::int),
+(NULL::string, 5::int),
+('Spark SQL'::string, NULL::int);
+----
+Spark SQL
+k SQL
+SQL
+(empty)
+Spark SQL
+NULL
+NULL
+
+query T
+SELECT substring(column1, column2, column3)
+FROM VALUES
+('Spark SQL'::string, -3::int, 2::int),
+('Spark SQL'::string, 3::int, 1::int),
+('Spark SQL'::string, 3::int, 700::int),
+('Spark SQL'::string, 3::int, -1::int),
+('Spark SQL'::string, 3::int, 0::int),
+('Spark SQL'::string, 300::int, 3::int),
+('Spark SQL'::string, -300::int, 3::int),
+(NULL::string, 3::int, 1::int),
+('Spark SQL'::string, NULL::int, 1::int),
+('Spark SQL'::string, 3::int, NULL::int);
+----
+SQ
+a
+ark SQL
+(empty)
+(empty)
+(empty)
+Spa
+NULL
+NULL
+NULL
+
+# alias substr
+
+query T
+SELECT substr('Spark SQL'::string, 0::int);
+----
+Spark SQL
+
+query T
+SELECT substr(column1, column2)
+FROM VALUES
+('Spark SQL'::string, 0::int),
+('Spark SQL'::string, 5::int),
+('Spark SQL'::string, -3::int),
+('Spark SQL'::string, 500::int),
+('Spark SQL'::string, -300::int),
+(NULL::string, 5::int),
+('Spark SQL'::string, NULL::int);
+----
+Spark SQL
+k SQL
+SQL
+(empty)
+Spark SQL
+NULL
+NULL
+
+query T
+SELECT substr(column1, column2, column3)
+FROM VALUES
+('Spark SQL'::string, -3::int, 2::int),
+('Spark SQL'::string, 3::int, 1::int),
+('Spark SQL'::string, 3::int, 700::int),
+('Spark SQL'::string, 3::int, -1::int),
+('Spark SQL'::string, 3::int, 0::int),
+('Spark SQL'::string, 300::int, 3::int),
+('Spark SQL'::string, -300::int, 3::int),
+(NULL::string, 3::int, 1::int),
+('Spark SQL'::string, NULL::int, 1::int),
+('Spark SQL'::string, 3::int, NULL::int);
+----
+SQ
+a
+ark SQL
+(empty)
+(empty)
+(empty)
+Spa
+NULL
+NULL
+NULL

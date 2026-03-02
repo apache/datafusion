@@ -81,7 +81,7 @@ SELECT crc32(arrow_cast('Spark', 'BinaryView'));
 ----
 1557323817
 
-# Upstream arrow-rs issue: https://github.com/apache/arrow-rs/issues/8841
-# This should succeed after we receive the fix
-query error Arrow error: Compute error: Internal Error: Cannot cast BinaryView to BinaryArray of expected type
+query I
 select crc32(arrow_cast(null, 'Dictionary(Int32, Utf8)'))
+----
+NULL

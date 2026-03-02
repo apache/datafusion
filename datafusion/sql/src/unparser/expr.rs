@@ -45,7 +45,7 @@ use datafusion_common::{
 };
 use datafusion_expr::{
     Between, BinaryExpr, Case, Cast, Expr, GroupingSet, Like, Operator, TryCast,
-    expr::{Alias, Exists, InList, ScalarFunction, Sort, WindowFunction},
+    expr::{Alias, Exists, InList, ScalarFunction, SetQuantifier, Sort, WindowFunction},
 };
 use sqlparser::ast::helpers::attached_token::AttachedToken;
 use sqlparser::tokenizer::Span;
@@ -393,6 +393,33 @@ impl Unparser<'_> {
                     negated: insubq.negated,
                 })
             }
+            Expr::SetComparison(set_cmp) => {
+                let left = Box::new(self.expr_to_sql_inner(set_cmp.expr.as_ref())?);
+                let sub_statement =
+                    self.plan_to_sql(set_cmp.subquery.subquery.as_ref())?;
+                let sub_query = if let ast::Statement::Query(inner_query) = sub_statement
+                {
+                    inner_query
+                } else {
+                    return plan_err!(
+                        "Subquery must be a Query, but found {sub_statement:?}"
+                    );
+                };
+                let compare_op = self.op_to_sql(&set_cmp.op)?;
+                match set_cmp.quantifier {
+                    SetQuantifier::Any => Ok(ast::Expr::AnyOp {
+                        left,
+                        compare_op,
+                        right: Box::new(ast::Expr::Subquery(sub_query)),
+                        is_some: false,
+                    }),
+                    SetQuantifier::All => Ok(ast::Expr::AllOp {
+                        left,
+                        compare_op,
+                        right: Box::new(ast::Expr::Subquery(sub_query)),
+                    }),
+                }
+            }
             Expr::Exists(Exists { subquery, negated }) => {
                 let sub_statement = self.plan_to_sql(subquery.subquery.as_ref())?;
                 let sub_query = if let ast::Statement::Query(inner_query) = sub_statement
@@ -467,6 +494,7 @@ impl Unparser<'_> {
                     kind: ast::CastKind::TryCast,
                     expr: Box::new(inner_expr),
                     data_type: self.arrow_dtype_to_ast_dtype(data_type)?,
+                    array: false,
                     format: None,
                 })
             }
@@ -1118,6 +1146,7 @@ impl Unparser<'_> {
             kind: ast::CastKind::Cast,
             expr: Box::new(ast::Expr::value(SingleQuotedString(ts))),
             data_type: self.dialect.timestamp_cast_dtype(&time_unit, &None),
+            array: false,
             format: None,
         })
     }
@@ -1140,6 +1169,7 @@ impl Unparser<'_> {
             kind: ast::CastKind::Cast,
             expr: Box::new(ast::Expr::value(SingleQuotedString(time))),
             data_type: ast::DataType::Time(None, TimezoneInfo::None),
+            array: false,
             format: None,
         })
     }
@@ -1157,6 +1187,7 @@ impl Unparser<'_> {
                     kind: ast::CastKind::Cast,
                     expr: Box::new(inner_expr),
                     data_type: self.arrow_dtype_to_ast_dtype(data_type)?,
+                    array: false,
                     format: None,
                 }),
             },
@@ -1164,6 +1195,7 @@ impl Unparser<'_> {
                 kind: ast::CastKind::Cast,
                 expr: Box::new(inner_expr),
                 data_type: self.arrow_dtype_to_ast_dtype(data_type)?,
+                array: false,
                 format: None,
             }),
         }
@@ -1305,6 +1337,7 @@ impl Unparser<'_> {
                         date.to_string(),
                     ))),
                     data_type: ast::DataType::Date,
+                    array: false,
                     format: None,
                 })
             }
@@ -1328,6 +1361,7 @@ impl Unparser<'_> {
                         datetime.to_string(),
                     ))),
                     data_type: self.ast_type_for_date64_in_cast(),
+                    array: false,
                     format: None,
                 })
             }
@@ -1414,6 +1448,7 @@ impl Unparser<'_> {
             ScalarValue::Map(_) => not_impl_err!("Unsupported scalar: {v:?}"),
             ScalarValue::Union(..) => not_impl_err!("Unsupported scalar: {v:?}"),
             ScalarValue::Dictionary(_k, v) => self.scalar_to_sql(v),
+            ScalarValue::RunEndEncoded(_, _, v) => self.scalar_to_sql(v),
         }
     }
 
@@ -1763,6 +1798,9 @@ impl Unparser<'_> {
                 not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
             DataType::Dictionary(_, val) => self.arrow_dtype_to_ast_dtype(val),
+            DataType::RunEndEncoded(_, val) => {
+                self.arrow_dtype_to_ast_dtype(val.data_type())
+            }
             DataType::Decimal32(precision, scale)
             | DataType::Decimal64(precision, scale)
             | DataType::Decimal128(precision, scale)
@@ -1782,9 +1820,6 @@ impl Unparser<'_> {
                 ))
             }
             DataType::Map(_, _) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type}")
-            }
-            DataType::RunEndEncoded(_, _) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
         }
@@ -2283,6 +2318,17 @@ mod tests {
                 Expr::Literal(
                     ScalarValue::Dictionary(
                         Box::new(DataType::Int32),
+                        Box::new(ScalarValue::Utf8(Some("foo".into()))),
+                    ),
+                    None,
+                ),
+                "'foo'",
+            ),
+            (
+                Expr::Literal(
+                    ScalarValue::RunEndEncoded(
+                        Field::new("run_ends", DataType::Int32, false).into(),
+                        Field::new("values", DataType::Utf8, true).into(),
                         Box::new(ScalarValue::Utf8(Some("foo".into()))),
                     ),
                     None,
@@ -3151,6 +3197,22 @@ mod tests {
         let ast_dtype = unparser.arrow_dtype_to_ast_dtype(&DataType::Dictionary(
             Box::new(DataType::Int32),
             Box::new(DataType::Utf8),
+        ))?;
+
+        assert_eq!(ast_dtype, ast::DataType::Varchar(None));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_run_end_encoded_to_sql() -> Result<()> {
+        let dialect = CustomDialectBuilder::new().build();
+
+        let unparser = Unparser::new(&dialect);
+
+        let ast_dtype = unparser.arrow_dtype_to_ast_dtype(&DataType::RunEndEncoded(
+            Field::new("run_ends", DataType::Int32, false).into(),
+            Field::new("values", DataType::Utf8, true).into(),
         ))?;
 
         assert_eq!(ast_dtype, ast::DataType::Varchar(None));

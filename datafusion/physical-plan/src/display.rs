@@ -1153,7 +1153,7 @@ mod tests {
             self
         }
 
-        fn properties(&self) -> &PlanProperties {
+        fn properties(&self) -> &Arc<PlanProperties> {
             unimplemented!()
         }
 
@@ -1174,10 +1174,6 @@ mod tests {
             _: Arc<TaskContext>,
         ) -> Result<SendableRecordBatchStream> {
             todo!()
-        }
-
-        fn statistics(&self) -> Result<Statistics> {
-            self.partition_statistics(None)
         }
 
         fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {

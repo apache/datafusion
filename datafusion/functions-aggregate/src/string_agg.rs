@@ -384,14 +384,13 @@ impl Accumulator for SimpleStringAggAccumulator {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let result = if self.has_value {
-            ScalarValue::LargeUtf8(Some(std::mem::take(&mut self.accumulated_string)))
+        if self.has_value {
+            Ok(ScalarValue::LargeUtf8(Some(
+                self.accumulated_string.clone(),
+            )))
         } else {
-            ScalarValue::LargeUtf8(None)
-        };
-
-        self.has_value = false;
-        Ok(result)
+            Ok(ScalarValue::LargeUtf8(None))
+        }
     }
 
     fn size(&self) -> usize {

@@ -24,7 +24,6 @@ mod combine_partial_final_agg;
 mod enforce_distribution;
 mod enforce_sorting;
 mod enforce_sorting_monotonicity;
-#[expect(clippy::needless_pass_by_value)]
 mod filter_pushdown;
 mod join_selection;
 #[expect(clippy::needless_pass_by_value)]
@@ -38,3 +37,5 @@ mod sanity_checker;
 #[expect(clippy::needless_pass_by_value)]
 mod test_utils;
 mod window_optimize;
+
+mod pushdown_utils;

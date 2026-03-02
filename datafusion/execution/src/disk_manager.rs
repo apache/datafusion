@@ -25,7 +25,7 @@ use parking_lot::Mutex;
 use rand::{Rng, rng};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use tempfile::{Builder, NamedTempFile, TempDir};
 
 use datafusion_common::human_readable_size;
@@ -77,6 +77,7 @@ impl DiskManagerBuilder {
                 local_dirs: Mutex::new(Some(vec![])),
                 max_temp_directory_size: self.max_temp_directory_size,
                 used_disk_space: Arc::new(AtomicU64::new(0)),
+                active_files_count: Arc::new(AtomicUsize::new(0)),
             }),
             DiskManagerMode::Directories(conf_dirs) => {
                 let local_dirs = create_local_dirs(&conf_dirs)?;
@@ -87,12 +88,14 @@ impl DiskManagerBuilder {
                     local_dirs: Mutex::new(Some(local_dirs)),
                     max_temp_directory_size: self.max_temp_directory_size,
                     used_disk_space: Arc::new(AtomicU64::new(0)),
+                    active_files_count: Arc::new(AtomicUsize::new(0)),
                 })
             }
             DiskManagerMode::Disabled => Ok(DiskManager {
                 local_dirs: Mutex::new(None),
                 max_temp_directory_size: self.max_temp_directory_size,
                 used_disk_space: Arc::new(AtomicU64::new(0)),
+                active_files_count: Arc::new(AtomicUsize::new(0)),
             }),
         }
     }
@@ -169,6 +172,17 @@ pub struct DiskManager {
     /// Used disk space in the temporary directories. Now only spilled data for
     /// external executors are counted.
     used_disk_space: Arc<AtomicU64>,
+    /// Number of active temporary files created by this disk manager
+    active_files_count: Arc<AtomicUsize>,
+}
+
+/// Information about the current disk usage for spilling
+#[derive(Debug, Clone, Copy)]
+pub struct SpillingProgress {
+    /// Total bytes currently used on disk for spilling
+    pub current_bytes: u64,
+    /// Total number of active spill files
+    pub active_files_count: usize,
 }
 
 impl DiskManager {
@@ -187,6 +201,7 @@ impl DiskManager {
                 local_dirs: Mutex::new(Some(vec![])),
                 max_temp_directory_size: DEFAULT_MAX_TEMP_DIRECTORY_SIZE,
                 used_disk_space: Arc::new(AtomicU64::new(0)),
+                active_files_count: Arc::new(AtomicUsize::new(0)),
             })),
             DiskManagerConfig::NewSpecified(conf_dirs) => {
                 let local_dirs = create_local_dirs(&conf_dirs)?;
@@ -197,12 +212,14 @@ impl DiskManager {
                     local_dirs: Mutex::new(Some(local_dirs)),
                     max_temp_directory_size: DEFAULT_MAX_TEMP_DIRECTORY_SIZE,
                     used_disk_space: Arc::new(AtomicU64::new(0)),
+                    active_files_count: Arc::new(AtomicUsize::new(0)),
                 }))
             }
             DiskManagerConfig::Disabled => Ok(Arc::new(Self {
                 local_dirs: Mutex::new(None),
                 max_temp_directory_size: DEFAULT_MAX_TEMP_DIRECTORY_SIZE,
                 used_disk_space: Arc::new(AtomicU64::new(0)),
+                active_files_count: Arc::new(AtomicUsize::new(0)),
             })),
         }
     }
@@ -250,6 +267,14 @@ impl DiskManager {
     /// Returns the maximum temporary directory size in bytes
     pub fn max_temp_directory_size(&self) -> u64 {
         self.max_temp_directory_size
+    }
+
+    /// Returns the current spilling progress
+    pub fn spilling_progress(&self) -> SpillingProgress {
+        SpillingProgress {
+            current_bytes: self.used_disk_space.load(Ordering::Relaxed),
+            active_files_count: self.active_files_count.load(Ordering::Relaxed),
+        }
     }
 
     /// Returns the temporary directory paths
@@ -301,6 +326,7 @@ impl DiskManager {
         }
 
         let dir_index = rng().random_range(0..local_dirs.len());
+        self.active_files_count.fetch_add(1, Ordering::Relaxed);
         Ok(RefCountedTempFile {
             parent_temp_dir: Arc::clone(&local_dirs[dir_index]),
             tempfile: Arc::new(
@@ -422,6 +448,9 @@ impl Drop for RefCountedTempFile {
             self.disk_manager
                 .used_disk_space
                 .fetch_sub(current_usage, Ordering::Relaxed);
+            self.disk_manager
+                .active_files_count
+                .fetch_sub(1, Ordering::Relaxed);
         }
     }
 }

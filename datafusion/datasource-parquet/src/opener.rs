@@ -47,7 +47,7 @@ use datafusion_physical_expr_common::physical_expr::{
     PhysicalExpr, is_dynamic_physical_expr,
 };
 use datafusion_physical_plan::metrics::{
-    Count, ExecutionPlanMetricsSet, MetricBuilder, PruningMetrics,
+    Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder, PruningMetrics,
 };
 use datafusion_pruning::{FilePruner, PruningPredicate, build_pruning_predicate};
 
@@ -69,13 +69,15 @@ use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader, RowGroupMe
 /// Implements [`FileOpener`] for a parquet file
 pub(super) struct ParquetOpener {
     /// Execution partition index
-    pub partition_index: usize,
+    pub(crate) partition_index: usize,
     /// Projection to apply on top of the table schema (i.e. can reference partition columns).
     pub projection: ProjectionExprs,
     /// Target number of rows in each output RecordBatch
     pub batch_size: usize,
     /// Optional limit on the number of rows to read
-    pub limit: Option<usize>,
+    pub(crate) limit: Option<usize>,
+    /// If should keep the output rows in order
+    pub preserve_order: bool,
     /// Optional predicate to apply during the scan
     pub predicate: Option<Arc<dyn PhysicalExpr>>,
     /// Table schema, including partition columns.
@@ -277,6 +279,8 @@ impl FileOpener for ParquetOpener {
         let max_predicate_cache_size = self.max_predicate_cache_size;
 
         let reverse_row_groups = self.reverse_row_groups;
+        let preserve_order = self.preserve_order;
+
         Ok(Box::pin(async move {
             #[cfg(feature = "parquet_encryption")]
             let file_decryption_properties = encryption_context
@@ -342,9 +346,10 @@ impl FileOpener for ParquetOpener {
             // Don't load the page index yet. Since it is not stored inline in
             // the footer, loading the page index if it is not needed will do
             // unnecessary I/O. We decide later if it is needed to evaluate the
-            // pruning predicates. Thus default to not requesting if from the
+            // pruning predicates. Thus default to not requesting it from the
             // underlying reader.
-            let mut options = ArrowReaderOptions::new().with_page_index(false);
+            let mut options =
+                ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Skip);
             #[cfg(feature = "parquet_encryption")]
             if let Some(fd_val) = file_decryption_properties {
                 options = options.with_file_decryption_properties(Arc::clone(&fd_val));
@@ -408,7 +413,7 @@ impl FileOpener for ParquetOpener {
             let rewriter = expr_adapter_factory.create(
                 Arc::clone(&logical_file_schema),
                 Arc::clone(&physical_file_schema),
-            );
+            )?;
             let simplifier = PhysicalExprSimplifier::new(&physical_file_schema);
             predicate = predicate
                 .map(|p| simplifier.simplify(rewriter.rewrite(p)?))
@@ -432,7 +437,7 @@ impl FileOpener for ParquetOpener {
                     reader_metadata,
                     &mut async_file_reader,
                     // Since we're manually loading the page index the option here should not matter but we pass it in for consistency
-                    options.with_page_index(true),
+                    options.with_page_index_policy(PageIndexPolicy::Optional),
                 )
                 .await?;
             }
@@ -545,11 +550,15 @@ impl FileOpener for ParquetOpener {
                     .add_matched(n_remaining_row_groups);
             }
 
-            let mut access_plan = row_groups.build();
+            // Prune by limit if limit is set and limit order is not sensitive
+            if let (Some(limit), false) = (limit, preserve_order) {
+                row_groups.prune_by_limit(limit, rg_metadata, &file_metrics);
+            }
 
             // --------------------------------------------------------
             // Step: prune pages from the kept row groups
             //
+            let mut access_plan = row_groups.build();
             // page index pruning: if all data on individual pages can
             // be ruled using page metadata, rows from other columns
             // with that range can be skipped as well
@@ -573,7 +582,7 @@ impl FileOpener for ParquetOpener {
 
             // ----------------------------------------------------------
             // Step: potentially reverse the access plan for performance.
-            // See `ParquetSource::try_reverse_output` for the rationale.
+            // See `ParquetSource::try_pushdown_sort` for the rationale.
             // ----------------------------------------------------------
             if reverse_row_groups {
                 prepared_plan = prepared_plan.reverse(file_metadata.as_ref())?;
@@ -674,15 +683,15 @@ impl FileOpener for ParquetOpener {
 /// arrow-rs parquet reader) to the parquet file metrics for DataFusion
 fn copy_arrow_reader_metrics(
     arrow_reader_metrics: &ArrowReaderMetrics,
-    predicate_cache_inner_records: &Count,
-    predicate_cache_records: &Count,
+    predicate_cache_inner_records: &Gauge,
+    predicate_cache_records: &Gauge,
 ) {
     if let Some(v) = arrow_reader_metrics.records_read_from_inner() {
-        predicate_cache_inner_records.add(v);
+        predicate_cache_inner_records.set(v);
     }
 
     if let Some(v) = arrow_reader_metrics.records_read_from_cache() {
-        predicate_cache_records.add(v);
+        predicate_cache_records.set(v);
     }
 }
 
@@ -731,6 +740,10 @@ fn constant_value_from_stats(
         && !min.is_null()
         && matches!(column_stats.null_count, Precision::Exact(0))
     {
+        // Cast to the expected data type if needed (e.g., Utf8 -> Dictionary)
+        if min.data_type() != *data_type {
+            return min.cast_to(data_type).ok();
+        }
         return Some(min.clone());
     }
 
@@ -1025,7 +1038,7 @@ mod test {
     };
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
     use futures::{Stream, StreamExt};
-    use object_store::{ObjectStore, memory::InMemory, path::Path};
+    use object_store::{ObjectStore, ObjectStoreExt, memory::InMemory, path::Path};
     use parquet::arrow::ArrowWriter;
     use parquet::file::properties::WriterProperties;
 
@@ -1051,6 +1064,7 @@ mod test {
         coerce_int96: Option<arrow::datatypes::TimeUnit>,
         max_predicate_cache_size: Option<usize>,
         reverse_row_groups: bool,
+        preserve_order: bool,
     }
 
     impl ParquetOpenerBuilder {
@@ -1076,6 +1090,7 @@ mod test {
                 coerce_int96: None,
                 max_predicate_cache_size: None,
                 reverse_row_groups: false,
+                preserve_order: false,
             }
         }
 
@@ -1183,6 +1198,7 @@ mod test {
                 encryption_factory: None,
                 max_predicate_cache_size: self.max_predicate_cache_size,
                 reverse_row_groups: self.reverse_row_groups,
+                preserve_order: self.preserve_order,
             }
         }
     }
@@ -1719,7 +1735,7 @@ mod test {
         // Write parquet file with multiple row groups
         // Force small row groups by setting max_row_group_size
         let props = WriterProperties::builder()
-            .set_max_row_group_size(3) // Force each batch into its own row group
+            .set_max_row_group_row_count(Some(3)) // Force each batch into its own row group
             .build();
 
         let data_len = write_parquet_batches(
@@ -1819,7 +1835,7 @@ mod test {
                 .unwrap(); // 4 rows
 
         let props = WriterProperties::builder()
-            .set_max_row_group_size(4)
+            .set_max_row_group_row_count(Some(4))
             .build();
 
         let data_len = write_parquet_batches(
@@ -1906,7 +1922,7 @@ mod test {
         let batch3 = record_batch!(("a", Int32, vec![Some(7), Some(8)])).unwrap();
 
         let props = WriterProperties::builder()
-            .set_max_row_group_size(2)
+            .set_max_row_group_row_count(Some(2))
             .build();
 
         let data_len = write_parquet_batches(

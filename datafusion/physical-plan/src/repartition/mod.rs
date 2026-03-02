@@ -39,7 +39,10 @@ use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::spill::spill_manager::SpillManager;
 use crate::spill::spill_pool::{self, SpillPoolWriter};
 use crate::stream::RecordBatchStreamAdapter;
-use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics};
+use crate::{
+    DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics,
+    check_if_same_properties,
+};
 
 use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions};
 use arrow::compute::take_arrays;
@@ -48,7 +51,8 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::utils::transpose;
 use datafusion_common::{
-    ColumnStatistics, DataFusionError, HashMap, assert_or_internal_err, internal_err,
+    ColumnStatistics, DataFusionError, HashMap, assert_or_internal_err,
+    internal_datafusion_err, internal_err,
 };
 use datafusion_common::{Result, not_impl_err};
 use datafusion_common_runtime::SpawnedTask;
@@ -421,6 +425,7 @@ enum BatchPartitionerState {
         exprs: Vec<Arc<dyn PhysicalExpr>>,
         num_partitions: usize,
         hash_buffer: Vec<u64>,
+        indices: Vec<Vec<u32>>,
     },
     RoundRobin {
         num_partitions: usize,
@@ -453,6 +458,7 @@ impl BatchPartitioner {
                 exprs,
                 num_partitions,
                 hash_buffer: vec![],
+                indices: vec![vec![]; num_partitions],
             },
             timer,
         }
@@ -562,6 +568,7 @@ impl BatchPartitioner {
                     exprs,
                     num_partitions: partitions,
                     hash_buffer,
+                    indices,
                 } => {
                     // Tracking time required for distributing indexes across output partitions
                     let timer = self.timer.timer();
@@ -578,9 +585,7 @@ impl BatchPartitioner {
                         hash_buffer,
                     )?;
 
-                    let mut indices: Vec<_> = (0..*partitions)
-                        .map(|_| Vec::with_capacity(batch.num_rows()))
-                        .collect();
+                    indices.iter_mut().for_each(|v| v.clear());
 
                     for (index, hash) in hash_buffer.iter().enumerate() {
                         indices[(*hash % *partitions as u64) as usize].push(index as u32);
@@ -591,22 +596,23 @@ impl BatchPartitioner {
 
                     // Borrowing partitioner timer to prevent moving `self` to closure
                     let partitioner_timer = &self.timer;
-                    let it = indices
-                        .into_iter()
-                        .enumerate()
-                        .filter_map(|(partition, indices)| {
-                            let indices: PrimitiveArray<UInt32Type> = indices.into();
-                            (!indices.is_empty()).then_some((partition, indices))
-                        })
-                        .map(move |(partition, indices)| {
+
+                    let mut partitioned_batches = vec![];
+                    for (partition, p_indices) in indices.iter_mut().enumerate() {
+                        if !p_indices.is_empty() {
+                            let taken_indices = std::mem::take(p_indices);
+                            let indices_array: PrimitiveArray<UInt32Type> =
+                                taken_indices.into();
+
                             // Tracking time required for repartitioned batches construction
                             let _timer = partitioner_timer.timer();
 
                             // Produce batches based on indices
-                            let columns = take_arrays(batch.columns(), &indices, None)?;
+                            let columns =
+                                take_arrays(batch.columns(), &indices_array, None)?;
 
                             let mut options = RecordBatchOptions::new();
-                            options = options.with_row_count(Some(indices.len()));
+                            options = options.with_row_count(Some(indices_array.len()));
                             let batch = RecordBatch::try_new_with_options(
                                 batch.schema(),
                                 columns,
@@ -614,10 +620,22 @@ impl BatchPartitioner {
                             )
                             .unwrap();
 
-                            Ok((partition, batch))
-                        });
+                            partitioned_batches.push(Ok((partition, batch)));
 
-                    Box::new(it)
+                            // Return the taken vec
+                            let (_, buffer, _) = indices_array.into_parts();
+                            let mut vec =
+                                buffer.into_inner().into_vec::<u32>().map_err(|e| {
+                                    internal_datafusion_err!(
+                                        "Could not convert buffer to vec: {e:?}"
+                                    )
+                                })?;
+                            vec.clear();
+                            *p_indices = vec;
+                        }
+                    }
+
+                    Box::new(partitioned_batches.into_iter())
                 }
             };
 
@@ -731,6 +749,10 @@ impl BatchPartitioner {
 /// system Paper](https://dl.acm.org/doi/pdf/10.1145/93605.98720)
 /// which uses the term "Exchange" for the concept of repartitioning
 /// data across threads.
+///
+/// For more background, please also see the [Optimizing Repartitions in DataFusion] blog.
+///
+/// [Optimizing Repartitions in DataFusion]: https://datafusion.apache.org/blog/2025/12/15/avoid-consecutive-repartitions
 #[derive(Debug, Clone)]
 pub struct RepartitionExec {
     /// Input execution plan
@@ -744,7 +766,7 @@ pub struct RepartitionExec {
     /// `SortPreservingRepartitionExec`, false means `RepartitionExec`.
     preserve_order: bool,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 #[derive(Debug, Clone)]
@@ -813,6 +835,18 @@ impl RepartitionExec {
     pub fn name(&self) -> &str {
         "RepartitionExec"
     }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            state: Default::default(),
+            ..Self::clone(self)
+        }
+    }
 }
 
 impl DisplayAs for RepartitionExec {
@@ -872,7 +906,7 @@ impl ExecutionPlan for RepartitionExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -884,6 +918,7 @@ impl ExecutionPlan for RepartitionExec {
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        check_if_same_properties!(self, children);
         let mut repartition = RepartitionExec::try_new(
             children.swap_remove(0),
             self.partitioning().clone(),
@@ -1051,10 +1086,6 @@ impl ExecutionPlan for RepartitionExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        self.input.partition_statistics(None)
-    }
-
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         if let Some(partition) = partition {
             let partition_count = self.partitioning().partition_count();
@@ -1185,7 +1216,7 @@ impl ExecutionPlan for RepartitionExec {
         _config: &ConfigOptions,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         use Partitioning::*;
-        let mut new_properties = self.cache.clone();
+        let mut new_properties = PlanProperties::clone(&self.cache);
         new_properties.partitioning = match new_properties.partitioning {
             RoundRobinBatch(_) => RoundRobinBatch(target_partitions),
             Hash(hash, _) => Hash(hash, target_partitions),
@@ -1196,7 +1227,7 @@ impl ExecutionPlan for RepartitionExec {
             state: Arc::clone(&self.state),
             metrics: self.metrics.clone(),
             preserve_order: self.preserve_order,
-            cache: new_properties,
+            cache: new_properties.into(),
         })))
     }
 }
@@ -1216,7 +1247,7 @@ impl RepartitionExec {
             state: Default::default(),
             metrics: ExecutionPlanMetricsSet::new(),
             preserve_order,
-            cache,
+            cache: Arc::new(cache),
         })
     }
 
@@ -1277,7 +1308,7 @@ impl RepartitionExec {
                 // to maintain order
                 self.input.output_partitioning().partition_count() > 1;
         let eq_properties = Self::eq_properties_helper(&self.input, self.preserve_order);
-        self.cache = self.cache.with_eq_properties(eq_properties);
+        Arc::make_mut(&mut self.cache).set_eq_properties(eq_properties);
         self
     }
 
@@ -2468,7 +2499,7 @@ mod tests {
     /// Create vector batches
     fn create_vec_batches(n: usize) -> Vec<RecordBatch> {
         let batch = create_batch();
-        (0..n).map(|_| batch.clone()).collect()
+        std::iter::repeat_n(batch, n).collect()
     }
 
     /// Create batch

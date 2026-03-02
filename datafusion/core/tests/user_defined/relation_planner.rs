@@ -68,9 +68,11 @@ fn plan_static_values_table(
                 .project(vec![col("column1").alias(column_name)])?
                 .build()?;
 
-            Ok(RelationPlanning::Planned(PlannedRelation::new(plan, alias)))
+            Ok(RelationPlanning::Planned(Box::new(PlannedRelation::new(
+                plan, alias,
+            ))))
         }
-        other => Ok(RelationPlanning::Original(other)),
+        other => Ok(RelationPlanning::Original(Box::new(other))),
     }
 }
 
@@ -176,9 +178,11 @@ impl RelationPlanner for SamplingJoinPlanner {
                     .cross_join(right_sampled)?
                     .build()?;
 
-                Ok(RelationPlanning::Planned(PlannedRelation::new(plan, alias)))
+                Ok(RelationPlanning::Planned(Box::new(PlannedRelation::new(
+                    plan, alias,
+                ))))
             }
-            other => Ok(RelationPlanning::Original(other)),
+            other => Ok(RelationPlanning::Original(Box::new(other))),
         }
     }
 }
@@ -195,7 +199,7 @@ impl RelationPlanner for PassThroughPlanner {
         _context: &mut dyn RelationPlannerContext,
     ) -> Result<RelationPlanning> {
         // Never handles anything - always delegates
-        Ok(RelationPlanning::Original(relation))
+        Ok(RelationPlanning::Original(Box::new(relation)))
     }
 }
 
@@ -217,7 +221,7 @@ impl RelationPlanner for PremiumFeaturePlanner {
                      to unlock advanced array operations."
                     .to_string(),
             )),
-            other => Ok(RelationPlanning::Original(other)),
+            other => Ok(RelationPlanning::Original(Box::new(other))),
         }
     }
 }

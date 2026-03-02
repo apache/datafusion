@@ -102,6 +102,7 @@ pub(crate) fn from_substrait_literal(
         },
         Some(LiteralType::Fp32(f)) => ScalarValue::Float32(Some(*f)),
         Some(LiteralType::Fp64(f)) => ScalarValue::Float64(Some(*f)),
+        #[expect(deprecated)]
         Some(LiteralType::Timestamp(t)) => {
             // Kept for backwards compatibility, new plans should use PrecisionTimestamp(Tz) instead
             #[expect(deprecated)]
@@ -385,6 +386,7 @@ pub(crate) fn from_substrait_literal(
             use interval_day_to_second::PrecisionMode;
             // DF only supports millisecond precision, so for any more granular type we lose precision
             let milliseconds = match precision_mode {
+                #[expect(deprecated)]
                 Some(PrecisionMode::Microseconds(ms)) => ms / 1000,
                 None => {
                     if *subseconds != 0 {

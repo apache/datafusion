@@ -548,6 +548,7 @@ impl FileSource for ParquetSource {
                 .batch_size
                 .expect("Batch size must set before creating ParquetOpener"),
             limit: base_config.limit,
+            preserve_order: base_config.preserve_order,
             predicate: self.predicate.clone(),
             table_schema: self.table_schema.clone(),
             metadata_size_hint: self.metadata_size_hint,
@@ -756,7 +757,7 @@ impl FileSource for ParquetSource {
     /// # Returns
     /// - `Inexact`: Created an optimized source (e.g., reversed scan) that approximates the order
     /// - `Unsupported`: Cannot optimize for this ordering
-    fn try_reverse_output(
+    fn try_pushdown_sort(
         &self,
         order: &[PhysicalSortExpr],
         eq_properties: &EquivalenceProperties,

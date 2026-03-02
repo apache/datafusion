@@ -25,20 +25,18 @@ https://datafusion.apache.org/ as part of the release process.
 
 ## Dependencies
 
-It's recommended to install build dependencies and build the documentation
-inside a Python virtualenv.
+Install build dependencies and build the documentation using
+[uv](https://docs.astral.sh/uv/):
 
 ```sh
-python3 -m venv venv
-pip install -r requirements.txt
+uv sync
+uv run bash build.sh
 ```
 
-If using [uv](https://docs.astral.sh/uv/) the script can be run like so without
-needing to create a virtual environment:
-
-```sh
-uv run --with-requirements requirements.txt bash build.sh
-```
+The docs build regenerates the workspace dependency graph via
+`docs/scripts/generate_dependency_graph.sh`, so ensure `cargo`, `cargo-depgraph`
+(`cargo install cargo-depgraph --version ^1.6 --locked`), and Graphviz `dot`
+(`brew install graphviz` or `sudo apt-get install -y graphviz`) are available.
 
 ## Build & Preview
 
