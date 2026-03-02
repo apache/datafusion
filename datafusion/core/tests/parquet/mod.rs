@@ -1148,7 +1148,7 @@ async fn make_test_file_rg(
         .expect("tempfile creation");
 
     let props = WriterProperties::builder()
-        .set_max_row_group_size(row_per_group)
+        .set_max_row_group_row_count(Some(row_per_group))
         .set_bloom_filter_enabled(true)
         .set_statistics_enabled(EnabledStatistics::Page)
         .build();
