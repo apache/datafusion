@@ -340,6 +340,10 @@ impl Dialect for PostgreSqlDialect {
         func_name: &str,
         args: &[Expr],
     ) -> Result<Option<ast::Expr>> {
+        if func_name == "array_has" {
+            return self.array_has_to_sql_any(unparser, args);
+        }
+
         if func_name == "round" {
             return Ok(Some(
                 self.round_to_sql_enforce_numeric(unparser, func_name, args)?,
@@ -351,6 +355,23 @@ impl Dialect for PostgreSqlDialect {
 }
 
 impl PostgreSqlDialect {
+    fn array_has_to_sql_any(
+        &self,
+        unparser: &Unparser,
+        args: &[Expr],
+    ) -> Result<Option<ast::Expr>> {
+        let [haystack, needle] = args else {
+            return Ok(None);
+        };
+
+        Ok(Some(ast::Expr::AnyOp {
+            left: Box::new(unparser.expr_to_sql(needle)?),
+            compare_op: BinaryOperator::Eq,
+            right: Box::new(unparser.expr_to_sql(haystack)?),
+            is_some: false,
+        }))
+    }
+
     fn round_to_sql_enforce_numeric(
         &self,
         unparser: &Unparser,
