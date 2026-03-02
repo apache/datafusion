@@ -151,7 +151,7 @@ impl FileStream {
                         self.file_stream_metrics.file_open_errors.add(1);
                         match self.on_error {
                             OnError::Skip => {
-                                self.file_stream_metrics.files_processed.add(1);
+                                self.file_stream_metrics.files_closed.add(1);
                                 self.file_stream_metrics.time_opening.stop();
                                 self.state = FileStreamState::Idle
                             }
@@ -188,7 +188,7 @@ impl FileStream {
                                             + self.file_iter.len()
                                             + usize::from(next.is_some());
                                         self.file_stream_metrics
-                                            .files_processed
+                                            .files_closed
                                             .add(done);
                                         self.state = FileStreamState::Limit;
                                         *remain = 0;
@@ -208,7 +208,7 @@ impl FileStream {
                             match self.on_error {
                                 // If `OnError::Skip` we skip the file as soon as we hit the first error
                                 OnError::Skip => {
-                                    self.file_stream_metrics.files_processed.add(1);
+                                    self.file_stream_metrics.files_closed.add(1);
                                     match mem::take(next) {
                                         Some(future) => {
                                             self.file_stream_metrics.time_opening.start();
@@ -237,7 +237,7 @@ impl FileStream {
                             }
                         }
                         None => {
-                            self.file_stream_metrics.files_processed.add(1);
+                            self.file_stream_metrics.files_closed.add(1);
                             self.file_stream_metrics.files_scanned.add(1);
                             self.file_stream_metrics.time_scanning_until_data.stop();
                             self.file_stream_metrics.time_scanning_total.stop();
@@ -417,10 +417,10 @@ pub struct FileStreamMetrics {
     pub file_scan_errors: Count,
     /// Count of files successfully opened.
     pub files_opened: Count,
-    /// Count of files processed (opened, pruned, or skipped due to limit).
+    /// Count of files closed (opened, pruned, or skipped due to limit).
     /// When the stream completes, this equals the total number of files
     /// assigned to this partition.
-    pub files_processed: Count,
+    pub files_closed: Count,
     /// Count of files completely scanned (reader stream fully consumed).
     pub files_scanned: Count,
 }
@@ -460,8 +460,8 @@ impl FileStreamMetrics {
         let files_opened =
             MetricBuilder::new(metrics).counter("files_opened", partition);
 
-        let files_processed =
-            MetricBuilder::new(metrics).counter("files_processed", partition);
+        let files_closed =
+            MetricBuilder::new(metrics).counter("files_closed", partition);
 
         let files_scanned =
             MetricBuilder::new(metrics).counter("files_scanned", partition);
@@ -474,7 +474,7 @@ impl FileStreamMetrics {
             file_open_errors,
             file_scan_errors,
             files_opened,
-            files_processed,
+            files_closed,
             files_scanned,
         }
     }
