@@ -668,7 +668,9 @@ impl BigQueryDialect {
 }
 
 pub static UNNAMED_SNOWFLAKE_FLATTEN_SUBQUERY_PREFIX: &str = "__unnamed_flatten_subquery";
-// Snowflake FLATTEN function outputs 6 columns: SEQ, KEY, PATH, INDEX, VALUE and THIS. The 4th column (INDEX) corresponds to the flattened value.
+// Snowflake FLATTEN outputs 6 columns (0-indexed): SEQ=0, KEY=1, PATH=2, INDEX=3, VALUE=4, THIS=5.
+// The VALUE column (index 4) holds the flattened element.
+// https://docs.snowflake.com/en/sql-reference/functions/flatten#output
 const FLATTEN_VALUE_COLUMN_IDX: usize = 4;
 
 #[derive(Default)]
@@ -711,6 +713,10 @@ impl Dialect for SnowflakeDialect {
             .map(|e| unparser.expr_to_sql(e))
             .collect::<Result<Vec<_>>>()?;
 
+        // These checks are defensive guards. In practice they are not reachable through
+        // standard SQL because the caller in `plan.rs` only invokes this method when the
+        // outer Projection has exactly one expression (the UNNEST placeholder), which means
+        // `columns.len()` is always 1. Multi-column UNNEST queries never enter this path.
         if exprs.len() != 1 {
             // Snowflake FLATTEN function only supports a single argument.
             return plan_err!(
@@ -746,9 +752,8 @@ impl Dialect for SnowflakeDialect {
             }),
         ]);
 
-        // To get the flattened result, we need to override the output columns of the FLATTEN function.
-        // The 4th column corresponds to the flattened value, which we will alias to the desired output column name.
-        // https://docs.snowflake.com/en/sql-reference/functions/flatten#output
+        // Override the VALUE column alias (FLATTEN_VALUE_COLUMN_IDX) with the desired output
+        // column name so the caller can reference the flattened element by its logical name.
         let column_alias = vec![
             unparser.new_ident_quoted_if_needs("SEQ".to_string()),
             unparser.new_ident_quoted_if_needs("KEY".to_string()),
