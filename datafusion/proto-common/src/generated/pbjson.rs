@@ -1876,7 +1876,7 @@ impl serde::Serialize for CsvOptions {
         if !self.ignore_trailing_whitespace.is_empty() {
             len += 1;
         }
-        if !self.encoding.is_empty() {
+        if !self.charset.is_empty() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion_common.CsvOptions", len)?;
@@ -1974,8 +1974,8 @@ impl serde::Serialize for CsvOptions {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("ignoreTrailingWhitespace", pbjson::private::base64::encode(&self.ignore_trailing_whitespace).as_str())?;
         }
-        if !self.encoding.is_empty() {
-            struct_ser.serialize_field("encoding", &self.encoding)?;
+        if !self.charset.is_empty() {
+            struct_ser.serialize_field("charset", &self.charset)?;
         }
         struct_ser.end()
     }
@@ -2025,7 +2025,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
             "ignoreLeadingWhitespace",
             "ignore_trailing_whitespace",
             "ignoreTrailingWhitespace",
-            "encoding",
+            "charset",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -2052,7 +2052,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
             QuoteStyle,
             IgnoreLeadingWhitespace,
             IgnoreTrailingWhitespace,
-            Encoding,
+            Charset,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -2096,7 +2096,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                             "quoteStyle" | "quote_style" => Ok(GeneratedField::QuoteStyle),
                             "ignoreLeadingWhitespace" | "ignore_leading_whitespace" => Ok(GeneratedField::IgnoreLeadingWhitespace),
                             "ignoreTrailingWhitespace" | "ignore_trailing_whitespace" => Ok(GeneratedField::IgnoreTrailingWhitespace),
-                            "encoding" => Ok(GeneratedField::Encoding),
+                            "charset" => Ok(GeneratedField::Charset),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -2138,7 +2138,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                 let mut quote_style__ = None;
                 let mut ignore_leading_whitespace__ = None;
                 let mut ignore_trailing_whitespace__ = None;
-                let mut encoding__ = None;
+                let mut charset__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::HasHeader => {
@@ -2299,11 +2299,11 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
-                        GeneratedField::Encoding => {
-                            if encoding__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("encoding"));
+                        GeneratedField::Charset => {
+                            if charset__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("charset"));
                             }
-                            encoding__ = Some(map_.next_value()?);
+                            charset__ = Some(map_.next_value()?);
                         }
                     }
                 }
@@ -2330,7 +2330,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                     quote_style: quote_style__.unwrap_or_default(),
                     ignore_leading_whitespace: ignore_leading_whitespace__.unwrap_or_default(),
                     ignore_trailing_whitespace: ignore_trailing_whitespace__.unwrap_or_default(),
-                    encoding: encoding__.unwrap_or_default(),
+                    charset: charset__.unwrap_or_default(),
                 })
             }
         }

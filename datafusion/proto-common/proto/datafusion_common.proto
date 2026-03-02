@@ -499,7 +499,7 @@ message CsvOptions {
   bytes ignore_leading_whitespace = 21;
   // Whether to ignore trailing whitespace in string values
   bytes ignore_trailing_whitespace = 22;
-  string encoding = 23; // Optional character encoding
+  string charset = 23; // Optional character encoding
 }
 
 // Options controlling CSV format

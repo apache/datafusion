@@ -700,7 +700,7 @@ pub struct CsvOptions {
     pub ignore_trailing_whitespace: ::prost::alloc::vec::Vec<u8>,
     /// Optional character encoding
     #[prost(string, tag = "23")]
-    pub encoding: ::prost::alloc::string::String,
+    pub charset: ::prost::alloc::string::String,
 }
 /// Options controlling CSV format
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
