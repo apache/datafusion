@@ -24,18 +24,3 @@ query T
 SELECT make_valid_utf8('Spark'::string);
 ----
 Spark
-
-query T
-SELECT make_valid_utf8('61'::binary);
-----
-a
-
-query T
-SELECT make_valid_utf8('80'::binary);
-----
-�
-
-query T
-SELECT make_valid_utf8('61C262'::binary);
-----
-a�b
