@@ -326,7 +326,7 @@ fn ensure_field_compatibility(
     if !DFSchema::datatype_is_logically_equal(
         datafusion_field.data_type(),
         substrait_field.data_type(),
-    ) {
+    ) && !is_safe_widening(datafusion_field.data_type(), substrait_field.data_type()) {
         return substrait_err!(
             "Field '{}' in Substrait schema has a different type ({}) than the corresponding field in the table schema ({}).",
             substrait_field.name(),
@@ -346,6 +346,25 @@ fn ensure_field_compatibility(
         );
     }
     Ok(())
+}
+
+/// Ensures that the given datafusion type can safely promoted to
+/// Substrait type, declared in the plan, without loss of precision.
+fn is_safe_widening(datafusion_type: &DataType, substrait_type: &DataType) -> bool {
+    matches!(
+        (datafusion_type, substrait_type),
+        // Signed integer widening
+        (DataType::Int8, DataType::Int16 | DataType::Int32 | DataType::Int64)
+            | (DataType::Int16, DataType::Int32 | DataType::Int64)
+            | (DataType::Int32, DataType::Int64)
+            // Unsigned integer widening
+            | (DataType::UInt8, DataType::UInt16 | DataType::UInt32 | DataType::UInt64)
+            | (DataType::UInt16, DataType::UInt32 | DataType::UInt64)
+            | (DataType::UInt32, DataType::UInt64)
+            // Float widening
+            | (DataType::Float16, DataType::Float32 | DataType::Float64)
+            | (DataType::Float32, DataType::Float64)
+    )
 }
 
 /// Returns true if the DataFusion and Substrait nullabilities are compatible, false otherwise
