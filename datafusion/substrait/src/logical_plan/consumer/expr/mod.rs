@@ -117,10 +117,7 @@ pub async fn from_substrait_extended_expr(
         return not_impl_err!("Type variation extensions are not supported");
     }
 
-    let consumer = DefaultSubstraitConsumer {
-        extensions: &extensions,
-        state,
-    };
+    let consumer = DefaultSubstraitConsumer::new(&extensions, state);
 
     let input_schema = DFSchemaRef::new(match &extended_expr.base_schema {
         Some(base_schema) => from_substrait_named_struct(&consumer, base_schema),

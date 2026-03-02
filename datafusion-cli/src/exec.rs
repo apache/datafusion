@@ -196,6 +196,7 @@ pub async fn exec_from_repl(
             }
             Err(ReadlineError::Interrupted) => {
                 println!("^C");
+                rl.helper().unwrap().reset_hint();
                 continue;
             }
             Err(ReadlineError::Eof) => {
@@ -521,6 +522,7 @@ mod tests {
     use datafusion::common::plan_err;
 
     use datafusion::prelude::SessionContext;
+    use datafusion_common::assert_contains;
     use url::Url;
 
     async fn create_external_table_test(location: &str, sql: &str) -> Result<()> {
@@ -714,7 +716,7 @@ mod tests {
         let err = create_external_table_test(location, &sql)
             .await
             .unwrap_err();
-        assert!(err.to_string().contains("os error 2"));
+        assert_contains!(err.to_string(), "os error 2");
 
         // for service_account_key
         let sql = format!(
@@ -722,9 +724,8 @@ mod tests {
         );
         let err = create_external_table_test(location, &sql)
             .await
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("No RSA key found in pem file"), "{err}");
+            .unwrap_err();
+        assert_contains!(err.to_string(), "Error reading pem file: no items found");
 
         // for application_credentials_path
         let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET
@@ -732,7 +733,7 @@ mod tests {
         let err = create_external_table_test(location, &sql)
             .await
             .unwrap_err();
-        assert!(err.to_string().contains("os error 2"));
+        assert_contains!(err.to_string(), "os error 2");
 
         Ok(())
     }
