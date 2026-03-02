@@ -20,9 +20,10 @@
 use std::sync::Arc;
 
 use crate::strings::make_and_append_view;
+use crate::utils::utf8_to_str_type;
 use arrow::array::{
     Array, ArrayRef, GenericStringArray, GenericStringBuilder, NullBufferBuilder,
-    OffsetSizeTrait, StringBuilder, StringViewArray, StringViewBuilder, new_null_array,
+    OffsetSizeTrait, StringViewArray, StringViewBuilder, new_null_array,
 };
 use arrow::buffer::{Buffer, ScalarBuffer};
 use arrow::datatypes::DataType;
@@ -331,35 +332,29 @@ fn string_trim<T: OffsetSizeTrait, Tr: Trimmer>(args: &[ArrayRef]) -> Result<Arr
     }
 }
 
+pub(crate) fn case_conversion_return_type(
+    arg_type: &DataType,
+    name: &str,
+) -> Result<DataType> {
+    if arg_type == &DataType::Utf8View {
+        Ok(DataType::Utf8View)
+    } else {
+        utf8_to_str_type(arg_type, name)
+    }
+}
+
 pub(crate) fn to_lower(args: &[ColumnarValue], name: &str) -> Result<ColumnarValue> {
-    case_conversion(
-        args,
-        |string| string.to_lowercase(),
-        name,
-        Utf8ViewOutput::Utf8View,
-    )
+    case_conversion(args, |string| string.to_lowercase(), name)
 }
 
 pub(crate) fn to_upper(args: &[ColumnarValue], name: &str) -> Result<ColumnarValue> {
-    case_conversion(
-        args,
-        |string| string.to_uppercase(),
-        name,
-        Utf8ViewOutput::Utf8,
-    )
-}
-
-#[derive(Debug, Clone, Copy)]
-enum Utf8ViewOutput {
-    Utf8,
-    Utf8View,
+    case_conversion(args, |string| string.to_uppercase(), name)
 }
 
 fn case_conversion<'a, F>(
     args: &'a [ColumnarValue],
     op: F,
     name: &str,
-    utf8view_output: Utf8ViewOutput,
 ) -> Result<ColumnarValue>
 where
     F: Fn(&'a str) -> String,
@@ -375,38 +370,18 @@ where
             >(array, op)?)),
             DataType::Utf8View => {
                 let string_array = as_string_view_array(array)?;
-                match utf8view_output {
-                    Utf8ViewOutput::Utf8 => {
-                        let mut string_builder = StringBuilder::with_capacity(
-                            string_array.len(),
-                            string_array.get_array_memory_size(),
-                        );
+                let mut string_builder =
+                    StringViewBuilder::with_capacity(string_array.len());
 
-                        for str in string_array.iter() {
-                            if let Some(str) = str {
-                                string_builder.append_value(op(str));
-                            } else {
-                                string_builder.append_null();
-                            }
-                        }
-
-                        Ok(ColumnarValue::Array(Arc::new(string_builder.finish())))
-                    }
-                    Utf8ViewOutput::Utf8View => {
-                        let mut string_builder =
-                            StringViewBuilder::with_capacity(string_array.len());
-
-                        for str in string_array.iter() {
-                            if let Some(str) = str {
-                                string_builder.append_value(op(str));
-                            } else {
-                                string_builder.append_null();
-                            }
-                        }
-
-                        Ok(ColumnarValue::Array(Arc::new(string_builder.finish())))
+                for str in string_array.iter() {
+                    if let Some(str) = str {
+                        string_builder.append_value(op(str));
+                    } else {
+                        string_builder.append_null();
                     }
                 }
+
+                Ok(ColumnarValue::Array(Arc::new(string_builder.finish())))
             }
             other => exec_err!("Unsupported data type {other:?} for function {name}"),
         },
@@ -421,14 +396,7 @@ where
             }
             ScalarValue::Utf8View(a) => {
                 let result = a.as_ref().map(|x| op(x));
-                match utf8view_output {
-                    Utf8ViewOutput::Utf8 => {
-                        Ok(ColumnarValue::Scalar(ScalarValue::Utf8(result)))
-                    }
-                    Utf8ViewOutput::Utf8View => {
-                        Ok(ColumnarValue::Scalar(ScalarValue::Utf8View(result)))
-                    }
-                }
+                Ok(ColumnarValue::Scalar(ScalarValue::Utf8View(result)))
             }
             other => exec_err!("Unsupported data type {other:?} for function {name}"),
         },

@@ -18,8 +18,7 @@
 use arrow::datatypes::DataType;
 use std::any::Any;
 
-use crate::string::common::to_lower;
-use crate::utils::utf8_to_str_type;
+use crate::string::common::{case_conversion_return_type, to_lower};
 use datafusion_common::Result;
 use datafusion_common::types::logical_string;
 use datafusion_expr::{
@@ -82,11 +81,7 @@ impl ScalarUDFImpl for LowerFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types[0] == DataType::Utf8View {
-            Ok(DataType::Utf8View)
-        } else {
-            utf8_to_str_type(&arg_types[0], "lower")
-        }
+        case_conversion_return_type(&arg_types[0], "lower")
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
