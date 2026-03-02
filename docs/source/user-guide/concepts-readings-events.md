@@ -192,6 +192,13 @@ This is a list of DataFusion related blog posts, articles, and other resources. 
 
 # 🌎 Community Events
 
+- **2026-07-22** [Denver Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/18428) - [RSVP](https://luma.com/jsu6faie)
+- **2026-05-12** [New York City Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/20030) - [RSVP](https://luma.com/adhshv92)
+- **2026-04-23** [Seattle Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/13500) - [RSVP](https://luma.com/hxshbp0m)
+- **2026-03-05** [Stockholm Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/18429) - [RSVP](https://luma.com/ctqtiqap)
+- **2026-02-19** [San Francisco Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/19859) - [RSVP](https://luma.com/p7r6fp2z), [Recording](https://www.youtube.com/playlist?list=PL42Ljm2tTt5peGUWMBN7WFkASq73j8PoU)
+- **2025-11-12** [Boston Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/16703) - [Recording](https://youtu.be/wCAud478Dg8), [Slides](https://drive.google.com/file/d/18KGH_wGHkgdAfjy5sQVKFhnN1GyYXSzU)
+- **2025-09-15** [New York City Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/16265) - [RSVP](https://lu.ma/qkcyycg0), [Recording](https://youtu.be/ElAiN_1fX_4)
 - **2025-01-23** [Amsterdam Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/12988) - [Slides](https://github.com/apache/datafusion/discussions/12988)
 - **2025-01-22** [Datadog Apache DataFusion Community Meeting](https://www.linkedin.com/posts/seshendranalla_apache-datafusion-community-meeting-2025-activity-7290384383201435648-8tqv) - [Recording](https://www.youtube.com/watch?v=ceTo2vUyRI0)
 - **2025-01-15** [Boston Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/13165) - [Slides](https://docs.google.com/presentation/d/1_zBLHdqxPlhWuNK2oCA2d_hCpb6HWgHbVJBseiUXA80)
