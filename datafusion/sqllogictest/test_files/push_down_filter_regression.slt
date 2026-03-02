@@ -1,0 +1,200 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Test push down filter
+
+# Regression test for https://github.com/apache/datafusion/issues/17188
+query I
+COPY (select i as k from generate_series(1, 10000000) as t(i))
+TO 'test_files/scratch/push_down_filter_regression/t1.parquet'
+STORED AS PARQUET;
+----
+10000000
+
+query I
+COPY (select i as k, i as v from generate_series(1, 10000000) as t(i))
+TO 'test_files/scratch/push_down_filter_regression/t2.parquet'
+STORED AS PARQUET;
+----
+10000000
+
+statement ok
+create external table t1 stored as parquet location 'test_files/scratch/push_down_filter_regression/t1.parquet';
+
+statement ok
+create external table t2 stored as parquet location 'test_files/scratch/push_down_filter_regression/t2.parquet';
+
+# The failure before https://github.com/apache/datafusion/pull/17197 was non-deterministic and random
+# So we'll run the same query a couple of times just to have more certainty it's fixed
+# Sorry about the spam in this slt test...
+
+query III rowsort
+select *
+from t1
+join t2 on t1.k = t2.k
+where v = 1 or v = 10000000
+order by t1.k, t2.v;
+----
+1 1 1
+10000000 10000000 10000000
+
+query III rowsort
+select *
+from t1
+join t2 on t1.k = t2.k
+where v = 1 or v = 10000000
+order by t1.k, t2.v;
+----
+1 1 1
+10000000 10000000 10000000
+
+query III rowsort
+select *
+from t1
+join t2 on t1.k = t2.k
+where v = 1 or v = 10000000
+order by t1.k, t2.v;
+----
+1 1 1
+10000000 10000000 10000000
+
+query III rowsort
+select *
+from t1
+join t2 on t1.k = t2.k
+where v = 1 or v = 10000000
+order by t1.k, t2.v;
+----
+1 1 1
+10000000 10000000 10000000
+
+query III rowsort
+select *
+from t1
+join t2 on t1.k = t2.k
+where v = 1 or v = 10000000
+order by t1.k, t2.v;
+----
+1 1 1
+10000000 10000000 10000000
+
+# Regression test for https://github.com/apache/datafusion/issues/17512
+
+query I
+COPY (
+    SELECT arrow_cast('2025-01-01T00:00:00Z'::timestamptz, 'Timestamp(Microsecond, Some("UTC"))') AS start_timestamp
+)
+TO 'test_files/scratch/push_down_filter_regression/17512.parquet'
+STORED AS PARQUET;
+----
+1
+
+statement ok
+CREATE EXTERNAL TABLE records STORED AS PARQUET LOCATION 'test_files/scratch/push_down_filter_regression/17512.parquet';
+
+query I
+SELECT 1
+FROM (
+    SELECT start_timestamp
+    FROM records
+    WHERE start_timestamp <= '2025-01-01T00:00:00Z'::timestamptz
+) AS t
+WHERE t.start_timestamp::time < '00:00:01'::time;
+----
+1
+
+# Test aggregate dynamic filter pushdown
+# Note: most of the test coverage lives in `datafusion/core/tests/physical_optimizer/filter_pushdown/mod.rs`
+# , to compare dynamic filter content easier. Here the tests are simple end-to-end
+# exercises.
+
+statement ok
+set datafusion.explain.format = 'indent';
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+statement ok
+set datafusion.execution.target_partitions = 2;
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = true;
+
+statement ok
+set datafusion.optimizer.enable_dynamic_filter_pushdown = true;
+
+statement ok
+set datafusion.optimizer.enable_aggregate_dynamic_filter_pushdown = true;
+
+statement ok
+create external table agg_dyn_test stored as parquet location '../core/tests/data/test_statistics_per_partition';
+
+# Expect dynamic filter available inside data source
+query TT
+explain select max(id) from agg_dyn_test where id > 1;
+----
+physical_plan
+01)AggregateExec: mode=Final, gby=[], aggr=[max(agg_dyn_test.id)]
+02)--CoalescePartitionsExec
+03)----AggregateExec: mode=Partial, gby=[], aggr=[max(agg_dyn_test.id)]
+04)------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-01/j5fUeSDQo22oPyPU.parquet, WORKSPACE_ROOT/datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-02/j5fUeSDQo22oPyPU.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-03/j5fUeSDQo22oPyPU.parquet, WORKSPACE_ROOT/datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-04/j5fUeSDQo22oPyPU.parquet]]}, projection=[id], file_type=parquet, predicate=id@0 > 1 AND DynamicFilter [ empty ], pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 1, required_guarantees=[]
+
+query I
+select max(id) from agg_dyn_test where id > 1;
+----
+4
+
+# Expect dynamic filter available inside data source
+query TT
+explain select max(id) from agg_dyn_test where (id+1) > 1;
+----
+physical_plan
+01)AggregateExec: mode=Final, gby=[], aggr=[max(agg_dyn_test.id)]
+02)--CoalescePartitionsExec
+03)----AggregateExec: mode=Partial, gby=[], aggr=[max(agg_dyn_test.id)]
+04)------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-01/j5fUeSDQo22oPyPU.parquet, WORKSPACE_ROOT/datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-02/j5fUeSDQo22oPyPU.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-03/j5fUeSDQo22oPyPU.parquet, WORKSPACE_ROOT/datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-04/j5fUeSDQo22oPyPU.parquet]]}, projection=[id], file_type=parquet, predicate=CAST(id@0 AS Int64) + 1 > 1 AND DynamicFilter [ empty ]
+
+# Expect dynamic filter available inside data source
+query TT
+explain select max(id), min(id) from agg_dyn_test where id < 10;
+----
+physical_plan
+01)AggregateExec: mode=Final, gby=[], aggr=[max(agg_dyn_test.id), min(agg_dyn_test.id)]
+02)--CoalescePartitionsExec
+03)----AggregateExec: mode=Partial, gby=[], aggr=[max(agg_dyn_test.id), min(agg_dyn_test.id)]
+04)------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-01/j5fUeSDQo22oPyPU.parquet, WORKSPACE_ROOT/datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-02/j5fUeSDQo22oPyPU.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-03/j5fUeSDQo22oPyPU.parquet, WORKSPACE_ROOT/datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-04/j5fUeSDQo22oPyPU.parquet]]}, projection=[id], file_type=parquet, predicate=id@0 < 10 AND DynamicFilter [ empty ], pruning_predicate=id_null_count@1 != row_count@2 AND id_min@0 < 10, required_guarantees=[]
+
+# Dynamic filter should not be available for grouping sets
+query TT
+explain select max(id) from agg_dyn_test where id < 10
+group by grouping sets ((), (id))
+----
+physical_plan
+01)ProjectionExec: expr=[max(agg_dyn_test.id)@2 as max(agg_dyn_test.id)]
+02)--AggregateExec: mode=FinalPartitioned, gby=[id@0 as id, __grouping_id@1 as __grouping_id], aggr=[max(agg_dyn_test.id)]
+03)----RepartitionExec: partitioning=Hash([id@0, __grouping_id@1], 2), input_partitions=2
+04)------AggregateExec: mode=Partial, gby=[(NULL as id), (id@0 as id)], aggr=[max(agg_dyn_test.id)]
+05)--------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-01/j5fUeSDQo22oPyPU.parquet, WORKSPACE_ROOT/datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-02/j5fUeSDQo22oPyPU.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-03/j5fUeSDQo22oPyPU.parquet, WORKSPACE_ROOT/datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-04/j5fUeSDQo22oPyPU.parquet]]}, projection=[id], file_type=parquet, predicate=id@0 < 10, pruning_predicate=id_null_count@1 != row_count@2 AND id_min@0 < 10, required_guarantees=[]
+
+statement ok
+drop table agg_dyn_test;
+
+statement ok
+drop table t1;
+
+statement ok
+drop table t2;
