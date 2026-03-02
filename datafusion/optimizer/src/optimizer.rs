@@ -33,8 +33,9 @@ use datafusion_common::{DFSchema, DataFusionError, HashSet, Result, internal_err
 use datafusion_expr::logical_plan::LogicalPlan;
 
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
+use crate::decorrelate_dependent_join::DecorrelateDependentJoin;
 use crate::decorrelate_lateral_join::DecorrelateLateralJoin;
-use crate::decorrelate_predicate_subquery::DecorrelatePredicateSubquery;
+// use crate::decorrelate_predicate_subquery::DecorrelatePredicateSubquery;
 use crate::eliminate_cross_join::EliminateCrossJoin;
 use crate::eliminate_duplicated_expr::EliminateDuplicatedExpr;
 use crate::eliminate_filter::EliminateFilter;
@@ -283,13 +284,14 @@ impl Optimizer {
             Arc::new(SimplifyExpressions::new()),
             Arc::new(ReplaceDistinctWithAggregate::new()),
             Arc::new(EliminateJoin::new()),
-            Arc::new(DecorrelatePredicateSubquery::new()),
-            Arc::new(ScalarSubqueryToJoin::new()),
-            Arc::new(DecorrelateLateralJoin::new()),
-            Arc::new(ExtractEquijoinPredicate::new()),
+
             Arc::new(EliminateDuplicatedExpr::new()),
             Arc::new(EliminateFilter::new()),
             Arc::new(EliminateCrossJoin::new()),
+            Arc::new(DecorrelateDependentJoin::new()), // TODO
+            // Arc::new(DecorrelatePredicateSubquery::new()),
+            // Arc::new(ScalarSubqueryToJoin::new()),
+            Arc::new(DecorrelateLateralJoin::new()),
             Arc::new(EliminateLimit::new()),
             Arc::new(PropagateEmptyRelation::new()),
             Arc::new(FilterNullJoinKeys::default()),
@@ -297,6 +299,7 @@ impl Optimizer {
             // Filters can't be pushed down past Limits, we should do PushDownFilter after PushDownLimit
             Arc::new(PushDownLimit::new()),
             Arc::new(PushDownFilter::new()),
+            Arc::new(ExtractEquijoinPredicate::new()),
             Arc::new(SingleDistinctToGroupBy::new()),
             // The previous optimizations added expressions and projections,
             // that might benefit from the following rules

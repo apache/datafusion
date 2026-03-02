@@ -61,23 +61,69 @@ logical_plan
 03)----Aggregate: groupBy=[[custsale.cntrycode]], aggr=[[count(Int64(1)), sum(custsale.c_acctbal)]]
 04)------SubqueryAlias: custsale
 05)--------Projection: substr(customer.c_phone, Int64(1), Int64(2)) AS cntrycode, customer.c_acctbal
-06)----------Inner Join:  Filter: CAST(customer.c_acctbal AS Decimal128(19, 6)) > __scalar_sq_2.avg(customer.c_acctbal)
-07)------------Projection: customer.c_phone, customer.c_acctbal
-08)--------------LeftAnti Join: customer.c_custkey = __correlated_sq_1.o_custkey
-09)----------------Filter: substr(customer.c_phone, Int64(1), Int64(2)) IN ([Utf8View("13"), Utf8View("31"), Utf8View("23"), Utf8View("29"), Utf8View("30"), Utf8View("18"), Utf8View("17")])
-10)------------------TableScan: customer projection=[c_custkey, c_phone, c_acctbal], partial_filters=[substr(customer.c_phone, Int64(1), Int64(2)) IN ([Utf8View("13"), Utf8View("31"), Utf8View("23"), Utf8View("29"), Utf8View("30"), Utf8View("18"), Utf8View("17")]), Boolean(true)]
-11)----------------SubqueryAlias: __correlated_sq_1
-12)------------------TableScan: orders projection=[o_custkey]
-13)------------SubqueryAlias: __scalar_sq_2
-14)--------------Aggregate: groupBy=[[]], aggr=[[avg(customer.c_acctbal)]]
-15)----------------Projection: customer.c_acctbal
-16)------------------Filter: customer.c_acctbal > Decimal128(Some(0),15,2) AND substr(customer.c_phone, Int64(1), Int64(2)) IN ([Utf8View("13"), Utf8View("31"), Utf8View("23"), Utf8View("29"), Utf8View("30"), Utf8View("18"), Utf8View("17")])
-17)--------------------TableScan: customer projection=[c_phone, c_acctbal], partial_filters=[customer.c_acctbal > Decimal128(Some(0),15,2), substr(customer.c_phone, Int64(1), Int64(2)) IN ([Utf8View("13"), Utf8View("31"), Utf8View("23"), Utf8View("29"), Utf8View("30"), Utf8View("18"), Utf8View("17")])]
+06)----------Projection: customer.c_phone, customer.c_acctbal
+07)------------Filter: NOT mark
+08)--------------Projection: customer.c_phone, customer.c_acctbal, mark
+09)----------------LeftMark Join(ComparisonJoin): customer.c_custkey = customer_dscan_1.customer_c_custkey Null=Null
+10)------------------Projection: customer.c_custkey, customer.c_phone, customer.c_acctbal
+11)--------------------Filter: CAST(customer.c_acctbal AS Decimal128(19, 6)) > avg(customer.c_acctbal)
+12)----------------------LeftSingle Join(ComparisonJoin): 
+13)------------------------Filter: substr(customer.c_phone, Int64(1), Int64(2)) IN ([Utf8View("13"), Utf8View("31"), Utf8View("23"), Utf8View("29"), Utf8View("30"), Utf8View("18"), Utf8View("17")])
+14)--------------------------TableScan: customer projection=[c_custkey, c_phone, c_acctbal], partial_filters=[substr(customer.c_phone, Int64(1), Int64(2)) IN ([Utf8View("13"), Utf8View("31"), Utf8View("23"), Utf8View("29"), Utf8View("30"), Utf8View("18"), Utf8View("17")])]
+15)------------------------Aggregate: groupBy=[[]], aggr=[[avg(customer.c_acctbal)]]
+16)--------------------------Projection: customer.c_acctbal
+17)----------------------------Filter: Boolean(true) AND customer.c_acctbal > Decimal128(Some(0),15,2) AND substr(customer.c_phone, Int64(1), Int64(2)) IN ([Utf8View("13"), Utf8View("31"), Utf8View("23"), Utf8View("29"), Utf8View("30"), Utf8View("18"), Utf8View("17")])
+18)------------------------------TableScan: customer projection=[c_phone, c_acctbal], partial_filters=[Boolean(true), customer.c_acctbal > Decimal128(Some(0),15,2), substr(customer.c_phone, Int64(1), Int64(2)) IN ([Utf8View("13"), Utf8View("31"), Utf8View("23"), Utf8View("29"), Utf8View("30"), Utf8View("18"), Utf8View("17")])]
+19)------------------Projection: orders.o_orderkey, customer_dscan_1.customer_c_custkey
+20)--------------------Inner Join(DelimJoin): orders.o_custkey = customer_dscan_1.customer_c_custkey
+21)----------------------Filter: Boolean(true)
+22)------------------------TableScan: orders projection=[o_orderkey, o_custkey], partial_filters=[Boolean(true)]
+23)----------------------Projection: customer.c_custkey AS customer_dscan_1.customer_c_custkey
+24)------------------------DelimGet: customer.c_custkey
 physical_plan
 01)SortPreservingMergeExec: [cntrycode@0 ASC NULLS LAST]
 02)--SortExec: expr=[cntrycode@0 ASC NULLS LAST], preserve_partitioning=[true]
 03)----ProjectionExec: expr=[cntrycode@0 as cntrycode, count(Int64(1))@1 as numcust, sum(custsale.c_acctbal)@2 as totacctbal]
 04)------AggregateExec: mode=FinalPartitioned, gby=[cntrycode@0 as cntrycode], aggr=[count(Int64(1)), sum(custsale.c_acctbal)]
+<<<<<<< HEAD
+05)--------CoalesceBatchesExec: target_batch_size=8192
+06)----------RepartitionExec: partitioning=Hash([cntrycode@0], 4), input_partitions=4
+07)------------AggregateExec: mode=Partial, gby=[cntrycode@0 as cntrycode], aggr=[count(Int64(1)), sum(custsale.c_acctbal)]
+08)--------------ProjectionExec: expr=[substr(c_phone@0, 1, 2) as cntrycode, c_acctbal@1 as c_acctbal]
+09)----------------CoalesceBatchesExec: target_batch_size=8192
+10)------------------FilterExec: NOT mark@2, projection=[c_phone@0, c_acctbal@1]
+11)--------------------CoalesceBatchesExec: target_batch_size=8192
+12)----------------------HashJoinExec: mode=Partitioned, join_type=LeftMark, on=[(c_custkey@0, customer_c_custkey@1)], projection=[c_phone@1, c_acctbal@2, mark@3], NullsEqual: true
+13)------------------------CoalesceBatchesExec: target_batch_size=8192
+14)--------------------------RepartitionExec: partitioning=Hash([c_custkey@0], 4), input_partitions=4
+15)----------------------------CoalesceBatchesExec: target_batch_size=8192
+16)------------------------------FilterExec: CAST(c_acctbal@2 AS Decimal128(19, 6)) > avg(customer.c_acctbal)@3, projection=[c_custkey@0, c_phone@1, c_acctbal@2]
+17)--------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+18)----------------------------------NestedLoopJoinExec: join_type=LeftSingle
+19)------------------------------------CoalescePartitionsExec
+20)--------------------------------------CoalesceBatchesExec: target_batch_size=8192
+21)----------------------------------------FilterExec: substr(c_phone@1, 1, 2) IN ([13, 31, 23, 29, 30, 18, 17])
+22)------------------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+23)--------------------------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/customer.tbl]]}, projection=[c_custkey, c_phone, c_acctbal], file_type=csv, has_header=false
+24)------------------------------------AggregateExec: mode=Final, gby=[], aggr=[avg(customer.c_acctbal)]
+25)--------------------------------------CoalescePartitionsExec
+26)----------------------------------------AggregateExec: mode=Partial, gby=[], aggr=[avg(customer.c_acctbal)]
+27)------------------------------------------CoalesceBatchesExec: target_batch_size=8192
+28)--------------------------------------------FilterExec: true AND c_acctbal@1 > Some(0),15,2 AND substr(c_phone@0, 1, 2) IN ([13, 31, 23, 29, 30, 18, 17]), projection=[c_acctbal@1]
+29)----------------------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+30)------------------------------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/customer.tbl]]}, projection=[c_phone, c_acctbal], file_type=csv, has_header=false
+31)------------------------CoalesceBatchesExec: target_batch_size=8192
+32)--------------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(o_custkey@1, customer_c_custkey@0)], projection=[o_orderkey@0, customer_c_custkey@2]
+33)----------------------------CoalesceBatchesExec: target_batch_size=8192
+34)------------------------------RepartitionExec: partitioning=Hash([o_custkey@1], 4), input_partitions=4
+35)--------------------------------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:0..4223281], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:4223281..8446562], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:8446562..12669843], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:12669843..16893122]]}, projection=[o_orderkey, o_custkey], file_type=csv, has_header=false
+36)----------------------------CoalesceBatchesExec: target_batch_size=8192
+37)------------------------------RepartitionExec: partitioning=Hash([customer_c_custkey@0], 4), input_partitions=4
+38)--------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+39)----------------------------------ProjectionExec: expr=[c_custkey@0 as customer_c_custkey]
+40)------------------------------------AggregateExec: mode=Final, gby=[c_custkey@0 as c_custkey], aggr=[]
+41)--------------------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/customer.tbl]]}, projection=[c_custkey], file_type=csv, has_header=false
+=======
 05)--------RepartitionExec: partitioning=Hash([cntrycode@0], 4), input_partitions=4
 06)----------AggregateExec: mode=Partial, gby=[cntrycode@0 as cntrycode], aggr=[count(Int64(1)), sum(custsale.c_acctbal)]
 07)------------ProjectionExec: expr=[substr(c_phone@0, 1, 2) as cntrycode, c_acctbal@1 as c_acctbal]
@@ -98,3 +144,4 @@ physical_plan
 22)------------------------FilterExec: c_acctbal@1 > Some(0),15,2 AND substr(c_phone@0, 1, 2) IN (SET) ([13, 31, 23, 29, 30, 18, 17]), projection=[c_acctbal@1]
 23)--------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 24)----------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/customer.tbl]]}, projection=[c_phone, c_acctbal], file_type=csv, has_header=false
+>>>>>>> 234730694392553bb5fa244e7b3782b9ccf3ebd3

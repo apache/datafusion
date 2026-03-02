@@ -55,8 +55,9 @@ use datafusion_common::{
 use datafusion_physical_expr::PhysicalExprRef;
 
 use ahash::RandomState;
+use futures::{ready, Stream, StreamExt};
+use std::collections::HashMap as StdHashMap;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
-use futures::{Stream, StreamExt, ready};
 
 /// Represents build-side of hash join.
 pub(super) enum BuildSide {
@@ -218,7 +219,10 @@ pub(super) struct HashJoinStream {
     build_accumulator: Option<Arc<SharedBuildAccumulator>>,
     /// Optional future to signal when build information has been reported by all partitions
     /// and the dynamic filter has been updated
-    build_waiter: Option<OnceFut<()>>,
+    bounds_waiter: Option<OnceFut<()>>,
+    /// Used by Left Single Join to check it multiple rows matched at runtime.
+    left_match_counts: StdHashMap<u64, usize>,
+
     /// Partitioning mode to use
     mode: PartitionMode,
     /// Output buffer for coalescing small batches into larger ones with optional fetch limit.
@@ -398,8 +402,9 @@ impl HashJoinStream {
             probe_indices_buffer: Vec::with_capacity(batch_size),
             build_indices_buffer: Vec::with_capacity(batch_size),
             right_side_ordered,
-            build_accumulator,
-            build_waiter: None,
+            bounds_accumulator,
+            bounds_waiter: None,
+            left_match_counts: StdHashMap::new(),
             mode,
             output_buffer,
             null_aware,
@@ -784,6 +789,21 @@ impl HashJoinStream {
         )?;
 
         let push_status = self.output_buffer.push_batch(batch)?;
+
+        // Validates cardinality constraints for single join types
+        // TODO: RightSingle support.
+        if matches!(self.join_type, JoinType::LeftSingle) {
+            for &left_idx in left_indices.values() {
+                let count = self.left_match_counts.entry(left_idx).or_insert(0);
+                *count += 1;
+                if *count > 1 {
+                    return internal_err!(
+                                "LeftSingle join constraint violated: build side row at index {} has multiple matches", 
+                                left_idx
+                            );
+                }
+            }
+        }
 
         timer.done();
 

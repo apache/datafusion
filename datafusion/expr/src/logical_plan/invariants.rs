@@ -199,7 +199,7 @@ pub fn check_subquery_expr(
                 }
             }?;
             match outer_plan {
-                LogicalPlan::Projection(_) | LogicalPlan::Filter(_) => Ok(()),
+                LogicalPlan::Projection(_) | LogicalPlan::Filter(_) | LogicalPlan::DependentJoin(_) => Ok(()),
                 LogicalPlan::Aggregate(Aggregate {
                     group_expr,
                     aggr_expr,
@@ -217,7 +217,7 @@ pub fn check_subquery_expr(
                 }
                 _ => plan_err!(
                     "Correlated scalar subquery can only be used in Projection, \
-                    Filter, Aggregate plan nodes"
+                    Filter, Aggregate, DependentJoin plan nodes"
                 ),
             }?;
         }
@@ -253,11 +253,12 @@ pub fn check_subquery_expr(
             | LogicalPlan::TableScan(_)
             | LogicalPlan::Window(_)
             | LogicalPlan::Aggregate(_)
-            | LogicalPlan::Join(_) => Ok(()),
+            | LogicalPlan::Join(_)
+            | LogicalPlan::DependentJoin(_) => Ok(()),
             _ => plan_err!(
                 "In/Exist/SetComparison subquery can only be used in \
-                Projection, Filter, TableScan, Window functions, Aggregate and Join plan nodes, \
-                but was used in [{}]",
+                Projection, Filter, TableScan, Window functions, Aggregate and Join \
+                and DependentJoin plan nodes, but was used in [{}]",
                 outer_plan.display()
             ),
         }?;
@@ -324,7 +325,8 @@ fn check_inner_plan(inner_plan: &LogicalPlan) -> Result<()> {
             JoinType::Left
             | JoinType::LeftSemi
             | JoinType::LeftAnti
-            | JoinType::LeftMark => {
+            | JoinType::LeftMark
+            | JoinType::LeftSingle => {
                 check_inner_plan(left)?;
                 check_no_outer_references(right)
             }
@@ -344,6 +346,7 @@ fn check_inner_plan(inner_plan: &LogicalPlan) -> Result<()> {
             }
         },
         LogicalPlan::Extension(_) => Ok(()),
+        LogicalPlan::DependentJoin(_) => Ok(()),
         plan => check_no_outer_references(plan),
     }
 }

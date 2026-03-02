@@ -337,6 +337,28 @@ impl PlannerContext {
         self.outer_queries_schemas_stack.pop()
     }
 
+    /// Return the stack of outer relations' schemas, the outer most
+    /// relation are at the first entry
+    pub fn outer_queries_schemas(&self) -> Vec<DFSchemaRef> {
+        self.outer_queries_schemas_stack.to_vec()
+    }
+
+    /// Sets the outer query schema, returning the existing one, if
+    /// any
+    pub fn append_outer_query_schema(&mut self, schema: DFSchemaRef) {
+        self.outer_queries_schemas_stack.push(schema);
+    }
+
+    /// The schema of the adjacent outer relation
+    pub fn latest_outer_query_schema(&mut self) -> Option<DFSchemaRef> {
+        self.outer_queries_schemas_stack.last().cloned()
+    }
+
+    /// Remove the schema of the adjacent outer relation
+    pub fn pop_outer_query_schema(&mut self) -> Option<DFSchemaRef> {
+        self.outer_queries_schemas_stack.pop()
+    }
+
     pub fn set_table_schema(
         &mut self,
         mut schema: Option<DFSchemaRef>,

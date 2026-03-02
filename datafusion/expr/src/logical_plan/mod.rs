@@ -38,12 +38,12 @@ pub use ddl::{
 };
 pub use dml::{DmlStatement, WriteOp};
 pub use plan::{
-    Aggregate, Analyze, ColumnUnnestList, DescribeTable, Distinct, DistinctOn,
-    EmptyRelation, Explain, ExplainOption, Extension, FetchType, Filter, Join,
-    JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Projection,
+    projection_schema, Aggregate, Analyze, ColumnUnnestList, CorrelatedColumnInfo,
+    DelimGet, DependentJoin, DescribeTable, Distinct, DistinctOn, EmptyRelation, Explain,
+    ExplainOption, Extension, FetchType, Filter, Join, JoinConstraint,
+    JoinKind, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Projection,
     RecursiveQuery, Repartition, SkipType, Sort, StringifiedPlan, Subquery,
     SubqueryAlias, TableScan, ToStringifiedPlan, Union, Unnest, Values, Window,
-    projection_schema,
 };
 pub use statement::{
     Deallocate, Execute, Prepare, ResetVariable, SetVariable, Statement,

@@ -600,7 +600,8 @@ fn multi_hash_joins() -> Result<()> {
             | JoinType::Full
             | JoinType::LeftSemi
             | JoinType::LeftAnti
-            | JoinType::LeftMark => {
+            | JoinType::LeftMark
+            | JoinType::LeftSingle => {
                 // Join on (a == c)
                 let top_join_on = vec![(
                     Arc::new(Column::new_with_schema("a", &join.schema()).unwrap()) as _,
@@ -665,7 +666,8 @@ fn multi_hash_joins() -> Result<()> {
             | JoinType::Full
             | JoinType::RightSemi
             | JoinType::RightAnti
-            | JoinType::RightMark => {
+            | JoinType::RightMark
+            | JoinType::LeftSingle => {
                 // This time we use (b1 == c) for top join
                 // Join on (b1 == c)
                 let top_join_on = vec![(

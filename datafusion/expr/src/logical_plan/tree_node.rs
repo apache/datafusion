@@ -38,11 +38,11 @@
 //! * [`LogicalPlan::expressions`]: Return a copy of the plan's expressions
 
 use crate::{
-    Aggregate, Analyze, CreateMemoryTable, CreateView, DdlStatement, Distinct,
-    DistinctOn, DmlStatement, Execute, Explain, Expr, Extension, Filter, Join, Limit,
-    LogicalPlan, Partitioning, Prepare, Projection, RecursiveQuery, Repartition, Sort,
-    Statement, Subquery, SubqueryAlias, TableScan, Union, Unnest, UserDefinedLogicalNode,
-    Values, Window, dml::CopyTo,
+    Aggregate, Analyze, CreateMemoryTable, CreateView, DdlStatement, DependentJoin,
+    Distinct, DistinctOn, DmlStatement, Execute, Explain, Expr, Extension, Filter, Join,
+    Limit, LogicalPlan, Partitioning, Prepare, Projection, RecursiveQuery, Repartition,
+    Sort, Statement, Subquery, SubqueryAlias, TableScan, Union, Unnest,
+    UserDefinedLogicalNode, Values, Window, dml::CopyTo,
 };
 use datafusion_common::tree_node::TreeNodeRefContainer;
 
@@ -133,6 +133,7 @@ impl TreeNode for LogicalPlan {
                 join_constraint,
                 schema,
                 null_equality,
+                join_kind,
                 null_aware,
             }) => (left, right).map_elements(f)?.update_data(|(left, right)| {
                 LogicalPlan::Join(Join {
@@ -144,6 +145,7 @@ impl TreeNode for LogicalPlan {
                     join_constraint,
                     schema,
                     null_equality,
+                    join_kind,
                     null_aware,
                 })
             }),
@@ -351,7 +353,31 @@ impl TreeNode for LogicalPlan {
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation { .. }
             | LogicalPlan::Values { .. }
-            | LogicalPlan::DescribeTable(_) => Transformed::no(self),
+            | LogicalPlan::DescribeTable(_)
+            | LogicalPlan::DelimGet(_) => Transformed::no(self),
+            LogicalPlan::DependentJoin(DependentJoin {
+                schema,
+                correlated_columns,
+                subquery_expr,
+                subquery_depth,
+                subquery_name,
+                lateral_join_condition,
+                left,
+                right,
+                any_join,
+            }) => (left, right).map_elements(f)?.update_data(|(left, right)| {
+                LogicalPlan::DependentJoin(DependentJoin {
+                    schema,
+                    correlated_columns,
+                    subquery_expr,
+                    subquery_depth,
+                    subquery_name,
+                    lateral_join_condition,
+                    left,
+                    right,
+                    any_join,
+                })
+            }),
         })
     }
 }
@@ -404,6 +430,22 @@ impl LogicalPlan {
         mut f: F,
     ) -> Result<TreeNodeRecursion> {
         match self {
+            LogicalPlan::DependentJoin(DependentJoin {
+                correlated_columns,
+                lateral_join_condition,
+                ..
+            }) => {
+                let correlated_column_exprs = correlated_columns
+                    .iter()
+                    .map(|info| Expr::Column(info.col.clone()))
+                    .collect::<Vec<_>>();
+                let maybe_lateral_join_condition = lateral_join_condition
+                    .as_ref()
+                    .map(|(_, condition)| condition.clone());
+
+                (&correlated_column_exprs, &maybe_lateral_join_condition)
+                    .apply_ref_elements(f)
+            }
             LogicalPlan::Projection(Projection { expr, .. }) => expr.apply_elements(f),
             LogicalPlan::Values(Values { values, .. }) => values.apply_elements(f),
             LogicalPlan::Filter(Filter { predicate, .. }) => f(predicate),
@@ -475,7 +517,8 @@ impl LogicalPlan {
             | LogicalPlan::Dml(_)
             | LogicalPlan::Ddl(_)
             | LogicalPlan::Copy(_)
-            | LogicalPlan::DescribeTable(_) => Ok(TreeNodeRecursion::Continue),
+            | LogicalPlan::DescribeTable(_)
+            | LogicalPlan::DelimGet(_) => Ok(TreeNodeRecursion::Continue),
         }
     }
 
@@ -566,6 +609,7 @@ impl LogicalPlan {
                 join_constraint,
                 schema,
                 null_equality,
+                join_kind,
                 null_aware,
             }) => (on, filter).map_elements(f)?.update_data(|(on, filter)| {
                 LogicalPlan::Join(Join {
@@ -577,6 +621,7 @@ impl LogicalPlan {
                     join_constraint,
                     schema,
                     null_equality,
+                    join_kind,
                     null_aware,
                 })
             }),
@@ -657,7 +702,9 @@ impl LogicalPlan {
             | LogicalPlan::Dml(_)
             | LogicalPlan::Ddl(_)
             | LogicalPlan::Copy(_)
-            | LogicalPlan::DescribeTable(_) => Transformed::no(self),
+            | LogicalPlan::DescribeTable(_)
+            | LogicalPlan::DependentJoin(_)
+            | LogicalPlan::DelimGet(_) => Transformed::no(self),
         })
     }
 

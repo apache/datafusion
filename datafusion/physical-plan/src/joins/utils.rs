@@ -228,7 +228,7 @@ pub struct ColumnIndex {
 fn output_join_field(old_field: &Field, join_type: &JoinType, is_left: bool) -> Field {
     let force_nullable = match join_type {
         JoinType::Inner => false,
-        JoinType::Left => !is_left, // right input is padded with nulls
+        JoinType::Left | JoinType::LeftSingle => !is_left, // right input is padded with nulls
         JoinType::Right => is_left, // left input is padded with nulls
         JoinType::Full => true,     // both inputs can be padded with nulls
         JoinType::LeftSemi => false, // doesn't introduce nulls
@@ -287,7 +287,11 @@ pub fn build_join_schema(
     };
 
     let (fields, column_indices): (SchemaBuilder, Vec<ColumnIndex>) = match join_type {
-        JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
+        JoinType::Inner
+        | JoinType::Left
+        | JoinType::Full
+        | JoinType::Right
+        | JoinType::LeftSingle => {
             // left then right
             left_fields().chain(right_fields()).unzip()
         }
@@ -486,7 +490,11 @@ fn estimate_join_cardinality(
         .unzip::<_, _, Vec<_>, Vec<_>>();
 
     match join_type {
-        JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
+        JoinType::Inner
+        | JoinType::Left
+        | JoinType::Right
+        | JoinType::Full
+        | JoinType::LeftSingle => {
             let ij_cardinality = estimate_inner_join_cardinality(
                 Statistics {
                     num_rows: left_stats.num_rows,
@@ -505,7 +513,7 @@ fn estimate_join_cardinality(
             // it is greater than the minimum cardinality constraints of these
             // joins (so that we don't underestimate the cardinality).
             let cardinality = match join_type {
-                JoinType::Inner => ij_cardinality,
+                JoinType::Inner|JoinType::LeftSingle => ij_cardinality,
                 JoinType::Left => ij_cardinality.max(&left_stats.num_rows),
                 JoinType::Right => ij_cardinality.max(&right_stats.num_rows),
                 JoinType::Full => ij_cardinality
@@ -852,6 +860,7 @@ pub(crate) fn need_produce_result_in_final(join_type: JoinType) -> bool {
             | JoinType::LeftSemi
             | JoinType::LeftMark
             | JoinType::Full
+            | JoinType::LeftSingle
     )
 }
 
@@ -1055,7 +1064,8 @@ pub(crate) fn build_batch_empty_build_side(
         | JoinType::LeftSemi
         | JoinType::RightSemi
         | JoinType::LeftAnti
-        | JoinType::LeftMark => Ok(RecordBatch::new_empty(Arc::new(schema.clone()))),
+        | JoinType::LeftMark
+        | JoinType::LeftSingle => Ok(RecordBatch::new_empty(Arc::new(schema.clone()))),
 
         // the remaining joins will return data for the right columns and null for the left ones
         JoinType::Right | JoinType::Full | JoinType::RightAnti | JoinType::RightMark => {
@@ -1104,7 +1114,7 @@ pub(crate) fn adjust_indices_by_join_type(
             // matched
             Ok((left_indices, right_indices))
         }
-        JoinType::Left => {
+        JoinType::Left | JoinType::LeftSingle => {
             // matched
             Ok((left_indices, right_indices))
             // unmatched left row will be produced in the end of loop, and it has been set in the left visited bitmap
@@ -1499,9 +1509,11 @@ pub(crate) fn symmetric_join_output_partitioning(
     let left_partitioning = left.output_partitioning();
     let right_partitioning = right.output_partitioning();
     let result = match join_type {
-        JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
-            left_partitioning.clone()
-        }
+        JoinType::Left
+        | JoinType::LeftSemi
+        | JoinType::LeftAnti
+        | JoinType::LeftMark
+        | JoinType::LeftSingle => left_partitioning.clone(),
         JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {
             right_partitioning.clone()
         }
@@ -1533,7 +1545,8 @@ pub(crate) fn asymmetric_join_output_partitioning(
         | JoinType::LeftSemi
         | JoinType::LeftAnti
         | JoinType::Full
-        | JoinType::LeftMark => Partitioning::UnknownPartitioning(
+        | JoinType::LeftMark
+        | JoinType::LeftSingle => Partitioning::UnknownPartitioning(
             right.output_partitioning().partition_count(),
         ),
     };
