@@ -29,7 +29,7 @@ use datafusion_common::utils::ListCoercion;
 use datafusion_common::{DataFusionError, Result, not_impl_err};
 
 use std::any::Any;
-use std::fmt::Write;
+use std::fmt::{self, Write};
 
 use crate::utils::make_scalar_function;
 use arrow::array::{
@@ -324,7 +324,6 @@ fn generate_string_array<O: OffsetSizeTrait>(
     null_strings: &[Option<&str>],
 ) -> Result<StringArray> {
     let mut builder = StringBuilder::with_capacity(list_arr.len(), 0);
-    let mut buf = String::new();
 
     for ((arr, &delimiter), &null_string) in list_arr
         .iter()
@@ -336,17 +335,16 @@ fn generate_string_array<O: OffsetSizeTrait>(
             continue;
         };
 
-        buf.clear();
         let mut first = true;
-        compute_array_to_string(&mut buf, &arr, delimiter, null_string, &mut first)?;
-        builder.append_value(&buf);
+        compute_array_to_string(&mut builder, &arr, delimiter, null_string, &mut first)?;
+        builder.append_value("");
     }
 
     Ok(builder.finish())
 }
 
 fn compute_array_to_string(
-    buf: &mut String,
+    buf: &mut impl Write,
     arr: &ArrayRef,
     delimiter: &str,
     null_string: Option<&str>,
@@ -368,9 +366,9 @@ fn compute_array_to_string(
                     if *first {
                         *first = false;
                     } else {
-                        buf.push_str(delimiter);
+                        buf.write_str(delimiter)?;
                     }
-                    buf.push_str(ns);
+                    buf.write_str(ns)?;
                 }
             }
         };
@@ -411,8 +409,8 @@ fn compute_array_to_string(
                         delimiter,
                         null_string,
                         first,
-                        |buf, x: &str| buf.push_str(x),
-                    )
+                        |buf, x: &str| buf.write_str(x),
+                    )?
                 };
             }
             macro_rules! bool_leaf {
@@ -425,12 +423,12 @@ fn compute_array_to_string(
                         first,
                         |buf, x: bool| {
                             if x {
-                                buf.push_str("true");
+                                buf.write_str("true")
                             } else {
-                                buf.push_str("false");
+                                buf.write_str("false")
                             }
                         },
-                    )
+                    )?
                 };
             }
             macro_rules! int_leaf {
@@ -443,9 +441,9 @@ fn compute_array_to_string(
                         first,
                         |buf, x| {
                             let mut itoa_buf = itoa::Buffer::new();
-                            buf.push_str(itoa_buf.format(x));
+                            buf.write_str(itoa_buf.format(x))
                         },
-                    )
+                    )?
                 };
             }
             macro_rules! float_leaf {
@@ -456,14 +454,12 @@ fn compute_array_to_string(
                         delimiter,
                         null_string,
                         first,
-                        |buf, x| {
-                            // TODO: Consider switching to a more efficient
-                            // floating point display library (e.g., ryu). This
-                            // might result in some differences in the output
-                            // format, however.
-                            write!(buf, "{}", x).unwrap();
-                        },
-                    )
+                        // TODO: Consider switching to a more efficient
+                        // floating point display library (e.g., ryu). This
+                        // might result in some differences in the output
+                        // format, however.
+                        |buf, x| write!(buf, "{}", x),
+                    )?
                 };
             }
             match data_type {
@@ -509,14 +505,15 @@ fn compute_array_to_string(
 /// array to `buf`, separated by `delimiter`. Null elements are rendered
 /// using `null_string` if provided, or skipped otherwise. The `append`
 /// closure controls how each non-null element is written to the buffer.
-fn write_leaf_to_string<'a, A, T>(
-    buf: &mut String,
+fn write_leaf_to_string<'a, W: Write, A, T>(
+    buf: &mut W,
     arr: &'a A,
     delimiter: &str,
     null_string: Option<&str>,
     first: &mut bool,
-    append: impl Fn(&mut String, T),
-) where
+    append: impl Fn(&mut W, T) -> fmt::Result,
+) -> Result<()>
+where
     &'a A: IntoIterator<Item = Option<T>>,
 {
     for x in arr {
@@ -528,14 +525,15 @@ fn write_leaf_to_string<'a, A, T>(
         if *first {
             *first = false;
         } else {
-            buf.push_str(delimiter);
+            buf.write_str(delimiter)?;
         }
 
         match x {
-            Some(x) => append(buf, x),
-            None => buf.push_str(null_string.unwrap()),
+            Some(x) => append(buf, x)?,
+            None => buf.write_str(null_string.unwrap())?,
         }
     }
+    Ok(())
 }
 
 /// String_to_array SQL function
