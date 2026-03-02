@@ -548,7 +548,7 @@ impl DefaultPhysicalExprAdapterRewriter {
 /// let factory = BatchAdapterFactory::new(Arc::clone(&target_schema));
 ///
 /// // Create adapter for this specific source schema
-/// let adapter = factory.make_adapter(Arc::clone(&source_schema)).unwrap();
+/// let adapter = factory.make_adapter(&source_schema).unwrap();
 ///
 /// // Create a source batch
 /// let source_batch = RecordBatch::try_new(
@@ -603,10 +603,10 @@ impl BatchAdapterFactory {
     ///
     /// Batches fed into this [`BatchAdapter`] *must* conform to the source schema,
     /// no validation is performed at runtime to minimize overheads.
-    pub fn make_adapter(&self, source_schema: SchemaRef) -> Result<BatchAdapter> {
+    pub fn make_adapter(&self, source_schema: &SchemaRef) -> Result<BatchAdapter> {
         let expr_adapter = self
             .expr_adapter_factory
-            .create(Arc::clone(&self.target_schema), Arc::clone(&source_schema))?;
+            .create(Arc::clone(&self.target_schema), Arc::clone(source_schema))?;
 
         let simplifier = PhysicalExprSimplifier::new(&self.target_schema);
 
@@ -617,7 +617,7 @@ impl BatchAdapterFactory {
 
         let adapted = projection
             .try_map_exprs(|e| simplifier.simplify(expr_adapter.rewrite(e)?))?;
-        let projector = adapted.make_projector(&source_schema)?;
+        let projector = adapted.make_projector(source_schema)?;
 
         Ok(BatchAdapter { projector })
     }
@@ -707,7 +707,7 @@ mod tests {
         let expr = expressions::BinaryExpr::new(
             Arc::clone(&column_a),
             Operator::Plus,
-            Arc::new(expressions::Literal::new(ScalarValue::Int64(Some(5)))),
+            Arc::new(Literal::new(ScalarValue::Int64(Some(5)))),
         );
         let expr = expressions::BinaryExpr::new(
             Arc::new(expr),
@@ -715,7 +715,7 @@ mod tests {
             Arc::new(expressions::BinaryExpr::new(
                 Arc::clone(&column_c),
                 Operator::Gt,
-                Arc::new(expressions::Literal::new(ScalarValue::Float64(Some(0.0)))),
+                Arc::new(Literal::new(ScalarValue::Float64(Some(0.0)))),
             )),
         );
 
@@ -730,7 +730,7 @@ mod tests {
                 None,
             )),
             Operator::Plus,
-            Arc::new(expressions::Literal::new(ScalarValue::Int64(Some(5)))),
+            Arc::new(Literal::new(ScalarValue::Int64(Some(5)))),
         );
         let expected = Arc::new(expressions::BinaryExpr::new(
             Arc::new(expected),
@@ -738,7 +738,7 @@ mod tests {
             Arc::new(expressions::BinaryExpr::new(
                 lit(ScalarValue::Float64(None)), // c is missing, so it becomes null
                 Operator::Gt,
-                Arc::new(expressions::Literal::new(ScalarValue::Float64(Some(0.0)))),
+                Arc::new(Literal::new(ScalarValue::Float64(Some(0.0)))),
             )),
         )) as Arc<dyn PhysicalExpr>;
 
@@ -856,7 +856,7 @@ mod tests {
         let result = adapter.rewrite(column_expr)?;
 
         // Should be replaced with a literal null
-        if let Some(literal) = result.as_any().downcast_ref::<expressions::Literal>() {
+        if let Some(literal) = result.as_any().downcast_ref::<Literal>() {
             assert_eq!(*literal.value(), ScalarValue::Float64(None));
         } else {
             panic!("Expected literal expression");
@@ -917,7 +917,7 @@ mod tests {
         // Should be replaced with the partition value
         let literal = result
             .as_any()
-            .downcast_ref::<expressions::Literal>()
+            .downcast_ref::<Literal>()
             .expect("Expected literal expression");
         assert_eq!(*literal.value(), partition_value);
 
@@ -1075,7 +1075,7 @@ mod tests {
         assert_eq!(
             res.column(0)
                 .as_any()
-                .downcast_ref::<arrow::array::StringArray>()
+                .downcast_ref::<StringArray>()
                 .unwrap()
                 .iter()
                 .collect_vec(),
@@ -1084,7 +1084,7 @@ mod tests {
         assert_eq!(
             res.column(1)
                 .as_any()
-                .downcast_ref::<arrow::array::Int64Array>()
+                .downcast_ref::<Int64Array>()
                 .unwrap()
                 .iter()
                 .collect_vec(),
@@ -1262,7 +1262,7 @@ mod tests {
         ]));
 
         let factory = BatchAdapterFactory::new(Arc::clone(&target_schema));
-        let adapter = factory.make_adapter(Arc::clone(&source_schema)).unwrap();
+        let adapter = factory.make_adapter(&source_schema).unwrap();
 
         // Create source batch
         let source_batch = RecordBatch::try_new(
@@ -1317,7 +1317,7 @@ mod tests {
         ]));
 
         let factory = BatchAdapterFactory::new(Arc::clone(&target_schema));
-        let adapter = factory.make_adapter(Arc::clone(&source_schema)).unwrap();
+        let adapter = factory.make_adapter(&source_schema).unwrap();
 
         let source_batch = RecordBatch::try_new(
             Arc::clone(&source_schema),
@@ -1380,7 +1380,7 @@ mod tests {
         .unwrap();
 
         let factory = BatchAdapterFactory::new(Arc::clone(&target_schema));
-        let adapter = factory.make_adapter(source_schema).unwrap();
+        let adapter = factory.make_adapter(&source_schema).unwrap();
         let adapted = adapter.adapt_batch(&source_batch).unwrap();
 
         let result_struct = adapted
@@ -1405,7 +1405,7 @@ mod tests {
         ]));
 
         let factory = BatchAdapterFactory::new(Arc::clone(&schema));
-        let adapter = factory.make_adapter(Arc::clone(&schema)).unwrap();
+        let adapter = factory.make_adapter(&schema).unwrap();
 
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
@@ -1438,18 +1438,18 @@ mod tests {
             Field::new("x", DataType::Int32, false),
             Field::new("y", DataType::Utf8, true),
         ]));
-        let adapter1 = factory.make_adapter(source1).unwrap();
+        let adapter1 = factory.make_adapter(&source1).unwrap();
 
         // Second source schema (different order)
         let source2 = Arc::new(Schema::new(vec![
             Field::new("y", DataType::Utf8, true),
             Field::new("x", DataType::Int64, false),
         ]));
-        let adapter2 = factory.make_adapter(source2).unwrap();
+        let adapter2 = factory.make_adapter(&source2).unwrap();
 
         // Both should work correctly
-        assert!(format!("{:?}", adapter1).contains("BatchAdapter"));
-        assert!(format!("{:?}", adapter2).contains("BatchAdapter"));
+        assert!(format!("{adapter1:?}").contains("BatchAdapter"));
+        assert!(format!("{adapter2:?}").contains("BatchAdapter"));
     }
 
     #[test]
