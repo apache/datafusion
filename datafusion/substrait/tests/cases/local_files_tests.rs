@@ -309,8 +309,9 @@ async fn test_local_files_path_type_variants() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_local_files_no_valid_paths() -> Result<()> {
-    // Create a plan with empty items
+async fn test_local_files_empty_items() -> Result<()> {
+    // Create a plan with empty items — the spec doesn't enforce non-empty,
+    // so this is passed through to resolve_local_files for the implementer to decide
     let schema = create_test_schema();
     let named_struct = schema_to_named_struct(&schema);
 
@@ -349,14 +350,19 @@ async fn test_local_files_no_valid_paths() -> Result<()> {
 
     let ctx = SessionContext::new();
 
-    // This should fail because there are no valid paths
+    // With the default consumer, resolve_local_files returns not_impl_err,
+    // then the single-file fallback tries resolve_table_ref which also fails,
+    // so the original resolve_local_files error is returned
     let result = from_substrait_plan(&ctx.state(), &plan).await;
 
-    assert!(result.is_err(), "Should fail with no valid URIs");
+    assert!(
+        result.is_err(),
+        "Should fail when resolve_local_files is not implemented"
+    );
     let err_msg = result.unwrap_err().to_string();
     assert!(
-        err_msg.contains("No valid file URIs"),
-        "Error should mention no valid URIs: {err_msg}",
+        err_msg.contains("resolve_local_files is not implemented"),
+        "Error should mention resolve_local_files: {err_msg}",
     );
 
     Ok(())

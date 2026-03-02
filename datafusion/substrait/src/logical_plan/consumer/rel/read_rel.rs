@@ -206,43 +206,42 @@ pub async fn from_read_rel(
                 .flatten()
                 .collect();
 
-            if uris.is_empty() {
-                return plan_err!("No valid file URIs found in LocalFiles");
-            }
-
             // Generate a table name from the first URI's path component
-            let table_name = std::path::Path::new(uris[0].path())
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
+            let table_name = uris
+                .first()
+                .and_then(|uri| {
+                    std::path::Path::new(uri.path())
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                })
                 .unwrap_or_else(|| "local_files".to_string());
 
             let table_reference = TableReference::Bare {
                 table: table_name.clone().into(),
             };
 
-            // Try to resolve files using the new trait method.
-            // If not implemented, fall back to the legacy single-file behavior
-            // for backward compatibility.
-            let provider = match consumer
-                .resolve_local_files(&uris, &substrait_schema)
-                .await
-            {
-                Ok(provider) => provider,
-                Err(_) => {
-                    // Fallback: use the filename to look up a pre-registered table
-                    // This maintains backward compatibility with the original behavior
-                    match consumer.resolve_table_ref(&table_reference).await? {
-                        Some(provider) => provider,
-                        None => {
-                            return plan_err!(
-                                "No table named '{table_name}' found. \
-                                 To support LocalFiles with multiple files or custom file resolution, \
-                                 implement the resolve_local_files method on your SubstraitConsumer."
-                            );
+            // Try to resolve files using the consumer's resolve_local_files method.
+            // If not implemented (default returns not_impl_err), fall back to the
+            // legacy single-file behavior for backward compatibility. For multiple
+            // files, propagate the error to avoid silently producing incorrect results.
+            let provider =
+                match consumer.resolve_local_files(&uris, &substrait_schema).await {
+                    Ok(provider) => provider,
+                    Err(e) => {
+                        if uris.len() <= 1 {
+                            // Single-file fallback: look up a pre-registered table
+                            // by filename, maintaining backward compatibility
+                            match consumer.resolve_table_ref(&table_reference).await? {
+                                Some(provider) => provider,
+                                None => return Err(e),
+                            }
+                        } else {
+                            // Multi-file: don't fall back, as resolve_table_ref would
+                            // only use the first filename and silently ignore the rest
+                            return Err(e);
                         }
                     }
-                }
-            };
+                };
 
             // Build the scan plan inline
             let schema = substrait_schema.replace_qualifier(table_reference.clone());

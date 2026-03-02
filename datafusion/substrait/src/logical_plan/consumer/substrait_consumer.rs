@@ -163,6 +163,9 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
     /// `file:///`, `s3://`, `hdfs://`) so implementations can determine how to
     /// access the files.
     ///
+    /// Note: The `url::Url` type is used here despite the name — it handles
+    /// general URIs (not just URLs) without issue.
+    ///
     /// The default implementation returns an error since resolving arbitrary
     /// file URIs requires access to an object store or file system which may
     /// not be available in all contexts.
