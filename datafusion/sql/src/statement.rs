@@ -342,26 +342,28 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 refresh_mode,
                 initialize,
                 require_user,
+                partition_of,
+                for_values,
             }) => {
                 if temporary {
-                    return not_impl_err!("Temporary tables not supported")?;
+                    return not_impl_err!("Temporary tables not supported");
                 }
                 if external {
-                    return not_impl_err!("External tables not supported")?;
+                    return not_impl_err!("External tables not supported");
                 }
                 if global.is_some() {
-                    return not_impl_err!("Global tables not supported")?;
+                    return not_impl_err!("Global tables not supported");
                 }
                 if transient {
-                    return not_impl_err!("Transient tables not supported")?;
+                    return not_impl_err!("Transient tables not supported");
                 }
                 if volatile {
-                    return not_impl_err!("Volatile tables not supported")?;
+                    return not_impl_err!("Volatile tables not supported");
                 }
                 if hive_distribution != ast::HiveDistributionStyle::NONE {
                     return not_impl_err!(
                         "Hive distribution not supported: {hive_distribution:?}"
-                    )?;
+                    );
                 }
                 if hive_formats.is_some()
                     && !matches!(
@@ -374,122 +376,126 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         })
                     )
                 {
-                    return not_impl_err!(
-                        "Hive formats not supported: {hive_formats:?}"
-                    )?;
+                    return not_impl_err!("Hive formats not supported: {hive_formats:?}");
                 }
                 if file_format.is_some() {
-                    return not_impl_err!("File format not supported")?;
+                    return not_impl_err!("File format not supported");
                 }
                 if location.is_some() {
-                    return not_impl_err!("Location not supported")?;
+                    return not_impl_err!("Location not supported");
                 }
                 if without_rowid {
-                    return not_impl_err!("Without rowid not supported")?;
+                    return not_impl_err!("Without rowid not supported");
                 }
                 if like.is_some() {
-                    return not_impl_err!("Like not supported")?;
+                    return not_impl_err!("Like not supported");
                 }
                 if clone.is_some() {
-                    return not_impl_err!("Clone not supported")?;
+                    return not_impl_err!("Clone not supported");
                 }
                 if comment.is_some() {
-                    return not_impl_err!("Comment not supported")?;
+                    return not_impl_err!("Comment not supported");
                 }
                 if on_commit.is_some() {
-                    return not_impl_err!("On commit not supported")?;
+                    return not_impl_err!("On commit not supported");
                 }
                 if on_cluster.is_some() {
-                    return not_impl_err!("On cluster not supported")?;
+                    return not_impl_err!("On cluster not supported");
                 }
                 if primary_key.is_some() {
-                    return not_impl_err!("Primary key not supported")?;
+                    return not_impl_err!("Primary key not supported");
                 }
                 if order_by.is_some() {
-                    return not_impl_err!("Order by not supported")?;
+                    return not_impl_err!("Order by not supported");
                 }
                 if partition_by.is_some() {
-                    return not_impl_err!("Partition by not supported")?;
+                    return not_impl_err!("Partition by not supported");
                 }
                 if cluster_by.is_some() {
-                    return not_impl_err!("Cluster by not supported")?;
+                    return not_impl_err!("Cluster by not supported");
                 }
                 if clustered_by.is_some() {
-                    return not_impl_err!("Clustered by not supported")?;
+                    return not_impl_err!("Clustered by not supported");
                 }
                 if strict {
-                    return not_impl_err!("Strict not supported")?;
+                    return not_impl_err!("Strict not supported");
                 }
                 if copy_grants {
-                    return not_impl_err!("Copy grants not supported")?;
+                    return not_impl_err!("Copy grants not supported");
                 }
                 if enable_schema_evolution.is_some() {
-                    return not_impl_err!("Enable schema evolution not supported")?;
+                    return not_impl_err!("Enable schema evolution not supported");
                 }
                 if change_tracking.is_some() {
-                    return not_impl_err!("Change tracking not supported")?;
+                    return not_impl_err!("Change tracking not supported");
                 }
                 if data_retention_time_in_days.is_some() {
-                    return not_impl_err!("Data retention time in days not supported")?;
+                    return not_impl_err!("Data retention time in days not supported");
                 }
                 if max_data_extension_time_in_days.is_some() {
                     return not_impl_err!(
                         "Max data extension time in days not supported"
-                    )?;
+                    );
                 }
                 if default_ddl_collation.is_some() {
-                    return not_impl_err!("Default DDL collation not supported")?;
+                    return not_impl_err!("Default DDL collation not supported");
                 }
                 if with_aggregation_policy.is_some() {
-                    return not_impl_err!("With aggregation policy not supported")?;
+                    return not_impl_err!("With aggregation policy not supported");
                 }
                 if with_row_access_policy.is_some() {
-                    return not_impl_err!("With row access policy not supported")?;
+                    return not_impl_err!("With row access policy not supported");
                 }
                 if with_tags.is_some() {
-                    return not_impl_err!("With tags not supported")?;
+                    return not_impl_err!("With tags not supported");
                 }
                 if iceberg {
-                    return not_impl_err!("Iceberg not supported")?;
+                    return not_impl_err!("Iceberg not supported");
                 }
                 if external_volume.is_some() {
-                    return not_impl_err!("External volume not supported")?;
+                    return not_impl_err!("External volume not supported");
                 }
                 if base_location.is_some() {
-                    return not_impl_err!("Base location not supported")?;
+                    return not_impl_err!("Base location not supported");
                 }
                 if catalog.is_some() {
-                    return not_impl_err!("Catalog not supported")?;
+                    return not_impl_err!("Catalog not supported");
                 }
                 if catalog_sync.is_some() {
-                    return not_impl_err!("Catalog sync not supported")?;
+                    return not_impl_err!("Catalog sync not supported");
                 }
                 if storage_serialization_policy.is_some() {
-                    return not_impl_err!("Storage serialization policy not supported")?;
+                    return not_impl_err!("Storage serialization policy not supported");
                 }
                 if inherits.is_some() {
-                    return not_impl_err!("Table inheritance not supported")?;
+                    return not_impl_err!("Table inheritance not supported");
                 }
                 if dynamic {
-                    return not_impl_err!("Dynamic tables not supported")?;
+                    return not_impl_err!("Dynamic tables not supported");
                 }
                 if version.is_some() {
-                    return not_impl_err!("Version not supported")?;
+                    return not_impl_err!("Version not supported");
                 }
                 if target_lag.is_some() {
-                    return not_impl_err!("Target lag not supported")?;
+                    return not_impl_err!("Target lag not supported");
                 }
                 if warehouse.is_some() {
-                    return not_impl_err!("Warehouse not supported")?;
+                    return not_impl_err!("Warehouse not supported");
                 }
                 if refresh_mode.is_some() {
-                    return not_impl_err!("Refresh mode not supported")?;
+                    return not_impl_err!("Refresh mode not supported");
                 }
                 if initialize.is_some() {
-                    return not_impl_err!("Initialize not supported")?;
+                    return not_impl_err!("Initialize not supported");
                 }
                 if require_user {
-                    return not_impl_err!("Require user not supported")?;
+                    return not_impl_err!("Require user not supported");
+                }
+                if partition_of.is_some() {
+                    return not_impl_err!("PARTITION OF not supported");
+                }
+                if for_values.is_some() {
+                    return not_impl_err!("PARTITION OF .. FOR VALUES .. not supported");
                 }
                 // Merge inline constraints and existing constraints
                 let mut all_constraints = constraints;
@@ -989,7 +995,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 has_table_keyword,
                 settings,
                 format_clause,
-                insert_token: _insert_token, // record the location the `INSERT` token
+                insert_token: _, // record the location the `INSERT` token
+                optimizer_hint,
             }) => {
                 let table_name = match table {
                     TableObject::TableName(table_name) => table_name,
@@ -1045,6 +1052,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 if format_clause.is_some() {
                     plan_err!("Inserts with format clause not supported")?;
                 }
+                if optimizer_hint.is_some() {
+                    plan_err!("Optimizer hints not supported")?;
+                }
                 // optional keywords don't change behavior
                 let _ = into;
                 let _ = has_table_keyword;
@@ -1059,6 +1069,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 or,
                 limit,
                 update_token: _,
+                optimizer_hint,
             }) => {
                 let from_clauses =
                     from.map(|update_table_from_kind| match update_table_from_kind {
@@ -1079,6 +1090,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 if limit.is_some() {
                     return not_impl_err!("Update-limit clause not supported")?;
                 }
+                if optimizer_hint.is_some() {
+                    plan_err!("Optimizer hints not supported")?;
+                }
                 self.update_to_plan(table, &assignments, update_from, selection)
             }
 
@@ -1091,6 +1105,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 order_by,
                 limit,
                 delete_token: _,
+                optimizer_hint,
             }) => {
                 if !tables.is_empty() {
                     plan_err!("DELETE <TABLE> not supported")?;
@@ -1106,6 +1121,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
                 if !order_by.is_empty() {
                     plan_err!("Delete-order-by clause not yet supported")?;
+                }
+
+                if optimizer_hint.is_some() {
+                    plan_err!("Optimizer hints not supported")?;
                 }
 
                 let table_name = self.get_delete_target(from)?;
@@ -1393,6 +1412,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 cascade,
                 on_cluster,
                 table,
+                if_exists,
             }) => {
                 let _ = table; // Support TRUNCATE TABLE and TRUNCATE syntax
                 if table_names.len() != 1 {
@@ -1420,6 +1440,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
                 if on_cluster.is_some() {
                     return not_impl_err!("TRUNCATE with ON CLUSTER is not supported");
+                }
+                if if_exists {
+                    return not_impl_err!("TRUNCATE .. with IF EXISTS is not supported");
                 }
                 let table = self.object_name_to_table_reference(target.name.clone())?;
                 let source = self.context_provider.get_table_source(table.clone())?;

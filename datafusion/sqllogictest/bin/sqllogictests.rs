@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use clap::Parser;
+use clap::{ColorChoice, Parser, ValueEnum};
 use datafusion::common::instant::Instant;
 use datafusion::common::utils::get_available_parallelism;
 use datafusion::common::{DataFusionError, Result, exec_datafusion_err, exec_err};
@@ -44,7 +44,12 @@ use datafusion::common::runtime::SpawnedTask;
 use futures::FutureExt;
 use std::ffi::OsStr;
 use std::fs;
+use std::io::{IsTerminal, stderr, stdout};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 #[cfg(feature = "postgres")]
 mod postgres_container;
@@ -54,6 +59,21 @@ const DATAFUSION_TESTING_TEST_DIRECTORY: &str = "../../datafusion-testing/data/"
 const PG_COMPAT_FILE_PREFIX: &str = "pg_compat_";
 const SQLITE_PREFIX: &str = "sqlite";
 const ERRS_PER_FILE_LIMIT: usize = 10;
+const TIMING_DEBUG_SLOW_FILES_ENV: &str = "SLT_TIMING_DEBUG_SLOW_FILES";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum TimingSummaryMode {
+    Auto,
+    Off,
+    Top,
+    Full,
+}
+
+#[derive(Debug)]
+struct FileTiming {
+    relative_path: PathBuf,
+    elapsed: Duration,
+}
 
 pub fn main() -> Result<()> {
     tokio::runtime::Builder::new_multi_thread()
@@ -96,6 +116,7 @@ async fn run_tests() -> Result<()> {
     env_logger::init();
 
     let options: Options = Parser::parse();
+    let timing_debug_slow_files = is_env_truthy(TIMING_DEBUG_SLOW_FILES_ENV);
     if options.list {
         // nextest parses stdout, so print messages to stderr
         eprintln!("NOTICE: --list option unsupported, quitting");
@@ -107,6 +128,13 @@ async fn run_tests() -> Result<()> {
     }
 
     options.warn_on_ignored();
+
+    // Print parallelism info for debugging CI performance
+    eprintln!(
+        "Running with {} test threads (available parallelism: {})",
+        options.test_threads,
+        get_available_parallelism()
+    );
 
     #[cfg(feature = "postgres")]
     initialize_postgres_container(&options).await?;
@@ -122,6 +150,8 @@ async fn run_tests() -> Result<()> {
     )
     .unwrap()
     .progress_chars("##-");
+
+    let colored_output = options.is_colored();
 
     let start = Instant::now();
 
@@ -143,7 +173,11 @@ async fn run_tests() -> Result<()> {
     }
 
     let num_tests = test_files.len();
-    let errors: Vec<_> = futures::stream::iter(test_files)
+    // For CI environments without TTY, print progress periodically
+    let is_ci = !stderr().is_terminal();
+    let completed_count = Arc::new(AtomicUsize::new(0));
+
+    let file_results: Vec<_> = futures::stream::iter(test_files)
         .map(|test_file| {
             let validator = if options.include_sqlite
                 && test_file.relative_path.starts_with(SQLITE_PREFIX)
@@ -158,12 +192,14 @@ async fn run_tests() -> Result<()> {
             let filters = options.filters.clone();
 
             let relative_path = test_file.relative_path.clone();
+            let relative_path_for_timing = test_file.relative_path.clone();
 
             let currently_running_sql_tracker = CurrentlyExecutingSqlTracker::new();
             let currently_running_sql_tracker_clone =
                 currently_running_sql_tracker.clone();
+            let file_start = Instant::now();
             SpawnedTask::spawn(async move {
-                match (
+                let result = match (
                     options.postgres_runner,
                     options.complete,
                     options.substrait_round_trip,
@@ -176,8 +212,9 @@ async fn run_tests() -> Result<()> {
                             m_style_clone,
                             filters.as_ref(),
                             currently_running_sql_tracker_clone,
+                            colored_output,
                         )
-                        .await?
+                        .await
                     }
                     (false, false, _) => {
                         run_test_file(
@@ -187,8 +224,9 @@ async fn run_tests() -> Result<()> {
                             m_style_clone,
                             filters.as_ref(),
                             currently_running_sql_tracker_clone,
+                            colored_output,
                         )
-                        .await?
+                        .await
                     }
                     (false, true, _) => {
                         run_complete_file(
@@ -198,7 +236,7 @@ async fn run_tests() -> Result<()> {
                             m_style_clone,
                             currently_running_sql_tracker_clone,
                         )
-                        .await?
+                        .await
                     }
                     (true, false, _) => {
                         run_test_file_with_postgres(
@@ -209,7 +247,7 @@ async fn run_tests() -> Result<()> {
                             filters.as_ref(),
                             currently_running_sql_tracker_clone,
                         )
-                        .await?
+                        .await
                     }
                     (true, true, _) => {
                         run_complete_file_with_postgres(
@@ -219,20 +257,77 @@ async fn run_tests() -> Result<()> {
                             m_style_clone,
                             currently_running_sql_tracker_clone,
                         )
-                        .await?
+                        .await
                     }
+                };
+
+                let elapsed = file_start.elapsed();
+                if timing_debug_slow_files && elapsed.as_secs() > 30 {
+                    eprintln!(
+                        "Slow file: {} took {:.1}s",
+                        relative_path_for_timing.display(),
+                        elapsed.as_secs_f64()
+                    );
                 }
-                Ok(()) as Result<()>
+
+                (result, elapsed)
             })
             .join()
-            .map(move |result| (result, relative_path, currently_running_sql_tracker))
+            .map(move |result| {
+                let elapsed = match &result {
+                    Ok((_, elapsed)) => *elapsed,
+                    Err(_) => Duration::ZERO,
+                };
+
+                (
+                    result.map(|(thread_result, _)| thread_result),
+                    relative_path,
+                    currently_running_sql_tracker,
+                    elapsed,
+                )
+            })
         })
         // run up to num_cpus streams in parallel
         .buffer_unordered(options.test_threads)
-        .flat_map(|(result, test_file_path, current_sql)| {
+        .inspect({
+            let completed_count = Arc::clone(&completed_count);
+            move |_| {
+                let completed = completed_count.fetch_add(1, Ordering::Relaxed) + 1;
+                // In CI (no TTY), print progress every 10% or every 50 files
+                if is_ci && (completed.is_multiple_of(50) || completed == num_tests) {
+                    eprintln!(
+                        "Progress: {}/{} files completed ({:.0}%)",
+                        completed,
+                        num_tests,
+                        (completed as f64 / num_tests as f64) * 100.0
+                    );
+                }
+            }
+        })
+        .collect()
+        .await;
+
+    let mut file_timings: Vec<FileTiming> = file_results
+        .iter()
+        .map(|(_, path, _, elapsed)| FileTiming {
+            relative_path: path.clone(),
+            elapsed: *elapsed,
+        })
+        .collect();
+
+    file_timings.sort_by(|a, b| {
+        b.elapsed
+            .cmp(&a.elapsed)
+            .then_with(|| a.relative_path.cmp(&b.relative_path))
+    });
+
+    print_timing_summary(&options, &m, is_ci, &file_timings)?;
+
+    let errors: Vec<_> = file_results
+        .into_iter()
+        .filter_map(|(result, test_file_path, current_sql, _)| {
             // Filter out any Ok() leaving only the DataFusionErrors
-            futures::stream::iter(match result {
-                // Tokio panic error
+            match result {
                 Err(e) => {
                     let error = DataFusionError::External(Box::new(e));
                     let current_sql = current_sql.get_currently_running_sqls();
@@ -262,10 +357,9 @@ async fn run_tests() -> Result<()> {
                     }
                 }
                 Ok(thread_result) => thread_result.err(),
-            })
+            }
         })
-        .collect()
-        .await;
+        .collect();
 
     m.println(format!(
         "Completed {} test files in {}",
@@ -287,6 +381,69 @@ async fn run_tests() -> Result<()> {
     }
 }
 
+fn print_timing_summary(
+    options: &Options,
+    progress: &MultiProgress,
+    is_ci: bool,
+    file_timings: &[FileTiming],
+) -> Result<()> {
+    let mode = options.timing_summary_mode(is_ci);
+    if mode == TimingSummaryMode::Off || file_timings.is_empty() {
+        return Ok(());
+    }
+
+    let top_n = options.timing_top_n;
+    debug_assert!(matches!(
+        mode,
+        TimingSummaryMode::Top | TimingSummaryMode::Full
+    ));
+    let count = if mode == TimingSummaryMode::Full {
+        file_timings.len()
+    } else {
+        top_n
+    };
+
+    progress.println("Per-file elapsed summary (deterministic):")?;
+    for (idx, timing) in file_timings.iter().take(count).enumerate() {
+        progress.println(format!(
+            "{:>3}. {:>8.3}s  {}",
+            idx + 1,
+            timing.elapsed.as_secs_f64(),
+            timing.relative_path.display()
+        ))?;
+    }
+
+    if mode != TimingSummaryMode::Full && file_timings.len() > count {
+        progress.println(format!(
+            "... {} more files omitted (use --timing-summary full to show all)",
+            file_timings.len() - count
+        ))?;
+    }
+
+    Ok(())
+}
+
+fn is_env_truthy(name: &str) -> bool {
+    std::env::var_os(name)
+        .and_then(|value| value.into_string().ok())
+        .is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+}
+
+fn parse_timing_top_n(arg: &str) -> std::result::Result<usize, String> {
+    let parsed = arg
+        .parse::<usize>()
+        .map_err(|error| format!("invalid value '{arg}': {error}"))?;
+    if parsed == 0 {
+        return Err("must be >= 1".to_string());
+    }
+    Ok(parsed)
+}
+
 async fn run_test_file_substrait_round_trip(
     test_file: TestFile,
     validator: Validator,
@@ -294,6 +451,7 @@ async fn run_test_file_substrait_round_trip(
     mp_style: ProgressStyle,
     filters: &[Filter],
     currently_executing_sql_tracker: CurrentlyExecutingSqlTracker,
+    colored_output: bool,
 ) -> Result<()> {
     let TestFile {
         path,
@@ -323,7 +481,7 @@ async fn run_test_file_substrait_round_trip(
     runner.with_column_validator(strict_column_validator);
     runner.with_normalizer(value_normalizer);
     runner.with_validator(validator);
-    let res = run_file_in_runner(path, runner, filters).await;
+    let res = run_file_in_runner(path, runner, filters, colored_output).await;
     pb.finish_and_clear();
     res
 }
@@ -335,6 +493,7 @@ async fn run_test_file(
     mp_style: ProgressStyle,
     filters: &[Filter],
     currently_executing_sql_tracker: CurrentlyExecutingSqlTracker,
+    colored_output: bool,
 ) -> Result<()> {
     let TestFile {
         path,
@@ -364,7 +523,7 @@ async fn run_test_file(
     runner.with_column_validator(strict_column_validator);
     runner.with_normalizer(value_normalizer);
     runner.with_validator(validator);
-    let result = run_file_in_runner(path, runner, filters).await;
+    let result = run_file_in_runner(path, runner, filters, colored_output).await;
     pb.finish_and_clear();
     result
 }
@@ -373,6 +532,7 @@ async fn run_file_in_runner<D: AsyncDB, M: MakeConnection<Conn = D>>(
     path: PathBuf,
     mut runner: sqllogictest::Runner<D, M>,
     filters: &[Filter],
+    colored_output: bool,
 ) -> Result<()> {
     let path = path.canonicalize()?;
     let records =
@@ -386,7 +546,11 @@ async fn run_file_in_runner<D: AsyncDB, M: MakeConnection<Conn = D>>(
             continue;
         }
         if let Err(err) = runner.run_async(record).await {
-            errs.push(format!("{err}"));
+            if colored_output {
+                errs.push(format!("{}", err.display(true)));
+            } else {
+                errs.push(format!("{err}"));
+            }
         }
     }
 
@@ -479,7 +643,7 @@ async fn run_test_file_with_postgres(
     runner.with_column_validator(strict_column_validator);
     runner.with_normalizer(value_normalizer);
     runner.with_validator(validator);
-    let result = run_file_in_runner(path, runner, filters).await;
+    let result = run_file_in_runner(path, runner, filters, false).await;
     pb.finish_and_clear();
     result
 }
@@ -772,9 +936,48 @@ struct Options {
         default_value_t = get_available_parallelism()
     )]
     test_threads: usize,
+
+    #[clap(
+        long,
+        env = "SLT_TIMING_SUMMARY",
+        value_enum,
+        default_value_t = TimingSummaryMode::Auto,
+        help = "Per-file timing summary mode: auto|off|top|full"
+    )]
+    timing_summary: TimingSummaryMode,
+
+    #[clap(
+        long,
+        env = "SLT_TIMING_TOP_N",
+        default_value_t = 10,
+        value_parser = parse_timing_top_n,
+        help = "Number of files to show when timing summary mode is auto/top (must be >= 1)"
+    )]
+    timing_top_n: usize,
+
+    #[clap(
+        long,
+        value_name = "MODE",
+        help = "Control colored output",
+        default_value_t = ColorChoice::Auto
+    )]
+    color: ColorChoice,
 }
 
 impl Options {
+    fn timing_summary_mode(&self, is_ci: bool) -> TimingSummaryMode {
+        match self.timing_summary {
+            TimingSummaryMode::Auto => {
+                if is_ci {
+                    TimingSummaryMode::Top
+                } else {
+                    TimingSummaryMode::Off
+                }
+            }
+            mode => mode,
+        }
+    }
+
     /// Because this test can be run as a cargo test, commands like
     ///
     /// ```shell
@@ -811,6 +1014,37 @@ impl Options {
 
         if self.show_output {
             eprintln!("WARNING: Ignoring `--show-output` compatibility option");
+        }
+    }
+
+    /// Determine if colour output should be enabled, respecting --color, NO_COLOR, CARGO_TERM_COLOR, and terminal detection
+    fn is_colored(&self) -> bool {
+        // NO_COLOR takes precedence
+        if std::env::var_os("NO_COLOR").is_some() {
+            return false;
+        }
+
+        match self.color {
+            ColorChoice::Always => true,
+            ColorChoice::Never => false,
+            ColorChoice::Auto => {
+                // CARGO_TERM_COLOR takes precedence over auto-detection
+                let cargo_term_color = <ColorChoice as FromStr>::from_str(
+                    &std::env::var("CARGO_TERM_COLOR")
+                        .unwrap_or_else(|_| "auto".to_string()),
+                )
+                .unwrap_or(ColorChoice::Auto);
+                match cargo_term_color {
+                    ColorChoice::Always => true,
+                    ColorChoice::Never => false,
+                    ColorChoice::Auto => {
+                        // Auto for both CLI argument and CARGO_TERM_COLOR,
+                        // then use colors by default for non-dumb terminals
+                        stdout().is_terminal()
+                            && std::env::var("TERM").unwrap_or_default() != "dumb"
+                    }
+                }
+            }
         }
     }
 }

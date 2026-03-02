@@ -52,7 +52,7 @@ use datafusion_datasource::file_stream::FileOpenFuture;
 use datafusion_datasource::file_stream::FileOpener;
 use futures::StreamExt;
 use itertools::Itertools;
-use object_store::{GetOptions, GetRange, GetResultPayload, ObjectStore};
+use object_store::{GetOptions, GetRange, GetResultPayload, ObjectStore, ObjectStoreExt};
 
 /// Enum indicating which Arrow IPC format to use
 #[derive(Clone, Copy, Debug)]

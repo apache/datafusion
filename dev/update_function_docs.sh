@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
@@ -20,13 +20,14 @@
 
 set -e
 
-SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "${SOURCE_DIR}/../" && pwd
+ROOT_DIR="$(git rev-parse --show-toplevel)"
+cd "${ROOT_DIR}"
 
+# Load centralized tool versions
+source "${ROOT_DIR}/ci/scripts/utils/tool_versions.sh"
 
 TARGET_FILE="docs/source/user-guide/sql/aggregate_functions.md"
 PRINT_AGGREGATE_FUNCTION_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --bin print_functions_docs -- aggregate"
-PRETTIER_VERSION="2.7.1"
 
 echo "Inserting header"
 cat <<'EOF' > "$TARGET_FILE"

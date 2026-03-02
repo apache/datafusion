@@ -1,0 +1,188 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Test push down filter
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+# Test push down filter with limit for parquet
+statement ok
+set datafusion.execution.parquet.pushdown_filters = true;
+
+# this one is also required to make DF skip second file due to "sufficient" amount of rows
+statement ok
+set datafusion.execution.collect_statistics = true;
+
+# Create a table as a data source
+statement ok
+CREATE TABLE src_table (
+    part_key INT,
+    value INT
+) AS VALUES(1, 0), (1, 1), (1, 100), (2, 0), (2, 2), (2, 2), (2, 100), (3, 4), (3, 5), (3, 6);
+
+
+# There will be more than 2 records filtered from the table to check that `limit 1` actually applied.
+# Setup 3 files, i.e., as many as there are partitions:
+
+# File 1:
+query I
+COPY (SELECT * FROM src_table where part_key = 1)
+TO 'test_files/scratch/push_down_filter_parquet/test_filter_with_limit/part-0.parquet'
+STORED AS PARQUET;
+----
+3
+
+# File 2:
+query I
+COPY (SELECT * FROM src_table where part_key = 2)
+TO 'test_files/scratch/push_down_filter_parquet/test_filter_with_limit/part-1.parquet'
+STORED AS PARQUET;
+----
+4
+
+# File 3:
+query I
+COPY (SELECT * FROM src_table where part_key = 3)
+TO 'test_files/scratch/push_down_filter_parquet/test_filter_with_limit/part-2.parquet'
+STORED AS PARQUET;
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE test_filter_with_limit
+(
+  part_key INT,
+  value INT
+)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter_parquet/test_filter_with_limit/';
+
+query TT
+explain select * from test_filter_with_limit where value = 2 limit 1;
+----
+physical_plan
+01)CoalescePartitionsExec: fetch=1
+02)--DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/test_filter_with_limit/part-0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/test_filter_with_limit/part-1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/test_filter_with_limit/part-2.parquet]]}, projection=[part_key, value], limit=1, file_type=parquet, predicate=value@1 = 2, pruning_predicate=value_null_count@2 != row_count@3 AND value_min@0 <= 2 AND 2 <= value_max@1, required_guarantees=[value in (2)]
+
+query II
+select * from test_filter_with_limit where value = 2 limit 1;
+----
+2 2
+
+
+# Tear down test_filter_with_limit table:
+statement ok
+DROP TABLE test_filter_with_limit;
+
+# Tear down src_table table:
+statement ok
+DROP TABLE src_table;
+
+
+query I
+COPY (VALUES (1), (2), (3), (4), (5), (6), (7), (8), (9), (10))
+TO 'test_files/scratch/push_down_filter_parquet/t.parquet'
+STORED AS PARQUET;
+----
+10
+
+statement ok
+CREATE EXTERNAL TABLE t
+(
+  a INT
+)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter_parquet/t.parquet';
+
+
+# The predicate should not have a column cast  when the value is a valid i32
+query TT
+explain select a from t where a = '100';
+----
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/t.parquet]]}, projection=[a], file_type=parquet, predicate=a@0 = 100, pruning_predicate=a_null_count@2 != row_count@3 AND a_min@0 <= 100 AND 100 <= a_max@1, required_guarantees=[a in (100)]
+
+# The predicate should not have a column cast  when the value is a valid i32
+query TT
+explain select a from t where a != '100';
+----
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/t.parquet]]}, projection=[a], file_type=parquet, predicate=a@0 != 100, pruning_predicate=a_null_count@2 != row_count@3 AND (a_min@0 != 100 OR 100 != a_max@1), required_guarantees=[a not in (100)]
+
+# The predicate should still have the column cast when the value is a NOT valid i32
+query TT
+explain select a from t where a = '99999999999';
+----
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/t.parquet]]}, projection=[a], file_type=parquet, predicate=CAST(a@0 AS Utf8) = 99999999999
+
+# The predicate should still have the column cast when the value is a NOT valid i32
+query TT
+explain select a from t where a = '99.99';
+----
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/t.parquet]]}, projection=[a], file_type=parquet, predicate=CAST(a@0 AS Utf8) = 99.99
+
+# The predicate should still have the column cast when the value is a NOT valid i32
+query TT
+explain select a from t where a = '';
+----
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/t.parquet]]}, projection=[a], file_type=parquet, predicate=CAST(a@0 AS Utf8) = 
+
+# The predicate should not have a column cast when the operator is = or != and the literal can be round-trip casted without losing information.
+query TT
+explain select a from t where cast(a as string) = '100';
+----
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/t.parquet]]}, projection=[a], file_type=parquet, predicate=a@0 = 100, pruning_predicate=a_null_count@2 != row_count@3 AND a_min@0 <= 100 AND 100 <= a_max@1, required_guarantees=[a in (100)]
+
+# The predicate should still have the column cast when the literal alters its string representation after round-trip casting (leading zero lost).
+query TT
+explain select a from t where CAST(a AS string) = '0123';
+----
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/t.parquet]]}, projection=[a], file_type=parquet, predicate=CAST(a@0 AS Utf8View) = 0123
+
+
+# Test dynamic filter pushdown with swapped join inputs (issue #17196)
+# Create tables with different sizes to force join input swapping
+statement ok
+copy (select i as k from generate_series(1, 100) t(i)) to 'test_files/scratch/push_down_filter_parquet/small_table.parquet';
+
+statement ok
+copy (select i as k, i as v from generate_series(1, 1000) t(i)) to 'test_files/scratch/push_down_filter_parquet/large_table.parquet';
+
+statement ok
+create external table small_table stored as parquet location 'test_files/scratch/push_down_filter_parquet/small_table.parquet';
+
+statement ok
+create external table large_table stored as parquet location 'test_files/scratch/push_down_filter_parquet/large_table.parquet';
+
+# Test that dynamic filter is applied to the correct table after join input swapping
+# The small_table should be the build side, large_table should be the probe side with dynamic filter
+query TT
+explain select * from small_table join large_table on small_table.k = large_table.k where large_table.v >= 50;
+----
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(k@0, k@0)]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/small_table.parquet]]}, projection=[k], file_type=parquet
+03)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/large_table.parquet]]}, projection=[k, v], file_type=parquet, predicate=v@1 >= 50 AND DynamicFilter [ empty ], pruning_predicate=v_null_count@1 != row_count@2 AND v_max@0 >= 50, required_guarantees=[]
+
+statement ok
+drop table small_table;
+
+statement ok
+drop table large_table;
+
+statement ok
+drop table t;
