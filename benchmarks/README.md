@@ -499,6 +499,79 @@ scripts and queries from [2].
 [1]: https://github.com/ClickHouse/ClickBench
 [2]: https://github.com/ClickHouse/ClickBench/tree/main/datafusion
 
+### Running ClickBench on DataFusion
+
+When running ClickBench queries on DataFusion, there are two important configuration requirements:
+
+#### 1. Enable `binary_as_string` Option
+
+The ClickBench Parquet file contains binary columns that need to be interpreted as strings. When creating the external table, include the `binary_as_string` option:
+
+```sql
+CREATE EXTERNAL TABLE hits_raw
+STORED AS PARQUET
+LOCATION 'hits.parquet'
+OPTIONS ('binary_as_string' 'true');
+```
+
+This option is required for the full ClickBench dataset. Note that pre-processed subsets (like those in our test files) may have already converted binary to string columns and won't need this option.
+
+#### 2. Transform EventDate from UInt16 to DATE
+
+ClickBench stores the `EventDate` column as `UInt16` (days since epoch: 1970-01-01) for storage efficiency—2 bytes instead of 4-8 bytes for typical date types. However, DataFusion queries expect proper DATE types for date comparisons and filtering.
+
+**Why this matters:** Without transformation, queries that filter on `EventDate` (like queries 36-42) will fail or return incorrect results because DataFusion will attempt to cast the integer to a string for comparison.
+
+**Solution:** Create a view that transforms the raw UInt16 encoding to a DATE type:
+
+```sql
+CREATE VIEW hits AS
+SELECT * EXCEPT ("EventDate"),
+       CAST(CAST("EventDate" AS INTEGER) AS DATE) AS "EventDate"
+FROM hits_raw;
+```
+
+The two-step cast performs the following transformations:
+1. First casts UInt16 → INTEGER (required intermediate type)
+2. Then casts INTEGER → DATE (interpreting as days since epoch)
+
+#### Complete Setup Example
+
+Putting it all together, here's the canonical setup for running ClickBench on DataFusion:
+
+```sql
+-- Step 1: Register the raw table with binary_as_string
+CREATE EXTERNAL TABLE hits_raw
+STORED AS PARQUET
+LOCATION 'hits.parquet'
+OPTIONS ('binary_as_string' 'true');
+
+-- Step 2: Create the view with EventDate transformation
+CREATE VIEW hits AS
+SELECT * EXCEPT ("EventDate"),
+       CAST(CAST("EventDate" AS INTEGER) AS DATE) AS "EventDate"
+FROM hits_raw;
+
+-- Step 3: Run queries against the 'hits' view
+SELECT "URL", COUNT(*) AS PageViews
+FROM hits
+WHERE "CounterID" = 62
+  AND "EventDate" >= '2013-07-01'
+  AND "EventDate" <= '2013-07-31'
+GROUP BY "URL"
+ORDER BY PageViews DESC
+LIMIT 10;
+```
+
+The DataFusion ClickBench runner in `benchmarks/src/clickbench.rs` automatically applies these transformations, so you can run benchmarks directly with:
+
+```shell
+./bench.sh data clickbench
+./bench.sh run clickbench
+```
+
+For more details, see the [ClickBench official DataFusion setup][2].
+
 ## Parquet Filter
 
 Test performance of parquet filter pushdown
