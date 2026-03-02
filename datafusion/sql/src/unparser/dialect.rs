@@ -668,6 +668,8 @@ impl BigQueryDialect {
 }
 
 pub static UNNAMED_SNOWFLAKE_FLATTEN_SUBQUERY_PREFIX: &str = "__unnamed_flatten_subquery";
+// Snowflake FLATTEN function outputs 6 columns: SEQ, KEY, PATH, INDEX, VALUE and THIS. The 4th column (INDEX) corresponds to the flattened value.
+const FLATTEN_VALUE_COLUMN_IDX: usize = 4;
 
 #[derive(Default)]
 pub struct SnowflakeDialect {}
@@ -807,7 +809,7 @@ impl Dialect for SnowflakeDialect {
                         && value.columns.len() == 1
                     {
                         let mut new_columns = alias.columns.clone();
-                        new_columns[4] = value.columns[0].clone();
+                        new_columns[FLATTEN_VALUE_COLUMN_IDX] = value.columns[0].clone();
                         let new_alias = ast::TableAlias {
                             name: value.name.clone(),
                             columns: new_columns,
