@@ -31,7 +31,7 @@ use datafusion::common::Result;
 use datafusion::prelude::{CsvReadOptions, SessionContext};
 use object_store::memory::InMemory;
 use object_store::path::Path;
-use object_store::{ObjectStore, PutPayload};
+use object_store::{ObjectStore, ObjectStoreExt, PutPayload};
 use url::Url;
 
 /// Demonstrates reading CSV data from an in-memory object store.
