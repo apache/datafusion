@@ -430,8 +430,8 @@ impl FileOpener for CsvOpener {
                     let mut reader = match charset {
                         #[cfg(feature = "encoding_rs")]
                         Some(enc) => {
-                            use crate::charset::CharsetDecoder;
-                            let decoder = CharsetDecoder::new(decoder, enc);
+                            use crate::charset::CharsetBatchDecoder;
+                            let decoder = CharsetBatchDecoder::new(decoder, enc);
                             deserialize_reader(reader, decoder)
                         }
                         None => deserialize_reader(reader, decoder),
@@ -455,8 +455,8 @@ impl FileOpener for CsvOpener {
                     let stream = match charset {
                         #[cfg(feature = "encoding_rs")]
                         Some(enc) => {
-                            use crate::charset::CharsetDecoder;
-                            let decoder = CharsetDecoder::new(decoder, enc);
+                            use crate::charset::CharsetBatchDecoder;
+                            let decoder = CharsetBatchDecoder::new(decoder, enc);
                             deserialize_stream(stream, DecoderDeserializer::new(decoder))
                         }
                         None => {

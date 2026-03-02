@@ -41,32 +41,29 @@ pub fn lookup_charset(enc: Option<&str>) -> Result<Option<&'static Encoding>> {
     }
 }
 
-/// A `Decoder` that decodes input bytes from the specified character encoding
-/// to UTF-8 before passing them onto the inner `Decoder`.
-pub struct CharsetDecoder<T> {
+/// A record batch `Decoder` that decodes input bytes from the specified
+/// character encoding to UTF-8 before passing them onto the inner `Decoder`.
+#[derive(Debug)]
+pub struct CharsetBatchDecoder<T> {
     inner: T,
-    charset_decoder: encoding_rs::Decoder,
-    buffer: Buffer,
+    decoder: CharsetDecoder,
 }
 
-impl<T> CharsetDecoder<T> {
+impl<T> CharsetBatchDecoder<T> {
     pub fn new(inner: T, encoding: &'static Encoding) -> Self {
-        Self {
-            inner,
-            charset_decoder: encoding.new_decoder(),
-            buffer: Buffer::with_capacity(DECODE_BUFFER_CAP),
-        }
+        let decoder = CharsetDecoder::new(encoding);
+        Self { inner, decoder }
     }
 }
 
-impl<T: Decoder> Decoder for CharsetDecoder<T> {
+impl<T: Decoder> Decoder for CharsetBatchDecoder<T> {
     fn decode(&mut self, buf: &[u8]) -> Result<usize, ArrowError> {
         let last = buf.is_empty();
         let mut buf_offset = 0;
 
-        if !self.buffer.is_empty() {
-            let decoded = self.inner.decode(self.buffer.read_buf())?;
-            self.buffer.consume(decoded);
+        if !self.decoder.is_empty() {
+            let decoded = self.inner.decode(self.decoder.read())?;
+            self.decoder.consume(decoded);
 
             if decoded == 0 {
                 return Ok(buf_offset);
@@ -74,20 +71,13 @@ impl<T: Decoder> Decoder for CharsetDecoder<T> {
         }
 
         loop {
-            self.buffer.backshift();
-
-            let (res, read, written, _) = self.charset_decoder.decode_to_utf8(
-                &buf[buf_offset..],
-                self.buffer.write_buf(),
-                last,
-            );
+            let (read, input_empty) = self.decoder.fill(&buf[buf_offset..], last);
             buf_offset += read;
-            self.buffer.advance(written);
 
-            let decoded = self.inner.decode(self.buffer.read_buf())?;
-            self.buffer.consume(decoded);
+            let decoded = self.inner.decode(self.decoder.read())?;
+            self.decoder.consume(decoded);
 
-            if res == CoderResult::InputEmpty || decoded == 0 {
+            if input_empty || decoded == 0 {
                 break;
             }
         }
@@ -104,28 +94,18 @@ impl<T: Decoder> Decoder for CharsetDecoder<T> {
     }
 }
 
-impl<T: Debug> Debug for CharsetDecoder<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CharsetDecoder")
-            .field("inner", &self.inner)
-            .field("charset_decoder", self.charset_decoder.encoding())
-            .finish()
-    }
-}
-
+/// A `BufRead` adapter that decodes input bytes from the
+/// specified character encoding to UTF-8.
+#[derive(Debug)]
 pub struct CharsetReader<R> {
     inner: R,
-    charset_decoder: encoding_rs::Decoder,
-    buffer: Buffer,
+    decoder: CharsetDecoder,
 }
 
 impl<R: BufRead> CharsetReader<R> {
     pub fn new(inner: R, encoding: &'static Encoding) -> Self {
-        Self {
-            inner,
-            charset_decoder: encoding.new_decoder(),
-            buffer: Buffer::with_capacity(DECODE_BUFFER_CAP),
-        }
+        let decoder = CharsetDecoder::new(encoding);
+        Self { inner, decoder }
     }
 }
 
@@ -140,24 +120,87 @@ impl<R: BufRead> Read for CharsetReader<R> {
 
 impl<R: BufRead> BufRead for CharsetReader<R> {
     fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
-        if self.buffer.is_empty() {
-            self.buffer.backshift();
-
+        if self.decoder.needs_input() {
             let buf = self.inner.fill_buf()?;
-            let (_, read, written, _) = self.charset_decoder.decode_to_utf8(
-                buf,
-                self.buffer.write_buf(),
-                buf.is_empty(),
-            );
+            let (read, _) = self.decoder.fill(buf, buf.is_empty());
             self.inner.consume(read);
-            self.buffer.advance(written);
         }
 
-        Ok(self.buffer.read_buf())
+        Ok(self.decoder.read())
     }
 
     fn consume(&mut self, amount: usize) {
+        self.decoder.consume(amount);
+    }
+}
+
+/// Converts bytes from some character encoding to UTF-8,
+/// using an internal fixed-size buffer
+pub struct CharsetDecoder {
+    charset_decoder: encoding_rs::Decoder,
+    buffer: Buffer,
+    finished: bool,
+}
+
+impl CharsetDecoder {
+    /// Creates a new `CharsetDecoder`.
+    fn new(encoding: &'static Encoding) -> Self {
+        Self {
+            charset_decoder: encoding.new_decoder(),
+            buffer: Buffer::with_capacity(DECODE_BUFFER_CAP),
+            finished: false,
+        }
+    }
+
+    /// Returns `true` if the internal buffer is empty.
+    fn is_empty(&self) -> bool {
+        self.buffer.is_empty()
+    }
+
+    /// Returns `true` if the decoder needs more input to make progress.
+    fn needs_input(&self) -> bool {
+        !self.finished && self.buffer.is_empty()
+    }
+
+    /// Fills the internal buffer by decoding the provided bytes, returning
+    /// the number of bytes consumed and whether the input was exhausted.
+    fn fill(&mut self, src: &[u8], last: bool) -> (usize, bool) {
+        if self.finished {
+            return (0, true);
+        }
+
+        self.buffer.backshift();
+
+        let dst = self.buffer.write_buf();
+        let (res, read, written, _) = self.charset_decoder.decode_to_utf8(src, dst, last);
+        self.buffer.advance(written);
+
+        if last && res == CoderResult::InputEmpty {
+            self.finished = true;
+        }
+
+        (read, res == CoderResult::InputEmpty)
+    }
+
+    /// Returns the unread decoded bytes in the internal buffer.
+    fn read(&self) -> &[u8] {
+        self.buffer.read_buf()
+    }
+
+    /// Marks the given amount of bytes from the internal buffer as having been read.
+    /// Subsequent calls to `read` only return bytes that have not been marked as read.
+    fn consume(&mut self, amount: usize) {
         self.buffer.consume(amount);
+    }
+}
+
+impl Debug for CharsetDecoder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CharsetDecoder")
+            .field("charset_decoder", self.charset_decoder.encoding())
+            .field("buffer", &self.buffer)
+            .field("finished", &self.finished)
+            .finish()
     }
 }
 
