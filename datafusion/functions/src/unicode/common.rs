@@ -23,13 +23,31 @@ use arrow::array::{
 };
 use arrow::datatypes::DataType;
 use arrow_buffer::{NullBuffer, ScalarBuffer};
+use datafusion_common::ScalarValue;
 use datafusion_common::cast::{
     as_generic_string_array, as_int64_array, as_string_view_array,
 };
 use datafusion_common::exec_err;
+use datafusion_expr::ColumnarValue;
 use std::cmp::Ordering;
 use std::ops::Range;
 use std::sync::Arc;
+
+/// If `cv` is a non-null scalar string, return its value.
+pub(crate) fn try_as_scalar_str(cv: &ColumnarValue) -> Option<&str> {
+    match cv {
+        ColumnarValue::Scalar(s) => s.try_as_str().flatten(),
+        _ => None,
+    }
+}
+
+/// If `cv` is a non-null scalar Int64, return its value.
+pub(crate) fn try_as_scalar_i64(cv: &ColumnarValue) -> Option<i64> {
+    match cv {
+        ColumnarValue::Scalar(ScalarValue::Int64(v)) => *v,
+        _ => None,
+    }
+}
 
 /// A trait for `left` and `right` byte slicing operations
 pub(crate) trait LeftRightSlicer {
