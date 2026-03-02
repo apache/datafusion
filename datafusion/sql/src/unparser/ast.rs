@@ -437,7 +437,6 @@ pub enum TableFactorBuilder {
     Table(TableRelationBuilder),
     Derived(DerivedRelationBuilder),
     Unnest(UnnestRelationBuilder),
-    Function(FunctionRelationBuilder),
     TableFunction(TableFunctionRelationBuilder),
     Empty,
 }
@@ -457,11 +456,6 @@ impl RelationBuilder {
 
     pub fn unnest(&mut self, value: UnnestRelationBuilder) -> &mut Self {
         self.relation = Some(TableFactorBuilder::Unnest(value));
-        self
-    }
-
-    pub fn function(&mut self, value: FunctionRelationBuilder) -> &mut Self {
-        self.relation = Some(TableFactorBuilder::Function(value));
         self
     }
 
@@ -486,9 +480,6 @@ impl RelationBuilder {
             Some(TableFactorBuilder::Unnest(ref mut rel_builder)) => {
                 rel_builder.alias = value;
             }
-            Some(TableFactorBuilder::Function(ref mut rel_builder)) => {
-                rel_builder.alias = value;
-            }
             Some(TableFactorBuilder::TableFunction(ref mut rel_builder)) => {
                 rel_builder.alias = value;
             }
@@ -502,7 +493,6 @@ impl RelationBuilder {
             Some(TableFactorBuilder::Table(ref value)) => Some(value.build()?),
             Some(TableFactorBuilder::Derived(ref value)) => Some(value.build()?),
             Some(TableFactorBuilder::Unnest(ref value)) => Some(value.build()?),
-            Some(TableFactorBuilder::Function(ref value)) => Some(value.build()?),
             Some(TableFactorBuilder::TableFunction(ref value)) => Some(value.build()?),
             Some(TableFactorBuilder::Empty) => None,
             None => return Err(Into::into(UninitializedFieldError::from("relation"))),
@@ -714,47 +704,6 @@ pub struct FunctionRelationBuilder {
     name: ast::ObjectName,
     args: Vec<ast::FunctionArg>,
     alias: Option<ast::TableAlias>,
-}
-
-#[allow(dead_code)]
-impl FunctionRelationBuilder {
-    pub fn lateral(&mut self, value: bool) -> &mut Self {
-        self.lateral = value;
-        self
-    }
-
-    pub fn name(&mut self, value: ast::ObjectName) -> &mut Self {
-        self.name = value;
-        self
-    }
-
-    pub fn args(&mut self, value: Vec<ast::FunctionArg>) -> &mut Self {
-        self.args = value;
-        self
-    }
-
-    pub fn alias(&mut self, value: Option<ast::TableAlias>) -> &mut Self {
-        self.alias = value;
-        self
-    }
-
-    pub fn build(&self) -> Result<ast::TableFactor, BuilderError> {
-        Ok(ast::TableFactor::Function {
-            lateral: self.lateral,
-            name: self.name.clone(),
-            args: self.args.clone(),
-            alias: self.alias.clone(),
-        })
-    }
-
-    fn create_empty() -> Self {
-        Self {
-            lateral: Default::default(),
-            name: ast::ObjectName(vec![]),
-            args: Default::default(),
-            alias: Default::default(),
-        }
-    }
 }
 
 #[derive(Clone)]
