@@ -48,10 +48,11 @@ pub fn partitioned_csv_config(
 }
 
 #[cfg(not(feature = "encoding_rs"))]
-mod encoding {
+mod charset {
+    use core::convert::Infallible;
     use datafusion_common::{DataFusionError, Result};
 
-    pub fn find_encoding(enc: Option<&str>) -> Result<Option<core::convert::Infallible>> {
+    pub fn lookup_charset(enc: Option<&str>) -> Result<Option<Infallible>> {
         match enc {
             Some(_) => Err(DataFusionError::NotImplemented(format!(
                 "The 'encoding_rs' feature must be enabled to decode non-UTF-8 encodings"
