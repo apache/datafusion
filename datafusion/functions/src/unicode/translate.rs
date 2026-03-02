@@ -16,17 +16,16 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::Arc;
 
 use arrow::array::{
-    ArrayAccessor, ArrayIter, ArrayRef, AsArray, GenericStringBuilder, OffsetSizeTrait,
-    StringViewBuilder,
+    ArrayAccessor, ArrayIter, ArrayRef, AsArray, LargeStringBuilder, StringBuilder,
+    StringLikeArrayBuilder, StringViewBuilder,
 };
 use arrow::datatypes::DataType;
 use datafusion_common::HashMap;
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::utils::{make_scalar_function, utf8_to_str_type};
+use crate::utils::make_scalar_function;
 use datafusion_common::{Result, exec_err};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
@@ -94,11 +93,7 @@ impl ScalarUDFImpl for TranslateFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types[0] == DataType::Utf8View {
-            Ok(DataType::Utf8View)
-        } else {
-            utf8_to_str_type(&arg_types[0], "translate")
-        }
+        Ok(arg_types[0].clone())
     }
 
     fn invoke_with_args(
@@ -138,7 +133,7 @@ impl ScalarUDFImpl for TranslateFunc {
                 DataType::Utf8 => {
                     let arr = string_array.as_string::<i32>();
                     let builder =
-                        GenericStringBuilder::<i32>::with_capacity(len, len * 4);
+                        StringBuilder::with_capacity(len, arr.value_data().len());
                     translate_with_map(
                         arr,
                         &from_map,
@@ -150,7 +145,7 @@ impl ScalarUDFImpl for TranslateFunc {
                 DataType::LargeUtf8 => {
                     let arr = string_array.as_string::<i64>();
                     let builder =
-                        GenericStringBuilder::<i64>::with_capacity(len, len * 4);
+                        LargeStringBuilder::with_capacity(len, arr.value_data().len());
                     translate_with_map(
                         arr,
                         &from_map,
@@ -199,55 +194,21 @@ fn invoke_translate(args: &[ArrayRef]) -> Result<ArrayRef> {
             let string_array = args[0].as_string::<i32>();
             let from_array = args[1].as_string::<i32>();
             let to_array = args[2].as_string::<i32>();
-            let builder = GenericStringBuilder::<i32>::with_capacity(len, len * 4);
+            let builder =
+                StringBuilder::with_capacity(len, string_array.value_data().len());
             translate(string_array, from_array, to_array, builder)
         }
         DataType::LargeUtf8 => {
             let string_array = args[0].as_string::<i64>();
             let from_array = args[1].as_string::<i32>();
             let to_array = args[2].as_string::<i32>();
-            let builder = GenericStringBuilder::<i64>::with_capacity(len, len * 4);
+            let builder =
+                LargeStringBuilder::with_capacity(len, string_array.value_data().len());
             translate(string_array, from_array, to_array, builder)
         }
         other => {
             exec_err!("Unsupported data type {other:?} for function translate")
         }
-    }
-}
-
-/// Helper trait to abstract over different string builder types so `translate`
-/// and `translate_with_map` can produce the correct output array type.
-trait TranslateOutput {
-    fn append_value(&mut self, value: &str);
-    fn append_null(&mut self);
-    fn finish(self) -> ArrayRef;
-}
-
-impl<T: OffsetSizeTrait> TranslateOutput for GenericStringBuilder<T> {
-    fn append_value(&mut self, value: &str) {
-        self.append_value(value);
-    }
-
-    fn append_null(&mut self) {
-        self.append_null();
-    }
-
-    fn finish(mut self) -> ArrayRef {
-        Arc::new(GenericStringBuilder::finish(&mut self)) as ArrayRef
-    }
-}
-
-impl TranslateOutput for StringViewBuilder {
-    fn append_value(&mut self, value: &str) {
-        self.append_value(value);
-    }
-
-    fn append_null(&mut self) {
-        self.append_null();
-    }
-
-    fn finish(mut self) -> ArrayRef {
-        Arc::new(StringViewBuilder::finish(&mut self)) as ArrayRef
     }
 }
 
@@ -262,7 +223,7 @@ fn translate<'a, V, B, O>(
 where
     V: ArrayAccessor<Item = &'a str>,
     B: ArrayAccessor<Item = &'a str>,
-    O: TranslateOutput,
+    O: StringLikeArrayBuilder,
 {
     let string_array_iter = ArrayIter::new(string_array);
     let from_array_iter = ArrayIter::new(from_array);
@@ -275,8 +236,7 @@ where
     let mut string_graphemes: Vec<&str> = Vec::new();
     let mut result_graphemes: Vec<&str> = Vec::new();
 
-    for ((string, from), to) in
-        string_array_iter.zip(from_array_iter).zip(to_array_iter)
+    for ((string, from), to) in string_array_iter.zip(from_array_iter).zip(to_array_iter)
     {
         match (string, from, to) {
             (Some(string), Some(from), Some(to)) => {
@@ -365,7 +325,7 @@ fn translate_with_map<'a, V, O>(
 ) -> Result<ArrayRef>
 where
     V: ArrayAccessor<Item = &'a str>,
-    O: TranslateOutput,
+    O: StringLikeArrayBuilder,
 {
     let mut result_graphemes: Vec<&str> = Vec::new();
     let mut ascii_buf: Vec<u8> = Vec::new();
