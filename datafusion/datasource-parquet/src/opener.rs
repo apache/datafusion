@@ -670,6 +670,35 @@ impl FileOpener for ParquetOpener {
                 };
             }
 
+            // Precompute other-compressed-bytes-per-row for each post-scan filter,
+            // matching the row_filter path's metric for consistent effectiveness scoring.
+            // This also eliminates per-batch collect_columns() and get_array_memory_size() calls.
+            let total_rows: i64 = builder
+                .metadata()
+                .row_groups()
+                .iter()
+                .map(|rg| rg.num_rows())
+                .sum();
+            let post_scan_other_bytes_per_row: Vec<f64> = post_scan
+                .iter()
+                .map(|(_, expr)| {
+                    let filter_cols: Vec<usize> = collect_columns(expr)
+                        .iter()
+                        .map(|col| col.index())
+                        .collect();
+                    let filter_compressed = row_filter::total_compressed_bytes(
+                        &filter_cols,
+                        builder.metadata(),
+                    );
+                    if total_rows > 0 {
+                        (projection_size.saturating_sub(filter_compressed)) as f64
+                            / total_rows as f64
+                    } else {
+                        0.0
+                    }
+                })
+                .collect();
+
             // Include columns needed by all post-scan filters in the projection mask.
             let mask = {
                 let mut all_indices: Vec<usize> = projection.column_indices();
@@ -743,6 +772,7 @@ impl FileOpener for ParquetOpener {
                         let filtered = apply_post_scan_filters_with_stats(
                             b,
                             &post_scan,
+                            &post_scan_other_bytes_per_row,
                             &post_scan_tracker,
                         )?;
                         filter_apply_time.add_elapsed(start);
@@ -802,6 +832,7 @@ impl FileOpener for ParquetOpener {
 fn apply_post_scan_filters_with_stats(
     batch: RecordBatch,
     filters: &[(crate::selectivity::FilterId, Arc<dyn PhysicalExpr>)],
+    other_bytes_per_row: &[f64],
     tracker: &SelectivityTracker,
 ) -> Result<RecordBatch> {
     use arrow::array::as_boolean_array;
@@ -811,28 +842,18 @@ fn apply_post_scan_filters_with_stats(
         return Ok(batch);
     }
 
-    let batch_bytes = batch.get_array_memory_size() as u64;
     let input_rows = batch.num_rows() as u64;
-
-    // Start with all-true mask
     let mut combined_mask: Option<BooleanArray> = None;
 
-    // Evaluate each collecting filter individually and track stats
-    for &(id, ref expr) in filters {
+    for (i, &(id, ref expr)) in filters.iter().enumerate() {
         let start = datafusion_common::instant::Instant::now();
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
         let bool_arr = as_boolean_array(result.as_ref());
         let nanos = start.elapsed().as_nanos() as u64;
         let num_matched = bool_arr.true_count() as u64;
 
-        // Report "other projected bytes" — batch bytes minus this filter's
-        // column bytes. This is consistent with what row-level filters
-        // report and represents the actual late-materialization savings.
-        let filter_bytes: u64 = collect_columns(expr)
-            .iter()
-            .map(|col| batch.column(col.index()).get_array_memory_size() as u64)
-            .sum();
-        let other_bytes = batch_bytes.saturating_sub(filter_bytes);
+        // Use precomputed compressed-bytes-per-row, consistent with row-filter path
+        let other_bytes = (other_bytes_per_row[i] * input_rows as f64) as u64;
         tracker.update(id, num_matched, input_rows, nanos, other_bytes);
 
         if num_matched < input_rows {
