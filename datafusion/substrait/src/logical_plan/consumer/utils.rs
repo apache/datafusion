@@ -540,7 +540,9 @@ pub(crate) fn from_substrait_precision(
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use super::{NameTracker, make_renamed_schema};
+    use super::{
+        NameTracker, is_safe_widening, make_renamed_schema,
+    };
     use crate::extensions::Extensions;
     use crate::logical_plan::consumer::DefaultSubstraitConsumer;
     use datafusion::arrow::datatypes::{DataType, Field};
@@ -814,6 +816,51 @@ pub(crate) mod tests {
         assert_eq!(result2, col2);
 
         Ok(())
+    }
+
+    #[test]
+    fn safe_widening_signed_integers() {
+        assert!(is_safe_widening(&DataType::Int8, &DataType::Int16));
+        assert!(is_safe_widening(&DataType::Int8, &DataType::Int32));
+        assert!(is_safe_widening(&DataType::Int8, &DataType::Int64));
+        assert!(is_safe_widening(&DataType::Int16, &DataType::Int32));
+        assert!(is_safe_widening(&DataType::Int16, &DataType::Int64));
+        assert!(is_safe_widening(&DataType::Int32, &DataType::Int64));
+    }
+
+    #[test]
+    fn safe_widening_unsigned_integers() {
+        assert!(is_safe_widening(&DataType::UInt8, &DataType::UInt16));
+        assert!(is_safe_widening(&DataType::UInt8, &DataType::UInt32));
+        assert!(is_safe_widening(&DataType::UInt8, &DataType::UInt64));
+        assert!(is_safe_widening(&DataType::UInt16, &DataType::UInt32));
+        assert!(is_safe_widening(&DataType::UInt16, &DataType::UInt64));
+        assert!(is_safe_widening(&DataType::UInt32, &DataType::UInt64));
+    }
+
+    #[test]
+    fn safe_widening_floats() {
+        assert!(is_safe_widening(&DataType::Float16, &DataType::Float32));
+        assert!(is_safe_widening(&DataType::Float16, &DataType::Float64));
+        assert!(is_safe_widening(&DataType::Float32, &DataType::Float64));
+    }
+
+    #[test]
+    fn narrowing_rejected() {
+        assert!(!is_safe_widening(&DataType::Int64, &DataType::Int32));
+        assert!(!is_safe_widening(&DataType::Int32, &DataType::Int16));
+        assert!(!is_safe_widening(&DataType::Int16, &DataType::Int8));
+        assert!(!is_safe_widening(&DataType::Float64, &DataType::Float32));
+        assert!(!is_safe_widening(&DataType::UInt64, &DataType::UInt32));
+    }
+
+    #[test]
+    fn cross_family_rejected() {
+        assert!(!is_safe_widening(&DataType::Int32, &DataType::UInt64));
+        assert!(!is_safe_widening(&DataType::UInt32, &DataType::Int64));
+        assert!(!is_safe_widening(&DataType::Float32, &DataType::Int64));
+        assert!(!is_safe_widening(&DataType::Int32, &DataType::Float64));
+        assert!(!is_safe_widening(&DataType::Int32, &DataType::Utf8));
     }
 
     #[test]
