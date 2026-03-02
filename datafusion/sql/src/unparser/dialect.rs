@@ -17,6 +17,10 @@
 
 use std::{collections::HashMap, sync::Arc};
 
+use crate::unparser::ast::{
+    RelationBuilder, TableFactorBuilder, TableFunctionRelationBuilder,
+};
+
 use super::{
     Unparser, utils::character_length_to_sql, utils::date_part_to_sql,
     utils::sqlite_date_trunc_to_sql, utils::sqlite_from_unixtime_to_sql,
@@ -24,9 +28,10 @@ use super::{
 use arrow::array::timezone::Tz;
 use arrow::datatypes::TimeUnit;
 use chrono::DateTime;
-use datafusion_common::Result;
-use datafusion_expr::Expr;
+use datafusion_common::{Result, plan_err};
+use datafusion_expr::{Expr, LogicalPlan, Unnest};
 use regex::Regex;
+use sqlparser::ast::ValueWithSpan;
 use sqlparser::tokenizer::Span;
 use sqlparser::{
     ast::{
@@ -197,6 +202,35 @@ pub trait Dialect: Send + Sync {
     /// the LogicalPlan planner always puts UNNEST in the SELECT clause. This flag allows
     /// to unparse the UNNEST plan as [ast::TableFactor::UNNEST] instead of a subquery.
     fn unnest_as_table_factor(&self) -> bool {
+        false
+    }
+
+    /// Allow the dialect implement to unparse the unnest plan as the dialect-specific flattened
+    /// array table factor.
+    ///
+    /// Some dialects like Snowflake require FLATTEN function to unnest arrays in the FROM clause.
+    /// <https://docs.snowflake.com/en/sql-reference/functions/flatten#syntax>
+    fn unparse_unnest_table_factor(
+        &self,
+        _unnest: &Unnest,
+        _columns: &[Ident],
+        _unparser: &Unparser,
+    ) -> Result<Option<TableFactorBuilder>> {
+        Ok(None)
+    }
+
+    /// Allows the dialect to override relation alias unparsing if the dialect has specific rules.
+    /// Returns true if the dialect has overridden the alias unparsing, false to use default unparsing.
+    ///
+    /// This is useful for dialects that need to modify the alias based on specific conditions. For example,
+    /// in Snowflake, when using the FLATTEN function, the alias of the derived table needs to be adjusted
+    /// to match the output columns of the FLATTEN function. It can be used with [`unparse_unnest_table_factor`] to achieve this.
+    /// See [`SnowflakeDialect`] implementation for an example.
+    fn relation_alias_overrides(
+        &self,
+        _relation_builder: &mut RelationBuilder,
+        _alias: Option<&ast::TableAlias>,
+    ) -> bool {
         false
     }
 
@@ -633,6 +667,162 @@ impl BigQueryDialect {
     }
 }
 
+pub static UNNAMED_SNOWFLAKE_FLATTEN_SUBQUERY_PREFIX: &str = "__unnamed_flatten_subquery";
+
+#[derive(Default)]
+pub struct SnowflakeDialect {}
+
+impl Dialect for SnowflakeDialect {
+    fn identifier_quote_style(&self, _: &str) -> Option<char> {
+        Some('"')
+    }
+
+    fn unnest_as_table_factor(&self) -> bool {
+        true
+    }
+
+    fn unparse_unnest_table_factor(
+        &self,
+        unnest: &Unnest,
+        columns: &[Ident],
+        unparser: &Unparser,
+    ) -> Result<Option<TableFactorBuilder>> {
+        let LogicalPlan::Projection(projection) = unnest.input.as_ref() else {
+            return Ok(None);
+        };
+
+        if !matches!(projection.input.as_ref(), LogicalPlan::EmptyRelation(_)) {
+            // It may be possible that UNNEST is used as a source for the query.
+            // However, at this point, we don't yet know if it is just a single expression
+            // from another source or if it's from UNNEST.
+            //
+            // Unnest(Projection(EmptyRelation)) denotes a case with `UNNEST([...])`,
+            // which is normally safe to unnest as a table factor.
+            // However, in the future, more comprehensive checks can be added here.
+            return Ok(None);
+        };
+
+        let mut table_function_relation = TableFunctionRelationBuilder::default();
+        let mut exprs = projection
+            .expr
+            .iter()
+            .map(|e| unparser.expr_to_sql(e))
+            .collect::<Result<Vec<_>>>()?;
+
+        if exprs.len() != 1 {
+            // Snowflake FLATTEN function only supports a single argument.
+            return plan_err!(
+                "Only support one argument for Snowflake FLATTEN, found {}",
+                exprs.len()
+            );
+        }
+
+        if columns.len() != 1 {
+            // Snowflake FLATTEN function only supports a single output column.
+            return plan_err!(
+                "Only support one output column for Snowflake FLATTEN, found {}",
+                columns.len()
+            );
+        }
+
+        exprs.extend(vec![
+            ast::Expr::Value(ValueWithSpan {
+                value: ast::Value::SingleQuotedString("".to_string()),
+                span: Span::empty(),
+            }),
+            ast::Expr::Value(ValueWithSpan {
+                value: ast::Value::Boolean(false),
+                span: Span::empty(),
+            }),
+            ast::Expr::Value(ValueWithSpan {
+                value: ast::Value::Boolean(false),
+                span: Span::empty(),
+            }),
+            ast::Expr::Value(ValueWithSpan {
+                value: ast::Value::SingleQuotedString("ARRAY".to_string()),
+                span: Span::empty(),
+            }),
+        ]);
+
+        // To get the flattened result, we need to override the output columns of the FLATTEN function.
+        // The 4th column corresponds to the flattened value, which we will alias to the desired output column name.
+        // https://docs.snowflake.com/en/sql-reference/functions/flatten#output
+        let column_alias = vec![
+            unparser.new_ident_quoted_if_needs("SEQ".to_string()),
+            unparser.new_ident_quoted_if_needs("KEY".to_string()),
+            unparser.new_ident_quoted_if_needs("PATH".to_string()),
+            unparser.new_ident_quoted_if_needs("INDEX".to_string()),
+            columns[0].clone(),
+            unparser.new_ident_quoted_if_needs("THIS".to_string()),
+        ];
+
+        let func_expr = ast::Expr::Function(Function {
+            name: vec![Ident::new("FLATTEN")].into(),
+            uses_odbc_syntax: false,
+            parameters: ast::FunctionArguments::None,
+            args: ast::FunctionArguments::List(ast::FunctionArgumentList {
+                args: exprs
+                    .into_iter()
+                    .map(|e| ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(e)))
+                    .collect(),
+                duplicate_treatment: None,
+                clauses: vec![],
+            }),
+            filter: None,
+            null_treatment: None,
+            over: None,
+            within_group: vec![],
+        });
+        table_function_relation.expr(func_expr);
+        table_function_relation.alias(Some(
+            unparser.new_table_alias(
+                unparser
+                    .alias_generator
+                    .next(UNNAMED_SNOWFLAKE_FLATTEN_SUBQUERY_PREFIX),
+                column_alias,
+            ),
+        ));
+        Ok(Some(TableFactorBuilder::TableFunction(
+            table_function_relation,
+        )))
+    }
+
+    fn relation_alias_overrides(
+        &self,
+        relation_builder: &mut RelationBuilder,
+        alias: Option<&ast::TableAlias>,
+    ) -> bool {
+        // When using FLATTEN function, we need to adjust the alias of the derived table
+        // to match the output columns of the FLATTEN function. The 4th column corresponds
+        // to the flattened value, which we will alias to the desired output column name.
+        if let Some(TableFactorBuilder::TableFunction(rel_builder)) =
+            relation_builder.relation.as_mut()
+        {
+            if let Some(value) = &alias {
+                if let Some(alias) = rel_builder.alias.as_mut() {
+                    if alias
+                        .name
+                        .value
+                        .starts_with(UNNAMED_SNOWFLAKE_FLATTEN_SUBQUERY_PREFIX)
+                        && value.columns.len() == 1
+                    {
+                        let mut new_columns = alias.columns.clone();
+                        new_columns[4] = value.columns[0].clone();
+                        let new_alias = ast::TableAlias {
+                            name: value.name.clone(),
+                            columns: new_columns,
+                            explicit: true,
+                        };
+                        rel_builder.alias = Some(new_alias);
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+}
+
 pub struct CustomDialect {
     identifier_quote_style: Option<char>,
     supports_nulls_first_in_sort: bool,
@@ -829,6 +1019,7 @@ pub struct CustomDialectBuilder {
     window_func_support_window_frame: bool,
     full_qualified_col: bool,
     unnest_as_table_factor: bool,
+    unnest_to_flattened_table_factor: bool,
 }
 
 impl Default for CustomDialectBuilder {
@@ -863,6 +1054,7 @@ impl CustomDialectBuilder {
             window_func_support_window_frame: true,
             full_qualified_col: false,
             unnest_as_table_factor: false,
+            unnest_to_flattened_table_factor: false,
         }
     }
 
@@ -1027,6 +1219,14 @@ impl CustomDialectBuilder {
 
     pub fn with_unnest_as_table_factor(mut self, unnest_as_table_factor: bool) -> Self {
         self.unnest_as_table_factor = unnest_as_table_factor;
+        self
+    }
+
+    pub fn with_unnest_to_flattened_table_factor(
+        mut self,
+        unnest_to_flattened_table_factor: bool,
+    ) -> Self {
+        self.unnest_to_flattened_table_factor = unnest_to_flattened_table_factor;
         self
     }
 }

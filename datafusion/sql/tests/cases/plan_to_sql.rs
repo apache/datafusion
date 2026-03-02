@@ -39,7 +39,7 @@ use datafusion_sql::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_sql::unparser::dialect::{
     BigQueryDialect, CustomDialectBuilder, DefaultDialect as UnparserDefaultDialect,
     DefaultDialect, Dialect as UnparserDialect, MySqlDialect as UnparserMySqlDialect,
-    PostgreSqlDialect as UnparserPostgreSqlDialect, SqliteDialect,
+    PostgreSqlDialect as UnparserPostgreSqlDialect, SnowflakeDialect, SqliteDialect,
 };
 use datafusion_sql::unparser::{Unparser, expr_to_sql, plan_to_sql};
 use insta::assert_snapshot;
@@ -2595,6 +2595,57 @@ fn test_unparse_left_semi_join_with_table_scan_projection() -> Result<()> {
         @r#"SELECT "t1"."v" FROM "test" AS "t1" WHERE EXISTS (SELECT 1 FROM "test" AS "t2" WHERE ("t1"."v" = "t2"."v"))"#
     );
     Ok(())
+}
+
+#[test]
+fn test_unparse_unnest_to_table_flatten() -> Result<()> {
+    let unparser_dialect = SnowflakeDialect {};
+    let unparser = Unparser::new(&unparser_dialect);
+
+    let plan = sql_to_plan("SELECT * FROM UNNEST([1,2,3])")?;
+    assert_snapshot!(
+        unparser.plan_to_sql(&plan).unwrap(),
+        @r#"SELECT "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))" FROM TABLE(FLATTEN([1, 2, 3], '', false, false, 'ARRAY')) AS "__unnamed_flatten_subquery_1" ("SEQ", "KEY", "PATH", "INDEX", "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))", "THIS")"#
+    );
+
+    let plan = sql_to_plan("SELECT * FROM UNNEST([1,2,3]) t(a)")?;
+    assert_snapshot!(
+        unparser.plan_to_sql(&plan).unwrap(),
+        @r#"SELECT "t"."a" FROM TABLE(FLATTEN([1, 2, 3], '', false, false, 'ARRAY')) AS "t" ("SEQ", "KEY", "PATH", "INDEX", "a", "THIS")"#
+    );
+
+    let plan = sql_to_plan("SELECT * FROM unnest_table, UNNEST(unnest_table.array_col)")?;
+    assert_snapshot!(
+        unparser.plan_to_sql(&plan).unwrap(),
+        @r#"SELECT "unnest_table"."array_col", "unnest_table"."struct_col", "UNNEST(outer_ref(unnest_table.array_col))" FROM "unnest_table" CROSS JOIN TABLE(FLATTEN("unnest_table"."array_col", '', false, false, 'ARRAY')) AS "__unnamed_flatten_subquery_3" ("SEQ", "KEY", "PATH", "INDEX", "UNNEST(outer_ref(unnest_table.array_col))", "THIS")"#
+    );
+
+    let plan =
+        sql_to_plan("SELECT t.a FROM unnest_table, UNNEST(unnest_table.array_col) t(a)")?;
+    assert_snapshot!(
+        unparser.plan_to_sql(&plan).unwrap(),
+        @r#"SELECT "t"."a" FROM "unnest_table" CROSS JOIN TABLE(FLATTEN("unnest_table"."array_col", '', false, false, 'ARRAY')) AS "t" ("SEQ", "KEY", "PATH", "INDEX", "a", "THIS")"#
+    );
+
+    Ok(())
+}
+
+fn sql_to_plan(sql: &str) -> Result<LogicalPlan> {
+    let dialect = GenericDialect {};
+    let statement = Parser::new(&dialect).try_with_sql(sql)?.parse_statement()?;
+    let state = MockSessionState::default()
+        .with_aggregate_function(sum_udaf())
+        .with_aggregate_function(max_udaf())
+        .with_aggregate_function(grouping_udaf())
+        .with_window_function(rank_udwf())
+        .with_scalar_function(Arc::new(unicode::substr().as_ref().clone()))
+        .with_scalar_function(make_array_udf())
+        .with_expr_planner(Arc::new(CoreFunctionPlanner::default()))
+        .with_expr_planner(Arc::new(NestedFunctionPlanner))
+        .with_expr_planner(Arc::new(FieldAccessPlanner));
+    let context = MockContextProvider { state };
+    let sql_to_rel = SqlToRel::new(&context);
+    sql_to_rel.sql_statement_to_plan(statement)
 }
 
 #[test]
