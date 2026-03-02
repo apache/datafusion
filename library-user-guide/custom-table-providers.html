@@ -279,6 +279,7 @@
 <ul class="current nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="index.html">Introduction</a></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="upgrading/index.html">Upgrade Guides</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="upgrading/54.0.0.html">DataFusion 54.0.0</a></li>
 <li class="toctree-l2"><a class="reference internal" href="upgrading/53.0.0.html">DataFusion 53.0.0</a></li>
 <li class="toctree-l2"><a class="reference internal" href="upgrading/52.0.0.html">DataFusion 52.0.0</a></li>
 <li class="toctree-l2"><a class="reference internal" href="upgrading/51.0.0.html">DataFusion 51.0.0</a></li>
@@ -437,11 +438,12 @@ constraints are handled, see <a class="reference internal" href="table-constrain
 <span class="k">use</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">sync</span><span class="p">::{</span><span class="n">Arc</span><span class="p">,</span><span class="w"> </span><span class="n">Mutex</span><span class="p">};</span>
 <span class="k">use</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">collections</span><span class="p">::{</span><span class="n">BTreeMap</span><span class="p">,</span><span class="w"> </span><span class="n">HashMap</span><span class="p">};</span>
 <span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">common</span><span class="p">::</span><span class="nb">Result</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">common</span><span class="p">::</span><span class="n">tree_node</span><span class="p">::</span><span class="n">TreeNodeRecursion</span><span class="p">;</span>
 <span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">arrow</span><span class="p">::</span><span class="n">datatypes</span><span class="p">::{</span><span class="n">DataType</span><span class="p">,</span><span class="w"> </span><span class="n">Field</span><span class="p">,</span><span class="w"> </span><span class="n">Schema</span><span class="p">,</span><span class="w"> </span><span class="n">SchemaRef</span><span class="p">};</span>
 <span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">physical_plan</span><span class="p">::</span><span class="n">expressions</span><span class="p">::</span><span class="n">PhysicalSortExpr</span><span class="p">;</span>
 <span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">physical_plan</span><span class="p">::{</span>
 <span class="w">    </span><span class="n">ExecutionPlan</span><span class="p">,</span><span class="w"> </span><span class="n">SendableRecordBatchStream</span><span class="p">,</span><span class="w"> </span><span class="n">DisplayAs</span><span class="p">,</span><span class="w"> </span><span class="n">DisplayFormatType</span><span class="p">,</span>
-<span class="w">    </span><span class="n">Statistics</span><span class="p">,</span><span class="w"> </span><span class="n">PlanProperties</span>
+<span class="w">    </span><span class="n">Statistics</span><span class="p">,</span><span class="w"> </span><span class="n">PlanProperties</span><span class="p">,</span><span class="w"> </span><span class="n">PhysicalExpr</span>
 <span class="p">};</span>
 <span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">execution</span><span class="p">::</span><span class="n">context</span><span class="p">::</span><span class="n">TaskContext</span><span class="p">;</span>
 <span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">arrow</span><span class="p">::</span><span class="n">array</span><span class="p">::{</span><span class="n">UInt64Builder</span><span class="p">,</span><span class="w"> </span><span class="n">UInt8Builder</span><span class="p">};</span>
@@ -538,6 +540,13 @@ constraints are handled, see <a class="reference internal" href="table-constrain
 <span class="w">            </span><span class="nb">None</span><span class="p">,</span>
 <span class="w">        </span><span class="p">)</span><span class="o">?</span><span class="p">))</span>
 <span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">apply_expressions</span><span class="p">(</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">        </span><span class="n">_f</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">mut</span><span class="w"> </span><span class="k">dyn</span><span class="w"> </span><span class="nb">FnMut</span><span class="p">(</span><span class="o">&amp;</span><span class="k">dyn</span><span class="w"> </span><span class="n">PhysicalExpr</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">TreeNodeRecursion</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">TreeNodeRecursion</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="n">TreeNodeRecursion</span><span class="p">::</span><span class="n">Continue</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
 <span class="p">}</span>
 </pre></div>
 </div>
@@ -554,9 +563,10 @@ constraints are handled, see <a class="reference internal" href="table-constrain
 <h4>Scan Revisited<a class="headerlink" href="#scan-revisited" title="Link to this heading">#</a></h4>
 <p>The <code class="docutils literal notranslate"><span class="pre">scan</span></code> method of the <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code> returns a <code class="docutils literal notranslate"><span class="pre">Result&lt;Arc&lt;dyn</span> <span class="pre">ExecutionPlan&gt;&gt;</span></code>. We can use the <code class="docutils literal notranslate"><span class="pre">Arc</span></code> to return a reference-counted pointer to the <code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code> we implemented. In the example, this is done by:</p>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">async_trait</span><span class="p">::</span><span class="n">async_trait</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">common</span><span class="p">::</span><span class="n">tree_node</span><span class="p">::</span><span class="n">TreeNodeRecursion</span><span class="p">;</span>
 <span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">logical_expr</span><span class="p">::</span><span class="n">expr</span><span class="p">::</span><span class="n">Expr</span><span class="p">;</span>
 <span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">datasource</span><span class="p">::{</span><span class="n">TableProvider</span><span class="p">,</span><span class="w"> </span><span class="n">TableType</span><span class="p">};</span>
-<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">physical_plan</span><span class="p">::</span><span class="n">project_schema</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">physical_plan</span><span class="p">::{</span><span class="n">project_schema</span><span class="p">,</span><span class="w"> </span><span class="n">PhysicalExpr</span><span class="p">};</span>
 <span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">catalog</span><span class="p">::</span><span class="n">Session</span><span class="p">;</span>
 
 <span class="k">impl</span><span class="w"> </span><span class="n">CustomExec</span><span class="w"> </span><span class="p">{</span>
