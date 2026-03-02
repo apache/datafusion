@@ -2600,7 +2600,7 @@ fn test_unparse_left_semi_join_with_table_scan_projection() -> Result<()> {
 #[test]
 fn test_unparse_unnest_to_table_flatten() -> Result<()> {
     let unparser_dialect = SnowflakeDialect {};
-    let unparser = Unparser::new(&unparser_dialect);
+    let unparser: Unparser<'_> = Unparser::new(&unparser_dialect);
 
     let plan = sql_to_plan("SELECT * FROM UNNEST([1,2,3])")?;
     assert_snapshot!(
@@ -2608,18 +2608,21 @@ fn test_unparse_unnest_to_table_flatten() -> Result<()> {
         @r#"SELECT "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))" FROM TABLE(FLATTEN([1, 2, 3], '', false, false, 'ARRAY')) AS "__unnamed_flatten_subquery_1" ("SEQ", "KEY", "PATH", "INDEX", "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))", "THIS")"#
     );
 
+    let unparser: Unparser<'_> = Unparser::new(&unparser_dialect);
     let plan = sql_to_plan("SELECT * FROM UNNEST([1,2,3]) t(a)")?;
     assert_snapshot!(
         unparser.plan_to_sql(&plan).unwrap(),
         @r#"SELECT "t"."a" FROM TABLE(FLATTEN([1, 2, 3], '', false, false, 'ARRAY')) AS "t" ("SEQ", "KEY", "PATH", "INDEX", "a", "THIS")"#
     );
 
+    let unparser: Unparser<'_> = Unparser::new(&unparser_dialect);
     let plan = sql_to_plan("SELECT * FROM unnest_table, UNNEST(unnest_table.array_col)")?;
     assert_snapshot!(
         unparser.plan_to_sql(&plan).unwrap(),
-        @r#"SELECT "unnest_table"."array_col", "unnest_table"."struct_col", "UNNEST(outer_ref(unnest_table.array_col))" FROM "unnest_table" CROSS JOIN TABLE(FLATTEN("unnest_table"."array_col", '', false, false, 'ARRAY')) AS "__unnamed_flatten_subquery_3" ("SEQ", "KEY", "PATH", "INDEX", "UNNEST(outer_ref(unnest_table.array_col))", "THIS")"#
+        @r#"SELECT "unnest_table"."array_col", "unnest_table"."struct_col", "UNNEST(outer_ref(unnest_table.array_col))" FROM "unnest_table" CROSS JOIN TABLE(FLATTEN("unnest_table"."array_col", '', false, false, 'ARRAY')) AS "__unnamed_flatten_subquery_1" ("SEQ", "KEY", "PATH", "INDEX", "UNNEST(outer_ref(unnest_table.array_col))", "THIS")"#
     );
 
+    let unparser: Unparser<'_> = Unparser::new(&unparser_dialect);
     let plan =
         sql_to_plan("SELECT t.a FROM unnest_table, UNNEST(unnest_table.array_col) t(a)")?;
     assert_snapshot!(

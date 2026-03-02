@@ -699,14 +699,6 @@ impl Default for UnnestRelationBuilder {
 }
 
 #[derive(Clone)]
-pub struct FunctionRelationBuilder {
-    lateral: bool,
-    name: ast::ObjectName,
-    args: Vec<ast::FunctionArg>,
-    alias: Option<ast::TableAlias>,
-}
-
-#[derive(Clone)]
 pub struct TableFunctionRelationBuilder {
     pub expr: Option<ast::Expr>,
     pub alias: Option<ast::TableAlias>,
