@@ -20,7 +20,7 @@
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::row_group_filter::RowGroupAccessPlanFilter;
 use crate::{
-    ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
+    ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory, RowGroupAccess,
     apply_file_schema_type_coercions, coerce_int96_to_resolution, row_filter,
 };
 use arrow::array::{RecordBatch, RecordBatchOptions};
@@ -468,8 +468,15 @@ impl FileOpener for ParquetOpener {
                 if !access_plan.should_scan(i) {
                     continue;
                 }
+                let est_rows = match &access_plan.inner()[i] {
+                    RowGroupAccess::Selection(sel) => sel
+                        .iter()
+                        .filter(|s| !s.skip)
+                        .map(|s| s.row_count)
+                        .sum(),
+                    _ => metadata.row_group(i).num_rows() as usize,
+                };
                 let mut morsel_access_plan = ParquetAccessPlan::new_none(num_row_groups);
-                // Transfer the page-pruned access (Scan or Selection) for this row group
                 morsel_access_plan.set(i, access_plan.inner()[i].clone());
                 let morsel = ParquetMorsel {
                     metadata: Arc::clone(&metadata),
@@ -477,6 +484,13 @@ impl FileOpener for ParquetOpener {
                 };
                 let mut f = partitioned_file.clone();
                 f.extensions = Some(Arc::new(morsel));
+                // Store estimated row count so the WorkQueue can sort
+                // morsels globally (smallest first) for dynamic filters.
+                f.statistics = Some(Arc::new(Statistics {
+                    num_rows: Precision::Exact(est_rows),
+                    total_byte_size: Precision::Absent,
+                    column_statistics: vec![],
+                }));
                 morsels.push(f);
             }
             Ok(morsels)

@@ -720,9 +720,12 @@ impl DataSource for FileScanConfig {
 
         // With morsel-driven execution, the shared WorkQueue handles load
         // balancing at runtime so byte-range splitting is unnecessary.
-        // Just distribute whole files round-robin across target partitions.
+        // Sort files by estimated row count (smallest first) so that
+        // smaller / more-selective files are processed earlier, letting
+        // dynamic filters tighten sooner. Then distribute round-robin
+        // across target partitions.
         if self.morsel_driven {
-            let all_files: Vec<_> = self
+            let mut all_files: Vec<_> = self
                 .file_groups
                 .iter()
                 .flat_map(|g| g.files().iter().cloned())
@@ -730,6 +733,12 @@ impl DataSource for FileScanConfig {
             if all_files.is_empty() {
                 return Ok(None);
             }
+            all_files.sort_by_key(|f| {
+                f.statistics
+                    .as_ref()
+                    .and_then(|s| s.num_rows.get_value().copied())
+                    .unwrap_or(usize::MAX)
+            });
             let mut groups: Vec<Vec<PartitionedFile>> =
                 (0..target_partitions).map(|_| vec![]).collect();
             for (i, file) in all_files.into_iter().enumerate() {
