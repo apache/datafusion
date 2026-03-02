@@ -27,6 +27,7 @@ use datafusion_expr::{cast, col, lit, not, try_cast, when};
 use datafusion_functions::expr_fn::{
     btrim, length, regexp_like, regexp_replace, to_timestamp, upper,
 };
+use std::fmt::Write;
 use std::hint::black_box;
 use std::ops::Rem;
 use std::sync::Arc;
@@ -212,6 +213,29 @@ fn build_test_data_frame(ctx: &SessionContext, rt: &Runtime) -> DataFrame {
     })
 }
 
+/// Build a CASE-heavy dataframe over a non-inner join to stress
+/// planner-time filter pushdown and nullability/type inference.
+fn build_case_heavy_left_join_df(ctx: &SessionContext, rt: &Runtime) -> DataFrame {
+    let mut query = String::from(
+        "SELECT l.c0, r.c0 AS rc0 FROM t l LEFT JOIN t r ON l.c0 = r.c0 WHERE ",
+    );
+
+    // Keep this deterministic so comparisons between profiles are stable.
+    for i in 1..=30 {
+        if i > 1 {
+            query.push_str(" AND ");
+        }
+        let left_col = i % 20;
+        let right_col = (i + 1) % 20;
+        let _ = write!(
+            &mut query,
+            "CASE WHEN l.c{left_col} IS NOT NULL THEN length(l.c{left_col}) ELSE length(r.c{right_col}) END > 2"
+        );
+    }
+
+    rt.block_on(async { ctx.sql(&query).await.unwrap() })
+}
+
 fn criterion_benchmark(c: &mut Criterion) {
     let ctx = SessionContext::new();
     let rt = Runtime::new().unwrap();
@@ -220,10 +244,18 @@ fn criterion_benchmark(c: &mut Criterion) {
     // https://github.com/apache/datafusion/issues/17261
 
     let df = build_test_data_frame(&ctx, &rt);
+    let case_heavy_left_join_df = build_case_heavy_left_join_df(&ctx, &rt);
 
     c.bench_function("logical_plan_optimize", |b| {
         b.iter(|| {
             let df_clone = df.clone();
+            black_box(rt.block_on(async { df_clone.into_optimized_plan().unwrap() }));
+        })
+    });
+
+    c.bench_function("logical_plan_optimize_case_heavy_left_join", |b| {
+        b.iter(|| {
+            let df_clone = case_heavy_left_join_df.clone();
             black_box(rt.block_on(async { df_clone.into_optimized_plan().unwrap() }));
         })
     });
