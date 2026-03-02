@@ -336,10 +336,15 @@ pub(crate) fn case_conversion_return_type(
     arg_type: &DataType,
     name: &str,
 ) -> Result<DataType> {
-    if arg_type == &DataType::Utf8View {
-        Ok(DataType::Utf8View)
-    } else {
-        utf8_to_str_type(arg_type, name)
+    match arg_type {
+        DataType::Utf8View | DataType::BinaryView => Ok(DataType::Utf8View),
+        DataType::Dictionary(_, value_type)
+            if **value_type == DataType::Utf8View
+                || **value_type == DataType::BinaryView =>
+        {
+            Ok(DataType::Utf8View)
+        }
+        _ => utf8_to_str_type(arg_type, name),
     }
 }
 
