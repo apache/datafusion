@@ -270,6 +270,20 @@ message CopyToNode {
   repeated string partition_by = 7;
 }
 
+enum FileFormatKind {
+  FILE_FORMAT_KIND_UNSPECIFIED = 0;
+  FILE_FORMAT_KIND_CSV = 1;
+  FILE_FORMAT_KIND_JSON = 2;
+  FILE_FORMAT_KIND_PARQUET = 3;
+  FILE_FORMAT_KIND_ARROW = 4;
+  FILE_FORMAT_KIND_AVRO = 5;
+}
+
+message FileFormatProto {
+  FileFormatKind kind = 1;
+  bytes options = 2;
+}
+
 message DmlNode{
    enum Type {
     UPDATE = 0;
