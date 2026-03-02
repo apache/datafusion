@@ -54,9 +54,10 @@ mod charset {
 
     pub fn lookup_charset(enc: Option<&str>) -> Result<Option<Infallible>> {
         match enc {
-            Some(_) => Err(DataFusionError::NotImplemented(format!(
+            Some(_) => Err(DataFusionError::NotImplemented(
                 "The 'encoding_rs' feature must be enabled to decode non-UTF-8 encodings"
-            )))?,
+                    .to_string(),
+            ))?,
             None => Ok(None),
         }
     }
