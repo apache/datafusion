@@ -124,7 +124,6 @@ impl FileStream {
                 }
                 FileStreamState::Open { future } => match ready!(future.poll_unpin(cx)) {
                     Ok(reader) => {
-                        self.file_stream_metrics.files_processed.add(1);
                         // include time needed to start opening in `start_next_file`
                         self.file_stream_metrics.time_opening.stop();
                         let next = self.start_next_file().transpose();
@@ -151,6 +150,7 @@ impl FileStream {
                         self.file_stream_metrics.file_open_errors.add(1);
                         match self.on_error {
                             OnError::Skip => {
+                                self.file_stream_metrics.files_processed.add(1);
                                 self.file_stream_metrics.time_opening.stop();
                                 self.state = FileStreamState::Idle
                             }
@@ -180,13 +180,15 @@ impl FileStream {
                                         batch
                                     } else {
                                         let batch = batch.slice(0, *remain);
-                                        // Count the prefetched next file (if any) and
-                                        // all remaining files we will never open.
-                                        let unprocessed = self.file_iter.len()
+                                        // Count this file, the prefetched next file
+                                        // (if any), and all remaining files we will
+                                        // never open.
+                                        let done = 1
+                                            + self.file_iter.len()
                                             + usize::from(next.is_some());
                                         self.file_stream_metrics
                                             .files_processed
-                                            .add(unprocessed);
+                                            .add(done);
                                         self.state = FileStreamState::Limit;
                                         *remain = 0;
                                         batch
@@ -204,26 +206,29 @@ impl FileStream {
 
                             match self.on_error {
                                 // If `OnError::Skip` we skip the file as soon as we hit the first error
-                                OnError::Skip => match mem::take(next) {
-                                    Some(future) => {
-                                        self.file_stream_metrics.time_opening.start();
+                                OnError::Skip => {
+                                    self.file_stream_metrics.files_processed.add(1);
+                                    match mem::take(next) {
+                                        Some(future) => {
+                                            self.file_stream_metrics.time_opening.start();
 
-                                        match future {
-                                            NextOpen::Pending(future) => {
-                                                self.state =
-                                                    FileStreamState::Open { future }
-                                            }
-                                            NextOpen::Ready(reader) => {
-                                                self.state = FileStreamState::Open {
-                                                    future: Box::pin(std::future::ready(
-                                                        reader,
-                                                    )),
+                                            match future {
+                                                NextOpen::Pending(future) => {
+                                                    self.state =
+                                                        FileStreamState::Open { future }
+                                                }
+                                                NextOpen::Ready(reader) => {
+                                                    self.state = FileStreamState::Open {
+                                                        future: Box::pin(
+                                                            std::future::ready(reader),
+                                                        ),
+                                                    }
                                                 }
                                             }
                                         }
+                                        None => return Poll::Ready(None),
                                     }
-                                    None => return Poll::Ready(None),
-                                },
+                                }
                                 OnError::Fail => {
                                     self.state = FileStreamState::Error;
                                     return Poll::Ready(Some(Err(err)));
@@ -231,6 +236,7 @@ impl FileStream {
                             }
                         }
                         None => {
+                            self.file_stream_metrics.files_processed.add(1);
                             self.file_stream_metrics.files_scanned.add(1);
                             self.file_stream_metrics.time_scanning_until_data.stop();
                             self.file_stream_metrics.time_scanning_total.stop();
