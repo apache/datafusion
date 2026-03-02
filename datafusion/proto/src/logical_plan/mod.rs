@@ -215,34 +215,28 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
     ) -> Result<Arc<dyn FileFormatFactory>> {
         use prost::Message;
 
-        let proto = protobuf::FileFormatProto::decode(buf)
-            .map_err(|e| internal_datafusion_err!("Failed to decode FileFormatProto: {e}"))?;
+        let proto = protobuf::FileFormatProto::decode(buf).map_err(|e| {
+            internal_datafusion_err!("Failed to decode FileFormatProto: {e}")
+        })?;
 
-        let kind = protobuf::FileFormatKind::try_from(proto.kind)
-            .map_err(|_| internal_datafusion_err!("Unknown FileFormatKind: {}", proto.kind))?;
+        let kind = protobuf::FileFormatKind::try_from(proto.kind).map_err(|_| {
+            internal_datafusion_err!("Unknown FileFormatKind: {}", proto.kind)
+        })?;
 
         match kind {
-            protobuf::FileFormatKind::Csv => {
-                file_formats::CsvLogicalExtensionCodec
-                    .try_decode_file_format(&proto.options, ctx)
-            }
-            protobuf::FileFormatKind::Json => {
-                file_formats::JsonLogicalExtensionCodec
-                    .try_decode_file_format(&proto.options, ctx)
-            }
+            protobuf::FileFormatKind::Csv => file_formats::CsvLogicalExtensionCodec
+                .try_decode_file_format(&proto.options, ctx),
+            protobuf::FileFormatKind::Json => file_formats::JsonLogicalExtensionCodec
+                .try_decode_file_format(&proto.options, ctx),
             #[cfg(feature = "parquet")]
             protobuf::FileFormatKind::Parquet => {
                 file_formats::ParquetLogicalExtensionCodec
                     .try_decode_file_format(&proto.options, ctx)
             }
-            protobuf::FileFormatKind::Arrow => {
-                file_formats::ArrowLogicalExtensionCodec
-                    .try_decode_file_format(&proto.options, ctx)
-            }
-            protobuf::FileFormatKind::Avro => {
-                file_formats::AvroLogicalExtensionCodec
-                    .try_decode_file_format(&proto.options, ctx)
-            }
+            protobuf::FileFormatKind::Arrow => file_formats::ArrowLogicalExtensionCodec
+                .try_decode_file_format(&proto.options, ctx),
+            protobuf::FileFormatKind::Avro => file_formats::AvroLogicalExtensionCodec
+                .try_decode_file_format(&proto.options, ctx),
             #[cfg(not(feature = "parquet"))]
             protobuf::FileFormatKind::Parquet => {
                 not_impl_err!("Parquet support requires the 'parquet' feature")
@@ -304,9 +298,9 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
             kind: kind as i32,
             options,
         };
-        proto
-            .encode(buf)
-            .map_err(|e| internal_datafusion_err!("Failed to encode FileFormatProto: {e}"))?;
+        proto.encode(buf).map_err(|e| {
+            internal_datafusion_err!("Failed to encode FileFormatProto: {e}")
+        })?;
         Ok(())
     }
 }

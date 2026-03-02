@@ -840,7 +840,10 @@ async fn roundtrip_default_codec_json() -> Result<()> {
                 .unwrap();
             let decoded = json.options.as_ref().unwrap();
             assert_eq!(json_format.compression, decoded.compression);
-            assert_eq!(json_format.schema_infer_max_rec, decoded.schema_infer_max_rec);
+            assert_eq!(
+                json_format.schema_infer_max_rec,
+                decoded.schema_infer_max_rec
+            );
         }
         _ => panic!("Expected CopyTo plan"),
     }
