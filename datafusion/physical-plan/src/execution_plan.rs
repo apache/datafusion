@@ -259,6 +259,11 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// ```
     ///
     /// ## Node with multiple expressions (e.g., ProjectionExec, JoinExec)
+    ///
+    /// Use [`TreeNodeRecursion::visit_sibling`] when iterating over multiple
+    /// expressions. This correctly propagates [`TreeNodeRecursion::Stop`]: if
+    /// `f` returns `Stop` for an earlier expression, `visit_sibling` short-circuits
+    /// and skips the remaining ones.
     /// ```ignore
     /// fn apply_expressions(
     ///     &self,
