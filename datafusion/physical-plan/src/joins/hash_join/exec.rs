@@ -838,9 +838,8 @@ impl HashJoinExec {
     }
 
     fn allow_join_dynamic_filter_pushdown(&self, config: &ConfigOptions) -> bool {
-        if self.join_type != JoinType::Inner
-            || !config.optimizer.enable_join_dynamic_filter_pushdown
-        {
+        let (_, probe_preserved) = self.join_type.on_lr_is_preserved();
+        if !probe_preserved || !config.optimizer.enable_join_dynamic_filter_pushdown {
             return false;
         }
 
