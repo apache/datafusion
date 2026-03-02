@@ -16,17 +16,30 @@
 // under the License.
 
 use std::fmt::Debug;
+use std::io::{BufRead, Read};
 
 use arrow::array::RecordBatch;
 use arrow::error::ArrowError;
-use datafusion_common::Result;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_datasource::decoder::Decoder;
-use encoding_rs::{CoderResult, Encoding};
+use encoding_rs::{CoderResult, Encoding, UTF_8};
 
 use self::buffer::Buffer;
 
 /// Default capacity of the buffer used to decode non-UTF-8 charset streams
 static DECODE_BUFFER_CAP: usize = 8 * 1024;
+
+pub fn lookup_charset(enc: Option<&str>) -> Result<Option<&'static Encoding>> {
+    match enc {
+        Some(enc) => match Encoding::for_label(enc.as_bytes()) {
+            Some(enc) => Ok(Some(enc).filter(|enc| *enc != UTF_8)),
+            None => Err(DataFusionError::Configuration(format!(
+                "Unknown character set '{enc}'"
+            )))?,
+        },
+        None => Ok(None),
+    }
+}
 
 /// A `Decoder` that decodes input bytes from the specified character encoding
 /// to UTF-8 before passing them onto the inner `Decoder`.
@@ -97,6 +110,54 @@ impl<T: Debug> Debug for CharsetDecoder<T> {
             .field("inner", &self.inner)
             .field("charset_decoder", self.charset_decoder.encoding())
             .finish()
+    }
+}
+
+pub struct CharsetReader<R> {
+    inner: R,
+    charset_decoder: encoding_rs::Decoder,
+    buffer: Buffer,
+}
+
+impl<R: BufRead> CharsetReader<R> {
+    pub fn new(inner: R, encoding: &'static Encoding) -> Self {
+        Self {
+            inner,
+            charset_decoder: encoding.new_decoder(),
+            buffer: Buffer::with_capacity(DECODE_BUFFER_CAP),
+        }
+    }
+}
+
+impl<R: BufRead> Read for CharsetReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let src = self.fill_buf()?;
+        let len = src.len().min(buf.len());
+        buf[..len].copy_from_slice(&src[..len]);
+        Ok(len)
+    }
+}
+
+impl<R: BufRead> BufRead for CharsetReader<R> {
+    fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+        if self.buffer.is_empty() {
+            self.buffer.backshift();
+
+            let buf = self.inner.fill_buf()?;
+            let (_, read, written, _) = self.charset_decoder.decode_to_utf8(
+                buf,
+                self.buffer.write_buf(),
+                buf.is_empty(),
+            );
+            self.inner.consume(read);
+            self.buffer.advance(written);
+        }
+
+        Ok(self.buffer.read_buf())
+    }
+
+    fn consume(&mut self, amount: usize) {
+        self.buffer.consume(amount);
     }
 }
 

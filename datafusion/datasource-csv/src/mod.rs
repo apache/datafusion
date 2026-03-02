@@ -21,7 +21,7 @@
 #![cfg_attr(not(test), deny(clippy::clone_on_ref_ptr))]
 
 #[cfg(feature = "encoding_rs")]
-mod encoding;
+mod charset;
 pub mod file_format;
 pub mod source;
 
@@ -32,6 +32,7 @@ use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::{file::FileSource, file_scan_config::FileScanConfig};
 use datafusion_execution::object_store::ObjectStoreUrl;
+
 pub use file_format::*;
 
 /// Returns a [`FileScanConfig`] for given `file_groups`
@@ -44,4 +45,18 @@ pub fn partitioned_csv_config(
             .with_file_groups(file_groups)
             .build(),
     )
+}
+
+#[cfg(not(feature = "encoding_rs"))]
+mod encoding {
+    use datafusion_common::{DataFusionError, Result};
+
+    pub fn find_encoding(enc: Option<&str>) -> Result<Option<core::convert::Infallible>> {
+        match enc {
+            Some(_) => Err(DataFusionError::NotImplemented(format!(
+                "The 'encoding_rs' feature must be enabled to decode non-UTF-8 encodings"
+            )))?,
+            None => Ok(None),
+        }
+    }
 }

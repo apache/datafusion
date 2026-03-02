@@ -984,7 +984,7 @@ impl TryFrom<&protobuf::CsvOptions> for CsvOptions {
             escape: proto_opts.escape.first().copied(),
             double_quote: proto_opts.double_quote.first().map(|h| *h != 0),
             newlines_in_values: proto_opts.newlines_in_values.first().map(|h| *h != 0),
-            encoding: (!proto_opts.encoding.is_empty())
+            charset: (!proto_opts.encoding.is_empty())
                 .then(|| proto_opts.encoding.clone()),
             compression: proto_opts.compression().into(),
             compression_level: proto_opts.compression_level,

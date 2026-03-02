@@ -1646,7 +1646,7 @@ mod tests {
 
         // Read the file
         let ctx = SessionContext::new();
-        let opts = CsvReadOptions::new().has_header(true);
+        let opts = CsvReadOptions::new().has_header(true).charset("SHIFT-JIS");
         let batches = ctx.read_csv(path, opts).await?.collect().await?;
 
         // Check

@@ -2921,7 +2921,7 @@ config_namespace! {
         ///
         /// The default behaviour depends on the `datafusion.catalog.newlines_in_values` setting.
         pub newlines_in_values: Option<bool>, default = None
-        pub encoding: Option<String>, default = None
+        pub charset: Option<String>, default = None
         pub compression: CompressionTypeVariant, default = CompressionTypeVariant::UNCOMPRESSED
         /// Compression level for the output file. The valid range depends on the
         /// compression algorithm:
@@ -3031,6 +3031,13 @@ impl CsvOptions {
     /// The default behaviour depends on the `datafusion.catalog.newlines_in_values` setting.
     pub fn with_newlines_in_values(mut self, newlines_in_values: bool) -> Self {
         self.newlines_in_values = Some(newlines_in_values);
+        self
+    }
+
+    /// Specifies the character encoding the file is encoded with.
+    /// - defaults to UTF-8
+    pub fn with_charset(mut self, charset: impl Into<String>) -> Self {
+        self.charset = Some(charset.into());
         self
     }
 

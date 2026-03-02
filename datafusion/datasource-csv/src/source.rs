@@ -47,8 +47,7 @@ use datafusion_physical_plan::{
     DisplayFormatType, ExecutionPlan, ExecutionPlanProperties,
 };
 
-#[cfg(feature = "encoding_rs")]
-use crate::encoding::CharsetDecoder;
+use crate::charset::lookup_charset;
 use crate::file_format::CsvDecoder;
 use futures::{StreamExt, TryStreamExt};
 use object_store::buffered::BufWriter;
@@ -233,30 +232,6 @@ impl CsvOpener {
             partition_index: 0,
         }
     }
-
-    #[cfg(feature = "encoding_rs")]
-    fn encoding(&self) -> Result<Option<&'static encoding_rs::Encoding>> {
-        match self.config.options.encoding.as_ref() {
-            Some(enc) => match encoding_rs::Encoding::for_label(enc.as_bytes()) {
-                Some(enc) => Ok(Some(enc)),
-                None => Err(DataFusionError::Configuration(format!(
-                    "Unknown character set '{enc}'"
-                )))?,
-            },
-            None => Ok(None),
-        }
-    }
-
-    #[cfg(not(feature = "encoding_rs"))]
-    fn encoding(&self) -> Result<Option<core::convert::Infallible>> {
-        match &self.config.options.encoding {
-            Some(_) => Err(DataFusionError::NotImplemented(
-                "The 'encoding_rs' feature must be enabled to decode non-UTF-8 encodings"
-                    .to_owned(),
-            ))?,
-            None => Ok(None),
-        }
-    }
 }
 
 impl From<CsvSource> for Arc<dyn FileSource> {
@@ -394,7 +369,7 @@ impl FileOpener for CsvOpener {
         config.options.truncated_rows = Some(config.truncate_rows());
 
         let file_compression_type = self.file_compression_type.to_owned();
-        let encoding = self.encoding()?;
+        let charset = lookup_charset(self.config.options.charset.as_deref())?;
 
         if partitioned_file.range.is_some() {
             assert!(
@@ -452,9 +427,10 @@ impl FileOpener for CsvOpener {
 
                     let reader = BufReader::new(reader);
 
-                    let mut reader = match encoding {
+                    let mut reader = match charset {
                         #[cfg(feature = "encoding_rs")]
                         Some(enc) => {
+                            use crate::charset::CharsetDecoder;
                             let decoder = CharsetDecoder::new(decoder, enc);
                             deserialize_reader(reader, decoder)
                         }
@@ -476,9 +452,10 @@ impl FileOpener for CsvOpener {
 
                     let stream = file_compression_type.convert_stream(stream)?.fuse();
 
-                    let stream = match encoding {
+                    let stream = match charset {
                         #[cfg(feature = "encoding_rs")]
                         Some(enc) => {
+                            use crate::charset::CharsetDecoder;
                             let decoder = CharsetDecoder::new(decoder, enc);
                             deserialize_stream(stream, DecoderDeserializer::new(decoder))
                         }

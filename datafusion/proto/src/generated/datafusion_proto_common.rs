@@ -674,7 +674,7 @@ pub struct CsvOptions {
     pub compression_level: ::core::option::Option<u32>,
     /// Optional character encoding
     #[prost(string, tag = "20")]
-    pub encoding: ::prost::alloc::string::String,
+    pub charset: ::prost::alloc::string::String,
 }
 /// Options controlling CSV format
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
