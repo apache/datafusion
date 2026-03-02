@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use abi_stable::StableAbi;
 use abi_stable::std_types::{RString, RVec};
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_plan::{
@@ -293,6 +294,22 @@ impl ExecutionPlan for ForeignExecutionPlan {
                 .map(|stream| Pin::new(Box::new(stream)) as SendableRecordBatchStream)
         }
     }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(
+            &dyn datafusion_physical_plan::PhysicalExpr,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Visit expressions in the output ordering from equivalence properties
+        let mut tnr = TreeNodeRecursion::Continue;
+        if let Some(ordering) = self.properties.output_ordering() {
+            for sort_expr in ordering {
+                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
+            }
+        }
+        Ok(tnr)
+    }
 }
 
 #[cfg(test)]
@@ -366,6 +383,22 @@ pub(crate) mod tests {
             _context: Arc<TaskContext>,
         ) -> Result<SendableRecordBatchStream> {
             unimplemented!()
+        }
+
+        fn apply_expressions(
+            &self,
+            f: &mut dyn FnMut(
+                &dyn datafusion_physical_plan::PhysicalExpr,
+            ) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            // Visit expressions in the output ordering from equivalence properties
+            let mut tnr = TreeNodeRecursion::Continue;
+            if let Some(ordering) = self.props.output_ordering() {
+                for sort_expr in ordering {
+                    tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
+                }
+            }
+            Ok(tnr)
         }
     }
 
