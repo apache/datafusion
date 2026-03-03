@@ -202,6 +202,51 @@ async fn main() -> Result<()> {
 }
 ```
 
+#### Example: Supporting the UUID Type
+
+```rust
+# use std::sync::Arc;
+# use arrow::datatypes::{FieldRef, TimeUnit};
+# use datafusion::error::Result;
+# use datafusion::prelude::*;
+# use datafusion::execution::SessionStateBuilder;
+use datafusion_expr::planner::TypePlanner;
+# use sqlparser::ast;
+
+#[derive(Debug)]
+struct MyTypePlanner;
+
+impl TypePlanner for MyTypePlanner {
+    fn plan_type_field(&self, sql_type: &ast::DataType) -> Result<Option<FieldRef>> {
+        match sql_type {
+            sqlparser::ast::DataType::Uuid => Ok(Some(Arc::new(
+                Field::new("", DataType::FixedSizeBinary(16), true).with_metadata(
+                    [("ARROW:extension:name".to_string(), "arrow.uuid".to_string())]
+                        .into(),
+                ),
+            ))),
+            _ => Ok(self
+                .plan_type(sql_type)?
+                .map(|data_type| data_type.into_nullable_field_ref())),
+        }
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let state = SessionStateBuilder::new()
+        .with_default_features()
+        .with_type_planner(Arc::new(MyTypePlanner))
+        .build();
+
+    let ctx = SessionContext::new_with_state(state);
+
+    // Now UUID type is recognized
+    ctx.sql("CREATE TABLE idx (uuid UUID)").await?;
+    Ok(())
+}
+```
+
 For more details, see the [TypePlanner API documentation].
 
 ### RelationPlanner: Custom FROM Clause Elements
