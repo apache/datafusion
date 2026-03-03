@@ -22,7 +22,7 @@
 //! `ParquetOpener::open`, and [`FilterId`] for stable filter identification.
 
 use log::debug;
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use parquet::file::metadata::ParquetMetaData;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -166,12 +166,13 @@ impl SelectivityStats {
 pub(crate) struct TrackerConfig {
     /// Minimum bytes/sec throughput for promoting a filter (default: INFINITY = disabled).
     pub min_bytes_per_sec: f64,
-    /// Byte-ratio threshold for placing collecting filters at row-level vs post-scan.
-    /// This ratio represents the estimated bytes needed to evaluate the filter across the entire file divided by the total bytes in the projection.
-    /// A lower ratio means the filter is cheaper to evaluate and should be placed at row-level immediately, while a higher ratio means the filter is more expensive and should start as post-scan.
-    /// A value of ~1 means the filter is the same size as the entire projection at which point evaluating the filter at row-level may not be worth it without evidence of high effectiveness.
-    /// A value of ~0 means the filter is probably very cheap to evaluate relative to the projection.
-    /// Default is 0.15 (filters estimated to require more than 15% of the projection bytes will start as post-scan).
+    /// Byte-ratio threshold for initial filter placement (row-level vs post-scan).
+    /// Computed as `filter_compressed_bytes / projection_compressed_bytes`.
+    /// When low, the filter columns are small relative to the projection,
+    /// so row-level placement enables large late-materialization savings.
+    /// When high, the filter columns dominate the projection, so there's
+    /// little benefit from late materialization.
+    /// Default is 0.20.
     pub byte_ratio_threshold: f64,
     /// Z-score for confidence intervals on filter effectiveness.
     /// Lower values (e.g. 1.0 or 0.0) will make the tracker more aggressive about promotion/demotion based on limited data.
@@ -186,7 +187,7 @@ impl TrackerConfig {
     pub fn new() -> Self {
         Self {
             min_bytes_per_sec: f64::INFINITY,
-            byte_ratio_threshold: 0.05,
+            byte_ratio_threshold: 0.20,
             confidence_z: 2.0,
         }
     }
@@ -209,7 +210,8 @@ impl TrackerConfig {
     pub fn build(self) -> SelectivityTracker {
         SelectivityTracker {
             config: self,
-            inner: RwLock::new(SelectivityTrackerInner::new()),
+            filter_stats: RwLock::new(HashMap::new()),
+            inner: Mutex::new(SelectivityTrackerInner::new()),
         }
     }
 }
@@ -224,8 +226,53 @@ impl Default for TrackerConfig {
 /// which filters are promoted to row-level predicates (pushed into the Parquet
 /// reader) vs. applied post-scan (demoted) or dropped entirely.
 ///
-/// The `RwLock` is **private** — external callers cannot hold the guard across
-/// expensive work. All lock-holding code paths are auditable in this file.
+/// # Locking design
+///
+/// All locks are **private** to this struct — external callers cannot hold a
+/// guard across expensive work, and all lock-holding code paths are auditable
+/// in this file alone.
+///
+/// State is split across two independent locks to minimise contention between
+/// the hot per-batch `update()` path and the cold per-file-open
+/// `partition_filters()` path:
+///
+/// - **`filter_stats`** (`RwLock<HashMap<FilterId, Mutex<SelectivityStats>>>`)
+///   — `update()` acquires a *shared read* lock on the outer map, then a
+///   per-filter `Mutex` to increment counters.  Multiple threads updating
+///   *different* filters never contend at all; threads updating the *same*
+///   filter serialize only on the cheap per-filter `Mutex` (~100 ns).
+///   `partition_filters()` also takes a read lock here when it needs to
+///   inspect stats for promotion/demotion decisions, so it never blocks
+///   `update()` callers.  The write lock is taken only briefly in Phase 2
+///   of `partition_filters()` to insert entries for newly-seen filter IDs.
+///
+/// - **`inner`** (`Mutex<SelectivityTrackerInner>`) — holds the filter
+///   state-machine (`filter_states`) and dynamic-filter generation tracking.
+///   Only `partition_filters()` acquires this lock (once per file open), so
+///   concurrent `update()` calls are completely unaffected.
+///
+/// ## Lock ordering (deadlock-free)
+///
+/// Locks are always acquired in the order `inner` → `filter_stats` →
+/// per-filter `Mutex`.  Because `update()` never acquires `inner`, no
+/// cycle is possible.
+///
+/// ## Correctness of concurrent access
+///
+/// `update()` may write stats while `partition_filters()` reads them for
+/// promotion/demotion.  Both hold a shared `filter_stats` read lock; the
+/// per-filter `Mutex` ensures they do not interleave on the same filter's
+/// stats.  One proceeds first; the other sees a consistent (slightly newer
+/// or older) snapshot.  This is benign — the single-lock design that
+/// preceded this split already allowed stats to change between consecutive
+/// reads within `partition_filters()`.
+///
+/// On promote/demote, `partition_filters()` zeros a filter's stats via the
+/// per-filter `Mutex`.  An `update()` running concurrently may write one
+/// stale batch's worth of data to the freshly-zeroed stats; this is quickly
+/// diluted by hundreds of correct-context batches and is functionally
+/// identical to the old design where `update()` queued behind the write
+/// lock and ran immediately after.
 ///
 /// # Filter state machine
 ///
@@ -275,7 +322,24 @@ impl Default for TrackerConfig {
 /// See `TrackerConfig` for configuration knobs.
 pub struct SelectivityTracker {
     config: TrackerConfig,
-    inner: RwLock<SelectivityTrackerInner>,
+    /// Per-filter selectivity statistics, each individually `Mutex`-protected.
+    ///
+    /// The outer `RwLock` is almost always read-locked: both `update()` (hot,
+    /// per-batch) and `partition_filters()` (cold, per-file-open) only need
+    /// shared access to look up existing entries.  The write lock is taken
+    /// only when `partition_filters()` inserts entries for newly-seen filter
+    /// IDs — a brief, infrequent operation.
+    ///
+    /// Each inner `Mutex<SelectivityStats>` protects a single filter's
+    /// counters, so concurrent `update()` calls on *different* filters
+    /// proceed in parallel with zero contention.
+    filter_stats: RwLock<HashMap<FilterId, Mutex<SelectivityStats>>>,
+    /// Filter lifecycle state machine and dynamic-filter generation tracking.
+    ///
+    /// Only `partition_filters()` acquires this lock (once per file open).
+    /// `update()` never touches it, so the hot per-batch path is completely
+    /// decoupled from the cold state-machine path.
+    inner: Mutex<SelectivityTrackerInner>,
 }
 
 impl std::fmt::Debug for SelectivityTracker {
@@ -300,8 +364,14 @@ impl SelectivityTracker {
 
     /// Update stats for a filter after processing a batch.
     ///
-    /// Acquires and releases the write lock in bounded time.
-    /// Debug-logs lock wait times > 100μs **after** dropping the lock.
+    /// **Locking:** acquires `filter_stats.read()` (shared) then a per-filter
+    /// `Mutex`.  Never touches `inner`, so this hot per-batch path cannot
+    /// contend with the cold per-file-open `partition_filters()` path.
+    ///
+    /// Silently skips unknown filter IDs (can occur if `update()` is called
+    /// before `partition_filters()` has registered the filter — in practice
+    /// this cannot happen because `partition_filters()` runs during file open
+    /// before any batches are processed).
     pub(crate) fn update(
         &self,
         id: FilterId,
@@ -310,51 +380,114 @@ impl SelectivityTracker {
         eval_nanos: u64,
         batch_bytes: u64,
     ) {
-        self.inner
-            .write()
-            .update(id, matched, total, eval_nanos, batch_bytes);
+        let map = self.filter_stats.read();
+        if let Some(entry) = map.get(&id) {
+            entry.lock().update(matched, total, eval_nanos, batch_bytes);
+        }
     }
 
-    /// Partition filters into collecting / promoted / post-scan.
+    /// Partition filters into row-level predicates vs post-scan filters.
+    ///
+    /// Called once per file open (cold path).
+    ///
+    /// **Locking — two phases:**
+    /// 1. Acquires `inner` (exclusive) and `filter_stats` (shared read) for
+    ///    all decision logic — promotion, demotion, initial placement, and
+    ///    sorting by effectiveness.  Because `filter_stats` is only
+    ///    read-locked, concurrent `update()` calls proceed unblocked.
+    /// 2. If new filter IDs were seen, briefly acquires `filter_stats` (write)
+    ///    to insert per-filter `Mutex` entries so that future `update()` calls
+    ///    can find them.
     pub(crate) fn partition_filters(
         &self,
         filters: Vec<(FilterId, Arc<dyn PhysicalExpr>)>,
         projection_scan_size: usize,
-        projection_columns: &[usize],
         metadata: &ParquetMetaData,
     ) -> PartitionedFilters {
-        self.inner.write().partition_filters(
+        // Phase 1: inner.lock() + filter_stats.read() → all decision logic
+        let mut guard = self.inner.lock();
+        let stats_map = self.filter_stats.read();
+        let result = guard.partition_filters(
             filters,
             projection_scan_size,
-            projection_columns,
             metadata,
             &self.config,
-        )
+            &stats_map,
+        );
+        drop(stats_map);
+        drop(guard);
+
+        // Phase 2: if new filters were seen, briefly acquire write lock to insert entries
+        if !result.new_filter_ids.is_empty() {
+            let mut stats_write = self.filter_stats.write();
+            for id in result.new_filter_ids {
+                stats_write
+                    .entry(id)
+                    .or_insert_with(|| Mutex::new(SelectivityStats::default()));
+            }
+        }
+
+        result.partitioned
+    }
+
+    /// Test helper: ensure a stats entry exists for the given filter ID.
+    /// In production, `partition_filters()` inserts entries for new filters.
+    /// Tests that call `update()` without prior `partition_filters()` need this.
+    #[cfg(test)]
+    fn ensure_stats_entry(&self, id: FilterId) {
+        let map = self.filter_stats.read();
+        if map.get(&id).is_none() {
+            drop(map);
+            self.filter_stats
+                .write()
+                .entry(id)
+                .or_insert_with(|| Mutex::new(SelectivityStats::default()));
+        }
     }
 }
 
-/// Mutable state guarded by the `RwLock` inside [`SelectivityTracker`].
+/// Internal result from [`SelectivityTrackerInner::partition_filters`].
+///
+/// Carries both the partitioned filters and a list of newly-seen filter IDs
+/// back to the outer [`SelectivityTracker::partition_filters`], which uses
+/// `new_filter_ids` to insert per-filter `Mutex` entries into `filter_stats`
+/// in a brief Phase 2 write lock.
+struct PartitionResult {
+    partitioned: PartitionedFilters,
+    new_filter_ids: Vec<FilterId>,
+}
+
+/// Filter state-machine and generation tracking, guarded by the `Mutex`
+/// inside [`SelectivityTracker`].
+///
+/// This struct intentionally does **not** contain per-filter stats — those
+/// live in the separate `filter_stats` lock so that the hot `update()` path
+/// can modify stats without acquiring this lock.  Only the cold
+/// `partition_filters()` path (once per file open) needs this lock.
 #[derive(Debug)]
 struct SelectivityTrackerInner {
-    /// Per-filter effectiveness statistics, keyed by FilterId
-    stats: HashMap<FilterId, SelectivityStats>,
-    /// Per-filter lifecycle state
+    /// Per-filter lifecycle state (RowFilter / PostScan / Dropped).
     filter_states: HashMap<FilterId, FilterState>,
-    /// Snapshot generation for each filter (for detecting dynamic filter updates)
+    /// Last-seen snapshot generation per filter, for detecting when a dynamic
+    /// filter's selectivity has changed (e.g. hash-join build side grew).
     snapshot_generations: HashMap<FilterId, u64>,
 }
 
 impl SelectivityTrackerInner {
     fn new() -> Self {
         Self {
-            stats: HashMap::new(),
             filter_states: HashMap::new(),
             snapshot_generations: HashMap::new(),
         }
     }
 
     /// Check and update the snapshot generation for a filter.
-    fn note_generation(&mut self, id: FilterId, generation: u64) {
+    fn note_generation(
+        &mut self,
+        id: FilterId,
+        generation: u64,
+        stats_map: &HashMap<FilterId, Mutex<SelectivityStats>>,
+    ) {
         if generation == 0 {
             return;
         }
@@ -363,7 +496,9 @@ impl SelectivityTrackerInner {
             Some(_) => {
                 let current_state = self.filter_states.get(&id).copied();
                 // Always reset stats since selectivity changed with new generation.
-                self.stats.remove(&id);
+                if let Some(entry) = stats_map.get(&id) {
+                    *entry.lock() = SelectivityStats::default();
+                }
                 self.snapshot_generations.insert(id, generation);
 
                 // Optional/dynamic filters only get more selective over time
@@ -387,8 +522,14 @@ impl SelectivityTrackerInner {
     }
 
     /// Get the effectiveness for a filter by ID.
-    fn get_effectiveness_by_id(&self, id: FilterId) -> Option<f64> {
-        self.stats.get(&id).and_then(|s| s.effectiveness())
+    fn get_effectiveness_by_id(
+        &self,
+        id: FilterId,
+        stats_map: &HashMap<FilterId, Mutex<SelectivityStats>>,
+    ) -> Option<f64> {
+        stats_map
+            .get(&id)
+            .and_then(|entry| entry.lock().effectiveness())
     }
 
     /// Demote a filter to post-scan or drop it entirely if optional.
@@ -397,6 +538,7 @@ impl SelectivityTrackerInner {
         id: FilterId,
         expr: &Arc<dyn PhysicalExpr>,
         post_scan: &mut Vec<(FilterId, Arc<dyn PhysicalExpr>)>,
+        stats_map: &HashMap<FilterId, Mutex<SelectivityStats>>,
     ) {
         if expr
             .as_any()
@@ -406,7 +548,9 @@ impl SelectivityTrackerInner {
             self.filter_states.insert(id, FilterState::PostScan);
             post_scan.push((id, Arc::clone(expr)));
             // Reset stats for this filter so it can be re-evaluated as a post-scan filter.
-            self.stats.remove(&id);
+            if let Some(entry) = stats_map.get(&id) {
+                *entry.lock() = SelectivityStats::default();
+            }
         } else {
             self.filter_states.insert(id, FilterState::Dropped);
         }
@@ -418,26 +562,14 @@ impl SelectivityTrackerInner {
         id: FilterId,
         expr: Arc<dyn PhysicalExpr>,
         row_filters: &mut Vec<(FilterId, Arc<dyn PhysicalExpr>)>,
+        stats_map: &HashMap<FilterId, Mutex<SelectivityStats>>,
     ) {
         row_filters.push((id, expr));
         self.filter_states.insert(id, FilterState::RowFilter);
         // Reset stats for this filter since it will be evaluated at row-level now.
-        self.stats.remove(&id);
-    }
-
-    /// Update stats for a filter by ID after processing a batch.
-    fn update(
-        &mut self,
-        id: FilterId,
-        matched: u64,
-        total: u64,
-        eval_nanos: u64,
-        batch_bytes: u64,
-    ) {
-        self.stats
-            .entry(id)
-            .or_default()
-            .update(matched, total, eval_nanos, batch_bytes);
+        if let Some(entry) = stats_map.get(&id) {
+            *entry.lock() = SelectivityStats::default();
+        }
     }
 
     /// Partition filters into collecting / promoted / post-scan buckets.
@@ -445,19 +577,30 @@ impl SelectivityTrackerInner {
         &mut self,
         filters: Vec<(FilterId, Arc<dyn PhysicalExpr>)>,
         projection_scan_size: usize,
-        projection_columns: &[usize],
         metadata: &ParquetMetaData,
         config: &TrackerConfig,
-    ) -> PartitionedFilters {
+        stats_map: &HashMap<FilterId, Mutex<SelectivityStats>>,
+    ) -> PartitionResult {
+        let mut new_filter_ids = Vec::new();
+
         // If min_bytes_per_sec is INFINITY -> all filters are post-scan.
         if config.min_bytes_per_sec.is_infinite() {
             debug!(
                 "Filter promotion disabled via min_bytes_per_sec=INFINITY; all {} filters post-scan",
                 filters.len()
             );
-            return PartitionedFilters {
-                row_filters: Vec::new(),
-                post_scan: filters,
+            // Register all filter IDs so update() can find them
+            for &(id, _) in &filters {
+                if !stats_map.contains_key(&id) {
+                    new_filter_ids.push(id);
+                }
+            }
+            return PartitionResult {
+                partitioned: PartitionedFilters {
+                    row_filters: Vec::new(),
+                    post_scan: filters,
+                },
+                new_filter_ids,
             };
         }
         // If min_bytes_per_sec is 0 -> all filters are promoted.
@@ -466,9 +609,18 @@ impl SelectivityTrackerInner {
                 "All filters promoted via min_bytes_per_sec=0; all {} filters row-level",
                 filters.len()
             );
-            return PartitionedFilters {
-                row_filters: filters,
-                post_scan: Vec::new(),
+            // Register all filter IDs so update() can find them
+            for &(id, _) in &filters {
+                if !stats_map.contains_key(&id) {
+                    new_filter_ids.push(id);
+                }
+            }
+            return PartitionResult {
+                partitioned: PartitionedFilters {
+                    row_filters: filters,
+                    post_scan: Vec::new(),
+                },
+                new_filter_ids,
             };
         }
 
@@ -477,7 +629,7 @@ impl SelectivityTrackerInner {
         // This must be done before any other logic since it can change filter states and stats.
         for &(id, ref expr) in &filters {
             let generation = snapshot_generation(expr);
-            self.note_generation(id, generation);
+            self.note_generation(id, generation, stats_map);
         }
 
         // Separate into row filters and post-scan filters based on effectiveness and state.
@@ -504,65 +656,58 @@ impl SelectivityTrackerInner {
                         "FilterId {id}: New optional filter → Post-scan (conservative) — {expr}"
                     );
                     self.filter_states.insert(id, FilterState::PostScan);
+                    if !stats_map.contains_key(&id) {
+                        new_filter_ids.push(id);
+                    }
                     post_scan_filters.push((id, expr));
                     continue;
                 }
 
-                // Static filters: compare I/O cost of row-filter vs post-scan.
+                // Static filters: use filter_bytes / projection_bytes to decide
+                // initial placement. This ratio captures the I/O tradeoff:
                 //
-                // Post-scan I/O cost: 0 if filter columns are already in the
-                // projection (they're decoded anyway), otherwise the extra column bytes.
+                // - Low ratio (filter columns are small vs projection): row-filter
+                //   enables late materialization — the large non-filter portion of
+                //   the projection is only decoded for rows that pass the filter.
                 //
-                // Row-filter I/O cost: same column bytes, but enables late
-                // materialization (skipping other projected columns for pruned rows).
-                // However, late materialization has overhead for surviving rows.
+                // - High ratio (filter columns are most of the projection): little
+                //   benefit from late materialization since there's not much left
+                //   to skip. Post-scan avoids row-filter overhead.
                 //
-                // When extra_bytes == 0, post-scan has no I/O penalty, so it's the
-                // safe default — the adaptive system promotes if effective.
-                // When extra_bytes > 0 but small relative to projection, row-filter
-                // is worth trying since the extra I/O is cheap and pruning may help.
+                // Extra bytes (filter columns not in projection) are naturally
+                // included in filter_bytes, making the ratio higher and placement
+                // more conservative, which is correct since those bytes represent
+                // additional I/O cost for row-filter evaluation.
                 let filter_columns: Vec<usize> = collect_columns(&expr)
                     .iter()
                     .map(|col| col.index())
                     .collect();
-                let extra_columns: Vec<usize> = filter_columns
-                    .iter()
-                    .filter(|idx| !projection_columns.contains(idx))
-                    .copied()
-                    .collect();
-                let extra_bytes =
-                    crate::row_filter::total_compressed_bytes(&extra_columns, metadata);
+                let filter_bytes =
+                    crate::row_filter::total_compressed_bytes(&filter_columns, metadata);
+                let byte_ratio = if projection_scan_size > 0 {
+                    filter_bytes as f64 / projection_scan_size as f64
+                } else {
+                    1.0
+                };
 
-                if extra_bytes == 0 {
-                    // Filter columns are entirely in the projection — no extra I/O
-                    // for post-scan. Start PostScan; adaptive system promotes if
-                    // row-level pruning proves effective.
+                if !stats_map.contains_key(&id) {
+                    new_filter_ids.push(id);
+                }
+
+                if byte_ratio <= config.byte_ratio_threshold {
                     debug!(
-                        "FilterId {id}: New filter → Post-scan (filter columns in projection, zero extra I/O) — {expr}"
+                        "FilterId {id}: New filter → Row filter (byte_ratio {byte_ratio:.4} <= {}) — {expr}",
+                        config.byte_ratio_threshold
+                    );
+                    self.filter_states.insert(id, FilterState::RowFilter);
+                    row_filters.push((id, expr));
+                } else {
+                    debug!(
+                        "FilterId {id}: New filter → Post-scan (byte_ratio {byte_ratio:.4} > {}) — {expr}",
+                        config.byte_ratio_threshold
                     );
                     self.filter_states.insert(id, FilterState::PostScan);
                     post_scan_filters.push((id, expr));
-                } else {
-                    let byte_ratio = extra_bytes as f64 / projection_scan_size as f64;
-                    if byte_ratio <= config.byte_ratio_threshold {
-                        debug!(
-                            "FilterId {id}: New filter → Row filter via extra byte ratio {byte_ratio} <= threshold {} (extra_cols={}, filter_cols={}) — {expr}",
-                            config.byte_ratio_threshold,
-                            extra_columns.len(),
-                            filter_columns.len()
-                        );
-                        self.filter_states.insert(id, FilterState::RowFilter);
-                        row_filters.push((id, expr));
-                    } else {
-                        debug!(
-                            "FilterId {id}: New filter → Post-scan via extra byte ratio {byte_ratio} > threshold {} (extra_cols={}, filter_cols={}) — {expr}",
-                            config.byte_ratio_threshold,
-                            extra_columns.len(),
-                            filter_columns.len()
-                        );
-                        self.filter_states.insert(id, FilterState::PostScan);
-                        post_scan_filters.push((id, expr));
-                    }
                 }
                 continue;
             };
@@ -570,49 +715,63 @@ impl SelectivityTrackerInner {
             match state {
                 FilterState::RowFilter => {
                     // Should we demote this filter based on CI upper bound?
-                    if let Some(stats) = self.stats.get(&id)
-                        && let Some(ub) = stats.confidence_upper_bound(confidence_z)
-                        && ub < config.min_bytes_per_sec
-                    {
-                        debug!(
-                            "FilterId {id}: Row filter → Post-scan via CI upper bound {ub} < {} bytes/sec — {expr}",
-                            config.min_bytes_per_sec
-                        );
-                        self.demote_or_drop(id, &expr, &mut post_scan_filters);
-                        continue;
+                    if let Some(entry) = stats_map.get(&id) {
+                        let stats = entry.lock();
+                        if let Some(ub) = stats.confidence_upper_bound(confidence_z)
+                            && ub < config.min_bytes_per_sec
+                        {
+                            drop(stats);
+                            debug!(
+                                "FilterId {id}: Row filter → Post-scan via CI upper bound {ub} < {} bytes/sec — {expr}",
+                                config.min_bytes_per_sec
+                            );
+                            self.demote_or_drop(
+                                id,
+                                &expr,
+                                &mut post_scan_filters,
+                                stats_map,
+                            );
+                            continue;
+                        }
                     }
                     // If not demoted, keep as row filter.
                     row_filters.push((id, expr));
                 }
                 FilterState::PostScan => {
                     // Should we promote this filter based on CI lower bound?
-                    if let Some(stats) = self.stats.get(&id)
-                        && let Some(lb) = stats.confidence_lower_bound(confidence_z)
-                        && lb >= config.min_bytes_per_sec
-                    {
-                        debug!(
-                            "FilterId {id}: Post-scan → Row filter via CI lower bound {lb} >= {} bytes/sec — {expr}",
-                            config.min_bytes_per_sec
-                        );
-                        self.promote(id, expr, &mut row_filters);
-                        continue;
+                    if let Some(entry) = stats_map.get(&id) {
+                        let stats = entry.lock();
+                        if let Some(lb) = stats.confidence_lower_bound(confidence_z)
+                            && lb >= config.min_bytes_per_sec
+                        {
+                            drop(stats);
+                            debug!(
+                                "FilterId {id}: Post-scan → Row filter via CI lower bound {lb} >= {} bytes/sec — {expr}",
+                                config.min_bytes_per_sec
+                            );
+                            self.promote(id, expr, &mut row_filters, stats_map);
+                            continue;
+                        }
                     }
                     // Should we drop this filter if it's optional and ineffective?
                     // Non-optional filters must stay as post-scan regardless.
-                    if let Some(stats) = self.stats.get(&id)
-                        && let Some(ub) = stats.confidence_upper_bound(confidence_z)
-                        && ub < config.min_bytes_per_sec
-                        && expr
-                            .as_any()
-                            .downcast_ref::<OptionalFilterPhysicalExpr>()
-                            .is_some()
-                    {
-                        debug!(
-                            "FilterId {id}: Post-scan → Dropped via CI upper bound {ub} < {} bytes/sec — {expr}",
-                            config.min_bytes_per_sec
-                        );
-                        self.filter_states.insert(id, FilterState::Dropped);
-                        continue;
+                    if let Some(entry) = stats_map.get(&id) {
+                        let stats = entry.lock();
+                        if let Some(ub) = stats.confidence_upper_bound(confidence_z)
+                            && ub < config.min_bytes_per_sec
+                            && expr
+                                .as_any()
+                                .downcast_ref::<OptionalFilterPhysicalExpr>()
+                                .is_some()
+                        {
+                            drop(stats);
+                            debug!(
+                                "FilterId {id}: Post-scan → Dropped via CI upper bound {ub} < {} bytes/sec — {expr}",
+                                config.min_bytes_per_sec
+                            );
+                            self.filter_states.insert(id, FilterState::Dropped);
+                            continue;
+                        }
                     }
                     // Keep as post-scan filter (don't reset stats for mandatory filters).
                     post_scan_filters.push((id, expr));
@@ -628,8 +787,8 @@ impl SelectivityTrackerInner {
         let cmp_row_filters =
             |(id_a, expr_a): &(FilterId, Arc<dyn PhysicalExpr>),
              (id_b, expr_b): &(FilterId, Arc<dyn PhysicalExpr>)| {
-                let eff_a = self.get_effectiveness_by_id(*id_a);
-                let eff_b = self.get_effectiveness_by_id(*id_b);
+                let eff_a = self.get_effectiveness_by_id(*id_a, stats_map);
+                let eff_b = self.get_effectiveness_by_id(*id_b, stats_map);
                 if let (Some(eff_a), Some(eff_b)) = (eff_a, eff_b) {
                     eff_b
                         .partial_cmp(&eff_a)
@@ -650,9 +809,12 @@ impl SelectivityTrackerInner {
             row_filters.len(),
             post_scan_filters.len()
         );
-        PartitionedFilters {
-            row_filters,
-            post_scan: post_scan_filters,
+        PartitionResult {
+            partitioned: PartitionedFilters {
+                row_filters,
+                post_scan: post_scan_filters,
+            },
+            new_filter_ids,
         }
     }
 }
@@ -927,7 +1089,7 @@ mod tests {
             let config = TrackerConfig::default();
 
             assert!(config.min_bytes_per_sec.is_infinite());
-            assert_eq!(config.byte_ratio_threshold, 0.05);
+            assert_eq!(config.byte_ratio_threshold, 0.20);
             assert_eq!(config.confidence_z, 2.0);
         }
 
@@ -992,7 +1154,7 @@ mod tests {
             let expr = col_expr("a", 0);
             let filters = vec![(1, expr)];
 
-            let result = tracker.partition_filters(filters, 1000, &[], &metadata);
+            let result = tracker.partition_filters(filters, 1000, &metadata);
 
             // With 100% byte ratio, should go to post-scan
             assert_eq!(result.row_filters.len(), 0);
@@ -1000,7 +1162,7 @@ mod tests {
         }
 
         #[test]
-        fn test_initial_placement_filter_in_projection_starts_postscan() {
+        fn test_initial_placement_filter_in_projection_low_ratio() {
             let tracker = TrackerConfig::new()
                 .with_min_bytes_per_sec(1000.0)
                 .with_byte_ratio_threshold(0.5)
@@ -1009,15 +1171,15 @@ mod tests {
             // Create metadata: 1 row group, 100 rows, 100 bytes for column
             let metadata = create_test_metadata(vec![(100, vec![100])]);
 
-            // Filter using column 0 which IS in the projection
+            // Filter using column 0 which IS in the projection.
+            // filter_bytes=100, projection=1000, ratio=0.10 <= 0.5 → RowFilter
             let expr = col_expr("a", 0);
             let filters = vec![(1, expr)];
 
-            // projection_columns includes col 0 → extra_bytes = 0 → PostScan
-            let result = tracker.partition_filters(filters, 1000, &[0], &metadata);
+            let result = tracker.partition_filters(filters, 1000, &metadata);
 
-            assert_eq!(result.row_filters.len(), 0);
-            assert_eq!(result.post_scan.len(), 1);
+            assert_eq!(result.row_filters.len(), 1);
+            assert_eq!(result.post_scan.len(), 0);
         }
 
         #[test]
@@ -1035,7 +1197,7 @@ mod tests {
             let expr = col_expr("a", 0);
             let filters = vec![(1, expr)];
 
-            let result = tracker.partition_filters(filters, 1000, &[], &metadata);
+            let result = tracker.partition_filters(filters, 1000, &metadata);
 
             // With 10% byte ratio, should go to row-filter
             assert_eq!(result.row_filters.len(), 1);
@@ -1052,7 +1214,7 @@ mod tests {
             let expr = col_expr("a", 0);
             let filters = vec![(1, expr)];
 
-            let result = tracker.partition_filters(filters, 1000, &[], &metadata);
+            let result = tracker.partition_filters(filters, 1000, &metadata);
 
             // All filters should go to post_scan when min_bytes_per_sec is INFINITY
             assert_eq!(result.row_filters.len(), 0);
@@ -1067,7 +1229,7 @@ mod tests {
             let expr = col_expr("a", 0);
             let filters = vec![(1, expr)];
 
-            let result = tracker.partition_filters(filters, 1000, &[], &metadata);
+            let result = tracker.partition_filters(filters, 1000, &metadata);
 
             // All filters should be promoted to row_filters when min_bytes_per_sec is 0
             assert_eq!(result.row_filters.len(), 1);
@@ -1087,7 +1249,7 @@ mod tests {
             let filters = vec![(1, expr.clone())];
 
             // First partition: goes to PostScan (high byte ratio)
-            let result = tracker.partition_filters(filters.clone(), 1000, &[], &metadata);
+            let result = tracker.partition_filters(filters.clone(), 1000, &metadata);
             assert_eq!(result.post_scan.len(), 1);
             assert_eq!(result.row_filters.len(), 0);
 
@@ -1097,7 +1259,7 @@ mod tests {
             }
 
             // Second partition: should be promoted to RowFilter
-            let result = tracker.partition_filters(filters, 1000, &[], &metadata);
+            let result = tracker.partition_filters(filters, 1000, &metadata);
             assert_eq!(result.row_filters.len(), 1);
             assert_eq!(result.post_scan.len(), 0);
         }
@@ -1115,7 +1277,7 @@ mod tests {
             let filters = vec![(1, expr.clone())];
 
             // First partition: goes to RowFilter (low byte ratio)
-            let result = tracker.partition_filters(filters.clone(), 1000, &[], &metadata);
+            let result = tracker.partition_filters(filters.clone(), 1000, &metadata);
             assert_eq!(result.row_filters.len(), 1);
             assert_eq!(result.post_scan.len(), 0);
 
@@ -1125,7 +1287,7 @@ mod tests {
             }
 
             // Second partition: should be demoted to PostScan
-            let result = tracker.partition_filters(filters, 1000, &[], &metadata);
+            let result = tracker.partition_filters(filters, 1000, &metadata);
             assert_eq!(result.row_filters.len(), 0);
             assert_eq!(result.post_scan.len(), 1);
         }
@@ -1143,17 +1305,21 @@ mod tests {
             let filters = vec![(1, expr.clone())];
 
             // Start as RowFilter
-            tracker.partition_filters(filters.clone(), 1000, &[], &metadata);
+            tracker.partition_filters(filters.clone(), 1000, &metadata);
 
             // Add stats
             tracker.update(1, 100, 100, 100_000, 1000);
             tracker.update(1, 100, 100, 100_000, 1000);
 
             // Demote
-            tracker.partition_filters(filters.clone(), 1000, &[], &metadata);
+            tracker.partition_filters(filters.clone(), 1000, &metadata);
 
-            // Stats should be cleared, so on next update it starts fresh
-            assert_eq!(tracker.inner.read().stats.len(), 0);
+            // Stats should be zeroed after demotion
+            let stats_map = tracker.filter_stats.read();
+            assert_eq!(
+                *stats_map.get(&1).unwrap().lock(),
+                SelectivityStats::default()
+            );
         }
 
         #[test]
@@ -1169,7 +1335,7 @@ mod tests {
             let filters = vec![(1, expr.clone())];
 
             // Start as PostScan
-            tracker.partition_filters(filters.clone(), 1000, &[], &metadata);
+            tracker.partition_filters(filters.clone(), 1000, &metadata);
 
             // Add stats
             for _ in 0..3 {
@@ -1177,10 +1343,14 @@ mod tests {
             }
 
             // Promote
-            tracker.partition_filters(filters.clone(), 1000, &[], &metadata);
+            tracker.partition_filters(filters.clone(), 1000, &metadata);
 
-            // Stats should be cleared after promotion
-            assert_eq!(tracker.inner.read().stats.len(), 0);
+            // Stats should be zeroed after promotion
+            let stats_map = tracker.filter_stats.read();
+            assert_eq!(
+                *stats_map.get(&1).unwrap().lock(),
+                SelectivityStats::default()
+            );
         }
 
         #[test]
@@ -1196,7 +1366,7 @@ mod tests {
             let filters = vec![(1, expr.clone())];
 
             // Start as PostScan
-            tracker.partition_filters(filters.clone(), 1000, &[], &metadata);
+            tracker.partition_filters(filters.clone(), 1000, &metadata);
 
             // Feed poor effectiveness stats
             for _ in 0..5 {
@@ -1204,7 +1374,7 @@ mod tests {
             }
 
             // Next partition: should stay as PostScan (not dropped because not optional)
-            let result = tracker.partition_filters(filters, 1000, &[], &metadata);
+            let result = tracker.partition_filters(filters, 1000, &metadata);
             assert_eq!(result.post_scan.len(), 1);
             assert_eq!(result.row_filters.len(), 0);
         }
@@ -1223,12 +1393,12 @@ mod tests {
             // Mark filter as dropped by manually setting state
             tracker
                 .inner
-                .write()
+                .lock()
                 .filter_states
                 .insert(1, FilterState::Dropped);
 
             // On next partition, dropped filters should not reappear
-            let result = tracker.partition_filters(filters, 1000, &[], &metadata);
+            let result = tracker.partition_filters(filters, 1000, &metadata);
             assert_eq!(result.row_filters.len(), 0);
             assert_eq!(result.post_scan.len(), 0);
         }
@@ -1252,7 +1422,7 @@ mod tests {
             ];
 
             // Partition should process all filters
-            let result = tracker.partition_filters(filters.clone(), 1000, &[], &metadata);
+            let result = tracker.partition_filters(filters.clone(), 1000, &metadata);
 
             // With min_bytes_per_sec=1.0, filters should be partitioned
             assert!(result.row_filters.len() + result.post_scan.len() > 0);
@@ -1262,7 +1432,7 @@ mod tests {
             tracker.update(2, 10, 100, 1_000_000, 100);
             tracker.update(3, 40, 100, 1_000_000, 100);
 
-            let result2 = tracker.partition_filters(filters, 1000, &[], &metadata);
+            let result2 = tracker.partition_filters(filters, 1000, &metadata);
 
             // Filters should still be partitioned
             assert!(result2.row_filters.len() + result2.post_scan.len() > 0);
@@ -1283,13 +1453,13 @@ mod tests {
             ];
 
             // First partition - no stats yet
-            let result = tracker.partition_filters(filters.clone(), 1000, &[], &metadata);
+            let result = tracker.partition_filters(filters.clone(), 1000, &metadata);
 
             // All filters should be processed (partitioned into row/post-scan)
             assert!(result.row_filters.len() + result.post_scan.len() > 0);
 
             // Filters should be consistent on repeated calls
-            let result2 = tracker.partition_filters(filters, 1000, &[], &metadata);
+            let result2 = tracker.partition_filters(filters, 1000, &metadata);
             assert_eq!(
                 result.row_filters.len() + result.post_scan.len(),
                 result2.row_filters.len() + result2.post_scan.len()
@@ -1310,7 +1480,7 @@ mod tests {
 
             // First partition
             let result1 =
-                tracker.partition_filters(filters.clone(), 1000, &[], &metadata);
+                tracker.partition_filters(filters.clone(), 1000, &metadata);
             assert!(result1.row_filters.len() + result1.post_scan.len() > 0);
 
             // Only add stats for filters 1 and 3, not 2
@@ -1318,7 +1488,7 @@ mod tests {
             tracker.update(3, 60, 100, 1_000_000, 100);
 
             // Second partition with partial stats
-            let result2 = tracker.partition_filters(filters, 1000, &[], &metadata);
+            let result2 = tracker.partition_filters(filters, 1000, &metadata);
             assert!(result2.row_filters.len() + result2.post_scan.len() > 0);
         }
 
@@ -1334,8 +1504,8 @@ mod tests {
             ];
 
             let result1 =
-                tracker.partition_filters(filters.clone(), 1000, &[], &metadata);
-            let result2 = tracker.partition_filters(filters, 1000, &[], &metadata);
+                tracker.partition_filters(filters.clone(), 1000, &metadata);
+            let result2 = tracker.partition_filters(filters, 1000, &metadata);
 
             // Without stats and with identical byte sizes, order should be stable
             assert_eq!(result1.row_filters[0].0, result2.row_filters[0].0);
@@ -1362,11 +1532,12 @@ mod tests {
             let expr1 = col_expr("a", 0);
             let filters1 = vec![(1, expr1)];
 
-            tracker.partition_filters(filters1, 1000, &[], &metadata);
+            tracker.partition_filters(filters1, 1000, &metadata);
             tracker.update(1, 50, 100, 100_000, 1000);
 
             // Generation 0 doesn't trigger state reset
-            let snapshot_gen = tracker.inner.read().snapshot_generations.get(&1).copied();
+            let snapshot_gen =
+                tracker.inner.lock().snapshot_generations.get(&1).copied();
             assert_eq!(snapshot_gen, None);
         }
 
@@ -1377,45 +1548,77 @@ mod tests {
                 .with_byte_ratio_threshold(0.5)
                 .build();
 
+            // Pre-populate stats entry so update() can find it
+            tracker.ensure_stats_entry(1);
+
             // Initialize generation to 100
-            tracker.inner.write().note_generation(1, 100);
+            {
+                let mut inner = tracker.inner.lock();
+                let stats = tracker.filter_stats.read();
+                inner.note_generation(1, 100, &stats);
+            }
 
             // Add stats
             tracker.update(1, 50, 100, 100_000, 1000);
             tracker.update(1, 50, 100, 100_000, 1000);
 
-            let stats_before = tracker.inner.read().stats.contains_key(&1);
+            let stats_before = {
+                let stats_map = tracker.filter_stats.read();
+                *stats_map.get(&1).unwrap().lock() != SelectivityStats::default()
+            };
             assert!(stats_before);
 
             // Simulate generation change to a different value
-            tracker.inner.write().note_generation(1, 101);
+            {
+                let mut inner = tracker.inner.lock();
+                let stats = tracker.filter_stats.read();
+                inner.note_generation(1, 101, &stats);
+            }
 
-            // Stats should be cleared on generation change
-            let stats_after = tracker.inner.read().stats.contains_key(&1);
-            assert!(!stats_after);
+            // Stats should be zeroed on generation change
+            let stats_after = {
+                let stats_map = tracker.filter_stats.read();
+                *stats_map.get(&1).unwrap().lock() == SelectivityStats::default()
+            };
+            assert!(stats_after);
         }
 
         #[test]
         fn test_generation_unchanged_preserves_stats() {
             let tracker = TrackerConfig::new().with_min_bytes_per_sec(1000.0).build();
 
+            // Pre-populate stats entry so update() can find it
+            tracker.ensure_stats_entry(1);
+
             // Manually set generation
-            tracker.inner.write().note_generation(1, 100);
+            {
+                let mut inner = tracker.inner.lock();
+                let stats = tracker.filter_stats.read();
+                inner.note_generation(1, 100, &stats);
+            }
 
             // Add stats
             tracker.update(1, 50, 100, 100_000, 1000);
             tracker.update(1, 50, 100, 100_000, 1000);
 
-            let sample_count_before =
-                tracker.inner.read().stats.get(&1).map(|s| s.sample_count);
+            let sample_count_before = {
+                let stats_map = tracker.filter_stats.read();
+                stats_map.get(&1).map(|s| s.lock().sample_count)
+            };
             assert_eq!(sample_count_before, Some(2));
 
             // Call note_generation with same generation
-            tracker.inner.write().note_generation(1, 100);
+            {
+                let mut inner = tracker.inner.lock();
+                let stats = tracker.filter_stats.read();
+                inner.note_generation(1, 100, &stats);
+            }
 
             // Stats should be preserved
-            let sample_count_after =
-                tracker.inner.read().stats.get(&1).map(|s| s.sample_count);
+            let sample_count_after = {
+                let stats_map = tracker.filter_stats.read();
+                stats_map.get(&1).map(|s| s.lock().sample_count)
+            };
             assert_eq!(sample_count_after, Some(2));
         }
 
@@ -1431,16 +1634,22 @@ mod tests {
             // First partition: goes to RowFilter
             let expr = col_expr("a", 0);
             let filters = vec![(1, expr)];
-            tracker.partition_filters(filters.clone(), 1000, &[], &metadata);
+            tracker.partition_filters(filters.clone(), 1000, &metadata);
 
-            let state_before = tracker.inner.read().filter_states.get(&1).copied();
+            let state_before =
+                tracker.inner.lock().filter_states.get(&1).copied();
             assert_eq!(state_before, Some(FilterState::RowFilter));
 
             // Simulate generation change
-            tracker.inner.write().note_generation(1, 100);
+            {
+                let mut inner = tracker.inner.lock();
+                let stats = tracker.filter_stats.read();
+                inner.note_generation(1, 100, &stats);
+            }
 
             // State should be preserved despite stats being cleared
-            let state_after = tracker.inner.read().filter_states.get(&1).copied();
+            let state_after =
+                tracker.inner.lock().filter_states.get(&1).copied();
             assert_eq!(state_after, Some(FilterState::RowFilter));
         }
 
@@ -1454,16 +1663,25 @@ mod tests {
             // Manually set filter state to Dropped
             tracker
                 .inner
-                .write()
+                .lock()
                 .filter_states
                 .insert(1, FilterState::Dropped);
-            tracker.inner.write().note_generation(1, 100);
+            {
+                let mut inner = tracker.inner.lock();
+                let stats = tracker.filter_stats.read();
+                inner.note_generation(1, 100, &stats);
+            }
 
             // Simulate generation change
-            tracker.inner.write().note_generation(1, 101);
+            {
+                let mut inner = tracker.inner.lock();
+                let stats = tracker.filter_stats.read();
+                inner.note_generation(1, 101, &stats);
+            }
 
             // Dropped filter should be un-dropped to PostScan
-            let state_after = tracker.inner.read().filter_states.get(&1).copied();
+            let state_after =
+                tracker.inner.lock().filter_states.get(&1).copied();
             assert_eq!(state_after, Some(FilterState::PostScan));
         }
 
@@ -1471,20 +1689,39 @@ mod tests {
         fn test_multiple_filters_independent_generation_tracking() {
             let tracker = TrackerConfig::new().with_min_bytes_per_sec(1000.0).build();
 
+            // Pre-populate stats entries so update() can find them
+            tracker.ensure_stats_entry(1);
+            tracker.ensure_stats_entry(2);
+
             // Set generations for multiple filters
-            tracker.inner.write().note_generation(1, 100);
-            tracker.inner.write().note_generation(2, 200);
+            {
+                let mut inner = tracker.inner.lock();
+                let stats = tracker.filter_stats.read();
+                inner.note_generation(1, 100, &stats);
+                inner.note_generation(2, 200, &stats);
+            }
 
             // Add stats to both
             tracker.update(1, 50, 100, 100_000, 1000);
             tracker.update(2, 50, 100, 100_000, 1000);
 
             // Change generation of filter 1 only
-            tracker.inner.write().note_generation(1, 101);
+            {
+                let mut inner = tracker.inner.lock();
+                let stats = tracker.filter_stats.read();
+                inner.note_generation(1, 101, &stats);
+            }
 
-            // Filter 1 stats should be cleared, filter 2 preserved
-            assert!(!tracker.inner.read().stats.contains_key(&1));
-            assert!(tracker.inner.read().stats.contains_key(&2));
+            // Filter 1 stats should be zeroed, filter 2 preserved
+            let stats_map = tracker.filter_stats.read();
+            assert_eq!(
+                *stats_map.get(&1).unwrap().lock(),
+                SelectivityStats::default()
+            );
+            assert_ne!(
+                *stats_map.get(&2).unwrap().lock(),
+                SelectivityStats::default()
+            );
         }
     }
 
@@ -1505,7 +1742,7 @@ mod tests {
             let filters = vec![(1, expr.clone())];
 
             // Step 1: Initial placement (PostScan)
-            let result = tracker.partition_filters(filters.clone(), 1000, &[], &metadata);
+            let result = tracker.partition_filters(filters.clone(), 1000, &metadata);
             assert_eq!(result.post_scan.len(), 1);
             assert_eq!(result.row_filters.len(), 0);
 
@@ -1515,12 +1752,12 @@ mod tests {
             }
 
             // Step 3: Promotion should occur
-            let result = tracker.partition_filters(filters.clone(), 1000, &[], &metadata);
+            let result = tracker.partition_filters(filters.clone(), 1000, &metadata);
             assert_eq!(result.row_filters.len(), 1);
             assert_eq!(result.post_scan.len(), 0);
 
             // Step 4: Continue to partition without additional updates
-            let result = tracker.partition_filters(filters, 1000, &[], &metadata);
+            let result = tracker.partition_filters(filters, 1000, &metadata);
             assert_eq!(result.row_filters.len(), 1);
             assert_eq!(result.post_scan.len(), 0);
         }
@@ -1538,7 +1775,7 @@ mod tests {
             let filters = vec![(1, expr.clone())];
 
             // Step 1: Initial placement (RowFilter)
-            let result = tracker.partition_filters(filters.clone(), 1000, &[], &metadata);
+            let result = tracker.partition_filters(filters.clone(), 1000, &metadata);
             assert_eq!(result.row_filters.len(), 1);
             assert_eq!(result.post_scan.len(), 0);
 
@@ -1548,12 +1785,12 @@ mod tests {
             }
 
             // Step 3: Demotion should occur
-            let result = tracker.partition_filters(filters.clone(), 1000, &[], &metadata);
+            let result = tracker.partition_filters(filters.clone(), 1000, &metadata);
             assert_eq!(result.row_filters.len(), 0);
             assert_eq!(result.post_scan.len(), 1);
 
             // Step 4: Continue to partition without additional updates
-            let result = tracker.partition_filters(filters, 1000, &[], &metadata);
+            let result = tracker.partition_filters(filters, 1000, &metadata);
             assert_eq!(result.row_filters.len(), 0);
             assert_eq!(result.post_scan.len(), 1);
         }
@@ -1570,7 +1807,7 @@ mod tests {
             let filters = vec![(1, col_expr("a", 0)), (2, col_expr("a", 1))];
 
             // Initial partition: both go to PostScan (500/1000 = 0.5 > 0.4)
-            let result = tracker.partition_filters(filters.clone(), 1000, &[], &metadata);
+            let result = tracker.partition_filters(filters.clone(), 1000, &metadata);
             assert_eq!(result.post_scan.len(), 2);
 
             // Filter 1: high effectiveness (promote)
@@ -1584,7 +1821,7 @@ mod tests {
             }
 
             // Next partition: Filter 1 promoted, Filter 2 stays PostScan
-            let result = tracker.partition_filters(filters, 1000, &[], &metadata);
+            let result = tracker.partition_filters(filters, 1000, &metadata);
             assert_eq!(result.row_filters.len(), 1);
             assert_eq!(result.post_scan.len(), 1);
             assert_eq!(result.row_filters[0].0, 1);
@@ -1597,7 +1834,7 @@ mod tests {
             let metadata = create_test_metadata(vec![(100, vec![1000])]);
             let filters = vec![];
 
-            let result = tracker.partition_filters(filters, 1000, &[], &metadata);
+            let result = tracker.partition_filters(filters, 1000, &metadata);
 
             assert_eq!(result.row_filters.len(), 0);
             assert_eq!(result.post_scan.len(), 0);
@@ -1611,7 +1848,7 @@ mod tests {
             let expr = col_expr("a", 0);
             let filters = vec![(1, expr)];
 
-            let result = tracker.partition_filters(filters, 1000, &[], &metadata);
+            let result = tracker.partition_filters(filters, 1000, &metadata);
 
             assert_eq!(result.row_filters.len(), 1);
             assert_eq!(result.post_scan.len(), 0);
@@ -1630,7 +1867,7 @@ mod tests {
             let filters = vec![(1, expr.clone())];
 
             // Start as RowFilter
-            tracker.partition_filters(filters.clone(), 1000, &[], &metadata);
+            tracker.partition_filters(filters.clone(), 1000, &metadata);
 
             // All rows match (zero effectiveness)
             for _ in 0..5 {
@@ -1638,7 +1875,7 @@ mod tests {
             }
 
             // Should demote due to CI upper bound being 0
-            let result = tracker.partition_filters(filters, 1000, &[], &metadata);
+            let result = tracker.partition_filters(filters, 1000, &metadata);
             assert_eq!(result.row_filters.len(), 0);
             assert_eq!(result.post_scan.len(), 1);
         }
