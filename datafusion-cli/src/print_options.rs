@@ -115,7 +115,7 @@ impl PrintOptions {
         row_count: usize,
         format_options: &FormatOptions,
     ) -> Result<()> {
-        let stdout = std::io::stdout();
+        let stdout = io::stdout();
         let mut writer = stdout.lock();
 
         self.format.print_batches(
@@ -137,7 +137,7 @@ impl PrintOptions {
             query_start_time,
         );
 
-        self.write_output(&mut writer, formatted_exec_details)
+        self.write_output(&mut writer, &formatted_exec_details)
     }
 
     /// Print the stream to stdout using the specified format
@@ -153,7 +153,7 @@ impl PrintOptions {
             ));
         };
 
-        let stdout = std::io::stdout();
+        let stdout = io::stdout();
         let mut writer = stdout.lock();
 
         let mut row_count = 0_usize;
@@ -179,13 +179,13 @@ impl PrintOptions {
             query_start_time,
         );
 
-        self.write_output(&mut writer, formatted_exec_details)
+        self.write_output(&mut writer, &formatted_exec_details)
     }
 
     fn write_output<W: io::Write>(
         &self,
         writer: &mut W,
-        formatted_exec_details: String,
+        formatted_exec_details: &str,
     ) -> Result<()> {
         if !self.quiet {
             writeln!(writer, "{formatted_exec_details}")?;
@@ -237,11 +237,11 @@ mod tests {
 
         let mut print_output: Vec<u8> = Vec::new();
         let exec_out = String::from("Formatted Exec Output");
-        print_options.write_output(&mut print_output, exec_out.clone())?;
+        print_options.write_output(&mut print_output, &exec_out)?;
         assert!(print_output.is_empty());
 
         print_options.quiet = false;
-        print_options.write_output(&mut print_output, exec_out.clone())?;
+        print_options.write_output(&mut print_output, &exec_out)?;
         let out_str: String = print_output
             .clone()
             .try_into()
@@ -253,7 +253,7 @@ mod tests {
         print_options
             .instrumented_registry
             .set_instrument_mode(InstrumentedObjectStoreMode::Trace);
-        print_options.write_output(&mut print_output, exec_out.clone())?;
+        print_options.write_output(&mut print_output, &exec_out)?;
         let out_str: String = print_output
             .clone()
             .try_into()

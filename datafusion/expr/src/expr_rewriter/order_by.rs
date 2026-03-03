@@ -116,13 +116,13 @@ fn rewrite_in_terms_of_projection(
 
         if let Some(found) = found {
             return Ok(Transformed::yes(match normalized_expr {
-                Expr::Cast(Cast { expr: _, data_type }) => Expr::Cast(Cast {
+                Expr::Cast(Cast { expr: _, field }) => Expr::Cast(Cast {
                     expr: Box::new(found),
-                    data_type,
+                    field,
                 }),
-                Expr::TryCast(TryCast { expr: _, data_type }) => Expr::TryCast(TryCast {
+                Expr::TryCast(TryCast { expr: _, field }) => Expr::TryCast(TryCast {
                     expr: Box::new(found),
-                    data_type,
+                    field,
                 }),
                 _ => found,
             }));

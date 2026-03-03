@@ -20,8 +20,9 @@
 use arrow::array::{
     ArrayRef, Float32Array, Float64Array, RecordBatch, StringArray, StringViewBuilder,
     UInt64Array,
-    builder::{Int64Builder, StringBuilder},
+    builder::{Int64Builder, StringBuilder, StringDictionaryBuilder},
 };
+use arrow::datatypes::Int32Type;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::datasource::MemTable;
 use datafusion::error::Result;
@@ -65,6 +66,11 @@ pub fn create_schema() -> Schema {
         // Integers randomly selected from a narrow range of values such that
         // there are a few distinct values, but they are repeated often.
         Field::new("u64_narrow", DataType::UInt64, false),
+        Field::new(
+            "dict10",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            true,
+        ),
     ])
 }
 
@@ -109,6 +115,15 @@ fn create_record_batch(
         .map(|_| rng.random_range(0..10))
         .collect::<Vec<_>>();
 
+    let mut dict_builder = StringDictionaryBuilder::<Int32Type>::new();
+    for _ in 0..batch_size {
+        if rng.random::<f64>() > 0.9 {
+            dict_builder.append_null();
+        } else {
+            dict_builder.append_value(format!("market_{}", rng.random_range(0..10)));
+        }
+    }
+
     RecordBatch::try_new(
         schema,
         vec![
@@ -118,6 +133,7 @@ fn create_record_batch(
             Arc::new(UInt64Array::from(integer_values_wide)),
             Arc::new(UInt64Array::from(integer_values_mid)),
             Arc::new(UInt64Array::from(integer_values_narrow)),
+            Arc::new(dict_builder.finish()),
         ],
     )
     .unwrap()
