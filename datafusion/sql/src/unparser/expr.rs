@@ -1801,10 +1801,10 @@ impl Unparser<'_> {
             DataType::Union(_, _) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
-            DataType::Dictionary(_, val) => self.arrow_dtype_to_ast_dtype(&val.clone().into_nullable_field_ref()),
-            DataType::RunEndEncoded(_, val) => {
-                self.arrow_dtype_to_ast_dtype(val)
+            DataType::Dictionary(_, val) => {
+                self.arrow_dtype_to_ast_dtype(&val.clone().into_nullable_field_ref())
             }
+            DataType::RunEndEncoded(_, val) => self.arrow_dtype_to_ast_dtype(val),
             DataType::Decimal32(precision, scale)
             | DataType::Decimal64(precision, scale)
             | DataType::Decimal128(precision, scale)
@@ -3180,10 +3180,13 @@ mod tests {
 
         let unparser = Unparser::new(&dialect);
 
-        let ast_dtype = unparser.arrow_dtype_to_ast_dtype(&DataType::RunEndEncoded(
-            Field::new("run_ends", DataType::Int32, false).into(),
-            Field::new("values", DataType::Utf8, true).into(),
-        ).into_nullable_field_ref())?;
+        let ast_dtype = unparser.arrow_dtype_to_ast_dtype(
+            &DataType::RunEndEncoded(
+                Field::new("run_ends", DataType::Int32, false).into(),
+                Field::new("values", DataType::Utf8, true).into(),
+            )
+            .into_nullable_field_ref(),
+        )?;
 
         assert_eq!(ast_dtype, ast::DataType::Varchar(None));
 
