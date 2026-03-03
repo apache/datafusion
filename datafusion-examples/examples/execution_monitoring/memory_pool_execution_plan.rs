@@ -29,6 +29,7 @@
 use arrow::record_batch::RecordBatch;
 use arrow_schema::SchemaRef;
 use datafusion::common::record_batch;
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::common::{exec_datafusion_err, internal_err};
 use datafusion::datasource::{DefaultTableSource, memory::MemTable};
 use datafusion::error::Result;
@@ -295,5 +296,21 @@ impl ExecutionPlan for BufferingExecutionPlan {
                     })
             }),
         )))
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(
+            &dyn datafusion::physical_plan::PhysicalExpr,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Visit expressions in the output ordering from equivalence properties
+        let mut tnr = TreeNodeRecursion::Continue;
+        if let Some(ordering) = self.properties.output_ordering() {
+            for sort_expr in ordering {
+                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
+            }
+        }
+        Ok(tnr)
     }
 }
