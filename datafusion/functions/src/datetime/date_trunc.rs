@@ -458,7 +458,6 @@ impl ScalarUDFImpl for DateTruncFunc {
             }
         };
 
-
         let truncated_literal = match lit_expr.as_literal() {
             // Timestamp types (smallest to largest granularity)
             Some(ScalarValue::TimestampNanosecond(Some(ts_val), ts_tz)) => {
@@ -491,7 +490,10 @@ impl ScalarUDFImpl for DateTruncFunc {
                 let trunc_tval = truncate_time_nanos(*ts_val, granularity);
                 let next_tval = increment_time_nanos(trunc_tval, granularity);
                 if trunc_tval == next_tval {
-                    return exec_err!("{:?} too coarse for time in Nanoseconds", granularity.as_str());
+                    return exec_err!(
+                        "{:?} too coarse for time in Nanoseconds",
+                        granularity.as_str()
+                    );
                 }
 
                 Interval::try_new(
@@ -503,7 +505,10 @@ impl ScalarUDFImpl for DateTruncFunc {
                 let trunc_tval = truncate_time_micros(*ts_val, granularity);
                 let next_tval = increment_time_micros(trunc_tval, granularity);
                 if trunc_tval == next_tval {
-                    return exec_err!("{:?} too coarse for time in Microseconds", granularity.as_str());
+                    return exec_err!(
+                        "{:?} too coarse for time in Microseconds",
+                        granularity.as_str()
+                    );
                 }
 
                 Interval::try_new(
@@ -515,7 +520,10 @@ impl ScalarUDFImpl for DateTruncFunc {
                 let trunc_tval = truncate_time_millis(*ts_val, granularity);
                 let next_tval = increment_time_millis(trunc_tval, granularity);
                 if trunc_tval == next_tval {
-                    return exec_err!("{:?} too coarse for time in Milliseconds", granularity.as_str());
+                    return exec_err!(
+                        "{:?} too coarse for time in Milliseconds",
+                        granularity.as_str()
+                    );
                 }
 
                 Interval::try_new(
@@ -527,7 +535,10 @@ impl ScalarUDFImpl for DateTruncFunc {
                 let trunc_tval = truncate_time_secs(*ts_val, granularity);
                 let next_tval = increment_time_secs(trunc_tval, granularity);
                 if trunc_tval == next_tval {
-                    return exec_err!("{:?} too coarse for time in Seconds", granularity.as_str());
+                    return exec_err!(
+                        "{:?} too coarse for time in Seconds",
+                        granularity.as_str()
+                    );
                 }
 
                 Interval::try_new(
@@ -1049,15 +1060,17 @@ fn trunc_interval_for_ts<TsType: ArrowTimestampType>(
     let parsed_tz = parse_tz(ts_tz)?;
 
     // general_date_trunc returns values in TsType::UNIT (seconds/millis/micros/nanos)
-    let lower_val =
-        general_date_trunc(TsType::UNIT, *ts_val, parsed_tz, ts_granularity)?;
+    let lower_val = general_date_trunc(TsType::UNIT, *ts_val, parsed_tz, ts_granularity)?;
 
     // Increment based on timestamp unit and granularity
     let upper_val = if ts_granularity.valid_for_time() {
         increment_time_unit(TsType::UNIT, lower_val, ts_granularity)
     } else {
         increment_timestamp_nanos_calendar(
-            TsType::UNIT, lower_val, parsed_tz, ts_granularity,
+            TsType::UNIT,
+            lower_val,
+            parsed_tz,
+            ts_granularity,
         )?
     };
 
@@ -1737,7 +1750,9 @@ mod tests {
         // Note: This scenario is unreachable from SQL because invalid granularities
         // are rejected earlier in invoke_with_args (line 272). These tests verify
         // defensive error checking in the preimage computation.
-        use datafusion_expr::{col, lit, preimage::PreimageResult, simplify::SimplifyContext, Expr};
+        use datafusion_expr::{
+            Expr, col, lit, preimage::PreimageResult, simplify::SimplifyContext,
+        };
 
         let date_trunc_func = DateTruncFunc::new();
         let info = SimplifyContext::default();
@@ -1755,7 +1770,8 @@ mod tests {
         // Test Time64Microsecond (microsecond precision) with microsecond granularity
         // Should succeed because microseconds can be represented
         let args = vec![lit("microsecond"), col("x")];
-        let lit_expr = Expr::Literal(ScalarValue::Time64Microsecond(Some(45296000000)), None);
+        let lit_expr =
+            Expr::Literal(ScalarValue::Time64Microsecond(Some(45296000000)), None);
         let result = date_trunc_func.preimage(&args, &lit_expr, &info);
         assert!(result.is_ok());
         assert!(matches!(result.unwrap(), PreimageResult::Range { .. }));
@@ -1764,7 +1780,9 @@ mod tests {
     #[test]
     fn test_date_trunc_preimage_time_interval_bounds() {
         // Verify that preimage creates correct interval bounds with truncated lower value
-        use datafusion_expr::{col, lit, preimage::PreimageResult, simplify::SimplifyContext, Expr};
+        use datafusion_expr::{
+            Expr, col, lit, preimage::PreimageResult, simplify::SimplifyContext,
+        };
 
         let date_trunc_func = DateTruncFunc::new();
         let info = SimplifyContext::default();
@@ -1782,11 +1800,18 @@ mod tests {
 
         // Time32Millisecond: verify bounds are truncated
         let args = vec![lit("second"), col("x")];
-        let lit_expr = Expr::Literal(ScalarValue::Time32Millisecond(Some(45296500)), None);
+        let lit_expr =
+            Expr::Literal(ScalarValue::Time32Millisecond(Some(45296500)), None);
         let result = date_trunc_func.preimage(&args, &lit_expr, &info).unwrap();
         if let PreimageResult::Range { interval, .. } = result {
-            assert_eq!(interval.lower(), &ScalarValue::Time32Millisecond(Some(45296000)));
-            assert_eq!(interval.upper(), &ScalarValue::Time32Millisecond(Some(45297000)));
+            assert_eq!(
+                interval.lower(),
+                &ScalarValue::Time32Millisecond(Some(45296000))
+            );
+            assert_eq!(
+                interval.upper(),
+                &ScalarValue::Time32Millisecond(Some(45297000))
+            );
         } else {
             panic!("Expected Range result");
         }
