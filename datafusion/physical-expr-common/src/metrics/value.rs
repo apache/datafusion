@@ -1050,8 +1050,8 @@ impl Display for MetricValue {
                 write!(f, "{pruning_metrics}")
             }
             Self::Ratio { ratio_metrics, .. } => write!(f, "{ratio_metrics}"),
-            Self::Custom { name, value } => {
-                write!(f, "name:{name} {value}")
+            Self::Custom { value, .. } => {
+                write!(f, "{value}")
             }
         }
     }
@@ -1144,6 +1144,12 @@ mod tests {
         } else {
             panic!("Unexpected value");
         }
+    }
+
+    #[test]
+    fn test_display_custom_metric() {
+        let custom_val = new_custom_counter("hi", 11);
+        assert_eq!(custom_val.to_string(), "count: 11");
     }
 
     #[test]
