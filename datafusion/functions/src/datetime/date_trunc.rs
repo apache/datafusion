@@ -110,6 +110,22 @@ impl DateTruncGranularity {
         }
     }
 
+    /// Convert a DateTruncGranularity enum into a granularity string for error reporting
+    fn as_str(&self) -> &str {
+        match self {
+            Self::Microsecond => "microsecond",
+            Self::Millisecond => "millisecond",
+            Self::Second => "second",
+            Self::Minute => "minute",
+            Self::Hour => "hour",
+            Self::Day => "day",
+            Self::Week => "week",
+            Self::Month => "month",
+            Self::Quarter => "quarter",
+            Self::Year => "year",
+        }
+    }
+
     /// Returns true if this granularity can be handled with simple arithmetic
     /// (fine granularity: second, minute, millisecond, microsecond)
     fn is_fine_granularity(&self) -> bool {
@@ -442,44 +458,6 @@ impl ScalarUDFImpl for DateTruncFunc {
             }
         };
 
-        fn trunc_interval_for_ts<TsType: ArrowTimestampType>(
-            ts_val: &i64,
-            ts_tz: &Option<Arc<str>>,
-            ts_granularity: DateTruncGranularity,
-        ) -> Result<Interval> {
-            let parsed_tz = parse_tz(ts_tz)?;
-            let is_calendar_gran = matches!(
-                ts_granularity,
-                DateTruncGranularity::Year
-                    | DateTruncGranularity::Month
-                    | DateTruncGranularity::Quarter
-                    | DateTruncGranularity::Week
-                    | DateTruncGranularity::Day
-            );
-
-            // general_date_trunc returns values in TsType::UNIT (seconds/millis/micros/nanos)
-            let lower_val =
-                general_date_trunc(TsType::UNIT, *ts_val, parsed_tz, ts_granularity)?;
-
-            // Increment based on timestamp unit and granularity
-            let upper_val = if is_calendar_gran {
-                increment_timestamp_nanos_calendar(
-                    TsType::UNIT,
-                    lower_val,
-                    parsed_tz,
-                    ts_granularity,
-                )?
-            } else {
-                // For non-calendar granularities, use the increment function matching the time unit
-                increment_time_unit(TsType::UNIT, lower_val, ts_granularity)
-            };
-
-            // Create the actual interval
-            Interval::try_new(
-                ScalarValue::new_timestamp::<TsType>(Some(lower_val), ts_tz.clone()),
-                ScalarValue::new_timestamp::<TsType>(Some(upper_val), ts_tz.clone()),
-            )
-        }
 
         let truncated_literal = match lit_expr.as_literal() {
             // Timestamp types (smallest to largest granularity)
@@ -511,42 +489,50 @@ impl ScalarUDFImpl for DateTruncFunc {
             // Time types (smallest to largest granularity)
             Some(ScalarValue::Time64Nanosecond(Some(ts_val))) => {
                 let trunc_tval = truncate_time_nanos(*ts_val, granularity);
+                let next_tval = increment_time_nanos(trunc_tval, granularity);
+                if trunc_tval == next_tval {
+                    return exec_err!("{:?} too coarse for time in Nanoseconds", granularity.as_str());
+                }
+
                 Interval::try_new(
                     ScalarValue::Time64Nanosecond(Some(trunc_tval)),
-                    ScalarValue::Time64Nanosecond(Some(increment_time_nanos(
-                        trunc_tval,
-                        granularity,
-                    ))),
+                    ScalarValue::Time64Nanosecond(Some(next_tval)),
                 )?
             }
             Some(ScalarValue::Time64Microsecond(Some(ts_val))) => {
                 let trunc_tval = truncate_time_micros(*ts_val, granularity);
+                let next_tval = increment_time_micros(trunc_tval, granularity);
+                if trunc_tval == next_tval {
+                    return exec_err!("{:?} too coarse for time in Microseconds", granularity.as_str());
+                }
+
                 Interval::try_new(
                     ScalarValue::Time64Microsecond(Some(trunc_tval)),
-                    ScalarValue::Time64Microsecond(Some(increment_time_micros(
-                        trunc_tval,
-                        granularity,
-                    ))),
+                    ScalarValue::Time64Microsecond(Some(next_tval)),
                 )?
             }
             Some(ScalarValue::Time32Millisecond(Some(ts_val))) => {
                 let trunc_tval = truncate_time_millis(*ts_val, granularity);
+                let next_tval = increment_time_millis(trunc_tval, granularity);
+                if trunc_tval == next_tval {
+                    return exec_err!("{:?} too coarse for time in Milliseconds", granularity.as_str());
+                }
+
                 Interval::try_new(
                     ScalarValue::Time32Millisecond(Some(trunc_tval)),
-                    ScalarValue::Time32Millisecond(Some(increment_time_millis(
-                        trunc_tval,
-                        granularity,
-                    ))),
+                    ScalarValue::Time32Millisecond(Some(next_tval)),
                 )?
             }
             Some(ScalarValue::Time32Second(Some(ts_val))) => {
                 let trunc_tval = truncate_time_secs(*ts_val, granularity);
+                let next_tval = increment_time_secs(trunc_tval, granularity);
+                if trunc_tval == next_tval {
+                    return exec_err!("{:?} too coarse for time in Seconds", granularity.as_str());
+                }
+
                 Interval::try_new(
                     ScalarValue::Time32Second(Some(trunc_tval)),
-                    ScalarValue::Time32Second(Some(increment_time_secs(
-                        trunc_tval,
-                        granularity,
-                    ))),
+                    ScalarValue::Time32Second(Some(next_tval)),
                 )?
             }
 
@@ -685,7 +671,7 @@ fn increment_time_nanos(value: i64, granularity: DateTruncGranularity) -> i64 {
         DateTruncGranularity::Second => value + NANOS_PER_SECOND,
         DateTruncGranularity::Millisecond => value + NANOS_PER_MILLISECOND,
         DateTruncGranularity::Microsecond => value + NANOS_PER_MICROSECOND,
-        // Other granularities are not valid for time - should be caught earlier
+        // Other granularities are invalid; return same value
         _ => value,
     }
 }
@@ -698,7 +684,7 @@ fn increment_time_micros(value: i64, granularity: DateTruncGranularity) -> i64 {
         DateTruncGranularity::Second => value + MICROS_PER_SECOND,
         DateTruncGranularity::Millisecond => value + MICROS_PER_MILLISECOND,
         DateTruncGranularity::Microsecond => value + 1,
-        // Other granularities are not valid for time - should be caught earlier
+        // Other granularities are invalid; return same value
         _ => value,
     }
 }
@@ -710,7 +696,7 @@ fn increment_time_millis(value: i32, granularity: DateTruncGranularity) -> i32 {
         DateTruncGranularity::Minute => value + MILLIS_PER_MINUTE,
         DateTruncGranularity::Second => value + MILLIS_PER_SECOND,
         DateTruncGranularity::Millisecond => value + 1,
-        // Other granularities are not valid for time - should be caught earlier
+        // Other granularities are invalid; return same value
         _ => value,
     }
 }
@@ -721,7 +707,7 @@ fn increment_time_secs(value: i32, granularity: DateTruncGranularity) -> i32 {
         DateTruncGranularity::Hour => value + SECS_PER_HOUR,
         DateTruncGranularity::Minute => value + SECS_PER_MINUTE,
         DateTruncGranularity::Second => value + 1,
-        // Other granularities are not valid for time - should be caught earlier
+        // Other granularities are invalid; return same value
         _ => value,
     }
 }
@@ -1053,6 +1039,33 @@ fn general_date_trunc(
         },
     };
     Ok(result)
+}
+
+fn trunc_interval_for_ts<TsType: ArrowTimestampType>(
+    ts_val: &i64,
+    ts_tz: &Option<Arc<str>>,
+    ts_granularity: DateTruncGranularity,
+) -> Result<Interval> {
+    let parsed_tz = parse_tz(ts_tz)?;
+
+    // general_date_trunc returns values in TsType::UNIT (seconds/millis/micros/nanos)
+    let lower_val =
+        general_date_trunc(TsType::UNIT, *ts_val, parsed_tz, ts_granularity)?;
+
+    // Increment based on timestamp unit and granularity
+    let upper_val = if ts_granularity.valid_for_time() {
+        increment_time_unit(TsType::UNIT, lower_val, ts_granularity)
+    } else {
+        increment_timestamp_nanos_calendar(
+            TsType::UNIT, lower_val, parsed_tz, ts_granularity,
+        )?
+    };
+
+    // Create the actual interval
+    Interval::try_new(
+        ScalarValue::new_timestamp::<TsType>(Some(lower_val), ts_tz.clone()),
+        ScalarValue::new_timestamp::<TsType>(Some(upper_val), ts_tz.clone()),
+    )
 }
 
 fn parse_tz(tz: &Option<Arc<str>>) -> Result<Option<Tz>> {
@@ -1717,5 +1730,65 @@ mod tests {
                     panic!("unexpected column type");
                 }
             });
+    }
+
+    #[test]
+    fn test_date_trunc_preimage_time_granularity_too_fine() {
+        // Note: This scenario is unreachable from SQL because invalid granularities
+        // are rejected earlier in invoke_with_args (line 272). These tests verify
+        // defensive error checking in the preimage computation.
+        use datafusion_expr::{col, lit, preimage::PreimageResult, simplify::SimplifyContext, Expr};
+
+        let date_trunc_func = DateTruncFunc::new();
+        let info = SimplifyContext::default();
+
+        // Test Time32Second (second precision) with millisecond granularity
+        // Should error because milliseconds cannot be represented in second precision
+        let args = vec![lit("millisecond"), col("x")];
+        let lit_expr = Expr::Literal(ScalarValue::Time32Second(Some(45296)), None);
+        let result = date_trunc_func.preimage(&args, &lit_expr, &info);
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(e.to_string().contains("too coarse for time in Seconds"));
+        }
+
+        // Test Time64Microsecond (microsecond precision) with microsecond granularity
+        // Should succeed because microseconds can be represented
+        let args = vec![lit("microsecond"), col("x")];
+        let lit_expr = Expr::Literal(ScalarValue::Time64Microsecond(Some(45296000000)), None);
+        let result = date_trunc_func.preimage(&args, &lit_expr, &info);
+        assert!(result.is_ok());
+        assert!(matches!(result.unwrap(), PreimageResult::Range { .. }));
+    }
+
+    #[test]
+    fn test_date_trunc_preimage_time_interval_bounds() {
+        // Verify that preimage creates correct interval bounds with truncated lower value
+        use datafusion_expr::{col, lit, preimage::PreimageResult, simplify::SimplifyContext, Expr};
+
+        let date_trunc_func = DateTruncFunc::new();
+        let info = SimplifyContext::default();
+
+        // Time32Second: 12:34:56 (45296 secs) truncated to minute should be 12:34:00 (45240 secs)
+        let args = vec![lit("minute"), col("x")];
+        let lit_expr = Expr::Literal(ScalarValue::Time32Second(Some(45296)), None);
+        let result = date_trunc_func.preimage(&args, &lit_expr, &info).unwrap();
+        if let PreimageResult::Range { interval, .. } = result {
+            assert_eq!(interval.lower(), &ScalarValue::Time32Second(Some(45240)));
+            assert_eq!(interval.upper(), &ScalarValue::Time32Second(Some(45300)));
+        } else {
+            panic!("Expected Range result");
+        }
+
+        // Time32Millisecond: verify bounds are truncated
+        let args = vec![lit("second"), col("x")];
+        let lit_expr = Expr::Literal(ScalarValue::Time32Millisecond(Some(45296500)), None);
+        let result = date_trunc_func.preimage(&args, &lit_expr, &info).unwrap();
+        if let PreimageResult::Range { interval, .. } = result {
+            assert_eq!(interval.lower(), &ScalarValue::Time32Millisecond(Some(45296000)));
+            assert_eq!(interval.upper(), &ScalarValue::Time32Millisecond(Some(45297000)));
+        } else {
+            panic!("Expected Range result");
+        }
     }
 }

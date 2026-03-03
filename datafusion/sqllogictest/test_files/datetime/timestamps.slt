@@ -5481,6 +5481,25 @@ EXPLAIN SELECT ts FROM t1 WHERE date_trunc('year', ts) = timestamp '2024-06-20T1
 logical_plan EmptyRelation: rows=0
 physical_plan EmptyExec
 
+# Test YEAR granularity with non-aligned literal and <> operator
+# date_trunc('year', x) can never equal '2024-06-20', so <> is always true
+# Should return all rows (optimized to full table scan)
+
+query P
+SELECT ts FROM t1 WHERE date_trunc('year', ts) <> timestamp '2024-06-20T14:25:30' ORDER BY ts;
+----
+2023-01-15T10:30:45
+2024-06-20T14:25:30
+2024-12-31T23:59:59
+2025-03-10T08:15:20
+NULL
+
+query TT
+EXPLAIN SELECT ts FROM t1 WHERE date_trunc('year', ts) <> timestamp '2024-06-20T14:25:30';
+----
+logical_plan TableScan: t1 projection=[ts]
+physical_plan DataSourceExec: partitions=1, partition_sizes=[1]
+
 # Test MONTH granularity
 
 query P
@@ -5680,6 +5699,43 @@ physical_plan EmptyExec
 
 statement ok
 RESET datafusion.execution.time_zone;
+
+# Test date_trunc preimage optimization with Time types
+# These tests verify that the preimage computation works correctly for Time types with valid granularities
+
+statement ok
+CREATE TABLE time_test (id INT, val VARCHAR) AS VALUES (1, '12:34:56');
+
+# Valid granularity for Time32Second: the preimage optimization should create a range filter
+query TT
+EXPLAIN SELECT * FROM time_test WHERE date_trunc('second', arrow_cast(val, 'Time32(Second)')) = arrow_cast('12:34:56', 'Time32(Second)');
+----
+logical_plan
+01)Projection: time_test.id, time_test.val
+02)--Filter: __common_expr_3 >= Time32Second("45296") AND __common_expr_3 < Time32Second("45297")
+03)----Projection: CAST(time_test.val AS Time32(s)) AS __common_expr_3, time_test.id, time_test.val
+04)------TableScan: time_test projection=[id, val]
+physical_plan
+01)FilterExec: __common_expr_3@0 >= 45296 AND __common_expr_3@0 < 45297, projection=[id@1, val@2]
+02)--ProjectionExec: expr=[CAST(val@1 AS Time32(s)) as __common_expr_3, id@0 as id, val@1 as val]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Valid granularity for Time32Millisecond: the preimage optimization should create a range filter
+query TT
+EXPLAIN SELECT * FROM time_test WHERE date_trunc('millisecond', arrow_cast(val, 'Time32(Millisecond)')) = arrow_cast('12:34:56', 'Time32(Millisecond)');
+----
+logical_plan
+01)Projection: time_test.id, time_test.val
+02)--Filter: __common_expr_3 >= Time32Millisecond("45296000") AND __common_expr_3 < Time32Millisecond("45296001")
+03)----Projection: CAST(time_test.val AS Time32(ms)) AS __common_expr_3, time_test.id, time_test.val
+04)------TableScan: time_test projection=[id, val]
+physical_plan
+01)FilterExec: __common_expr_3@0 >= 45296000 AND __common_expr_3@0 < 45296001, projection=[id@1, val@2]
+02)--ProjectionExec: expr=[CAST(val@1 AS Time32(ms)) as __common_expr_3, id@0 as id, val@1 as val]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+DROP TABLE time_test;
 
 # Cleanup
 statement ok
