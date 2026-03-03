@@ -223,7 +223,15 @@ pub(super) fn rewrite_plan_for_sort_on_non_projected_fields(
 
     let mut collects = p.expr.clone();
     for sort in &sort.expr {
-        collects.push(sort.expr.clone());
+        // Strip aliases from sort expressions so the comparison matches
+        // the inner Projection's raw expressions. The optimizer may add
+        // sort expressions to the inner Projection without aliases, while
+        // the Sort node's expressions carry aliases from the original plan.
+        let mut expr = sort.expr.clone();
+        while let Expr::Alias(alias) = expr {
+            expr = *alias.expr;
+        }
+        collects.push(expr);
     }
 
     // Compare outer collects Expr::to_string with inner collected transformed values
