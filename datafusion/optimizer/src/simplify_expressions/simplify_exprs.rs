@@ -20,11 +20,13 @@
 use std::sync::Arc;
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result};
+use datafusion_common::{Column, DFSchema, DFSchemaRef, DataFusionError, Result};
 use datafusion_expr::Expr;
-use datafusion_expr::logical_plan::LogicalPlan;
+use datafusion_expr::logical_plan::{Aggregate, LogicalPlan, Projection};
 use datafusion_expr::simplify::SimplifyContext;
-use datafusion_expr::utils::merge_schema;
+use datafusion_expr::utils::{
+    columnize_expr, find_aggregate_exprs, grouping_set_to_exprlist, merge_schema,
+};
 
 use crate::optimizer::ApplyOrder;
 use crate::utils::NamePreserver;
@@ -101,6 +103,12 @@ impl SimplifyExpressions {
             .with_config_options(config.options())
             .with_query_execution_start_time(config.query_execution_start_time());
 
+        let info = if let LogicalPlan::Aggregate(Aggregate { aggr_expr, .. }) = &plan {
+            info.with_aggregate_exprs(Arc::new(aggr_expr.clone()))
+        } else {
+            info
+        };
+
         // Inputs have already been rewritten (due to bottom-up traversal handled by Optimizer)
         // Just need to rewrite our own expressions
 
@@ -130,14 +138,16 @@ impl SimplifyExpressions {
             ))
         };
 
-        plan.map_expressions(|expr| {
+        let transformed = plan.map_expressions(|expr| {
             // Preserve the aliasing of grouping sets.
             if let Expr::GroupingSet(_) = &expr {
                 expr.map_children(&mut rewrite_expr)
             } else {
                 rewrite_expr(expr)
             }
-        })
+        })?;
+
+        transformed.transform_data(rewrite_aggregate_non_aggregate_aggr_expr)
     }
 }
 
@@ -146,6 +156,75 @@ impl SimplifyExpressions {
     pub fn new() -> Self {
         Self {}
     }
+}
+
+/// Rewrites
+/// `Aggregate(group_expr, aggr_expr=[non_agg_expr(sum(..), count(..), ..)])`
+/// into:
+/// `Projection(..)` over `Aggregate(group_expr, aggr_expr=[sum(..), count(..), ..])`.
+///
+/// Aggregate planning requires each aggregate slot to be an aggregate function
+/// (possibly aliased). Some UDAF simplifiers can return larger expressions that
+/// reference multiple aggregate functions.
+fn rewrite_aggregate_non_aggregate_aggr_expr(
+    plan: LogicalPlan,
+) -> Result<Transformed<LogicalPlan>> {
+    let LogicalPlan::Aggregate(Aggregate {
+        input,
+        group_expr,
+        aggr_expr,
+        ..
+    }) = plan
+    else {
+        return Ok(Transformed::no(plan));
+    };
+
+    if aggr_expr.iter().all(is_top_level_aggregate_expr) {
+        return Ok(Transformed::no(LogicalPlan::Aggregate(Aggregate::try_new(
+            input, group_expr, aggr_expr,
+        )?)));
+    }
+
+    let inner_aggr_expr = find_aggregate_exprs(aggr_expr.iter());
+    let inner_aggregate = LogicalPlan::Aggregate(Aggregate::try_new(
+        Arc::clone(&input),
+        group_expr.clone(),
+        inner_aggr_expr,
+    )?);
+    let inner_aggregate = Arc::new(inner_aggregate);
+
+    let mut projection_exprs = aggregate_output_exprs(&group_expr)?;
+    projection_exprs.extend(aggr_expr);
+    let projection_exprs = projection_exprs
+        .into_iter()
+        .map(|expr| columnize_expr(expr, inner_aggregate.as_ref()))
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(Transformed::yes(LogicalPlan::Projection(
+        Projection::try_new(projection_exprs, inner_aggregate)?,
+    )))
+}
+
+fn is_top_level_aggregate_expr(expr: &Expr) -> bool {
+    matches!(
+        expr.clone().unalias_nested().data,
+        Expr::AggregateFunction(_)
+    )
+}
+
+fn aggregate_output_exprs(group_expr: &[Expr]) -> Result<Vec<Expr>> {
+    let mut output_exprs = grouping_set_to_exprlist(group_expr)?
+        .into_iter()
+        .cloned()
+        .collect::<Vec<_>>();
+
+    if matches!(group_expr, [Expr::GroupingSet(_)]) {
+        output_exprs.push(Expr::Column(Column::from_name(
+            Aggregate::INTERNAL_GROUPING_ID,
+        )));
+    }
+
+    Ok(output_exprs)
 }
 
 #[cfg(test)]
@@ -158,7 +237,7 @@ mod tests {
     use datafusion_expr::logical_plan::builder::table_scan_with_filters;
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::*;
-    use datafusion_functions_aggregate::expr_fn::{max, min};
+    use datafusion_functions_aggregate::expr_fn::{max, min, sum};
 
     use crate::OptimizerContext;
     use crate::assert_optimized_plan_eq_snapshot;
@@ -256,6 +335,52 @@ mod tests {
             TableScan: test
         "
         )
+    }
+
+    #[test]
+    fn test_simplify_udaf_to_non_aggregate_expr() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int64, false)]);
+        let table_scan = table_scan(Some("test"), &schema, None)?
+            .build()
+            .expect("building scan");
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(Vec::<Expr>::new(), vec![sum(col("a") + lit(2i64))])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Aggregate: groupBy=[[]], aggr=[[sum(test.a + Int64(2))]]
+          TableScan: test
+        "
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_simplify_udaf_to_non_aggregate_expr_with_common_sum_arg() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int64, false)]);
+        let table_scan = table_scan(Some("test"), &schema, None)?
+            .build()
+            .expect("building scan");
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                Vec::<Expr>::new(),
+                vec![sum(col("a") + lit(2i64)), sum(col("a") + lit(3i64))],
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: sum(test.a) + Int64(2) * CAST(count(test.a) AS Int64) AS sum(test.a + Int64(2)), sum(test.a) + Int64(3) * CAST(count(test.a) AS Int64) AS sum(test.a + Int64(3))
+          Aggregate: groupBy=[[]], aggr=[[sum(test.a), count(test.a)]]
+            TableScan: test
+        "
+        )?;
+        Ok(())
     }
 
     #[test]

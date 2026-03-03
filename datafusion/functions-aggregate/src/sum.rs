@@ -32,12 +32,17 @@ use datafusion_common::types::{
     logical_int64, logical_uint8, logical_uint16, logical_uint32, logical_uint64,
 };
 use datafusion_common::{HashMap, Result, ScalarValue, exec_err, not_impl_err};
-use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
+use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
+use datafusion_expr::expr_fn::cast;
+use datafusion_expr::function::{
+    AccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs,
+};
+use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::{AggregateOrderSensitivity, format_state_name};
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Coercion, Documentation, Expr, GroupsAccumulator,
-    ReversedUDAF, SetMonotonicity, Signature, TypeSignature, TypeSignatureClass,
-    Volatility,
+    Accumulator, AggregateUDFImpl, BinaryExpr, Coercion, Documentation, Expr,
+    GroupsAccumulator, Operator, ReversedUDAF, SetMonotonicity, Signature, TypeSignature,
+    TypeSignatureClass, Volatility,
 };
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use datafusion_functions_aggregate_common::aggregate::sum_distinct::DistinctSumAccumulator;
@@ -54,7 +59,7 @@ make_udaf_expr_and_func!(
 );
 
 pub fn sum_distinct(expr: Expr) -> Expr {
-    Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
+    Expr::AggregateFunction(AggregateFunction::new_udf(
         sum_udaf(),
         vec![expr],
         true,
@@ -344,6 +349,147 @@ impl AggregateUDFImpl for Sum {
             DataType::UInt32 => SetMonotonicity::Increasing,
             DataType::UInt64 => SetMonotonicity::Increasing,
             _ => SetMonotonicity::NotMonotonic,
+        }
+    }
+
+    /// Simplification Rules
+    fn simplify(&self) -> Option<AggregateFunctionSimplification> {
+        Some(Box::new(sum_simplifier))
+    }
+}
+
+/// Implement ClickBench Q29 specific optimization:
+/// `SUM(arg + constant)` --> `SUM(arg) + constant * COUNT(arg)`
+///
+/// Backstory: TODO
+///
+fn sum_simplifier(mut agg: AggregateFunction, info: &SimplifyContext) -> Result<Expr> {
+    // Explicitly destructure to ensure we check all relevant fields
+    let AggregateFunctionParams {
+        args,
+        distinct,
+        filter,
+        order_by,
+        null_treatment,
+    } = &agg.params;
+
+    if *distinct
+        || filter.is_some()
+        || !order_by.is_empty()
+        || null_treatment.is_some()
+        || args.len() != 1
+    {
+        return Ok(Expr::AggregateFunction(agg));
+    }
+
+    // otherwise check the arguments if they are <arg> + <literal>
+    let (arg, lit) = match SplitResult::new(agg.params.args[0].clone()) {
+        SplitResult::Original => return Ok(Expr::AggregateFunction(agg)),
+        SplitResult::Split { arg, lit } => (arg, lit),
+    };
+
+    if !has_common_rewrite_arg(&arg, info) {
+        return Ok(Expr::AggregateFunction(agg));
+    }
+
+    let lit_type = match &lit {
+        Expr::Literal(value, _) => value.data_type(),
+        _ => unreachable!("SplitResult::Split guarantees literal side"),
+    };
+    if lit_type == DataType::Null {
+        return Ok(Expr::AggregateFunction(agg));
+    }
+
+    // Rewrite to SUM(arg)
+    agg.params.args = vec![arg.clone()];
+    let sum_agg = Expr::AggregateFunction(agg);
+
+    let count_agg = cast(crate::count::count(arg), lit_type);
+
+    // sum(arg) + scalar * COUNT(arg)
+    Ok(sum_agg + (lit * count_agg))
+}
+
+fn has_common_rewrite_arg(arg: &Expr, info: &SimplifyContext) -> bool {
+    let Some(aggregate_exprs) = info.aggregate_exprs() else {
+        // Only apply this rewrite in the context of an Aggregate node where
+        // sibling aggregate expressions are known.
+        return false;
+    };
+
+    aggregate_exprs
+        .iter()
+        .filter_map(sum_rewrite_candidate_arg)
+        .filter(|candidate_arg| candidate_arg == arg)
+        .take(2)
+        .count()
+        > 1
+}
+
+fn sum_rewrite_candidate_arg(expr: &Expr) -> Option<Expr> {
+    let Expr::AggregateFunction(aggregate_fn) = expr.clone().unalias_nested().data else {
+        return None;
+    };
+    if !aggregate_fn.func.name().eq_ignore_ascii_case("sum") {
+        return None;
+    }
+
+    let AggregateFunctionParams {
+        args,
+        distinct,
+        filter,
+        order_by,
+        null_treatment,
+    } = &aggregate_fn.params;
+
+    if *distinct
+        || filter.is_some()
+        || !order_by.is_empty()
+        || null_treatment.is_some()
+        || args.len() != 1
+    {
+        return None;
+    }
+
+    match SplitResult::new(args[0].clone()) {
+        SplitResult::Split { arg, .. } => Some(arg),
+        SplitResult::Original => None,
+    }
+}
+
+/// Result of trying to split an expression into an arg and constant
+#[expect(clippy::large_enum_variant)]
+#[derive(Debug, Clone)]
+enum SplitResult {
+    /// if the expression is either of
+    /// * `<arg> <op> <lit>`
+    /// * `<lit> <op> <arg>`
+    ///
+    /// When `op` is `+`
+    Split { arg: Expr, lit: Expr },
+    /// If the expression is something else
+    Original,
+}
+
+impl SplitResult {
+    fn new(expr: Expr) -> Self {
+        let Expr::BinaryExpr(BinaryExpr { left, op, right }) = expr else {
+            return Self::Original;
+        };
+        if op != Operator::Plus {
+            return Self::Original;
+        }
+
+        match (left.as_ref(), right.as_ref()) {
+            (Expr::Literal(..), _) => Self::Split {
+                arg: *right,
+                lit: *left,
+            },
+            (_, Expr::Literal(..)) => Self::Split {
+                arg: *left,
+                lit: *right,
+            },
+            _ => Self::Original,
         }
     }
 }

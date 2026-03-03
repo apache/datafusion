@@ -38,6 +38,7 @@ pub struct SimplifyContext {
     schema: DFSchemaRef,
     query_execution_start_time: Option<DateTime<Utc>>,
     config_options: Arc<ConfigOptions>,
+    aggregate_exprs: Option<Arc<Vec<Expr>>>,
 }
 
 impl Default for SimplifyContext {
@@ -46,6 +47,7 @@ impl Default for SimplifyContext {
             schema: Arc::new(DFSchema::empty()),
             query_execution_start_time: None,
             config_options: Arc::new(ConfigOptions::default()),
+            aggregate_exprs: None,
         }
     }
 }
@@ -78,6 +80,12 @@ impl SimplifyContext {
         self
     }
 
+    /// Set aggregate expressions from the containing aggregate node, if any.
+    pub fn with_aggregate_exprs(mut self, aggregate_exprs: Arc<Vec<Expr>>) -> Self {
+        self.aggregate_exprs = Some(aggregate_exprs);
+        self
+    }
+
     /// Returns the schema
     pub fn schema(&self) -> &DFSchemaRef {
         &self.schema
@@ -107,6 +115,11 @@ impl SimplifyContext {
     /// Returns the configuration options for the session.
     pub fn config_options(&self) -> &Arc<ConfigOptions> {
         &self.config_options
+    }
+
+    /// Returns aggregate expressions from the containing aggregate node, if any.
+    pub fn aggregate_exprs(&self) -> Option<&[Expr]> {
+        self.aggregate_exprs.as_deref().map(Vec::as_slice)
     }
 }
 
