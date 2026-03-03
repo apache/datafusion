@@ -166,10 +166,10 @@ impl TaskContext {
         create: impl FnOnce() -> T,
     ) -> Arc<T> {
         let mut map = self.shared_state.0.lock().unwrap();
-        if let Some(existing) = map.get(&key) {
-            if let Ok(typed) = Arc::clone(existing).downcast::<T>() {
-                return typed;
-            }
+        if let Some(existing) = map.get(&key)
+            && let Ok(typed) = Arc::clone(existing).downcast::<T>()
+        {
+            return typed;
         }
         let value = Arc::new(create());
         map.insert(key, Arc::clone(&value) as Arc<dyn Any + Send + Sync>);

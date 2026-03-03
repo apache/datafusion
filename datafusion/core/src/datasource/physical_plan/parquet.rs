@@ -2545,6 +2545,8 @@ mod tests {
         assert!(count1 > 0, "Partition 1 should have produced rows");
 
         // Test re-executability: executing the same plan again should work
+        // (We have to create a new TaskContext, as it holds the state)
+        let task_ctx = ctx.task_ctx();
         let stream0 = exec.execute(0, Arc::clone(&task_ctx))?;
         let stream1 = exec.execute(1, Arc::clone(&task_ctx))?;
 
