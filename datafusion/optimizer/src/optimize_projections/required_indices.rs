@@ -119,6 +119,34 @@ impl RequiredIndices {
         self
     }
 
+    /// Conditionally mark this requirement as having volatile ancestors.
+    pub fn with_volatile_ancestor_if(mut self, value: bool) -> Self {
+        if value {
+            self.has_volatile_ancestor = true;
+        }
+        self
+    }
+
+    /// Propagate volatile-plan context into this requirement.
+    ///
+    /// This keeps call sites declarative and centralizes state-transition logic.
+    pub fn with_plan_volatile(mut self, volatile_in_plan: bool) -> Self {
+        if volatile_in_plan {
+            self.has_volatile_ancestor = true;
+        }
+        self
+    }
+
+    /// Transition this requirement for a multiplicity-sensitive child.
+    pub fn for_multiplicity_sensitive_child(self) -> Self {
+        self.with_multiplicity_sensitive()
+    }
+
+    /// Transition this requirement for a multiplicity-insensitive child.
+    pub fn for_multiplicity_insensitive_child(self) -> Self {
+        self.with_multiplicity_insensitive()
+    }
+
     /// Return whether a volatile expression exists in the ancestor chain.
     pub fn has_volatile_ancestor(&self) -> bool {
         self.has_volatile_ancestor

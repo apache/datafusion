@@ -192,13 +192,13 @@ fn optimize_projections(
                 RequiredIndices::new().with_exprs(schema, all_exprs_iter);
             let necessary_exprs = necessary_indices.get_required_exprs(schema);
             let mut necessary_indices = if new_aggr_expr.is_empty() {
-                necessary_indices.with_multiplicity_insensitive()
+                necessary_indices.for_multiplicity_insensitive_child()
             } else {
-                necessary_indices.with_multiplicity_sensitive()
+                necessary_indices.for_multiplicity_sensitive_child()
             };
-            if has_volatile_ancestor || volatile_in_plan {
-                necessary_indices = necessary_indices.with_volatile_ancestor();
-            }
+            necessary_indices = necessary_indices
+                .with_volatile_ancestor_if(has_volatile_ancestor)
+                .with_plan_volatile(volatile_in_plan);
 
             return optimize_projections(
                 Arc::unwrap_or_clone(aggregate.input),
@@ -240,13 +240,13 @@ fn optimize_projections(
             // parent or window expression requirements.
             let required_indices = child_reqs.with_exprs(&input_schema, &new_window_expr);
             let mut required_indices = if new_window_expr.is_empty() {
-                required_indices.with_multiplicity_insensitive()
+                required_indices.for_multiplicity_insensitive_child()
             } else {
-                required_indices.with_multiplicity_sensitive()
+                required_indices.for_multiplicity_sensitive_child()
             };
-            if has_volatile_ancestor || volatile_in_plan {
-                required_indices = required_indices.with_volatile_ancestor();
-            }
+            required_indices = required_indices
+                .with_volatile_ancestor_if(has_volatile_ancestor)
+                .with_plan_volatile(volatile_in_plan);
 
             return optimize_projections(
                 Arc::unwrap_or_clone(window.input),
@@ -317,7 +317,7 @@ fn optimize_projections(
                         .clone()
                         .with_projection_beneficial()
                         .with_plan_exprs(&plan, input.schema())?;
-                    Ok(with_volatile_if_needed(required, volatile_in_plan))
+                    Ok(required.with_plan_volatile(volatile_in_plan))
                 })
                 .collect::<Result<_>>()?
         }
@@ -331,7 +331,7 @@ fn optimize_projections(
                 .map(|input| {
                     let required =
                         indices.clone().with_plan_exprs(&plan, input.schema())?;
-                    Ok(with_volatile_if_needed(required, volatile_in_plan))
+                    Ok(required.with_plan_volatile(volatile_in_plan))
                 })
                 .collect::<Result<_>>()?
         }
@@ -351,7 +351,7 @@ fn optimize_projections(
                 .into_iter()
                 .map(|input| {
                     let required = RequiredIndices::new_for_all_exprs(input);
-                    Ok(with_volatile_if_needed(required, volatile_in_plan))
+                    Ok(required.with_plan_volatile(volatile_in_plan))
                 })
                 .collect::<Result<_>>()?
         }
@@ -377,7 +377,7 @@ fn optimize_projections(
                 .map(|(child, necessary_indices)| {
                     let required = RequiredIndices::new_from_indices(necessary_indices)
                         .with_plan_exprs(&plan, child.schema())?;
-                    Ok(with_volatile_if_needed(required, volatile_in_plan))
+                    Ok(required.with_plan_volatile(volatile_in_plan))
                 })
                 .collect::<Result<Vec<_>>>()?
         }
@@ -408,7 +408,7 @@ fn optimize_projections(
                         .clone()
                         .with_projection_beneficial()
                         .with_plan_exprs(&plan, input.schema())?;
-                    Ok(with_volatile_if_needed(required, volatile_in_plan))
+                    Ok(required.with_plan_volatile(volatile_in_plan))
                 })
                 .collect::<Result<Vec<_>>>()?
         }
@@ -420,14 +420,12 @@ fn optimize_projections(
                 left_req_indices.with_plan_exprs(&plan, join.left.schema())?;
             let right_indices =
                 right_req_indices.with_plan_exprs(&plan, join.right.schema())?;
-            let left_indices = with_volatile_if_needed(
-                left_indices.with_multiplicity_sensitive(),
-                volatile_in_plan,
-            );
-            let right_indices = with_volatile_if_needed(
-                right_indices.with_multiplicity_sensitive(),
-                volatile_in_plan,
-            );
+            let left_indices = left_indices
+                .for_multiplicity_sensitive_child()
+                .with_plan_volatile(volatile_in_plan);
+            let right_indices = right_indices
+                .for_multiplicity_sensitive_child()
+                .with_plan_volatile(volatile_in_plan);
             // Joins benefit from "small" input tables (lower memory usage).
             // Therefore, each child benefits from projection:
             vec![
@@ -440,8 +438,8 @@ fn optimize_projections(
             .into_iter()
             .map(|input| {
                 let required = RequiredIndices::new_for_all_exprs(input)
-                    .with_multiplicity_insensitive();
-                Ok(with_volatile_if_needed(required, volatile_in_plan))
+                    .for_multiplicity_insensitive_child();
+                Ok(required.with_plan_volatile(volatile_in_plan))
             })
             .collect::<Result<_>>()?,
         // these nodes are explicitly rewritten in the match statement above
@@ -467,10 +465,10 @@ fn optimize_projections(
             // at least provide the indices for the exec-columns as a starting point
             let mut required_indices =
                 RequiredIndices::new().with_plan_exprs(&plan, unnest.input.schema())?;
-            required_indices = required_indices.with_multiplicity_sensitive();
-            if volatile_in_plan || indices.has_volatile_ancestor() {
-                required_indices = required_indices.with_volatile_ancestor();
-            }
+            required_indices = required_indices
+                .for_multiplicity_sensitive_child()
+                .with_volatile_ancestor_if(indices.has_volatile_ancestor())
+                .with_plan_volatile(volatile_in_plan);
 
             // Add additional required indices from the parent
             let mut additional_necessary_child_indices = Vec::new();
@@ -519,17 +517,6 @@ fn optimize_projections(
         transformed_plan.map_data(|plan| plan.recompute_schema())
     } else {
         Ok(transformed_plan)
-    }
-}
-
-fn with_volatile_if_needed(
-    required: RequiredIndices,
-    volatile_in_plan: bool,
-) -> RequiredIndices {
-    if volatile_in_plan {
-        required.with_volatile_ancestor()
-    } else {
-        required
     }
 }
 
@@ -1027,7 +1014,8 @@ fn build_unnest_child_requirements(
         child_required_indices = child_required_indices.with_volatile_ancestor();
     }
     if !indices.multiplicity_sensitive() {
-        child_required_indices = child_required_indices.with_multiplicity_insensitive();
+        child_required_indices =
+            child_required_indices.for_multiplicity_insensitive_child();
     }
     child_required_indices
 }
