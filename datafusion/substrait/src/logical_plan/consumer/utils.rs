@@ -257,6 +257,24 @@ pub(super) fn make_renamed_schema(
     )
 }
 
+/// Apply only top-level column name aliases to expressions, without casting.
+/// Unlike `rename_expressions`, this never injects `Expr::Cast` for nested type
+/// differences, making it safe for aggregate expressions which the physical
+/// planner requires to be pure AggregateFunctions (optionally aliased).
+pub(super) fn alias_expressions(
+    exprs: impl IntoIterator<Item = Expr>,
+    new_schema_fields: &[Arc<Field>],
+) -> datafusion::common::Result<Vec<Expr>> {
+    exprs
+        .into_iter()
+        .zip(new_schema_fields)
+        .map(|(old_expr, new_field)| match &old_expr {
+            Expr::Column(c) if &c.name == new_field.name() => Ok(old_expr),
+            _ => old_expr.alias_if_changed(new_field.name().to_owned()),
+        })
+        .collect()
+}
+
 /// Ensure the expressions have the right name(s) according to the new schema.
 /// This includes the top-level (column) name, which will be renamed through aliasing if needed,
 /// as well as nested names (if the expression produces any struct types), which will be renamed
