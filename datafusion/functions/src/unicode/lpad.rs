@@ -16,17 +16,16 @@
 // under the License.
 
 use std::any::Any;
-use std::fmt::Write;
-use std::sync::Arc;
 
 use DataType::{LargeUtf8, Utf8, Utf8View};
 use arrow::array::{
-    Array, ArrayRef, AsArray, GenericStringArray, GenericStringBuilder, Int64Array,
+    ArrayRef, AsArray, GenericStringArray, GenericStringBuilder, Int64Array,
     OffsetSizeTrait, StringArrayType, StringViewArray,
 };
 use arrow::datatypes::DataType;
 use unicode_segmentation::UnicodeSegmentation;
 
+use crate::unicode::common::{StringArrayWriter, StringViewWriter};
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::{Result, exec_err};
@@ -109,7 +108,11 @@ impl ScalarUDFImpl for LPadFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        utf8_to_str_type(&arg_types[0], "lpad")
+        if arg_types[0] == Utf8View {
+            Ok(Utf8View)
+        } else {
+            utf8_to_str_type(&arg_types[0], "lpad")
+        }
     }
 
     fn invoke_with_args(
@@ -141,74 +144,84 @@ fn lpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 
     let length_array = as_int64_array(&args[1])?;
+    let len = args[0].len();
+    // 32 bytes per value is a rough estimate for the output data capacity.
+    let data_capacity = 32 * len;
 
     match (args.len(), args[0].data_type()) {
-        (2, Utf8View) => lpad_impl::<&StringViewArray, &GenericStringArray<i32>, T>(
+        (2, Utf8View) => lpad_impl(
             &args[0].as_string_view(),
             length_array,
-            None,
+            None::<&StringViewArray>,
+            StringViewWriter::new(len),
         ),
-        (2, Utf8 | LargeUtf8) => lpad_impl::<
-            &GenericStringArray<T>,
-            &GenericStringArray<T>,
-            T,
-        >(&args[0].as_string::<T>(), length_array, None),
-        (3, Utf8View) => lpad_with_replace::<&StringViewArray, T>(
+        (2, Utf8 | LargeUtf8) => lpad_impl(
+            &args[0].as_string::<T>(),
+            length_array,
+            None::<&GenericStringArray<T>>,
+            GenericStringBuilder::<T>::with_capacity(len, data_capacity),
+        ),
+        (3, Utf8View) => lpad_with_replace(
             &args[0].as_string_view(),
             length_array,
             &args[2],
+            StringViewWriter::new(len),
         ),
-        (3, Utf8 | LargeUtf8) => lpad_with_replace::<&GenericStringArray<T>, T>(
+        (3, Utf8 | LargeUtf8) => lpad_with_replace(
             &args[0].as_string::<T>(),
             length_array,
             &args[2],
+            GenericStringBuilder::<T>::with_capacity(len, data_capacity),
         ),
         (_, _) => unreachable!("lpad"),
     }
 }
 
-fn lpad_with_replace<'a, V, T: OffsetSizeTrait>(
+fn lpad_with_replace<'a, V, W>(
     string_array: &V,
     length_array: &Int64Array,
     fill_array: &'a ArrayRef,
+    writer: W,
 ) -> Result<ArrayRef>
 where
     V: StringArrayType<'a>,
+    W: StringArrayWriter,
 {
     match fill_array.data_type() {
-        Utf8View => lpad_impl::<V, &StringViewArray, T>(
+        Utf8View => lpad_impl(
             string_array,
             length_array,
             Some(fill_array.as_string_view()),
+            writer,
         ),
-        LargeUtf8 => lpad_impl::<V, &GenericStringArray<i64>, T>(
+        LargeUtf8 => lpad_impl(
             string_array,
             length_array,
             Some(fill_array.as_string::<i64>()),
+            writer,
         ),
-        Utf8 => lpad_impl::<V, &GenericStringArray<i32>, T>(
+        Utf8 => lpad_impl(
             string_array,
             length_array,
             Some(fill_array.as_string::<i32>()),
+            writer,
         ),
-        other => {
-            exec_err!("Unsupported data type {other:?} for function lpad")
-        }
+        other => exec_err!("Unsupported data type {other:?} for function lpad"),
     }
 }
 
-fn lpad_impl<'a, V, V2, T>(
+fn lpad_impl<'a, V, V2, W>(
     string_array: &V,
     length_array: &Int64Array,
     fill_array: Option<V2>,
+    mut writer: W,
 ) -> Result<ArrayRef>
 where
     V: StringArrayType<'a>,
     V2: StringArrayType<'a>,
-    T: OffsetSizeTrait,
+    W: StringArrayWriter,
 {
-    let array = if let Some(fill_array) = fill_array {
-        let mut builder: GenericStringBuilder<T> = GenericStringBuilder::new();
+    if let Some(fill_array) = fill_array {
         let mut graphemes_buf = Vec::new();
         let mut fill_chars_buf = Vec::new();
 
@@ -224,7 +237,8 @@ where
 
                 let length = if length < 0 { 0 } else { length as usize };
                 if length == 0 {
-                    builder.append_value("");
+                    // append empty string
+                    writer.finalize();
                     continue;
                 }
 
@@ -233,22 +247,23 @@ where
                     // so we skip expensive grapheme segmentation.
                     let str_len = string.len();
                     if length < str_len {
-                        builder.append_value(&string[..length]);
+                        writer.write_str(&string[..length])?;
                     } else if fill.is_empty() {
-                        builder.append_value(string);
+                        writer.write_str(string)?;
                     } else {
                         let pad_len = length - str_len;
                         let fill_len = fill.len();
                         let full_reps = pad_len / fill_len;
                         let remainder = pad_len % fill_len;
                         for _ in 0..full_reps {
-                            builder.write_str(fill)?;
+                            writer.write_str(fill)?;
                         }
                         if remainder > 0 {
-                            builder.write_str(&fill[..remainder])?;
+                            writer.write_str(&fill[..remainder])?;
                         }
-                        builder.append_value(string);
+                        writer.write_str(string)?;
                     }
+                    writer.finalize();
                 } else {
                     // Reuse buffers by clearing and refilling
                     graphemes_buf.clear();
@@ -258,26 +273,23 @@ where
                     fill_chars_buf.extend(fill.chars());
 
                     if length < graphemes_buf.len() {
-                        builder.append_value(graphemes_buf[..length].concat());
+                        writer.write_str(&graphemes_buf[..length].concat())?;
                     } else if fill_chars_buf.is_empty() {
-                        builder.append_value(string);
+                        writer.write_str(string)?;
                     } else {
                         for l in 0..length - graphemes_buf.len() {
-                            let c =
-                                *fill_chars_buf.get(l % fill_chars_buf.len()).unwrap();
-                            builder.write_char(c)?;
+                            writer
+                                .write_char(fill_chars_buf[l % fill_chars_buf.len()])?;
                         }
-                        builder.append_value(string);
+                        writer.write_str(string)?;
                     }
+                    writer.finalize();
                 }
             } else {
-                builder.append_null();
+                writer.append_null();
             }
         }
-
-        builder.finish()
     } else {
-        let mut builder: GenericStringBuilder<T> = GenericStringBuilder::new();
         let mut graphemes_buf = Vec::new();
 
         for (string, length) in string_array.iter().zip(length_array.iter()) {
@@ -288,7 +300,8 @@ where
 
                 let length = if length < 0 { 0 } else { length as usize };
                 if length == 0 {
-                    builder.append_value("");
+                    // append empty string
+                    writer.finalize();
                     continue;
                 }
 
@@ -296,36 +309,36 @@ where
                     // ASCII fast path: byte length == character length
                     let str_len = string.len();
                     if length < str_len {
-                        builder.append_value(&string[..length]);
+                        writer.write_str(&string[..length])?;
                     } else {
                         for _ in 0..(length - str_len) {
-                            builder.write_str(" ")?;
+                            writer.write_str(" ")?;
                         }
-                        builder.append_value(string);
+                        writer.write_str(string)?;
                     }
+                    writer.finalize();
                 } else {
                     // Reuse buffer by clearing and refilling
                     graphemes_buf.clear();
                     graphemes_buf.extend(string.graphemes(true));
 
                     if length < graphemes_buf.len() {
-                        builder.append_value(graphemes_buf[..length].concat());
+                        writer.write_str(&graphemes_buf[..length].concat())?;
                     } else {
                         for _ in 0..(length - graphemes_buf.len()) {
-                            builder.write_str(" ")?;
+                            writer.write_str(" ")?;
                         }
-                        builder.append_value(string);
+                        writer.write_str(string)?;
                     }
+                    writer.finalize();
                 }
             } else {
-                builder.append_null();
+                writer.append_null();
             }
         }
+    }
 
-        builder.finish()
-    };
-
-    Ok(Arc::new(array) as ArrayRef)
+    Ok(writer.finish())
 }
 
 #[cfg(test)]
@@ -333,8 +346,8 @@ mod tests {
     use crate::unicode::lpad::LPadFunc;
     use crate::utils::test::test_function;
 
-    use arrow::array::{Array, LargeStringArray, StringArray};
-    use arrow::datatypes::DataType::{LargeUtf8, Utf8};
+    use arrow::array::{Array, LargeStringArray, StringArray, StringViewArray};
+    use arrow::datatypes::DataType::{LargeUtf8, Utf8, Utf8View};
 
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
@@ -373,8 +386,8 @@ mod tests {
                 ],
                 $EXPECTED,
                 &str,
-                Utf8,
-                StringArray
+                Utf8View,
+                StringViewArray
             );
         };
 
@@ -469,8 +482,8 @@ mod tests {
                 ],
                 $EXPECTED,
                 &str,
-                Utf8,
-                StringArray
+                Utf8View,
+                StringViewArray
             );
             // utf8view, largeutf8
             test_function!(
@@ -482,8 +495,8 @@ mod tests {
                 ],
                 $EXPECTED,
                 &str,
-                Utf8,
-                StringArray
+                Utf8View,
+                StringViewArray
             );
             // utf8view, utf8view
             test_function!(
@@ -495,8 +508,8 @@ mod tests {
                 ],
                 $EXPECTED,
                 &str,
-                Utf8,
-                StringArray
+                Utf8View,
+                StringViewArray
             );
         };
     }
