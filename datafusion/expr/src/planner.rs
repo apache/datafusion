@@ -440,4 +440,17 @@ pub trait TypePlanner: Debug + Send + Sync {
     ) -> Result<Option<DataType>> {
         Ok(None)
     }
+
+    /// Plan SQL [`sqlparser::ast::DataType`] to DataFusion [`FieldRef`]
+    ///
+    /// Returns None if not possible. The default implementation falls back
+    /// on plan_type and wraps it in a nullable field reference.
+    fn plan_type_field(
+        &self,
+        sql_type: &sqlparser::ast::DataType,
+    ) -> Result<Option<FieldRef>> {
+        Ok(self
+            .plan_type(sql_type)?
+            .map(|data_type| data_type.into_nullable_field_ref()))
+    }
 }
