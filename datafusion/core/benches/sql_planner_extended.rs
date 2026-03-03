@@ -319,6 +319,10 @@ fn criterion_benchmark(c: &mut Criterion) {
 
             let input_label =
                 format!("predicates={predicate_count},case_depth={case_depth}");
+            // A/B interpretation:
+            // - with_push_down_filter: default optimizer path (rule enabled)
+            // - without_push_down_filter: control path with the rule removed
+            // Compare both IDs at the same sweep point to isolate rule impact.
             group.bench_with_input(
                 BenchmarkId::new("with_push_down_filter", &input_label),
                 &with_push_down_filter,
