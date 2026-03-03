@@ -2302,6 +2302,7 @@ dependencies = [
  "datafusion-physical-expr-common",
  "hashbrown 0.16.1",
  "itertools 0.14.0",
+ "itoa",
  "log",
  "paste",
  "rand 0.9.2",

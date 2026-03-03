@@ -18,7 +18,9 @@
 use clap::{ColorChoice, Parser, ValueEnum};
 use datafusion::common::instant::Instant;
 use datafusion::common::utils::get_available_parallelism;
-use datafusion::common::{DataFusionError, Result, exec_datafusion_err, exec_err};
+use datafusion::common::{
+    DataFusionError, HashMap, Result, exec_datafusion_err, exec_err,
+};
 use datafusion_sqllogictest::{
     CurrentlyExecutingSqlTracker, DataFusion, DataFusionSubstraitRoundTrip, Filter,
     TestContext, df_value_validator, read_dir_recursive, setup_scratch_dir,
@@ -47,8 +49,8 @@ use std::fs;
 use std::io::{IsTerminal, stderr, stdout};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 #[cfg(feature = "postgres")]
@@ -74,6 +76,55 @@ struct FileTiming {
     relative_path: PathBuf,
     elapsed: Duration,
 }
+
+/// TEST PRIORITY
+///
+/// Heuristically prioritize some test to run earlier.
+///
+/// Prioritizes test to run earlier if they are known to be long running (as
+/// each test file itself is run sequentially, but multiple test files are run
+/// in parallel.
+///
+/// Tests not listed here will run after the listed tests in an arbitrary order.
+///
+/// You can find the top longest running tests by running `--timing-summary` mode.
+/// For example
+///
+/// ```shell
+/// $  cargo test --profile=ci  --test sqllogictests -- --timing-summary top
+/// ...
+/// Per-file elapsed summary (deterministic):
+/// 1.    5.375s  push_down_filter_regression.slt
+/// 2.    3.174s  aggregate.slt
+/// 3.    3.158s  imdb.slt
+/// 4.    2.793s  joins.slt
+/// 5.    2.505s  array.slt
+/// 6.    2.265s  aggregate_skip_partial.slt
+/// 7.    2.260s  window.slt
+/// 8.    1.677s  group_by.slt
+/// 9.    0.973s  datetime/timestamps.slt
+/// 10.    0.822s  cte.slt
+/// ```
+static TEST_PRIORITY: LazyLock<HashMap<PathBuf, usize>> = LazyLock::new(|| {
+    [
+        (PathBuf::from("push_down_filter_regression.slt"), 0), // longest running, so run first.
+        (PathBuf::from("aggregate.slt"), 1),
+        (PathBuf::from("joins.slt"), 2),
+        (PathBuf::from("imdb.slt"), 3),
+        (PathBuf::from("array.slt"), 4),
+        (PathBuf::from("aggregate_skip_partial.slt"), 5),
+        (PathBuf::from("window.slt"), 6),
+        (PathBuf::from("group_by.slt"), 7),
+        (PathBuf::from("datetime/timestamps.slt"), 8),
+        (PathBuf::from("cte.slt"), 9),
+    ]
+    .into_iter()
+    .collect()
+});
+
+/// Default priority for tests not in the TEST_PRIORITY map. Tests with lower
+/// priority values run first.
+static DEFAULT_PRIORITY: usize = 100;
 
 pub fn main() -> Result<()> {
     tokio::runtime::Builder::new_multi_thread()
@@ -851,7 +902,21 @@ fn read_test_files(options: &Options) -> Result<Vec<TestFile>> {
         paths.append(&mut sqlite_paths)
     }
 
-    Ok(paths)
+    Ok(sort_tests(paths))
+}
+
+/// Sort the tests heuristically by order of "priority"
+///
+/// Prioritizes test to run earlier if they are known to be long running (as
+/// each test file itself is run sequentially, but multiple test files are run
+/// in parallel.
+fn sort_tests(mut tests: Vec<TestFile>) -> Vec<TestFile> {
+    tests.sort_by_key(|f| {
+        TEST_PRIORITY
+            .get(&f.relative_path)
+            .unwrap_or(&DEFAULT_PRIORITY)
+    });
+    tests
 }
 
 /// Parsed command line options
