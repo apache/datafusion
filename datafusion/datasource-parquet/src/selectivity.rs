@@ -1479,8 +1479,7 @@ mod tests {
             ];
 
             // First partition
-            let result1 =
-                tracker.partition_filters(filters.clone(), 1000, &metadata);
+            let result1 = tracker.partition_filters(filters.clone(), 1000, &metadata);
             assert!(result1.row_filters.len() + result1.post_scan.len() > 0);
 
             // Only add stats for filters 1 and 3, not 2
@@ -1503,8 +1502,7 @@ mod tests {
                 (3, col_expr("a", 2)),
             ];
 
-            let result1 =
-                tracker.partition_filters(filters.clone(), 1000, &metadata);
+            let result1 = tracker.partition_filters(filters.clone(), 1000, &metadata);
             let result2 = tracker.partition_filters(filters, 1000, &metadata);
 
             // Without stats and with identical byte sizes, order should be stable
@@ -1536,8 +1534,7 @@ mod tests {
             tracker.update(1, 50, 100, 100_000, 1000);
 
             // Generation 0 doesn't trigger state reset
-            let snapshot_gen =
-                tracker.inner.lock().snapshot_generations.get(&1).copied();
+            let snapshot_gen = tracker.inner.lock().snapshot_generations.get(&1).copied();
             assert_eq!(snapshot_gen, None);
         }
 
@@ -1636,8 +1633,7 @@ mod tests {
             let filters = vec![(1, expr)];
             tracker.partition_filters(filters.clone(), 1000, &metadata);
 
-            let state_before =
-                tracker.inner.lock().filter_states.get(&1).copied();
+            let state_before = tracker.inner.lock().filter_states.get(&1).copied();
             assert_eq!(state_before, Some(FilterState::RowFilter));
 
             // Simulate generation change
@@ -1648,8 +1644,7 @@ mod tests {
             }
 
             // State should be preserved despite stats being cleared
-            let state_after =
-                tracker.inner.lock().filter_states.get(&1).copied();
+            let state_after = tracker.inner.lock().filter_states.get(&1).copied();
             assert_eq!(state_after, Some(FilterState::RowFilter));
         }
 
@@ -1680,8 +1675,7 @@ mod tests {
             }
 
             // Dropped filter should be un-dropped to PostScan
-            let state_after =
-                tracker.inner.lock().filter_states.get(&1).copied();
+            let state_after = tracker.inner.lock().filter_states.get(&1).copied();
             assert_eq!(state_after, Some(FilterState::PostScan));
         }
 

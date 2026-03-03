@@ -620,9 +620,12 @@ impl FileOpener for ParquetOpener {
             let arrow_reader_metrics = ArrowReaderMetrics::enabled();
 
             let proj_cols = projection.column_indices();
+            let t0 = datafusion_common::instant::Instant::now();
             let projection_size =
                 row_filter::total_compressed_bytes(&proj_cols, builder.metadata());
+            let t_proj_bytes = t0.elapsed();
 
+            let t1 = datafusion_common::instant::Instant::now();
             let PartitionedFilters {
                 row_filters,
                 mut post_scan,
@@ -632,7 +635,6 @@ impl FileOpener for ParquetOpener {
                         selectivity_tracker.partition_filters(
                             conjuncts,
                             projection_size,
-                            &proj_cols,
                             builder.metadata(),
                         )
                     } else {
@@ -644,8 +646,11 @@ impl FileOpener for ParquetOpener {
             } else {
                 PartitionedFilters::default()
             };
+            let t_partition = t1.elapsed();
 
             // Build row filter.
+            let n_row_filters = row_filters.len();
+            let t2 = datafusion_common::instant::Instant::now();
             if !row_filters.is_empty() {
                 let row_filter_result = row_filter::build_row_filter(
                     row_filters,
@@ -670,9 +675,12 @@ impl FileOpener for ParquetOpener {
                 };
             }
 
+            let t_build_row_filter = t2.elapsed();
+
             // Precompute other-compressed-bytes-per-row for each post-scan filter,
             // matching the row_filter path's metric for consistent effectiveness scoring.
             // This also eliminates per-batch collect_columns() and get_array_memory_size() calls.
+            let t3 = datafusion_common::instant::Instant::now();
             let total_rows: i64 = builder
                 .metadata()
                 .row_groups()
@@ -698,6 +706,18 @@ impl FileOpener for ParquetOpener {
                     }
                 })
                 .collect();
+
+            let t_precompute = t3.elapsed();
+
+            debug!(
+                "TIMING file_open: proj_bytes={:?} partition={:?} build_row_filter={:?} precompute={:?} row_filters={} post_scan={}",
+                t_proj_bytes,
+                t_partition,
+                t_build_row_filter,
+                t_precompute,
+                n_row_filters,
+                post_scan.len()
+            );
 
             // Include columns needed by all post-scan filters in the projection mask.
             let mask = {

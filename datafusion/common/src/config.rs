@@ -767,17 +767,17 @@ config_namespace! {
         /// (iterative pruning; aka row-level) vs. all at once (post-scan).
         /// The ratio is computed as: (extra filter bytes not in projection) / (projected bytes).
         /// Filters whose extra columns consume a smaller fraction than this threshold are placed as row filters.
-        /// Filters whose extra columns consume a larger fraction are placed as post-scan filters.
-        /// Note: filter columns that are already in the query projection have zero extra cost,
-        /// so such filters always start as row filters regardless of this threshold.
-        /// Default: 0.05 meaning filters that require less than 5% additional bytes beyond the projection
-        /// are placed as row filters.
-        /// Set to INF to place all filters as row filters (skip byte-ratio check).
-        /// Set to 0 to place all filters as post-scan filters (no filter passes the ratio check).
+        /// Ratio of filter column bytes to projection bytes that controls
+        /// initial filter placement. Computed as
+        /// `filter_compressed_bytes / projection_compressed_bytes`.
+        /// Filters below this ratio start as row-level filters (enabling late
+        /// materialization); those above start as post-scan filters.
+        /// Default: 0.20 — filters whose columns are less than 20% of the
+        /// projection bytes start at row-level.
         ///
         /// **Interaction with `pushdown_filters`:**
         /// Only takes effect when `pushdown_filters = true`.
-        pub filter_collecting_byte_ratio_threshold: f64, default = 0.05
+        pub filter_collecting_byte_ratio_threshold: f64, default = 0.20
 
         /// (reading) Z-score for confidence intervals on filter effectiveness.
         /// Controls how much statistical evidence is required before promoting
