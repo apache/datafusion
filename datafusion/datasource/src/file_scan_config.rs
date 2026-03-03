@@ -654,10 +654,13 @@ impl DataSource for FileScanConfig {
                 let orderings = get_projected_output_ordering(self, &schema);
 
                 if self.morsel_driven {
-                    let files: Vec<_> = self.file_groups.iter().flat_map(|g| g.iter()).collect();
+                    let files: Vec<_> =
+                        self.file_groups.iter().flat_map(|g| g.iter()).collect();
                     write!(f, "files=[")?;
                     for (i, pf) in files.iter().enumerate() {
-                        if i > 0 { write!(f, ", ")?; }
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
                         write!(f, "{}", pf.object_meta.location.as_ref())?;
                     }
                     write!(f, "]")?;
@@ -1398,7 +1401,9 @@ impl DisplayAs for FileScanConfig {
             let files: Vec<_> = self.file_groups.iter().flat_map(|g| g.iter()).collect();
             write!(f, "files=[")?;
             for (i, pf) in files.iter().enumerate() {
-                if i > 0 { write!(f, ", ")?; }
+                if i > 0 {
+                    write!(f, ", ")?;
+                }
                 write!(f, "{}", pf.object_meta.location.as_ref())?;
             }
             write!(f, "]")?;
