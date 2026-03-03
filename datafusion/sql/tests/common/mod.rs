@@ -342,10 +342,7 @@ impl TableSource for EmptyTable {
 pub struct CustomTypePlanner {}
 
 impl TypePlanner for CustomTypePlanner {
-    fn plan_type(
-        &self,
-        sql_type: &sqlparser::ast::DataType,
-    ) -> Result<Option<DataType>> {
+    fn plan_type(&self, sql_type: &sqlparser::ast::DataType) -> Result<Option<DataType>> {
         match sql_type {
             sqlparser::ast::DataType::Datetime(precision) => {
                 let precision = match precision {
