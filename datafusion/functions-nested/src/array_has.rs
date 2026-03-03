@@ -411,6 +411,11 @@ fn array_has_all_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     array_has_all_and_any_inner(args, ComparisonType::All)
 }
 
+/// Number of rows to process per chunk when doing batched row conversion.
+/// Keeps the converted data cache-friendly while amortizing the per-call
+/// overhead of `RowConverter::convert_columns`.
+const ROW_CONVERSION_CHUNK_SIZE: usize = 256;
+
 // General row comparison for array_has_all and array_has_any
 fn general_array_has_for_all_and_any<'a>(
     haystack: ArrayWrapper<'a>,
@@ -423,37 +428,43 @@ fn general_array_has_for_all_and_any<'a>(
     let h_offsets: Vec<usize> = haystack.offsets().collect();
     let n_offsets: Vec<usize> = needle.offsets().collect();
 
-    // For efficiency with sliced arrays, only process the visible elements, not
-    // the entire underlying buffer. This requires rebasing offsets to start at
-    // zero.
-    let h_base = h_offsets[0];
-    let n_base = n_offsets[0];
-    let h_vals = haystack
-        .values()
-        .slice(h_base, h_offsets[num_rows] - h_base);
-    let n_vals = needle.values().slice(n_base, n_offsets[num_rows] - n_base);
-
-    // Convert all haystack and needle values to rows up front
-    let all_h_rows = converter.convert_columns(&[h_vals])?;
-    let all_n_rows = converter.convert_columns(&[n_vals])?;
-
     let h_nulls = haystack.nulls();
     let n_nulls = needle.nulls();
     let mut builder = BooleanArray::builder(num_rows);
 
-    for i in 0..num_rows {
-        if h_nulls.is_some_and(|n| n.is_null(i)) || n_nulls.is_some_and(|n| n.is_null(i))
-        {
-            builder.append_null();
-            continue;
+    for chunk_start in (0..num_rows).step_by(ROW_CONVERSION_CHUNK_SIZE) {
+        let chunk_end = (chunk_start + ROW_CONVERSION_CHUNK_SIZE).min(num_rows);
+
+        let h_elem_start = h_offsets[chunk_start];
+        let h_elem_end = h_offsets[chunk_end];
+        let n_elem_start = n_offsets[chunk_start];
+        let n_elem_end = n_offsets[chunk_end];
+
+        let h_vals = haystack
+            .values()
+            .slice(h_elem_start, h_elem_end - h_elem_start);
+        let n_vals = needle
+            .values()
+            .slice(n_elem_start, n_elem_end - n_elem_start);
+
+        let chunk_h_rows = converter.convert_columns(&[h_vals])?;
+        let chunk_n_rows = converter.convert_columns(&[n_vals])?;
+
+        for i in chunk_start..chunk_end {
+            if h_nulls.is_some_and(|n| n.is_null(i))
+                || n_nulls.is_some_and(|n| n.is_null(i))
+            {
+                builder.append_null();
+                continue;
+            }
+            builder.append_value(general_array_has_all_and_any_kernel(
+                &chunk_h_rows,
+                (h_offsets[i] - h_elem_start)..(h_offsets[i + 1] - h_elem_start),
+                &chunk_n_rows,
+                (n_offsets[i] - n_elem_start)..(n_offsets[i + 1] - n_elem_start),
+                comparison_type,
+            ));
         }
-        builder.append_value(general_array_has_all_and_any_kernel(
-            &all_h_rows,
-            (h_offsets[i] - h_base)..(h_offsets[i + 1] - h_base),
-            &all_n_rows,
-            (n_offsets[i] - n_base)..(n_offsets[i + 1] - n_base),
-            comparison_type,
-        ));
     }
 
     Ok(Arc::new(builder.finish()))
@@ -470,38 +481,45 @@ fn array_has_all_and_any_string_internal<'a>(
     let h_offsets: Vec<usize> = haystack.offsets().collect();
     let n_offsets: Vec<usize> = needle.offsets().collect();
 
-    // For efficiency with sliced arrays, only process the visible elements, not
-    // the entire underlying buffer. This requires rebasing offsets to start at
-    // zero.
-    let h_base = h_offsets[0];
-    let n_base = n_offsets[0];
-    let h_vals = haystack
-        .values()
-        .slice(h_base, h_offsets[num_rows] - h_base);
-    let n_vals = needle.values().slice(n_base, n_offsets[num_rows] - n_base);
-
-    let all_h_strings = string_array_to_vec(h_vals.as_ref());
-    let all_n_strings = string_array_to_vec(n_vals.as_ref());
-
     let h_nulls = haystack.nulls();
     let n_nulls = needle.nulls();
     let mut builder = BooleanArray::builder(num_rows);
 
-    for i in 0..num_rows {
-        if h_nulls.is_some_and(|n| n.is_null(i)) || n_nulls.is_some_and(|n| n.is_null(i))
-        {
-            builder.append_null();
-            continue;
+    for chunk_start in (0..num_rows).step_by(ROW_CONVERSION_CHUNK_SIZE) {
+        let chunk_end = (chunk_start + ROW_CONVERSION_CHUNK_SIZE).min(num_rows);
+
+        let h_elem_start = h_offsets[chunk_start];
+        let h_elem_end = h_offsets[chunk_end];
+        let n_elem_start = n_offsets[chunk_start];
+        let n_elem_end = n_offsets[chunk_end];
+
+        let h_vals = haystack
+            .values()
+            .slice(h_elem_start, h_elem_end - h_elem_start);
+        let n_vals = needle
+            .values()
+            .slice(n_elem_start, n_elem_end - n_elem_start);
+
+        let chunk_h_strings = string_array_to_vec(h_vals.as_ref());
+        let chunk_n_strings = string_array_to_vec(n_vals.as_ref());
+
+        for i in chunk_start..chunk_end {
+            if h_nulls.is_some_and(|n| n.is_null(i))
+                || n_nulls.is_some_and(|n| n.is_null(i))
+            {
+                builder.append_null();
+                continue;
+            }
+            let h_start = h_offsets[i] - h_elem_start;
+            let h_end = h_offsets[i + 1] - h_elem_start;
+            let n_start = n_offsets[i] - n_elem_start;
+            let n_end = n_offsets[i + 1] - n_elem_start;
+            builder.append_value(array_has_string_kernel(
+                &chunk_h_strings[h_start..h_end],
+                &chunk_n_strings[n_start..n_end],
+                comparison_type,
+            ));
         }
-        let h_start = h_offsets[i] - h_base;
-        let h_end = h_offsets[i + 1] - h_base;
-        let n_start = n_offsets[i] - n_base;
-        let n_end = n_offsets[i + 1] - n_base;
-        builder.append_value(array_has_string_kernel(
-            &all_h_strings[h_start..h_end],
-            &all_n_strings[n_start..n_end],
-            comparison_type,
-        ));
     }
 
     Ok(Arc::new(builder.finish()))
