@@ -34,21 +34,17 @@ query TT
 explain select b from t where b ~ '.*'
 ----
 logical_plan
-01)Filter: t.b ~ Utf8View(".*")
+01)Filter: t.b IS NOT NULL
 02)--TableScan: t projection=[b]
 physical_plan
-01)FilterExec: b@0 ~ .*
+01)FilterExec: b@0 IS NOT NULL
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TT
 explain select b from t where b !~ '.*'
 ----
-logical_plan
-01)Filter: t.b !~ Utf8View(".*")
-02)--TableScan: t projection=[b]
-physical_plan
-01)FilterExec: b@0 !~ .*
-02)--DataSourceExec: partitions=1, partition_sizes=[1]
+logical_plan EmptyRelation: rows=0
+physical_plan EmptyExec
 
 query T
 select b from t where b ~ '.*'
@@ -58,6 +54,57 @@ c
 
 query T
 select b from t where b !~ '.*'
+----
+
+# test regex .*literal.* simplifies to contains()
+query TT
+explain select b from t where b ~ '.*a.*'
+----
+logical_plan
+01)Filter: contains(t.b, Utf8("a"))
+02)--TableScan: t projection=[b]
+physical_plan
+01)FilterExec: contains(b@0, a)
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query T
+select b from t where b ~ '.*a.*'
+----
+a
+
+query TT
+explain select b from t where b !~ '.*a.*'
+----
+logical_plan
+01)Filter: NOT contains(t.b, Utf8("a"))
+02)--TableScan: t projection=[b]
+physical_plan
+01)FilterExec: NOT contains(b@0, a)
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query T
+select b from t where b !~ '.*a.*'
+----
+c
+
+query TT
+explain select b from t where b ~ '.*.*'
+----
+logical_plan
+01)Filter: t.b IS NOT NULL
+02)--TableScan: t projection=[b]
+physical_plan
+01)FilterExec: b@0 IS NOT NULL
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query T
+select b from t where b ~ '.*.*'
+----
+a
+c
+
+query T
+select b from t where b !~ '.*.*'
 ----
 
 query TT
