@@ -649,8 +649,18 @@ impl DataSource for FileScanConfig {
                 let schema = self.projected_schema().map_err(|_| std::fmt::Error {})?;
                 let orderings = get_projected_output_ordering(self, &schema);
 
-                write!(f, "file_groups=")?;
-                FileGroupsDisplay(&self.file_groups).fmt_as(t, f)?;
+                if self.morsel_driven {
+                    let files: Vec<_> = self.file_groups.iter().flat_map(|g| g.iter()).collect();
+                    write!(f, "files=[")?;
+                    for (i, pf) in files.iter().enumerate() {
+                        if i > 0 { write!(f, ", ")?; }
+                        write!(f, "{}", pf.object_meta.location.as_ref())?;
+                    }
+                    write!(f, "]")?;
+                } else {
+                    write!(f, "file_groups=")?;
+                    FileGroupsDisplay(&self.file_groups).fmt_as(t, f)?;
+                }
 
                 if !schema.fields().is_empty() {
                     if let Some(projection) = self.file_source.projection() {
@@ -1372,8 +1382,18 @@ impl DisplayAs for FileScanConfig {
         let schema = self.projected_schema().map_err(|_| std::fmt::Error {})?;
         let orderings = get_projected_output_ordering(self, &schema);
 
-        write!(f, "file_groups=")?;
-        FileGroupsDisplay(&self.file_groups).fmt_as(t, f)?;
+        if self.morsel_driven {
+            let files: Vec<_> = self.file_groups.iter().flat_map(|g| g.iter()).collect();
+            write!(f, "files=[")?;
+            for (i, pf) in files.iter().enumerate() {
+                if i > 0 { write!(f, ", ")?; }
+                write!(f, "{}", pf.object_meta.location.as_ref())?;
+            }
+            write!(f, "]")?;
+        } else {
+            write!(f, "file_groups=")?;
+            FileGroupsDisplay(&self.file_groups).fmt_as(t, f)?;
+        }
 
         if !schema.fields().is_empty() {
             write!(f, ", projection={}", ProjectSchemaDisplay(&schema))?;

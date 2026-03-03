@@ -23,7 +23,7 @@ select date_bin(interval '1637426858 months', to_timestamp_millis(1040292460), t
 ----
 NULL
 
-# Negative timestamp with month interval - should return NULL instead of panicking  
+# Negative timestamp with month interval - should return NULL instead of panicking
 query P
 select date_bin(interval '1 month', to_timestamp_millis(-1040292460), timestamp '1984-01-07 00:00:00');
 ----
