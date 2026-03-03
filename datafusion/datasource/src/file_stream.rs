@@ -213,19 +213,34 @@ impl FileStream {
                             let queue = self.shared_queue.as_ref().expect("shared queue");
                             // Take the guard to decrement morselizing_count
                             let _guard = self.morsel_guard.take();
+                            self.file_stream_metrics.time_opening.stop();
 
                             if morsels.is_empty() {
-                                self.file_stream_metrics.time_opening.stop();
-                                // No morsels returned, skip this file
+                                // No morsels returned (file pruned entirely), skip.
                                 self.state = FileStreamState::Idle;
                             } else {
-                                // Push morsels to the morsel queue. Workers
-                                // drain that queue before pulling new files,
-                                // so these row groups get processed next,
-                                // preserving I/O locality within the file.
+                                // Push morsels to the morsel queue. Workers drain
+                                // that queue before pulling new files, preserving
+                                // I/O locality within the file.
                                 queue.push_morsels(morsels);
-                                self.file_stream_metrics.time_opening.stop();
-                                self.state = FileStreamState::Idle;
+
+                                // Pipeline: immediately start morselizing the next
+                                // file (if any) while workers consume the morsels
+                                // we just pushed. This overlaps the next file's
+                                // footer read + pruning with the current file's row
+                                // group data reads.
+                                if let Some(next_file) =
+                                    queue.pop_next_file_for_prefetch()
+                                {
+                                    self.morsel_guard = Some(MorselizingGuard {
+                                        queue: Arc::clone(queue),
+                                    });
+                                    self.state = FileStreamState::Morselizing {
+                                        future: self.file_opener.morselize(next_file),
+                                    };
+                                } else {
+                                    self.state = FileStreamState::Idle;
+                                }
                             }
                         }
                         Err(e) => {
@@ -505,6 +520,23 @@ impl WorkQueue {
         let prev = self.morselizing_count.fetch_sub(1, Ordering::AcqRel);
         if prev == 1 {
             self.notify.notify_waiters();
+        }
+    }
+
+    /// Pop the next whole file for prefetch morselization.
+    ///
+    /// Should only be called when the morsels queue is known to be non-empty
+    /// (e.g. immediately after [`Self::push_morsels`]), so that workers have
+    /// morsels to consume while the prefetch runs.  Increments
+    /// `morselizing_count` so that waiting workers do not declare the queue
+    /// done prematurely.
+    pub fn pop_next_file_for_prefetch(&self) -> Option<PartitionedFile> {
+        let mut files = self.files.lock().unwrap();
+        if let Some(file) = files.pop_front() {
+            self.morselizing_count.fetch_add(1, Ordering::Relaxed);
+            Some(file)
+        } else {
+            None
         }
     }
 }
