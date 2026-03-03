@@ -271,24 +271,44 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
         ) -> Result<()> {
             let mut blob = Vec::new();
             codec.try_encode_file_format(&mut blob, node)?;
-            protobuf::FileFormatWrapper { kind: kind.into(), blob }
-                .encode(buf)
-                .map_err(|e| DataFusionError::Internal(e.to_string()))
+            protobuf::FileFormatWrapper {
+                kind: kind.into(),
+                blob,
+            }
+            .encode(buf)
+            .map_err(|e| DataFusionError::Internal(e.to_string()))
         }
 
         #[cfg(feature = "parquet")]
         if node.as_any().is::<ParquetFormatFactory>() {
-            return encode_with(buf, FileFormatKind::Parquet, node, &ParquetLogicalExtensionCodec {});
+            return encode_with(
+                buf,
+                FileFormatKind::Parquet,
+                node,
+                &ParquetLogicalExtensionCodec {},
+            );
         }
 
         if node.as_any().is::<CsvFormatFactory>() {
             encode_with(buf, FileFormatKind::Csv, node, &CsvLogicalExtensionCodec {})
         } else if node.as_any().is::<JsonFormatFactory>() {
-            encode_with(buf, FileFormatKind::Json, node, &JsonLogicalExtensionCodec {})
+            encode_with(
+                buf,
+                FileFormatKind::Json,
+                node,
+                &JsonLogicalExtensionCodec {},
+            )
         } else if node.as_any().is::<ArrowFormatFactory>() {
-            encode_with(buf, FileFormatKind::Arrow, node, &ArrowLogicalExtensionCodec {})
+            encode_with(
+                buf,
+                FileFormatKind::Arrow,
+                node,
+                &ArrowLogicalExtensionCodec {},
+            )
         } else {
-            not_impl_err!("Unsupported FileFormatFactory type for DefaultLogicalExtensionCodec")
+            not_impl_err!(
+                "Unsupported FileFormatFactory type for DefaultLogicalExtensionCodec"
+            )
         }
     }
 }
