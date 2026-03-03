@@ -1758,9 +1758,11 @@ fn test_sort_with_scalar_fn_and_push_down_fetch() -> Result<()> {
         .filter(col("search_phrase").not_eq(lit("")))?
         .project(vec![col("search_phrase"), col("event_time")])?
         .sort_with_limit(
-            vec![substr_udf
-                .call(vec![col("event_time"), lit(1), lit(5)])
-                .sort(true, true)],
+            vec![
+                substr_udf
+                    .call(vec![col("event_time"), lit(1), lit(5)])
+                    .sort(true, true),
+            ],
             Some(10),
         )?
         .project(vec![col("search_phrase")])?
