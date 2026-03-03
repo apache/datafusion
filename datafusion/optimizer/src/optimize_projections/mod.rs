@@ -893,9 +893,6 @@ fn rewrite_projection_given_requirements(
 
     let mut required_indices =
         RequiredIndices::new().with_exprs(input.schema(), exprs_used.iter());
-    if indices.projection_beneficial() {
-        required_indices = required_indices.with_projection_beneficial();
-    }
     if !indices.multiplicity_sensitive() {
         required_indices = required_indices.for_multiplicity_insensitive_child();
     }
