@@ -436,6 +436,11 @@ SELECT upper(arrow_cast('foo', 'Dictionary(Int32, Utf8)'))
 FOO
 
 query T
+SELECT upper(arrow_cast(arrow_cast('foo', 'Dictionary(Int32, Utf8)'), 'Dictionary(Int32, Utf8View)'))
+----
+FOO
+
+query T
 SELECT upper('árvore ação αβγ')
 ----
 ÁRVORE AÇÃO ΑΒΓ
@@ -457,6 +462,11 @@ LargeUtf8
 
 query T
 SELECT arrow_typeof(upper(arrow_cast('foo', 'Utf8View')))
+----
+Utf8View
+
+query T
+SELECT arrow_typeof(upper(arrow_cast(arrow_cast('foo', 'Dictionary(Int32, Utf8)'), 'Dictionary(Int32, Utf8View)')))
 ----
 Utf8View
 
@@ -506,6 +516,11 @@ SELECT lower(arrow_cast('FOObar', 'Dictionary(Int32, Utf8)'))
 foobar
 
 query T
+SELECT lower(arrow_cast(arrow_cast('FOObar', 'Dictionary(Int32, Utf8)'), 'Dictionary(Int32, Utf8View)'))
+----
+foobar
+
+query T
 SELECT lower('ÁRVORE AÇÃO ΑΒΓ')
 ----
 árvore ação αβγ
@@ -527,6 +542,11 @@ LargeUtf8
 
 query T
 SELECT arrow_typeof(lower(arrow_cast('FOObar', 'Utf8View')))
+----
+Utf8View
+
+query T
+SELECT arrow_typeof(lower(arrow_cast(arrow_cast('FOObar', 'Dictionary(Int32, Utf8)'), 'Dictionary(Int32, Utf8View)')))
 ----
 Utf8View
 
