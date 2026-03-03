@@ -897,6 +897,8 @@ message PhysicalExprNode {
     UnknownColumn unknown_column = 20;
 
     PhysicalHashExprNode hash_expr = 21;
+
+    PhysicalPlaceholderNode placeholder_expr = 22;
   }
 }
 
@@ -1022,6 +1024,11 @@ message PhysicalHashExprNode {
   uint64 seed2 = 4;
   uint64 seed3 = 5;
   string description = 6;
+}
+
+message PhysicalPlaceholderNode {
+  string id = 1;
+  optional datafusion_common.Field field = 2;
 }
 
 message FilterExecNode {

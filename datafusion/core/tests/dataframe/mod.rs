@@ -5504,7 +5504,7 @@ async fn test_dataframe_placeholder_column_parameter() -> Result<()> {
     let err_msg = results.unwrap_err().strip_backtrace();
     assert_snapshot!(
         err_msg,
-        @"Execution error: Placeholder '$1' was not provided a value for execution."
+        @"Execution error: Placeholder '$1' was not provided a field."
     );
 
     // Providing a parameter value should resolve the error
