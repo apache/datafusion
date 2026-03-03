@@ -227,10 +227,7 @@ fn to_char_scalar(expression: &ColumnarValue, format: &str) -> Result<ColumnarVa
                 // handles both date and time specifiers (with zero for
                 // the time components).
                 Err(_) if data_type == &Date32 => {
-                    return to_char_scalar(
-                        &expression.cast_to(&Date64, None)?,
-                        format,
-                    );
+                    return to_char_scalar(&expression.cast_to(&Date64, None)?, format);
                 }
                 Err(e) => return Err(e.into()),
             }
