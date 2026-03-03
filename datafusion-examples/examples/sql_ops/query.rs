@@ -17,18 +17,19 @@
 
 //! See `main.rs` for how to run it.
 
+use std::sync::Arc;
+
 use datafusion::arrow::array::{UInt8Array, UInt64Array};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::catalog::MemTable;
 use datafusion::common::{assert_batches_eq, exec_datafusion_err};
-use datafusion::datasource::MemTable;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingOptions;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::prelude::*;
+use datafusion_examples::utils::{datasets::ExampleDataset, write_csv_to_parquet};
 use object_store::local::LocalFileSystem;
-use std::path::Path;
-use std::sync::Arc;
 
 /// Examples of various ways to execute queries using SQL
 ///
@@ -113,32 +114,33 @@ async fn query_parquet() -> Result<()> {
     // create local execution context
     let ctx = SessionContext::new();
 
-    let test_data = datafusion::test_util::parquet_test_data();
+    // Convert the CSV input into a temporary Parquet directory for querying
+    let dataset = ExampleDataset::Cars;
+    let parquet_temp = write_csv_to_parquet(&ctx, &dataset.path()).await?;
 
     // Configure listing options
     let file_format = ParquetFormat::default().with_enable_pruning(true);
-    let listing_options = ListingOptions::new(Arc::new(file_format))
-        // This is a workaround for this example since `test_data` contains
-        // many different parquet different files,
-        // in practice use FileType::PARQUET.get_ext().
-        .with_file_extension("alltypes_plain.parquet");
+    let listing_options =
+        ListingOptions::new(Arc::new(file_format)).with_file_extension(".parquet");
+
+    let table_path = parquet_temp.file_uri()?;
 
     // First example were we use an absolute path, which requires no additional setup.
     ctx.register_listing_table(
         "my_table",
-        &format!("file://{test_data}/"),
+        &table_path,
         listing_options.clone(),
         None,
         None,
     )
-    .await
-    .unwrap();
+    .await?;
 
     // execute the query
     let df = ctx
         .sql(
             "SELECT * \
         FROM my_table \
+        ORDER BY speed \
         LIMIT 1",
         )
         .await?;
@@ -147,21 +149,22 @@ async fn query_parquet() -> Result<()> {
     let results = df.collect().await?;
     assert_batches_eq!(
         [
-            "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+",
-            "| id | bool_col | tinyint_col | smallint_col | int_col | bigint_col | float_col | double_col | date_string_col  | string_col | timestamp_col       |",
-            "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+",
-            "| 4  | true     | 0           | 0            | 0       | 0          | 0.0       | 0.0        | 30332f30312f3039 | 30         | 2009-03-01T00:00:00 |",
-            "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+",
+            "+-----+-------+---------------------+",
+            "| car | speed | time                |",
+            "+-----+-------+---------------------+",
+            "| red | 0.0   | 1996-04-12T12:05:15 |",
+            "+-----+-------+---------------------+",
         ],
         &results
     );
 
-    // Second example were we temporarily move into the test data's parent directory and
-    // simulate a relative path, this requires registering an ObjectStore.
+    // Second example where we change the current working directory and explicitly
+    // register a local filesystem object store. This demonstrates how listing tables
+    // resolve paths via an ObjectStore, even when using filesystem-backed data.
     let cur_dir = std::env::current_dir()?;
-
-    let test_data_path = Path::new(&test_data);
-    let test_data_path_parent = test_data_path
+    let test_data_path_parent = parquet_temp
+        .tmp_dir
+        .path()
         .parent()
         .ok_or(exec_datafusion_err!("test_data path needs a parent"))?;
 
@@ -169,15 +172,15 @@ async fn query_parquet() -> Result<()> {
 
     let local_fs = Arc::new(LocalFileSystem::default());
 
-    let u = url::Url::parse("file://./")
+    let url = url::Url::parse("file://./")
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    ctx.register_object_store(&u, local_fs);
+    ctx.register_object_store(&url, local_fs);
 
     // Register a listing table - this will use all files in the directory as data sources
     // for the query
     ctx.register_listing_table(
         "relative_table",
-        "./data",
+        parquet_temp.path_str()?,
         listing_options.clone(),
         None,
         None,
@@ -189,6 +192,7 @@ async fn query_parquet() -> Result<()> {
         .sql(
             "SELECT * \
         FROM relative_table \
+        ORDER BY speed \
         LIMIT 1",
         )
         .await?;
@@ -197,11 +201,11 @@ async fn query_parquet() -> Result<()> {
     let results = df.collect().await?;
     assert_batches_eq!(
         [
-            "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+",
-            "| id | bool_col | tinyint_col | smallint_col | int_col | bigint_col | float_col | double_col | date_string_col  | string_col | timestamp_col       |",
-            "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+",
-            "| 4  | true     | 0           | 0            | 0       | 0          | 0.0       | 0.0        | 30332f30312f3039 | 30         | 2009-03-01T00:00:00 |",
-            "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+",
+            "+-----+-------+---------------------+",
+            "| car | speed | time                |",
+            "+-----+-------+---------------------+",
+            "| red | 0.0   | 1996-04-12T12:05:15 |",
+            "+-----+-------+---------------------+",
         ],
         &results
     );

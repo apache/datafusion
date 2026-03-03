@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-extern crate criterion;
 mod helper;
 
 use arrow::datatypes::{DataType, Field};

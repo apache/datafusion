@@ -72,6 +72,19 @@ pub trait ArrowHashTable {
     fn find_or_insert(&mut self, row_idx: usize, replace_idx: usize) -> (usize, bool);
 }
 
+/// Returns true if the given data type can be used as a top-K aggregation hash key.
+///
+/// Supported types include Arrow primitives (integers, floats, decimals, intervals)
+/// and UTF-8 strings (`Utf8`, `LargeUtf8`, `Utf8View`). This is used internally by
+/// `PriorityMap::supports()` to validate grouping key type compatibility.
+pub fn is_supported_hash_key_type(kt: &DataType) -> bool {
+    kt.is_primitive()
+        || matches!(
+            kt,
+            DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8
+        )
+}
+
 // An implementation of ArrowHashTable for String keys
 pub struct StringHashTable {
     owned: ArrayRef,
@@ -108,6 +121,34 @@ impl StringHashTable {
             data_type,
         }
     }
+
+    /// Extracts the string value at the given row index, handling nulls and different string types.
+    ///
+    /// Returns `None` if the value is null, otherwise `Some(value.to_string())`.
+    fn extract_string_value(&self, row_idx: usize) -> Option<String> {
+        let is_null_and_value = match self.data_type {
+            DataType::Utf8 => {
+                let arr = self.owned.as_string::<i32>();
+                (arr.is_null(row_idx), arr.value(row_idx))
+            }
+            DataType::LargeUtf8 => {
+                let arr = self.owned.as_string::<i64>();
+                (arr.is_null(row_idx), arr.value(row_idx))
+            }
+            DataType::Utf8View => {
+                let arr = self.owned.as_string_view();
+                (arr.is_null(row_idx), arr.value(row_idx))
+            }
+            _ => panic!("Unsupported data type"),
+        };
+
+        let (is_null, value) = is_null_and_value;
+        if is_null {
+            None
+        } else {
+            Some(value.to_string())
+        }
+    }
 }
 
 impl ArrowHashTable for StringHashTable {
@@ -138,63 +179,15 @@ impl ArrowHashTable for StringHashTable {
     }
 
     fn find_or_insert(&mut self, row_idx: usize, replace_idx: usize) -> (usize, bool) {
-        let id = match self.data_type {
-            DataType::Utf8 => {
-                let ids = self
-                    .owned
-                    .as_any()
-                    .downcast_ref::<StringArray>()
-                    .expect("Expected StringArray for DataType::Utf8");
-                if ids.is_null(row_idx) {
-                    None
-                } else {
-                    Some(ids.value(row_idx))
-                }
-            }
-            DataType::LargeUtf8 => {
-                let ids = self
-                    .owned
-                    .as_any()
-                    .downcast_ref::<LargeStringArray>()
-                    .expect("Expected LargeStringArray for DataType::LargeUtf8");
-                if ids.is_null(row_idx) {
-                    None
-                } else {
-                    Some(ids.value(row_idx))
-                }
-            }
-            DataType::Utf8View => {
-                let ids = self
-                    .owned
-                    .as_any()
-                    .downcast_ref::<StringViewArray>()
-                    .expect("Expected StringViewArray for DataType::Utf8View");
-                if ids.is_null(row_idx) {
-                    None
-                } else {
-                    Some(ids.value(row_idx))
-                }
-            }
-            _ => panic!("Unsupported data type"),
-        };
+        let id = self.extract_string_value(row_idx);
 
-        // TODO: avoid double lookup by using entry API
+        // Compute hash and create equality closure for hash table lookup.
+        let hash = self.rnd.hash_one(id.as_deref());
+        let id_for_eq = id.clone();
+        let eq = move |mi: &Option<String>| id_for_eq.as_deref() == mi.as_deref();
 
-        let hash = self.rnd.hash_one(id);
-        if let Some(map_idx) = self
-            .map
-            .find(hash, |mi| id == mi.as_ref().map(|id| id.as_str()))
-        {
-            return (map_idx, false);
-        }
-
-        // we're full and this is a better value, so remove the worst
-        let heap_idx = self.map.remove_if_full(replace_idx);
-
-        // add the new group
-        let id = id.map(|id| id.to_string());
-        let map_idx = self.map.insert(hash, &id, heap_idx);
-        (map_idx, true)
+        // Use entry API to avoid double lookup
+        self.map.find_or_insert(hash, id, replace_idx, eq)
     }
 }
 
@@ -260,19 +253,12 @@ where
         } else {
             Some(ids.value(row_idx))
         };
-
+        // Compute hash and create equality closure for hash table lookup.
         let hash: u64 = id.hash(&self.rnd);
-        // TODO: avoid double lookup by using entry API
-        if let Some(map_idx) = self.map.find(hash, |mi| id == *mi) {
-            return (map_idx, false);
-        }
+        let eq = |mi: &Option<VAL::Native>| id == *mi;
 
-        // we're full and this is a better value, so remove the worst
-        let heap_idx = self.map.remove_if_full(replace_idx);
-
-        // add the new group
-        let map_idx = self.map.insert(hash, &id, heap_idx);
-        (map_idx, true)
+        // Use entry API to avoid double lookup
+        self.map.find_or_insert(hash, id, replace_idx, eq)
     }
 }
 
@@ -285,11 +271,6 @@ impl<ID: KeyType + PartialEq> TopKHashTable<ID> {
             free_index: None,
             limit,
         }
-    }
-
-    pub fn find(&self, hash: u64, mut eq: impl FnMut(&ID) -> bool) -> Option<usize> {
-        let eq = |&idx: &usize| eq(&self.store[idx].as_ref().unwrap().id);
-        self.map.find(hash, eq).copied()
     }
 
     pub fn heap_idx_at(&self, map_idx: usize) -> usize {
@@ -324,8 +305,27 @@ impl<ID: KeyType + PartialEq> TopKHashTable<ID> {
         }
     }
 
-    pub fn insert(&mut self, hash: u64, id: &ID, heap_idx: usize) -> usize {
-        let mi = HashTableItem::new(hash, id.clone(), heap_idx);
+    /// Find an existing entry or insert a new one, avoiding double hash table lookup.
+    /// Returns (map_idx, is_new) where is_new indicates if this was a new insertion.
+    /// If inserting a new entry and the table is full, replaces the entry at replace_idx.
+    pub fn find_or_insert(
+        &mut self,
+        hash: u64,
+        id: ID,
+        replace_idx: usize,
+        mut eq: impl FnMut(&ID) -> bool,
+    ) -> (usize, bool) {
+        // Check if entry exists - this is the only hash table lookup
+        {
+            let eq_fn = |idx: &usize| eq(&self.store[*idx].as_ref().unwrap().id);
+            if let Some(&map_idx) = self.map.find(hash, eq_fn) {
+                return (map_idx, false);
+            }
+        }
+
+        // Entry doesn't exist - compute heap_idx and prepare item
+        let heap_idx = self.remove_if_full(replace_idx);
+        let mi = HashTableItem::new(hash, id, heap_idx);
         let store_idx = if let Some(idx) = self.free_index.take() {
             self.store[idx] = Some(mi);
             idx
@@ -334,19 +334,15 @@ impl<ID: KeyType + PartialEq> TopKHashTable<ID> {
             self.store.len() - 1
         };
 
+        // Reserve space if needed
         let hasher = |idx: &usize| self.store[*idx].as_ref().unwrap().hash;
         if self.map.len() == self.map.capacity() {
             self.map.reserve(self.limit, hasher);
         }
 
-        let eq_fn = |idx: &usize| self.store[*idx].as_ref().unwrap().id == *id;
-        match self.map.entry(hash, eq_fn, hasher) {
-            Entry::Occupied(_) => unreachable!("Item should not exist"),
-            Entry::Vacant(vacant) => {
-                vacant.insert(store_idx);
-            }
-        }
-        store_idx
+        // Insert without checking again since we already confirmed it doesn't exist
+        self.map.insert_unique(hash, store_idx, hasher);
+        (store_idx, true)
     }
 
     pub fn len(&self) -> usize {
@@ -449,15 +445,29 @@ mod tests {
     #[test]
     fn should_resize_properly() -> Result<()> {
         let mut heap_to_map = BTreeMap::<usize, usize>::new();
+        // Create TopKHashTable with limit=5 and capacity=3 to force resizing
         let mut map = TopKHashTable::<Option<String>>::new(5, 3);
-        for (heap_idx, id) in vec!["1", "2", "3", "4", "5"].into_iter().enumerate() {
+
+        // Insert 5 entries, tracking the heap-to-map index mapping
+        for (heap_idx, id) in ["1", "2", "3", "4", "5"].iter().enumerate() {
+            let value = Some(id.to_string());
             let hash = heap_idx as u64;
-            let map_idx = map.insert(hash, &Some(id.to_string()), heap_idx);
-            let _ = heap_to_map.insert(heap_idx, map_idx);
+            let (map_idx, is_new) =
+                map.find_or_insert(hash, value.clone(), heap_idx, |v| *v == value);
+            assert!(is_new, "Entry should be new");
+            heap_to_map.insert(heap_idx, map_idx);
         }
 
+        // Verify all 5 entries are present
+        assert_eq!(map.len(), 5);
+
+        // Verify that the hash table resized properly (capacity should have grown beyond 3)
+        // This is implicit - if it didn't resize, insertions would have failed or been slow
+
+        // Drain all values in heap order
         let (_heap_idxs, map_idxs): (Vec<_>, Vec<_>) = heap_to_map.into_iter().unzip();
         let ids = map.take_all(map_idxs);
+
         assert_eq!(
             format!("{ids:?}"),
             r#"[Some("1"), Some("2"), Some("3"), Some("4"), Some("5")]"#

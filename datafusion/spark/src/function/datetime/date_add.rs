@@ -21,7 +21,6 @@ use std::sync::Arc;
 use arrow::array::ArrayRef;
 use arrow::compute;
 use arrow::datatypes::{DataType, Date32Type, Field, FieldRef};
-use arrow::error::ArrowError;
 use datafusion_common::cast::{
     as_date32_array, as_int8_array, as_int16_array, as_int32_array,
 };
@@ -83,12 +82,7 @@ impl ScalarUDFImpl for SparkDateAdd {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let nullable = args.arg_fields.iter().any(|f| f.is_nullable())
-            || args
-                .scalar_arguments
-                .iter()
-                .any(|arg| matches!(arg, Some(sv) if sv.is_null()));
-
+        let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
         Ok(Arc::new(Field::new(
             self.name(),
             DataType::Date32,
@@ -107,38 +101,26 @@ fn spark_date_add(args: &[ArrayRef]) -> Result<ArrayRef> {
     let result = match days_arg.data_type() {
         DataType::Int8 => {
             let days_array = as_int8_array(days_arg)?;
-            compute::try_binary::<_, _, _, Date32Type>(
+            compute::binary::<_, _, _, Date32Type>(
                 date_array,
                 days_array,
-                |date, days| {
-                    date.checked_add(days as i32).ok_or_else(|| {
-                        ArrowError::ArithmeticOverflow("date_add".to_string())
-                    })
-                },
+                |date, days| date.wrapping_add(days as i32),
             )?
         }
         DataType::Int16 => {
             let days_array = as_int16_array(days_arg)?;
-            compute::try_binary::<_, _, _, Date32Type>(
+            compute::binary::<_, _, _, Date32Type>(
                 date_array,
                 days_array,
-                |date, days| {
-                    date.checked_add(days as i32).ok_or_else(|| {
-                        ArrowError::ArithmeticOverflow("date_add".to_string())
-                    })
-                },
+                |date, days| date.wrapping_add(days as i32),
             )?
         }
         DataType::Int32 => {
             let days_array = as_int32_array(days_arg)?;
-            compute::try_binary::<_, _, _, Date32Type>(
+            compute::binary::<_, _, _, Date32Type>(
                 date_array,
                 days_array,
-                |date, days| {
-                    date.checked_add(days).ok_or_else(|| {
-                        ArrowError::ArithmeticOverflow("date_add".to_string())
-                    })
-                },
+                |date, days| date.wrapping_add(days),
             )?
         }
         _ => {
@@ -155,7 +137,6 @@ fn spark_date_add(args: &[ArrayRef]) -> Result<ArrayRef> {
 mod tests {
     use super::*;
     use arrow::datatypes::Field;
-    use datafusion_common::ScalarValue;
 
     #[test]
     fn test_date_add_non_nullable_inputs() {
@@ -188,27 +169,6 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: args,
                 scalar_arguments: &[None, None],
-            })
-            .unwrap();
-
-        assert_eq!(ret_field.data_type(), &DataType::Date32);
-        assert!(ret_field.is_nullable());
-    }
-
-    #[test]
-    fn test_date_add_null_scalar() {
-        let func = SparkDateAdd::new();
-        let args = &[
-            Arc::new(Field::new("date", DataType::Date32, false)),
-            Arc::new(Field::new("num", DataType::Int32, false)),
-        ];
-
-        let null_scalar = ScalarValue::Int32(None);
-
-        let ret_field = func
-            .return_field_from_args(ReturnFieldArgs {
-                arg_fields: args,
-                scalar_arguments: &[None, Some(&null_scalar)],
             })
             .unwrap();
 

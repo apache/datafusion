@@ -20,7 +20,7 @@
 
 use std::sync::Arc;
 
-use datafusion_physical_plan::aggregates::AggregateExec;
+use datafusion_physical_plan::aggregates::{AggregateExec, LimitOptions};
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
@@ -63,7 +63,7 @@ impl LimitedDistinctAggregation {
             aggr.input_schema(),
         )
         .expect("Unable to copy Aggregate!")
-        .with_limit(Some(limit));
+        .with_limit_options(Some(LimitOptions::new(limit)));
         Some(Arc::new(new_aggr))
     }
 

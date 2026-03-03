@@ -32,6 +32,7 @@ use arrow::datatypes::SchemaRef;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{GetExt, Result, Statistics, internal_err, not_impl_err};
 use datafusion_physical_expr::LexRequirement;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_session::Session;
 
@@ -40,6 +41,35 @@ use object_store::{ObjectMeta, ObjectStore};
 
 /// Default max records to scan to infer the schema
 pub const DEFAULT_SCHEMA_INFER_MAX_RECORD: usize = 1000;
+
+/// Metadata fetched from a file, including statistics and ordering.
+///
+/// This struct is returned by [`FileFormat::infer_stats_and_ordering`] to
+/// provide all metadata in a single read, avoiding duplicate I/O operations.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct FileMeta {
+    /// Statistics for the file (row counts, byte sizes, column statistics).
+    pub statistics: Statistics,
+    /// The ordering (sort order) of the file, if known.
+    pub ordering: Option<LexOrdering>,
+}
+
+impl FileMeta {
+    /// Creates a new `FileMeta` with the given statistics and no ordering.
+    pub fn new(statistics: Statistics) -> Self {
+        Self {
+            statistics,
+            ordering: None,
+        }
+    }
+
+    /// Sets the ordering for this file metadata.
+    pub fn with_ordering(mut self, ordering: Option<LexOrdering>) -> Self {
+        self.ordering = ordering;
+        self
+    }
+}
 
 /// This trait abstracts all the file format specific implementations
 /// from the [`TableProvider`]. This helps code re-utilization across
@@ -89,6 +119,52 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
         table_schema: SchemaRef,
         object: &ObjectMeta,
     ) -> Result<Statistics>;
+
+    /// Infer the ordering (sort order) for the provided object from file metadata.
+    ///
+    /// Returns `Ok(None)` if the file format does not support ordering inference
+    /// or if the file does not have ordering information.
+    ///
+    /// `table_schema` is the (combined) schema of the overall table
+    /// and may be a superset of the schema contained in this file.
+    ///
+    /// The default implementation returns `Ok(None)`.
+    async fn infer_ordering(
+        &self,
+        _state: &dyn Session,
+        _store: &Arc<dyn ObjectStore>,
+        _table_schema: SchemaRef,
+        _object: &ObjectMeta,
+    ) -> Result<Option<LexOrdering>> {
+        Ok(None)
+    }
+
+    /// Infer both statistics and ordering from a single metadata read.
+    ///
+    /// This is more efficient than calling [`Self::infer_stats`] and
+    /// [`Self::infer_ordering`] separately when both are needed, as it avoids
+    /// reading file metadata twice.
+    ///
+    /// The default implementation calls both methods separately. File formats
+    /// that can extract both from a single read should override this method.
+    async fn infer_stats_and_ordering(
+        &self,
+        state: &dyn Session,
+        store: &Arc<dyn ObjectStore>,
+        table_schema: SchemaRef,
+        object: &ObjectMeta,
+    ) -> Result<FileMeta> {
+        let statistics = self
+            .infer_stats(state, store, Arc::clone(&table_schema), object)
+            .await?;
+        let ordering = self
+            .infer_ordering(state, store, table_schema, object)
+            .await?;
+        Ok(FileMeta {
+            statistics,
+            ordering,
+        })
+    }
 
     /// Take a list of files and convert it to the appropriate executor
     /// according to this file format.

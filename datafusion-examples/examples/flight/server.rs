@@ -17,24 +17,23 @@
 
 //! See `main.rs` for how to run it.
 
-use arrow::ipc::writer::{CompressionContext, DictionaryTracker, IpcDataGenerator};
 use std::sync::Arc;
 
-use arrow_flight::{PollInfo, SchemaAsIpc};
-use datafusion::arrow::error::ArrowError;
-use datafusion::datasource::file_format::parquet::ParquetFormat;
-use datafusion::datasource::listing::{ListingOptions, ListingTableUrl};
-use futures::stream::BoxStream;
-use tonic::transport::Server;
-use tonic::{Request, Response, Status, Streaming};
-
-use datafusion::prelude::*;
-
+use arrow::ipc::writer::{CompressionContext, DictionaryTracker, IpcDataGenerator};
 use arrow_flight::{
     Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
     HandshakeRequest, HandshakeResponse, PutResult, SchemaResult, Ticket,
     flight_service_server::FlightService, flight_service_server::FlightServiceServer,
 };
+use arrow_flight::{PollInfo, SchemaAsIpc};
+use datafusion::arrow::error::ArrowError;
+use datafusion::datasource::file_format::parquet::ParquetFormat;
+use datafusion::datasource::listing::{ListingOptions, ListingTableUrl};
+use datafusion::prelude::*;
+use datafusion_examples::utils::{datasets::ExampleDataset, write_csv_to_parquet};
+use futures::stream::BoxStream;
+use tonic::transport::Server;
+use tonic::{Request, Response, Status, Streaming};
 
 #[derive(Clone)]
 pub struct FlightServiceImpl {}
@@ -85,16 +84,21 @@ impl FlightService for FlightServiceImpl {
                 // create local execution context
                 let ctx = SessionContext::new();
 
-                let testdata = datafusion::test_util::parquet_test_data();
+                // Convert the CSV input into a temporary Parquet directory for querying
+                let dataset = ExampleDataset::Cars;
+                let parquet_temp = write_csv_to_parquet(&ctx, &dataset.path())
+                    .await
+                    .map_err(|e| {
+                        Status::internal(format!("Error writing csv to parquet: {e}"))
+                    })?;
+                let parquet_path = parquet_temp.path_str().map_err(|e| {
+                    Status::internal(format!("Error getting parquet path: {e}"))
+                })?;
 
                 // register parquet file with the execution context
-                ctx.register_parquet(
-                    "alltypes_plain",
-                    &format!("{testdata}/alltypes_plain.parquet"),
-                    ParquetReadOptions::default(),
-                )
-                .await
-                .map_err(to_tonic_err)?;
+                ctx.register_parquet("cars", parquet_path, ParquetReadOptions::default())
+                    .await
+                    .map_err(to_tonic_err)?;
 
                 // create the DataFrame
                 let df = ctx.sql(sql).await.map_err(to_tonic_err)?;

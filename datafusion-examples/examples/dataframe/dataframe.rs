@@ -17,6 +17,10 @@
 
 //! See `main.rs` for how to run it.
 
+use std::fs::File;
+use std::io::Write;
+use std::sync::Arc;
+
 use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray, StringViewArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::catalog::MemTable;
@@ -28,10 +32,9 @@ use datafusion::error::Result;
 use datafusion::functions_aggregate::average::avg;
 use datafusion::functions_aggregate::min_max::max;
 use datafusion::prelude::*;
-use std::fs::{File, create_dir_all};
-use std::io::Write;
-use std::sync::Arc;
+use datafusion_examples::utils::{datasets::ExampleDataset, write_csv_to_parquet};
 use tempfile::{TempDir, tempdir};
+use tokio::fs::create_dir_all;
 
 /// This example demonstrates using DataFusion's DataFrame API
 ///
@@ -64,8 +67,8 @@ pub async fn dataframe_example() -> Result<()> {
     read_memory(&ctx).await?;
     read_memory_macro().await?;
     write_out(&ctx).await?;
-    register_aggregate_test_data("t1", &ctx).await?;
-    register_aggregate_test_data("t2", &ctx).await?;
+    register_cars_test_data("t1", &ctx).await?;
+    register_cars_test_data("t2", &ctx).await?;
     where_scalar_subquery(&ctx).await?;
     where_in_subquery(&ctx).await?;
     where_exist_subquery(&ctx).await?;
@@ -77,23 +80,24 @@ pub async fn dataframe_example() -> Result<()> {
 /// 2. Show the schema
 /// 3. Select columns and rows
 async fn read_parquet(ctx: &SessionContext) -> Result<()> {
-    // Find the local path of "alltypes_plain.parquet"
-    let testdata = datafusion::test_util::parquet_test_data();
-    let filename = &format!("{testdata}/alltypes_plain.parquet");
+    // Convert the CSV input into a temporary Parquet directory for querying
+    let dataset = ExampleDataset::Cars;
+    let parquet_temp = write_csv_to_parquet(ctx, &dataset.path()).await?;
 
     // Read the parquet files and show its schema using 'describe'
     let parquet_df = ctx
-        .read_parquet(filename, ParquetReadOptions::default())
+        .read_parquet(parquet_temp.path_str()?, ParquetReadOptions::default())
         .await?;
 
     // show its schema using 'describe'
     parquet_df.clone().describe().await?.show().await?;
 
     // Select three columns and filter the results
-    // so that only rows where id > 1 are returned
+    // so that only rows where speed > 1 are returned
+    // select car, speed, time from t where speed > 1
     parquet_df
-        .select_columns(&["id", "bool_col", "timestamp_col"])?
-        .filter(col("id").gt(lit(1)))?
+        .select_columns(&["car", "speed", "time"])?
+        .filter(col("speed").gt(lit(1)))?
         .show()
         .await?;
 
@@ -211,15 +215,15 @@ async fn write_out(ctx: &SessionContext) -> Result<()> {
     // Create a single temp root with subdirectories
     let tmp_root = TempDir::new()?;
     let examples_root = tmp_root.path().join("datafusion-examples");
-    create_dir_all(&examples_root)?;
+    create_dir_all(&examples_root).await?;
     let table_dir = examples_root.join("test_table");
     let parquet_dir = examples_root.join("test_parquet");
     let csv_dir = examples_root.join("test_csv");
     let json_dir = examples_root.join("test_json");
-    create_dir_all(&table_dir)?;
-    create_dir_all(&parquet_dir)?;
-    create_dir_all(&csv_dir)?;
-    create_dir_all(&json_dir)?;
+    create_dir_all(&table_dir).await?;
+    create_dir_all(&parquet_dir).await?;
+    create_dir_all(&csv_dir).await?;
+    create_dir_all(&json_dir).await?;
 
     let create_sql = format!(
         "CREATE EXTERNAL TABLE test(tablecol1 varchar)
@@ -266,7 +270,7 @@ async fn write_out(ctx: &SessionContext) -> Result<()> {
 }
 
 /// Use the DataFrame API to execute the following subquery:
-/// select c1,c2 from t1 where (select avg(t2.c2) from t2 where t1.c1 = t2.c1)>0 limit 3;
+/// select car, speed from t1 where (select avg(t2.speed) from t2 where t1.car = t2.car) > 0 limit 3;
 async fn where_scalar_subquery(ctx: &SessionContext) -> Result<()> {
     ctx.table("t1")
         .await?
@@ -274,14 +278,14 @@ async fn where_scalar_subquery(ctx: &SessionContext) -> Result<()> {
             scalar_subquery(Arc::new(
                 ctx.table("t2")
                     .await?
-                    .filter(out_ref_col(DataType::Utf8, "t1.c1").eq(col("t2.c1")))?
-                    .aggregate(vec![], vec![avg(col("t2.c2"))])?
-                    .select(vec![avg(col("t2.c2"))])?
+                    .filter(out_ref_col(DataType::Utf8, "t1.car").eq(col("t2.car")))?
+                    .aggregate(vec![], vec![avg(col("t2.speed"))])?
+                    .select(vec![avg(col("t2.speed"))])?
                     .into_unoptimized_plan(),
             ))
-            .gt(lit(0u8)),
+            .gt(lit(0.0)),
         )?
-        .select(vec![col("t1.c1"), col("t1.c2")])?
+        .select(vec![col("t1.car"), col("t1.speed")])?
         .limit(0, Some(3))?
         .show()
         .await?;
@@ -289,22 +293,24 @@ async fn where_scalar_subquery(ctx: &SessionContext) -> Result<()> {
 }
 
 /// Use the DataFrame API to execute the following subquery:
-/// select t1.c1, t1.c2 from t1 where t1.c2 in (select max(t2.c2) from t2 where t2.c1 > 0 ) limit 3;
+/// select t1.car, t1.speed from t1 where t1.speed in (select max(t2.speed) from t2 where t2.car = 'red') limit 3;
 async fn where_in_subquery(ctx: &SessionContext) -> Result<()> {
     ctx.table("t1")
         .await?
         .filter(in_subquery(
-            col("t1.c2"),
+            col("t1.speed"),
             Arc::new(
                 ctx.table("t2")
                     .await?
-                    .filter(col("t2.c1").gt(lit(ScalarValue::UInt8(Some(0)))))?
-                    .aggregate(vec![], vec![max(col("t2.c2"))])?
-                    .select(vec![max(col("t2.c2"))])?
+                    .filter(
+                        col("t2.car").eq(lit(ScalarValue::Utf8(Some("red".to_string())))),
+                    )?
+                    .aggregate(vec![], vec![max(col("t2.speed"))])?
+                    .select(vec![max(col("t2.speed"))])?
                     .into_unoptimized_plan(),
             ),
         ))?
-        .select(vec![col("t1.c1"), col("t1.c2")])?
+        .select(vec![col("t1.car"), col("t1.speed")])?
         .limit(0, Some(3))?
         .show()
         .await?;
@@ -312,31 +318,27 @@ async fn where_in_subquery(ctx: &SessionContext) -> Result<()> {
 }
 
 /// Use the DataFrame API to execute the following subquery:
-/// select t1.c1, t1.c2 from t1 where exists (select t2.c2 from t2 where t1.c1 = t2.c1) limit 3;
+/// select t1.car, t1.speed from t1 where exists (select t2.speed from t2 where t1.car = t2.car) limit 3;
 async fn where_exist_subquery(ctx: &SessionContext) -> Result<()> {
     ctx.table("t1")
         .await?
         .filter(exists(Arc::new(
             ctx.table("t2")
                 .await?
-                .filter(out_ref_col(DataType::Utf8, "t1.c1").eq(col("t2.c1")))?
-                .select(vec![col("t2.c2")])?
+                .filter(out_ref_col(DataType::Utf8, "t1.car").eq(col("t2.car")))?
+                .select(vec![col("t2.speed")])?
                 .into_unoptimized_plan(),
         )))?
-        .select(vec![col("t1.c1"), col("t1.c2")])?
+        .select(vec![col("t1.car"), col("t1.speed")])?
         .limit(0, Some(3))?
         .show()
         .await?;
     Ok(())
 }
 
-async fn register_aggregate_test_data(name: &str, ctx: &SessionContext) -> Result<()> {
-    let testdata = datafusion::test_util::arrow_test_data();
-    ctx.register_csv(
-        name,
-        &format!("{testdata}/csv/aggregate_test_100.csv"),
-        CsvReadOptions::default(),
-    )
-    .await?;
+async fn register_cars_test_data(name: &str, ctx: &SessionContext) -> Result<()> {
+    let dataset = ExampleDataset::Cars;
+    ctx.register_csv(name, dataset.path_str()?, CsvReadOptions::default())
+        .await?;
     Ok(())
 }

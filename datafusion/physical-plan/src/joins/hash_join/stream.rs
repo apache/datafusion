@@ -21,8 +21,12 @@
 //! [`super::HashJoinExec`]. See comments in [`HashJoinStream`] for more details.
 
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::task::Poll;
 
+use crate::coalesce::{LimitedBatchCoalescer, PushBatchStatus};
+use crate::joins::Map;
+use crate::joins::MapOffset;
 use crate::joins::PartitionMode;
 use crate::joins::hash_join::exec::JoinLeftData;
 use crate::joins::hash_join::shared_bounds::{
@@ -34,7 +38,6 @@ use crate::joins::utils::{
 use crate::{
     RecordBatchStream, SendableRecordBatchStream, handle_state,
     hash_utils::create_hashes,
-    joins::join_hash_map::JoinHashMapOffset,
     joins::utils::{
         BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinHashMapType,
         StatefulStreamResult, adjust_indices_by_join_type, apply_join_filter_to_indices,
@@ -44,7 +47,6 @@ use crate::{
 };
 
 use arrow::array::{Array, ArrayRef, UInt32Array, UInt64Array};
-use arrow::compute::BatchCoalescer;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{
@@ -154,13 +156,13 @@ pub(super) struct ProcessProbeBatchState {
     /// Probe-side on expressions values
     values: Vec<ArrayRef>,
     /// Starting offset for JoinHashMap lookups
-    offset: JoinHashMapOffset,
+    offset: MapOffset,
     /// Max joined probe-side index from current batch
     joined_probe_idx: Option<usize>,
 }
 
 impl ProcessProbeBatchState {
-    fn advance(&mut self, offset: JoinHashMapOffset, joined_probe_idx: Option<usize>) {
+    fn advance(&mut self, offset: MapOffset, joined_probe_idx: Option<usize>) {
         self.offset = offset;
         if joined_probe_idx.is_some() {
             self.joined_probe_idx = joined_probe_idx;
@@ -219,10 +221,11 @@ pub(super) struct HashJoinStream {
     build_waiter: Option<OnceFut<()>>,
     /// Partitioning mode to use
     mode: PartitionMode,
-    /// Output buffer for coalescing small batches into larger ones.
-    /// Uses `BatchCoalescer` from arrow to efficiently combine batches.
-    /// When batches are already close to target size, they bypass coalescing.
-    output_buffer: Box<BatchCoalescer>,
+    /// Output buffer for coalescing small batches into larger ones with optional fetch limit.
+    /// Uses `LimitedBatchCoalescer` to efficiently combine batches and absorb limit with 'fetch'
+    output_buffer: LimitedBatchCoalescer,
+    /// Whether this is a null-aware anti join
+    null_aware: bool,
 }
 
 impl RecordBatchStream for HashJoinStream {
@@ -287,10 +290,10 @@ pub(super) fn lookup_join_hashmap(
     null_equality: NullEquality,
     hashes_buffer: &[u64],
     limit: usize,
-    offset: JoinHashMapOffset,
+    offset: MapOffset,
     probe_indices_buffer: &mut Vec<u32>,
     build_indices_buffer: &mut Vec<u64>,
-) -> Result<(UInt64Array, UInt32Array, Option<JoinHashMapOffset>)> {
+) -> Result<(UInt64Array, UInt32Array, Option<MapOffset>)> {
     let next_offset = build_hashmap.get_matched_indices_with_limit_offset(
         hashes_buffer,
         limit,
@@ -370,14 +373,12 @@ impl HashJoinStream {
         right_side_ordered: bool,
         build_accumulator: Option<Arc<SharedBuildAccumulator>>,
         mode: PartitionMode,
+        null_aware: bool,
+        fetch: Option<usize>,
     ) -> Self {
-        // Create output buffer with coalescing.
-        // Use biggest_coalesce_batch_size to bypass coalescing for batches
-        // that are already close to target size (within 50%).
-        let output_buffer = Box::new(
-            BatchCoalescer::new(Arc::clone(&schema), batch_size)
-                .with_biggest_coalesce_batch_size(Some(batch_size / 2)),
-        );
+        // Create output buffer with coalescing and optional fetch limit.
+        let output_buffer =
+            LimitedBatchCoalescer::new(Arc::clone(&schema), batch_size, fetch);
 
         Self {
             partition,
@@ -401,6 +402,7 @@ impl HashJoinStream {
             build_waiter: None,
             mode,
             output_buffer,
+            null_aware,
         }
     }
 
@@ -417,6 +419,11 @@ impl HashJoinStream {
                     .join_metrics
                     .baseline
                     .record_poll(Poll::Ready(Some(Ok(batch))));
+            }
+
+            // Check if the coalescer has finished (limit reached and flushed)
+            if self.output_buffer.is_finished() {
+                return Poll::Ready(None);
             }
 
             return match self.state {
@@ -437,7 +444,7 @@ impl HashJoinStream {
                 }
                 HashJoinStreamState::Completed if !self.output_buffer.is_empty() => {
                     // Flush any remaining buffered data
-                    self.output_buffer.finish_buffered_batch()?;
+                    self.output_buffer.finish()?;
                     // Continue loop to emit the flushed batch
                     continue;
                 }
@@ -482,6 +489,10 @@ impl HashJoinStream {
                 .get_shared(cx)
         )?;
         build_timer.done();
+
+        // Note: For null-aware anti join, we need to check the probe side (right) for NULLs,
+        // not the build side (left). The probe-side NULL check happens during process_probe_batch.
+        // The probe_side_has_null flag will be set there if any probe batch contains NULL.
 
         // Handle dynamic filter build-side information accumulation
         //
@@ -552,9 +563,15 @@ impl HashJoinStream {
                 // Precalculate hash values for fetched batch
                 let keys_values = evaluate_expressions_to_arrays(&self.on_right, &batch)?;
 
-                self.hashes_buffer.clear();
-                self.hashes_buffer.resize(batch.num_rows(), 0);
-                create_hashes(&keys_values, &self.random_state, &mut self.hashes_buffer)?;
+                if let Map::HashMap(_) = self.build_side.try_as_ready()?.left_data.map() {
+                    self.hashes_buffer.clear();
+                    self.hashes_buffer.resize(batch.num_rows(), 0);
+                    create_hashes(
+                        &keys_values,
+                        &self.random_state,
+                        &mut self.hashes_buffer,
+                    )?;
+                }
 
                 self.join_metrics.input_batches.add(1);
                 self.join_metrics.input_rows.add(batch.num_rows());
@@ -588,8 +605,48 @@ impl HashJoinStream {
 
         let timer = self.join_metrics.join_time.timer();
 
+        // Null-aware anti join semantics:
+        // For LeftAnti: output LEFT (build) rows where LEFT.key NOT IN RIGHT.key
+        // 1. If RIGHT (probe) contains NULL in any batch, no LEFT rows should be output
+        // 2. LEFT rows with NULL keys should not be output (handled in final stage)
+        if self.null_aware {
+            // Mark that we've seen a probe batch with actual rows (probe side is non-empty)
+            // Only set this if batch has rows - empty batches don't count
+            // Use shared atomic state so all partitions can see this global information
+            if state.batch.num_rows() > 0 {
+                build_side
+                    .left_data
+                    .probe_side_non_empty
+                    .store(true, Ordering::Relaxed);
+            }
+
+            // Check if probe side (RIGHT) contains NULL
+            // Since null_aware validation ensures single column join, we only check the first column
+            let probe_key_column = &state.values[0];
+            if probe_key_column.null_count() > 0 {
+                // Found NULL in probe side - set shared flag to prevent any output
+                build_side
+                    .left_data
+                    .probe_side_has_null
+                    .store(true, Ordering::Relaxed);
+            }
+
+            // If probe side has NULL (detected in this or any other partition), return empty result
+            if build_side
+                .left_data
+                .probe_side_has_null
+                .load(Ordering::Relaxed)
+            {
+                timer.done();
+                self.state = HashJoinStreamState::FetchProbeBatch;
+                return Ok(StatefulStreamResult::Continue);
+            }
+        }
+
         // if the left side is empty, we can skip the (potentially expensive) join operation
-        if build_side.left_data.hash_map.is_empty() && self.filter.is_none() {
+        let is_empty = build_side.left_data.map().is_empty();
+
+        if is_empty && self.filter.is_none() {
             let result = build_batch_empty_build_side(
                 &self.schema,
                 build_side.left_data.batch(),
@@ -605,17 +662,34 @@ impl HashJoinStream {
         }
 
         // get the matched by join keys indices
-        let (left_indices, right_indices, next_offset) = lookup_join_hashmap(
-            build_side.left_data.hash_map(),
-            build_side.left_data.values(),
-            &state.values,
-            self.null_equality,
-            &self.hashes_buffer,
-            self.batch_size,
-            state.offset,
-            &mut self.probe_indices_buffer,
-            &mut self.build_indices_buffer,
-        )?;
+        let (left_indices, right_indices, next_offset) = match build_side.left_data.map()
+        {
+            Map::HashMap(map) => lookup_join_hashmap(
+                map.as_ref(),
+                build_side.left_data.values(),
+                &state.values,
+                self.null_equality,
+                &self.hashes_buffer,
+                self.batch_size,
+                state.offset,
+                &mut self.probe_indices_buffer,
+                &mut self.build_indices_buffer,
+            )?,
+            Map::ArrayMap(array_map) => {
+                let next_offset = array_map.get_matched_indices_with_limit_offset(
+                    &state.values,
+                    self.batch_size,
+                    state.offset,
+                    &mut self.probe_indices_buffer,
+                    &mut self.build_indices_buffer,
+                )?;
+                (
+                    UInt64Array::from(self.build_indices_buffer.clone()),
+                    UInt32Array::from(self.probe_indices_buffer.clone()),
+                    next_offset,
+                )
+            }
+        };
 
         let distinct_right_indices_count = count_distinct_sorted_indices(&right_indices);
 
@@ -709,9 +783,16 @@ impl HashJoinStream {
             join_side,
         )?;
 
-        self.output_buffer.push_batch(batch)?;
+        let push_status = self.output_buffer.push_batch(batch)?;
 
         timer.done();
+
+        // If limit reached, finish and move to Completed state
+        if push_status == PushBatchStatus::LimitReached {
+            self.output_buffer.finish()?;
+            self.state = HashJoinStreamState::Completed;
+            return Ok(StatefulStreamResult::Continue);
+        }
 
         if next_offset.is_none() {
             self.state = HashJoinStreamState::FetchProbeBatch;
@@ -740,17 +821,65 @@ impl HashJoinStream {
         }
 
         let build_side = self.build_side.try_as_ready()?;
+
+        // For null-aware anti join, if probe side had NULL, no rows should be output
+        // Check shared atomic state to get global knowledge across all partitions
+        if self.null_aware
+            && build_side
+                .left_data
+                .probe_side_has_null
+                .load(Ordering::Relaxed)
+        {
+            timer.done();
+            self.state = HashJoinStreamState::Completed;
+            return Ok(StatefulStreamResult::Continue);
+        }
         if !build_side.left_data.report_probe_completed() {
             self.state = HashJoinStreamState::Completed;
             return Ok(StatefulStreamResult::Continue);
         }
 
         // use the global left bitmap to produce the left indices and right indices
-        let (left_side, right_side) = get_final_indices_from_shared_bitmap(
+        let (mut left_side, mut right_side) = get_final_indices_from_shared_bitmap(
             build_side.left_data.visited_indices_bitmap(),
             self.join_type,
             true,
         );
+
+        // For null-aware anti join, filter out LEFT rows with NULL in join keys
+        // BUT only if the probe side (RIGHT) was non-empty. If probe side is empty,
+        // NULL NOT IN (empty) = TRUE, so NULL rows should be returned.
+        // Use shared atomic state to get global knowledge across all partitions
+        if self.null_aware
+            && self.join_type == JoinType::LeftAnti
+            && build_side
+                .left_data
+                .probe_side_non_empty
+                .load(Ordering::Relaxed)
+        {
+            // Since null_aware validation ensures single column join, we only check the first column
+            let build_key_column = &build_side.left_data.values()[0];
+
+            // Filter out indices where the key is NULL
+            let filtered_indices: Vec<u64> = left_side
+                .iter()
+                .filter_map(|idx| {
+                    let idx_usize = idx.unwrap() as usize;
+                    if build_key_column.is_null(idx_usize) {
+                        None // Skip rows with NULL keys
+                    } else {
+                        Some(idx.unwrap())
+                    }
+                })
+                .collect();
+
+            left_side = UInt64Array::from(filtered_indices);
+
+            // Update right_side to match the new length
+            let mut builder = arrow::array::UInt32Builder::with_capacity(left_side.len());
+            builder.append_nulls(left_side.len());
+            right_side = builder.finish();
+        }
 
         self.join_metrics.input_batches.add(1);
         self.join_metrics.input_rows.add(left_side.len());
@@ -771,7 +900,12 @@ impl HashJoinStream {
                 &self.column_indices,
                 JoinSide::Left,
             )?;
-            self.output_buffer.push_batch(batch)?;
+            let push_status = self.output_buffer.push_batch(batch)?;
+
+            // If limit reached, finish the coalescer
+            if push_status == PushBatchStatus::LimitReached {
+                self.output_buffer.finish()?;
+            }
         }
 
         Ok(StatefulStreamResult::Continue)

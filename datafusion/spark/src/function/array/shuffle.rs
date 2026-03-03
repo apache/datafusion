@@ -105,11 +105,8 @@ impl ScalarUDFImpl for SparkShuffle {
         &self,
         args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        if args.args.is_empty() {
-            return exec_err!("shuffle expects at least 1 argument");
-        }
-        if args.args.len() > 2 {
-            return exec_err!("shuffle expects at most 2 arguments");
+        if args.args.is_empty() || args.args.len() > 2 {
+            return exec_err!("shuffle expects 1 or 2 argument(s)");
         }
 
         // Extract seed from second argument if present
@@ -131,10 +128,10 @@ fn extract_seed(seed_arg: &ColumnarValue) -> Result<Option<u64>> {
         ColumnarValue::Scalar(scalar) => {
             let seed = match scalar {
                 ScalarValue::Int64(Some(v)) => Some(*v as u64),
-                ScalarValue::Null => None,
+                ScalarValue::Null | ScalarValue::Int64(None) => None,
                 _ => {
                     return exec_err!(
-                        "shuffle seed must be Int64 type, got '{}'",
+                        "shuffle seed must be Int64 type but got '{}'",
                         scalar.data_type()
                     );
                 }
@@ -164,7 +161,10 @@ fn array_shuffle_with_seed(arg: &[ArrayRef], seed: Option<u64>) -> Result<ArrayR
             fixed_size_array_shuffle(array, field, seed)
         }
         Null => Ok(Arc::clone(input_array)),
-        array_type => exec_err!("shuffle does not support type '{array_type}'."),
+        array_type => exec_err!(
+            "shuffle does not support type '{array_type}'; \
+        expected types: List, LargeList, FixedSizeList or Null."
+        ),
     }
 }
 

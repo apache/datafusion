@@ -94,13 +94,6 @@ caused by
 Error during planning: Cannot coerce arithmetic expression Timestamp(ns) + Utf8 to valid types
 
 
-# DATE minus DATE
-# https://github.com/apache/arrow-rs/issues/4383
-query ?
-SELECT DATE '2023-04-09' - DATE '2023-04-02';
-----
-7 days 0 hours 0 mins 0 secs
-
 # DATE minus Timestamp
 query ?
 SELECT DATE '2023-04-09' - '2000-01-01T00:00:00'::timestamp;
@@ -113,16 +106,17 @@ SELECT '2023-01-01T00:00:00'::timestamp - DATE '2021-01-01';
 ----
 730 days 0 hours 0 mins 0.000000000 secs
 
-# NULL with DATE arithmetic should yield NULL
-query ?
+# NULL with DATE arithmetic should yield NULL (but Int64 type)
+query I
 SELECT NULL - DATE '1984-02-28';
 ----
 NULL
 
-query ?
+query I
 SELECT DATE '1984-02-28' - NULL
 ----
 NULL
+
 
 # to_date_test
 statement ok

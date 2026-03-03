@@ -1,0 +1,22 @@
+
+#  minimize batch size to 1 in order to trigger different code paths
+statement ok
+set datafusion.execution.batch_size = '1';
+
+# ----
+# tests with target partition set to 1
+# ----
+statement ok
+set datafusion.execution.target_partitions = '1';
+
+
+statement ok
+CREATE TABLE filter_limit (i INT) as values (1), (2);
+
+query I
+SELECT COUNT(*) FROM (SELECT i FROM filter_limit WHERE i <> 0 LIMIT 1);
+----
+1
+
+statement ok
+DROP TABLE filter_limit;

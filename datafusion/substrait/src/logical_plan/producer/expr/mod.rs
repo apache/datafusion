@@ -141,6 +141,7 @@ pub fn to_substrait_rex(
         Expr::InList(expr) => producer.handle_in_list(expr, schema),
         Expr::Exists(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
         Expr::InSubquery(expr) => producer.handle_in_subquery(expr, schema),
+        Expr::SetComparison(expr) => producer.handle_set_comparison(expr, schema),
         Expr::ScalarSubquery(expr) => {
             not_impl_err!("Cannot convert {expr:?} to Substrait")
         }

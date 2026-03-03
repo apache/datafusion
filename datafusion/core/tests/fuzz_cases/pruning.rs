@@ -31,7 +31,9 @@ use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::{ExecutionPlan, collect, filter::FilterExec};
 use itertools::Itertools;
-use object_store::{ObjectStore, PutPayload, memory::InMemory, path::Path};
+use object_store::{
+    ObjectStore, ObjectStoreExt, PutPayload, memory::InMemory, path::Path,
+};
 use parquet::{
     arrow::ArrowWriter,
     file::properties::{EnabledStatistics, WriterProperties},

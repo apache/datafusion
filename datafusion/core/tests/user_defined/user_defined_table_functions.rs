@@ -221,6 +221,31 @@ impl TableFunctionImpl for SimpleCsvTableFunc {
     }
 }
 
+/// Test that expressions passed to UDTFs are properly type-coerced
+/// This is a regression test for https://github.com/apache/datafusion/issues/19914
+#[tokio::test]
+async fn test_udtf_type_coercion() -> Result<()> {
+    use datafusion::datasource::MemTable;
+
+    #[derive(Debug)]
+    struct NoOpTableFunc;
+
+    impl TableFunctionImpl for NoOpTableFunc {
+        fn call(&self, _: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+            let schema = Arc::new(arrow::datatypes::Schema::empty());
+            Ok(Arc::new(MemTable::try_new(schema, vec![vec![]])?))
+        }
+    }
+
+    let ctx = SessionContext::new();
+    ctx.register_udtf("f", Arc::new(NoOpTableFunc));
+
+    // This should not panic - the array elements should be coerced to Float64
+    let _ = ctx.sql("SELECT * FROM f(ARRAY[0.1, 1, 2])").await?;
+
+    Ok(())
+}
+
 fn read_csv_batches(csv_path: impl AsRef<Path>) -> Result<(SchemaRef, Vec<RecordBatch>)> {
     let mut file = File::open(csv_path)?;
     let (schema, _) = Format::default()

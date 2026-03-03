@@ -494,22 +494,25 @@ physical_plan
 01)CoalescePartitionsExec: fetch=3
 02)--UnionExec
 03)----ProjectionExec: expr=[count(Int64(1))@0 as cnt]
-04)------AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
-05)--------CoalescePartitionsExec
-06)----------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
-07)------------ProjectionExec: expr=[]
-08)--------------AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[]
-09)----------------RepartitionExec: partitioning=Hash([c1@0], 4), input_partitions=4
-10)------------------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[]
-11)--------------------FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434, projection=[c1@0]
-12)----------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-13)------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c13], file_type=csv, has_header=true
-14)----ProjectionExec: expr=[1 as cnt]
-15)------PlaceholderRowExec
-16)----ProjectionExec: expr=[lead(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as cnt]
-17)------BoundedWindowAggExec: wdw=[lead(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { "lead(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING": nullable Int64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
-18)--------ProjectionExec: expr=[1 as c1]
-19)----------PlaceholderRowExec
+04)------GlobalLimitExec: skip=0, fetch=3
+05)--------AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+06)----------CoalescePartitionsExec
+07)------------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+08)--------------ProjectionExec: expr=[]
+09)----------------AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[]
+10)------------------RepartitionExec: partitioning=Hash([c1@0], 4), input_partitions=4
+11)--------------------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[]
+12)----------------------FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434, projection=[c1@0]
+13)------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+14)--------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c13], file_type=csv, has_header=true
+15)----ProjectionExec: expr=[1 as cnt]
+16)------GlobalLimitExec: skip=0, fetch=3
+17)--------PlaceholderRowExec
+18)----ProjectionExec: expr=[lead(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as cnt]
+19)------GlobalLimitExec: skip=0, fetch=3
+20)--------BoundedWindowAggExec: wdw=[lead(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { "lead(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING": nullable Int64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
+21)----------ProjectionExec: expr=[1 as c1]
+22)------------PlaceholderRowExec
 
 
 ########

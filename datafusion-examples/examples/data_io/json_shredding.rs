@@ -47,7 +47,7 @@ use datafusion_physical_expr_adapter::{
 };
 use object_store::memory::InMemory;
 use object_store::path::Path;
-use object_store::{ObjectStore, PutPayload};
+use object_store::{ObjectStoreExt, PutPayload};
 
 // Example showing how to implement custom filter rewriting for JSON shredding.
 //
@@ -76,7 +76,7 @@ pub async fn json_shredding() -> Result<()> {
         let mut buf = vec![];
 
         let props = WriterProperties::builder()
-            .set_max_row_group_size(2)
+            .set_max_row_group_row_count(Some(2))
             .build();
 
         let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props))
@@ -275,17 +275,17 @@ impl PhysicalExprAdapterFactory for ShreddedJsonRewriterFactory {
         &self,
         logical_file_schema: SchemaRef,
         physical_file_schema: SchemaRef,
-    ) -> Arc<dyn PhysicalExprAdapter> {
+    ) -> Result<Arc<dyn PhysicalExprAdapter>> {
         let default_factory = DefaultPhysicalExprAdapterFactory;
         let default_adapter = default_factory.create(
             Arc::clone(&logical_file_schema),
             Arc::clone(&physical_file_schema),
-        );
+        )?;
 
-        Arc::new(ShreddedJsonRewriter {
+        Ok(Arc::new(ShreddedJsonRewriter {
             physical_file_schema,
             default_adapter,
-        })
+        }))
     }
 }
 

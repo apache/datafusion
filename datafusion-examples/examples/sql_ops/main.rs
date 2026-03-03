@@ -26,10 +26,18 @@
 //!
 //! Each subcommand runs a corresponding example:
 //! - `all` — run all examples included in this module
-//! - `analysis` — analyse SQL queries with DataFusion structures
-//! - `custom_sql_parser` — implementing a custom SQL parser to extend DataFusion
-//! - `frontend` — create LogicalPlans (only) from sql strings
-//! - `query` — query data using SQL (in memory RecordBatches, local Parquet files)
+//!
+//! - `analysis`
+//!   (file: analysis.rs, desc: Analyze SQL queries)
+//!
+//! - `custom_sql_parser`
+//!   (file: custom_sql_parser.rs, desc: Implement a custom SQL parser to extend DataFusion)
+//!
+//! - `frontend`
+//!   (file: frontend.rs, desc: Build LogicalPlans from SQL)
+//!
+//! - `query`  
+//!   (file: query.rs, desc: Query data using SQL)
 
 mod analysis;
 mod custom_sql_parser;

@@ -30,9 +30,11 @@ use crate::{
 
 use arrow::array::{ArrayRef, NullArray, RecordBatch, RecordBatchOptions};
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, assert_or_internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_expr::PhysicalExpr;
 
 use log::trace;
 
@@ -43,7 +45,7 @@ pub struct PlaceholderRowExec {
     schema: SchemaRef,
     /// Number of partitions
     partitions: usize,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl PlaceholderRowExec {
@@ -54,7 +56,7 @@ impl PlaceholderRowExec {
         PlaceholderRowExec {
             schema,
             partitions,
-            cache,
+            cache: Arc::new(cache),
         }
     }
 
@@ -63,7 +65,7 @@ impl PlaceholderRowExec {
         self.partitions = partitions;
         // Update output partitioning when updating partitions:
         let output_partitioning = Self::output_partitioning_helper(self.partitions);
-        self.cache = self.cache.with_partitioning(output_partitioning);
+        Arc::make_mut(&mut self.cache).partitioning = output_partitioning;
         self
     }
 
@@ -132,12 +134,19 @@ impl ExecutionPlan for PlaceholderRowExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![]
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn with_new_children(
@@ -167,10 +176,6 @@ impl ExecutionPlan for PlaceholderRowExec {
 
         let ms = MemoryStream::try_new(self.data()?, Arc::clone(&self.schema), None)?;
         Ok(Box::pin(cooperative(ms)))
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {

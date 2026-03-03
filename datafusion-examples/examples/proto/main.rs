@@ -21,14 +21,20 @@
 //!
 //! ## Usage
 //! ```bash
-//! cargo run --example proto -- [all|composed_extension_codec]
+//! cargo run --example proto -- [all|composed_extension_codec|expression_deduplication]
 //! ```
 //!
 //! Each subcommand runs a corresponding example:
 //! - `all` — run all examples included in this module
-//! - `composed_extension_codec` — example of using multiple extension codecs for serialization / deserialization
+//!
+//! - `composed_extension_codec`
+//!   (file: composed_extension_codec.rs, desc: Use multiple extension codecs for serialization/deserialization)
+//!
+//! - `expression_deduplication`
+//!   (file: expression_deduplication.rs, desc: Example of expression caching/deduplication using the codec decorator pattern)
 
 mod composed_extension_codec;
+mod expression_deduplication;
 
 use datafusion::error::{DataFusionError, Result};
 use strum::{IntoEnumIterator, VariantNames};
@@ -39,6 +45,7 @@ use strum_macros::{Display, EnumIter, EnumString, VariantNames};
 enum ExampleKind {
     All,
     ComposedExtensionCodec,
+    ExpressionDeduplication,
 }
 
 impl ExampleKind {
@@ -58,6 +65,9 @@ impl ExampleKind {
             }
             ExampleKind::ComposedExtensionCodec => {
                 composed_extension_codec::composed_extension_codec().await?
+            }
+            ExampleKind::ExpressionDeduplication => {
+                expression_deduplication::expression_deduplication().await?
             }
         }
         Ok(())

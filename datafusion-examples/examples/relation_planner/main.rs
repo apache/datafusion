@@ -27,9 +27,15 @@
 //!
 //! Each subcommand runs a corresponding example:
 //! - `all` — run all examples included in this module
-//! - `match_recognize` — MATCH_RECOGNIZE pattern matching on event streams
-//! - `pivot_unpivot` — PIVOT and UNPIVOT operations for reshaping data
-//! - `table_sample` — TABLESAMPLE clause for sampling rows from tables
+//!
+//! - `match_recognize`
+//!   (file: match_recognize.rs, desc: Implement MATCH_RECOGNIZE pattern matching)
+//!
+//! - `pivot_unpivot`
+//!   (file: pivot_unpivot.rs, desc: Implement PIVOT / UNPIVOT)
+//!
+//! - `table_sample`
+//!   (file: table_sample.rs, desc: Implement TABLESAMPLE)
 //!
 //! ## Snapshot Testing
 //!

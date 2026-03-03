@@ -20,16 +20,19 @@ use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
+    check_if_same_properties,
 };
 use arrow::array::RecordBatch;
 use arrow_schema::{Fields, Schema, SchemaRef};
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
+use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Result, assert_eq_or_internal_err};
 use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::ScalarFunctionExpr;
 use datafusion_physical_expr::async_scalar_function::AsyncFuncExpr;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr_common::metrics::{BaselineMetrics, RecordOutput};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use futures::Stream;
 use futures::stream::StreamExt;
@@ -44,12 +47,12 @@ use std::task::{Context, Poll, ready};
 ///
 /// The schema of the output of the AsyncFuncExec is:
 /// Input columns followed by one column for each async expression
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AsyncFuncExec {
     /// The async expressions to evaluate
     async_exprs: Vec<Arc<AsyncFuncExpr>>,
     input: Arc<dyn ExecutionPlan>,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
     metrics: ExecutionPlanMetricsSet,
 }
 
@@ -83,7 +86,7 @@ impl AsyncFuncExec {
         Ok(Self {
             input,
             async_exprs,
-            cache,
+            cache: Arc::new(cache),
             metrics: ExecutionPlanMetricsSet::new(),
         })
     }
@@ -111,6 +114,17 @@ impl AsyncFuncExec {
 
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
+    }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(self)
+        }
     }
 }
 
@@ -148,7 +162,7 @@ impl ExecutionPlan for AsyncFuncExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -156,18 +170,26 @@ impl ExecutionPlan for AsyncFuncExec {
         vec![&self.input]
     }
 
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
-        children: Vec<Arc<dyn ExecutionPlan>>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         assert_eq_or_internal_err!(
             children.len(),
             1,
             "AsyncFuncExec wrong number of children"
         );
+        check_if_same_properties!(self, children);
         Ok(Arc::new(AsyncFuncExec::try_new(
             self.async_exprs.clone(),
-            Arc::clone(&children[0]),
+            children.swap_remove(0),
         )?))
     }
 
@@ -182,10 +204,13 @@ impl ExecutionPlan for AsyncFuncExec {
             context.session_id(),
             context.task_id()
         );
-        // TODO figure out how to record metrics
 
         // first execute the input stream
         let input_stream = self.input.execute(partition, Arc::clone(&context))?;
+
+        // TODO: Track `elapsed_compute` in `BaselineMetrics`
+        // Issue: <https://github.com/apache/datafusion/issues/19658>
+        let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
 
         // now, for each record batch, evaluate the async expressions and add the columns to the result
         let async_exprs_captured = Arc::new(self.async_exprs.clone());
@@ -207,6 +232,7 @@ impl ExecutionPlan for AsyncFuncExec {
             let async_exprs_captured = Arc::clone(&async_exprs_captured);
             let schema_captured = Arc::clone(&schema_captured);
             let config_options = Arc::clone(&config_options_ref);
+            let baseline_metrics_captured = baseline_metrics.clone();
 
             async move {
                 let batch = batch?;
@@ -219,7 +245,8 @@ impl ExecutionPlan for AsyncFuncExec {
                     output_arrays.push(output.to_array(batch.num_rows())?);
                 }
                 let batch = RecordBatch::try_new(schema_captured, output_arrays)?;
-                Ok(batch)
+
+                Ok(batch.record_output(&baseline_metrics_captured))
             }
         });
 
@@ -386,7 +413,7 @@ mod tests {
             vec![Arc::new(UInt32Array::from(vec![1, 2, 3, 4, 5, 6]))],
         )?;
 
-        let batches: Vec<RecordBatch> = (0..50).map(|_| batch.clone()).collect();
+        let batches: Vec<RecordBatch> = std::iter::repeat_n(batch, 50).collect();
 
         let session_config = SessionConfig::new().with_batch_size(200);
         let task_ctx = TaskContext::default().with_session_config(session_config);

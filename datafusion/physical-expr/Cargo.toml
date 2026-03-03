@@ -85,5 +85,9 @@ name = "is_null"
 harness = false
 name = "binary_op"
 
+[[bench]]
+harness = false
+name = "simplify"
+
 [package.metadata.cargo-machete]
 ignored = ["half"]

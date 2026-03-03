@@ -51,3 +51,11 @@ datafusion-physical-expr = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 log = { workspace = true }
 paste = { workspace = true }
+
+[dev-dependencies]
+arrow = { workspace = true, features = ["test_utils"] }
+criterion = { workspace = true }
+
+[[bench]]
+name = "nth_value"
+harness = false

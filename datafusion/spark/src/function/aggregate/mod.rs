@@ -19,6 +19,7 @@ use datafusion_expr::AggregateUDF;
 use std::sync::Arc;
 
 pub mod avg;
+pub mod collect;
 pub mod try_sum;
 
 pub mod expr_fn {
@@ -30,6 +31,16 @@ pub mod expr_fn {
         "Returns the sum of values for a column, or NULL if overflow occurs",
         arg1
     ));
+    export_functions!((
+        collect_list,
+        "Returns a list created from the values in a column",
+        arg1
+    ));
+    export_functions!((
+        collect_set,
+        "Returns a set created from the values in a column",
+        arg1
+    ));
 }
 
 // TODO: try use something like datafusion_functions_aggregate::create_func!()
@@ -39,7 +50,13 @@ pub fn avg() -> Arc<AggregateUDF> {
 pub fn try_sum() -> Arc<AggregateUDF> {
     Arc::new(AggregateUDF::new_from_impl(try_sum::SparkTrySum::new()))
 }
+pub fn collect_list() -> Arc<AggregateUDF> {
+    Arc::new(AggregateUDF::new_from_impl(collect::SparkCollectList::new()))
+}
+pub fn collect_set() -> Arc<AggregateUDF> {
+    Arc::new(AggregateUDF::new_from_impl(collect::SparkCollectSet::new()))
+}
 
 pub fn functions() -> Vec<Arc<AggregateUDF>> {
-    vec![avg(), try_sum()]
+    vec![avg(), try_sum(), collect_list(), collect_set()]
 }

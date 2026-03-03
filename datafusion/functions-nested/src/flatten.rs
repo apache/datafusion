@@ -208,7 +208,7 @@ fn flatten_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
         Null => Ok(Arc::clone(array)),
         _ => {
-            exec_err!("flatten does not support type '{:?}'", array.data_type())
+            exec_err!("flatten does not support type '{}'", array.data_type())
         }
     }
 }

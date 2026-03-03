@@ -21,7 +21,6 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use crate::aggregate_statistics::AggregateStatistics;
-use crate::coalesce_batches::CoalesceBatches;
 use crate::combine_partial_final_agg::CombinePartialFinalAggregate;
 use crate::enforce_distribution::EnforceDistribution;
 use crate::enforce_sorting::EnforceSorting;
@@ -83,6 +82,12 @@ impl Default for PhysicalOptimizer {
 impl PhysicalOptimizer {
     /// Create a new optimizer using the recommended list of rules
     pub fn new() -> Self {
+        // NOTEs:
+        // - The order of rules in this list is important, as it determines the
+        //   order in which they are applied.
+        // - Adding a new rule here is expensive as it will be applied to all
+        //   queries, and will likely increase the optimization time. Please extend
+        //   existing rules when possible, rather than adding a new rule.
         let rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> = vec![
             // If there is a output requirement of the query, make sure that
             // this information is not lost across different rules during optimization.
@@ -120,9 +125,6 @@ impl PhysicalOptimizer {
             Arc::new(OptimizeAggregateOrder::new()),
             // TODO: `try_embed_to_hash_join` in the ProjectionPushdown rule would be block by the CoalesceBatches, so add it before CoalesceBatches. Maybe optimize it in the future.
             Arc::new(ProjectionPushdown::new()),
-            // The CoalesceBatches rule will not influence the distribution and ordering of the
-            // whole plan tree. Therefore, to avoid influencing other rules, it should run last.
-            Arc::new(CoalesceBatches::new()),
             // Remove the ancillary output requirement operator since we are done with the planning
             // phase.
             Arc::new(OutputRequirements::new_remove_mode()),

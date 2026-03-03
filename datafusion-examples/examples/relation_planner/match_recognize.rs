@@ -362,7 +362,7 @@ impl RelationPlanner for MatchRecognizePlanner {
             ..
         } = relation
         else {
-            return Ok(RelationPlanning::Original(relation));
+            return Ok(RelationPlanning::Original(Box::new(relation)));
         };
 
         // Plan the input table
@@ -401,6 +401,8 @@ impl RelationPlanner for MatchRecognizePlanner {
             node: Arc::new(node),
         });
 
-        Ok(RelationPlanning::Planned(PlannedRelation::new(plan, alias)))
+        Ok(RelationPlanning::Planned(Box::new(PlannedRelation::new(
+            plan, alias,
+        ))))
     }
 }

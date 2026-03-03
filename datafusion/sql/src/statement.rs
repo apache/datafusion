@@ -55,9 +55,10 @@ use datafusion_expr::{
     TransactionIsolationLevel, TransactionStart, Volatility, WriteOp, cast, col,
 };
 use sqlparser::ast::{
-    self, BeginTransactionKind, IndexColumn, IndexType, NullsDistinctOption, OrderByExpr,
-    OrderByOptions, Set, ShowStatementIn, ShowStatementOptions, SqliteOnConflict,
-    TableObject, UpdateTableFromKind, ValueWithSpan,
+    self, BeginTransactionKind, CheckConstraint, ForeignKeyConstraint, IndexColumn,
+    IndexType, NullsDistinctOption, OrderByExpr, OrderByOptions, PrimaryKeyConstraint,
+    Set, ShowStatementIn, ShowStatementOptions, SqliteOnConflict, TableObject,
+    UniqueConstraint, Update, UpdateTableFromKind, ValueWithSpan,
 };
 use sqlparser::ast::{
     Assignment, AssignmentTarget, ColumnDef, CreateIndex, CreateTable,
@@ -102,38 +103,24 @@ fn get_schema_name(schema_name: &SchemaName) -> String {
 /// Construct `TableConstraint`(s) for the given columns by iterating over
 /// `columns` and extracting individual inline constraint definitions.
 fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConstraint> {
-    let mut constraints = vec![];
+    let mut constraints: Vec<TableConstraint> = vec![];
     for column in columns {
         for ast::ColumnOptionDef { name, option } in &column.options {
             match option {
-                ast::ColumnOption::Unique {
-                    is_primary: false,
+                ast::ColumnOption::Unique(UniqueConstraint {
                     characteristics,
-                } => constraints.push(TableConstraint::Unique {
+                    name,
+                    index_name: _index_name,
+                    index_type_display: _index_type_display,
+                    index_type: _index_type,
+                    columns: _column,
+                    index_options: _index_options,
+                    nulls_distinct: _nulls_distinct,
+                }) => constraints.push(TableConstraint::Unique(UniqueConstraint {
                     name: name.clone(),
-                    columns: vec![IndexColumn {
-                        column: OrderByExpr {
-                            expr: SQLExpr::Identifier(column.name.clone()),
-                            options: OrderByOptions {
-                                asc: None,
-                                nulls_first: None,
-                            },
-                            with_fill: None,
-                        },
-                        operator_class: None,
-                    }],
-                    characteristics: *characteristics,
                     index_name: None,
                     index_type_display: ast::KeyOrIndexDisplay::None,
                     index_type: None,
-                    index_options: vec![],
-                    nulls_distinct: NullsDistinctOption::None,
-                }),
-                ast::ColumnOption::Unique {
-                    is_primary: true,
-                    characteristics,
-                } => constraints.push(TableConstraint::PrimaryKey {
-                    name: name.clone(),
                     columns: vec![IndexColumn {
                         column: OrderByExpr {
                             expr: SQLExpr::Identifier(column.name.clone()),
@@ -145,35 +132,69 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
                         },
                         operator_class: None,
                     }],
-                    characteristics: *characteristics,
-                    index_name: None,
-                    index_type: None,
                     index_options: vec![],
-                }),
-                ast::ColumnOption::ForeignKey {
+                    characteristics: *characteristics,
+                    nulls_distinct: NullsDistinctOption::None,
+                })),
+                ast::ColumnOption::PrimaryKey(PrimaryKeyConstraint {
+                    characteristics,
+                    name: _name,
+                    index_name: _index_name,
+                    index_type: _index_type,
+                    columns: _columns,
+                    index_options: _index_options,
+                }) => {
+                    constraints.push(TableConstraint::PrimaryKey(PrimaryKeyConstraint {
+                        name: name.clone(),
+                        index_name: None,
+                        index_type: None,
+                        columns: vec![IndexColumn {
+                            column: OrderByExpr {
+                                expr: SQLExpr::Identifier(column.name.clone()),
+                                options: OrderByOptions {
+                                    asc: None,
+                                    nulls_first: None,
+                                },
+                                with_fill: None,
+                            },
+                            operator_class: None,
+                        }],
+                        index_options: vec![],
+                        characteristics: *characteristics,
+                    }))
+                }
+                ast::ColumnOption::ForeignKey(ForeignKeyConstraint {
                     foreign_table,
                     referred_columns,
                     on_delete,
                     on_update,
                     characteristics,
-                } => constraints.push(TableConstraint::ForeignKey {
-                    name: name.clone(),
-                    columns: vec![],
-                    foreign_table: foreign_table.clone(),
-                    referred_columns: referred_columns.to_vec(),
-                    on_delete: *on_delete,
-                    on_update: *on_update,
-                    characteristics: *characteristics,
-                    index_name: None,
-                }),
-                ast::ColumnOption::Check(expr) => {
-                    constraints.push(TableConstraint::Check {
+                    name: _name,
+                    index_name: _index_name,
+                    columns: _columns,
+                    match_kind: _match_kind,
+                }) => {
+                    constraints.push(TableConstraint::ForeignKey(ForeignKeyConstraint {
                         name: name.clone(),
-                        expr: Box::new(expr.clone()),
-                        enforced: None,
-                    })
+                        index_name: None,
+                        columns: vec![],
+                        foreign_table: foreign_table.clone(),
+                        referred_columns: referred_columns.clone(),
+                        on_delete: *on_delete,
+                        on_update: *on_update,
+                        match_kind: None,
+                        characteristics: *characteristics,
+                    }))
                 }
-                // Other options are not constraint related.
+                ast::ColumnOption::Check(CheckConstraint {
+                    name,
+                    expr,
+                    enforced: _enforced,
+                }) => constraints.push(TableConstraint::Check(CheckConstraint {
+                    name: name.clone(),
+                    expr: expr.clone(),
+                    enforced: None,
+                })),
                 ast::ColumnOption::Default(_)
                 | ast::ColumnOption::Null
                 | ast::ColumnOption::NotNull
@@ -191,7 +212,8 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
                 | ast::ColumnOption::Tags(_)
                 | ast::ColumnOption::Alias(_)
                 | ast::ColumnOption::Srid(_)
-                | ast::ColumnOption::Collation(_) => {}
+                | ast::ColumnOption::Collation(_)
+                | ast::ColumnOption::Invisible => {}
             }
         }
     }
@@ -320,152 +342,160 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 refresh_mode,
                 initialize,
                 require_user,
+                partition_of,
+                for_values,
             }) => {
                 if temporary {
-                    return not_impl_err!("Temporary tables not supported")?;
+                    return not_impl_err!("Temporary tables not supported");
                 }
                 if external {
-                    return not_impl_err!("External tables not supported")?;
+                    return not_impl_err!("External tables not supported");
                 }
                 if global.is_some() {
-                    return not_impl_err!("Global tables not supported")?;
+                    return not_impl_err!("Global tables not supported");
                 }
                 if transient {
-                    return not_impl_err!("Transient tables not supported")?;
+                    return not_impl_err!("Transient tables not supported");
                 }
                 if volatile {
-                    return not_impl_err!("Volatile tables not supported")?;
+                    return not_impl_err!("Volatile tables not supported");
                 }
                 if hive_distribution != ast::HiveDistributionStyle::NONE {
                     return not_impl_err!(
                         "Hive distribution not supported: {hive_distribution:?}"
-                    )?;
+                    );
                 }
-                if !matches!(
-                    hive_formats,
-                    Some(ast::HiveFormat {
-                        row_format: None,
-                        serde_properties: None,
-                        storage: None,
-                        location: None,
-                    })
-                ) {
-                    return not_impl_err!(
-                        "Hive formats not supported: {hive_formats:?}"
-                    )?;
+                if hive_formats.is_some()
+                    && !matches!(
+                        hive_formats,
+                        Some(ast::HiveFormat {
+                            row_format: None,
+                            serde_properties: None,
+                            storage: None,
+                            location: None,
+                        })
+                    )
+                {
+                    return not_impl_err!("Hive formats not supported: {hive_formats:?}");
                 }
                 if file_format.is_some() {
-                    return not_impl_err!("File format not supported")?;
+                    return not_impl_err!("File format not supported");
                 }
                 if location.is_some() {
-                    return not_impl_err!("Location not supported")?;
+                    return not_impl_err!("Location not supported");
                 }
                 if without_rowid {
-                    return not_impl_err!("Without rowid not supported")?;
+                    return not_impl_err!("Without rowid not supported");
                 }
                 if like.is_some() {
-                    return not_impl_err!("Like not supported")?;
+                    return not_impl_err!("Like not supported");
                 }
                 if clone.is_some() {
-                    return not_impl_err!("Clone not supported")?;
+                    return not_impl_err!("Clone not supported");
                 }
                 if comment.is_some() {
-                    return not_impl_err!("Comment not supported")?;
+                    return not_impl_err!("Comment not supported");
                 }
                 if on_commit.is_some() {
-                    return not_impl_err!("On commit not supported")?;
+                    return not_impl_err!("On commit not supported");
                 }
                 if on_cluster.is_some() {
-                    return not_impl_err!("On cluster not supported")?;
+                    return not_impl_err!("On cluster not supported");
                 }
                 if primary_key.is_some() {
-                    return not_impl_err!("Primary key not supported")?;
+                    return not_impl_err!("Primary key not supported");
                 }
                 if order_by.is_some() {
-                    return not_impl_err!("Order by not supported")?;
+                    return not_impl_err!("Order by not supported");
                 }
                 if partition_by.is_some() {
-                    return not_impl_err!("Partition by not supported")?;
+                    return not_impl_err!("Partition by not supported");
                 }
                 if cluster_by.is_some() {
-                    return not_impl_err!("Cluster by not supported")?;
+                    return not_impl_err!("Cluster by not supported");
                 }
                 if clustered_by.is_some() {
-                    return not_impl_err!("Clustered by not supported")?;
+                    return not_impl_err!("Clustered by not supported");
                 }
                 if strict {
-                    return not_impl_err!("Strict not supported")?;
+                    return not_impl_err!("Strict not supported");
                 }
                 if copy_grants {
-                    return not_impl_err!("Copy grants not supported")?;
+                    return not_impl_err!("Copy grants not supported");
                 }
                 if enable_schema_evolution.is_some() {
-                    return not_impl_err!("Enable schema evolution not supported")?;
+                    return not_impl_err!("Enable schema evolution not supported");
                 }
                 if change_tracking.is_some() {
-                    return not_impl_err!("Change tracking not supported")?;
+                    return not_impl_err!("Change tracking not supported");
                 }
                 if data_retention_time_in_days.is_some() {
-                    return not_impl_err!("Data retention time in days not supported")?;
+                    return not_impl_err!("Data retention time in days not supported");
                 }
                 if max_data_extension_time_in_days.is_some() {
                     return not_impl_err!(
                         "Max data extension time in days not supported"
-                    )?;
+                    );
                 }
                 if default_ddl_collation.is_some() {
-                    return not_impl_err!("Default DDL collation not supported")?;
+                    return not_impl_err!("Default DDL collation not supported");
                 }
                 if with_aggregation_policy.is_some() {
-                    return not_impl_err!("With aggregation policy not supported")?;
+                    return not_impl_err!("With aggregation policy not supported");
                 }
                 if with_row_access_policy.is_some() {
-                    return not_impl_err!("With row access policy not supported")?;
+                    return not_impl_err!("With row access policy not supported");
                 }
                 if with_tags.is_some() {
-                    return not_impl_err!("With tags not supported")?;
+                    return not_impl_err!("With tags not supported");
                 }
                 if iceberg {
-                    return not_impl_err!("Iceberg not supported")?;
+                    return not_impl_err!("Iceberg not supported");
                 }
                 if external_volume.is_some() {
-                    return not_impl_err!("External volume not supported")?;
+                    return not_impl_err!("External volume not supported");
                 }
                 if base_location.is_some() {
-                    return not_impl_err!("Base location not supported")?;
+                    return not_impl_err!("Base location not supported");
                 }
                 if catalog.is_some() {
-                    return not_impl_err!("Catalog not supported")?;
+                    return not_impl_err!("Catalog not supported");
                 }
                 if catalog_sync.is_some() {
-                    return not_impl_err!("Catalog sync not supported")?;
+                    return not_impl_err!("Catalog sync not supported");
                 }
                 if storage_serialization_policy.is_some() {
-                    return not_impl_err!("Storage serialization policy not supported")?;
+                    return not_impl_err!("Storage serialization policy not supported");
                 }
                 if inherits.is_some() {
-                    return not_impl_err!("Table inheritance not supported")?;
+                    return not_impl_err!("Table inheritance not supported");
                 }
                 if dynamic {
-                    return not_impl_err!("Dynamic tables not supported")?;
+                    return not_impl_err!("Dynamic tables not supported");
                 }
                 if version.is_some() {
-                    return not_impl_err!("Version not supported")?;
+                    return not_impl_err!("Version not supported");
                 }
                 if target_lag.is_some() {
-                    return not_impl_err!("Target lag not supported")?;
+                    return not_impl_err!("Target lag not supported");
                 }
                 if warehouse.is_some() {
-                    return not_impl_err!("Warehouse not supported")?;
+                    return not_impl_err!("Warehouse not supported");
                 }
                 if refresh_mode.is_some() {
-                    return not_impl_err!("Refresh mode not supported")?;
+                    return not_impl_err!("Refresh mode not supported");
                 }
                 if initialize.is_some() {
-                    return not_impl_err!("Initialize not supported")?;
+                    return not_impl_err!("Initialize not supported");
                 }
                 if require_user {
-                    return not_impl_err!("Require user not supported")?;
+                    return not_impl_err!("Require user not supported");
+                }
+                if partition_of.is_some() {
+                    return not_impl_err!("PARTITION OF not supported");
+                }
+                if for_values.is_some() {
+                    return not_impl_err!("PARTITION OF .. FOR VALUES .. not supported");
                 }
                 // Merge inline constraints and existing constraints
                 let mut all_constraints = constraints;
@@ -557,7 +587,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     }
                 }
             }
-            Statement::CreateView {
+            Statement::CreateView(ast::CreateView {
                 or_replace,
                 materialized,
                 name,
@@ -574,7 +604,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 or_alter,
                 secure,
                 name_before_not_exists,
-            } => {
+            }) => {
                 if materialized {
                     return not_impl_err!("Materialized views not supported")?;
                 }
@@ -596,7 +626,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
                 // put the statement back together temporarily to get the SQL
                 // string representation
-                let stmt = Statement::CreateView {
+                let stmt = Statement::CreateView(ast::CreateView {
                     or_replace,
                     materialized,
                     name,
@@ -613,16 +643,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     or_alter,
                     secure,
                     name_before_not_exists,
-                };
+                });
                 let sql = stmt.to_string();
-                let Statement::CreateView {
+                let Statement::CreateView(ast::CreateView {
                     name,
                     columns,
                     query,
                     or_replace,
                     temporary,
                     ..
-                } = stmt
+                }) = stmt
                 else {
                     return internal_err!("Unreachable code in create view");
                 };
@@ -965,6 +995,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 has_table_keyword,
                 settings,
                 format_clause,
+                insert_token: _, // record the location the `INSERT` token
+                optimizer_hint,
             }) => {
                 let table_name = match table {
                     TableObject::TableName(table_name) => table_name,
@@ -1020,12 +1052,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 if format_clause.is_some() {
                     plan_err!("Inserts with format clause not supported")?;
                 }
+                if optimizer_hint.is_some() {
+                    plan_err!("Optimizer hints not supported")?;
+                }
                 // optional keywords don't change behavior
                 let _ = into;
                 let _ = has_table_keyword;
                 self.insert_to_plan(table_name, columns, source, overwrite, replace_into)
             }
-            Statement::Update {
+            Statement::Update(Update {
                 table,
                 assignments,
                 from,
@@ -1033,7 +1068,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 returning,
                 or,
                 limit,
-            } => {
+                update_token: _,
+                optimizer_hint,
+            }) => {
                 let from_clauses =
                     from.map(|update_table_from_kind| match update_table_from_kind {
                         UpdateTableFromKind::BeforeSet(from_clauses) => from_clauses,
@@ -1053,6 +1090,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 if limit.is_some() {
                     return not_impl_err!("Update-limit clause not supported")?;
                 }
+                if optimizer_hint.is_some() {
+                    plan_err!("Optimizer hints not supported")?;
+                }
                 self.update_to_plan(table, &assignments, update_from, selection)
             }
 
@@ -1064,6 +1104,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 from,
                 order_by,
                 limit,
+                delete_token: _,
+                optimizer_hint,
             }) => {
                 if !tables.is_empty() {
                     plan_err!("DELETE <TABLE> not supported")?;
@@ -1081,12 +1123,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     plan_err!("Delete-order-by clause not yet supported")?;
                 }
 
-                if limit.is_some() {
-                    plan_err!("Delete-limit clause not yet supported")?;
+                if optimizer_hint.is_some() {
+                    plan_err!("Optimizer hints not supported")?;
                 }
 
                 let table_name = self.get_delete_target(from)?;
-                self.delete_to_plan(&table_name, selection)
+                self.delete_to_plan(&table_name, selection, limit)
             }
 
             Statement::StartTransaction {
@@ -1295,7 +1337,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let function_body = match function_body {
                     Some(r) => Some(self.sql_to_expr(
                         match r {
-                            ast::CreateFunctionBody::AsBeforeOptions(expr) => expr,
+                            // `link_symbol` indicates if the primary expression contains the name of shared library file.
+                            ast::CreateFunctionBody::AsBeforeOptions{body: expr, link_symbol: _link_symbol} => expr,
                             ast::CreateFunctionBody::AsAfterOptions(expr) => expr,
                             ast::CreateFunctionBody::Return(expr) => expr,
                             ast::CreateFunctionBody::AsBeginEnd(_) => {
@@ -1338,11 +1381,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
                 Ok(LogicalPlan::Ddl(statement))
             }
-            Statement::DropFunction {
+            Statement::DropFunction(ast::DropFunction {
                 if_exists,
                 func_desc,
-                ..
-            } => {
+                drop_behavior: _,
+            }) => {
                 // According to postgresql documentation it can be only one function
                 // specified in drop statement
                 if let Some(desc) = func_desc.first() {
@@ -1361,6 +1404,60 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 } else {
                     exec_err!("Function name not provided")
                 }
+            }
+            Statement::Truncate(ast::Truncate {
+                table_names,
+                partitions,
+                identity,
+                cascade,
+                on_cluster,
+                table,
+                if_exists,
+            }) => {
+                let _ = table; // Support TRUNCATE TABLE and TRUNCATE syntax
+                if table_names.len() != 1 {
+                    return not_impl_err!(
+                        "TRUNCATE with multiple tables is not supported"
+                    );
+                }
+
+                let target = &table_names[0];
+                if target.only {
+                    return not_impl_err!("TRUNCATE with ONLY is not supported");
+                }
+                if partitions.is_some() {
+                    return not_impl_err!("TRUNCATE with PARTITION is not supported");
+                }
+                if identity.is_some() {
+                    return not_impl_err!(
+                        "TRUNCATE with RESTART/CONTINUE IDENTITY is not supported"
+                    );
+                }
+                if cascade.is_some() {
+                    return not_impl_err!(
+                        "TRUNCATE with CASCADE/RESTRICT is not supported"
+                    );
+                }
+                if on_cluster.is_some() {
+                    return not_impl_err!("TRUNCATE with ON CLUSTER is not supported");
+                }
+                if if_exists {
+                    return not_impl_err!("TRUNCATE .. with IF EXISTS is not supported");
+                }
+                let table = self.object_name_to_table_reference(target.name.clone())?;
+                let source = self.context_provider.get_table_source(table.clone())?;
+
+                // TRUNCATE does not operate on input rows. The EmptyRelation is a logical placeholder
+                // since the real operation is executed directly by the TableProvider's truncate() hook.
+                Ok(LogicalPlan::Dml(DmlStatement::new(
+                    table.clone(),
+                    source,
+                    WriteOp::Truncate,
+                    Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+                        produce_one_row: false,
+                        schema: DFSchemaRef::new(DFSchema::empty()),
+                    })),
+                )))
             }
             Statement::CreateIndex(CreateIndex {
                 name,
@@ -1716,8 +1813,17 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let constraints = constraints
             .iter()
             .map(|c: &TableConstraint| match c {
-                TableConstraint::Unique { name, columns, .. } => {
-                    let constraint_name = match name {
+                TableConstraint::Unique(UniqueConstraint {
+                    name,
+                    index_name: _,
+                    index_type_display: _,
+                    index_type: _,
+                    columns,
+                    index_options: _,
+                    characteristics: _,
+                    nulls_distinct: _,
+                }) => {
+                    let constraint_name = match &name {
                         Some(name) => &format!("unique constraint with name '{name}'"),
                         None => "unique constraint",
                     };
@@ -1729,7 +1835,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     )?;
                     Ok(Constraint::Unique(indices))
                 }
-                TableConstraint::PrimaryKey { columns, .. } => {
+                TableConstraint::PrimaryKey(PrimaryKeyConstraint {
+                    name: _,
+                    index_name: _,
+                    index_type: _,
+                    columns,
+                    index_options: _,
+                    characteristics: _,
+                }) => {
                     // Get primary key indices in the schema
                     let indices = self.get_constraint_column_indices(
                         df_schema,
@@ -1978,6 +2091,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         &self,
         table_name: &ObjectName,
         predicate_expr: Option<SQLExpr>,
+        limit: Option<SQLExpr>,
     ) -> Result<LogicalPlan> {
         // Do a table lookup to verify the table exists
         let table_ref = self.object_name_to_table_reference(table_name.clone())?;
@@ -1991,7 +2105,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .build()?;
         let mut planner_context = PlannerContext::new();
 
-        let source = match predicate_expr {
+        let mut source = match predicate_expr {
             None => scan,
             Some(predicate_expr) => {
                 let filter_expr =
@@ -2007,6 +2121,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 LogicalPlan::Filter(Filter::try_new(filter_expr, Arc::new(scan))?)
             }
         };
+
+        if let Some(limit) = limit {
+            let empty_schema = DFSchema::empty();
+            let limit = self.sql_to_expr(limit, &empty_schema, &mut planner_context)?;
+            source = LogicalPlanBuilder::from(source)
+                .limit_by_expr(None, Some(limit))?
+                .build()?
+        }
 
         let plan = LogicalPlan::Dml(DmlStatement::new(
             table_ref,

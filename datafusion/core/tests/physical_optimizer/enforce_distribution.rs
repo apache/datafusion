@@ -40,7 +40,9 @@ use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::ScalarValue;
 use datafusion_common::config::CsvOptions;
 use datafusion_common::error::Result;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_expr::{JoinType, Operator};
@@ -56,7 +58,7 @@ use datafusion_physical_optimizer::output_requirements::OutputRequirements;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
-use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
+
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::execution_plan::ExecutionPlan;
 use datafusion_physical_plan::expressions::col;
@@ -67,8 +69,7 @@ use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlanProperties, PlanProperties, Statistics,
-    displayable,
+    DisplayAs, DisplayFormatType, ExecutionPlanProperties, PlanProperties, displayable,
 };
 use insta::Settings;
 
@@ -120,7 +121,7 @@ macro_rules! assert_plan {
 struct SortRequiredExec {
     input: Arc<dyn ExecutionPlan>,
     expr: LexOrdering,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl SortRequiredExec {
@@ -132,7 +133,7 @@ impl SortRequiredExec {
         Self {
             input,
             expr: requirement,
-            cache,
+            cache: Arc::new(cache),
         }
     }
 
@@ -174,7 +175,7 @@ impl ExecutionPlan for SortRequiredExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -203,16 +204,26 @@ impl ExecutionPlan for SortRequiredExec {
         )))
     }
 
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Visit expressions in the output ordering from equivalence properties
+        let mut tnr = TreeNodeRecursion::Continue;
+        if let Some(ordering) = self.cache.output_ordering() {
+            for sort_expr in ordering {
+                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
+            }
+        }
+        Ok(tnr)
+    }
+
     fn execute(
         &self,
         _partition: usize,
         _context: Arc<datafusion::execution::context::TaskContext>,
     ) -> Result<datafusion_physical_plan::SendableRecordBatchStream> {
         unreachable!();
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        self.input.partition_statistics(None)
     }
 }
 
@@ -1741,9 +1752,6 @@ fn merge_does_not_need_sort() -> Result<()> {
     // Scan some sorted parquet files
     let exec = parquet_exec_multiple_sorted(vec![sort_key.clone()]);
 
-    // CoalesceBatchesExec to mimic behavior after a filter
-    let exec = Arc::new(CoalesceBatchesExec::new(exec, 4096));
-
     // Merge from multiple parquet files and keep the data sorted
     let exec: Arc<dyn ExecutionPlan> =
         Arc::new(SortPreservingMergeExec::new(sort_key, exec));
@@ -1757,8 +1765,7 @@ fn merge_does_not_need_sort() -> Result<()> {
     assert_plan!(plan_distrib,
                                                                                     @r"
     SortPreservingMergeExec: [a@0 ASC]
-      CoalesceBatchesExec: target_batch_size=4096
-        DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
+      DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
     ");
 
     // Test: result IS DIFFERENT, if EnforceSorting is run first:
@@ -1772,8 +1779,7 @@ fn merge_does_not_need_sort() -> Result<()> {
                                                                                     @r"
     SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
       CoalescePartitionsExec
-        CoalesceBatchesExec: target_batch_size=4096
-          DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
+        DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
     ");
 
     Ok(())

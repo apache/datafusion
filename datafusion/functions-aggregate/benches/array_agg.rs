@@ -43,7 +43,7 @@ fn merge_batch_bench(c: &mut Criterion, name: &str, values: ArrayRef) {
     let list_item_data_type = values.as_list::<i32>().values().data_type().clone();
     c.bench_function(name, |b| {
         b.iter(|| {
-            #[allow(clippy::unit_arg)]
+            #[expect(clippy::unit_arg)]
             black_box(
                 ArrayAggAccumulator::try_new(&list_item_data_type, false)
                     .unwrap()

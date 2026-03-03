@@ -147,13 +147,14 @@ Here are some less active projects that used DataFusion:
 - [Flock]
 - [Tensorbase]
 
+If you know of another project, please submit a PR to add a link!
+
 [ballista]: https://github.com/apache/datafusion-ballista
 [auron]: https://github.com/apache/auron
 [cloudfuse buzz]: https://github.com/cloudfuse-io/buzz-rust
 [cnosdb]: https://github.com/cnosdb/cnosdb
 [cube store]: https://github.com/cube-js/cube.js/tree/master/rust
 [dask sql]: https://github.com/dask-contrib/dask-sql
-[datafusion-tui]: https://github.com/datafusion-contrib/datafusion-tui
 [delta-rs]: https://github.com/delta-io/delta-rs
 [edb postgres lakehouse]: https://www.enterprisedb.com/products/analytics
 [exon]: https://github.com/wheretrue/exon
@@ -172,7 +173,7 @@ Here are some less active projects that used DataFusion:
 [synnada]: https://synnada.ai/
 [tensorbase]: https://github.com/tensorbase/tensorbase
 [vegafusion]: https://vegafusion.io/
-[vortex]: https://vortex.dev/ "if you know of another project, please submit a PR to add a link!"
+[vortex]: https://vortex.dev/
 
 ## Integrations and Extensions
 

@@ -117,7 +117,7 @@ use datafusion::{
 };
 use datafusion_common::{
     DFSchemaRef, DataFusionError, Result, Statistics, internal_err, not_impl_err,
-    plan_datafusion_err, plan_err,
+    plan_datafusion_err, plan_err, tree_node::TreeNodeRecursion,
 };
 use datafusion_expr::{
     UserDefinedLogicalNode, UserDefinedLogicalNodeCore,
@@ -331,7 +331,7 @@ impl RelationPlanner for TableSamplePlanner {
             index_hints,
         } = relation
         else {
-            return Ok(RelationPlanning::Original(relation));
+            return Ok(RelationPlanning::Original(Box::new(relation)));
         };
 
         // Extract sample spec (handles both before/after alias positions)
@@ -401,7 +401,9 @@ impl RelationPlanner for TableSamplePlanner {
 
             let fraction = bucket_num as f64 / total as f64;
             let plan = TableSamplePlanNode::new(input, fraction, seed).into_plan();
-            return Ok(RelationPlanning::Planned(PlannedRelation::new(plan, alias)));
+            return Ok(RelationPlanning::Planned(Box::new(PlannedRelation::new(
+                plan, alias,
+            ))));
         }
 
         // Handle quantity-based sampling
@@ -422,7 +424,9 @@ impl RelationPlanner for TableSamplePlanner {
                 let plan = LogicalPlanBuilder::from(input)
                     .limit(0, Some(rows as usize))?
                     .build()?;
-                Ok(RelationPlanning::Planned(PlannedRelation::new(plan, alias)))
+                Ok(RelationPlanning::Planned(Box::new(PlannedRelation::new(
+                    plan, alias,
+                ))))
             }
 
             // TABLESAMPLE (N PERCENT) - percentage sampling
@@ -430,7 +434,9 @@ impl RelationPlanner for TableSamplePlanner {
                 let percent: f64 = parse_literal::<Float64Type>(&quantity_value_expr)?;
                 let fraction = percent / 100.0;
                 let plan = TableSamplePlanNode::new(input, fraction, seed).into_plan();
-                Ok(RelationPlanning::Planned(PlannedRelation::new(plan, alias)))
+                Ok(RelationPlanning::Planned(Box::new(PlannedRelation::new(
+                    plan, alias,
+                ))))
             }
 
             // TABLESAMPLE (N) - fraction if <1.0, row limit if >=1.0
@@ -448,7 +454,9 @@ impl RelationPlanner for TableSamplePlanner {
                     // Interpret as fraction
                     TableSamplePlanNode::new(input, value, seed).into_plan()
                 };
-                Ok(RelationPlanning::Planned(PlannedRelation::new(plan, alias)))
+                Ok(RelationPlanning::Planned(Box::new(PlannedRelation::new(
+                    plan, alias,
+                ))))
             }
         }
     }
@@ -610,7 +618,7 @@ pub struct SampleExec {
     upper_bound: f64,
     seed: u64,
     metrics: ExecutionPlanMetricsSet,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl SampleExec {
@@ -648,7 +656,7 @@ impl SampleExec {
             upper_bound,
             seed,
             metrics: ExecutionPlanMetricsSet::new(),
-            cache,
+            cache: Arc::new(cache),
         })
     }
 
@@ -678,7 +686,7 @@ impl ExecutionPlan for SampleExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -734,6 +742,22 @@ impl ExecutionPlan for SampleExec {
             .to_inexact();
 
         Ok(stats)
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(
+            &dyn datafusion::physical_plan::PhysicalExpr,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Visit expressions in the output ordering from equivalence properties
+        let mut tnr = TreeNodeRecursion::Continue;
+        if let Some(ordering) = self.cache.output_ordering() {
+            for sort_expr in ordering {
+                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
+            }
+        }
+        Ok(tnr)
     }
 }
 

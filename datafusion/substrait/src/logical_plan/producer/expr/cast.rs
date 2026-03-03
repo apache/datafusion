@@ -35,7 +35,7 @@ pub fn from_cast(
         // only the untyped(a null scalar value) null literal need this special handling
         // since all other kind of nulls are already typed and can be handled by substrait
         // e.g. null::<Int32Type> or null::<Utf8Type>
-        if matches!(lit, ScalarValue::Null) {
+        if *lit == ScalarValue::Null {
             let lit = Literal {
                 nullable: true,
                 type_variation_reference: DEFAULT_TYPE_VARIATION_REF,

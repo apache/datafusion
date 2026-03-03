@@ -72,7 +72,7 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
                 return Ok(Transformed::no(plan));
             };
 
-            let transformed = if matches!(input_agg_exec.mode(), AggregateMode::Partial)
+            let transformed = if *input_agg_exec.mode() == AggregateMode::Partial
                 && can_combine(
                     (
                         agg_exec.group_expr(),
@@ -98,7 +98,9 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
                     Arc::clone(input_agg_exec.input()),
                     input_agg_exec.input_schema(),
                 )
-                .map(|combined_agg| combined_agg.with_limit(agg_exec.limit()))
+                .map(|combined_agg| {
+                    combined_agg.with_limit_options(agg_exec.limit_options())
+                })
                 .ok()
                 .map(Arc::new)
             } else {

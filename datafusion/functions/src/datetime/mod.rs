@@ -53,11 +53,14 @@ make_udf_function!(to_date::ToDateFunc, to_date);
 make_udf_function!(to_local_time::ToLocalTimeFunc, to_local_time);
 make_udf_function!(to_time::ToTimeFunc, to_time);
 make_udf_function!(to_unixtime::ToUnixtimeFunc, to_unixtime);
-make_udf_function!(to_timestamp::ToTimestampFunc, to_timestamp);
-make_udf_function!(to_timestamp::ToTimestampSecondsFunc, to_timestamp_seconds);
-make_udf_function!(to_timestamp::ToTimestampMillisFunc, to_timestamp_millis);
-make_udf_function!(to_timestamp::ToTimestampMicrosFunc, to_timestamp_micros);
-make_udf_function!(to_timestamp::ToTimestampNanosFunc, to_timestamp_nanos);
+make_udf_function_with_config!(to_timestamp::ToTimestampFunc, to_timestamp);
+make_udf_function_with_config!(
+    to_timestamp::ToTimestampSecondsFunc,
+    to_timestamp_seconds
+);
+make_udf_function_with_config!(to_timestamp::ToTimestampMillisFunc, to_timestamp_millis);
+make_udf_function_with_config!(to_timestamp::ToTimestampMicrosFunc, to_timestamp_micros);
+make_udf_function_with_config!(to_timestamp::ToTimestampNanosFunc, to_timestamp_nanos);
 
 // create UDF with config
 make_udf_function_with_config!(now::NowFunc, now);
@@ -118,24 +121,24 @@ pub mod expr_fn {
         args,
     ),(
         to_timestamp,
-        "converts a string and optional formats to a `Timestamp(Nanoseconds, None)`",
-        args,
+        "converts a string and optional formats to a `Timestamp(Nanoseconds, TimeZone)`",
+        @config args,
     ),(
         to_timestamp_seconds,
-        "converts a string and optional formats to a `Timestamp(Seconds, None)`",
-        args,
+        "converts a string and optional formats to a `Timestamp(Seconds, TimeZone)`",
+        @config args,
     ),(
         to_timestamp_millis,
-        "converts a string and optional formats to a `Timestamp(Milliseconds, None)`",
-        args,
+        "converts a string and optional formats to a `Timestamp(Milliseconds, TimeZone)`",
+        @config args,
     ),(
         to_timestamp_micros,
-        "converts a string and optional formats to a `Timestamp(Microseconds, None)`",
-        args,
+        "converts a string and optional formats to a `Timestamp(Microseconds, TimeZone)`",
+        @config args,
     ),(
         to_timestamp_nanos,
-        "converts a string and optional formats to a `Timestamp(Nanoseconds, None)`",
-        args,
+        "converts a string and optional formats to a `Timestamp(Nanoseconds, TimeZone)`",
+        @config args,
     ));
 
     /// Returns a string representation of a date, time, timestamp or duration based
@@ -271,6 +274,7 @@ pub mod expr_fn {
 /// Returns all DataFusion functions defined in this package
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
     use datafusion_common::config::ConfigOptions;
+    let config = ConfigOptions::default();
     vec![
         current_date(),
         current_time(),
@@ -280,16 +284,16 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         from_unixtime(),
         make_date(),
         make_time(),
-        now(&ConfigOptions::default()),
+        now(&config),
         to_char(),
         to_date(),
         to_local_time(),
         to_time(),
         to_unixtime(),
-        to_timestamp(),
-        to_timestamp_seconds(),
-        to_timestamp_millis(),
-        to_timestamp_micros(),
-        to_timestamp_nanos(),
+        to_timestamp(&config),
+        to_timestamp_seconds(&config),
+        to_timestamp_millis(&config),
+        to_timestamp_micros(&config),
+        to_timestamp_nanos(&config),
     ]
 }

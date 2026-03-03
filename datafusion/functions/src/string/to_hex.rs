@@ -18,7 +18,6 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::utils::make_scalar_function;
 use arrow::array::{Array, ArrayRef, StringArray};
 use arrow::buffer::{Buffer, OffsetBuffer};
 use arrow::datatypes::{
@@ -26,7 +25,7 @@ use arrow::datatypes::{
     Int64Type, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
 use datafusion_common::cast::as_primitive_array;
-use datafusion_common::{Result, ScalarValue, exec_err};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     TypeSignatureClass, Volatility,
@@ -38,11 +37,11 @@ const HEX_CHARS: &[u8; 16] = b"0123456789abcdef";
 
 /// Converts the number to its equivalent hexadecimal representation.
 /// to_hex(2147483647) = '7fffffff'
-fn to_hex<T: ArrowPrimitiveType>(args: &[ArrayRef]) -> Result<ArrayRef>
+fn to_hex_array<T: ArrowPrimitiveType>(array: &ArrayRef) -> Result<ArrayRef>
 where
     T::Native: ToHex,
 {
-    let integer_array = as_primitive_array::<T>(&args[0])?;
+    let integer_array = as_primitive_array::<T>(array)?;
     let len = integer_array.len();
 
     // Max hex string length: 16 chars for u64/i64
@@ -76,6 +75,14 @@ where
     let result = StringArray::new(offsets, Buffer::from_vec(values), nulls);
 
     Ok(Arc::new(result) as ArrayRef)
+}
+
+#[inline]
+fn to_hex_scalar<T: ToHex>(value: T) -> String {
+    let mut hex_buffer = [0u8; 16];
+    let hex_len = value.write_hex_to_buffer(&mut hex_buffer);
+    // SAFETY: hex_buffer is ASCII hex digits
+    unsafe { std::str::from_utf8_unchecked(&hex_buffer[16 - hex_len..]).to_string() }
 }
 
 /// Trait for converting integer types to hexadecimal in a buffer
@@ -223,33 +230,71 @@ impl ScalarUDFImpl for ToHexFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        match args.args[0].data_type() {
-            DataType::Null => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None))),
-            DataType::Int64 => {
-                make_scalar_function(to_hex::<Int64Type>, vec![])(&args.args)
+        let arg = &args.args[0];
+
+        match arg {
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(v))) => Ok(
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(to_hex_scalar(*v)))),
+            ),
+            ColumnarValue::Scalar(ScalarValue::UInt64(Some(v))) => Ok(
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(to_hex_scalar(*v)))),
+            ),
+            ColumnarValue::Scalar(ScalarValue::Int32(Some(v))) => Ok(
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(to_hex_scalar(*v)))),
+            ),
+            ColumnarValue::Scalar(ScalarValue::UInt32(Some(v))) => Ok(
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(to_hex_scalar(*v)))),
+            ),
+            ColumnarValue::Scalar(ScalarValue::Int16(Some(v))) => Ok(
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(to_hex_scalar(*v)))),
+            ),
+            ColumnarValue::Scalar(ScalarValue::UInt16(Some(v))) => Ok(
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(to_hex_scalar(*v)))),
+            ),
+            ColumnarValue::Scalar(ScalarValue::Int8(Some(v))) => Ok(
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(to_hex_scalar(*v)))),
+            ),
+            ColumnarValue::Scalar(ScalarValue::UInt8(Some(v))) => Ok(
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(to_hex_scalar(*v)))),
+            ),
+
+            // NULL scalars
+            ColumnarValue::Scalar(s) if s.is_null() => {
+                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))
             }
-            DataType::UInt64 => {
-                make_scalar_function(to_hex::<UInt64Type>, vec![])(&args.args)
-            }
-            DataType::Int32 => {
-                make_scalar_function(to_hex::<Int32Type>, vec![])(&args.args)
-            }
-            DataType::UInt32 => {
-                make_scalar_function(to_hex::<UInt32Type>, vec![])(&args.args)
-            }
-            DataType::Int16 => {
-                make_scalar_function(to_hex::<Int16Type>, vec![])(&args.args)
-            }
-            DataType::UInt16 => {
-                make_scalar_function(to_hex::<UInt16Type>, vec![])(&args.args)
-            }
-            DataType::Int8 => {
-                make_scalar_function(to_hex::<Int8Type>, vec![])(&args.args)
-            }
-            DataType::UInt8 => {
-                make_scalar_function(to_hex::<UInt8Type>, vec![])(&args.args)
-            }
-            other => exec_err!("Unsupported data type {other:?} for function to_hex"),
+
+            ColumnarValue::Array(array) => match array.data_type() {
+                DataType::Int64 => {
+                    Ok(ColumnarValue::Array(to_hex_array::<Int64Type>(array)?))
+                }
+                DataType::UInt64 => {
+                    Ok(ColumnarValue::Array(to_hex_array::<UInt64Type>(array)?))
+                }
+                DataType::Int32 => {
+                    Ok(ColumnarValue::Array(to_hex_array::<Int32Type>(array)?))
+                }
+                DataType::UInt32 => {
+                    Ok(ColumnarValue::Array(to_hex_array::<UInt32Type>(array)?))
+                }
+                DataType::Int16 => {
+                    Ok(ColumnarValue::Array(to_hex_array::<Int16Type>(array)?))
+                }
+                DataType::UInt16 => {
+                    Ok(ColumnarValue::Array(to_hex_array::<UInt16Type>(array)?))
+                }
+                DataType::Int8 => {
+                    Ok(ColumnarValue::Array(to_hex_array::<Int8Type>(array)?))
+                }
+                DataType::UInt8 => {
+                    Ok(ColumnarValue::Array(to_hex_array::<UInt8Type>(array)?))
+                }
+                other => exec_err!("Unsupported data type {other:?} for function to_hex"),
+            },
+
+            other => internal_err!(
+                "Unexpected argument type {:?} for function to_hex",
+                other.data_type()
+            ),
         }
     }
 
@@ -288,8 +333,8 @@ mod tests {
                 let expected = $expected;
 
                 let array = <$array_type>::from(input);
-                let array_ref = Arc::new(array);
-                let hex_result = to_hex::<$arrow_type>(&[array_ref])?;
+                let array_ref: ArrayRef = Arc::new(array);
+                let hex_result = to_hex_array::<$arrow_type>(&array_ref)?;
                 let hex_array = as_string_array(&hex_result)?;
                 let expected_array = StringArray::from(expected);
 

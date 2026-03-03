@@ -76,6 +76,7 @@ impl OptimizerRule for ExtractEquijoinPredicate {
                 join_constraint,
                 schema,
                 null_equality,
+                null_aware,
             }) => {
                 let left_schema = left.schema();
                 let right_schema = right.schema();
@@ -117,6 +118,7 @@ impl OptimizerRule for ExtractEquijoinPredicate {
                             // According to `is not distinct from`'s semantics, it's
                             // safe to override it
                             null_equality: NullEquality::NullEqualsNull,
+                            null_aware,
                         })));
                     }
                 }
@@ -132,6 +134,7 @@ impl OptimizerRule for ExtractEquijoinPredicate {
                         join_constraint,
                         schema,
                         null_equality,
+                        null_aware,
                     })))
                 } else {
                     Ok(Transformed::no(LogicalPlan::Join(Join {
@@ -143,6 +146,7 @@ impl OptimizerRule for ExtractEquijoinPredicate {
                         join_constraint,
                         schema,
                         null_equality,
+                        null_aware,
                     })))
                 }
             }

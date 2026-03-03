@@ -30,6 +30,7 @@ use arrow::datatypes::*;
 use arrow::error::ArrowError;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{Result, ScalarValue, internal_err, not_impl_err};
+
 use datafusion_expr::binary::BinaryTypeCoercer;
 use datafusion_expr::interval_arithmetic::{Interval, apply_operator};
 use datafusion_expr::sort_properties::ExprProperties;
@@ -162,6 +163,94 @@ fn boolean_op(
     op(ll, rr).map(|t| Arc::new(t) as _)
 }
 
+/// Returns true if both operands are Date types (Date32 or Date64)
+/// Used to detect Date - Date operations which should return Int64 (days difference)
+fn is_date_minus_date(lhs: &DataType, rhs: &DataType) -> bool {
+    matches!(
+        (lhs, rhs),
+        (DataType::Date32, DataType::Date32) | (DataType::Date64, DataType::Date64)
+    )
+}
+
+/// Computes the difference between two dates and returns the result as Int64 (days)
+/// This aligns with PostgreSQL, DuckDB, and MySQL behavior where date - date returns an integer
+///
+/// Implementation: Uses Arrow's sub_wrapping to get Duration, then converts to Int64 days
+fn apply_date_subtraction(
+    lhs: &ColumnarValue,
+    rhs: &ColumnarValue,
+) -> Result<ColumnarValue> {
+    use arrow::compute::kernels::numeric::sub_wrapping;
+
+    // Use Arrow's sub_wrapping to compute the Duration result
+    let duration_result = apply(lhs, rhs, sub_wrapping)?;
+
+    // Convert Duration to Int64 (days)
+    match duration_result {
+        ColumnarValue::Array(array) => {
+            let int64_array = duration_to_days(&array)?;
+            Ok(ColumnarValue::Array(int64_array))
+        }
+        ColumnarValue::Scalar(scalar) => {
+            // Convert scalar Duration to Int64 days
+            let array = scalar.to_array_of_size(1)?;
+            let int64_array = duration_to_days(&array)?;
+            let int64_scalar = ScalarValue::try_from_array(int64_array.as_ref(), 0)?;
+            Ok(ColumnarValue::Scalar(int64_scalar))
+        }
+    }
+}
+
+/// Converts a Duration array to Int64 days
+/// Handles different Duration time units (Second, Millisecond, Microsecond, Nanosecond)
+fn duration_to_days(array: &ArrayRef) -> Result<ArrayRef> {
+    use datafusion_common::cast::{
+        as_duration_microsecond_array, as_duration_millisecond_array,
+        as_duration_nanosecond_array, as_duration_second_array,
+    };
+
+    const SECONDS_PER_DAY: i64 = 86_400;
+    const MILLIS_PER_DAY: i64 = 86_400_000;
+    const MICROS_PER_DAY: i64 = 86_400_000_000;
+    const NANOS_PER_DAY: i64 = 86_400_000_000_000;
+
+    match array.data_type() {
+        DataType::Duration(TimeUnit::Second) => {
+            let duration_array = as_duration_second_array(array)?;
+            let result: Int64Array = duration_array
+                .iter()
+                .map(|v| v.map(|val| val / SECONDS_PER_DAY))
+                .collect();
+            Ok(Arc::new(result))
+        }
+        DataType::Duration(TimeUnit::Millisecond) => {
+            let duration_array = as_duration_millisecond_array(array)?;
+            let result: Int64Array = duration_array
+                .iter()
+                .map(|v| v.map(|val| val / MILLIS_PER_DAY))
+                .collect();
+            Ok(Arc::new(result))
+        }
+        DataType::Duration(TimeUnit::Microsecond) => {
+            let duration_array = as_duration_microsecond_array(array)?;
+            let result: Int64Array = duration_array
+                .iter()
+                .map(|v| v.map(|val| val / MICROS_PER_DAY))
+                .collect();
+            Ok(Arc::new(result))
+        }
+        DataType::Duration(TimeUnit::Nanosecond) => {
+            let duration_array = as_duration_nanosecond_array(array)?;
+            let result: Int64Array = duration_array
+                .iter()
+                .map(|v| v.map(|val| val / NANOS_PER_DAY))
+                .collect();
+            Ok(Arc::new(result))
+        }
+        other => internal_err!("duration_to_days expected Duration type, got: {}", other),
+    }
+}
+
 impl PhysicalExpr for BinaryExpr {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -251,6 +340,11 @@ impl PhysicalExpr for BinaryExpr {
         match self.op {
             Operator::Plus if self.fail_on_overflow => return apply(&lhs, &rhs, add),
             Operator::Plus => return apply(&lhs, &rhs, add_wrapping),
+            // Special case: Date - Date returns Int64 (days difference)
+            // This aligns with PostgreSQL, DuckDB, and MySQL behavior
+            Operator::Minus if is_date_minus_date(&left_data_type, &right_data_type) => {
+                return apply_date_subtraction(&lhs, &rhs);
+            }
             Operator::Minus if self.fail_on_overflow => return apply(&lhs, &rhs, sub),
             Operator::Minus => return apply(&lhs, &rhs, sub_wrapping),
             Operator::Multiply if self.fail_on_overflow => return apply(&lhs, &rhs, mul),

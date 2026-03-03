@@ -43,7 +43,7 @@ use futures::{FutureExt, TryFutureExt};
 use insta::assert_snapshot;
 use object_store::memory::InMemory;
 use object_store::path::Path;
-use object_store::{ObjectMeta, ObjectStore};
+use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::arrow::async_reader::AsyncFileReader;
@@ -69,13 +69,9 @@ async fn route_data_access_ops_to_parquet_file_reader_factory() {
         store_parquet_in_memory(vec![batch]).await;
     let file_group = parquet_files_meta
         .into_iter()
-        .map(|meta| PartitionedFile {
-            object_meta: meta,
-            partition_values: vec![],
-            range: None,
-            statistics: None,
-            extensions: Some(Arc::new(String::from(EXPECTED_USER_DEFINED_METADATA))),
-            metadata_size_hint: None,
+        .map(|meta| {
+            PartitionedFile::new_from_meta(meta)
+                .with_extensions(Arc::new(String::from(EXPECTED_USER_DEFINED_METADATA)))
         })
         .collect();
 

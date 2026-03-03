@@ -28,7 +28,7 @@ use crate::strings::{
 use datafusion_common::cast::{as_string_array, as_string_view_array};
 use datafusion_common::{Result, ScalarValue, internal_err, plan_err};
 use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{ColumnarValue, Documentation, Expr, Volatility, lit};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_macros::user_doc;
@@ -120,24 +120,21 @@ impl ScalarUDFImpl for ConcatFunc {
             }
         });
 
-        let array_len = args
-            .iter()
-            .filter_map(|x| match x {
-                ColumnarValue::Array(array) => Some(array.len()),
-                _ => None,
-            })
-            .next();
+        let array_len = args.iter().find_map(|x| match x {
+            ColumnarValue::Array(array) => Some(array.len()),
+            _ => None,
+        });
 
         // Scalar
         if array_len.is_none() {
-            let mut result = String::new();
-            for arg in args {
+            let mut values = Vec::with_capacity(args.len());
+            for arg in &args {
                 let ColumnarValue::Scalar(scalar) = arg else {
                     return internal_err!("concat expected scalar value, got {arg:?}");
                 };
 
                 match scalar.try_as_str() {
-                    Some(Some(v)) => result.push_str(v),
+                    Some(Some(v)) => values.push(v),
                     Some(None) => {} // null literal
                     None => plan_err!(
                         "Concat function does not support scalar type {}",
@@ -145,6 +142,7 @@ impl ScalarUDFImpl for ConcatFunc {
                     )?,
                 }
             }
+            let result = values.concat();
 
             return match return_datatype {
                 DataType::Utf8View => {
@@ -206,7 +204,9 @@ impl ScalarUDFImpl for ConcatFunc {
                         DataType::Utf8View => {
                             let string_array = as_string_view_array(array)?;
 
-                            data_size += string_array.len();
+                            // This is an estimate; in particular, it will
+                            // undercount arrays of short strings (<= 12 bytes).
+                            data_size += string_array.total_buffer_bytes_used();
                             let column = if array.is_nullable() {
                                 ColumnarValueRef::NullableStringViewArray(string_array)
                             } else {
@@ -277,7 +277,7 @@ impl ScalarUDFImpl for ConcatFunc {
     fn simplify(
         &self,
         args: Vec<Expr>,
-        _info: &dyn SimplifyInfo,
+        _info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         simplify_concat(args)
     }

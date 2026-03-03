@@ -31,7 +31,9 @@ use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
 use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 use datafusion_common::{
     ColumnStatistics, JoinType, NullEquality, Result, Statistics, internal_err,
@@ -53,7 +55,6 @@ use datafusion_physical_optimizer::limited_distinct_aggregation::LimitedDistinct
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
-use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::filter::FilterExec;
@@ -248,6 +249,7 @@ pub fn hash_join_exec(
         None,
         PartitionMode::Partitioned,
         NullEquality::NullEqualsNothing,
+        false,
     )?))
 }
 
@@ -360,13 +362,6 @@ pub fn aggregate_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
     )
 }
 
-pub fn coalesce_batches_exec(
-    input: Arc<dyn ExecutionPlan>,
-    batch_size: usize,
-) -> Arc<dyn ExecutionPlan> {
-    Arc::new(CoalesceBatchesExec::new(input, batch_size))
-}
-
 pub fn sort_exec(
     ordering: LexOrdering,
     input: Arc<dyn ExecutionPlan>,
@@ -461,7 +456,7 @@ impl ExecutionPlan for RequirementsTestExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         self.input.properties()
     }
 
@@ -498,6 +493,20 @@ impl ExecutionPlan for RequirementsTestExec {
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         unimplemented!("Test exec does not support execution")
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Visit expressions in required_input_ordering if present
+        let mut tnr = TreeNodeRecursion::Continue;
+        if let Some(ordering) = &self.required_input_ordering {
+            for sort_expr in ordering {
+                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
+            }
+        }
+        Ok(tnr)
     }
 }
 
@@ -832,7 +841,7 @@ pub fn sort_expr_named(name: &str, index: usize) -> PhysicalSortExpr {
 pub struct TestScan {
     schema: SchemaRef,
     output_ordering: Vec<LexOrdering>,
-    plan_properties: PlanProperties,
+    plan_properties: Arc<PlanProperties>,
     // Store the requested ordering for display
     requested_ordering: Option<LexOrdering>,
 }
@@ -866,7 +875,7 @@ impl TestScan {
         Self {
             schema,
             output_ordering,
-            plan_properties,
+            plan_properties: Arc::new(plan_properties),
             requested_ordering: None,
         }
     }
@@ -922,7 +931,7 @@ impl ExecutionPlan for TestScan {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.plan_properties
     }
 
@@ -969,6 +978,28 @@ impl ExecutionPlan for TestScan {
         Ok(SortOrderPushdownResult::Inexact {
             inner: Arc::new(new_scan),
         })
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Visit expressions in output_ordering
+        let mut tnr = TreeNodeRecursion::Continue;
+        for ordering in &self.output_ordering {
+            for sort_expr in ordering {
+                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
+            }
+        }
+
+        // Visit expressions in requested_ordering if present
+        if let Some(ordering) = &self.requested_ordering {
+            for sort_expr in ordering {
+                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
+            }
+        }
+
+        Ok(tnr)
     }
 }
 
