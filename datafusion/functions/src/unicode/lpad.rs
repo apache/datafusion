@@ -237,7 +237,7 @@ where
 
                 let length = if length < 0 { 0 } else { length as usize };
                 if length == 0 {
-                    // append empty string
+                    writer.write_str("")?;
                     writer.finalize();
                     continue;
                 }
@@ -300,7 +300,7 @@ where
 
                 let length = if length < 0 { 0 } else { length as usize };
                 if length == 0 {
-                    // append empty string
+                    writer.write_str("")?;
                     writer.finalize();
                     continue;
                 }
