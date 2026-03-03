@@ -75,4 +75,4 @@ url = { workspace = true }
 uuid = { workspace = true }
 
 [target.'cfg(not(target_os = "windows"))'.dev-dependencies]
-nix = { version = "0.31.1", features = ["fs"] }
+nix = { version = "0.31.2", features = ["fs"] }
