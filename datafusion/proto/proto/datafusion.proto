@@ -1393,3 +1393,15 @@ message SortMergeJoinExecNode {
   repeated SortExprNode sort_options = 6;
   datafusion_common.NullEquality null_equality = 7;
 }
+
+enum FileFormatKind {
+  CSV = 0;
+  JSON = 1;
+  PARQUET = 2;
+  ARROW = 3;
+}
+
+message FileFormatWrapper {
+  FileFormatKind kind = 1;
+  bytes blob = 2;
+}
