@@ -23,5 +23,24 @@
 
 ## Original Query: SELECT second('2009-07-30 12:58:59');
 ## PySpark 3.5.5 Result: {'second(2009-07-30 12:58:59)': 59, 'typeof(second(2009-07-30 12:58:59))': 'int', 'typeof(2009-07-30 12:58:59)': 'string'}
-#query
-#SELECT second('2009-07-30 12:58:59'::string);
+query I
+SELECT second('2009-07-30 12:58:59'::timestamp);
+----
+59
+
+# Test with different seconds
+query I
+SELECT second('2009-07-30 12:58:00'::timestamp);
+----
+0
+
+query I
+SELECT second('2009-07-30 12:58:30'::timestamp);
+----
+30
+
+# Test with NULL
+query I
+SELECT second(NULL::timestamp);
+----
+NULL

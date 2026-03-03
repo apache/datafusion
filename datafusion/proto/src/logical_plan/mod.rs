@@ -21,28 +21,28 @@ use std::sync::Arc;
 
 use crate::protobuf::logical_plan_node::LogicalPlanType::CustomScan;
 use crate::protobuf::{
-    dml_node, ColumnUnnestListItem, ColumnUnnestListRecursion, CteWorkTableScanNode,
-    CustomTableScanNode, DmlNode, SortExprNodeCollection,
+    ColumnUnnestListItem, ColumnUnnestListRecursion, CteWorkTableScanNode,
+    CustomTableScanNode, DmlNode, SortExprNodeCollection, dml_node,
 };
 use crate::{
     convert_required, into_required,
     protobuf::{
-        self, listing_table_scan_node::FileFormatType,
-        logical_plan_node::LogicalPlanType, LogicalExtensionNode, LogicalPlanNode,
+        self, LogicalExtensionNode, LogicalPlanNode,
+        listing_table_scan_node::FileFormatType, logical_plan_node::LogicalPlanType,
     },
 };
 
-use crate::protobuf::{proto_error, ToProtoError};
+use crate::protobuf::{ToProtoError, proto_error};
 use arrow::datatypes::{DataType, Field, Schema, SchemaBuilder, SchemaRef};
 use datafusion_catalog::cte_worktable::CteWorkTable;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{
-    assert_or_internal_err, context, internal_datafusion_err, internal_err, not_impl_err,
-    plan_err, DataFusionError, Result, TableReference, ToDFSchema,
+    DataFusionError, Result, TableReference, ToDFSchema, assert_or_internal_err, context,
+    internal_datafusion_err, internal_err, not_impl_err, plan_err,
 };
 use datafusion_datasource::file_format::FileFormat;
 use datafusion_datasource::file_format::{
-    file_type_to_format, format_as_file_type, FileFormatFactory,
+    FileFormatFactory, file_type_to_format, format_as_file_type,
 };
 use datafusion_datasource_arrow::file_format::ArrowFormat;
 #[cfg(feature = "avro")]
@@ -52,18 +52,17 @@ use datafusion_datasource_json::file_format::JsonFormat as OtherNdJsonFormat;
 #[cfg(feature = "parquet")]
 use datafusion_datasource_parquet::file_format::ParquetFormat;
 use datafusion_expr::{
-    dml,
-    logical_plan::{
-        builder::project, Aggregate, CreateCatalog, CreateCatalogSchema,
-        CreateExternalTable, CreateView, DdlStatement, Distinct, EmptyRelation,
-        Extension, Join, JoinConstraint, Prepare, Projection, Repartition, Sort,
-        SubqueryAlias, TableScan, Values, Window,
-    },
-    DistinctOn, DropView, Expr, LogicalPlan, LogicalPlanBuilder, ScalarUDF, SortExpr,
-    Statement, WindowUDF,
+    AggregateUDF, DmlStatement, FetchType, RecursiveQuery, SkipType, TableSource, Unnest,
 };
 use datafusion_expr::{
-    AggregateUDF, DmlStatement, FetchType, RecursiveQuery, SkipType, TableSource, Unnest,
+    DistinctOn, DropView, Expr, LogicalPlan, LogicalPlanBuilder, ScalarUDF, SortExpr,
+    Statement, WindowUDF, dml,
+    logical_plan::{
+        Aggregate, CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateView,
+        DdlStatement, Distinct, EmptyRelation, Extension, Join, JoinConstraint, Prepare,
+        Projection, Repartition, Sort, SubqueryAlias, TableScan, Values, Window,
+        builder::project,
+    },
 };
 use protobuf::FileFormatKind;
 
@@ -74,9 +73,9 @@ use crate::logical_plan::file_formats::{
     ArrowLogicalExtensionCodec, CsvLogicalExtensionCodec, JsonLogicalExtensionCodec,
 };
 use crate::logical_plan::to_proto::serialize_sorts;
+use datafusion_catalog::TableProvider;
 use datafusion_catalog::default_table_source::{provider_as_source, source_as_provider};
 use datafusion_catalog::view::ViewTable;
-use datafusion_catalog::TableProvider;
 use datafusion_catalog_listing::{ListingOptions, ListingTable, ListingTableConfig};
 use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource_arrow::file_format::ArrowFormatFactory;
@@ -85,8 +84,8 @@ use datafusion_datasource_json::file_format::JsonFormatFactory;
 #[cfg(feature = "parquet")]
 use datafusion_datasource_parquet::file_format::ParquetFormatFactory;
 use datafusion_execution::TaskContext;
-use prost::bytes::BufMut;
 use prost::Message;
+use prost::bytes::BufMut;
 
 pub mod file_formats;
 pub mod from_proto;
@@ -520,14 +519,17 @@ impl AsLogicalPlan for LogicalPlanNode {
                             }
                             Arc::new(json)
                         }
-                        #[cfg_attr(not(feature = "avro"), allow(unused_variables))]
                         FileFormatType::Avro(..) => {
                             #[cfg(feature = "avro")]
                             {
                                 Arc::new(AvroFormat)
                             }
                             #[cfg(not(feature = "avro"))]
-                            panic!("Unable to process avro file since `avro` feature is not enabled");
+                            {
+                                panic!(
+                                    "Unable to process avro file since `avro` feature is not enabled"
+                                );
+                            }
                         }
                         FileFormatType::Arrow(..) => {
                             Arc::new(ArrowFormat)
@@ -703,27 +705,26 @@ impl AsLogicalPlan for LogicalPlanNode {
                 }
 
                 Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
-                    CreateExternalTable {
-                        schema: pb_schema.try_into()?,
-                        name: from_table_reference(
+                    CreateExternalTable::builder(
+                        from_table_reference(
                             create_extern_table.name.as_ref(),
                             "CreateExternalTable",
                         )?,
-                        location: create_extern_table.location.clone(),
-                        file_type: create_extern_table.file_type.clone(),
-                        table_partition_cols: create_extern_table
-                            .table_partition_cols
-                            .clone(),
-                        order_exprs,
-                        if_not_exists: create_extern_table.if_not_exists,
-                        or_replace: create_extern_table.or_replace,
-                        temporary: create_extern_table.temporary,
-                        definition,
-                        unbounded: create_extern_table.unbounded,
-                        options: create_extern_table.options.clone(),
-                        constraints: constraints.into(),
-                        column_defaults,
-                    },
+                        create_extern_table.location.clone(),
+                        create_extern_table.file_type.clone(),
+                        pb_schema.try_into()?,
+                    )
+                    .with_partition_cols(create_extern_table.table_partition_cols.clone())
+                    .with_order_exprs(order_exprs)
+                    .with_if_not_exists(create_extern_table.if_not_exists)
+                    .with_or_replace(create_extern_table.or_replace)
+                    .with_temporary(create_extern_table.temporary)
+                    .with_definition(definition)
+                    .with_unbounded(create_extern_table.unbounded)
+                    .with_options(create_extern_table.options.clone())
+                    .with_constraints(constraints.into())
+                    .with_column_defaults(column_defaults)
+                    .build(),
                 )))
             }
             LogicalPlanType::CreateView(create_view) => {
@@ -1547,7 +1548,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         PartitionMethod::RoundRobin(*partition_count as u64)
                     }
                     Partitioning::DistributeBy(_) => {
-                        return not_impl_err!("DistributeBy")
+                        return not_impl_err!("DistributeBy");
                     }
                 };
 

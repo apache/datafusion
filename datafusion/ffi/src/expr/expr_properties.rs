@@ -26,7 +26,6 @@ use crate::expr::interval::FFI_Interval;
 /// See [`ExprProperties`] for the meaning of each field.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub struct FFI_ExprProperties {
     sort_properties: FFI_SortProperties,
     range: FFI_Interval,
@@ -62,7 +61,6 @@ impl TryFrom<FFI_ExprProperties> for ExprProperties {
 
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub enum FFI_SortProperties {
     Ordered(FFI_SortOptions),
     Unordered,
@@ -91,7 +89,6 @@ impl From<&FFI_SortProperties> for SortProperties {
 
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub struct FFI_SortOptions {
     pub descending: bool,
     pub nulls_first: bool,

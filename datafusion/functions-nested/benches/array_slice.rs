@@ -15,16 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-extern crate criterion;
-
 use arrow::array::{
     Int64Array, ListArray, ListViewArray, NullBufferBuilder, PrimitiveArray,
 };
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{DataType, Field, Int64Type};
-use criterion::{criterion_group, criterion_main, Criterion};
-use datafusion_common::config::ConfigOptions;
+use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
+use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions_nested::extract::array_slice_udf;
 use rand::rngs::StdRng;

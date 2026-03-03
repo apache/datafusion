@@ -21,8 +21,8 @@ use insta::assert_snapshot;
 use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
-    build_group_by, get_optimized_plan, mock_data, parquet_exec_with_sort, schema,
-    TestAggregate,
+    TestAggregate, build_group_by, get_optimized_plan, mock_data, parquet_exec_with_sort,
+    schema,
 };
 
 use arrow::datatypes::DataType;
@@ -34,10 +34,10 @@ use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{self, cast, col};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_plan::{
+    ExecutionPlan,
     aggregates::{AggregateExec, AggregateMode},
     collect,
     limit::{GlobalLimitExec, LocalLimitExec},
-    ExecutionPlan,
 };
 
 async fn run_plan_and_format(plan: Arc<dyn ExecutionPlan>) -> Result<String> {

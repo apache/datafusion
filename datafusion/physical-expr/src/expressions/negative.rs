@@ -29,15 +29,15 @@ use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
-use datafusion_common::{internal_err, plan_err, Result};
+use datafusion_common::{Result, internal_err, plan_err};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::statistics::Distribution::{
     self, Bernoulli, Exponential, Gaussian, Generic, Uniform,
 };
 use datafusion_expr::{
-    type_coercion::{is_interval, is_null, is_signed_numeric, is_timestamp},
     ColumnarValue,
+    type_coercion::{is_interval, is_signed_numeric, is_timestamp},
 };
 
 /// Negative expression
@@ -190,7 +190,7 @@ pub fn negative(
     input_schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     let data_type = arg.data_type(input_schema)?;
-    if is_null(&data_type) {
+    if data_type.is_null() {
         Ok(arg)
     } else if !is_signed_numeric(&data_type)
         && !is_interval(&data_type)
@@ -205,10 +205,10 @@ pub fn negative(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::{col, Column};
+    use crate::expressions::{Column, col};
 
     use arrow::array::*;
-    use arrow::datatypes::DataType::{Float32, Float64, Int16, Int32, Int64, Int8};
+    use arrow::datatypes::DataType::{Float32, Float64, Int8, Int16, Int32, Int64};
     use arrow::datatypes::*;
     use datafusion_common::cast::as_primitive_array;
     use datafusion_common::{DataFusionError, ScalarValue};
@@ -277,11 +277,13 @@ mod tests {
         );
 
         // Bernoulli
-        assert!(negative_expr
-            .evaluate_statistics(&[&Distribution::new_bernoulli(ScalarValue::from(
-                0.75
-            ))?])
-            .is_err());
+        assert!(
+            negative_expr
+                .evaluate_statistics(&[&Distribution::new_bernoulli(ScalarValue::from(
+                    0.75
+                ))?])
+                .is_err()
+        );
 
         // Exponential
         assert_eq!(

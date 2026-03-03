@@ -16,9 +16,10 @@
 // under the License.
 
 use arrow::datatypes::FieldRef;
+use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::{
-    assert_or_internal_err, exec_datafusion_err, internal_err, not_impl_err,
-    plan_datafusion_err, plan_err, Column, DFSchema, Result, Span, TableReference,
+    Column, DFSchema, Result, Span, TableReference, assert_or_internal_err,
+    exec_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
 };
 use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::{Case, Expr};
@@ -36,16 +37,21 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         let id_span = id.span;
-        if id.value.starts_with('@') {
+        if id.value.starts_with('@') && id.quote_style.is_none() {
             // TODO: figure out if ScalarVariables should be insensitive.
             let var_names = vec![id.value];
-            let ty = self
+            let field = self
                 .context_provider
-                .get_variable_type(&var_names)
+                .get_variable_field(&var_names)
+                .or_else(|| {
+                    self.context_provider
+                        .get_variable_type(&var_names)
+                        .map(|ty| ty.into_nullable_field_ref())
+                })
                 .ok_or_else(|| {
                     plan_datafusion_err!("variable {var_names:?} has no type information")
                 })?;
-            Ok(Expr::ScalarVariable(ty, var_names))
+            Ok(Expr::ScalarVariable(field, var_names))
         } else {
             // Don't use `col()` here because it will try to
             // interpret names with '.' as if they were
@@ -61,16 +67,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     qualifier.filter(|q| q.table() != UNNAMED_TABLE).cloned(),
                     normalize_ident,
                 );
-                if self.options.collect_spans {
-                    if let Some(span) = Span::try_from_sqlparser_span(id_span) {
-                        column.spans_mut().add_span(span);
-                    }
+                if self.options.collect_spans
+                    && let Some(span) = Span::try_from_sqlparser_span(id_span)
+                {
+                    column.spans_mut().add_span(span);
                 }
                 return Ok(Expr::Column(column));
             }
 
             // Check the outer query schema
-            if let Some(outer) = planner_context.outer_query_schema() {
+            for outer in planner_context.outer_schemas_iter() {
                 if let Ok((qualifier, field)) =
                     outer.qualified_field_with_unqualified_name(normalize_ident.as_str())
                 {
@@ -84,10 +90,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
             // Default case
             let mut column = Column::new_unqualified(normalize_ident);
-            if self.options.collect_spans {
-                if let Some(span) = Span::try_from_sqlparser_span(id_span) {
-                    column.spans_mut().add_span(span);
-                }
+            if self.options.collect_spans
+                && let Some(span) = Span::try_from_sqlparser_span(id_span)
+            {
+                column.spans_mut().add_span(span);
             }
             Ok(Expr::Column(column))
         }
@@ -106,18 +112,23 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .filter_map(|id| Span::try_from_sqlparser_span(id.span)),
         );
 
-        if ids[0].value.starts_with('@') {
+        if ids[0].value.starts_with('@') && ids[0].quote_style.is_none() {
             let var_names: Vec<_> = ids
                 .into_iter()
                 .map(|id| self.ident_normalizer.normalize(id))
                 .collect();
-            let ty = self
+            let field = self
                 .context_provider
-                .get_variable_type(&var_names)
+                .get_variable_field(&var_names)
+                .or_else(|| {
+                    self.context_provider
+                        .get_variable_type(&var_names)
+                        .map(|ty| ty.into_nullable_field_ref())
+                })
                 .ok_or_else(|| {
                     exec_datafusion_err!("variable {var_names:?} has no type information")
                 })?;
-            Ok(Expr::ScalarVariable(ty, var_names))
+            Ok(Expr::ScalarVariable(field, var_names))
         } else {
             let ids = ids
                 .into_iter()
@@ -148,10 +159,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 // Found matching field with no spare identifier(s)
                 Some((field, qualifier, _nested_names)) => {
                     let mut column = Column::from((qualifier, field));
-                    if self.options.collect_spans {
-                        if let Some(span) = ids_span {
-                            column.spans_mut().add_span(span);
-                        }
+                    if self.options.collect_spans
+                        && let Some(span) = ids_span
+                    {
+                        column.spans_mut().add_span(span);
                     }
                     Ok(Expr::Column(column))
                 }
@@ -162,17 +173,18 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         not_impl_err!("compound identifier: {ids:?}")
                     } else {
                         // Check the outer_query_schema and try to find a match
-                        if let Some(outer) = planner_context.outer_query_schema() {
+                        for outer in planner_context.outer_schemas_iter() {
                             let search_result = search_dfschema(&ids, outer);
-                            match search_result {
+                            let result = match search_result {
                                 // Found matching field with spare identifier(s) for nested field(s) in structure
                                 Some((field, qualifier, nested_names))
                                     if !nested_names.is_empty() =>
                                 {
-                                    // TODO: remove when can support nested identifiers for OuterReferenceColumn
+                                    // TODO: remove this when we have support for nested identifiers for OuterReferenceColumn
                                     not_impl_err!(
                                         "Nested identifiers are not yet supported for OuterReferenceColumn {}",
-                                        Column::from((qualifier, field)).quoted_flat_name()
+                                        Column::from((qualifier, field))
+                                            .quoted_flat_name()
                                     )
                                 }
                                 // Found matching field with no spare identifier(s)
@@ -184,26 +196,20 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                     ))
                                 }
                                 // Found no matching field, will return a default
-                                None => {
-                                    let s = &ids[0..ids.len()];
-                                    // safe unwrap as s can never be empty or exceed the bounds
-                                    let (relation, column_name) =
-                                        form_identifier(s).unwrap();
-                                    Ok(Expr::Column(Column::new(relation, column_name)))
-                                }
-                            }
-                        } else {
-                            let s = &ids[0..ids.len()];
-                            // Safe unwrap as s can never be empty or exceed the bounds
-                            let (relation, column_name) = form_identifier(s).unwrap();
-                            let mut column = Column::new(relation, column_name);
-                            if self.options.collect_spans {
-                                if let Some(span) = ids_span {
-                                    column.spans_mut().add_span(span);
-                                }
-                            }
-                            Ok(Expr::Column(column))
+                                None => continue,
+                            };
+                            return result;
                         }
+                        // Safe unwrap as column name can never be empty or exceed the bounds
+                        let (relation, column_name) =
+                            form_identifier(&ids[0..ids.len()]).unwrap();
+                        let mut column = Column::new(relation, column_name);
+                        if self.options.collect_spans
+                            && let Some(span) = ids_span
+                        {
+                            column.spans_mut().add_span(span);
+                        }
+                        Ok(Expr::Column(column))
                     }
                 }
             }

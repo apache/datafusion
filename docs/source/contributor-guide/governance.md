@@ -64,6 +64,7 @@ Notes:
 | QP Hou                  | houqp            | [houqp](https://github.com/houqp)                       |                | PMC       |
 | Jie Wen                 | jakevin          | [jackwener](https://github.com/jackwener)               |                | PMC       |
 | Jay Zhan                | jayzhan          | [jayzhan211](https://github.com/jayzhan211)             |                | PMC       |
+| Jeffrey Vo              | jeffreyvo        | [Jefffrey](https://github.com/Jefffrey)                 |                | PMC       |
 | Jonah Gao               | jonah            | [jonahgao](https://github.com/jonahgao)                 |                | PMC       |
 | Kun Liu                 | liukun           | [liukun4515](https://github.com/liukun4515)             |                | PMC       |
 | Mehmet Ozan Kabak       | ozankabak        | [ozankabak](https://github.com/ozankabak)               | Synnada, Inc   | PMC       |
@@ -73,14 +74,15 @@ Notes:
 | Wes McKinney            | wesm             | [wesm](https://github.com/wesm)                         | Posit          | PMC       |
 | Will Jones              | wjones127        | [wjones127](https://github.com/wjones127)               | LanceDB        | PMC       |
 | Xudong Wang             | xudong963        | [xudong963](https://github.com/xudong963)               | Polygon.io     | PMC       |
+| Yongting You            | ytyou            | [2010YOUY01](https://github.com/2010YOUY01)             | Independent    | PMC       |
 | Adrian Garcia Badaracco | adriangb         | [adriangb](https://github.com/adriangb)                 | Pydantic       | Committer |
 | Brent Gardner           | avantgardner     | [avantgardnerio](https://github.com/avantgardnerio)     | Coralogix      | Committer |
 | Dmitrii Blaginin        | blaginin         | [blaginin](https://github.com/blaginin)                 | SpiralDB       | Committer |
 | Piotr Findeisen         | findepi          | [findepi](https://github.com/findepi)                   | dbt Labs       | Committer |
+| Gabriel Musat           | gabotechs        | [gabotechs](https://github.com/gabotechs)               | DataDog        | Committer |
 | Jax Liu                 | goldmedal        | [goldmedal](https://github.com/goldmedal)               | Canner         | Committer |
 | Huaxin Gao              | huaxingao        | [huaxingao](https://github.com/huaxingao)               |                | Committer |
 | Ifeanyi Ubah            | iffyio           | [iffyio](https://github.com/iffyio)                     | Validio        | Committer |
-| Jeffrey Vo              | jeffreyvo        | [Jefffrey](https://github.com/Jefffrey)                 |                | Committer |
 | Liu Jiayu               | jiayuliu         | [jimexist](https://github.com/jimexist)                 |                | Committer |
 | Ruiqiu Cao              | kamille          | [Rachelint](https://github.com/Rachelint)               | Tencent        | Committer |
 | Kazuyuki Tanimura       | kazuyukitanimura | [kazuyukitanimura](https://github.com/kazuyukitanimura) |                | Committer |
@@ -106,7 +108,6 @@ Notes:
 | Yang Jiang              | yangjiang        | [Ted-jiang](https://github.com/Ted-jiang)               | Ebay           | Committer |
 | Yoav Cohen              | ycohen           | [yoavcloud](https://github.com/yoavcloud)               |                | Committer |
 | Yijie Shen              | yjshen           | [yjshen](https://github.com/yjshen)                     | DataPelago     | Committer |
-| Yongting You            | ytyou            | [2010YOUY01](https://github.com/2010YOUY01)             | Independent    | Committer |
 | Qi Zhu                  | zhuqi            | [zhuqi-lucas](https://github.com/zhuqi-lucas)           | Polygon.io     | Committer |
 
 <!-- End Auto-Generated Committer List -->

@@ -299,7 +299,7 @@ pub fn tpcds_schemas() -> Vec<TableDef> {
                 Field::new("c_birth_country", DataType::Utf8, false),
                 Field::new("c_login", DataType::Utf8, false),
                 Field::new("c_email_address", DataType::Utf8, false),
-                Field::new("c_last_review_date_sk", DataType::Utf8, false),
+                Field::new("c_last_review_date", DataType::Utf8, false),
             ]),
         ),
         TableDef::new(

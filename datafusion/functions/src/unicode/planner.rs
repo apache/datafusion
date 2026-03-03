@@ -17,9 +17,9 @@
 
 //! SQL planning extensions like [`UnicodeFunctionPlanner`]
 
+use datafusion_expr::Expr;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::planner::{ExprPlanner, PlannerResult};
-use datafusion_expr::Expr;
 
 #[derive(Default, Debug)]
 pub struct UnicodeFunctionPlanner;

@@ -15,15 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::common::{substrait_err, Column, DFSchemaRef};
+use datafusion::common::{Column, DFSchemaRef, substrait_err};
 use datafusion::logical_expr::Expr;
+use substrait::proto::Expression;
 use substrait::proto::expression::field_reference::{
     ReferenceType, RootReference, RootType,
 };
 use substrait::proto::expression::{
-    reference_segment, FieldReference, ReferenceSegment, RexType,
+    FieldReference, ReferenceSegment, RexType, reference_segment,
 };
-use substrait::proto::Expression;
 
 pub fn from_column(
     col: &Column,

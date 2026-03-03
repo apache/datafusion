@@ -15,92 +15,98 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Structs and traits to provide the information needed for expression simplification.
+//! Structs to provide the information needed for expression simplification.
+
+use std::sync::Arc;
 
 use arrow::datatypes::DataType;
-use datafusion_common::{DFSchemaRef, Result, internal_datafusion_err};
+use chrono::{DateTime, Utc};
+use datafusion_common::config::ConfigOptions;
+use datafusion_common::{DFSchema, DFSchemaRef, Result};
 
-use crate::{Expr, ExprSchemable, execution_props::ExecutionProps};
+use crate::{Expr, ExprSchemable};
 
-/// Provides the information necessary to apply algebraic simplification to an
-/// [Expr]. See [SimplifyContext] for one concrete implementation.
-///
-/// This trait exists so that other systems can plug schema
-/// information in without having to create `DFSchema` objects. If you
-/// have a [`DFSchemaRef`] you can use [`SimplifyContext`]
-pub trait SimplifyInfo {
-    /// Returns true if this Expr has boolean type
-    fn is_boolean_type(&self, expr: &Expr) -> Result<bool>;
-
-    /// Returns true of this expr is nullable (could possibly be NULL)
-    fn nullable(&self, expr: &Expr) -> Result<bool>;
-
-    /// Returns details needed for partial expression evaluation
-    fn execution_props(&self) -> &ExecutionProps;
-
-    /// Returns data type of this expr needed for determining optimized int type of a value
-    fn get_data_type(&self, expr: &Expr) -> Result<DataType>;
-}
-
-/// Provides simplification information based on DFSchema and
-/// [`ExecutionProps`]. This is the default implementation used by DataFusion
+/// Provides simplification information based on schema, query execution time,
+/// and configuration options.
 ///
 /// # Example
 /// See the `simplify_demo` in the [`expr_api` example]
 ///
 /// [`expr_api` example]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/query_planning/expr_api.rs
 #[derive(Debug, Clone)]
-pub struct SimplifyContext<'a> {
-    schema: Option<DFSchemaRef>,
-    props: &'a ExecutionProps,
+pub struct SimplifyContext {
+    schema: DFSchemaRef,
+    query_execution_start_time: Option<DateTime<Utc>>,
+    config_options: Arc<ConfigOptions>,
 }
 
-impl<'a> SimplifyContext<'a> {
-    /// Create a new SimplifyContext
-    pub fn new(props: &'a ExecutionProps) -> Self {
+impl Default for SimplifyContext {
+    fn default() -> Self {
         Self {
-            schema: None,
-            props,
+            schema: Arc::new(DFSchema::empty()),
+            query_execution_start_time: None,
+            config_options: Arc::new(ConfigOptions::default()),
         }
     }
+}
 
-    /// Register a [`DFSchemaRef`] with this context
-    pub fn with_schema(mut self, schema: DFSchemaRef) -> Self {
-        self.schema = Some(schema);
+impl SimplifyContext {
+    /// Set the [`ConfigOptions`] for this context
+    pub fn with_config_options(mut self, config_options: Arc<ConfigOptions>) -> Self {
+        self.config_options = config_options;
         self
     }
-}
 
-impl SimplifyInfo for SimplifyContext<'_> {
+    /// Set the schema for this context
+    pub fn with_schema(mut self, schema: DFSchemaRef) -> Self {
+        self.schema = schema;
+        self
+    }
+
+    /// Set the query execution start time
+    pub fn with_query_execution_start_time(
+        mut self,
+        query_execution_start_time: Option<DateTime<Utc>>,
+    ) -> Self {
+        self.query_execution_start_time = query_execution_start_time;
+        self
+    }
+
+    /// Set the query execution start to the current time
+    pub fn with_current_time(mut self) -> Self {
+        self.query_execution_start_time = Some(Utc::now());
+        self
+    }
+
+    /// Returns the schema
+    pub fn schema(&self) -> &DFSchemaRef {
+        &self.schema
+    }
+
     /// Returns true if this Expr has boolean type
-    fn is_boolean_type(&self, expr: &Expr) -> Result<bool> {
-        if let Some(schema) = &self.schema
-            && let Ok(DataType::Boolean) = expr.get_type(schema)
-        {
-            return Ok(true);
-        }
-
-        Ok(false)
+    pub fn is_boolean_type(&self, expr: &Expr) -> Result<bool> {
+        Ok(expr.get_type(&self.schema)? == DataType::Boolean)
     }
 
     /// Returns true if expr is nullable
-    fn nullable(&self, expr: &Expr) -> Result<bool> {
-        let schema = self.schema.as_ref().ok_or_else(|| {
-            internal_datafusion_err!("attempt to get nullability without schema")
-        })?;
-        expr.nullable(schema.as_ref())
+    pub fn nullable(&self, expr: &Expr) -> Result<bool> {
+        expr.nullable(self.schema.as_ref())
     }
 
     /// Returns data type of this expr needed for determining optimized int type of a value
-    fn get_data_type(&self, expr: &Expr) -> Result<DataType> {
-        let schema = self.schema.as_ref().ok_or_else(|| {
-            internal_datafusion_err!("attempt to get data type without schema")
-        })?;
-        expr.get_type(schema)
+    pub fn get_data_type(&self, expr: &Expr) -> Result<DataType> {
+        expr.get_type(&self.schema)
     }
 
-    fn execution_props(&self) -> &ExecutionProps {
-        self.props
+    /// Returns the time at which the query execution started.
+    /// If `None`, time-dependent functions like `now()` will not be simplified.
+    pub fn query_execution_start_time(&self) -> Option<DateTime<Utc>> {
+        self.query_execution_start_time
+    }
+
+    /// Returns the configuration options for the session.
+    pub fn config_options(&self) -> &Arc<ConfigOptions> {
+        &self.config_options
     }
 }
 

@@ -28,9 +28,9 @@ use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::DataType;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::types::{
-    logical_int32, logical_int64, logical_string, NativeType,
+    NativeType, logical_int32, logical_int64, logical_string,
 };
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature,
     TypeSignatureClass, Volatility,
@@ -176,7 +176,7 @@ fn substr(args: &[ArrayRef]) -> Result<ArrayRef> {
 // `get_true_start_end('Hi🌏', 1, None) -> (0, 6)`
 // `get_true_start_end('Hi🌏', 1, 1) -> (0, 1)`
 // `get_true_start_end('Hi🌏', -10, 2) -> (0, 0)`
-fn get_true_start_end(
+pub fn get_true_start_end(
     input: &str,
     start: i64,
     count: Option<u64>,
@@ -185,7 +185,10 @@ fn get_true_start_end(
     let start = start.checked_sub(1).unwrap_or(start);
 
     let end = match count {
-        Some(count) => start + count as i64,
+        Some(count) => {
+            let count_i64 = i64::try_from(count).unwrap_or(i64::MAX);
+            start.saturating_add(count_i64)
+        }
         None => input.len() as i64,
     };
     let count_to_end = count.is_some();
@@ -235,7 +238,7 @@ fn get_true_start_end(
 // string, such as `substr(long_str_with_1k_chars, 1, 32)`.
 // In such case the overhead of ASCII-validation may not be worth it, so
 // skip the validation for short prefix for now.
-fn enable_ascii_fast_path<'a, V: StringArrayType<'a>>(
+pub fn enable_ascii_fast_path<'a, V: StringArrayType<'a>>(
     string_array: &V,
     start: &Int64Array,
     count: Option<&Int64Array>,
@@ -247,7 +250,7 @@ fn enable_ascii_fast_path<'a, V: StringArrayType<'a>>(
 
             // HACK: can be simplified if function has specialized
             // implementation for `ScalarValue` (implement without `make_scalar_function()`)
-            let avg_prefix_len = start
+            let total_prefix_len = start
                 .iter()
                 .zip(count.iter())
                 .take(n_sample)
@@ -255,11 +258,11 @@ fn enable_ascii_fast_path<'a, V: StringArrayType<'a>>(
                     let start = start.unwrap_or(0);
                     let count = count.unwrap_or(0);
                     // To get substring, need to decode from 0 to start+count instead of start to start+count
-                    start + count
+                    start.saturating_add(count)
                 })
-                .sum::<i64>();
+                .fold(0i64, |acc, val| acc.saturating_add(val));
 
-            avg_prefix_len as f64 / n_sample as f64 <= short_prefix_threshold
+            (total_prefix_len as f64 / n_sample as f64) <= short_prefix_threshold
         }
         None => false,
     };
@@ -364,7 +367,7 @@ fn string_view_substr(
         other => {
             return exec_err!(
                 "substr was called with {other} arguments. It requires 2 or 3."
-            )
+            );
         }
     }
 
@@ -470,7 +473,7 @@ mod tests {
     use arrow::array::{Array, StringViewArray};
     use arrow::datatypes::DataType::Utf8View;
 
-    use datafusion_common::{exec_err, Result, ScalarValue};
+    use datafusion_common::{Result, ScalarValue, exec_err};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 
     use crate::unicode::substr::SubstrFunc;
@@ -810,7 +813,7 @@ mod tests {
             SubstrFunc::new(),
             vec![
                 ColumnarValue::Scalar(ScalarValue::from("abc")),
-                ColumnarValue::Scalar(ScalarValue::from(-9223372036854775808i64)),
+                ColumnarValue::Scalar(ScalarValue::from(i64::MIN)),
             ],
             Ok(Some("abc")),
             &str,
@@ -821,10 +824,22 @@ mod tests {
             SubstrFunc::new(),
             vec![
                 ColumnarValue::Scalar(ScalarValue::from("overflow")),
-                ColumnarValue::Scalar(ScalarValue::from(-9223372036854775808i64)),
+                ColumnarValue::Scalar(ScalarValue::from(i64::MIN)),
                 ColumnarValue::Scalar(ScalarValue::from(1i64)),
             ],
             exec_err!("negative overflow when calculating skip value"),
+            &str,
+            Utf8View,
+            StringViewArray
+        );
+        test_function!(
+            SubstrFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::from("large count")),
+                ColumnarValue::Scalar(ScalarValue::from(2i64)),
+                ColumnarValue::Scalar(ScalarValue::from(i64::MAX)),
+            ],
+            Ok(Some("arge count")),
             &str,
             Utf8View,
             StringViewArray

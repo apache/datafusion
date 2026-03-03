@@ -24,15 +24,15 @@ use arrow::array::{
 
 use arrow::compute::sum;
 use arrow::datatypes::{
-    i256, ArrowNativeType, DataType, Decimal128Type, Decimal256Type, Decimal32Type,
-    Decimal64Type, DecimalType, DurationMicrosecondType, DurationMillisecondType,
-    DurationNanosecondType, DurationSecondType, Field, FieldRef, Float64Type, TimeUnit,
-    UInt64Type, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION,
-    DECIMAL256_MAX_SCALE, DECIMAL32_MAX_PRECISION, DECIMAL32_MAX_SCALE,
-    DECIMAL64_MAX_PRECISION, DECIMAL64_MAX_SCALE,
+    ArrowNativeType, DECIMAL32_MAX_PRECISION, DECIMAL32_MAX_SCALE,
+    DECIMAL64_MAX_PRECISION, DECIMAL64_MAX_SCALE, DECIMAL128_MAX_PRECISION,
+    DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE, DataType,
+    Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, DecimalType,
+    DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
+    DurationSecondType, Field, FieldRef, Float64Type, TimeUnit, UInt64Type, i256,
 };
-use datafusion_common::types::{logical_float64, NativeType};
-use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
+use datafusion_common::types::{NativeType, logical_float64};
+use datafusion_common::{Result, ScalarValue, exec_err, not_impl_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
@@ -310,12 +310,14 @@ impl AggregateUDFImpl for Avg {
             };
             // Similar to datafusion_functions_aggregate::sum::Sum::state_fields
             // since the accumulator uses DistinctSumAccumulator internally.
-            Ok(vec![Field::new_list(
-                format_state_name(args.name, "avg distinct"),
-                Field::new_list_field(dt, true),
-                false,
-            )
-            .into()])
+            Ok(vec![
+                Field::new_list(
+                    format_state_name(args.name, "avg distinct"),
+                    Field::new_list_field(dt, true),
+                    false,
+                )
+                .into(),
+            ])
         } else {
             Ok(vec![
                 Field::new(
@@ -819,7 +821,8 @@ where
             opt_filter,
             total_num_groups,
             |group_index, new_value| {
-                let sum = &mut self.sums[group_index];
+                // SAFETY: group_index is guaranteed to be in bounds
+                let sum = unsafe { self.sums.get_unchecked_mut(group_index) };
                 *sum = sum.add_wrapping(new_value);
 
                 self.counts[group_index] += 1;
@@ -834,12 +837,16 @@ where
         let sums = emit_to.take_needed(&mut self.sums);
         let nulls = self.null_state.build(emit_to);
 
-        assert_eq!(nulls.len(), sums.len());
+        if let Some(nulls) = &nulls {
+            assert_eq!(nulls.len(), sums.len());
+        }
         assert_eq!(counts.len(), sums.len());
 
         // don't evaluate averages with null inputs to avoid errors on null values
 
-        let array: PrimitiveArray<T> = if nulls.null_count() > 0 {
+        let array: PrimitiveArray<T> = if let Some(nulls) = &nulls
+            && nulls.null_count() > 0
+        {
             let mut builder = PrimitiveBuilder::<T>::with_capacity(nulls.len())
                 .with_data_type(self.return_data_type.clone());
             let iter = sums.into_iter().zip(counts).zip(nulls.iter());
@@ -858,7 +865,7 @@ where
                 .zip(counts.into_iter())
                 .map(|(sum, count)| (self.avg_fn)(sum, count))
                 .collect::<Result<Vec<_>>>()?;
-            PrimitiveArray::new(averages.into(), Some(nulls)) // no copy
+            PrimitiveArray::new(averages.into(), nulls) // no copy
                 .with_data_type(self.return_data_type.clone())
         };
 
@@ -868,7 +875,6 @@ where
     // return arrays for sums and counts
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         let nulls = self.null_state.build(emit_to);
-        let nulls = Some(nulls);
 
         let counts = emit_to.take_needed(&mut self.counts);
         let counts = UInt64Array::new(counts.into(), nulls.clone()); // zero copy
@@ -902,7 +908,9 @@ where
             opt_filter,
             total_num_groups,
             |group_index, partial_count| {
-                self.counts[group_index] += partial_count;
+                // SAFETY: group_index is guaranteed to be in bounds
+                let count = unsafe { self.counts.get_unchecked_mut(group_index) };
+                *count += partial_count;
             },
         );
 
@@ -914,7 +922,8 @@ where
             opt_filter,
             total_num_groups,
             |group_index, new_value: <T as ArrowPrimitiveType>::Native| {
-                let sum = &mut self.sums[group_index];
+                // SAFETY: group_index is guaranteed to be in bounds
+                let sum = unsafe { self.sums.get_unchecked_mut(group_index) };
                 *sum = sum.add_wrapping(new_value);
             },
         );

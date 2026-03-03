@@ -70,7 +70,7 @@ use arrow::{
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::{
     common::cast::as_int64_array,
-    common::{arrow_datafusion_err, DFSchemaRef},
+    common::{DFSchemaRef, arrow_datafusion_err},
     error::{DataFusionError, Result},
     execution::{
         context::{QueryPlanner, SessionState, TaskContext},
@@ -84,17 +84,19 @@ use datafusion::{
     physical_expr::EquivalenceProperties,
     physical_plan::{
         DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
-        PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
+        PlanProperties, RecordBatchStream, SendableRecordBatchStream,
     },
     physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner},
     prelude::{SessionConfig, SessionContext},
 };
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{assert_eq_or_internal_err, assert_or_internal_err, ScalarValue};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
+use datafusion_common::{ScalarValue, assert_eq_or_internal_err, assert_or_internal_err};
 use datafusion_expr::{FetchType, InvariantLevel, Projection, SortExpr};
-use datafusion_optimizer::optimizer::ApplyOrder;
 use datafusion_optimizer::AnalyzerRule;
+use datafusion_optimizer::optimizer::ApplyOrder;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 
 use async_trait::async_trait;
@@ -161,7 +163,7 @@ async fn run_and_compare_query(ctx: SessionContext, description: &str) -> Result
         insta::with_settings!({
             description => description,
         }, {
-            insta::assert_snapshot!(actual, @r###"
+            insta::assert_snapshot!(actual, @r"
             +-------------+---------+
             | customer_id | revenue |
             +-------------+---------+
@@ -169,7 +171,7 @@ async fn run_and_compare_query(ctx: SessionContext, description: &str) -> Result
             | jorge       | 200     |
             | andy        | 150     |
             +-------------+---------+
-        "###);
+            ");
         });
     }
 
@@ -188,13 +190,13 @@ async fn run_and_compare_query_with_analyzer_rule(
     insta::with_settings!({
         description => description,
     }, {
-        insta::assert_snapshot!(actual, @r###"
+        insta::assert_snapshot!(actual, @r"
         +------------+--------------------------+
         | UInt64(42) | arrow_typeof(UInt64(42)) |
         +------------+--------------------------+
         | 42         | UInt64                   |
         +------------+--------------------------+
-        "###);
+        ");
     });
 
     Ok(())
@@ -212,7 +214,7 @@ async fn run_and_compare_query_with_auto_schemas(
     insta::with_settings!({
             description => description,
         }, {
-            insta::assert_snapshot!(actual, @r###"
+            insta::assert_snapshot!(actual, @r"
             +----------+----------+
             | column_1 | column_2 |
             +----------+----------+
@@ -220,7 +222,7 @@ async fn run_and_compare_query_with_auto_schemas(
             | jorge    | 200      |
             | andy     | 150      |
             +----------+----------+
-        "###);
+            ");
     });
 
     Ok(())
@@ -433,21 +435,21 @@ impl OptimizerRule for OptimizerMakeExtensionNodeInvalid {
         plan: LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>, DataFusionError> {
-        if let LogicalPlan::Extension(Extension { node }) = &plan {
-            if let Some(prev) = node.as_any().downcast_ref::<TopKPlanNode>() {
-                return Ok(Transformed::yes(LogicalPlan::Extension(Extension {
-                    node: Arc::new(TopKPlanNode {
-                        k: prev.k,
-                        input: prev.input.clone(),
-                        expr: prev.expr.clone(),
-                        // In a real use case, this rewriter could have change the number of inputs, etc
-                        invariant_mock: Some(InvariantMock {
-                            should_fail_invariant: true,
-                            kind: InvariantLevel::Always,
-                        }),
+        if let LogicalPlan::Extension(Extension { node }) = &plan
+            && let Some(prev) = node.as_any().downcast_ref::<TopKPlanNode>()
+        {
+            return Ok(Transformed::yes(LogicalPlan::Extension(Extension {
+                node: Arc::new(TopKPlanNode {
+                    k: prev.k,
+                    input: prev.input.clone(),
+                    expr: prev.expr.clone(),
+                    // In a real use case, this rewriter could have change the number of inputs, etc
+                    invariant_mock: Some(InvariantMock {
+                        should_fail_invariant: true,
+                        kind: InvariantLevel::Always,
                     }),
-                })));
-            }
+                }),
+            })));
         };
 
         Ok(Transformed::no(plan))
@@ -515,23 +517,18 @@ impl OptimizerRule for TopKOptimizerRule {
             return Ok(Transformed::no(plan));
         };
 
-        if let LogicalPlan::Sort(Sort {
-            ref expr,
-            ref input,
-            ..
-        }) = limit.input.as_ref()
+        if let LogicalPlan::Sort(Sort { expr, input, .. }) = limit.input.as_ref()
+            && expr.len() == 1
         {
-            if expr.len() == 1 {
-                // we found a sort with a single sort expr, replace with a a TopK
-                return Ok(Transformed::yes(LogicalPlan::Extension(Extension {
-                    node: Arc::new(TopKPlanNode {
-                        k: fetch,
-                        input: input.as_ref().clone(),
-                        expr: expr[0].clone(),
-                        invariant_mock: self.invariant_mock.clone(),
-                    }),
-                })));
-            }
+            // we found a sort with a single sort expr, replace with a a TopK
+            return Ok(Transformed::yes(LogicalPlan::Extension(Extension {
+                node: Arc::new(TopKPlanNode {
+                    k: fetch,
+                    input: input.as_ref().clone(),
+                    expr: expr[0].clone(),
+                    invariant_mock: self.invariant_mock.clone(),
+                }),
+            })));
         }
 
         Ok(Transformed::no(plan))
@@ -658,13 +655,17 @@ struct TopKExec {
     input: Arc<dyn ExecutionPlan>,
     /// The maximum number of values
     k: usize,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl TopKExec {
     fn new(input: Arc<dyn ExecutionPlan>, k: usize) -> Self {
         let cache = Self::compute_properties(input.schema());
-        Self { input, k, cache }
+        Self {
+            input,
+            k,
+            cache: Arc::new(cache),
+        }
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
@@ -709,7 +710,7 @@ impl ExecutionPlan for TopKExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -748,10 +749,20 @@ impl ExecutionPlan for TopKExec {
         }))
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        // to improve the optimizability of this plan
-        // better statistics inference could be provided
-        Ok(Statistics::new_unknown(&self.schema()))
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(
+            &dyn datafusion::physical_plan::PhysicalExpr,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Visit expressions in the output ordering from equivalence properties
+        let mut tnr = TreeNodeRecursion::Continue;
+        if let Some(ordering) = self.cache.output_ordering() {
+            for sort_expr in ordering {
+                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
+            }
+        }
+        Ok(tnr)
     }
 }
 

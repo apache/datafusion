@@ -47,4 +47,4 @@ pub mod registry {
 pub use disk_manager::DiskManager;
 pub use registry::FunctionRegistry;
 pub use stream::{RecordBatchStream, SendableRecordBatchStream};
-pub use task::TaskContext;
+pub use task::{TaskContext, TaskContextProvider};

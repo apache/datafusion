@@ -19,17 +19,17 @@ use std::any::Any;
 use std::fmt::Write;
 use std::sync::Arc;
 
+use DataType::{LargeUtf8, Utf8, Utf8View};
 use arrow::array::{
     Array, ArrayRef, AsArray, GenericStringArray, GenericStringBuilder, Int64Array,
     OffsetSizeTrait, StringArrayType, StringViewArray,
 };
 use arrow::datatypes::DataType;
 use unicode_segmentation::UnicodeSegmentation;
-use DataType::{LargeUtf8, Utf8, Utf8View};
 
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::cast::as_int64_array;
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
@@ -49,7 +49,10 @@ use datafusion_macros::user_doc;
 +---------------------------------------------+
 ```"#,
     standard_argument(name = "str", prefix = "String"),
-    argument(name = "n", description = "String length to pad to."),
+    argument(
+        name = "n",
+        description = "String length to pad to. If the input string is longer than this length, it is truncated (on the right)."
+    ),
     argument(
         name = "padding_str",
         description = "Optional string expression to pad with. Can be a constant, column, or function, and any combination of string operators. _Default is a space._"
@@ -206,6 +209,8 @@ where
 {
     let array = if let Some(fill_array) = fill_array {
         let mut builder: GenericStringBuilder<T> = GenericStringBuilder::new();
+        let mut graphemes_buf = Vec::new();
+        let mut fill_chars_buf = Vec::new();
 
         for ((string, length), fill) in string_array
             .iter()
@@ -223,20 +228,47 @@ where
                     continue;
                 }
 
-                let graphemes = string.graphemes(true).collect::<Vec<&str>>();
-                let fill_chars = fill.chars().collect::<Vec<char>>();
-
-                if length < graphemes.len() {
-                    builder.append_value(graphemes[..length].concat());
-                } else if fill_chars.is_empty() {
-                    builder.append_value(string);
-                } else {
-                    for l in 0..length - graphemes.len() {
-                        let c = *fill_chars.get(l % fill_chars.len()).unwrap();
-                        builder.write_char(c)?;
+                if string.is_ascii() && fill.is_ascii() {
+                    // ASCII fast path: byte length == character length,
+                    // so we skip expensive grapheme segmentation.
+                    let str_len = string.len();
+                    if length < str_len {
+                        builder.append_value(&string[..length]);
+                    } else if fill.is_empty() {
+                        builder.append_value(string);
+                    } else {
+                        let pad_len = length - str_len;
+                        let fill_len = fill.len();
+                        let full_reps = pad_len / fill_len;
+                        let remainder = pad_len % fill_len;
+                        for _ in 0..full_reps {
+                            builder.write_str(fill)?;
+                        }
+                        if remainder > 0 {
+                            builder.write_str(&fill[..remainder])?;
+                        }
+                        builder.append_value(string);
                     }
-                    builder.write_str(string)?;
-                    builder.append_value("");
+                } else {
+                    // Reuse buffers by clearing and refilling
+                    graphemes_buf.clear();
+                    graphemes_buf.extend(string.graphemes(true));
+
+                    fill_chars_buf.clear();
+                    fill_chars_buf.extend(fill.chars());
+
+                    if length < graphemes_buf.len() {
+                        builder.append_value(graphemes_buf[..length].concat());
+                    } else if fill_chars_buf.is_empty() {
+                        builder.append_value(string);
+                    } else {
+                        for l in 0..length - graphemes_buf.len() {
+                            let c =
+                                *fill_chars_buf.get(l % fill_chars_buf.len()).unwrap();
+                            builder.write_char(c)?;
+                        }
+                        builder.append_value(string);
+                    }
                 }
             } else {
                 builder.append_null();
@@ -246,6 +278,7 @@ where
         builder.finish()
     } else {
         let mut builder: GenericStringBuilder<T> = GenericStringBuilder::new();
+        let mut graphemes_buf = Vec::new();
 
         for (string, length) in string_array.iter().zip(length_array.iter()) {
             if let (Some(string), Some(length)) = (string, length) {
@@ -259,13 +292,30 @@ where
                     continue;
                 }
 
-                let graphemes = string.graphemes(true).collect::<Vec<&str>>();
-                if length < graphemes.len() {
-                    builder.append_value(graphemes[..length].concat());
+                if string.is_ascii() {
+                    // ASCII fast path: byte length == character length
+                    let str_len = string.len();
+                    if length < str_len {
+                        builder.append_value(&string[..length]);
+                    } else {
+                        for _ in 0..(length - str_len) {
+                            builder.write_str(" ")?;
+                        }
+                        builder.append_value(string);
+                    }
                 } else {
-                    builder.write_str(" ".repeat(length - graphemes.len()).as_str())?;
-                    builder.write_str(string)?;
-                    builder.append_value("");
+                    // Reuse buffer by clearing and refilling
+                    graphemes_buf.clear();
+                    graphemes_buf.extend(string.graphemes(true));
+
+                    if length < graphemes_buf.len() {
+                        builder.append_value(graphemes_buf[..length].concat());
+                    } else {
+                        for _ in 0..(length - graphemes_buf.len()) {
+                            builder.write_str(" ")?;
+                        }
+                        builder.append_value(string);
+                    }
                 }
             } else {
                 builder.append_null();
@@ -513,6 +563,17 @@ mod tests {
             Ok(None)
         );
         test_lpad!(
+            Some("hello".into()),
+            ScalarValue::Int64(Some(2i64)),
+            Ok(Some("he"))
+        );
+        test_lpad!(
+            Some("hi".into()),
+            ScalarValue::Int64(Some(6i64)),
+            Some("xy".into()),
+            Ok(Some("xyxyhi"))
+        );
+        test_lpad!(
             Some("josé".into()),
             ScalarValue::Int64(Some(10i64)),
             Some("xy".into()),
@@ -526,9 +587,13 @@ mod tests {
         );
 
         #[cfg(not(feature = "unicode_expressions"))]
-        test_lpad!(Some("josé".into()), ScalarValue::Int64(Some(5i64)), internal_err!(
+        test_lpad!(
+            Some("josé".into()),
+            ScalarValue::Int64(Some(5i64)),
+            internal_err!(
                 "function lpad requires compilation with feature flag: unicode_expressions."
-        ));
+            )
+        );
 
         Ok(())
     }

@@ -18,18 +18,19 @@
 //! Aggregate without grouping columns
 
 use crate::aggregates::{
-    aggregate_expressions, create_accumulators, finalize_aggregation, AccumulatorItem,
-    AggrDynFilter, AggregateMode, DynamicFilterAggregateType,
+    AccumulatorItem, AggrDynFilter, AggregateInputMode, AggregateMode,
+    DynamicFilterAggregateType, aggregate_expressions, create_accumulators,
+    finalize_aggregation,
 };
 use crate::metrics::{BaselineMetrics, RecordOutput};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{internal_datafusion_err, internal_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, internal_datafusion_err, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
-use datafusion_physical_expr::expressions::{lit, BinaryExpr};
 use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr::expressions::{BinaryExpr, lit};
 use futures::stream::BoxStream;
 use std::borrow::Cow;
 use std::cmp::Ordering;
@@ -61,7 +62,7 @@ struct AggregateStreamInner {
     mode: AggregateMode,
     input: SendableRecordBatchStream,
     aggregate_expressions: Vec<Vec<Arc<dyn PhysicalExpr>>>,
-    filter_expressions: Vec<Option<Arc<dyn PhysicalExpr>>>,
+    filter_expressions: Arc<[Option<Arc<dyn PhysicalExpr>>]>,
 
     // ==== Runtime States/Buffers ====
     accumulators: Vec<AccumulatorItem>,
@@ -94,7 +95,9 @@ impl AggregateStreamInner {
         &self,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         let Some(filter_state) = self.agg_dyn_filter_state.as_ref() else {
-            return internal_err!("`build_dynamic_filter_from_accumulator_bounds()` is only called when dynamic filter is enabled");
+            return internal_err!(
+                "`build_dynamic_filter_from_accumulator_bounds()` is only called when dynamic filter is enabled"
+            );
         };
 
         let mut predicates: Vec<Arc<dyn PhysicalExpr>> =
@@ -158,6 +161,8 @@ impl AggregateStreamInner {
             return Ok(());
         };
 
+        let mut bounds_changed = false;
+
         for acc_info in &filter_state.supported_accumulators_info {
             let acc =
                 self.accumulators
@@ -173,20 +178,27 @@ impl AggregateStreamInner {
             let current_bound = acc.evaluate()?;
             {
                 let mut bound = acc_info.shared_bound.lock();
-                match acc_info.aggr_type {
+                let new_bound = match acc_info.aggr_type {
                     DynamicFilterAggregateType::Max => {
-                        *bound = scalar_max(&bound, &current_bound)?;
+                        scalar_max(&bound, &current_bound)?
                     }
                     DynamicFilterAggregateType::Min => {
-                        *bound = scalar_min(&bound, &current_bound)?;
+                        scalar_min(&bound, &current_bound)?
                     }
+                };
+                if new_bound != *bound {
+                    *bound = new_bound;
+                    bounds_changed = true;
                 }
             }
         }
 
-        // Step 2: Sync the dynamic filter physical expression with reader
-        let predicate = self.build_dynamic_filter_from_accumulator_bounds()?;
-        filter_state.filter.update(predicate)?;
+        // Step 2: Sync the dynamic filter physical expression with reader,
+        // but only if any bound actually changed.
+        if bounds_changed {
+            let predicate = self.build_dynamic_filter_from_accumulator_bounds()?;
+            filter_state.filter.update(predicate)?;
+        }
 
         Ok(())
     }
@@ -249,6 +261,23 @@ fn scalar_cmp_null_short_circuit(
     }
 }
 
+/// Prepend the grouping ID column to the output columns if present.
+///
+/// For GROUPING SETS with no GROUP BY expressions, the schema includes a `__grouping_id`
+/// column that must be present in the output. This function inserts it at the beginning
+/// of the columns array to maintain schema alignment.
+fn prepend_grouping_id_column(
+    mut columns: Vec<Arc<dyn arrow::array::Array>>,
+    grouping_id: Option<&ScalarValue>,
+) -> Result<Vec<Arc<dyn arrow::array::Array>>> {
+    if let Some(id) = grouping_id {
+        let num_rows = columns.first().map(|array| array.len()).unwrap_or(1);
+        let grouping_ids = id.to_array_of_size(num_rows)?;
+        columns.insert(0, grouping_ids);
+    }
+    Ok(columns)
+}
+
 impl AggregateStream {
     /// Create a new AggregateStream
     pub fn new(
@@ -257,19 +286,15 @@ impl AggregateStream {
         partition: usize,
     ) -> Result<Self> {
         let agg_schema = Arc::clone(&agg.schema);
-        let agg_filter_expr = agg.filter_expr.clone();
+        let agg_filter_expr = Arc::clone(&agg.filter_expr);
 
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
         let input = agg.input.execute(partition, Arc::clone(context))?;
 
         let aggregate_expressions = aggregate_expressions(&agg.aggr_expr, &agg.mode, 0)?;
-        let filter_expressions = match agg.mode {
-            AggregateMode::Partial
-            | AggregateMode::Single
-            | AggregateMode::SinglePartitioned => agg_filter_expr,
-            AggregateMode::Final | AggregateMode::FinalPartitioned => {
-                vec![None; agg.aggr_expr.len()]
-            }
+        let filter_expressions = match agg.mode.input_mode() {
+            AggregateInputMode::Raw => agg_filter_expr,
+            AggregateInputMode::Partial => vec![None; agg.aggr_expr.len()].into(),
         };
         let accumulators = create_accumulators(&agg.aggr_expr)?;
 
@@ -348,6 +373,9 @@ impl AggregateStream {
                         let timer = this.baseline_metrics.elapsed_compute().timer();
                         let result =
                             finalize_aggregation(&mut this.accumulators, &this.mode)
+                                .and_then(|columns| {
+                                    prepend_grouping_id_column(columns, None)
+                                })
                                 .and_then(|columns| {
                                     RecordBatch::try_new(
                                         Arc::clone(&this.schema),
@@ -433,13 +461,9 @@ fn aggregate_batch(
 
             // 1.4
             let size_pre = accum.size();
-            let res = match mode {
-                AggregateMode::Partial
-                | AggregateMode::Single
-                | AggregateMode::SinglePartitioned => accum.update_batch(&values),
-                AggregateMode::Final | AggregateMode::FinalPartitioned => {
-                    accum.merge_batch(&values)
-                }
+            let res = match mode.input_mode() {
+                AggregateInputMode::Raw => accum.update_batch(&values),
+                AggregateInputMode::Partial => accum.merge_batch(&values),
             };
             let size_post = accum.size();
             allocated += size_post.saturating_sub(size_pre);

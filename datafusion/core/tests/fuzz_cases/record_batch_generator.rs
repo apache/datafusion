@@ -19,23 +19,23 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, DictionaryArray, PrimitiveArray, RecordBatch};
 use arrow::datatypes::{
-    ArrowPrimitiveType, BooleanType, DataType, Date32Type, Date64Type, Decimal128Type,
-    Decimal256Type, Decimal32Type, Decimal64Type, DurationMicrosecondType,
+    ArrowPrimitiveType, BooleanType, DataType, Date32Type, Date64Type, Decimal32Type,
+    Decimal64Type, Decimal128Type, Decimal256Type, DurationMicrosecondType,
     DurationMillisecondType, DurationNanosecondType, DurationSecondType, Field,
-    Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
+    Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
     IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType,
     Schema, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
     Time64NanosecondType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type, UInt64Type,
-    UInt8Type,
+    TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type, UInt32Type,
+    UInt64Type,
 };
 use arrow_schema::{
-    DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION,
-    DECIMAL256_MAX_SCALE, DECIMAL32_MAX_PRECISION, DECIMAL32_MAX_SCALE,
-    DECIMAL64_MAX_PRECISION, DECIMAL64_MAX_SCALE,
+    DECIMAL32_MAX_PRECISION, DECIMAL32_MAX_SCALE, DECIMAL64_MAX_PRECISION,
+    DECIMAL64_MAX_SCALE, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
+    DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
 };
-use datafusion_common::{arrow_datafusion_err, Result};
-use rand::{rng, rngs::StdRng, Rng, SeedableRng};
+use datafusion_common::{Result, arrow_datafusion_err};
+use rand::{Rng, SeedableRng, rng, rngs::StdRng};
 use test_utils::array_gen::{
     BinaryArrayGenerator, BooleanArrayGenerator, DecimalArrayGenerator,
     PrimitiveArrayGenerator, StringArrayGenerator,

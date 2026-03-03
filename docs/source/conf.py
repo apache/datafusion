@@ -117,6 +117,8 @@ html_sidebars = {
     "**": ["docs-sidebar.html"],
 }
 
+html_favicon = '_static/favicon.svg'
+
 # tell myst_parser to auto-generate anchor links for headers h1, h2, h3
 myst_heading_anchors = 3
 
@@ -132,4 +134,5 @@ suppress_warnings = ["misc.highlighting_failure"]
 redirects = {
     "library-user-guide/adding-udfs": "functions/index.html",
     "user-guide/runtime_configs": "configs.html",
+    "library-user-guide/upgrading": "/library-user-guide/upgrading/index.html",
 }

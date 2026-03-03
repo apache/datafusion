@@ -19,14 +19,15 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use arrow::datatypes::DataType;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
-    DFSchema, Dependency, Diagnostic, Result, Span,
+    DFSchema, Dependency, Diagnostic, Result, Span, internal_datafusion_err,
+    internal_err, not_impl_err, plan_datafusion_err, plan_err,
 };
 use datafusion_expr::{
+    Expr, ExprSchemable, SortExpr, WindowFrame, WindowFunctionDefinition,
+    arguments::ArgumentName,
     expr,
     expr::{NullTreatment, ScalarFunction, Unnest, WildcardOptions, WindowFunction},
     planner::{PlannerResult, RawAggregateExpr, RawWindowExpr},
-    Expr, ExprSchemable, SortExpr, WindowFrame, WindowFunctionDefinition,
 };
 use sqlparser::ast::{
     DuplicateTreatment, Expr as SQLExpr, Function as SQLFunction, FunctionArg,
@@ -121,7 +122,7 @@ impl FunctionArgs {
                 null_treatment: null_treatment.map(|v| v.into()),
                 distinct: false,
                 within_group,
-                function_without_parentheses: matches!(args, FunctionArguments::None),
+                function_without_parentheses: args == FunctionArguments::None,
             });
         };
 
@@ -152,42 +153,46 @@ impl FunctionArgs {
                 FunctionArgumentClause::OrderBy(oby) => {
                     if order_by.is_some() {
                         if !within_group.is_empty() {
-                            return plan_err!("ORDER BY clause is only permitted in WITHIN GROUP clause when a WITHIN GROUP is used");
+                            return plan_err!(
+                                "ORDER BY clause is only permitted in WITHIN GROUP clause when a WITHIN GROUP is used"
+                            );
                         }
-                        return not_impl_err!("Calling {name}: Duplicated ORDER BY clause in function arguments");
+                        return not_impl_err!(
+                            "Calling {name}: Duplicated ORDER BY clause in function arguments"
+                        );
                     }
                     order_by = Some(oby);
                 }
                 FunctionArgumentClause::Limit(limit) => {
                     return not_impl_err!(
                         "Calling {name}: LIMIT not supported in function arguments: {limit}"
-                    )
+                    );
                 }
                 FunctionArgumentClause::OnOverflow(overflow) => {
                     return not_impl_err!(
                         "Calling {name}: ON OVERFLOW not supported in function arguments: {overflow}"
-                    )
+                    );
                 }
                 FunctionArgumentClause::Having(having) => {
                     return not_impl_err!(
                         "Calling {name}: HAVING not supported in function arguments: {having}"
-                    )
+                    );
                 }
                 FunctionArgumentClause::Separator(sep) => {
                     return not_impl_err!(
                         "Calling {name}: SEPARATOR not supported in function arguments: {sep}"
-                    )
+                    );
                 }
                 FunctionArgumentClause::JsonNullClause(jn) => {
                     return not_impl_err!(
                         "Calling {name}: JSON NULL clause not supported in function arguments: {jn}"
-                    )
+                    );
                 }
                 FunctionArgumentClause::JsonReturningClause(jr) => {
                     return not_impl_err!(
                         "Calling {name}: JSON RETURNING clause not supported in function arguments: {jr}"
-                    )
-                },
+                    );
+                }
             }
         }
 
@@ -214,7 +219,7 @@ impl FunctionArgs {
 }
 
 // Helper type for extracting WITHIN GROUP ordering and prepended args
-type WithinGroupExtraction = (Vec<SortExpr>, Vec<Expr>, Vec<Option<String>>);
+type WithinGroupExtraction = (Vec<SortExpr>, Vec<Expr>, Vec<Option<ArgumentName>>);
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(super) fn sql_function_to_expr(
@@ -237,12 +242,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         } = function_args;
 
         if over.is_some() && !within_group.is_empty() {
-            return plan_err!("OVER and WITHIN GROUP clause cannot be used together. \
-                OVER is for window functions, whereas WITHIN GROUP is for ordered set aggregate functions");
+            return plan_err!(
+                "OVER and WITHIN GROUP clause cannot be used together. \
+                OVER is for window functions, whereas WITHIN GROUP is for ordered set aggregate functions"
+            );
         }
 
         if !order_by.is_empty() && !within_group.is_empty() {
-            return plan_err!("ORDER BY and WITHIN GROUP clauses cannot be used together in the same aggregate function");
+            return plan_err!(
+                "ORDER BY and WITHIN GROUP clauses cannot be used together in the same aggregate function"
+            );
         }
 
         // If function is a window function (it has an OVER clause),
@@ -261,7 +270,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     return plan_err!(
                         "Expected an identifier in function name, but found {:?}",
                         object_name.0[0]
-                    )
+                    );
                 }
             }
         };
@@ -738,7 +747,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         sql: FunctionArg,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
-    ) -> Result<(Expr, Option<String>)> {
+    ) -> Result<(Expr, Option<ArgumentName>)> {
         match sql {
             FunctionArg::Named {
                 name,
@@ -746,7 +755,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 operator: _,
             } => {
                 let expr = self.sql_expr_to_logical_expr(arg, schema, planner_context)?;
-                let arg_name = crate::utils::normalize_ident(name);
+                let arg_name = ArgumentName {
+                    value: name.value,
+                    is_quoted: name.quote_style.is_some(),
+                };
                 Ok((expr, Some(arg_name)))
             }
             FunctionArg::Named {
@@ -759,7 +771,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     qualifier: None,
                     options: Box::new(WildcardOptions::default()),
                 };
-                let arg_name = crate::utils::normalize_ident(name);
+                let arg_name = ArgumentName {
+                    value: name.value,
+                    is_quoted: name.quote_style.is_some(),
+                };
                 Ok((expr, Some(arg_name)))
             }
             FunctionArg::Unnamed(FunctionArgExpr::Expr(arg)) => {
@@ -796,7 +811,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 operator: _,
             } => {
                 let expr = self.sql_expr_to_logical_expr(arg, schema, planner_context)?;
-                let arg_name = crate::utils::normalize_ident(name);
+                let arg_name = ArgumentName {
+                    value: name.value,
+                    is_quoted: name.quote_style.is_some(),
+                };
                 Ok((expr, Some(arg_name)))
             }
             FunctionArg::ExprNamed {
@@ -809,7 +827,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     qualifier: None,
                     options: Box::new(WildcardOptions::default()),
                 };
-                let arg_name = crate::utils::normalize_ident(name);
+                let arg_name = ArgumentName {
+                    value: name.value,
+                    is_quoted: name.quote_style.is_some(),
+                };
                 Ok((expr, Some(arg_name)))
             }
             _ => not_impl_err!("Unsupported qualified wildcard argument: {sql:?}"),
@@ -832,8 +853,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         args: Vec<FunctionArg>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
-    ) -> Result<(Vec<Expr>, Vec<Option<String>>)> {
-        let results: Result<Vec<(Expr, Option<String>)>> = args
+    ) -> Result<(Vec<Expr>, Vec<Option<ArgumentName>>)> {
+        let results: Result<Vec<(Expr, Option<ArgumentName>)>> = args
             .into_iter()
             .map(|a| {
                 self.sql_fn_arg_to_logical_expr_with_name(a, schema, planner_context)
@@ -841,7 +862,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .collect();
 
         let pairs = results?;
-        let (exprs, names): (Vec<Expr>, Vec<Option<String>>) = pairs.into_iter().unzip();
+        let (exprs, names): (Vec<Expr>, Vec<Option<ArgumentName>>) =
+            pairs.into_iter().unzip();
         Ok((exprs, names))
     }
 
@@ -849,7 +871,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         &self,
         within_group: Vec<OrderByExpr>,
         mut args: Vec<Expr>,
-        mut arg_names: Vec<Option<String>>,
+        mut arg_names: Vec<Option<ArgumentName>>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<WithinGroupExtraction> {

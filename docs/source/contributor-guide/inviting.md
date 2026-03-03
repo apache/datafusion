@@ -126,7 +126,7 @@ explicitly add them to the roster on the [Whimsy Roster Tool].
 ### Step 4: Announce and Celebrate the New Committer
 
 Email to Send an email such as the following to
-[dev@datafusion.apache.org](mailto:dev@datafusion.apache.org]) to celebrate and
+[dev@datafusion.apache.org](mailto:dev@datafusion.apache.org) to celebrate and
 acknowledge the new committer to the community.
 
 ```

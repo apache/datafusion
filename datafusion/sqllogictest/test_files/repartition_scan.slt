@@ -27,6 +27,10 @@ set datafusion.execution.target_partitions = 4;
 statement ok
 set datafusion.optimizer.repartition_file_min_size = 1;
 
+# disable the listing cache so DataFusion picks up changes from COPY statements
+statement ok
+set datafusion.runtime.list_files_cache_limit = "0K";
+
 ###################
 ### Parquet tests
 ###################

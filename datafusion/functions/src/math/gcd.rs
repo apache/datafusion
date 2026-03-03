@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{new_null_array, ArrayRef, AsArray, Int64Array, PrimitiveArray};
+use arrow::array::{ArrayRef, AsArray, Int64Array, PrimitiveArray};
 use arrow::compute::try_binary;
 use arrow::datatypes::{DataType, Int64Type};
 use arrow::error::ArrowError;
@@ -23,7 +23,7 @@ use std::any::Any;
 use std::mem::swap;
 use std::sync::Arc;
 
-use datafusion_common::{exec_err, internal_datafusion_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_datafusion_err};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
@@ -94,20 +94,23 @@ impl ScalarUDFImpl for GcdFunc {
             [ColumnarValue::Array(a), ColumnarValue::Array(b)] => {
                 compute_gcd_for_arrays(&a, &b)
             }
-            [ColumnarValue::Scalar(ScalarValue::Int64(a)), ColumnarValue::Scalar(ScalarValue::Int64(b))] => {
-                match (a, b) {
-                    (Some(a), Some(b)) => Ok(ColumnarValue::Scalar(ScalarValue::Int64(
-                        Some(compute_gcd(a, b)?),
-                    ))),
-                    _ => Ok(ColumnarValue::Scalar(ScalarValue::Int64(None))),
-                }
-            }
-            [ColumnarValue::Array(a), ColumnarValue::Scalar(ScalarValue::Int64(b))] => {
-                compute_gcd_with_scalar(&a, b)
-            }
-            [ColumnarValue::Scalar(ScalarValue::Int64(a)), ColumnarValue::Array(b)] => {
-                compute_gcd_with_scalar(&b, a)
-            }
+            [
+                ColumnarValue::Scalar(ScalarValue::Int64(a)),
+                ColumnarValue::Scalar(ScalarValue::Int64(b)),
+            ] => match (a, b) {
+                (Some(a), Some(b)) => Ok(ColumnarValue::Scalar(ScalarValue::Int64(
+                    Some(compute_gcd(a, b)?),
+                ))),
+                _ => Ok(ColumnarValue::Scalar(ScalarValue::Int64(None))),
+            },
+            [
+                ColumnarValue::Array(a),
+                ColumnarValue::Scalar(ScalarValue::Int64(b)),
+            ] => compute_gcd_with_scalar(&a, b),
+            [
+                ColumnarValue::Scalar(ScalarValue::Int64(a)),
+                ColumnarValue::Array(b),
+            ] => compute_gcd_with_scalar(&b, a),
             _ => exec_err!("Unsupported argument types for function gcd"),
         }
     }
@@ -141,10 +144,7 @@ fn compute_gcd_with_scalar(arr: &ArrayRef, scalar: Option<i64>) -> Result<Column
 
             result.map(|arr| ColumnarValue::Array(Arc::new(arr) as ArrayRef))
         }
-        None => Ok(ColumnarValue::Array(new_null_array(
-            &DataType::Int64,
-            arr.len(),
-        ))),
+        None => Ok(ColumnarValue::Scalar(ScalarValue::Int64(None))),
     }
 }
 

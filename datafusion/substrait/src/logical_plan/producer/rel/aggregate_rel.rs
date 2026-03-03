@@ -16,9 +16,9 @@
 // under the License.
 
 use crate::logical_plan::producer::{
-    from_aggregate_function, substrait_field_ref, SubstraitProducer,
+    SubstraitProducer, from_aggregate_function, substrait_field_ref,
 };
-use datafusion::common::{internal_err, not_impl_err, DFSchemaRef};
+use datafusion::common::{DFSchemaRef, internal_err, not_impl_err};
 use datafusion::logical_expr::expr::Alias;
 use datafusion::logical_expr::utils::powerset;
 use datafusion::logical_expr::{Aggregate, Distinct, Expr, GroupingSet};
@@ -64,7 +64,7 @@ pub fn from_distinct(
                 .map(substrait_field_ref)
                 .collect::<datafusion::common::Result<Vec<_>>>()?;
 
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Aggregate(Box::new(AggregateRel {
                     common: None,
@@ -168,7 +168,7 @@ pub fn parse_flat_grouping_exprs(
         ref_group_exprs.push(rex);
         expression_references.push((ref_group_exprs.len() - 1) as u32);
     }
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     Ok(Grouping {
         grouping_expressions,
         expression_references,
@@ -181,7 +181,9 @@ pub fn to_substrait_agg_measure(
     schema: &DFSchemaRef,
 ) -> datafusion::common::Result<Measure> {
     match expr {
-        Expr::AggregateFunction(agg_fn) => from_aggregate_function(producer, agg_fn, schema),
+        Expr::AggregateFunction(agg_fn) => {
+            from_aggregate_function(producer, agg_fn, schema)
+        }
         Expr::Alias(Alias { expr, .. }) => {
             to_substrait_agg_measure(producer, expr, schema)
         }

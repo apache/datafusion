@@ -21,15 +21,15 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{
-    new_null_array, Array, ArrayRef, AsArray, Float32Array, Float64Array,
+    Array, ArrayRef, AsArray, Float32Array, Float64Array, new_null_array,
 };
 use arrow::compute;
 use arrow::datatypes::{DataType, Float64Type};
 use arrow::record_batch::RecordBatch;
-use datafusion::common::{exec_err, internal_err, ScalarValue};
+use datafusion::common::{ScalarValue, exec_err, internal_err};
 use datafusion::error::Result;
-use datafusion::logical_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion::logical_expr::Volatility;
+use datafusion::logical_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
 };

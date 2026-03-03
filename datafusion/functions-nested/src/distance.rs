@@ -29,8 +29,8 @@ use datafusion_common::cast::{
     as_float32_array, as_float64_array, as_generic_list_array, as_int32_array,
     as_int64_array,
 };
-use datafusion_common::utils::{coerced_type_with_base_type_only, ListCoercion};
-use datafusion_common::{exec_err, plan_err, utils::take_function_args, Result};
+use datafusion_common::utils::{ListCoercion, coerced_type_with_base_type_only};
+use datafusion_common::{Result, exec_err, plan_err, utils::take_function_args};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };

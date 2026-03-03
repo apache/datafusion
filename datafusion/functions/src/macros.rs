@@ -41,6 +41,17 @@
 /// - `Vec<Expr>` argument (single argument followed by a comma)
 /// - Variable number of `Expr` arguments (zero or more arguments, must be without commas)
 /// - Functions that require config (marked with `@config` prefix)
+///
+/// Note on configuration construction paths:
+/// - The convenience wrappers generated for `@config` functions call the inner
+///   constructor with `ConfigOptions::default()`. These wrappers are intended
+///   primarily for programmatic `Expr` construction and convenience usage.
+/// - When functions are registered in a session, DataFusion will call
+///   `with_updated_config()` to create a `ScalarUDF` instance using the session's
+///   actual `ConfigOptions`. This also happens when configuration changes at runtime
+///   (e.g., via `SET` statements). In short: the macro uses the default config for
+///   convenience constructors; the session config is applied when functions are
+///   registered or when configuration is updated.
 #[macro_export]
 macro_rules! export_functions {
     ($(($FUNC:ident, $DOC:expr, $($arg:tt)*)),*) => {
@@ -56,6 +67,24 @@ macro_rules! export_functions {
         pub fn $FUNC() -> datafusion_expr::Expr {
             use datafusion_common::config::ConfigOptions;
             super::$FUNC(&ConfigOptions::default()).call(vec![])
+        }
+    };
+
+    // function that requires config and takes a vector argument
+    (single $FUNC:ident, $DOC:expr, @config $arg:ident,) => {
+        #[doc = $DOC]
+        pub fn $FUNC($arg: Vec<datafusion_expr::Expr>) -> datafusion_expr::Expr {
+            use datafusion_common::config::ConfigOptions;
+            super::$FUNC(&ConfigOptions::default()).call($arg)
+        }
+    };
+
+    // function that requires config and variadic arguments
+    (single $FUNC:ident, $DOC:expr, @config $($arg:ident)*) => {
+        #[doc = $DOC]
+        pub fn $FUNC($($arg: datafusion_expr::Expr),*) -> datafusion_expr::Expr {
+            use datafusion_common::config::ConfigOptions;
+            super::$FUNC(&ConfigOptions::default()).call(vec![$($arg),*])
         }
     };
 
@@ -166,9 +195,7 @@ macro_rules! downcast_named_arg {
 /// $ARRAY_TYPE: the type of array to cast the argument to
 #[macro_export]
 macro_rules! downcast_arg {
-    ($ARG:expr, $ARRAY_TYPE:ident) => {{
-        $crate::downcast_named_arg!($ARG, "", $ARRAY_TYPE)
-    }};
+    ($ARG:expr, $ARRAY_TYPE:ident) => {{ $crate::downcast_named_arg!($ARG, "", $ARRAY_TYPE) }};
 }
 
 /// Macro to create a unary math UDF.
@@ -191,7 +218,7 @@ macro_rules! make_math_unary_udf {
 
             use arrow::array::{ArrayRef, AsArray};
             use arrow::datatypes::{DataType, Float32Type, Float64Type};
-            use datafusion_common::{exec_err, Result};
+            use datafusion_common::{Result, exec_err};
             use datafusion_expr::interval_arithmetic::Interval;
             use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
             use datafusion_expr::{
@@ -270,7 +297,7 @@ macro_rules! make_math_unary_udf {
                             return exec_err!(
                                 "Unsupported data type {other:?} for function {}",
                                 self.name()
-                            )
+                            );
                         }
                     };
 
@@ -305,9 +332,10 @@ macro_rules! make_math_binary_udf {
 
             use arrow::array::{ArrayRef, AsArray};
             use arrow::datatypes::{DataType, Float32Type, Float64Type};
-            use datafusion_common::{exec_err, Result};
-            use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
+            use datafusion_common::utils::take_function_args;
+            use datafusion_common::{Result, ScalarValue, internal_err};
             use datafusion_expr::TypeSignature;
+            use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
             use datafusion_expr::{
                 ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl,
                 Signature, Volatility,
@@ -366,37 +394,76 @@ macro_rules! make_math_binary_udf {
                     &self,
                     args: ScalarFunctionArgs,
                 ) -> Result<ColumnarValue> {
-                    let args = ColumnarValue::values_to_arrays(&args.args)?;
-                    let arr: ArrayRef = match args[0].data_type() {
-                        DataType::Float64 => {
-                            let y = args[0].as_primitive::<Float64Type>();
-                            let x = args[1].as_primitive::<Float64Type>();
-                            let result = arrow::compute::binary::<_, _, _, Float64Type>(
-                                y,
-                                x,
-                                |y, x| f64::$BINARY_FUNC(y, x),
-                            )?;
-                            Arc::new(result) as _
-                        }
-                        DataType::Float32 => {
-                            let y = args[0].as_primitive::<Float32Type>();
-                            let x = args[1].as_primitive::<Float32Type>();
-                            let result = arrow::compute::binary::<_, _, _, Float32Type>(
-                                y,
-                                x,
-                                |y, x| f32::$BINARY_FUNC(y, x),
-                            )?;
-                            Arc::new(result) as _
-                        }
-                        other => {
-                            return exec_err!(
-                                "Unsupported data type {other:?} for function {}",
-                                self.name()
-                            )
-                        }
-                    };
+                    let ScalarFunctionArgs {
+                        args, return_field, ..
+                    } = args;
+                    let return_type = return_field.data_type();
+                    let [y, x] = take_function_args(self.name(), args)?;
 
-                    Ok(ColumnarValue::Array(arr))
+                    match (y, x) {
+                        (
+                            ColumnarValue::Scalar(y_scalar),
+                            ColumnarValue::Scalar(x_scalar),
+                        ) => match (&y_scalar, &x_scalar) {
+                            (y, x) if y.is_null() || x.is_null() => {
+                                ColumnarValue::Scalar(ScalarValue::Null)
+                                    .cast_to(return_type, None)
+                            }
+                            (
+                                ScalarValue::Float64(Some(yv)),
+                                ScalarValue::Float64(Some(xv)),
+                            ) => Ok(ColumnarValue::Scalar(ScalarValue::Float64(Some(
+                                f64::$BINARY_FUNC(*yv, *xv),
+                            )))),
+                            (
+                                ScalarValue::Float32(Some(yv)),
+                                ScalarValue::Float32(Some(xv)),
+                            ) => Ok(ColumnarValue::Scalar(ScalarValue::Float32(Some(
+                                f32::$BINARY_FUNC(*yv, *xv),
+                            )))),
+                            _ => internal_err!(
+                                "Unexpected scalar types for function {}: {:?}, {:?}",
+                                self.name(),
+                                y_scalar.data_type(),
+                                x_scalar.data_type()
+                            ),
+                        },
+                        (y, x) => {
+                            let args = ColumnarValue::values_to_arrays(&[y, x])?;
+                            let arr: ArrayRef = match args[0].data_type() {
+                                DataType::Float64 => {
+                                    let y = args[0].as_primitive::<Float64Type>();
+                                    let x = args[1].as_primitive::<Float64Type>();
+                                    let result =
+                                        arrow::compute::binary::<_, _, _, Float64Type>(
+                                            y,
+                                            x,
+                                            |y, x| f64::$BINARY_FUNC(y, x),
+                                        )?;
+                                    Arc::new(result) as _
+                                }
+                                DataType::Float32 => {
+                                    let y = args[0].as_primitive::<Float32Type>();
+                                    let x = args[1].as_primitive::<Float32Type>();
+                                    let result =
+                                        arrow::compute::binary::<_, _, _, Float32Type>(
+                                            y,
+                                            x,
+                                            |y, x| f32::$BINARY_FUNC(y, x),
+                                        )?;
+                                    Arc::new(result) as _
+                                }
+                                other => {
+                                    return internal_err!(
+                                        "Unsupported data type {other:?} for function {}",
+                                        self.name()
+                                    );
+                                }
+                            };
+
+                            Ok(ColumnarValue::Array(arr))
+                        }
+                    }
                 }
 
                 fn documentation(&self) -> Option<&Documentation> {

@@ -17,23 +17,24 @@
 
 //! Regex expressions
 
-use arrow::array::{Array, ArrayRef, AsArray, GenericStringArray};
+use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, GenericStringArray};
 use arrow::compute::kernels::regexp;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{LargeUtf8, Utf8, Utf8View};
 use datafusion_common::types::logical_string;
 use datafusion_common::{
-    arrow_datafusion_err, exec_err, internal_err, plan_err, Result, ScalarValue,
+    Result, ScalarValue, arrow_datafusion_err, exec_err, internal_err, plan_err,
 };
 use datafusion_expr::{
-    binary_expr, cast, Coercion, ColumnarValue, Documentation, Expr, ScalarUDFImpl,
-    Signature, TypeSignature, TypeSignatureClass, Volatility,
+    Coercion, ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature,
+    TypeSignature, TypeSignatureClass, Volatility, binary_expr, cast,
 };
 use datafusion_macros::user_doc;
 
-use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr_common::operator::Operator;
 use datafusion_expr_common::type_coercion::binary::BinaryTypeCoercer;
+use regex::Regex;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -130,35 +131,52 @@ impl ScalarUDFImpl for RegexpLikeFunc {
         args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
         let args = &args.args;
-
-        let len = args
-            .iter()
-            .fold(Option::<usize>::None, |acc, arg| match arg {
-                ColumnarValue::Scalar(_) => acc,
-                ColumnarValue::Array(a) => Some(a.len()),
-            });
-
-        let is_scalar = len.is_none();
-        let inferred_length = len.unwrap_or(1);
-        let args = args
-            .iter()
-            .map(|arg| arg.to_array(inferred_length))
-            .collect::<Result<Vec<_>>>()?;
-
-        let result = regexp_like(&args);
-        if is_scalar {
-            // If all inputs are scalar, keeps output as scalar
-            let result = result.and_then(|arr| ScalarValue::try_from_array(&arr, 0));
-            result.map(ColumnarValue::Scalar)
-        } else {
-            result.map(ColumnarValue::Array)
+        match args.as_slice() {
+            [ColumnarValue::Scalar(value), ColumnarValue::Scalar(pattern)] => {
+                let value = scalar_string(value)?;
+                let pattern = scalar_string(pattern)?;
+                regexp_like_scalar(value, pattern, None)
+            }
+            [
+                ColumnarValue::Scalar(value),
+                ColumnarValue::Scalar(pattern),
+                ColumnarValue::Scalar(flags),
+            ] => {
+                let value = scalar_string(value)?;
+                let pattern = scalar_string(pattern)?;
+                let flags = scalar_string(flags)?;
+                regexp_like_scalar(value, pattern, flags)
+            }
+            [ColumnarValue::Array(values), ColumnarValue::Scalar(pattern)] => {
+                let pattern = scalar_string(pattern)?;
+                let array = regexp_like_array_scalar(values, pattern, None)?;
+                Ok(ColumnarValue::Array(array))
+            }
+            [
+                ColumnarValue::Array(values),
+                ColumnarValue::Scalar(pattern),
+                ColumnarValue::Scalar(flags),
+            ] => {
+                let flags = scalar_string(flags)?;
+                if flags.is_some_and(|flagz| flagz.contains('g')) {
+                    plan_err!("regexp_like() does not support the \"global\" option")
+                } else {
+                    let pattern = scalar_string(pattern)?;
+                    let array = regexp_like_array_scalar(values, pattern, flags)?;
+                    Ok(ColumnarValue::Array(array))
+                }
+            }
+            _ => {
+                let args = ColumnarValue::values_to_arrays(args)?;
+                regexp_like(&args).map(ColumnarValue::Array)
+            }
         }
     }
 
     fn simplify(
         &self,
         mut args: Vec<Expr>,
-        info: &dyn SimplifyInfo,
+        info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         // Try to simplify regexp_like usage to one of the builtin operators since those have
         // optimized code paths for the case where the regular expression pattern is a scalar.
@@ -275,41 +293,123 @@ pub fn regexp_like(args: &[ArrayRef]) -> Result<ArrayRef> {
                 Utf8 => args[2].as_string::<i32>(),
                 LargeUtf8 => {
                     let large_string_array = args[2].as_string::<i64>();
-                    let string_vec: Vec<Option<&str>> = (0..large_string_array.len()).map(|i| {
-                        if large_string_array.is_null(i) {
-                            None
-                        } else {
-                            Some(large_string_array.value(i))
-                        }
-                    })
-                    .collect();
+                    let string_vec: Vec<Option<&str>> = (0..large_string_array.len())
+                        .map(|i| {
+                            if large_string_array.is_null(i) {
+                                None
+                            } else {
+                                Some(large_string_array.value(i))
+                            }
+                        })
+                        .collect();
 
                     &GenericStringArray::<i32>::from(string_vec)
-                },
+                }
                 _ => {
                     let string_view_array = args[2].as_string_view();
-                    let string_vec: Vec<Option<String>> = (0..string_view_array.len()).map(|i| {
-                        if string_view_array.is_null(i) {
-                            None
-                        } else {
-                            Some(string_view_array.value(i).to_string())
-                        }
-                    })
-                    .collect();
+                    let string_vec: Vec<Option<String>> = (0..string_view_array.len())
+                        .map(|i| {
+                            if string_view_array.is_null(i) {
+                                None
+                            } else {
+                                Some(string_view_array.value(i).to_string())
+                            }
+                        })
+                        .collect();
                     &GenericStringArray::<i32>::from(string_vec)
-                },
+                }
             };
 
-            if flags.iter().any(|s| s == Some("g")) {
+            if flags
+                .iter()
+                .any(|s| s.is_some_and(|flagz| flagz.contains('g')))
+            {
                 return plan_err!("regexp_like() does not support the \"global\" option");
             }
 
             handle_regexp_like(&args[0], &args[1], Some(flags))
-        },
+        }
         other => exec_err!(
             "`regexp_like` was called with {other} arguments. It requires at least 2 and at most 3."
         ),
     }
+}
+
+fn scalar_string(value: &ScalarValue) -> Result<Option<&str>> {
+    match value.try_as_str() {
+        Some(v) => Ok(v),
+        None => internal_err!(
+            "Unsupported data type {:?} for function `regexp_like`",
+            value.data_type()
+        ),
+    }
+}
+
+fn regexp_like_array_scalar(
+    values: &ArrayRef,
+    pattern: Option<&str>,
+    flags: Option<&str>,
+) -> Result<ArrayRef> {
+    use DataType::*;
+
+    let Some(pattern) = pattern else {
+        return Ok(Arc::new(BooleanArray::new_null(values.len())));
+    };
+    let array = match values.data_type() {
+        Utf8 => {
+            let array = values.as_string::<i32>();
+            regexp::regexp_is_match_scalar(array, pattern, flags)?
+        }
+        Utf8View => {
+            let array = values.as_string_view();
+            regexp::regexp_is_match_scalar(array, pattern, flags)?
+        }
+        LargeUtf8 => {
+            let array = values.as_string::<i64>();
+            regexp::regexp_is_match_scalar(array, pattern, flags)?
+        }
+        other => {
+            return internal_err!(
+                "Unsupported data type {other:?} for function `regexp_like`"
+            );
+        }
+    };
+
+    Ok(Arc::new(array))
+}
+
+fn regexp_like_scalar(
+    value: Option<&str>,
+    pattern: Option<&str>,
+    flags: Option<&str>,
+) -> Result<ColumnarValue> {
+    if flags.is_some_and(|flagz| flagz.contains('g')) {
+        return plan_err!("regexp_like() does not support the \"global\" option");
+    }
+
+    if value.is_none() || pattern.is_none() {
+        return Ok(ColumnarValue::Scalar(ScalarValue::Boolean(None)));
+    }
+
+    let value = value.unwrap();
+    let pattern = pattern.unwrap();
+    let pattern = match flags {
+        Some(flagz) => format!("(?{flagz}){pattern}"),
+        None => pattern.to_string(),
+    };
+
+    let result = if pattern.is_empty() {
+        true
+    } else {
+        let re = Regex::new(pattern.as_str()).map_err(|e| {
+            datafusion_common::DataFusionError::Execution(format!(
+                "Regular expression did not compile: {e:?}"
+            ))
+        })?;
+        re.is_match(value)
+    };
+
+    Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(result))))
 }
 
 fn handle_regexp_like(
@@ -354,7 +454,7 @@ fn handle_regexp_like(
                 .map_err(|e| arrow_datafusion_err!(e))?
         }
         (Utf8, LargeUtf8) => {
-            let value = values.as_string_view();
+            let value = values.as_string::<i32>();
             let pattern = patterns.as_string::<i64>();
 
             regexp::regexp_is_match(value, pattern, flags)
@@ -384,7 +484,7 @@ fn handle_regexp_like(
         other => {
             return internal_err!(
                 "Unsupported data type {other:?} for function `regexp_like`"
-            )
+            );
         }
     };
 
@@ -397,8 +497,37 @@ mod tests {
 
     use arrow::array::StringArray;
     use arrow::array::{BooleanBuilder, StringViewArray};
+    use arrow::datatypes::{DataType, Field};
+    use datafusion_common::config::ConfigOptions;
+    use datafusion_common::{Result, ScalarValue};
+    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
 
-    use crate::regex::regexplike::regexp_like;
+    use crate::regex::regexplike::{RegexpLikeFunc, regexp_like};
+
+    fn invoke_regexp_like(args: Vec<ColumnarValue>) -> Result<ColumnarValue> {
+        let number_rows = args
+            .iter()
+            .find_map(|arg| match arg {
+                ColumnarValue::Array(array) => Some(array.len()),
+                _ => None,
+            })
+            .unwrap_or(1);
+        let arg_fields = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| {
+                Arc::new(Field::new(format!("arg_{idx}"), arg.data_type(), true))
+            })
+            .collect::<Vec<_>>();
+
+        RegexpLikeFunc::new().invoke_with_args(ScalarFunctionArgs {
+            args,
+            arg_fields,
+            number_rows,
+            return_field: Arc::new(Field::new("f", DataType::Boolean, true)),
+            config_options: Arc::new(ConfigOptions::default()),
+        })
+    }
 
     #[test]
     fn test_case_sensitive_regexp_like_utf8() {
@@ -494,6 +623,68 @@ mod tests {
 
         assert_eq!(
             re_err.strip_backtrace(),
+            "Error during planning: regexp_like() does not support the \"global\" option"
+        );
+    }
+
+    #[test]
+    fn test_regexp_like_scalar_invoke() {
+        let args = vec![
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some("foobarbequebaz".to_string()))),
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some("(bar)(beque)".to_string()))),
+        ];
+        let result = invoke_regexp_like(args).unwrap();
+        match result {
+            ColumnarValue::Scalar(ScalarValue::Boolean(Some(true))) => {}
+            other => panic!("Unexpected result {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_regexp_like_array_scalar_invoke() {
+        let values = Arc::new(StringArray::from(vec!["abc", "xyz"]));
+        let args = vec![
+            ColumnarValue::Array(values),
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some("^(a)".to_string()))),
+        ];
+        let result = invoke_regexp_like(args).unwrap();
+        let mut expected_builder = BooleanBuilder::new();
+        expected_builder.append_value(true);
+        expected_builder.append_value(false);
+        let expected = expected_builder.finish();
+        match result {
+            ColumnarValue::Array(array) => {
+                assert_eq!(array.as_ref(), &expected);
+            }
+            other => panic!("Unexpected result {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_regexp_like_scalar_flags_with_global() {
+        let args = vec![
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some("abc".to_string()))),
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some("^(a)".to_string()))),
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some("ig".to_string()))),
+        ];
+        let err = invoke_regexp_like(args).expect_err("global flag should be rejected");
+        assert_eq!(
+            err.strip_backtrace(),
+            "Error during planning: regexp_like() does not support the \"global\" option"
+        );
+    }
+
+    #[test]
+    fn test_regexp_like_array_scalar_flags_with_global() {
+        let values = Arc::new(StringArray::from(vec!["abc", "xyz"]));
+        let args = vec![
+            ColumnarValue::Array(values),
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some("^(a)".to_string()))),
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some("ig".to_string()))),
+        ];
+        let err = invoke_regexp_like(args).expect_err("global flag should be rejected");
+        assert_eq!(
+            err.strip_backtrace(),
             "Error during planning: regexp_like() does not support the \"global\" option"
         );
     }

@@ -39,6 +39,18 @@ When testing Spark functions:
 - Test cases should only contain `SELECT` statements with the function being tested
 - Add explicit casts to input values to ensure the correct data type is used (e.g., `0::INT`)
   - Explicit casting is necessary because DataFusion and Spark do not infer data types in the same way
+- If the Spark built-in function under test behaves differently in ANSI SQL mode, please wrap your test cases like this example:
+
+```sql
+statement ok
+set datafusion.execution.enable_ansi_mode = true;
+
+# Functions under test
+select abs((-128)::TINYINT)
+
+statement ok
+set datafusion.execution.enable_ansi_mode = false;
+```
 
 ### Finding Test Cases
 

@@ -17,12 +17,12 @@
 
 use crate::aggregates::group_values::GroupValues;
 use ahash::RandomState;
-use arrow::array::{Array, ArrayRef, ListArray, RecordBatch, StructArray};
+use arrow::array::{Array, ArrayRef, ListArray, StructArray};
 use arrow::compute::cast;
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::row::{RowConverter, Rows, SortField};
-use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::Result;
+use datafusion_common::hash_utils::create_hashes;
 use datafusion_execution::memory_pool::proxy::{HashTableAllocExt, VecAllocExt};
 use datafusion_expr::EmitTo;
 use hashbrown::hash_table::HashTable;
@@ -243,17 +243,16 @@ impl GroupValues for GroupValuesRows {
         Ok(output)
     }
 
-    fn clear_shrink(&mut self, batch: &RecordBatch) {
-        let count = batch.num_rows();
+    fn clear_shrink(&mut self, num_rows: usize) {
         self.group_values = self.group_values.take().map(|mut rows| {
             rows.clear();
             rows
         });
         self.map.clear();
-        self.map.shrink_to(count, |_| 0); // hasher does not matter since the map is cleared
+        self.map.shrink_to(num_rows, |_| 0); // hasher does not matter since the map is cleared
         self.map_size = self.map.capacity() * size_of::<(u64, usize)>();
         self.hashes_buffer.clear();
-        self.hashes_buffer.shrink_to(count);
+        self.hashes_buffer.shrink_to(num_rows);
     }
 }
 

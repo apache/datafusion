@@ -18,8 +18,8 @@
 //! [`OptimizeUnions`]: removes `Union` nodes in the logical plan.
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::tree_node::Transformed;
 use datafusion_common::Result;
+use datafusion_common::tree_node::Transformed;
 use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
 use datafusion_expr::{Distinct, LogicalPlan, Projection, Union};
 use itertools::Itertools;
@@ -32,7 +32,7 @@ use std::sync::Arc;
 pub struct OptimizeUnions;
 
 impl OptimizeUnions {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
@@ -151,10 +151,10 @@ fn extract_plan_from_distinct(plan: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analyzer::type_coercion::TypeCoercion;
-    use crate::analyzer::Analyzer;
-    use crate::assert_optimized_plan_eq_snapshot;
     use crate::OptimizerContext;
+    use crate::analyzer::Analyzer;
+    use crate::analyzer::type_coercion::TypeCoercion;
+    use crate::assert_optimized_plan_eq_snapshot;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::config::ConfigOptions;
     use datafusion_expr::{col, logical_plan::table_scan};
@@ -497,9 +497,7 @@ mod tests {
             OptimizerContext::new().with_max_passes(1),
             vec![Arc::new(OptimizeUnions::new())],
             plan,
-            @r"
-        TableScan: table
-        "
+            @"TableScan: table"
         )
     }
 }

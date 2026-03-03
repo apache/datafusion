@@ -23,16 +23,16 @@ use std::sync::Arc;
 use crate::PhysicalExpr;
 
 use arrow::array::BooleanArray;
-use arrow::array::{new_empty_array, Array, ArrayRef};
+use arrow::array::{Array, ArrayRef, new_empty_array};
+use arrow::compute::SortOptions;
 use arrow::compute::filter as arrow_filter;
 use arrow::compute::kernels::sort::SortColumn;
-use arrow::compute::SortOptions;
 use arrow::datatypes::FieldRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::utils::compare_rows;
 use datafusion_common::{
-    arrow_datafusion_err, exec_datafusion_err, internal_err, Result, ScalarValue,
+    Result, ScalarValue, arrow_datafusion_err, exec_datafusion_err, internal_err,
 };
 use datafusion_expr::window_state::{
     PartitionBatchState, WindowAggState, WindowFrameContext, WindowFrameStateGroups,

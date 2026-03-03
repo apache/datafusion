@@ -113,3 +113,21 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[[{x:100}] as a]
 02)--PlaceholderRowExec
+
+# Simplify expr = L1 AND expr != L2 to expr = L1 when L1 != L2
+query TT
+EXPLAIN SELECT
+    v = 1 AND v != 0 as opt1,
+    v = 2 AND v != 2 as noopt1,
+    v != 3 AND v = 4 as opt2,
+    v != 5 AND v = 5 as noopt2
+FROM (VALUES (0), (1), (2)) t(v)
+----
+logical_plan
+01)Projection: t.v = Int64(1) AS opt1, t.v = Int64(2) AND t.v != Int64(2) AS noopt1, t.v = Int64(4) AS opt2, t.v != Int64(5) AND t.v = Int64(5) AS noopt2
+02)--SubqueryAlias: t
+03)----Projection: column1 AS v
+04)------Values: (Int64(0)), (Int64(1)), (Int64(2))
+physical_plan
+01)ProjectionExec: expr=[column1@0 = 1 as opt1, column1@0 = 2 AND column1@0 != 2 as noopt1, column1@0 = 4 as opt2, column1@0 != 5 AND column1@0 = 5 as noopt2]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]

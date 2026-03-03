@@ -27,15 +27,16 @@ use crate::execution_plan::{Boundedness, EmissionType, SchedulingType};
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
-    RecordBatchStream, SendableRecordBatchStream, Statistics,
+    RecordBatchStream, SendableRecordBatchStream,
 };
 
 use arrow::array::RecordBatch;
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{assert_eq_or_internal_err, assert_or_internal_err, Result};
-use datafusion_execution::memory_pool::MemoryReservation;
+use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::{Result, assert_eq_or_internal_err, assert_or_internal_err};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_execution::memory_pool::MemoryReservation;
+use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
 
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use futures::Stream;
@@ -144,6 +145,9 @@ pub trait LazyBatchGenerator: Send + Sync + fmt::Debug + fmt::Display {
 
     /// Generate the next batch, return `None` when no more batches are available
     fn generate_next_batch(&mut self) -> Result<Option<RecordBatch>>;
+
+    /// Returns a new instance with the state reset.
+    fn reset_state(&self) -> Arc<RwLock<dyn LazyBatchGenerator>>;
 }
 
 /// Execution plan for lazy in-memory batches of data
@@ -158,7 +162,7 @@ pub struct LazyMemoryExec {
     /// Functions to generate batches for each partition
     batch_generators: Vec<Arc<RwLock<dyn LazyBatchGenerator>>>,
     /// Plan properties cache storing equivalence properties, partitioning, and execution mode
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
 }
@@ -197,7 +201,8 @@ impl LazyMemoryExec {
             EmissionType::Incremental,
             boundedness,
         )
-        .with_scheduling_type(SchedulingType::Cooperative);
+        .with_scheduling_type(SchedulingType::Cooperative)
+        .into();
 
         Ok(Self {
             schema,
@@ -212,9 +217,9 @@ impl LazyMemoryExec {
         match projection.as_ref() {
             Some(columns) => {
                 let projected = Arc::new(self.schema.project(columns).unwrap());
-                self.cache = self.cache.with_eq_properties(EquivalenceProperties::new(
-                    Arc::clone(&projected),
-                ));
+                Arc::make_mut(&mut self.cache).set_eq_properties(
+                    EquivalenceProperties::new(Arc::clone(&projected)),
+                );
                 self.schema = projected;
                 self.projection = projection;
                 self
@@ -233,12 +238,12 @@ impl LazyMemoryExec {
             partition_count,
             generator_count
         );
-        self.cache.partitioning = partitioning;
+        Arc::make_mut(&mut self.cache).partitioning = partitioning;
         Ok(())
     }
 
     pub fn add_ordering(&mut self, ordering: impl IntoIterator<Item = PhysicalSortExpr>) {
-        self.cache
+        Arc::make_mut(&mut self.cache)
             .eq_properties
             .add_orderings(std::iter::once(ordering));
     }
@@ -303,12 +308,19 @@ impl ExecutionPlan for LazyMemoryExec {
         Arc::clone(&self.schema)
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![]
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn with_new_children(
@@ -349,8 +361,19 @@ impl ExecutionPlan for LazyMemoryExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        Ok(Statistics::new_unknown(&self.schema))
+    fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
+        let generators = self
+            .generators()
+            .iter()
+            .map(|g| g.read().reset_state())
+            .collect::<Vec<_>>();
+        Ok(Arc::new(LazyMemoryExec {
+            schema: Arc::clone(&self.schema),
+            batch_generators: generators,
+            cache: Arc::clone(&self.cache),
+            metrics: ExecutionPlanMetricsSet::new(),
+            projection: self.projection.clone(),
+        }))
     }
 }
 
@@ -449,6 +472,15 @@ mod lazy_memory_tests {
                 Arc::clone(&self.schema),
                 vec![Arc::new(array)],
             )?))
+        }
+
+        fn reset_state(&self) -> Arc<RwLock<dyn LazyBatchGenerator>> {
+            Arc::new(RwLock::new(TestGenerator {
+                counter: 0,
+                max_batches: self.max_batches,
+                batch_size: self.batch_size,
+                schema: Arc::clone(&self.schema),
+            }))
         }
     }
 
@@ -565,6 +597,33 @@ mod lazy_memory_tests {
             assert_eq!(metrics.output_rows().unwrap(), expected_rows);
             assert!(metrics.elapsed_compute().unwrap() > 0);
         }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_lazy_memory_exec_reset_state() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        let generator = TestGenerator {
+            counter: 0,
+            max_batches: 3,
+            batch_size: 2,
+            schema: Arc::clone(&schema),
+        };
+
+        let exec = Arc::new(LazyMemoryExec::try_new(
+            schema,
+            vec![Arc::new(RwLock::new(generator))],
+        )?);
+        let stream = exec.execute(0, Arc::new(TaskContext::default()))?;
+        let batches = collect(stream).await?;
+
+        let exec_reset = exec.reset_state()?;
+        let stream = exec_reset.execute(0, Arc::new(TaskContext::default()))?;
+        let batches_reset = collect(stream).await?;
+
+        // if the reset_state is not correct, the batches_reset will be empty
+        assert_eq!(batches, batches_reset);
 
         Ok(())
     }

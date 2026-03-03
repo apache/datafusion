@@ -17,9 +17,9 @@
 
 use arrow::array::{ArrayRef, ArrowPrimitiveType, PrimitiveArray, UInt32Array};
 use arrow::datatypes::DataType;
-use chrono_tz::{Tz, TZ_VARIANTS};
+use chrono_tz::{TZ_VARIANTS, Tz};
 use rand::prelude::IndexedRandom;
-use rand::{rng, rngs::StdRng, Rng};
+use rand::{Rng, rng, rngs::StdRng};
 use std::sync::Arc;
 
 use super::random_data::RandomNativeData;

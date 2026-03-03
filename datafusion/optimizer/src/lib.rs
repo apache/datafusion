@@ -57,6 +57,7 @@ pub mod eliminate_nested_union {
 }
 pub mod eliminate_outer_join;
 pub mod extract_equijoin_predicate;
+pub mod extract_leaf_expressions;
 pub mod filter_null_join_keys;
 pub mod optimize_projections;
 pub mod optimize_unions;
@@ -65,6 +66,7 @@ pub mod propagate_empty_relation;
 pub mod push_down_filter;
 pub mod push_down_limit;
 pub mod replace_distinct_aggregate;
+pub mod rewrite_set_comparison;
 pub mod scalar_subquery_to_join;
 pub mod simplify_expressions;
 pub mod single_distinct_to_groupby;

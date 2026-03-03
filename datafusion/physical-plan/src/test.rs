@@ -25,19 +25,20 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::Context;
 
+use crate::ExecutionPlan;
 use crate::common;
 use crate::execution_plan::{Boundedness, EmissionType};
 use crate::memory::MemoryStream;
 use crate::metrics::MetricsSet;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::streaming::PartitionStream;
-use crate::ExecutionPlan;
 use crate::{DisplayAs, DisplayFormatType, PlanProperties};
 
 use arrow::array::{Array, ArrayRef, Int32Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
-    assert_or_internal_err, config::ConfigOptions, project_schema, Result, Statistics,
+    Result, Statistics, assert_or_internal_err, config::ConfigOptions, project_schema,
 };
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::equivalence::{
@@ -45,7 +46,9 @@ use datafusion_physical_expr::equivalence::{
 };
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::collect_columns;
-use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, Partitioning};
+use datafusion_physical_expr::{
+    EquivalenceProperties, LexOrdering, Partitioning, PhysicalExpr,
+};
 
 use futures::{Future, FutureExt};
 
@@ -75,7 +78,7 @@ pub struct TestMemoryExec {
     /// The maximum number of records to read from this plan. If `None`,
     /// all records after filtering are returned.
     fetch: Option<usize>,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl DisplayAs for TestMemoryExec {
@@ -105,10 +108,10 @@ impl DisplayAs for TestMemoryExec {
                     .map_or(String::new(), |limit| format!(", fetch={limit}"));
                 if self.show_sizes {
                     write!(
-                                f,
-                                "partitions={}, partition_sizes={partition_sizes:?}{limit}{output_ordering}{constraints}",
-                                partition_sizes.len(),
-                            )
+                        f,
+                        "partitions={}, partition_sizes={partition_sizes:?}{limit}{output_ordering}{constraints}",
+                        partition_sizes.len(),
+                    )
                 } else {
                     write!(
                         f,
@@ -134,7 +137,7 @@ impl ExecutionPlan for TestMemoryExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -142,11 +145,25 @@ impl ExecutionPlan for TestMemoryExec {
         Vec::new()
     }
 
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Apply to all sort information orderings
+        let mut tnr = TreeNodeRecursion::Continue;
+        for ordering in &self.sort_information {
+            for sort_expr in ordering {
+                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
+            }
+        }
+        Ok(tnr)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        unimplemented!()
+        Ok(self)
     }
 
     fn repartitioned(
@@ -167,10 +184,6 @@ impl ExecutionPlan for TestMemoryExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         unimplemented!()
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        self.statistics_inner()
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
@@ -239,7 +252,7 @@ impl TestMemoryExec {
         Ok(Self {
             partitions: partitions.to_vec(),
             schema,
-            cache: PlanProperties::new(
+            cache: Arc::new(PlanProperties::new(
                 EquivalenceProperties::new_with_orderings(
                     Arc::clone(&projected_schema),
                     Vec::<LexOrdering>::new(),
@@ -247,7 +260,7 @@ impl TestMemoryExec {
                 Partitioning::UnknownPartitioning(partitions.len()),
                 EmissionType::Incremental,
                 Boundedness::Bounded,
-            ),
+            )),
             projected_schema,
             projection,
             sort_information: vec![],
@@ -265,7 +278,7 @@ impl TestMemoryExec {
     ) -> Result<Arc<TestMemoryExec>> {
         let mut source = Self::try_new(partitions, schema, projection)?;
         let cache = source.compute_properties();
-        source.cache = cache;
+        source.cache = Arc::new(cache);
         Ok(Arc::new(source))
     }
 
@@ -273,7 +286,7 @@ impl TestMemoryExec {
     pub fn update_cache(source: &Arc<TestMemoryExec>) -> TestMemoryExec {
         let cache = source.compute_properties();
         let mut source = (**source).clone();
-        source.cache = cache;
+        source.cache = Arc::new(cache);
         source
     }
 
@@ -342,6 +355,7 @@ impl TestMemoryExec {
         }
 
         self.sort_information = sort_information;
+        self.cache = Arc::new(self.compute_properties());
         Ok(self)
     }
 

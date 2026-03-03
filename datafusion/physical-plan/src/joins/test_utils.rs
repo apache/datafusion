@@ -25,11 +25,11 @@ use crate::joins::{
 };
 use crate::repartition::RepartitionExec;
 use crate::test::TestMemoryExec;
-use crate::{common, ExecutionPlan, ExecutionPlanProperties, Partitioning};
+use crate::{ExecutionPlan, ExecutionPlanProperties, Partitioning, common};
 
 use arrow::array::{
-    types::IntervalDayTime, ArrayRef, Float64Array, Int32Array, IntervalDayTimeArray,
-    RecordBatch, TimestampMillisecondArray,
+    ArrayRef, Float64Array, Int32Array, IntervalDayTimeArray, RecordBatch,
+    TimestampMillisecondArray, types::IntervalDayTime,
 };
 use arrow::datatypes::{DataType, Schema};
 use arrow::util::pretty::pretty_format_batches;
@@ -152,6 +152,7 @@ pub async fn partitioned_hash_join_with_filter(
         None,
         PartitionMode::Partitioned,
         null_equality,
+        false, // null_aware
     )?);
 
     let mut batches = vec![];

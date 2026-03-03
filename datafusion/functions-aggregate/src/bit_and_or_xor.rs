@@ -24,14 +24,14 @@ use std::hash::Hash;
 use std::mem::{size_of, size_of_val};
 
 use ahash::RandomState;
-use arrow::array::{downcast_integer, Array, ArrayRef, AsArray};
+use arrow::array::{Array, ArrayRef, AsArray, downcast_integer};
 use arrow::datatypes::{
-    ArrowNativeType, ArrowNumericType, DataType, Field, FieldRef, Int16Type, Int32Type,
-    Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    ArrowNativeType, ArrowNumericType, DataType, Field, FieldRef, Int8Type, Int16Type,
+    Int32Type, Int64Type, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
 
 use datafusion_common::cast::as_list_array;
-use datafusion_common::{not_impl_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, not_impl_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
@@ -262,30 +262,36 @@ impl AggregateUDFImpl for BitwiseOperation {
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         if args.input_fields[0].data_type().is_null() {
-            Ok(vec![Field::new(
-                format_state_name(args.name, self.name()),
-                DataType::Null,
-                true,
-            )
-            .into()])
+            Ok(vec![
+                Field::new(
+                    format_state_name(args.name, self.name()),
+                    DataType::Null,
+                    true,
+                )
+                .into(),
+            ])
         } else if self.operation == BitwiseOperationType::Xor && args.is_distinct {
-            Ok(vec![Field::new_list(
-                format_state_name(
-                    args.name,
-                    format!("{} distinct", self.name()).as_str(),
-                ),
-                // See COMMENTS.md to understand why nullable is set to true
-                Field::new_list_field(args.return_type().clone(), true),
-                false,
-            )
-            .into()])
+            Ok(vec![
+                Field::new_list(
+                    format_state_name(
+                        args.name,
+                        format!("{} distinct", self.name()).as_str(),
+                    ),
+                    // See COMMENTS.md to understand why nullable is set to true
+                    Field::new_list_field(args.return_type().clone(), true),
+                    false,
+                )
+                .into(),
+            ])
         } else {
-            Ok(vec![Field::new(
-                format_state_name(args.name, self.name()),
-                args.return_field.data_type().clone(),
-                true,
-            )
-            .into()])
+            Ok(vec![
+                Field::new(
+                    format_state_name(args.name, self.name()),
+                    args.return_field.data_type().clone(),
+                    true,
+                )
+                .into(),
+            ])
         }
     }
 

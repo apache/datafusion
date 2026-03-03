@@ -158,7 +158,7 @@ pub trait ObjectStoreRegistry: Send + Sync + std::fmt::Debug + 'static {
 
     /// Deregister the store previously registered with the same key. Returns the
     /// deregistered store if it existed.
-    #[allow(unused_variables)]
+    #[expect(unused_variables)]
     fn deregister_store(&self, url: &Url) -> Result<Arc<dyn ObjectStore>> {
         not_impl_err!(
             "ObjectStoreRegistry::deregister_store is not implemented for this ObjectStoreRegistry"

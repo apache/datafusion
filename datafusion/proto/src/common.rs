@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::{assert_eq_or_internal_err, internal_datafusion_err, Result};
+use datafusion_common::{Result, assert_eq_or_internal_err, internal_datafusion_err};
 
 pub(crate) fn str_to_byte(s: &String, description: &str) -> Result<u8> {
     assert_eq_or_internal_err!(

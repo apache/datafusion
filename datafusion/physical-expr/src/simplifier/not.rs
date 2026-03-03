@@ -32,25 +32,29 @@
 use std::sync::Arc;
 
 use arrow::datatypes::Schema;
-use datafusion_common::{tree_node::Transformed, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, tree_node::Transformed};
 use datafusion_expr::Operator;
 
-use crate::expressions::{in_list, lit, BinaryExpr, InListExpr, Literal, NotExpr};
 use crate::PhysicalExpr;
+use crate::expressions::{BinaryExpr, InListExpr, Literal, NotExpr, in_list, lit};
 
 /// Attempts to simplify NOT expressions by applying one level of transformation
 ///
 /// This function applies a single simplification rule and returns. When used with
 /// TreeNodeRewriter, multiple passes will automatically be applied until no more
 /// transformations are possible.
+#[deprecated(
+    since = "53.0.0",
+    note = "This function will be made private in a future release, please file an issue if you have a reason for keeping it public."
+)]
 pub fn simplify_not_expr(
-    expr: &Arc<dyn PhysicalExpr>,
+    expr: Arc<dyn PhysicalExpr>,
     schema: &Schema,
 ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
     // Check if this is a NOT expression
     let not_expr = match expr.as_any().downcast_ref::<NotExpr>() {
         Some(not_expr) => not_expr,
-        None => return Ok(Transformed::no(Arc::clone(expr))),
+        None => return Ok(Transformed::no(expr)),
     };
 
     let inner_expr = not_expr.arg();
@@ -120,5 +124,5 @@ pub fn simplify_not_expr(
     }
 
     // If no simplification possible, return the original expression
-    Ok(Transformed::no(Arc::clone(expr)))
+    Ok(Transformed::no(expr))
 }

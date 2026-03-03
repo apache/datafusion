@@ -53,6 +53,7 @@ datafusion-physical-expr = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 half = { workspace = true }
 log = { workspace = true }
+num-traits = { workspace = true }
 paste = { workspace = true }
 
 [dev-dependencies]

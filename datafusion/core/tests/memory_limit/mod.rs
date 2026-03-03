@@ -39,19 +39,19 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::streaming::PartitionStream;
 use datafusion::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
 use datafusion::prelude::{SessionConfig, SessionContext};
-use datafusion_catalog::streaming::StreamingTable;
 use datafusion_catalog::Session;
-use datafusion_common::{assert_contains, Result};
+use datafusion_catalog::streaming::StreamingTable;
+use datafusion_common::{Result, assert_contains};
+use datafusion_execution::TaskContext;
 use datafusion_execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
 use datafusion_execution::memory_pool::{
     FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool,
 };
 use datafusion_execution::runtime_env::RuntimeEnv;
-use datafusion_execution::TaskContext;
 use datafusion_expr::{Expr, TableType};
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
-use datafusion_physical_optimizer::join_selection::JoinSelection;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::join_selection::JoinSelection;
 use datafusion_physical_plan::collect as collect_batches;
 use datafusion_physical_plan::common::collect;
 use datafusion_physical_plan::spill::get_record_batch_memory_size;
@@ -604,8 +604,8 @@ async fn test_disk_spill_limit_reached() -> Result<()> {
 
     let err = df.collect().await.unwrap_err();
     assert_contains!(
-    err.to_string(),
-    "The used disk space during the spilling process has exceeded the allowable limit"
+        err.to_string(),
+        "The used disk space during the spilling process has exceeded the allowable limit"
     );
 
     Ok(())
@@ -977,11 +977,13 @@ impl Scenario {
                     descending: false,
                     nulls_first: false,
                 };
-                let sort_information = vec![[
-                    PhysicalSortExpr::new(col("a", &schema).unwrap(), options),
-                    PhysicalSortExpr::new(col("b", &schema).unwrap(), options),
-                ]
-                .into()];
+                let sort_information = vec![
+                    [
+                        PhysicalSortExpr::new(col("a", &schema).unwrap(), options),
+                        PhysicalSortExpr::new(col("b", &schema).unwrap(), options),
+                    ]
+                    .into(),
+                ];
 
                 let table = SortedTableProvider::new(batches, sort_information);
                 Arc::new(table)
@@ -1057,7 +1059,7 @@ fn make_dict_batches() -> Vec<RecordBatch> {
     let batch_size = 50;
 
     let mut i = 0;
-    let gen = std::iter::from_fn(move || {
+    let batch_gen = std::iter::from_fn(move || {
         // create values like
         // 0000000001
         // 0000000002
@@ -1080,7 +1082,7 @@ fn make_dict_batches() -> Vec<RecordBatch> {
 
     let num_batches = 5;
 
-    let batches: Vec<_> = gen.take(num_batches).collect();
+    let batches: Vec<_> = batch_gen.take(num_batches).collect();
 
     batches.iter().enumerate().for_each(|(i, batch)| {
         println!("Dict batch[{i}] size is: {}", batch.get_array_memory_size());

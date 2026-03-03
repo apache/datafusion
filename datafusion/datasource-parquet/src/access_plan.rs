@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::{assert_eq_or_internal_err, Result};
+use datafusion_common::{Result, assert_eq_or_internal_err};
 use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
 use parquet::file::metadata::RowGroupMetaData;
 
@@ -82,6 +82,10 @@ use parquet::file::metadata::RowGroupMetaData;
 /// └───────────────────┘
 ///  Row Group 3
 /// ```
+///
+/// For more background, please also see the [Embedding User-Defined Indexes in Apache Parquet Files blog]
+///
+/// [Embedding User-Defined Indexes in Apache Parquet Files blog]: https://datafusion.apache.org/blog/2025/07/14/user-defined-parquet-indexes
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParquetAccessPlan {
     /// How to access the i-th row group
@@ -302,13 +306,10 @@ impl ParquetAccessPlan {
 
     /// Return an iterator over the row group indexes that should be scanned
     pub fn row_group_index_iter(&self) -> impl Iterator<Item = usize> + '_ {
-        self.row_groups.iter().enumerate().filter_map(|(idx, b)| {
-            if b.should_scan() {
-                Some(idx)
-            } else {
-                None
-            }
-        })
+        self.row_groups
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, b)| if b.should_scan() { Some(idx) } else { None })
     }
 
     /// Return a vec of all row group indexes to scan
@@ -511,7 +512,10 @@ mod test {
             .unwrap_err()
             .to_string();
         assert_eq!(row_group_indexes, vec![0, 1, 2, 3]);
-        assert_contains!(err, "Invalid ParquetAccessPlan Selection. Row group 1 has 20 rows but selection only specifies 22 rows");
+        assert_contains!(
+            err,
+            "Invalid ParquetAccessPlan Selection. Row group 1 has 20 rows but selection only specifies 22 rows"
+        );
     }
 
     /// [`RowGroupMetaData`] that returns 4 row groups with 10, 20, 30, 40 rows

@@ -19,28 +19,28 @@
 
 use std::sync::Arc;
 
-use arrow::array::{record_batch, RecordBatch};
-use arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
+use arrow::array::{RecordBatch, record_batch};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 
 use datafusion::assert_batches_eq;
+use datafusion::common::Result;
 use datafusion::common::not_impl_err;
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion::common::{Result, ScalarValue};
 use datafusion::datasource::listing::{
     ListingTable, ListingTableConfig, ListingTableConfigExt, ListingTableUrl,
 };
 use datafusion::execution::context::SessionContext;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::parquet::arrow::ArrowWriter;
-use datafusion::physical_expr::expressions::CastExpr;
 use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_expr::expressions::{CastColumnExpr, CastExpr};
 use datafusion::prelude::SessionConfig;
 use datafusion_physical_expr_adapter::{
     DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter, PhysicalExprAdapterFactory,
 };
 use object_store::memory::InMemory;
 use object_store::path::Path;
-use object_store::{ObjectStore, PutPayload};
+use object_store::{ObjectStore, ObjectStoreExt, PutPayload};
 
 // Example showing how to implement custom casting rules to adapt file schemas.
 // This example enforces that casts must be strictly widening: if the file type is Int64 and the table type is Int32, it will error
@@ -49,9 +49,9 @@ use object_store::{ObjectStore, PutPayload};
 pub async fn custom_file_casts() -> Result<()> {
     println!("=== Creating example data ===");
 
-    // Create a logical / table schema with an Int32 column
+    // Create a logical / table schema with an Int32 column (nullable)
     let logical_schema =
-        Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, true)]));
 
     // Create some data that can be cast (Int16 -> Int32 is widening) and some that cannot (Int64 -> Int32 is narrowing)
     let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
@@ -156,14 +156,14 @@ impl PhysicalExprAdapterFactory for CustomCastPhysicalExprAdapterFactory {
         &self,
         logical_file_schema: SchemaRef,
         physical_file_schema: SchemaRef,
-    ) -> Arc<dyn PhysicalExprAdapter> {
+    ) -> Result<Arc<dyn PhysicalExprAdapter>> {
         let inner = self
             .inner
-            .create(logical_file_schema, Arc::clone(&physical_file_schema));
-        Arc::new(CustomCastsPhysicalExprAdapter {
+            .create(logical_file_schema, Arc::clone(&physical_file_schema))?;
+        Ok(Arc::new(CustomCastsPhysicalExprAdapter {
             physical_file_schema,
             inner,
-        })
+        }))
     }
 }
 
@@ -192,18 +192,21 @@ impl PhysicalExprAdapter for CustomCastsPhysicalExprAdapter {
                     );
                 }
             }
+            if let Some(cast) = expr.as_any().downcast_ref::<CastColumnExpr>() {
+                let input_data_type =
+                    cast.expr().data_type(&self.physical_file_schema)?;
+                let output_data_type = cast.data_type(&self.physical_file_schema)?;
+                if !CastExpr::check_bigger_cast(
+                    cast.target_field().data_type(),
+                    &input_data_type,
+                ) {
+                    return not_impl_err!(
+                        "Unsupported CAST from {input_data_type} to {output_data_type}"
+                    );
+                }
+            }
             Ok(Transformed::no(expr))
         })
         .data()
-    }
-
-    fn with_partition_values(
-        &self,
-        partition_values: Vec<(FieldRef, ScalarValue)>,
-    ) -> Arc<dyn PhysicalExprAdapter> {
-        Arc::new(Self {
-            inner: self.inner.with_partition_values(partition_values),
-            ..self.clone()
-        })
     }
 }

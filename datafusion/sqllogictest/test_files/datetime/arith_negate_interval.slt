@@ -1,0 +1,13 @@
+# - interval → interval
+# Negate an interval
+# - interval '23 hours' → -23:00:00
+
+query ?
+SELECT - interval '23 hours'
+----
+-23 hours
+
+query T
+SELECT arrow_typeof(- interval '23 hours')
+----
+Interval(MonthDayNano)

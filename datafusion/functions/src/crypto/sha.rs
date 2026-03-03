@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::crypto::basic::{digest_process, DigestAlgorithm};
+use crate::crypto::basic::{DigestAlgorithm, digest_process};
 
 use arrow::datatypes::DataType;
 use datafusion_common::{
+    Result,
     types::{logical_binary, logical_string},
     utils::take_function_args,
-    Result,
 };
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,

@@ -25,7 +25,7 @@ use arrow::datatypes::{DataType, Field, SchemaBuilder, ToByteSlice};
 
 use datafusion_common::utils::{fixed_size_list_to_arrays, list_to_arrays};
 use datafusion_common::{
-    exec_err, utils::take_function_args, HashSet, Result, ScalarValue,
+    HashSet, Result, ScalarValue, exec_err, utils::take_function_args,
 };
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{
@@ -119,7 +119,7 @@ fn get_first_array_ref(columnar_value: &ColumnarValue) -> Result<ArrayRef> {
             ScalarValue::List(array) => Ok(array.value(0)),
             ScalarValue::LargeList(array) => Ok(array.value(0)),
             ScalarValue::FixedSizeList(array) => Ok(array.value(0)),
-            _ => exec_err!("Expected array, got {:?}", value),
+            _ => exec_err!("Expected array, got {}", value),
         },
         ColumnarValue::Array(array) => Ok(array.to_owned()),
     }

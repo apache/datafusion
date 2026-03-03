@@ -23,12 +23,12 @@ use std::sync::Arc;
 use crate::avro_to_arrow::Reader as AvroReader;
 
 use datafusion_common::error::Result;
+use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_datasource::TableSchema;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::file_stream::FileOpener;
 use datafusion_datasource::projection::{ProjectionOpener, SplitProjection};
-use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
-use datafusion_datasource::TableSchema;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::projection::ProjectionExprs;
@@ -42,7 +42,6 @@ pub struct AvroSource {
     batch_size: Option<usize>,
     projection: SplitProjection,
     metrics: ExecutionPlanMetricsSet,
-    schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
 
 impl AvroSource {
@@ -54,7 +53,6 @@ impl AvroSource {
             table_schema,
             batch_size: None,
             metrics: ExecutionPlanMetricsSet::new(),
-            schema_adapter_factory: None,
         }
     }
 
@@ -143,18 +141,18 @@ impl FileSource for AvroSource {
         Ok(None)
     }
 
-    fn with_schema_adapter_factory(
+    fn apply_expressions(
         &self,
-        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
-    ) -> Result<Arc<dyn FileSource>> {
-        Ok(Arc::new(Self {
-            schema_adapter_factory: Some(schema_adapter_factory),
-            ..self.clone()
-        }))
-    }
-
-    fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
-        self.schema_adapter_factory.clone()
+        f: &mut dyn FnMut(
+            &dyn datafusion_physical_plan::PhysicalExpr,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Visit projection expressions
+        let mut tnr = TreeNodeRecursion::Continue;
+        for proj_expr in &self.projection.source {
+            tnr = tnr.visit_sibling(|| f(proj_expr.expr.as_ref()))?;
+        }
+        Ok(tnr)
     }
 }
 
@@ -162,9 +160,9 @@ mod private {
     use super::*;
 
     use bytes::Buf;
-    use datafusion_datasource::{file_stream::FileOpenFuture, PartitionedFile};
+    use datafusion_datasource::{PartitionedFile, file_stream::FileOpenFuture};
     use futures::StreamExt;
-    use object_store::{GetResultPayload, ObjectStore};
+    use object_store::{GetResultPayload, ObjectStore, ObjectStoreExt};
 
     pub struct AvroOpener {
         pub config: Arc<AvroSource>,

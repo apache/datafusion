@@ -23,19 +23,19 @@ use std::vec;
 
 use crate::utils::make_decimal_type;
 use arrow::datatypes::*;
+use datafusion_common::TableReference;
 use datafusion_common::config::SqlParserOptions;
 use datafusion_common::datatype::{DataTypeExt, FieldExt};
 use datafusion_common::error::add_possible_columns_to_diag;
-use datafusion_common::TableReference;
+use datafusion_common::{DFSchema, DataFusionError, Result, not_impl_err, plan_err};
 use datafusion_common::{
-    field_not_found, internal_err, plan_datafusion_err, DFSchemaRef, Diagnostic,
-    SchemaError,
+    DFSchemaRef, Diagnostic, SchemaError, field_not_found, internal_err,
+    plan_datafusion_err,
 };
-use datafusion_common::{not_impl_err, plan_err, DFSchema, DataFusionError, Result};
 use datafusion_expr::logical_plan::{LogicalPlan, LogicalPlanBuilder};
 pub use datafusion_expr::planner::ContextProvider;
 use datafusion_expr::utils::find_column_exprs;
-use datafusion_expr::{col, Expr};
+use datafusion_expr::{Expr, col};
 use sqlparser::ast::{ArrayElemTypeDef, ExactNumberInfo, TimezoneInfo};
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{DataType as SQLDataType, Ident, ObjectName, TableAlias};
@@ -202,7 +202,9 @@ impl FromStr for NullOrdering {
             "nulls_min" => Ok(Self::NullsMin),
             "nulls_first" => Ok(Self::NullsFirst),
             "nulls_last" => Ok(Self::NullsLast),
-            _ => plan_err!("Unknown null ordering: Expected one of 'nulls_first', 'nulls_last', 'nulls_min' or 'nulls_max'. Got {s}"),
+            _ => plan_err!(
+                "Unknown null ordering: Expected one of 'nulls_first', 'nulls_last', 'nulls_min' or 'nulls_max'. Got {s}"
+            ),
         }
     }
 }
@@ -259,8 +261,10 @@ pub struct PlannerContext {
     /// Map of CTE name to logical plan of the WITH clause.
     /// Use `Arc<LogicalPlan>` to allow cheap cloning
     ctes: HashMap<String, Arc<LogicalPlan>>,
-    /// The query schema of the outer query plan, used to resolve the columns in subquery
-    outer_query_schema: Option<DFSchemaRef>,
+
+    /// The queries schemas of outer query relations, used to resolve the outer referenced
+    /// columns in subquery (recursive aware)
+    outer_queries_schemas_stack: Vec<DFSchemaRef>,
     /// The joined schemas of all FROM clauses planned so far. When planning LATERAL
     /// FROM clauses, this should become a suffix of the `outer_query_schema`.
     outer_from_schema: Option<DFSchemaRef>,
@@ -280,7 +284,7 @@ impl PlannerContext {
         Self {
             prepare_param_data_types: Arc::new(vec![]),
             ctes: HashMap::new(),
-            outer_query_schema: None,
+            outer_queries_schemas_stack: vec![],
             outer_from_schema: None,
             create_table_schema: None,
         }
@@ -295,19 +299,42 @@ impl PlannerContext {
         self
     }
 
-    // Return a reference to the outer query's schema
-    pub fn outer_query_schema(&self) -> Option<&DFSchema> {
-        self.outer_query_schema.as_ref().map(|s| s.as_ref())
+    /// Return the stack of outer relations' schemas, the outer most
+    /// relation are at the first entry
+    pub fn outer_queries_schemas(&self) -> &[DFSchemaRef] {
+        &self.outer_queries_schemas_stack
+    }
+
+    /// Return an iterator of the subquery relations' schemas, innermost
+    /// relation is returned first.
+    ///
+    /// This order corresponds to the order of resolution when looking up column
+    /// references in subqueries, which start from the innermost relation and
+    /// then look up the outer relations one by one until a match is found or no
+    /// more outer relation exist.
+    ///
+    /// NOTE this is *REVERSED* order of [`Self::outer_queries_schemas`]
+    ///
+    /// This is useful to resolve the column reference in the subquery by
+    /// looking up the outer query schemas one by one.
+    pub fn outer_schemas_iter(&self) -> impl Iterator<Item = &DFSchemaRef> {
+        self.outer_queries_schemas_stack.iter().rev()
     }
 
     /// Sets the outer query schema, returning the existing one, if
     /// any
-    pub fn set_outer_query_schema(
-        &mut self,
-        mut schema: Option<DFSchemaRef>,
-    ) -> Option<DFSchemaRef> {
-        std::mem::swap(&mut self.outer_query_schema, &mut schema);
-        schema
+    pub fn append_outer_query_schema(&mut self, schema: DFSchemaRef) {
+        self.outer_queries_schemas_stack.push(schema);
+    }
+
+    /// The schema of the adjacent outer relation
+    pub fn latest_outer_query_schema(&self) -> Option<&DFSchemaRef> {
+        self.outer_queries_schemas_stack.last()
+    }
+
+    /// Remove the schema of the adjacent outer relation
+    pub fn pop_outer_query_schema(&mut self) -> Option<DFSchemaRef> {
+        self.outer_queries_schemas_stack.pop()
     }
 
     pub fn set_table_schema(
@@ -593,10 +620,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         sql_type: &SQLDataType,
     ) -> Result<FieldRef> {
         // First check if any of the registered type_planner can handle this type
-        if let Some(type_planner) = self.context_provider.get_type_planner() {
-            if let Some(data_type) = type_planner.plan_type(sql_type)? {
-                return Ok(data_type.into_nullable_field_ref());
-            }
+        if let Some(type_planner) = self.context_provider.get_type_planner()
+            && let Some(data_type) = type_planner.plan_type(sql_type)?
+        {
+            return Ok(data_type.into_nullable_field_ref());
         }
 
         // If no type_planner can handle this type, use the default conversion
@@ -686,8 +713,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLDataType::Timestamp(precision, tz_info)
                 if precision.is_none() || [0, 3, 6, 9].contains(&precision.unwrap()) =>
             {
-                let tz = if matches!(tz_info, TimezoneInfo::Tz)
-                    || matches!(tz_info, TimezoneInfo::WithTimeZone)
+                let tz = if *tz_info == TimezoneInfo::Tz
+                    || *tz_info == TimezoneInfo::WithTimeZone
                 {
                     // Timestamp With Time Zone
                     // INPUT : [SQLDataType]   TimestampTz + [Config] Time Zone
@@ -708,8 +735,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
             SQLDataType::Date => Ok(DataType::Date32),
             SQLDataType::Time(None, tz_info) => {
-                if matches!(tz_info, TimezoneInfo::None)
-                    || matches!(tz_info, TimezoneInfo::WithoutTimeZone)
+                if *tz_info == TimezoneInfo::None
+                    || *tz_info == TimezoneInfo::WithoutTimeZone
                 {
                     Ok(DataType::Time64(TimeUnit::Nanosecond))
                 } else {
@@ -821,7 +848,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::HugeInt
             | SQLDataType::UHugeInt
             | SQLDataType::UBigInt
-            | SQLDataType::TimestampNtz
+            | SQLDataType::TimestampNtz{..}
             | SQLDataType::NamedTable { .. }
             | SQLDataType::TsVector
             | SQLDataType::TsQuery

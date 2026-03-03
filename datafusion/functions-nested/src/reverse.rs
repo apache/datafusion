@@ -32,7 +32,7 @@ use datafusion_common::cast::{
     as_fixed_size_list_array, as_large_list_array, as_large_list_view_array,
     as_list_array, as_list_view_array,
 };
-use datafusion_common::{exec_err, utils::take_function_args, Result};
+use datafusion_common::{Result, exec_err, utils::take_function_args};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };

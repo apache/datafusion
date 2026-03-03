@@ -20,8 +20,8 @@ use std::{
     ops::AddAssign,
     str::FromStr,
     sync::{
-        atomic::{AtomicU8, Ordering},
         Arc,
+        atomic::{AtomicU8, Ordering},
     },
     time::Duration,
 };
@@ -31,17 +31,71 @@ use arrow::util::pretty::pretty_format_batches;
 use async_trait::async_trait;
 use chrono::Utc;
 use datafusion::{
-    common::{instant::Instant, HashMap},
+    common::{HashMap, instant::Instant},
     error::DataFusionError,
     execution::object_store::{DefaultObjectStoreRegistry, ObjectStoreRegistry},
 };
-use futures::stream::BoxStream;
+use futures::stream::{BoxStream, Stream};
+use futures::{StreamExt, TryStreamExt};
 use object_store::{
-    path::Path, GetOptions, GetRange, GetResult, ListResult, MultipartUpload, ObjectMeta,
-    ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
+    CopyOptions, GetOptions, GetRange, GetResult, ListResult, MultipartUpload,
+    ObjectMeta, ObjectStore, ObjectStoreExt, PutMultipartOptions, PutOptions, PutPayload,
+    PutResult, Result, path::Path,
 };
 use parking_lot::{Mutex, RwLock};
 use url::Url;
+
+/// A stream wrapper that measures the time until the first response(item or end of stream) is yielded
+struct TimeToFirstItemStream<S> {
+    inner: S,
+    start: Instant,
+    request_index: usize,
+    requests: Arc<Mutex<Vec<RequestDetails>>>,
+    first_item_yielded: bool,
+}
+
+impl<S> TimeToFirstItemStream<S> {
+    fn new(
+        inner: S,
+        start: Instant,
+        request_index: usize,
+        requests: Arc<Mutex<Vec<RequestDetails>>>,
+    ) -> Self {
+        Self {
+            inner,
+            start,
+            request_index,
+            requests,
+            first_item_yielded: false,
+        }
+    }
+}
+
+impl<S> Stream for TimeToFirstItemStream<S>
+where
+    S: Stream<Item = Result<ObjectMeta>> + Unpin,
+{
+    type Item = Result<ObjectMeta>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        let poll_result = std::pin::Pin::new(&mut self.inner).poll_next(cx);
+
+        if !self.first_item_yielded && poll_result.is_ready() {
+            self.first_item_yielded = true;
+            let elapsed = self.start.elapsed();
+
+            let mut requests = self.requests.lock();
+            if let Some(request) = requests.get_mut(self.request_index) {
+                request.duration = Some(elapsed);
+            }
+        }
+
+        poll_result
+    }
+}
 
 /// The profiling mode to use for an [`InstrumentedObjectStore`] instance. Collecting profiling
 /// data will have a small negative impact on both CPU and memory usage. Default is `Disabled`
@@ -57,7 +111,7 @@ pub enum InstrumentedObjectStoreMode {
 }
 
 impl fmt::Display for InstrumentedObjectStoreMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{self:?}")
     }
 }
@@ -91,7 +145,7 @@ impl From<u8> for InstrumentedObjectStoreMode {
 pub struct InstrumentedObjectStore {
     inner: Arc<dyn ObjectStore>,
     instrument_mode: AtomicU8,
-    requests: Mutex<Vec<RequestDetails>>,
+    requests: Arc<Mutex<Vec<RequestDetails>>>,
 }
 
 impl InstrumentedObjectStore {
@@ -100,7 +154,7 @@ impl InstrumentedObjectStore {
         Self {
             inner: object_store,
             instrument_mode,
-            requests: Mutex::new(Vec::new()),
+            requests: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -177,16 +231,26 @@ impl InstrumentedObjectStore {
         let timestamp = Utc::now();
         let range = options.range.clone();
 
+        let head = options.head;
         let start = Instant::now();
         let ret = self.inner.get_opts(location, options).await?;
         let elapsed = start.elapsed();
 
+        let (op, size) = if head {
+            (Operation::Head, None)
+        } else {
+            (
+                Operation::Get,
+                Some((ret.range.end - ret.range.start) as usize),
+            )
+        };
+
         self.requests.lock().push(RequestDetails {
-            op: Operation::Get,
+            op,
             path: location.clone(),
             timestamp,
             duration: Some(elapsed),
-            size: Some((ret.range.end - ret.range.start) as usize),
+            size,
             range,
             extra_display: None,
         });
@@ -194,23 +258,30 @@ impl InstrumentedObjectStore {
         Ok(ret)
     }
 
-    async fn instrumented_delete(&self, location: &Path) -> Result<()> {
+    fn instrumented_delete_stream(
+        &self,
+        locations: BoxStream<'static, Result<Path>>,
+    ) -> BoxStream<'static, Result<Path>> {
+        let requests_captured = Arc::clone(&self.requests);
+
         let timestamp = Utc::now();
         let start = Instant::now();
-        self.inner.delete(location).await?;
-        let elapsed = start.elapsed();
-
-        self.requests.lock().push(RequestDetails {
-            op: Operation::Delete,
-            path: location.clone(),
-            timestamp,
-            duration: Some(elapsed),
-            size: None,
-            range: None,
-            extra_display: None,
-        });
-
-        Ok(())
+        self.inner
+            .delete_stream(locations)
+            .and_then(move |location| {
+                let elapsed = start.elapsed();
+                requests_captured.lock().push(RequestDetails {
+                    op: Operation::Delete,
+                    path: location.clone(),
+                    timestamp,
+                    duration: Some(elapsed),
+                    size: None,
+                    range: None,
+                    extra_display: None,
+                });
+                futures::future::ok(location)
+            })
+            .boxed()
     }
 
     fn instrumented_list(
@@ -218,19 +289,31 @@ impl InstrumentedObjectStore {
         prefix: Option<&Path>,
     ) -> BoxStream<'static, Result<ObjectMeta>> {
         let timestamp = Utc::now();
-        let ret = self.inner.list(prefix);
+        let start = Instant::now();
+        let inner_stream = self.inner.list(prefix);
 
-        self.requests.lock().push(RequestDetails {
-            op: Operation::List,
-            path: prefix.cloned().unwrap_or_else(|| Path::from("")),
-            timestamp,
-            duration: None, // list returns a stream, so the duration isn't meaningful
-            size: None,
-            range: None,
-            extra_display: None,
-        });
+        let request_index = {
+            let mut requests = self.requests.lock();
+            requests.push(RequestDetails {
+                op: Operation::List,
+                path: prefix.cloned().unwrap_or_else(|| Path::from("")),
+                timestamp,
+                duration: None,
+                size: None,
+                range: None,
+                extra_display: None,
+            });
+            requests.len() - 1
+        };
 
-        ret
+        let wrapped_stream = TimeToFirstItemStream::new(
+            inner_stream,
+            start,
+            request_index,
+            Arc::clone(&self.requests),
+        );
+
+        Box::pin(wrapped_stream)
     }
 
     async fn instrumented_list_with_delimiter(
@@ -296,29 +379,10 @@ impl InstrumentedObjectStore {
 
         Ok(())
     }
-
-    async fn instrumented_head(&self, location: &Path) -> Result<ObjectMeta> {
-        let timestamp = Utc::now();
-        let start = Instant::now();
-        let ret = self.inner.head(location).await?;
-        let elapsed = start.elapsed();
-
-        self.requests.lock().push(RequestDetails {
-            op: Operation::Head,
-            path: location.clone(),
-            timestamp,
-            duration: Some(elapsed),
-            size: None,
-            range: None,
-            extra_display: None,
-        });
-
-        Ok(ret)
-    }
 }
 
 impl fmt::Display for InstrumentedObjectStore {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mode: InstrumentedObjectStoreMode =
             self.instrument_mode.load(Ordering::Relaxed).into();
         write!(
@@ -364,12 +428,15 @@ impl ObjectStore for InstrumentedObjectStore {
         self.inner.get_opts(location, options).await
     }
 
-    async fn delete(&self, location: &Path) -> Result<()> {
+    fn delete_stream(
+        &self,
+        locations: BoxStream<'static, Result<Path>>,
+    ) -> BoxStream<'static, Result<Path>> {
         if self.enabled() {
-            return self.instrumented_delete(location).await;
+            return self.instrumented_delete_stream(locations);
         }
 
-        self.inner.delete(location).await
+        self.inner.delete_stream(locations)
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
@@ -388,28 +455,24 @@ impl ObjectStore for InstrumentedObjectStore {
         self.inner.list_with_delimiter(prefix).await
     }
 
-    async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
+    async fn copy_opts(
+        &self,
+        from: &Path,
+        to: &Path,
+        options: CopyOptions,
+    ) -> Result<()> {
         if self.enabled() {
-            return self.instrumented_copy(from, to).await;
+            return match options.mode {
+                object_store::CopyMode::Create => {
+                    self.instrumented_copy_if_not_exists(from, to).await
+                }
+                object_store::CopyMode::Overwrite => {
+                    self.instrumented_copy(from, to).await
+                }
+            };
         }
 
-        self.inner.copy(from, to).await
-    }
-
-    async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
-        if self.enabled() {
-            return self.instrumented_copy_if_not_exists(from, to).await;
-        }
-
-        self.inner.copy_if_not_exists(from, to).await
-    }
-
-    async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-        if self.enabled() {
-            return self.instrumented_head(location).await;
-        }
-
-        self.inner.head(location).await
+        self.inner.copy_opts(from, to, options).await
     }
 }
 
@@ -425,7 +488,7 @@ pub enum Operation {
 }
 
 impl fmt::Display for Operation {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{self:?}")
     }
 }
@@ -443,7 +506,7 @@ pub struct RequestDetails {
 }
 
 impl fmt::Display for RequestDetails {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut output_parts = vec![format!(
             "{} operation={:?}",
             self.timestamp.to_rfc3339(),
@@ -758,6 +821,7 @@ impl ObjectStoreRegistry for InstrumentedObjectStoreRegistry {
 
 #[cfg(test)]
 mod tests {
+    use futures::StreamExt;
     use object_store::WriteMultipart;
 
     use super::*;
@@ -782,9 +846,11 @@ mod tests {
             "TRaCe".parse().unwrap(),
             InstrumentedObjectStoreMode::Trace
         ));
-        assert!("does_not_exist"
-            .parse::<InstrumentedObjectStoreMode>()
-            .is_err());
+        assert!(
+            "does_not_exist"
+                .parse::<InstrumentedObjectStoreMode>()
+                .is_err()
+        );
 
         assert!(matches!(0.into(), InstrumentedObjectStoreMode::Disabled));
         assert!(matches!(1.into(), InstrumentedObjectStoreMode::Summary));
@@ -896,13 +962,15 @@ mod tests {
 
         instrumented.set_instrument_mode(InstrumentedObjectStoreMode::Trace);
         assert!(instrumented.requests.lock().is_empty());
-        let _ = instrumented.list(Some(&path));
+        let mut stream = instrumented.list(Some(&path));
+        // Consume at least one item from the stream to trigger duration measurement
+        let _ = stream.next().await;
         assert_eq!(instrumented.requests.lock().len(), 1);
 
         let request = instrumented.take_requests().pop().unwrap();
         assert_eq!(request.op, Operation::List);
         assert_eq!(request.path, path);
-        assert!(request.duration.is_none());
+        assert!(request.duration.is_some());
         assert!(request.size.is_none());
         assert!(request.range.is_none());
         assert!(request.extra_display.is_none());

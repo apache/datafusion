@@ -46,13 +46,13 @@ mod tests {
             .collect()
             .await?;
 
-        insta::assert_snapshot!(batches_to_string(&results),@r###"
+        insta::assert_snapshot!(batches_to_string(&results),@r"
         +---+
         | b |
         +---+
         | 2 |
         +---+
-        "###);
+        ");
 
         Ok(())
     }
@@ -96,14 +96,14 @@ mod tests {
             .collect()
             .await?;
 
-        insta::assert_snapshot!(batches_to_string(&results),@r###"
+        insta::assert_snapshot!(batches_to_string(&results),@r"
         +---------+---------+---------+
         | column1 | column2 | column3 |
         +---------+---------+---------+
         | 1       | 2       | 3       |
         | 4       | 5       | 6       |
         +---------+---------+---------+
-        "###);
+        ");
 
         let view_sql =
             "CREATE VIEW replace_xyz AS SELECT * REPLACE (column1*2 as column1) FROM xyz";
@@ -115,14 +115,14 @@ mod tests {
             .collect()
             .await?;
 
-        insta::assert_snapshot!(batches_to_string(&results),@r###"
+        insta::assert_snapshot!(batches_to_string(&results),@r"
         +---------+---------+---------+
         | column1 | column2 | column3 |
         +---------+---------+---------+
         | 2       | 2       | 3       |
         | 8       | 5       | 6       |
         +---------+---------+---------+
-        "###);
+        ");
 
         Ok(())
     }
@@ -146,14 +146,14 @@ mod tests {
             .collect()
             .await?;
 
-        insta::assert_snapshot!(batches_to_string(&results),@r###"
+        insta::assert_snapshot!(batches_to_string(&results),@r"
         +---------------+
         | column1_alias |
         +---------------+
         | 1             |
         | 4             |
         +---------------+
-        "###);
+        ");
 
         Ok(())
     }
@@ -177,14 +177,14 @@ mod tests {
             .collect()
             .await?;
 
-        insta::assert_snapshot!(batches_to_string(&results),@r###"
+        insta::assert_snapshot!(batches_to_string(&results),@r"
         +---------------+---------------+
         | column2_alias | column1_alias |
         +---------------+---------------+
         | 2             | 1             |
         | 5             | 4             |
         +---------------+---------------+
-        "###);
+        ");
 
         Ok(())
     }
@@ -213,14 +213,14 @@ mod tests {
             .collect()
             .await?;
 
-        insta::assert_snapshot!(batches_to_string(&results),@r###"
+        insta::assert_snapshot!(batches_to_string(&results),@r"
         +---------+
         | column1 |
         +---------+
         | 1       |
         | 4       |
         +---------+
-        "###);
+        ");
 
         Ok(())
     }
@@ -249,13 +249,13 @@ mod tests {
             .collect()
             .await?;
 
-        insta::assert_snapshot!(batches_to_string(&results),@r###"
+        insta::assert_snapshot!(batches_to_string(&results),@r"
         +---------+
         | column1 |
         +---------+
         | 4       |
         +---------+
-        "###);
+        ");
 
         Ok(())
     }
@@ -287,14 +287,14 @@ mod tests {
             .collect()
             .await?;
 
-        insta::assert_snapshot!(batches_to_string(&results),@r###"
+        insta::assert_snapshot!(batches_to_string(&results),@r"
         +---------+---------+---------+
         | column2 | column1 | column3 |
         +---------+---------+---------+
         | 2       | 1       | 3       |
         | 5       | 4       | 6       |
         +---------+---------+---------+
-        "###);
+        ");
 
         Ok(())
     }
@@ -445,14 +445,14 @@ mod tests {
             .collect()
             .await?;
 
-        insta::assert_snapshot!(batches_to_string(&results),@r###"
+        insta::assert_snapshot!(batches_to_string(&results),@r"
         +---------+
         | column1 |
         +---------+
         | 1       |
         | 4       |
         +---------+
-        "###);
+        ");
 
         Ok(())
     }

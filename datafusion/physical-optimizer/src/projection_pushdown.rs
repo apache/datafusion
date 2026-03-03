@@ -20,24 +20,25 @@
 //! projections one by one if the operator below is amenable to this. If a
 //! projection reaches a source, it can even disappear from the plan entirely.
 
-use crate::{OptimizerContext, PhysicalOptimizerRule};
+use crate::PhysicalOptimizerRule;
 use arrow::datatypes::{Fields, Schema, SchemaRef};
 use datafusion_common::alias::AliasGenerator;
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::{JoinSide, JoinType, Result};
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
-use datafusion_physical_plan::joins::NestedLoopJoinExec;
-use datafusion_physical_plan::projection::{
-    remove_unnecessary_projections, ProjectionExec,
-};
+use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, is_volatile};
 use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::joins::NestedLoopJoinExec;
+use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
+use datafusion_physical_plan::projection::{
+    ProjectionExec, remove_unnecessary_projections,
+};
 
 /// This rule inspects `ProjectionExec`'s in the given physical plan and tries to
 /// remove or swap with its child.
@@ -49,17 +50,17 @@ use datafusion_physical_plan::ExecutionPlan;
 pub struct ProjectionPushdown {}
 
 impl ProjectionPushdown {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
 }
 
 impl PhysicalOptimizerRule for ProjectionPushdown {
-    fn optimize_plan(
+    fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        _context: &OptimizerContext,
+        _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let alias_generator = AliasGenerator::new();
         let plan = plan
@@ -134,7 +135,7 @@ fn try_push_down_join_filter(
     );
 
     let new_lhs_length = lhs_rewrite.data.0.schema().fields.len();
-    let projections = match projections {
+    let projections = match projections.as_ref() {
         None => match join.join_type() {
             JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
                 // Build projections that ignore the newly projected columns.
@@ -348,8 +349,7 @@ impl<'a> JoinFilterRewriter<'a> {
         // Recurse if there is a dependency to both sides or if the entire expression is volatile.
         let depends_on_other_side =
             self.depends_on_join_side(&expr, self.join_side.negate())?;
-        let is_volatile = is_volatile_expression_tree(expr.as_ref());
-        if depends_on_other_side || is_volatile {
+        if depends_on_other_side || is_volatile(&expr) {
             return expr.map_children(|expr| self.rewrite(expr));
         }
 
@@ -430,28 +430,14 @@ impl<'a> JoinFilterRewriter<'a> {
     }
 }
 
-fn is_volatile_expression_tree(expr: &dyn PhysicalExpr) -> bool {
-    if expr.is_volatile_node() {
-        return true;
-    }
-
-    expr.children()
-        .iter()
-        .map(|expr| is_volatile_expression_tree(expr.as_ref()))
-        .reduce(|lhs, rhs| lhs || rhs)
-        .unwrap_or(false)
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
     use arrow::datatypes::{DataType, Field, FieldRef, Schema};
-    use datafusion_common::config::ConfigOptions;
-    use datafusion_execution::config::SessionConfig;
     use datafusion_expr_common::operator::Operator;
     use datafusion_functions::math::random;
-    use datafusion_physical_expr::expressions::{binary, lit};
     use datafusion_physical_expr::ScalarFunctionExpr;
+    use datafusion_physical_expr::expressions::{binary, lit};
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_plan::displayable;
     use datafusion_physical_plan::empty::EmptyExec;
@@ -673,10 +659,7 @@ mod test {
         )?;
 
         let optimizer = ProjectionPushdown::new();
-        let session_config = SessionConfig::new();
-        let optimizer_context = OptimizerContext::new(session_config);
-        let optimized_plan =
-            optimizer.optimize_plan(Arc::new(join), &optimizer_context)?;
+        let optimized_plan = optimizer.optimize(Arc::new(join), &Default::default())?;
 
         let displayable_plan = displayable(optimized_plan.as_ref()).indent(false);
         Ok(displayable_plan.to_string())

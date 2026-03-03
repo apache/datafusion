@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::vec::IntoIter;
 
 use crate::expressions::with_new_schema;
-use crate::{add_offset_to_physical_sort_exprs, LexOrdering, PhysicalExpr};
+use crate::{LexOrdering, PhysicalExpr, add_offset_to_physical_sort_exprs};
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::SchemaRef;
@@ -326,10 +326,10 @@ mod tests {
 
     use crate::equivalence::tests::create_test_schema;
     use crate::equivalence::{
-        convert_to_orderings, convert_to_sort_exprs, EquivalenceClass, EquivalenceGroup,
-        EquivalenceProperties, OrderingEquivalenceClass,
+        EquivalenceClass, EquivalenceGroup, EquivalenceProperties,
+        OrderingEquivalenceClass, convert_to_orderings, convert_to_sort_exprs,
     };
-    use crate::expressions::{col, BinaryExpr, Column};
+    use crate::expressions::{BinaryExpr, Column, col};
     use crate::utils::tests::TestScalarUDF;
     use crate::{
         AcrossPartitions, ConstExpr, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
@@ -338,8 +338,8 @@ mod tests {
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::config::ConfigOptions;
     use datafusion_common::Result;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_expr::{Operator, ScalarUDF};
 
     #[test]
@@ -639,8 +639,9 @@ mod tests {
         ];
 
         for (orderings, eq_group, constants, reqs, expected) in test_cases {
-            let err_msg =
-                format!("error in test orderings: {orderings:?}, eq_group: {eq_group:?}, constants: {constants:?}, reqs: {reqs:?}, expected: {expected:?}");
+            let err_msg = format!(
+                "error in test orderings: {orderings:?}, eq_group: {eq_group:?}, constants: {constants:?}, reqs: {reqs:?}, expected: {expected:?}"
+            );
             let mut eq_properties = EquivalenceProperties::new(Arc::clone(&test_schema));
             let orderings = convert_to_orderings(&orderings);
             eq_properties.add_orderings(orderings);

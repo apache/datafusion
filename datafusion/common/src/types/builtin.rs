@@ -16,6 +16,7 @@
 // under the License.
 
 use arrow::datatypes::IntervalUnit::*;
+use arrow::datatypes::TimeUnit::*;
 
 use crate::types::{LogicalTypeRef, NativeType};
 use std::sync::{Arc, LazyLock};
@@ -81,4 +82,18 @@ singleton_variant!(
     logical_interval_mdn,
     Interval,
     MonthDayNano
+);
+
+singleton_variant!(
+    LOGICAL_INTERVAL_YEAR_MONTH,
+    logical_interval_year_month,
+    Interval,
+    YearMonth
+);
+
+singleton_variant!(
+    LOGICAL_DURATION_MICROSECOND,
+    logical_duration_microsecond,
+    Duration,
+    Microsecond
 );

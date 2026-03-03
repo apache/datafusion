@@ -207,6 +207,25 @@ SELECT ends_with('foobar', 'foo')
 ----
 false
 
+query B
+SELECT ends_with(a, '%bar') from (values ('foobar'), ('foo%bar')) as t(a);
+----
+false
+true
+
+query B
+SELECT ends_with(a, '_bar') from (values ('foobar'), ('foo_bar')) as t(a);
+----
+false
+true
+
+query B
+SELECT ends_with(a, '\_bar') from (values ('foobar'), ('foo\\bar'), ('foo\_bar')) as t(a);
+----
+false
+false
+true
+
 query I
 SELECT levenshtein('kitten', 'sitting')
 ----
@@ -845,6 +864,26 @@ query B
 SELECT starts_with('foobar', 'bar')
 ----
 false
+
+
+query B
+SELECT starts_with(a, 'foo%') from (values ('foobar'), ('foo%bar')) as t(a);
+----
+false
+true
+
+query B
+SELECT starts_with(a, 'foo\_') from (values ('foobar'), ('foo\\_bar'), ('foo\_bar')) as t(a);
+----
+false
+false
+true
+
+query B
+SELECT starts_with(a, 'foo_') from (values ('foobar'), ('foo_bar')) as t(a);
+----
+false
+true
 
 query TT
 select '   ', '|'

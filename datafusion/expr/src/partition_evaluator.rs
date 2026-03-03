@@ -86,6 +86,10 @@ use crate::window_state::WindowAggState;
 /// [`uses_window_frame`]: Self::uses_window_frame
 /// [`include_rank`]: Self::include_rank
 /// [`supports_bounded_execution`]: Self::supports_bounded_execution
+///
+/// For more background, please also see the [User defined Window Functions in DataFusion blog]
+///
+/// [User defined Window Functions in DataFusion blog]: https://datafusion.apache.org/blog/2025/04/19/user-defined-window-functions
 pub trait PartitionEvaluator: Debug + Send {
     /// When the window frame has a fixed beginning (e.g UNBOUNDED
     /// PRECEDING), some functions such as FIRST_VALUE, LAST_VALUE and
@@ -175,7 +179,7 @@ pub trait PartitionEvaluator: Debug + Send {
     }
 
     /// Evaluate window function on a range of rows in an input
-    /// partition.x
+    /// partition.
     ///
     /// This is the simplest and most general function to implement
     /// but also the least performant as it creates output one row at
@@ -210,7 +214,7 @@ pub trait PartitionEvaluator: Debug + Send {
     ///  A  | 1
     ///  C  | 3
     ///  D  | 4
-    ///  D  | 5
+    ///  D  | 4
     /// ```
     ///
     /// For this case, `num_rows` would be `5` and the

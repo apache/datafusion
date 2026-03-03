@@ -35,19 +35,19 @@ use datafusion::execution::memory_pool::MemoryConsumer;
 use datafusion::logical_expr::{DdlStatement, LogicalPlan};
 use datafusion::physical_plan::execution_plan::EmissionType;
 use datafusion::physical_plan::spill::get_record_batch_memory_size;
-use datafusion::physical_plan::{execute_stream, ExecutionPlanProperties};
+use datafusion::physical_plan::{ExecutionPlanProperties, execute_stream};
 use datafusion::sql::parser::{DFParser, Statement};
 use datafusion::sql::sqlparser;
 use datafusion::sql::sqlparser::dialect::dialect_from_str;
 use futures::StreamExt;
 use log::warn;
 use object_store::Error::Generic;
-use rustyline::error::ReadlineError;
 use rustyline::Editor;
+use rustyline::error::ReadlineError;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::prelude::*;
 use std::io::BufReader;
+use std::io::prelude::*;
 use tokio::signal;
 
 /// run and execute SQL statements and commands, against a context with the given print options
@@ -168,7 +168,10 @@ pub async fn exec_from_repl(
                         }
                     }
                 } else {
-                    eprintln!("'\\{}' is not a valid command, you can use '\\?' to see all commands", &line[1..]);
+                    eprintln!(
+                        "'\\{}' is not a valid command, you can use '\\?' to see all commands",
+                        &line[1..]
+                    );
                 }
             }
             Ok(line) => {
@@ -193,6 +196,7 @@ pub async fn exec_from_repl(
             }
             Err(ReadlineError::Interrupted) => {
                 println!("^C");
+                rl.helper().unwrap().reset_hint();
                 continue;
             }
             Err(ReadlineError::Eof) => {
@@ -266,7 +270,7 @@ impl StatementExecutor {
         let options = task_ctx.session_config().options();
 
         // Track memory usage for the query result if it's bounded
-        let mut reservation =
+        let reservation =
             MemoryConsumer::new("DataFusion-Cli").register(task_ctx.memory_pool());
 
         if physical_plan.boundedness().is_unbounded() {
@@ -297,7 +301,7 @@ impl StatementExecutor {
                 let curr_num_rows = batch.num_rows();
                 // Stop collecting results if the number of rows exceeds the limit
                 // results batch should include the last batch that exceeds the limit
-                if row_count < max_rows + curr_num_rows {
+                if row_count < max_rows.saturating_add(curr_num_rows) {
                     // Try to grow the reservation to accommodate the batch in memory
                     reservation.try_grow(get_record_batch_memory_size(&batch))?;
                     results.push(batch);
@@ -334,7 +338,9 @@ impl StatementExecutor {
                 if matches!(err.as_ref(), Generic { store, source: _ } if "S3".eq_ignore_ascii_case(store))
                     && self.statement_for_retry.is_some() =>
             {
-                warn!("S3 region is incorrect, auto-detecting the correct region (this may be slow). Consider updating your region configuration.");
+                warn!(
+                    "S3 region is incorrect, auto-detecting the correct region (this may be slow). Consider updating your region configuration."
+                );
                 let plan =
                     create_plan(ctx, self.statement_for_retry.take().unwrap(), true)
                         .await?;
@@ -516,6 +522,7 @@ mod tests {
     use datafusion::common::plan_err;
 
     use datafusion::prelude::SessionContext;
+    use datafusion_common::assert_contains;
     use url::Url;
 
     async fn create_external_table_test(location: &str, sql: &str) -> Result<()> {
@@ -699,8 +706,7 @@ mod tests {
     #[tokio::test]
     async fn create_object_store_table_gcs() -> Result<()> {
         let service_account_path = "fake_service_account_path";
-        let service_account_key =
-            "{\"private_key\": \"fake_private_key.pem\",\"client_email\":\"fake_client_email\", \"private_key_id\":\"id\"}";
+        let service_account_key = "{\"private_key\": \"fake_private_key.pem\",\"client_email\":\"fake_client_email\", \"private_key_id\":\"id\"}";
         let application_credentials_path = "fake_application_credentials_path";
         let location = "gcs://bucket/path/file.parquet";
 
@@ -710,15 +716,16 @@ mod tests {
         let err = create_external_table_test(location, &sql)
             .await
             .unwrap_err();
-        assert!(err.to_string().contains("os error 2"));
+        assert_contains!(err.to_string(), "os error 2");
 
         // for service_account_key
-        let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET OPTIONS('gcp.service_account_key' '{service_account_key}') LOCATION '{location}'");
+        let sql = format!(
+            "CREATE EXTERNAL TABLE test STORED AS PARQUET OPTIONS('gcp.service_account_key' '{service_account_key}') LOCATION '{location}'"
+        );
         let err = create_external_table_test(location, &sql)
             .await
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("No RSA key found in pem file"), "{err}");
+            .unwrap_err();
+        assert_contains!(err.to_string(), "Error reading pem file: no items found");
 
         // for application_credentials_path
         let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET
@@ -726,7 +733,7 @@ mod tests {
         let err = create_external_table_test(location, &sql)
             .await
             .unwrap_err();
-        assert!(err.to_string().contains("os error 2"));
+        assert_contains!(err.to_string(), "os error 2");
 
         Ok(())
     }
@@ -748,8 +755,9 @@ mod tests {
         let location = "path/to/file.cvs";
 
         // Test with format options
-        let sql =
-            format!("CREATE EXTERNAL TABLE test STORED AS CSV LOCATION '{location}' OPTIONS('format.has_header' 'true')");
+        let sql = format!(
+            "CREATE EXTERNAL TABLE test STORED AS CSV LOCATION '{location}' OPTIONS('format.has_header' 'true')"
+        );
         create_external_table_test(location, &sql).await.unwrap();
 
         Ok(())

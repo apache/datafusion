@@ -18,7 +18,14 @@
 # under the License.
 #
 
-set -e
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "${SCRIPT_DIR}"
+
 rm -rf build 2> /dev/null
+
+# Keep the workspace dependency graph in sync with the codebase.
+scripts/generate_dependency_graph.sh
 
 make html

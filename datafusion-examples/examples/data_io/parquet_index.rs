@@ -27,19 +27,19 @@ use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::common::pruning::PruningStatistics;
 use datafusion::common::{
-    internal_datafusion_err, DFSchema, DataFusionError, Result, ScalarValue,
+    DFSchema, DataFusionError, Result, ScalarValue, internal_datafusion_err,
 };
+use datafusion::datasource::TableProvider;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::memory::DataSourceExec;
 use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource};
-use datafusion::datasource::TableProvider;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::{
-    utils::conjunction, TableProviderFilterPushDown, TableType,
+    TableProviderFilterPushDown, TableType, utils::conjunction,
 };
 use datafusion::parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use datafusion::parquet::arrow::{
-    arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter,
+    ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder,
 };
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_optimizer::pruning::PruningPredicate;
@@ -52,8 +52,8 @@ use std::fs;
 use std::fs::{DirEntry, File};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tempfile::TempDir;
 use url::Url;
 
@@ -511,7 +511,7 @@ impl ParquetMetadataIndexBuilder {
 
         // Get the schema of the file. A real system might have to handle the
         // case where the schema of the file is not the same as the schema of
-        // the other files e.g. using SchemaAdapter.
+        // the other files e.g. using PhysicalExprAdapterFactory.
         if self.file_schema.is_none() {
             self.file_schema = Some(reader.schema().clone());
         }

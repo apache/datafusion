@@ -27,10 +27,10 @@ use crate::source::AvroSource;
 
 use arrow::datatypes::Schema;
 use arrow::datatypes::SchemaRef;
+use datafusion_common::DEFAULT_AVRO_EXTENSION;
+use datafusion_common::GetExt;
 use datafusion_common::internal_err;
 use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::GetExt;
-use datafusion_common::DEFAULT_AVRO_EXTENSION;
 use datafusion_common::{Result, Statistics};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_compression_type::FileCompressionType;
@@ -41,7 +41,7 @@ use datafusion_physical_plan::ExecutionPlan;
 use datafusion_session::Session;
 
 use async_trait::async_trait;
-use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
+use object_store::{GetResultPayload, ObjectMeta, ObjectStore, ObjectStoreExt};
 
 #[derive(Default)]
 /// Factory struct used to create [`AvroFormat`]

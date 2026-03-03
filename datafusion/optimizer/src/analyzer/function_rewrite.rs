@@ -23,9 +23,9 @@ use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{DFSchema, Result};
 
 use crate::utils::NamePreserver;
+use datafusion_expr::LogicalPlan;
 use datafusion_expr::expr_rewriter::FunctionRewrite;
 use datafusion_expr::utils::merge_schema;
-use datafusion_expr::LogicalPlan;
 use std::sync::Arc;
 
 /// Analyzer rule that invokes [`FunctionRewrite`]s on expressions
