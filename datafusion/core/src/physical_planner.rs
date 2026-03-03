@@ -62,20 +62,17 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::Schema;
 use arrow_schema::Field;
 use datafusion_catalog::ScanArgs;
-use datafusion_common::Column;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::format::ExplainAnalyzeLevel;
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeRecursion, TreeNodeVisitor,
 };
+use datafusion_common::{Column as CommonColumn, TableReference};
 use datafusion_common::{
     DFSchema, ScalarValue, exec_err, internal_datafusion_err, internal_err, not_impl_err,
     plan_err,
 };
-use datafusion_common::{
-    TableReference, assert_eq_or_internal_err, assert_or_internal_err,
-};
-use datafusion_common::{Column as CommonColumn, TableReference};
+use datafusion_common::{assert_eq_or_internal_err, assert_or_internal_err};
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_expr::dml::{CopyTo, InsertOp};
@@ -1672,95 +1669,41 @@ impl DefaultPhysicalPlanner {
             LogicalPlan::DependentJoin(_) => {
                 return internal_err!(
                     "Optimizors have not completely remove dependent join"
-                )
+                );
             }
             LogicalPlan::DelimGet(DelimGet {
-                delim_scan_name,
+                // delim_scan_name,
                 delim_scan_node,
                 projected_schema,
                 ..
             }) => {
-                match delim_scan_node.as_ref() {
-                    LogicalPlan::TableScan(_) => {
-                        let resolved =
-                            session_state.resolve_table_ref(delim_scan_name.clone());
-                        if let Ok(schema) = session_state.schema_for_ref(resolved.clone())
-                        {
-                            if let Some(table) = schema.table(&resolved.table).await? {
-                                let mut proj = vec![];
-                                for (i, field) in
-                                    table.schema().fields().iter().enumerate()
-                                {
-                                    for iter in projected_schema.as_ref().iter() {
-                                        if iter.1 == field {
-                                            proj.push(i);
-                                        }
-                                    }
-                                }
+                // self.create_project_physical_exec(session_state, input_exec, delim_scan_node, expr);
+                let delim_scan =
+                    LogicalPlanBuilder::new(delim_scan_node.as_ref().clone())
+                        .build()?;
+                let group_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = (0
+                    ..projected_schema.fields().len())
+                    .map(|i| {
+                        let name = projected_schema.field(i).name().to_string();
+                        let expr = Arc::new(Column::new(&name, i));
+                        (expr as Arc<dyn PhysicalExpr>, name)
+                    })
+                    .collect();
 
-                                // First create the scan execution plan.
-                                let scan_plan = table
-                                    .scan(session_state, Some(&proj), &[], None)
-                                    .await?;
+                let group_by = PhysicalGroupBy::new_single(group_exprs);
+                let delim_scan_plan: Arc<dyn ExecutionPlan> =
+                    self.create_initial_plan(&delim_scan, session_state).await?;
+                let input_schema = delim_scan_plan.schema();
 
-                                // Now add aggregation to eliminate duplicated rows.
-                                // Create a PhysicalGroupBy with empty expressions, which means we're grouping by all columns
-                                let schema = &scan_plan.schema();
-                                let group_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> =
-                                    (0..schema.fields().len())
-                                        .map(|i| {
-                                            let name = schema.field(i).name().to_string();
-                                            let expr = Arc::new(Column::new(&name, i))
-                                                as Arc<dyn PhysicalExpr>;
-                                            (expr, name)
-                                        })
-                                        .collect();
-
-                                let group_by = PhysicalGroupBy::new_single(group_exprs);
-
-                                // Create the AggregateExec with no aggregate expressions to deduplicate the rows
-                                Arc::new(AggregateExec::try_new(
-                                    AggregateMode::Final,
-                                    group_by,
-                                    vec![], // No aggregate expressions, just grouping to deduplicate
-                                    vec![], // No filters
-                                    scan_plan.clone(),
-                                    scan_plan.schema(),
-                                )?)
-                            } else {
-                                return internal_err!("no table provider");
-                            }
-                        } else {
-                            return internal_err!("empty schema");
-                        }
-                    }
-                    LogicalPlan::SubqueryAlias(_) => {
-                        // TODO: this is a workaround to support delim_scan from a subquery alias
-                        // Add distinct operator on all the columns (for true delimination)
-                        let delim_scan =
-                            LogicalPlanBuilder::new(delim_scan_node.as_ref().clone())
-                                .project(projected_schema.as_ref().iter().map(
-                                    |(_, field)| {
-                                        SelectExpr::Expression(Expr::Column(
-                                            CommonColumn::new(
-                                                Some(delim_scan_name.clone()),
-                                                field.name(),
-                                            ),
-                                        ))
-                                    },
-                                ))?
-                                .build()?;
-
-                        Box::pin(self.create_initial_plan(&delim_scan, session_state))
-                            .await?
-                    }
-                    _ => {
-                        return internal_err!(
-                            "Unsupported delim scan node: {:?}",
-                            delim_scan_node.as_ref()
-                        );
-                    }
-                }
+                // Create the AggregateExec with no aggregate expressions to deduplicate the rows
+                Arc::new(AggregateExec::try_new(
+                    AggregateMode::Final,
+                    group_by,
+                    vec![], // No aggregate expressions, just grouping to deduplicate
+                    vec![], // No filters
+                    delim_scan_plan,
+                    input_schema,
+                )?)
             }
         };
         Ok(exec_node)
@@ -2083,9 +2026,9 @@ fn strip_column_qualifiers(expr: Expr) -> Result<Expr> {
             && col.relation.is_some()
         {
             // Strip the qualifier
-            return Ok(Transformed::yes(Expr::Column(Column::new_unqualified(
-                col.name.clone(),
-            ))));
+            return Ok(Transformed::yes(Expr::Column(
+                CommonColumn::new_unqualified(col.name.clone()),
+            )));
         }
         Ok(Transformed::no(e))
     })

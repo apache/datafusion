@@ -516,8 +516,7 @@ impl DependentJoinRewriter {
                     let node = self.nodes.get_mut(&dependent_join_node_id).ok_or(
                         internal_datafusion_err!(
                         "dependent join node with id {dependent_join_node_id} not found"
-                    ),
-                    )?;
+                    )).unwrap();
                     let accesses = node
                         .columns_accesses_by_subquery_id
                         .entry(subquery_node_id)
@@ -537,7 +536,7 @@ impl DependentJoinRewriter {
             });
             // if all the accesses are resolved, remove the column from the map
             if accesses.len() == 0 {
-                self.all_outer_ref_columns.remove(col);
+                self.all_outer_ref_columns.swap_remove(col);
             }
         }
         Ok(is_table_provider)
@@ -729,15 +728,22 @@ impl TreeNodeRewriter for DependentJoinRewriter {
         // TODO: what if the current node is transformed by some optimizer later
         // or even decorrelated? then node.clone() will only store the snapshot
         // we need some form of in place rewrite here
-        if node
-            .schema()
-            .columns()
-            .iter()
-            .try_for_each(|col| self.check_matching_column_provider(col, new_id))?
-        {
-            self.domain_columns_provider_nodes
-                .insert(new_id, node.clone());
-        };
+        // We skipping join node here because it is not a true provider of columns.
+        if !matches!(node, LogicalPlan::Join(_)) {
+            if node
+                .schema()
+                .columns()
+                .iter()
+                .map(|col| self.check_matching_column_provider(col, new_id))
+                .collect::<Result<Vec<bool>>>()?
+                .iter()
+                .any(|b| *b)
+            {
+                self.domain_columns_provider_nodes
+                    .insert(new_id, node.clone());
+            };
+        }
+
         match &node {
             LogicalPlan::Filter(f) => {
                 collect_subquery_types(
@@ -1078,22 +1084,6 @@ fn collect_subquery_types(
             })
         })
         .expect("Inner is always Ok");
-
-    //match sub_expr {
-    //    Expr::ScalarSubquery(_) => {
-    //        *is_dependent_join_node = true;
-    //        subquery_types.push_back(SubqueryType::Scalar);
-    //    }
-    //    Expr::InSubquery(_) => {
-    //        *is_dependent_join_node = true;
-    //        subquery_types.push_back(SubqueryType::In);
-    //    }
-    //    Expr::Exists(_) => {
-    //        *is_dependent_join_node = true;
-    //        subquery_types.push_back(SubqueryType::Exists);
-    //    }
-    //    _ => {}
-    //}
 }
 
 /// Normalize negated subqueries by extracting the NOT to the top level

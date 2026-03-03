@@ -162,7 +162,7 @@ impl OptimizerRule for Deliminator {
         }
 
         // println!("\n=== Processing All Joins ===");
-        let mut joins = IndexMap::new();
+        let joins = IndexMap::new();
         // for candidate in candidate_visitor.candidates.values() {
         //     for join in &candidate.joins {
         //         println!("  Join {{");
@@ -475,7 +475,7 @@ fn remove_inequality_join_with_delim_scan(
             })?;
 
             let delim_comparison =
-                if let Expr::BinaryExpr(ref mut binary_expr) = delim_condition {
+                if let Expr::BinaryExpr(binary_expr) = delim_condition {
                     &mut binary_expr.op
                 } else {
                     return internal_err!("expr must be binary");

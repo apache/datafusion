@@ -64,6 +64,7 @@ use datafusion_common::{
     assert_eq_or_internal_err, assert_or_internal_err, internal_err, plan_err,
 };
 use indexmap::{IndexMap, IndexSet};
+use itertools::Itertools;
 
 // backwards compatibility
 use crate::display::PgJsonVisitor;
@@ -316,8 +317,9 @@ impl PartialEq for CorrelatedColumnInfo {
 #[derive(Debug, Clone, Eq)]
 pub struct DelimGet {
     // TODO: is it necessary to alias?
-    pub delim_scan_name: TableReference,
+    // pub delim_scan_name: TableReference,
     pub delim_scan_node: Arc<LogicalPlan>,
+    pub delim_scan_node_id: usize,
     pub columns: Vec<Column>,
     /// The schema description of the output
     pub projected_schema: DFSchemaRef,
@@ -326,7 +328,7 @@ pub struct DelimGet {
 
 impl DelimGet {
     pub fn try_new(
-        delim_scan_name: TableReference,
+        delim_scan_node_id: usize,
         delim_scan_node: &LogicalPlan,
         correlated_columns: &Vec<CorrelatedColumnInfo>,
     ) -> Result<Self> {
@@ -347,33 +349,37 @@ impl DelimGet {
         // let first_table_ref = correlated_columns[0].col.relation.clone();
 
         // Validate all columns come from the same table
-        for column_info in correlated_columns.into_iter() {
-            if column_info.col.relation.as_ref().unwrap() != &delim_scan_name {
-                return internal_err!(
-                "DelimGet requires all columns to be from the same table, found mixed table references");
-            }
-        }
+        // for column_info in correlated_columns.into_iter() {
+        //     if column_info.col.relation.as_ref().unwrap() != &delim_scan_name {
+        //         return internal_err!(
+        //         "DelimGet requires all columns to be from the same table, found mixed table references {} vs {}", 
+        //         column_info.col.relation.as_ref().unwrap(), delim_scan_name);
+        //     }
+        // }
 
         // let table_name = first_table_ref.ok_or_else(|| {
         //     DataFusionError::Plan(
         //         "DelimGet requires all columns to have a table reference".to_string(),
         //     )
         // })?;
+        let dedup_correlated_columns = correlated_columns.iter().unique_by(|c|{
+            c.col.clone()
+        }).collect::<Vec<_>>();
 
         // Collect both table references and fields together
         let qualified_fields: Vec<(Option<TableReference>, Arc<Field>)> =
-            correlated_columns
+            dedup_correlated_columns
                 .iter()
-                .map(|c| (Some(delim_scan_name.clone()), c.field.clone()))
+                .map(|c| (c.col.relation.clone(), c.field.clone()))
                 .collect();
 
         let columns: Vec<Column> =
-            correlated_columns.iter().map(|c| c.col.clone()).collect();
+            dedup_correlated_columns.iter().map(|c| c.col.clone()).collect();
 
         let schema = DFSchema::new_with_metadata(qualified_fields, HashMap::new())?;
 
         Ok(DelimGet {
-            delim_scan_name,
+            delim_scan_node_id,
             delim_scan_node: Arc::new(delim_scan_node.clone()),
             columns,
             projected_schema: Arc::new(schema),
@@ -383,13 +389,12 @@ impl DelimGet {
 
 impl PartialEq for DelimGet {
     fn eq(&self, other: &Self) -> bool {
-        self.delim_scan_name == other.delim_scan_name && self.columns == other.columns
+         self.columns == other.columns
     }
 }
 
 impl Hash for DelimGet {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.delim_scan_name.hash(state);
         self.columns.hash(state);
         self.delim_scan_node.hash(state);
         self.projected_schema.hash(state);
@@ -398,10 +403,7 @@ impl Hash for DelimGet {
 
 impl PartialOrd for DelimGet {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match self.delim_scan_name.partial_cmp(&other.delim_scan_name) {
-            Some(Ordering::Equal) => self.columns.partial_cmp(&other.columns),
-            cmp => cmp,
-        }
+        self.columns.partial_cmp(&other.columns)
     }
 }
 
@@ -436,7 +438,7 @@ impl Display for DependentJoin {
         let correlated_str = self
             .correlated_columns
             .iter()
-            .map(|info| format!("{0} lvl {1}", info.col, info.depth))
+            .map(|info| format!("{0} lvl {1} provided by {2}", info.col, info.depth, info.delim_scan_node_id))
             .collect::<Vec<String>>()
             .join(", ");
         let lateral_join_info =
@@ -2006,8 +2008,9 @@ impl LogicalPlan {
         impl Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
                 match self.0 {
-                    LogicalPlan::DelimGet(DelimGet { .. }) => {
-                        write!(f, "DelimGet:")
+                    LogicalPlan::DelimGet(DelimGet { columns, delim_scan_node_id,.. }) => {
+                        let columns_str = columns.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(", ");
+                        write!(f, "DelimGet: scan_id:[{delim_scan_node_id}] columns:[{columns_str}]")
                     }
                     LogicalPlan::EmptyRelation(EmptyRelation {
                         produce_one_row,

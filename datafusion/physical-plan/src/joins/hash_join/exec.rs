@@ -1661,7 +1661,7 @@ impl ExecutionPlan for HashJoinExec {
 fn lr_is_preserved(join_type: JoinType) -> (bool, bool) {
     match join_type {
         JoinType::Inner => (true, true),
-        JoinType::Left => (true, false),
+        JoinType::Left | JoinType::LeftSingle => (true, false),
         JoinType::Right => (false, true),
         JoinType::Full => (false, false),
         // Filters in semi/anti joins are either on the preserved side, or on join keys,

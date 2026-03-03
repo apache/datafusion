@@ -72,7 +72,7 @@ pub fn test_table_scan() -> Result<LogicalPlan> {
 pub fn test_delim_scan_with_name(
     correlated_columns: Vec<CorrelatedColumnInfo>,
 ) -> Result<LogicalPlan> {
-    LogicalPlanBuilder::delim_get(&correlated_columns)?.build()
+    LogicalPlanBuilder::delim_get(0,&correlated_columns)?.build()
 }
 
 /// Create a table with the given name and column definitions.

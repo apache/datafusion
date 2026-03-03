@@ -639,7 +639,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             Some(predicate_expr) => {
                 let fallback_schemas = plan.fallback_normalize_schemas();
 
-                let outer_query_schema_vec = planner_context.outer_queries_schemas();
                 let filter_expr =
                     self.sql_to_expr(predicate_expr, plan.schema(), planner_context)?;
 

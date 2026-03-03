@@ -416,12 +416,12 @@ impl LogicalPlanBuilder {
     }
 
     pub fn delim_get(
-        delim_scan_name: TableReference,
+        delim_scan_node_id: usize,
         delim_scan_node: &LogicalPlan,
         correlated_columns: &Vec<CorrelatedColumnInfo>,
     ) -> Result<Self> {
         Ok(Self::new(LogicalPlan::DelimGet(DelimGet::try_new(
-            delim_scan_name,
+            delim_scan_node_id,
             delim_scan_node,
             correlated_columns,
         )?)))

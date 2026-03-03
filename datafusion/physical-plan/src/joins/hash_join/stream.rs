@@ -219,7 +219,7 @@ pub(super) struct HashJoinStream {
     build_accumulator: Option<Arc<SharedBuildAccumulator>>,
     /// Optional future to signal when build information has been reported by all partitions
     /// and the dynamic filter has been updated
-    bounds_waiter: Option<OnceFut<()>>,
+    build_waiter: Option<OnceFut<()>>,
     /// Used by Left Single Join to check it multiple rows matched at runtime.
     left_match_counts: StdHashMap<u64, usize>,
 
@@ -402,8 +402,8 @@ impl HashJoinStream {
             probe_indices_buffer: Vec::with_capacity(batch_size),
             build_indices_buffer: Vec::with_capacity(batch_size),
             right_side_ordered,
-            bounds_accumulator,
-            bounds_waiter: None,
+            build_accumulator,
+            build_waiter: None,
             left_match_counts: StdHashMap::new(),
             mode,
             output_buffer,
