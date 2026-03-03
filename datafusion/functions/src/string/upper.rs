@@ -211,4 +211,14 @@ mod tests {
 
         to_upper(input, expected)
     }
+
+    #[test]
+    fn upper_return_type_dictionary_utf8view() -> Result<()> {
+        let return_type = UpperFunc::new().return_type(&[DataType::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(DataType::Utf8View),
+        )])?;
+        assert_eq!(return_type, DataType::Utf8View);
+        Ok(())
+    }
 }
