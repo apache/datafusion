@@ -34,13 +34,28 @@ use datafusion_expr::{Expr, LogicalPlan};
 /// Indices are always in order and without duplicates. For example, if these
 /// indices were added `[3, 2, 4, 3, 6, 1]`,  the instance would be represented
 /// by  `[1, 2, 3, 4, 6]`.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub(super) struct RequiredIndices {
     /// The indices of the required columns in the
     indices: Vec<usize>,
     /// If putting a projection above children is beneficial for the parent.
     /// Defaults to false.
     projection_beneficial: bool,
+    /// Whether ancestors can observe row multiplicity changes.
+    multiplicity_sensitive: bool,
+    /// Whether any ancestor expression is volatile.
+    has_volatile_ancestor: bool,
+}
+
+impl Default for RequiredIndices {
+    fn default() -> Self {
+        Self {
+            indices: Vec::new(),
+            projection_beneficial: false,
+            multiplicity_sensitive: true,
+            has_volatile_ancestor: false,
+        }
+    }
 }
 
 impl RequiredIndices {
@@ -54,6 +69,8 @@ impl RequiredIndices {
         Self {
             indices: (0..plan.schema().fields().len()).collect(),
             projection_beneficial: false,
+            multiplicity_sensitive: true,
+            has_volatile_ancestor: false,
         }
     }
 
@@ -62,6 +79,8 @@ impl RequiredIndices {
         Self {
             indices,
             projection_beneficial: false,
+            multiplicity_sensitive: true,
+            has_volatile_ancestor: false,
         }
         .compact()
     }
@@ -75,6 +94,34 @@ impl RequiredIndices {
     pub fn with_projection_beneficial(mut self) -> Self {
         self.projection_beneficial = true;
         self
+    }
+
+    /// Mark this requirement as multiplicity-insensitive.
+    pub fn with_multiplicity_insensitive(mut self) -> Self {
+        self.multiplicity_sensitive = false;
+        self
+    }
+
+    /// Mark this requirement as multiplicity-sensitive.
+    pub fn with_multiplicity_sensitive(mut self) -> Self {
+        self.multiplicity_sensitive = true;
+        self
+    }
+
+    /// Return whether ancestors can observe multiplicity changes.
+    pub fn multiplicity_sensitive(&self) -> bool {
+        self.multiplicity_sensitive
+    }
+
+    /// Mark this requirement as having volatile ancestors.
+    pub fn with_volatile_ancestor(mut self) -> Self {
+        self.has_volatile_ancestor = true;
+        self
+    }
+
+    /// Return whether a volatile expression exists in the ancestor chain.
+    pub fn has_volatile_ancestor(&self) -> bool {
+        self.has_volatile_ancestor
     }
 
     /// Return the value of projection beneficial flag
@@ -173,10 +220,14 @@ impl RequiredIndices {
             Self {
                 indices: l,
                 projection_beneficial,
+                multiplicity_sensitive: self.multiplicity_sensitive,
+                has_volatile_ancestor: self.has_volatile_ancestor,
             },
             Self {
                 indices: r,
                 projection_beneficial,
+                multiplicity_sensitive: self.multiplicity_sensitive,
+                has_volatile_ancestor: self.has_volatile_ancestor,
             },
         )
     }
