@@ -1114,12 +1114,12 @@ mod tests {
         };
 
         let output = invoke(10)?.as_boolean().clone();
-        assert_eq!(output.value(0), false);
-        assert_eq!(output.value(1), false);
+        assert!(!output.value(0));
+        assert!(!output.value(1));
 
         let output = invoke(70)?.as_boolean().clone();
-        assert_eq!(output.value(0), false);
-        assert_eq!(output.value(1), false);
+        assert!(!output.value(0));
+        assert!(!output.value(1));
 
         Ok(())
     }
