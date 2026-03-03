@@ -18,12 +18,11 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::utils::{make_scalar_function, utf8_to_str_type};
+use crate::utils::make_scalar_function;
 use DataType::{LargeUtf8, Utf8, Utf8View};
 use arrow::array::{
-    Array, ArrayRef, AsArray, GenericStringArray, LargeStringBuilder, OffsetSizeTrait,
-    StringArrayType, StringBuilder, StringLikeArrayBuilder, StringViewArray,
-    StringViewBuilder,
+    Array, ArrayRef, AsArray, LargeStringBuilder, StringArrayType, StringBuilder,
+    StringLikeArrayBuilder, StringViewBuilder,
 };
 use arrow::datatypes::DataType;
 use datafusion_common::{Result, exec_err};
@@ -84,11 +83,7 @@ impl ScalarUDFImpl for ReverseFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types[0] == Utf8View {
-            Ok(Utf8View)
-        } else {
-            utf8_to_str_type(&arg_types[0], "btrim")
-        }
+        Ok(arg_types[0].clone())
     }
 
     fn invoke_with_args(
@@ -97,8 +92,7 @@ impl ScalarUDFImpl for ReverseFunc {
     ) -> Result<ColumnarValue> {
         let args = &args.args;
         match args[0].data_type() {
-            Utf8 | Utf8View => make_scalar_function(reverse::<i32>, vec![])(args),
-            LargeUtf8 => make_scalar_function(reverse::<i64>, vec![])(args),
+            Utf8 | Utf8View | LargeUtf8 => make_scalar_function(reverse, vec![])(args),
             other => {
                 exec_err!("Unsupported data type {other:?} for function reverse")
             }
@@ -112,21 +106,21 @@ impl ScalarUDFImpl for ReverseFunc {
 
 /// Reverses the order of the characters in the string `reverse('abcde') = 'edcba'`.
 /// The implementation uses UTF-8 code points as characters
-fn reverse<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn reverse(args: &[ArrayRef]) -> Result<ArrayRef> {
     let len = args[0].len();
 
     match args[0].data_type() {
-        Utf8View => reverse_impl::<&StringViewArray, StringViewBuilder>(
+        Utf8 => reverse_impl(
+            &args[0].as_string::<i32>(),
+            StringBuilder::with_capacity(len, 1024),
+        ),
+        Utf8View => reverse_impl(
             &args[0].as_string_view(),
             StringViewBuilder::with_capacity(len),
         ),
-        LargeUtf8 => reverse_impl::<&GenericStringArray<T>, LargeStringBuilder>(
-            &args[0].as_string::<T>(),
+        LargeUtf8 => reverse_impl(
+            &args[0].as_string::<i64>(),
             LargeStringBuilder::with_capacity(len, 1024),
-        ),
-        Utf8 => reverse_impl::<&GenericStringArray<T>, StringBuilder>(
-            &args[0].as_string::<T>(),
-            StringBuilder::with_capacity(len, 1024),
         ),
         _ => unreachable!(
             "Reverse can only be applied to Utf8View, Utf8 and LargeUtf8 types"
