@@ -1,0 +1,140 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Tests for Spark-compatible array_contains function.
+# Spark semantics: if element is found -> true; if not found and array has nulls -> null; if not found and no nulls -> false.
+
+###
+### Scalar tests
+###
+
+# Element found in array
+query B
+SELECT array_contains(array(1, 2, 3), 2);
+----
+true
+
+# Element not found, no nulls in array
+query B
+SELECT array_contains(array(1, 2, 3), 4);
+----
+false
+
+# Element not found, array has null elements -> null
+query B
+SELECT array_contains(array(1, NULL, 3), 2);
+----
+NULL
+
+# Element found, array has null elements -> true (nulls don't matter)
+query B
+SELECT array_contains(array(1, NULL, 3), 1);
+----
+true
+
+# Element found at the end, array has null elements -> true
+query B
+SELECT array_contains(array(1, NULL, 3), 3);
+----
+true
+
+# Null array -> null
+query B
+SELECT array_contains(NULL, 1);
+----
+NULL
+
+# Null element -> null
+query B
+SELECT array_contains(array(1, 2, 3), NULL);
+----
+NULL
+
+# Empty array, element not found -> false
+query B
+SELECT array_contains(array(), 1);
+----
+false
+
+# Array with only nulls, element not found -> null
+query B
+SELECT array_contains(array(NULL, NULL), 1);
+----
+NULL
+
+# String array, element found
+query B
+SELECT array_contains(array('a', 'b', 'c'), 'b');
+----
+true
+
+# String array, element not found, no nulls
+query B
+SELECT array_contains(array('a', 'b', 'c'), 'd');
+----
+false
+
+# String array, element not found, has null
+query B
+SELECT array_contains(array('a', NULL, 'c'), 'd');
+----
+NULL
+
+###
+### Columnar tests with a table
+###
+
+statement ok
+CREATE TABLE test_arrays AS VALUES
+  (1, make_array(1, 2, 3),       10),
+  (2, make_array(4, NULL, 6),    5),
+  (3, make_array(7, 8, 9),       10),
+  (4, NULL,                      1),
+  (5, make_array(10, NULL, NULL), 10);
+
+# Column needle against column array
+query IBB
+SELECT column1,
+       array_contains(column2, column3),
+       array_contains(column2, 10)
+FROM test_arrays
+ORDER BY column1;
+----
+1 false false
+2 NULL NULL
+3 false false
+4 NULL NULL
+5 true true
+
+statement ok
+DROP TABLE test_arrays;
+
+###
+### Nested array tests
+###
+
+# Nested array element found
+query B
+SELECT array_contains(array(array(1, 2), array(3, 4)), array(3, 4));
+----
+true
+
+# Nested array element not found, no nulls
+query B
+SELECT array_contains(array(array(1, 2), array(3, 4)), array(5, 6));
+----
+false
