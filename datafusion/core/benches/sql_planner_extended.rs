@@ -246,10 +246,7 @@ fn build_case_heavy_left_join_query(predicate_count: usize, case_depth: usize) -
             );
         }
 
-        let _ = write!(
-            &mut query,
-            "{expr} > 2"
-        );
+        let _ = write!(&mut query, "{expr} > 2");
     }
 
     query
@@ -305,29 +302,34 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     for case_depth in case_depth_sweep {
         for predicate_count in predicate_sweep {
-            let with_push_down_filter = build_case_heavy_left_join_df_with_push_down_filter(
-                &rt,
-                predicate_count,
-                case_depth,
-                true,
-            );
-            let without_push_down_filter = build_case_heavy_left_join_df_with_push_down_filter(
-                &rt,
-                predicate_count,
-                case_depth,
-                false,
-            );
+            let with_push_down_filter =
+                build_case_heavy_left_join_df_with_push_down_filter(
+                    &rt,
+                    predicate_count,
+                    case_depth,
+                    true,
+                );
+            let without_push_down_filter =
+                build_case_heavy_left_join_df_with_push_down_filter(
+                    &rt,
+                    predicate_count,
+                    case_depth,
+                    false,
+                );
 
-            let input_label = format!("predicates={predicate_count},case_depth={case_depth}");
+            let input_label =
+                format!("predicates={predicate_count},case_depth={case_depth}");
             group.bench_with_input(
                 BenchmarkId::new("with_push_down_filter", &input_label),
                 &with_push_down_filter,
                 |b, df| {
                     b.iter(|| {
                         let df_clone = df.clone();
-                        black_box(rt.block_on(async {
-                            df_clone.into_optimized_plan().unwrap()
-                        }));
+                        black_box(
+                            rt.block_on(async {
+                                df_clone.into_optimized_plan().unwrap()
+                            }),
+                        );
                     })
                 },
             );
@@ -337,9 +339,11 @@ fn criterion_benchmark(c: &mut Criterion) {
                 |b, df| {
                     b.iter(|| {
                         let df_clone = df.clone();
-                        black_box(rt.block_on(async {
-                            df_clone.into_optimized_plan().unwrap()
-                        }));
+                        black_box(
+                            rt.block_on(async {
+                                df_clone.into_optimized_plan().unwrap()
+                            }),
+                        );
                     })
                 },
             );
