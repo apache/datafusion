@@ -987,7 +987,13 @@ fn can_eliminate_unnest(unnest: &Unnest, indices: &RequiredIndices) -> bool {
         return false;
     }
 
-    if !unnest.options.preserve_nulls || !unnest.struct_type_columns.is_empty() {
+    // List unnest can drop rows for empty lists even when preserve_nulls=true.
+    // Without proving non-empty cardinality, keep UNNEST conservatively.
+    if !unnest.list_type_columns.is_empty() {
+        return false;
+    }
+
+    if !unnest.options.preserve_nulls {
         return false;
     }
 
@@ -2398,7 +2404,35 @@ mod tests {
     }
 
     #[test]
-    fn eliminate_unnest_when_only_group_keys_are_required() -> Result<()> {
+    fn eliminate_struct_unnest_when_only_group_keys_are_required() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::UInt32, false),
+            Field::new(
+                "user",
+                DataType::Struct(
+                    vec![
+                        Field::new("name", DataType::Utf8, true),
+                        Field::new("score", DataType::Int32, true),
+                    ]
+                    .into(),
+                ),
+                true,
+            ),
+        ]);
+        let plan = scan_empty(Some("test"), &schema, None)?
+            .unnest_column("user")?
+            .aggregate(vec![col("id")], Vec::<Expr>::new())?
+            .project(vec![col("id")])?
+            .build()?;
+
+        let optimized = optimize(plan)?;
+        let formatted = format!("{}", optimized.display_indent());
+        assert!(!formatted.contains("Unnest:"));
+        Ok(())
+    }
+
+    #[test]
+    fn keep_list_unnest_when_group_keys_are_only_required_outputs() -> Result<()> {
         let schema = Schema::new(vec![
             Field::new("id", DataType::UInt32, false),
             Field::new(
@@ -2415,7 +2449,7 @@ mod tests {
 
         let optimized = optimize(plan)?;
         let formatted = format!("{}", optimized.display_indent());
-        assert!(!formatted.contains("Unnest:"));
+        assert!(formatted.contains("Unnest:"));
         Ok(())
     }
 
