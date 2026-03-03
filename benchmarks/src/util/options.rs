@@ -91,7 +91,15 @@ impl CommonOpt {
     pub fn runtime_env_builder(&self) -> Result<RuntimeEnvBuilder> {
         let mut rt_builder = RuntimeEnvBuilder::new();
         const NUM_TRACKED_CONSUMERS: usize = 5;
-        if let Some(memory_limit) = self.memory_limit {
+        // Use CLI --memory-limit if provided, otherwise fall back to
+        // DATAFUSION_RUNTIME_MEMORY_LIMIT env var
+        let memory_limit = self.memory_limit.or_else(|| {
+            std::env::var("DATAFUSION_RUNTIME_MEMORY_LIMIT")
+                .ok()
+                .and_then(|val| parse_memory_limit(&val).ok())
+        });
+
+        if let Some(memory_limit) = memory_limit {
             let pool: Arc<dyn MemoryPool> = match self.mem_pool_type.as_str() {
                 "fair" => Arc::new(TrackConsumersPool::new(
                     FairSpillPool::new(memory_limit),
@@ -137,6 +145,39 @@ fn parse_memory_limit(limit: &str) -> Result<usize, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_runtime_env_builder_reads_env_var() {
+        // Set the env var and verify runtime_env_builder picks it up
+        // when no CLI --memory-limit is provided
+        let opt = CommonOpt {
+            iterations: 3,
+            partitions: None,
+            batch_size: None,
+            mem_pool_type: "fair".to_string(),
+            memory_limit: None,
+            sort_spill_reservation_bytes: None,
+            debug: false,
+        };
+
+        // With env var set, builder should succeed and have a memory pool
+        // SAFETY: This test is single-threaded and the env var is restored after use
+        unsafe {
+            std::env::set_var("DATAFUSION_RUNTIME_MEMORY_LIMIT", "2G");
+        }
+        let builder = opt.runtime_env_builder().unwrap();
+        let runtime = builder.build().unwrap();
+        unsafe {
+            std::env::remove_var("DATAFUSION_RUNTIME_MEMORY_LIMIT");
+        }
+        // A 2G memory pool should be present — verify it reports the correct limit
+        match runtime.memory_pool.memory_limit() {
+            datafusion::execution::memory_pool::MemoryLimit::Finite(limit) => {
+                assert_eq!(limit, 2 * 1024 * 1024 * 1024);
+            }
+            _ => panic!("Expected Finite memory limit"),
+        }
+    }
 
     #[test]
     fn test_parse_memory_limit_all() {
