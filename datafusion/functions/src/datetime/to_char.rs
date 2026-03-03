@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use arrow::array::builder::StringBuilder;
 use arrow::array::cast::AsArray;
-use arrow::array::{Array, ArrayRef, new_null_array};
+use arrow::array::{Array, ArrayRef};
 use arrow::compute::cast;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{
@@ -143,9 +143,11 @@ impl ScalarUDFImpl for ToCharFunc {
         let [date_time, format] = take_function_args(self.name(), &args)?;
 
         match format {
-            ColumnarValue::Scalar(ScalarValue::Null) => to_char_scalar(date_time, None),
-            ColumnarValue::Scalar(ScalarValue::Utf8(fmt)) => {
-                to_char_scalar(date_time, fmt.as_deref())
+            ColumnarValue::Scalar(ScalarValue::Null | ScalarValue::Utf8(None)) => {
+                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))
+            }
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some(fmt))) => {
+                to_char_scalar(date_time, fmt)
             }
             ColumnarValue::Array(_) => to_char_array(&args),
             _ => exec_err!(
@@ -166,11 +168,8 @@ impl ScalarUDFImpl for ToCharFunc {
 
 fn build_format_options<'a>(
     data_type: &DataType,
-    format: Option<&'a str>,
+    format: &'a str,
 ) -> Result<FormatOptions<'a>> {
-    let Some(format) = format else {
-        return Ok(FormatOptions::new());
-    };
     let format_options = match data_type {
         Date32 => FormatOptions::new()
             .with_date_format(Some(format))
@@ -198,28 +197,19 @@ fn build_format_options<'a>(
 }
 
 /// Formats `expression` using a constant `format` string.
-fn to_char_scalar(
-    expression: &ColumnarValue,
-    format: Option<&str>,
-) -> Result<ColumnarValue> {
+fn to_char_scalar(expression: &ColumnarValue, format: &str) -> Result<ColumnarValue> {
     // ArrayFormatter requires an array, so scalar expressions must be
     // converted to a 1-element array first.
     let data_type = &expression.data_type();
     let is_scalar_expression = matches!(&expression, ColumnarValue::Scalar(_));
     let array = expression.to_array(1)?;
 
-    if format.is_none() {
-        return if is_scalar_expression {
-            Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))
-        } else {
-            Ok(ColumnarValue::Array(new_null_array(&Utf8, array.len())))
-        };
-    }
-
     let format_options = build_format_options(data_type, format)?;
     let formatter = ArrayFormatter::try_new(array.as_ref(), &format_options)?;
 
-    let fmt_len = format.map_or(20, |f| f.len() + 10);
+    // Pad the preallocated capacity a bit because format specifiers often
+    // expand the string (e.g., %Y -> "2026")
+    let fmt_len = format.len() + 10;
     let mut builder = StringBuilder::with_capacity(array.len(), array.len() * fmt_len);
 
     for i in 0..array.len() {
@@ -237,7 +227,10 @@ fn to_char_scalar(
                 // handles both date and time specifiers (with zero for
                 // the time components).
                 Err(_) if data_type == &Date32 => {
-                    return to_char_scalar(&expression.cast_to(&Date64, None)?, format);
+                    return to_char_scalar(
+                        &expression.cast_to(&Date64, None)?,
+                        format,
+                    );
                 }
                 Err(e) => return Err(e.into()),
             }
@@ -259,6 +252,7 @@ fn to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let format_array = arrays[1].as_string::<i32>();
     let data_type = data_array.data_type();
 
+    // Arbitrary guess for the length of a typical formatted datetime string
     let fmt_len = 30;
     let mut builder =
         StringBuilder::with_capacity(data_array.len(), data_array.len() * fmt_len);
@@ -270,7 +264,7 @@ fn to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             continue;
         }
 
-        let format = Some(format_array.value(idx));
+        let format = format_array.value(idx);
         let format_options = build_format_options(data_type, format)?;
         let formatter = ArrayFormatter::try_new(data_array.as_ref(), &format_options)?;
 
