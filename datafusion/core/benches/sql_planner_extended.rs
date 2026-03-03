@@ -216,6 +216,7 @@ fn build_test_data_frame(ctx: &SessionContext, rt: &Runtime) -> DataFrame {
 /// Build a CASE-heavy dataframe over a non-inner join to stress
 /// planner-time filter pushdown and nullability/type inference.
 fn build_case_heavy_left_join_df(ctx: &SessionContext, rt: &Runtime) -> DataFrame {
+    register_string_table(ctx, 100, 1000);
     let query = build_case_heavy_left_join_query(30, 1);
     rt.block_on(async { ctx.sql(&query).await.unwrap() })
 }
@@ -274,14 +275,15 @@ fn build_case_heavy_left_join_df_with_push_down_filter(
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    let ctx = SessionContext::new();
+    let baseline_ctx = SessionContext::new();
+    let case_heavy_ctx = SessionContext::new();
     let rt = Runtime::new().unwrap();
 
     // validate logical plan optimize performance
     // https://github.com/apache/datafusion/issues/17261
 
-    let df = build_test_data_frame(&ctx, &rt);
-    let case_heavy_left_join_df = build_case_heavy_left_join_df(&ctx, &rt);
+    let df = build_test_data_frame(&baseline_ctx, &rt);
+    let case_heavy_left_join_df = build_case_heavy_left_join_df(&case_heavy_ctx, &rt);
 
     c.bench_function("logical_plan_optimize", |b| {
         b.iter(|| {
