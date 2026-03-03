@@ -31,6 +31,29 @@ AS VALUES
 statement ok
 set datafusion.explain.logical_plan_only = true;
 
+# Safe case: struct unnest is cardinality-preserving and unnested outputs are dead.
+# Unnest should be removed.
+statement ok
+CREATE TABLE unnest_prune_struct_t
+AS VALUES
+    (1, struct('a', 10)),
+    (2, struct('b', 20))
+;
+
+query TT
+EXPLAIN SELECT id
+FROM (
+  SELECT column1 AS id, unnest(column2)
+  FROM unnest_prune_struct_t
+) q
+GROUP BY id;
+----
+logical_plan
+01)Aggregate: groupBy=[[q.id]], aggr=[[]]
+02)--SubqueryAlias: q
+03)----Projection: unnest_prune_struct_t.column1 AS id
+04)------TableScan: unnest_prune_struct_t projection=[column1]
+
 # Empty-list/null semantics are cardinality-sensitive even if unnested column is dead.
 # Unnest must remain.
 query TT
