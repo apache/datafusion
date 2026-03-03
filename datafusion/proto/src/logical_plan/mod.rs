@@ -263,46 +263,33 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
         buf: &mut Vec<u8>,
         node: Arc<dyn FileFormatFactory>,
     ) -> Result<()> {
-        let (kind, blob) = if node.as_any().is::<CsvFormatFactory>() {
+        fn encode_with(
+            buf: &mut Vec<u8>,
+            kind: FileFormatKind,
+            node: Arc<dyn FileFormatFactory>,
+            codec: &dyn LogicalExtensionCodec,
+        ) -> Result<()> {
             let mut blob = Vec::new();
-            CsvLogicalExtensionCodec {}.try_encode_file_format(&mut blob, node)?;
-            (FileFormatKind::Csv, blob)
-        } else if node.as_any().is::<JsonFormatFactory>() {
-            let mut blob = Vec::new();
-            JsonLogicalExtensionCodec {}.try_encode_file_format(&mut blob, node)?;
-            (FileFormatKind::Json, blob)
-        } else if {
-            #[cfg(feature = "parquet")]
-            {
-                node.as_any().is::<ParquetFormatFactory>()
-            }
-            #[cfg(not(feature = "parquet"))]
-            {
-                false
-            }
-        } {
-            #[cfg(feature = "parquet")]
-            {
-                let mut blob = Vec::new();
-                ParquetLogicalExtensionCodec {}
-                    .try_encode_file_format(&mut blob, node)?;
-                (FileFormatKind::Parquet, blob)
-            }
-        } else if node.as_any().is::<ArrowFormatFactory>() {
-            (FileFormatKind::Arrow, Vec::new())
-        } else {
-            return not_impl_err!(
-                "Unsupported FileFormatFactory type for DefaultLogicalExtensionCodec"
-            );
-        };
+            codec.try_encode_file_format(&mut blob, node)?;
+            protobuf::FileFormatWrapper { kind: kind.into(), blob }
+                .encode(buf)
+                .map_err(|e| DataFusionError::Internal(e.to_string()))
+        }
 
-        let wrapper = protobuf::FileFormatWrapper {
-            kind: kind.into(),
-            blob,
-        };
-        wrapper
-            .encode(buf)
-            .map_err(|e| DataFusionError::Internal(e.to_string()))
+        #[cfg(feature = "parquet")]
+        if node.as_any().is::<ParquetFormatFactory>() {
+            return encode_with(buf, FileFormatKind::Parquet, node, &ParquetLogicalExtensionCodec {});
+        }
+
+        if node.as_any().is::<CsvFormatFactory>() {
+            encode_with(buf, FileFormatKind::Csv, node, &CsvLogicalExtensionCodec {})
+        } else if node.as_any().is::<JsonFormatFactory>() {
+            encode_with(buf, FileFormatKind::Json, node, &JsonLogicalExtensionCodec {})
+        } else if node.as_any().is::<ArrowFormatFactory>() {
+            encode_with(buf, FileFormatKind::Arrow, node, &ArrowLogicalExtensionCodec {})
+        } else {
+            not_impl_err!("Unsupported FileFormatFactory type for DefaultLogicalExtensionCodec")
+        }
     }
 }
 
