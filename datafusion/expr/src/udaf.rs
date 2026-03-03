@@ -28,6 +28,7 @@ use arrow::datatypes::{DataType, Field, FieldRef};
 
 use datafusion_common::{Result, ScalarValue, Statistics, exec_err, not_impl_err};
 use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
+use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
 use crate::expr::{
@@ -299,6 +300,21 @@ impl AggregateUDF {
     /// See [`AggregateUDFImpl::simplify`] for more details.
     pub fn simplify(&self) -> Option<AggregateFunctionSimplification> {
         self.inner.simplify()
+    }
+
+    /// Rewrite aggregate to have simpler arguments
+    ///
+    /// See  [`AggregateUDFImpl::simplify_expr_op_literal`] for more details
+    pub fn simplify_expr_op_literal(
+        &self,
+        agg_function: &AggregateFunction,
+        arg: &Expr,
+        op: Operator,
+        lit: &Expr,
+        arg_is_left: bool,
+    ) -> Result<Option<Expr>> {
+        self.inner
+            .simplify_expr_op_literal(agg_function, arg, op, lit, arg_is_left)
     }
 
     /// Returns true if the function is max, false if the function is min
@@ -689,6 +705,74 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// later in query planning.
     fn simplify(&self) -> Option<AggregateFunctionSimplification> {
         None
+    }
+
+    /// Rewrite the aggregate to have simpler arguments
+    ///
+    /// This query pattern is not common in most real workloads, and most
+    /// aggregate implementations can safely ignore it. This API is included in
+    /// DataFusion because it is important for ClickBench Q29. See backstory
+    /// on <https://github.com/apache/datafusion/issues/15524>
+    ///
+    /// # Rewrite Overview
+    ///
+    /// The idea is to rewrite multiple aggregates with "complex arguments" into
+    /// ones with simpler arguments that can be optimized by common subexpression
+    /// elimination (CSE). At a high level the rewrite looks like
+    ///
+    /// * `Aggregate(SUM(x + 1), SUM(x + 2), ...)`
+    ///
+    /// Into
+    ///
+    /// * `Aggregate(SUM(x) + 1 * COUNT(x), SUM(x) + 2 * COUNT(x), ...)`
+    ///
+    /// While this rewrite may seem worse (slower) than the original as it
+    /// computes *more* aggregate expressions, the common subexpression
+    /// elimination (CSE) can then reduce the number of distinct aggregates the
+    /// query actually needs to compute with a rewrite like
+    ///
+    /// * `Projection(_A + 1*_B, _A + 2*_B)`
+    /// * `  Aggregate(_A = SUM(x), _B = COUNT(x))`
+    ///
+    /// This optimization is extremely important for ClickBench Q29, which has 90
+    /// such expressions for some reason, and so this optimization results in
+    /// only two aggregates being needed. The DataFusion optimizer will invoke
+    /// this method when it detects multiple aggregates in a query that share
+    /// arguments of the form `<arg> <op> <literal>`.
+    ///
+    /// # API
+    ///
+    /// If `agg_function` supports the rewrite, it should return a semantically
+    /// equivalent expression (likely with more aggregate expressions, but
+    /// simpler arguments)
+    ///
+    /// This is only called when:
+    /// 1. There are no "special" aggregate params (filters, null handling, etc)
+    /// 2. Aggregate functions with exactly one [`Expr`] argument
+    /// 3. There are no volatile expressions
+    ///
+    /// Arguments
+    /// * `agg_function`: the original aggregate function detected with complex
+    ///   arguments.
+    /// * `arg`: The common argument shared across multiple aggregates (e.g. `x`
+    ///   in the example above)
+    /// * `op`: the operator between the common argument and the literal (e.g.
+    ///   `+` in `x + 1` or `1 + x`)
+    /// * `lit`: the literal argument (e.g. `1` or `2` in the example above)
+    /// * `arg_is_left`: whether the common argument is on the left or right of
+    ///   the operator (e.g. `true` for `x + 1` and false for `1 + x`)
+    ///
+    /// The default implementation returns `None`, which is what most aggregates
+    /// should do.
+    fn simplify_expr_op_literal(
+        &self,
+        _agg_function: &AggregateFunction,
+        _arg: &Expr,
+        _op: Operator,
+        _lit: &Expr,
+        _arg_is_left: bool,
+    ) -> Result<Option<Expr>> {
+        Ok(None)
     }
 
     /// Returns the reverse expression of the aggregate function.
@@ -1241,6 +1325,18 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
 
     fn simplify(&self) -> Option<AggregateFunctionSimplification> {
         self.inner.simplify()
+    }
+
+    fn simplify_expr_op_literal(
+        &self,
+        agg_function: &AggregateFunction,
+        arg: &Expr,
+        op: Operator,
+        lit: &Expr,
+        arg_is_left: bool,
+    ) -> Result<Option<Expr>> {
+        self.inner
+            .simplify_expr_op_literal(agg_function, arg, op, lit, arg_is_left)
     }
 
     fn reverse_expr(&self) -> ReversedUDAF {

@@ -3490,7 +3490,9 @@ pub struct Aggregate {
     pub input: Arc<LogicalPlan>,
     /// Grouping expressions
     pub group_expr: Vec<Expr>,
-    /// Aggregate expressions
+    /// Aggregate expressions.
+    ///
+    /// Note these *must* be either [`Expr::AggregateFunction`] or [`Expr::Alias`]
     pub aggr_expr: Vec<Expr>,
     /// The schema description of the aggregate output
     pub schema: DFSchemaRef,
