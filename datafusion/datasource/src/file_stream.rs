@@ -236,7 +236,6 @@ impl FileStream {
                         }
                         None => {
                             self.file_stream_metrics.files_closed.add(1);
-                            self.file_stream_metrics.files_scanned.add(1);
                             self.file_stream_metrics.time_scanning_until_data.stop();
                             self.file_stream_metrics.time_scanning_total.stop();
 
@@ -419,8 +418,6 @@ pub struct FileStreamMetrics {
     /// When the stream completes, this equals the total number of files
     /// assigned to this partition.
     pub files_closed: Count,
-    /// Count of files completely scanned (reader stream fully consumed).
-    pub files_scanned: Count,
 }
 
 impl FileStreamMetrics {
@@ -459,9 +456,6 @@ impl FileStreamMetrics {
 
         let files_closed = MetricBuilder::new(metrics).counter("files_closed", partition);
 
-        let files_scanned =
-            MetricBuilder::new(metrics).counter("files_scanned", partition);
-
         Self {
             time_opening,
             time_scanning_until_data,
@@ -471,7 +465,6 @@ impl FileStreamMetrics {
             file_scan_errors,
             files_opened,
             files_closed,
-            files_scanned,
         }
     }
 }
