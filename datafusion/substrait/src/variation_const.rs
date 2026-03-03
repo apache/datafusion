@@ -37,6 +37,10 @@
 
 /// The "system-preferred" variation (i.e., no variation).
 pub const DEFAULT_TYPE_VARIATION_REF: u32 = 0;
+#[deprecated(
+    since = "46.0.0",
+    note = "Use Arrow extension types (u8, u16, u32, u64) instead"
+)]
 pub const UNSIGNED_INTEGER_TYPE_VARIATION_REF: u32 = 1;
 
 #[deprecated(since = "42.0.0", note = "Use `PrecisionTimestamp(Tz)` type instead")]
@@ -49,15 +53,29 @@ pub const TIMESTAMP_MICRO_TYPE_VARIATION_REF: u32 = 2;
 pub const TIMESTAMP_NANO_TYPE_VARIATION_REF: u32 = 3;
 
 pub const DATE_32_TYPE_VARIATION_REF: u32 = 0;
+#[deprecated(since = "46.0.0", note = "Use Arrow extension type (date_millis) instead")]
 pub const DATE_64_TYPE_VARIATION_REF: u32 = 1;
+#[deprecated(
+    since = "46.0.0",
+    note = "Use Arrow extension types (time_seconds, time_millis) instead"
+)]
 pub const TIME_32_TYPE_VARIATION_REF: u32 = 0;
+#[deprecated(
+    since = "46.0.0",
+    note = "Use Arrow extension types (time_millis, time_nanos) instead"
+)]
 pub const TIME_64_TYPE_VARIATION_REF: u32 = 1;
 pub const DEFAULT_CONTAINER_TYPE_VARIATION_REF: u32 = 0;
+#[deprecated(
+    since = "46.0.0",
+    note = "Use Arrow extension types (large_string, large_binary, large_list) instead"
+)]
 pub const LARGE_CONTAINER_TYPE_VARIATION_REF: u32 = 1;
 pub const VIEW_CONTAINER_TYPE_VARIATION_REF: u32 = 2;
 pub const DEFAULT_MAP_TYPE_VARIATION_REF: u32 = 0;
 pub const DICTIONARY_MAP_TYPE_VARIATION_REF: u32 = 1;
 pub const DECIMAL_128_TYPE_VARIATION_REF: u32 = 0;
+#[deprecated(since = "46.0.0", note = "Use Arrow extension type (decimal256) instead")]
 pub const DECIMAL_256_TYPE_VARIATION_REF: u32 = 1;
 /// Used for the arrow type [`DataType::Interval`] with [`IntervalUnit::DayTime`].
 ///
@@ -67,6 +85,7 @@ pub const DEFAULT_INTERVAL_DAY_TYPE_VARIATION_REF: u32 = 0;
 /// Used for the arrow type [`DataType::Duration`].
 ///
 /// [`DataType::Duration`]: datafusion::arrow::datatypes::DataType::Duration
+#[deprecated(since = "46.0.0", note = "Use Arrow extension type (duration) instead")]
 pub const DURATION_INTERVAL_DAY_TYPE_VARIATION_REF: u32 = 1;
 
 // For [user-defined types](https://substrait.io/types/type_classes/#user-defined-types).
@@ -130,3 +149,83 @@ pub const FLOAT_16_TYPE_NAME: &str = "fp16";
 ///
 /// [`DataType::Null`]: datafusion::arrow::datatypes::DataType::Null
 pub const NULL_TYPE_NAME: &str = "null";
+
+// Unsigned integer type names as defined in Arrow's extension_types.yaml
+// See: <https://github.com/apache/arrow/blob/main/format/substrait/extension_types.yaml>
+
+/// For [`DataType::UInt8`]
+///
+/// [`DataType::UInt8`]: datafusion::arrow::datatypes::DataType::UInt8
+pub const U8_TYPE_NAME: &str = "u8";
+
+/// For [`DataType::UInt16`]
+///
+/// [`DataType::UInt16`]: datafusion::arrow::datatypes::DataType::UInt16
+pub const U16_TYPE_NAME: &str = "u16";
+
+/// For [`DataType::UInt32`]
+///
+/// [`DataType::UInt32`]: datafusion::arrow::datatypes::DataType::UInt32
+pub const U32_TYPE_NAME: &str = "u32";
+
+/// For [`DataType::UInt64`]
+///
+/// [`DataType::UInt64`]: datafusion::arrow::datatypes::DataType::UInt64
+pub const U64_TYPE_NAME: &str = "u64";
+
+// Large container type names as defined in Arrow's extension_types.yaml
+
+/// For [`DataType::LargeUtf8`]
+///
+/// [`DataType::LargeUtf8`]: datafusion::arrow::datatypes::DataType::LargeUtf8
+pub const LARGE_STRING_TYPE_NAME: &str = "large_string";
+
+/// For [`DataType::LargeBinary`]
+///
+/// [`DataType::LargeBinary`]: datafusion::arrow::datatypes::DataType::LargeBinary
+pub const LARGE_BINARY_TYPE_NAME: &str = "large_binary";
+
+/// For [`DataType::LargeList`]
+///
+/// [`DataType::LargeList`]: datafusion::arrow::datatypes::DataType::LargeList
+pub const LARGE_LIST_TYPE_NAME: &str = "large_list";
+
+/// For [`DataType::Decimal256`]
+///
+/// [`DataType::Decimal256`]: datafusion::arrow::datatypes::DataType::Decimal256
+pub const DECIMAL256_TYPE_NAME: &str = "decimal256";
+
+/// For [`DataType::Duration`]
+///
+/// [`DataType::Duration`]: datafusion::arrow::datatypes::DataType::Duration
+pub const DURATION_TYPE_NAME: &str = "duration";
+
+// Date/Time type names as defined in Arrow's extension_types.yaml
+
+/// For [`DataType::Date64`]
+///
+/// [`DataType::Date64`]: datafusion::arrow::datatypes::DataType::Date64
+pub const DATE_MILLIS_TYPE_NAME: &str = "date_millis";
+
+/// For [`DataType::Time32`] with [`TimeUnit::Second`]
+///
+/// [`DataType::Time32`]: datafusion::arrow::datatypes::DataType::Time32
+/// [`TimeUnit::Second`]: datafusion::arrow::datatypes::TimeUnit::Second
+pub const TIME_SECONDS_TYPE_NAME: &str = "time_seconds";
+
+/// For [`DataType::Time32`] with [`TimeUnit::Millisecond`]
+///
+/// [`DataType::Time32`]: datafusion::arrow::datatypes::DataType::Time32
+/// [`TimeUnit::Millisecond`]: datafusion::arrow::datatypes::TimeUnit::Millisecond
+pub const TIME_MILLIS_TYPE_NAME: &str = "time_millis";
+
+/// For [`DataType::Time64`] with [`TimeUnit::Nanosecond`]
+///
+/// [`DataType::Time64`]: datafusion::arrow::datatypes::DataType::Time64
+/// [`TimeUnit::Nanosecond`]: datafusion::arrow::datatypes::TimeUnit::Nanosecond
+pub const TIME_NANOS_TYPE_NAME: &str = "time_nanos";
+
+/// For [`DataType::FixedSizeList`]
+///
+/// [`DataType::FixedSizeList`]: datafusion::arrow::datatypes::DataType::FixedSizeList
+pub const FIXED_SIZE_LIST_TYPE_NAME: &str = "fixed_size_list";

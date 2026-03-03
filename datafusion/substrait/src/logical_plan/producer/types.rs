@@ -17,15 +17,18 @@
 
 use crate::logical_plan::producer::utils::flatten_names;
 use crate::logical_plan::producer::{SubstraitProducer, to_substrait_precision};
+// Time64(Microsecond) has no Arrow extension type, so we keep using the variation hack
+#[expect(deprecated)]
+use crate::variation_const::TIME_64_TYPE_VARIATION_REF;
 use crate::variation_const::{
-    DATE_32_TYPE_VARIATION_REF, DATE_64_TYPE_VARIATION_REF,
-    DECIMAL_128_TYPE_VARIATION_REF, DECIMAL_256_TYPE_VARIATION_REF,
-    DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_INTERVAL_DAY_TYPE_VARIATION_REF,
-    DEFAULT_MAP_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
-    DICTIONARY_MAP_TYPE_VARIATION_REF, DURATION_INTERVAL_DAY_TYPE_VARIATION_REF,
-    FLOAT_16_TYPE_NAME, LARGE_CONTAINER_TYPE_VARIATION_REF, NULL_TYPE_NAME,
-    TIME_32_TYPE_VARIATION_REF, TIME_64_TYPE_VARIATION_REF,
-    UNSIGNED_INTEGER_TYPE_VARIATION_REF, VIEW_CONTAINER_TYPE_VARIATION_REF,
+    DATE_32_TYPE_VARIATION_REF, DATE_MILLIS_TYPE_NAME, DECIMAL256_TYPE_NAME,
+    DECIMAL_128_TYPE_VARIATION_REF, DEFAULT_CONTAINER_TYPE_VARIATION_REF,
+    DEFAULT_INTERVAL_DAY_TYPE_VARIATION_REF, DEFAULT_MAP_TYPE_VARIATION_REF,
+    DEFAULT_TYPE_VARIATION_REF, DICTIONARY_MAP_TYPE_VARIATION_REF, DURATION_TYPE_NAME,
+    FIXED_SIZE_LIST_TYPE_NAME, FLOAT_16_TYPE_NAME, LARGE_BINARY_TYPE_NAME,
+    LARGE_LIST_TYPE_NAME, LARGE_STRING_TYPE_NAME, NULL_TYPE_NAME, TIME_MILLIS_TYPE_NAME,
+    TIME_NANOS_TYPE_NAME, TIME_SECONDS_TYPE_NAME, U16_TYPE_NAME, U32_TYPE_NAME,
+    U64_TYPE_NAME, U8_TYPE_NAME, VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
 use datafusion::arrow::datatypes::{DataType, IntervalUnit};
 use datafusion::common::{DFSchemaRef, not_impl_err, plan_err};
@@ -65,48 +68,68 @@ pub(crate) fn to_substrait_type(
                 nullability,
             })),
         }),
-        DataType::UInt8 => Ok(substrait::proto::Type {
-            kind: Some(r#type::Kind::I8(r#type::I8 {
-                type_variation_reference: UNSIGNED_INTEGER_TYPE_VARIATION_REF,
-                nullability,
-            })),
-        }),
+        DataType::UInt8 => {
+            let type_anchor = producer.register_type(U8_TYPE_NAME.to_string());
+            Ok(substrait::proto::Type {
+                kind: Some(r#type::Kind::UserDefined(r#type::UserDefined {
+                    type_reference: type_anchor,
+                    type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                    nullability,
+                    type_parameters: vec![],
+                })),
+            })
+        }
         DataType::Int16 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::I16(r#type::I16 {
                 type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
                 nullability,
             })),
         }),
-        DataType::UInt16 => Ok(substrait::proto::Type {
-            kind: Some(r#type::Kind::I16(r#type::I16 {
-                type_variation_reference: UNSIGNED_INTEGER_TYPE_VARIATION_REF,
-                nullability,
-            })),
-        }),
+        DataType::UInt16 => {
+            let type_anchor = producer.register_type(U16_TYPE_NAME.to_string());
+            Ok(substrait::proto::Type {
+                kind: Some(r#type::Kind::UserDefined(r#type::UserDefined {
+                    type_reference: type_anchor,
+                    type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                    nullability,
+                    type_parameters: vec![],
+                })),
+            })
+        }
         DataType::Int32 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::I32(r#type::I32 {
                 type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
                 nullability,
             })),
         }),
-        DataType::UInt32 => Ok(substrait::proto::Type {
-            kind: Some(r#type::Kind::I32(r#type::I32 {
-                type_variation_reference: UNSIGNED_INTEGER_TYPE_VARIATION_REF,
-                nullability,
-            })),
-        }),
+        DataType::UInt32 => {
+            let type_anchor = producer.register_type(U32_TYPE_NAME.to_string());
+            Ok(substrait::proto::Type {
+                kind: Some(r#type::Kind::UserDefined(r#type::UserDefined {
+                    type_reference: type_anchor,
+                    type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                    nullability,
+                    type_parameters: vec![],
+                })),
+            })
+        }
         DataType::Int64 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::I64(r#type::I64 {
                 type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
                 nullability,
             })),
         }),
-        DataType::UInt64 => Ok(substrait::proto::Type {
-            kind: Some(r#type::Kind::I64(r#type::I64 {
-                type_variation_reference: UNSIGNED_INTEGER_TYPE_VARIATION_REF,
-                nullability,
-            })),
-        }),
+        DataType::UInt64 => {
+            let type_anchor = producer.register_type(U64_TYPE_NAME.to_string());
+            Ok(substrait::proto::Type {
+                kind: Some(r#type::Kind::UserDefined(r#type::UserDefined {
+                    type_reference: type_anchor,
+                    type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                    nullability,
+                    type_parameters: vec![],
+                })),
+            })
+        }
         DataType::Float16 => {
             let type_anchor = producer.register_type(FLOAT_16_TYPE_NAME.to_string());
             Ok(substrait::proto::Type {
@@ -152,24 +175,54 @@ pub(crate) fn to_substrait_type(
             Ok(substrait::proto::Type { kind: Some(kind) })
         }
         DataType::Time32(unit) => {
-            let precision = to_substrait_precision(unit);
+            // Arrow extension_types.yaml defines time_seconds and time_millis for Time32
+            let type_name = match unit {
+                datafusion::arrow::datatypes::TimeUnit::Second => TIME_SECONDS_TYPE_NAME,
+                datafusion::arrow::datatypes::TimeUnit::Millisecond => TIME_MILLIS_TYPE_NAME,
+                _ => {
+                    return not_impl_err!("Unsupported Time32 unit: {unit:?}")
+                }
+            };
+            let type_anchor = producer.register_type(type_name.to_string());
             Ok(substrait::proto::Type {
-                kind: Some(r#type::Kind::PrecisionTime(r#type::PrecisionTime {
-                    precision,
-                    type_variation_reference: TIME_32_TYPE_VARIATION_REF,
+                kind: Some(r#type::Kind::UserDefined(r#type::UserDefined {
+                    type_reference: type_anchor,
+                    type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
                     nullability,
+                    type_parameters: vec![],
                 })),
             })
         }
         DataType::Time64(unit) => {
-            let precision = to_substrait_precision(unit);
-            Ok(substrait::proto::Type {
-                kind: Some(r#type::Kind::PrecisionTime(r#type::PrecisionTime {
-                    precision,
-                    type_variation_reference: TIME_64_TYPE_VARIATION_REF,
-                    nullability,
-                })),
-            })
+            // Arrow extension_types.yaml only defines time_nanos for Time64
+            // Time64(Microsecond) has no extension type, so we use native PrecisionTime
+            match unit {
+                datafusion::arrow::datatypes::TimeUnit::Nanosecond => {
+                    let type_anchor = producer.register_type(TIME_NANOS_TYPE_NAME.to_string());
+                    Ok(substrait::proto::Type {
+                        kind: Some(r#type::Kind::UserDefined(r#type::UserDefined {
+                            type_reference: type_anchor,
+                            type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                            nullability,
+                            type_parameters: vec![],
+                        })),
+                    })
+                }
+                datafusion::arrow::datatypes::TimeUnit::Microsecond => {
+                    // No Arrow extension type for Time64(Microsecond), use native PrecisionTime with variation
+                    let precision = to_substrait_precision(unit);
+                    Ok(substrait::proto::Type {
+                        kind: Some(r#type::Kind::PrecisionTime(r#type::PrecisionTime {
+                            precision,
+                            type_variation_reference: TIME_64_TYPE_VARIATION_REF,
+                            nullability,
+                        })),
+                    })
+                }
+                _ => {
+                    not_impl_err!("Unsupported Time64 unit: {unit:?}")
+                }
+            }
         }
         DataType::Date32 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::Date(r#type::Date {
@@ -177,12 +230,17 @@ pub(crate) fn to_substrait_type(
                 nullability,
             })),
         }),
-        DataType::Date64 => Ok(substrait::proto::Type {
-            kind: Some(r#type::Kind::Date(r#type::Date {
-                type_variation_reference: DATE_64_TYPE_VARIATION_REF,
-                nullability,
-            })),
-        }),
+        DataType::Date64 => {
+            let type_anchor = producer.register_type(DATE_MILLIS_TYPE_NAME.to_string());
+            Ok(substrait::proto::Type {
+                kind: Some(r#type::Kind::UserDefined(r#type::UserDefined {
+                    type_reference: type_anchor,
+                    type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                    nullability,
+                    type_parameters: vec![],
+                })),
+            })
+        }
         DataType::Interval(interval_unit) => {
             match interval_unit {
                 IntervalUnit::YearMonth => Ok(substrait::proto::Type {
@@ -212,12 +270,16 @@ pub(crate) fn to_substrait_type(
             }
         }
         DataType::Duration(duration_unit) => {
+            let type_anchor = producer.register_type(DURATION_TYPE_NAME.to_string());
             let precision = to_substrait_precision(duration_unit);
             Ok(substrait::proto::Type {
-                kind: Some(r#type::Kind::IntervalDay(r#type::IntervalDay {
-                    type_variation_reference: DURATION_INTERVAL_DAY_TYPE_VARIATION_REF,
+                kind: Some(r#type::Kind::UserDefined(r#type::UserDefined {
+                    type_reference: type_anchor,
+                    type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
                     nullability,
-                    precision: Some(precision),
+                    type_parameters: vec![r#type::Parameter {
+                        parameter: Some(r#type::parameter::Parameter::Integer(precision as i64)),
+                    }],
                 })),
             })
         }
@@ -234,12 +296,17 @@ pub(crate) fn to_substrait_type(
                 nullability,
             })),
         }),
-        DataType::LargeBinary => Ok(substrait::proto::Type {
-            kind: Some(r#type::Kind::Binary(r#type::Binary {
-                type_variation_reference: LARGE_CONTAINER_TYPE_VARIATION_REF,
-                nullability,
-            })),
-        }),
+        DataType::LargeBinary => {
+            let type_anchor = producer.register_type(LARGE_BINARY_TYPE_NAME.to_string());
+            Ok(substrait::proto::Type {
+                kind: Some(r#type::Kind::UserDefined(r#type::UserDefined {
+                    type_reference: type_anchor,
+                    type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                    nullability,
+                    type_parameters: vec![],
+                })),
+            })
+        }
         DataType::BinaryView => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::Binary(r#type::Binary {
                 type_variation_reference: VIEW_CONTAINER_TYPE_VARIATION_REF,
@@ -252,12 +319,17 @@ pub(crate) fn to_substrait_type(
                 nullability,
             })),
         }),
-        DataType::LargeUtf8 => Ok(substrait::proto::Type {
-            kind: Some(r#type::Kind::String(r#type::String {
-                type_variation_reference: LARGE_CONTAINER_TYPE_VARIATION_REF,
-                nullability,
-            })),
-        }),
+        DataType::LargeUtf8 => {
+            let type_anchor = producer.register_type(LARGE_STRING_TYPE_NAME.to_string());
+            Ok(substrait::proto::Type {
+                kind: Some(r#type::Kind::UserDefined(r#type::UserDefined {
+                    type_reference: type_anchor,
+                    type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                    nullability,
+                    type_parameters: vec![],
+                })),
+            })
+        }
         DataType::Utf8View => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::String(r#type::String {
                 type_variation_reference: VIEW_CONTAINER_TYPE_VARIATION_REF,
@@ -276,14 +348,38 @@ pub(crate) fn to_substrait_type(
             })
         }
         DataType::LargeList(inner) => {
+            let type_anchor = producer.register_type(LARGE_LIST_TYPE_NAME.to_string());
             let inner_type =
                 to_substrait_type(producer, inner.data_type(), inner.is_nullable())?;
             Ok(substrait::proto::Type {
-                kind: Some(r#type::Kind::List(Box::new(r#type::List {
-                    r#type: Some(Box::new(inner_type)),
-                    type_variation_reference: LARGE_CONTAINER_TYPE_VARIATION_REF,
+                kind: Some(r#type::Kind::UserDefined(r#type::UserDefined {
+                    type_reference: type_anchor,
+                    type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
                     nullability,
-                }))),
+                    type_parameters: vec![r#type::Parameter {
+                        parameter: Some(r#type::parameter::Parameter::DataType(inner_type)),
+                    }],
+                })),
+            })
+        }
+        DataType::FixedSizeList(inner, size) => {
+            let type_anchor = producer.register_type(FIXED_SIZE_LIST_TYPE_NAME.to_string());
+            let inner_type =
+                to_substrait_type(producer, inner.data_type(), inner.is_nullable())?;
+            Ok(substrait::proto::Type {
+                kind: Some(r#type::Kind::UserDefined(r#type::UserDefined {
+                    type_reference: type_anchor,
+                    type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                    nullability,
+                    type_parameters: vec![
+                        r#type::Parameter {
+                            parameter: Some(r#type::parameter::Parameter::DataType(inner_type)),
+                        },
+                        r#type::Parameter {
+                            parameter: Some(r#type::parameter::Parameter::Integer(*size as i64)),
+                        },
+                    ],
+                })),
             })
         }
         DataType::Map(inner, _) => match inner.data_type() {
@@ -344,14 +440,24 @@ pub(crate) fn to_substrait_type(
                 precision: *p as i32,
             })),
         }),
-        DataType::Decimal256(p, s) => Ok(substrait::proto::Type {
-            kind: Some(r#type::Kind::Decimal(r#type::Decimal {
-                type_variation_reference: DECIMAL_256_TYPE_VARIATION_REF,
-                nullability,
-                scale: *s as i32,
-                precision: *p as i32,
-            })),
-        }),
+        DataType::Decimal256(p, s) => {
+            let type_anchor = producer.register_type(DECIMAL256_TYPE_NAME.to_string());
+            Ok(substrait::proto::Type {
+                kind: Some(r#type::Kind::UserDefined(r#type::UserDefined {
+                    type_reference: type_anchor,
+                    type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                    nullability,
+                    type_parameters: vec![
+                        r#type::Parameter {
+                            parameter: Some(r#type::parameter::Parameter::Integer(*p as i64)),
+                        },
+                        r#type::Parameter {
+                            parameter: Some(r#type::parameter::Parameter::Integer(*s as i64)),
+                        },
+                    ],
+                })),
+            })
+        }
         _ => not_impl_err!("Unsupported cast type: {dt}"),
     }
 }

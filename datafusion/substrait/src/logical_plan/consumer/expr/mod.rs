@@ -112,7 +112,7 @@ pub async fn from_substrait_extended_expr(
     extended_expr: &ExtendedExpression,
 ) -> datafusion::common::Result<ExprContainer> {
     // Register function extension
-    let extensions = Extensions::try_from(&extended_expr.extensions)?;
+    let extensions = Extensions::from_substrait(&extended_expr.extension_uris, &extended_expr.extensions)?;
     if !extensions.type_variations.is_empty() {
         return not_impl_err!("Type variation extensions are not supported");
     }

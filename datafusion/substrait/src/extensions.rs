@@ -15,22 +15,26 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::common::{DataFusionError, HashMap, plan_err};
-use substrait::proto::extensions::SimpleExtensionDeclaration;
+use datafusion::common::{HashMap, plan_err};
+use substrait::proto::extensions::{SimpleExtensionDeclaration, SimpleExtensionUri};
 use substrait::proto::extensions::simple_extension_declaration::{
     ExtensionFunction, ExtensionType, ExtensionTypeVariation, MappingType,
 };
+
+/// Arrow's official Substrait extension types URI
+pub const ARROW_EXTENSION_TYPES_URI: &str =
+    "https://github.com/apache/arrow/blob/main/format/substrait/extension_types.yaml";
 
 /// Substrait uses [SimpleExtensions](https://substrait.io/extensions/#simple-extensions) to define
 /// behavior of plans in addition to what's supported directly by the protobuf definitions.
 /// That includes functions, but also provides support for custom types and variations for existing
 /// types. This structs facilitates the use of these extensions in DataFusion.
 /// TODO: DF doesn't yet use extensions for type variations <https://github.com/apache/datafusion/issues/11544>
-/// TODO: DF doesn't yet provide valid extensionUris <https://github.com/apache/datafusion/issues/11545>
 #[derive(Default, Debug, PartialEq)]
 pub struct Extensions {
+    pub uris: HashMap<u32, String>,      // anchor -> URI
     pub functions: HashMap<u32, String>, // anchor -> function name
-    pub types: HashMap<u32, String>,     // anchor -> type name
+    pub types: HashMap<u32, (String, u32)>, // anchor -> (type name, uri_anchor)
     pub type_variations: HashMap<u32, String>, // anchor -> type variation name
 }
 
@@ -62,39 +66,61 @@ impl Extensions {
         }
     }
 
-    /// Registers a type and returns the anchor (reference) to it. If the type has already
+    /// Registers a URI and returns the anchor (reference) to it. If the URI has already
     /// been registered, it returns the existing anchor.
+    pub fn register_uri(&mut self, uri: &str) -> u32 {
+        match self.uris.iter().find(|(_, u)| *u == uri) {
+            Some((uri_anchor, _)) => *uri_anchor, // URI has been registered
+            None => {
+                // URI has NOT been registered
+                let uri_anchor = self.uris.len() as u32;
+                self.uris.insert(uri_anchor, uri.to_string());
+                uri_anchor
+            }
+        }
+    }
+
+    /// Registers an Arrow extension type and returns the anchor (reference) to it.
+    /// Uses the official Arrow extension types URI by default.
+    /// If the type has already been registered, it returns the existing anchor.
     pub fn register_type(&mut self, type_name: &str) -> u32 {
         let type_name = type_name.to_lowercase();
-        match self.types.iter().find(|(_, t)| *t == &type_name) {
+        let uri_anchor = self.register_uri(ARROW_EXTENSION_TYPES_URI);
+        match self.types.iter().find(|(_, (t, _))| *t == type_name) {
             Some((type_anchor, _)) => *type_anchor, // Type has been registered
             None => {
                 // Type has NOT been registered
                 let type_anchor = self.types.len() as u32;
-                self.types.insert(type_anchor, type_name.clone());
+                self.types.insert(type_anchor, (type_name.clone(), uri_anchor));
                 type_anchor
             }
         }
     }
 }
 
-impl TryFrom<&Vec<SimpleExtensionDeclaration>> for Extensions {
-    type Error = DataFusionError;
-
-    fn try_from(
-        value: &Vec<SimpleExtensionDeclaration>,
+impl Extensions {
+    /// Parse extensions from Substrait plan components
+    pub fn from_substrait(
+        extension_uris: &[SimpleExtensionUri],
+        extensions: &[SimpleExtensionDeclaration],
     ) -> datafusion::common::Result<Self> {
+        let mut uris = HashMap::new();
         let mut functions = HashMap::new();
         let mut types = HashMap::new();
         let mut type_variations = HashMap::new();
 
-        for ext in value {
+        for uri in extension_uris {
+            uris.insert(uri.extension_uri_anchor, uri.uri.clone());
+        }
+
+        for ext in extensions {
             match &ext.mapping_type {
                 Some(MappingType::ExtensionFunction(ext_f)) => {
                     functions.insert(ext_f.function_anchor, ext_f.name.to_owned());
                 }
                 Some(MappingType::ExtensionType(ext_t)) => {
-                    types.insert(ext_t.type_anchor, ext_t.name.to_owned());
+                    let uri_anchor = ext_t.extension_urn_reference;
+                    types.insert(ext_t.type_anchor, (ext_t.name.to_owned(), uri_anchor));
                 }
                 Some(MappingType::ExtensionTypeVariation(ext_v)) => {
                     type_variations
@@ -105,10 +131,22 @@ impl TryFrom<&Vec<SimpleExtensionDeclaration>> for Extensions {
         }
 
         Ok(Extensions {
+            uris,
             functions,
             types,
             type_variations,
         })
+    }
+
+    /// Get extension URIs for Substrait plan
+    pub fn to_extension_uris(&self) -> Vec<SimpleExtensionUri> {
+        self.uris
+            .iter()
+            .map(|(anchor, uri)| SimpleExtensionUri {
+                extension_uri_anchor: *anchor,
+                uri: uri.clone(),
+            })
+            .collect()
     }
 }
 
@@ -131,10 +169,10 @@ impl From<Extensions> for Vec<SimpleExtensionDeclaration> {
             extensions.push(simple_extension);
         }
 
-        for (t_anchor, t_name) in val.types {
+        for (t_anchor, (t_name, uri_anchor)) in val.types {
             let type_extension = ExtensionType {
-                extension_uri_reference: u32::MAX, // https://github.com/apache/datafusion/issues/11545
-                extension_urn_reference: u32::MAX, // https://github.com/apache/datafusion/issues/11545
+                extension_uri_reference: uri_anchor,
+                extension_urn_reference: uri_anchor,
                 type_anchor: t_anchor,
                 name: t_name,
             };
