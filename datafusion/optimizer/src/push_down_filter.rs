@@ -176,27 +176,9 @@ pub(crate) fn lr_is_preserved(join_type: JoinType) -> (bool, bool) {
     }
 }
 
-/// For a given JOIN type, determine whether each input of the join is preserved
-/// for the join condition (`ON` clause filters).
-///
-/// It is only correct to push filters below a join for preserved inputs.
-///
-/// # Return Value
-/// A tuple of booleans - (left_preserved, right_preserved).
-///
-/// See [`lr_is_preserved`] for a definition of "preserved".
+/// See [`JoinType::on_lr_is_preserved`] for details.
 pub(crate) fn on_lr_is_preserved(join_type: JoinType) -> (bool, bool) {
-    match join_type {
-        JoinType::Inner => (true, true),
-        JoinType::Left => (false, true),
-        JoinType::Right => (true, false),
-        JoinType::Full => (false, false),
-        JoinType::LeftSemi | JoinType::RightSemi => (true, true),
-        JoinType::LeftAnti => (false, true),
-        JoinType::RightAnti => (true, false),
-        JoinType::LeftMark => (false, true),
-        JoinType::RightMark => (true, false),
-    }
+    join_type.on_lr_is_preserved()
 }
 
 /// Evaluates the columns referenced in the given expression to see if they refer
