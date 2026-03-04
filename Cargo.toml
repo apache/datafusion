@@ -265,6 +265,7 @@ strip = false            # Retain debug info for flamegraphs
 debug = false
 inherits = "dev"
 incremental = false
+opt-level = 1
 
 # This rule applies to every package except workspace members (dependencies
 # such as `arrow` and `tokio`). It disables debug info and related features on
