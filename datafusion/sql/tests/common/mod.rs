@@ -342,22 +342,6 @@ impl TableSource for EmptyTable {
 pub struct CustomTypePlanner {}
 
 impl TypePlanner for CustomTypePlanner {
-    fn plan_type(&self, sql_type: &sqlparser::ast::DataType) -> Result<Option<DataType>> {
-        match sql_type {
-            sqlparser::ast::DataType::Datetime(precision) => {
-                let precision = match precision {
-                    Some(0) => TimeUnit::Second,
-                    Some(3) => TimeUnit::Millisecond,
-                    Some(6) => TimeUnit::Microsecond,
-                    None | Some(9) => TimeUnit::Nanosecond,
-                    _ => unreachable!(),
-                };
-                Ok(Some(DataType::Timestamp(precision, None)))
-            }
-            _ => Ok(None),
-        }
-    }
-
     fn plan_type_field(
         &self,
         sql_type: &sqlparser::ast::DataType,
@@ -369,9 +353,19 @@ impl TypePlanner for CustomTypePlanner {
                         .into(),
                 ),
             ))),
-            _ => Ok(self
-                .plan_type(sql_type)?
-                .map(|data_type| data_type.into_nullable_field_ref())),
+            sqlparser::ast::DataType::Datetime(precision) => {
+                let precision = match precision {
+                    Some(0) => TimeUnit::Second,
+                    Some(3) => TimeUnit::Millisecond,
+                    Some(6) => TimeUnit::Microsecond,
+                    None | Some(9) => TimeUnit::Nanosecond,
+                    _ => unreachable!(),
+                };
+                Ok(Some(
+                    DataType::Timestamp(precision, None).into_nullable_field_ref(),
+                ))
+            }
+            _ => Ok(None),
         }
     }
 }

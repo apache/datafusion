@@ -434,6 +434,7 @@ pub trait TypePlanner: Debug + Send + Sync {
     /// Plan SQL [`sqlparser::ast::DataType`] to DataFusion [`DataType`]
     ///
     /// Returns None if not possible
+    #[deprecated(since = "53.0.0", note = "Use plan_type_field()")]
     fn plan_type(
         &self,
         _sql_type: &sqlparser::ast::DataType,

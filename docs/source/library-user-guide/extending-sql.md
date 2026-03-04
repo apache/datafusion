@@ -158,7 +158,7 @@ when you need to support SQL types that aren't natively recognized.
 
 ```rust
 # use std::sync::Arc;
-# use arrow::datatypes::{DataType, TimeUnit};
+# use arrow::datatypes::{DataType, FieldRef, TimeUnit};
 # use datafusion::error::Result;
 # use datafusion::prelude::*;
 # use datafusion::execution::SessionStateBuilder;
@@ -169,7 +169,7 @@ use datafusion_expr::planner::TypePlanner;
 struct MyTypePlanner;
 
 impl TypePlanner for MyTypePlanner {
-    fn plan_type(&self, sql_type: &ast::DataType) -> Result<Option<DataType>> {
+    fn plan_type_field(&self, sql_type: &ast::DataType) -> Result<Option<FieldRef>> {
         match sql_type {
             // Map DATETIME(precision) to Arrow Timestamp
             ast::DataType::Datetime(precision) => {
@@ -180,7 +180,9 @@ impl TypePlanner for MyTypePlanner {
                     None | Some(9) => TimeUnit::Nanosecond,
                     _ => return Ok(None), // Let default handling take over
                 };
-                Ok(Some(DataType::Timestamp(time_unit, None)))
+                Ok(Some(
+                    DataType::Timestamp(time_unit, None).into_nullable_field_ref()
+                ))
             }
             _ => Ok(None), // Return None for types we don't handle
         }
@@ -206,7 +208,7 @@ async fn main() -> Result<()> {
 
 ```rust
 # use std::sync::Arc;
-# use arrow::datatypes::{FieldRef, TimeUnit};
+# use arrow::datatypes::{DataType, FieldRef, TimeUnit};
 # use datafusion::error::Result;
 # use datafusion::prelude::*;
 # use datafusion::execution::SessionStateBuilder;
@@ -225,9 +227,7 @@ impl TypePlanner for MyTypePlanner {
                         .into(),
                 ),
             ))),
-            _ => Ok(self
-                .plan_type(sql_type)?
-                .map(|data_type| data_type.into_nullable_field_ref())),
+            _ => Ok(None),
         }
     }
 }
