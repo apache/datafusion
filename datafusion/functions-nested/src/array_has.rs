@@ -1193,7 +1193,7 @@ mod tests {
             })
             .unwrap();
         let output = result.into_array(num_rows).unwrap();
-        assert_eq!(output.as_boolean().iter().collect::<Vec<_>>(), expected,);
+        assert_eq!(output.as_boolean().iter().collect::<Vec<_>>(), expected);
     }
 
     #[test]
