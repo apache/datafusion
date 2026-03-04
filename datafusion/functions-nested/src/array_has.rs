@@ -414,7 +414,7 @@ fn array_has_all_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 /// Number of rows to process at a time when doing batched row conversion.  This
 /// amortizes the row conversion overhead over more rows, but making this too
 /// large can cause cache pressure for large arrays. See
-/// https://github.com/apache/datafusion/pull/20588 for context.
+/// <https://github.com/apache/datafusion/pull/20588> for context.
 const ROW_CONVERSION_CHUNK_SIZE: usize = 512;
 
 // General row comparison for array_has_all and array_has_any
