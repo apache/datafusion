@@ -69,6 +69,7 @@ use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
 use arrow_schema::{DataType, Schema};
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
     JoinSide, JoinType, NullEquality, Result, assert_or_internal_err, internal_err,
@@ -1229,6 +1230,30 @@ impl ExecutionPlan for HashJoinExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.left, &self.right]
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Apply to join key expressions from both sides
+        let mut tnr = TreeNodeRecursion::Continue;
+        for (left, right) in &self.on {
+            tnr = tnr.visit_sibling(|| f(left.as_ref()))?;
+            tnr = tnr.visit_sibling(|| f(right.as_ref()))?;
+        }
+
+        // Apply to join filter expression if present
+        if let Some(filter) = &self.filter {
+            tnr = tnr.visit_sibling(|| f(filter.expression().as_ref()))?;
+        }
+
+        // Apply to dynamic filter expression if present
+        if let Some(df) = &self.dynamic_filter {
+            tnr = tnr.visit_sibling(|| f(df.filter.as_ref()))?;
+        }
+
+        Ok(tnr)
     }
 
     /// Creates a new HashJoinExec with different children while preserving configuration.

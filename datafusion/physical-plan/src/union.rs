@@ -50,6 +50,7 @@ use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     Result, assert_or_internal_err, exec_err, internal_datafusion_err,
 };
@@ -271,6 +272,13 @@ impl ExecutionPlan for UnionExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         self.inputs.iter().collect()
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn with_new_children(
@@ -587,6 +595,13 @@ impl ExecutionPlan for InterleaveExec {
 
     fn maintains_input_order(&self) -> Vec<bool> {
         vec![false; self.inputs().len()]
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn with_new_children(
