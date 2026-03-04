@@ -29,6 +29,7 @@ use datafusion_common::utils::ListCoercion;
 use datafusion_common::{DataFusionError, Result, not_impl_err};
 
 use std::any::Any;
+use std::fmt::{self, Write};
 
 use crate::utils::make_scalar_function;
 use arrow::array::{
@@ -36,7 +37,7 @@ use arrow::array::{
     builder::{ArrayBuilder, LargeStringBuilder, StringViewBuilder},
     cast::AsArray,
 };
-use arrow::compute::cast;
+use arrow::compute::{can_cast_types, cast};
 use arrow::datatypes::DataType::{
     Dictionary, FixedSizeList, LargeList, LargeUtf8, List, Null, Utf8, Utf8View,
 };
@@ -53,69 +54,6 @@ use datafusion_expr::{
 use datafusion_functions::downcast_arg;
 use datafusion_macros::user_doc;
 use std::sync::Arc;
-
-macro_rules! call_array_function {
-    ($DATATYPE:expr, false) => {
-        match $DATATYPE {
-            DataType::Utf8 => array_function!(StringArray),
-            DataType::Utf8View => array_function!(StringViewArray),
-            DataType::LargeUtf8 => array_function!(LargeStringArray),
-            DataType::Boolean => array_function!(BooleanArray),
-            DataType::Float32 => array_function!(Float32Array),
-            DataType::Float64 => array_function!(Float64Array),
-            DataType::Int8 => array_function!(Int8Array),
-            DataType::Int16 => array_function!(Int16Array),
-            DataType::Int32 => array_function!(Int32Array),
-            DataType::Int64 => array_function!(Int64Array),
-            DataType::UInt8 => array_function!(UInt8Array),
-            DataType::UInt16 => array_function!(UInt16Array),
-            DataType::UInt32 => array_function!(UInt32Array),
-            DataType::UInt64 => array_function!(UInt64Array),
-            dt => not_impl_err!("Unsupported data type in array_to_string: {dt}"),
-        }
-    };
-    ($DATATYPE:expr, $INCLUDE_LIST:expr) => {{
-        match $DATATYPE {
-            DataType::List(_) => array_function!(ListArray),
-            DataType::Utf8 => array_function!(StringArray),
-            DataType::Utf8View => array_function!(StringViewArray),
-            DataType::LargeUtf8 => array_function!(LargeStringArray),
-            DataType::Boolean => array_function!(BooleanArray),
-            DataType::Float32 => array_function!(Float32Array),
-            DataType::Float64 => array_function!(Float64Array),
-            DataType::Int8 => array_function!(Int8Array),
-            DataType::Int16 => array_function!(Int16Array),
-            DataType::Int32 => array_function!(Int32Array),
-            DataType::Int64 => array_function!(Int64Array),
-            DataType::UInt8 => array_function!(UInt8Array),
-            DataType::UInt16 => array_function!(UInt16Array),
-            DataType::UInt32 => array_function!(UInt32Array),
-            DataType::UInt64 => array_function!(UInt64Array),
-            dt => not_impl_err!("Unsupported data type in array_to_string: {dt}"),
-        }
-    }};
-}
-
-macro_rules! to_string {
-    ($ARG:expr, $ARRAY:expr, $DELIMITER:expr, $NULL_STRING:expr, $WITH_NULL_STRING:expr, $ARRAY_TYPE:ident) => {{
-        let arr = downcast_arg!($ARRAY, $ARRAY_TYPE);
-        for x in arr {
-            match x {
-                Some(x) => {
-                    $ARG.push_str(&x.to_string());
-                    $ARG.push_str($DELIMITER);
-                }
-                None => {
-                    if $WITH_NULL_STRING {
-                        $ARG.push_str($NULL_STRING);
-                        $ARG.push_str($DELIMITER);
-                    }
-                }
-            }
-        }
-        Ok($ARG)
-    }};
-}
 
 // Create static instances of ScalarUDFs for each function
 make_udf_expr_and_func!(
@@ -145,7 +83,7 @@ make_udf_expr_and_func!(
     argument(name = "delimiter", description = "Array element separator."),
     argument(
         name = "null_string",
-        description = "Optional. String to replace null values in the array. If not provided, nulls will be handled by default behavior."
+        description = "Optional. String to use for null values in the output. If not provided, nulls will be omitted."
     )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -347,181 +285,255 @@ fn array_to_string_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
     };
 
-    let mut null_string = String::from("");
-    let mut with_null_string = false;
-    if args.len() == 3 {
-        null_string = match args[2].data_type() {
-            Utf8 => args[2].as_string::<i32>().value(0).to_string(),
-            Utf8View => args[2].as_string_view().value(0).to_string(),
-            LargeUtf8 => args[2].as_string::<i64>().value(0).to_string(),
+    let null_strings: Vec<Option<&str>> = if args.len() == 3 {
+        match args[2].data_type() {
+            Utf8 => args[2].as_string::<i32>().iter().collect(),
+            Utf8View => args[2].as_string_view().iter().collect(),
+            LargeUtf8 => args[2].as_string::<i64>().iter().collect(),
             other => {
                 return exec_err!(
-                    "unsupported type for second argument to array_to_string function as {other:?}"
+                    "unsupported type for third argument to array_to_string function as {other:?}"
                 );
             }
-        };
-        with_null_string = true;
-    }
-
-    /// Creates a single string from single element of a ListArray (which is
-    /// itself another Array)
-    fn compute_array_to_string<'a>(
-        arg: &'a mut String,
-        arr: &ArrayRef,
-        delimiter: String,
-        null_string: String,
-        with_null_string: bool,
-    ) -> Result<&'a mut String> {
-        match arr.data_type() {
-            List(..) => {
-                let list_array = as_list_array(&arr)?;
-                for i in 0..list_array.len() {
-                    if !list_array.is_null(i) {
-                        compute_array_to_string(
-                            arg,
-                            &list_array.value(i),
-                            delimiter.clone(),
-                            null_string.clone(),
-                            with_null_string,
-                        )?;
-                    } else if with_null_string {
-                        arg.push_str(&null_string);
-                        arg.push_str(&delimiter);
-                    }
-                }
-
-                Ok(arg)
-            }
-            FixedSizeList(..) => {
-                let list_array = as_fixed_size_list_array(&arr)?;
-
-                for i in 0..list_array.len() {
-                    if !list_array.is_null(i) {
-                        compute_array_to_string(
-                            arg,
-                            &list_array.value(i),
-                            delimiter.clone(),
-                            null_string.clone(),
-                            with_null_string,
-                        )?;
-                    } else if with_null_string {
-                        arg.push_str(&null_string);
-                        arg.push_str(&delimiter);
-                    }
-                }
-
-                Ok(arg)
-            }
-            LargeList(..) => {
-                let list_array = as_large_list_array(&arr)?;
-                for i in 0..list_array.len() {
-                    if !list_array.is_null(i) {
-                        compute_array_to_string(
-                            arg,
-                            &list_array.value(i),
-                            delimiter.clone(),
-                            null_string.clone(),
-                            with_null_string,
-                        )?;
-                    } else if with_null_string {
-                        arg.push_str(&null_string);
-                        arg.push_str(&delimiter);
-                    }
-                }
-
-                Ok(arg)
-            }
-            Dictionary(_key_type, value_type) => {
-                // Call cast to unwrap the dictionary. This could be optimized if we wanted
-                // to accept the overhead of extra code
-                let values = cast(&arr, value_type.as_ref()).map_err(|e| {
-                    DataFusionError::from(e).context(
-                        "Casting dictionary to values in compute_array_to_string",
-                    )
-                })?;
-                compute_array_to_string(
-                    arg,
-                    &values,
-                    delimiter,
-                    null_string,
-                    with_null_string,
-                )
-            }
-            Null => Ok(arg),
-            data_type => {
-                macro_rules! array_function {
-                    ($ARRAY_TYPE:ident) => {
-                        to_string!(
-                            arg,
-                            arr,
-                            &delimiter,
-                            &null_string,
-                            with_null_string,
-                            $ARRAY_TYPE
-                        )
-                    };
-                }
-                call_array_function!(data_type, false)
-            }
         }
-    }
-
-    fn generate_string_array<O: OffsetSizeTrait>(
-        list_arr: &GenericListArray<O>,
-        delimiters: &[Option<&str>],
-        null_string: &str,
-        with_null_string: bool,
-    ) -> Result<StringArray> {
-        let mut res: Vec<Option<String>> = Vec::new();
-        for (arr, &delimiter) in list_arr.iter().zip(delimiters.iter()) {
-            if let (Some(arr), Some(delimiter)) = (arr, delimiter) {
-                let mut arg = String::from("");
-                let s = compute_array_to_string(
-                    &mut arg,
-                    &arr,
-                    delimiter.to_string(),
-                    null_string.to_string(),
-                    with_null_string,
-                )?
-                .clone();
-
-                if let Some(s) = s.strip_suffix(delimiter) {
-                    res.push(Some(s.to_string()));
-                } else {
-                    res.push(Some(s));
-                }
-            } else {
-                res.push(None);
-            }
-        }
-
-        Ok(StringArray::from(res))
-    }
+    } else {
+        // If `null_strings` is not specified, we treat it as equivalent to
+        // explicitly passing a NULL value for `null_strings` in every row.
+        vec![None; args[0].len()]
+    };
 
     let string_arr = match arr.data_type() {
         List(_) => {
             let list_array = as_list_array(&arr)?;
-            generate_string_array::<i32>(
-                list_array,
-                &delimiters,
-                &null_string,
-                with_null_string,
-            )?
+            generate_string_array::<i32>(list_array, &delimiters, &null_strings)?
         }
         LargeList(_) => {
             let list_array = as_large_list_array(&arr)?;
-            generate_string_array::<i64>(
-                list_array,
-                &delimiters,
-                &null_string,
-                with_null_string,
-            )?
+            generate_string_array::<i64>(list_array, &delimiters, &null_strings)?
         }
         // Signature guards against this arm
         _ => return exec_err!("array_to_string expects list as first argument"),
     };
 
     Ok(Arc::new(string_arr))
+}
+
+fn generate_string_array<O: OffsetSizeTrait>(
+    list_arr: &GenericListArray<O>,
+    delimiters: &[Option<&str>],
+    null_strings: &[Option<&str>],
+) -> Result<StringArray> {
+    let mut builder = StringBuilder::with_capacity(list_arr.len(), 0);
+
+    for ((arr, &delimiter), &null_string) in list_arr
+        .iter()
+        .zip(delimiters.iter())
+        .zip(null_strings.iter())
+    {
+        let (Some(arr), Some(delimiter)) = (arr, delimiter) else {
+            builder.append_null();
+            continue;
+        };
+
+        let mut first = true;
+        compute_array_to_string(&mut builder, &arr, delimiter, null_string, &mut first)?;
+        builder.append_value("");
+    }
+
+    Ok(builder.finish())
+}
+
+fn compute_array_to_string(
+    w: &mut impl Write,
+    arr: &ArrayRef,
+    delimiter: &str,
+    null_string: Option<&str>,
+    first: &mut bool,
+) -> Result<()> {
+    // Handle lists by recursing on each list element.
+    macro_rules! handle_list {
+        ($list_array:expr) => {
+            for i in 0..$list_array.len() {
+                if !$list_array.is_null(i) {
+                    compute_array_to_string(
+                        w,
+                        &$list_array.value(i),
+                        delimiter,
+                        null_string,
+                        first,
+                    )?;
+                } else if let Some(ns) = null_string {
+                    if *first {
+                        *first = false;
+                    } else {
+                        w.write_str(delimiter)?;
+                    }
+                    w.write_str(ns)?;
+                }
+            }
+        };
+    }
+
+    match arr.data_type() {
+        List(..) => {
+            let list_array = as_list_array(arr)?;
+            handle_list!(list_array);
+            Ok(())
+        }
+        FixedSizeList(..) => {
+            let list_array = as_fixed_size_list_array(arr)?;
+            handle_list!(list_array);
+            Ok(())
+        }
+        LargeList(..) => {
+            let list_array = as_large_list_array(arr)?;
+            handle_list!(list_array);
+            Ok(())
+        }
+        Dictionary(_key_type, value_type) => {
+            // Call cast to unwrap the dictionary. This could be optimized if we wanted
+            // to accept the overhead of extra code
+            let values = cast(arr, value_type.as_ref()).map_err(|e| {
+                DataFusionError::from(e)
+                    .context("Casting dictionary to values in compute_array_to_string")
+            })?;
+            compute_array_to_string(w, &values, delimiter, null_string, first)
+        }
+        Null => Ok(()),
+        data_type => {
+            macro_rules! str_leaf {
+                ($ARRAY_TYPE:ident) => {
+                    write_leaf_to_string(
+                        w,
+                        downcast_arg!(arr, $ARRAY_TYPE),
+                        delimiter,
+                        null_string,
+                        first,
+                        |w, x: &str| w.write_str(x),
+                    )?
+                };
+            }
+            macro_rules! bool_leaf {
+                ($ARRAY_TYPE:ident) => {
+                    write_leaf_to_string(
+                        w,
+                        downcast_arg!(arr, $ARRAY_TYPE),
+                        delimiter,
+                        null_string,
+                        first,
+                        |w, x: bool| {
+                            if x {
+                                w.write_str("true")
+                            } else {
+                                w.write_str("false")
+                            }
+                        },
+                    )?
+                };
+            }
+            macro_rules! int_leaf {
+                ($ARRAY_TYPE:ident) => {
+                    write_leaf_to_string(
+                        w,
+                        downcast_arg!(arr, $ARRAY_TYPE),
+                        delimiter,
+                        null_string,
+                        first,
+                        |w, x| {
+                            let mut itoa_buf = itoa::Buffer::new();
+                            w.write_str(itoa_buf.format(x))
+                        },
+                    )?
+                };
+            }
+            macro_rules! float_leaf {
+                ($ARRAY_TYPE:ident) => {
+                    write_leaf_to_string(
+                        w,
+                        downcast_arg!(arr, $ARRAY_TYPE),
+                        delimiter,
+                        null_string,
+                        first,
+                        // TODO: Consider switching to a more efficient
+                        // floating point display library (e.g., ryu). This
+                        // might result in some differences in the output
+                        // format, however.
+                        |w, x| write!(w, "{}", x),
+                    )?
+                };
+            }
+            match data_type {
+                Utf8 => str_leaf!(StringArray),
+                Utf8View => str_leaf!(StringViewArray),
+                LargeUtf8 => str_leaf!(LargeStringArray),
+                DataType::Boolean => bool_leaf!(BooleanArray),
+                DataType::Float32 => float_leaf!(Float32Array),
+                DataType::Float64 => float_leaf!(Float64Array),
+                DataType::Int8 => int_leaf!(Int8Array),
+                DataType::Int16 => int_leaf!(Int16Array),
+                DataType::Int32 => int_leaf!(Int32Array),
+                DataType::Int64 => int_leaf!(Int64Array),
+                DataType::UInt8 => int_leaf!(UInt8Array),
+                DataType::UInt16 => int_leaf!(UInt16Array),
+                DataType::UInt32 => int_leaf!(UInt32Array),
+                DataType::UInt64 => int_leaf!(UInt64Array),
+                data_type if can_cast_types(data_type, &Utf8) => {
+                    let str_arr = cast(arr, &Utf8).map_err(|e| {
+                        DataFusionError::from(e)
+                            .context("Casting to string in array_to_string")
+                    })?;
+                    return compute_array_to_string(
+                        w,
+                        &str_arr,
+                        delimiter,
+                        null_string,
+                        first,
+                    );
+                }
+                data_type => {
+                    return not_impl_err!(
+                        "Unsupported data type in array_to_string: {data_type}"
+                    );
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Appends the string representation of each element in a leaf (non-list)
+/// array to `w`, separated by `delimiter`. Null elements are rendered
+/// using `null_string` if provided, or skipped otherwise. The `append`
+/// closure controls how each non-null element is written.
+fn write_leaf_to_string<'a, W: Write, A, T>(
+    w: &mut W,
+    arr: &'a A,
+    delimiter: &str,
+    null_string: Option<&str>,
+    first: &mut bool,
+    append: impl Fn(&mut W, T) -> fmt::Result,
+) -> Result<()>
+where
+    &'a A: IntoIterator<Item = Option<T>>,
+{
+    for x in arr {
+        // Skip nulls when no null_string is provided
+        if x.is_none() && null_string.is_none() {
+            continue;
+        }
+
+        if *first {
+            *first = false;
+        } else {
+            w.write_str(delimiter)?;
+        }
+
+        match x {
+            Some(x) => append(w, x)?,
+            None => w.write_str(null_string.unwrap())?,
+        }
+    }
+    Ok(())
 }
 
 /// String_to_array SQL function
