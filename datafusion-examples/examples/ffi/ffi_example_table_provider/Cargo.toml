@@ -28,6 +28,9 @@ datafusion = { workspace = true }
 datafusion-ffi = { workspace = true }
 ffi_module_interface = { path = "../ffi_module_interface" }
 
+[lints]
+workspace = true
+
 [lib]
 name = "ffi_example_table_provider"
 crate-type = ["cdylib", 'rlib']

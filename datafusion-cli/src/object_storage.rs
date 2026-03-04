@@ -65,6 +65,21 @@ pub async fn get_s3_object_store_builder(
     aws_options: &AwsOptions,
     resolve_region: bool,
 ) -> Result<AmazonS3Builder> {
+    // Box the inner future to reduce the future size of this async function,
+    // which is deeply nested in the CLI's async call chain.
+    Box::pin(get_s3_object_store_builder_inner(
+        url,
+        aws_options,
+        resolve_region,
+    ))
+    .await
+}
+
+async fn get_s3_object_store_builder_inner(
+    url: &Url,
+    aws_options: &AwsOptions,
+    resolve_region: bool,
+) -> Result<AmazonS3Builder> {
     let AwsOptions {
         access_key_id,
         secret_access_key,
@@ -209,7 +224,7 @@ impl CredentialsFromConfig {
 
 #[derive(Debug)]
 struct S3CredentialProvider {
-    credentials: aws_credential_types::provider::SharedCredentialsProvider,
+    credentials: SharedCredentialsProvider,
 }
 
 #[async_trait]

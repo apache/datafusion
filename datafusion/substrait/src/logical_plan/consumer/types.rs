@@ -34,19 +34,37 @@ use crate::variation_const::{
 };
 use crate::variation_const::{FLOAT_16_TYPE_NAME, NULL_TYPE_NAME};
 use datafusion::arrow::datatypes::{
-    DataType, Field, Fields, IntervalUnit, Schema, TimeUnit,
+    DataType, Field, FieldRef, Fields, IntervalUnit, Schema, TimeUnit,
 };
+use datafusion::common::datatype::DataTypeExt;
 use datafusion::common::{
     DFSchema, not_impl_err, substrait_datafusion_err, substrait_err,
 };
 use std::sync::Arc;
 use substrait::proto::{NamedStruct, Type, r#type};
 
+pub(crate) fn field_from_substrait_type_without_names(
+    consumer: &impl SubstraitConsumer,
+    dt: &Type,
+) -> datafusion::common::Result<FieldRef> {
+    Ok(from_substrait_type_without_names(consumer, dt)?.into_nullable_field_ref())
+}
+
 pub(crate) fn from_substrait_type_without_names(
     consumer: &impl SubstraitConsumer,
     dt: &Type,
 ) -> datafusion::common::Result<DataType> {
     from_substrait_type(consumer, dt, &[], &mut 0)
+}
+
+pub fn field_from_substrait_type(
+    consumer: &impl SubstraitConsumer,
+    dt: &Type,
+    dfs_names: &[String],
+    name_idx: &mut usize,
+) -> datafusion::common::Result<FieldRef> {
+    // We could add nullability here now that we are returning a Field
+    Ok(from_substrait_type(consumer, dt, dfs_names, name_idx)?.into_nullable_field_ref())
 }
 
 pub fn from_substrait_type(

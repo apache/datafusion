@@ -57,6 +57,10 @@ sql = ["sqlparser"]
 harness = false
 name = "with_hashes"
 
+[[bench]]
+harness = false
+name = "scalar_to_array"
+
 [dependencies]
 ahash = { workspace = true }
 apache-avro = { workspace = true, features = [

@@ -58,12 +58,12 @@ use crate::simplify_expressions::SimplifyExpressions;
 use crate::single_distinct_to_groupby::SingleDistinctToGroupBy;
 use crate::utils::log_plan;
 
-/// `OptimizerRule`s transforms one [`LogicalPlan`] into another which
-/// computes the same results, but in a potentially more efficient
-/// way. If there are no suitable transformations for the input plan,
-/// the optimizer should simply return it unmodified.
+/// Transforms one [`LogicalPlan`] into another which computes the same results,
+/// but in a potentially more efficient way.
 ///
-/// To change the semantics of a `LogicalPlan`, see [`AnalyzerRule`]
+/// See notes on [`Self::rewrite`] for details on how to implement an `OptimizerRule`.
+///
+/// To change the semantics of a `LogicalPlan`, see [`AnalyzerRule`].
 ///
 /// Use [`SessionState::add_optimizer_rule`] to register additional
 /// `OptimizerRule`s.
@@ -88,8 +88,40 @@ pub trait OptimizerRule: Debug {
         true
     }
 
-    /// Try to rewrite `plan` to an optimized form, returning `Transformed::yes`
-    /// if the plan was rewritten and `Transformed::no` if it was not.
+    /// Try to rewrite `plan` to an optimized form, returning [`Transformed::yes`]
+    /// if the plan was rewritten and [`Transformed::no`] if it was not.
+    ///
+    /// # Notes for implementations:
+    ///
+    /// ## Return the same plan if no changes were made
+    ///
+    /// If there are no suitable transformations for the input plan,
+    /// the optimizer should simply return it unmodified.
+    ///
+    /// The optimizer will call `rewrite` several times until a fixed point is
+    /// reached, so it is important that `rewrite` return [`Transformed::no`] if
+    /// the output is the same.
+    ///
+    /// ## Matching on functions
+    ///
+    /// The rule should avoid function-specific transformations, and instead use
+    /// methods on [`ScalarUDFImpl`] and [`AggregateUDFImpl`]. Specifically, the
+    /// rule should not check function names as functions can be overridden, and
+    /// may not have the same semantics as the functions provided with
+    /// DataFusion.
+    ///
+    /// For example, if a rule rewrites a function based on the check
+    /// `func.name() == "sum"`, it may rewrite the plan incorrectly if the
+    /// registered `sum` function has different semantics (for example, the
+    /// `sum` function from the `datafusion-spark` crate).
+    ///
+    /// There are still several cases that rely on function name checking in
+    /// the rules included with DataFusion. Please see [#18643] for more details
+    /// and to help remove these cases.
+    ///
+    /// [`ScalarUDFImpl`]: datafusion_expr::ScalarUDFImpl
+    /// [`AggregateUDFImpl`]: datafusion_expr::ScalarUDFImpl
+    /// [#18643]: https://github.com/apache/datafusion/issues/18643
     fn rewrite(
         &self,
         _plan: LogicalPlan,
