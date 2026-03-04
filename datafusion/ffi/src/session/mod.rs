@@ -607,6 +607,7 @@ mod tests {
     use std::sync::Arc;
 
     use arrow_schema::{DataType, Field, Schema};
+    use datafusion::execution::SessionStateBuilder;
     use datafusion_common::DataFusionError;
     use datafusion_expr::col;
     use datafusion_expr::registry::FunctionRegistry;
@@ -617,7 +618,15 @@ mod tests {
     #[tokio::test]
     async fn test_ffi_session() -> Result<(), DataFusionError> {
         let (ctx, task_ctx_provider) = crate::util::tests::test_session_and_ctx();
-        let state = ctx.state();
+        let mut table_options = TableOptions::default();
+        table_options.csv.has_header = Some(true);
+        table_options.json.schema_infer_max_rec = Some(10);
+        table_options.parquet.global.coerce_int96 = Some("123456789".into());
+
+        let state = SessionStateBuilder::new_from_existing(ctx.state())
+            .with_table_options(table_options)
+            .build();
+
         let logical_codec = FFI_LogicalExtensionCodec::new(
             Arc::new(DefaultLogicalExtensionCodec {}),
             None,
