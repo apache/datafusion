@@ -418,6 +418,7 @@ fn leaf_indices_for_roots(
     // schema has no group columns (Struct, Map, etc.); when group columns
     // exist, their children become separate leaves and shift all subsequent
     // leaf indices.
+    // Struct columns are unsupported.
     let root_set: BTreeSet<_> = root_indices.iter().copied().collect();
 
     (0..schema_descr.num_columns())
