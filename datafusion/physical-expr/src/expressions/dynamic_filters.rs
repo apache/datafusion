@@ -22,11 +22,33 @@ use tokio::sync::watch;
 use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{
-    Result,
+    Result, Statistics,
     tree_node::{Transformed, TransformedResult, TreeNode},
 };
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::physical_expr::DynHash;
+
+/// Trait for dynamic filter producers that can update their bounds
+/// based on file-level statistics.
+///
+/// When a parquet file is opened, its file-level statistics (min/max per column)
+/// can be used to update the dynamic filter bounds before any data is read.
+/// This enables earlier pruning of subsequent files.
+///
+/// For example, an aggregate computing `min(a)` that sees a file with
+/// `min_value(a) = 5` can update its dynamic filter to `a <= 5`,
+/// allowing subsequent files where `min_value(a) > 5` to be skipped entirely.
+pub trait DynamicFilterFileStatsHandler: Send + Sync + std::fmt::Debug {
+    /// Update filter bounds based on file-level statistics.
+    ///
+    /// Returns `Ok(true)` if any bounds were changed and the filter was updated,
+    /// `Ok(false)` otherwise.
+    fn update_from_file_statistics(
+        &self,
+        statistics: &Statistics,
+        schema: &Schema,
+    ) -> Result<bool>;
+}
 
 /// State of a dynamic filter, tracking both updates and completion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,6 +108,9 @@ struct Inner {
     /// This is redundant with the watch channel state, but allows us to return immediately
     /// from `wait_complete()` without subscribing if already complete.
     is_complete: bool,
+    /// Optional handler for updating bounds from file-level statistics.
+    /// This is set by the producer (e.g., `AggregateExec`) that creates the dynamic filter.
+    file_stats_handler: Option<Arc<dyn DynamicFilterFileStatsHandler>>,
 }
 
 impl Inner {
@@ -96,6 +121,7 @@ impl Inner {
             generation: 1,
             expr,
             is_complete: false,
+            file_stats_handler: None,
         }
     }
 
@@ -242,10 +268,12 @@ impl DynamicFilterPhysicalExpr {
         // Load the current inner, increment generation, and store the new one
         let mut current = self.inner.write();
         let new_generation = current.generation + 1;
+        let file_stats_handler = current.file_stats_handler.clone();
         *current = Inner {
             generation: new_generation,
             expr: new_expr,
             is_complete: current.is_complete,
+            file_stats_handler,
         };
         drop(current); // Release the lock before broadcasting
 
@@ -270,6 +298,40 @@ impl DynamicFilterPhysicalExpr {
         let _ = self.state_watch.send(FilterState::Complete {
             generation: current_generation,
         });
+    }
+
+    /// Set a handler for updating this dynamic filter's bounds from file-level statistics.
+    ///
+    /// The handler will be shared across all copies of this dynamic filter
+    /// (including remapped copies created via `with_new_children`).
+    pub fn set_file_stats_handler(
+        &self,
+        handler: Arc<dyn DynamicFilterFileStatsHandler>,
+    ) {
+        self.inner.write().file_stats_handler = Some(handler);
+    }
+
+    /// Update this dynamic filter's bounds based on file-level statistics.
+    ///
+    /// This delegates to the registered [`DynamicFilterFileStatsHandler`] if one
+    /// has been set via [`Self::set_file_stats_handler`].
+    ///
+    /// Returns `Ok(true)` if bounds were updated, `Ok(false)` if no handler
+    /// is registered or no bounds changed.
+    pub fn update_from_file_statistics(
+        &self,
+        statistics: &Statistics,
+        schema: &Schema,
+    ) -> Result<bool> {
+        // Clone the handler under a brief read lock, then release
+        // before calling it (the handler may call `self.update()` which
+        // acquires a write lock on the same inner).
+        let handler = self.inner.read().file_stats_handler.clone();
+        if let Some(handler) = handler {
+            handler.update_from_file_statistics(statistics, schema)
+        } else {
+            Ok(false)
+        }
     }
 
     /// Wait asynchronously for any update to this filter.

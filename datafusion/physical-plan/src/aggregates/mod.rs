@@ -53,7 +53,10 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::{Accumulator, Aggregate};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
-use datafusion_physical_expr::expressions::{Column, DynamicFilterPhysicalExpr, lit};
+use datafusion_physical_expr::expressions::{
+    Column, DynamicFilterFileStatsHandler, DynamicFilterPhysicalExpr, lit,
+};
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use datafusion_physical_expr::{
     ConstExpr, EquivalenceProperties, physical_exprs_contains,
 };
@@ -574,8 +577,16 @@ struct PerAccumulatorDynFilter {
     /// for no grouping aggregate execution), and this index is into    `aggregate_expressions`
     /// vec inside `AggregateStreamInner`
     aggr_index: usize,
-    // The current bound. Shared among all streams.
+    /// The column expression this accumulator operates on (e.g., `col("a")` for `min(a)`).
+    column: Arc<dyn PhysicalExpr>,
+    /// The current bound. Shared among all streams.
     shared_bound: Arc<Mutex<ScalarValue>>,
+    /// Whether the current bound has been confirmed by actual data processing
+    /// (not just from file-level statistics). When `false`, the filter uses
+    /// inclusive comparison (`<=`/`>=`) to ensure the boundary value is not
+    /// filtered out before the accumulator sees it. When `true`, strict
+    /// comparison (`<`/`>`) is used for more aggressive pruning.
+    bound_from_data: Arc<AtomicBool>,
 }
 
 /// Aggregate types that are supported for dynamic filter in `AggregateExec`
@@ -583,6 +594,135 @@ struct PerAccumulatorDynFilter {
 enum DynamicFilterAggregateType {
     Min,
     Max,
+}
+
+use datafusion_expr::Operator;
+use datafusion_physical_expr::expressions::BinaryExpr;
+
+impl AggrDynFilter {
+    /// Build the filter predicate expression from current bounds.
+    ///
+    /// When `bound_from_data` is true for an accumulator, uses strict comparison
+    /// (`<`/`>`) for more aggressive pruning. When false (bound from file stats),
+    /// uses inclusive comparison (`<=`/`>=`) to ensure the boundary value is not
+    /// filtered out before the accumulator sees it.
+    fn build_predicate(&self) -> Result<Arc<dyn PhysicalExpr>> {
+        let mut predicates: Vec<Arc<dyn PhysicalExpr>> =
+            Vec::with_capacity(self.supported_accumulators_info.len());
+
+        for acc_info in &self.supported_accumulators_info {
+            let bound = {
+                let guard = acc_info.shared_bound.lock();
+                if (*guard).is_null() {
+                    continue;
+                }
+                guard.clone()
+            };
+
+            let literal = lit(bound);
+            let from_data = acc_info.bound_from_data.load(AtomicOrdering::Relaxed);
+            let predicate: Arc<dyn PhysicalExpr> = match acc_info.aggr_type {
+                DynamicFilterAggregateType::Min => {
+                    let op = if from_data {
+                        Operator::Lt
+                    } else {
+                        Operator::LtEq
+                    };
+                    Arc::new(BinaryExpr::new(
+                        Arc::clone(&acc_info.column),
+                        op,
+                        literal,
+                    ))
+                }
+                DynamicFilterAggregateType::Max => {
+                    let op = if from_data {
+                        Operator::Gt
+                    } else {
+                        Operator::GtEq
+                    };
+                    Arc::new(BinaryExpr::new(
+                        Arc::clone(&acc_info.column),
+                        op,
+                        literal,
+                    ))
+                }
+            };
+            predicates.push(predicate);
+        }
+
+        let combined = predicates.into_iter().reduce(|acc, pred| {
+            Arc::new(BinaryExpr::new(acc, Operator::Or, pred)) as Arc<dyn PhysicalExpr>
+        });
+
+        Ok(combined.unwrap_or_else(|| lit(true)))
+    }
+}
+
+impl DynamicFilterFileStatsHandler for AggrDynFilter {
+    fn update_from_file_statistics(
+        &self,
+        statistics: &Statistics,
+        schema: &Schema,
+    ) -> Result<bool> {
+        let mut bounds_changed = false;
+
+        for acc_info in &self.supported_accumulators_info {
+            let col = acc_info
+                .column
+                .as_any()
+                .downcast_ref::<Column>()
+                .ok_or_else(|| {
+                    datafusion_common::internal_datafusion_err!(
+                        "Expected Column expression in aggregate dynamic filter"
+                    )
+                })?;
+
+            // Look up column in the file schema by name
+            let col_idx = match schema.index_of(col.name()) {
+                Ok(idx) if idx < statistics.column_statistics.len() => idx,
+                _ => continue,
+            };
+
+            let col_stats = &statistics.column_statistics[col_idx];
+
+            // Extract the relevant statistic based on aggregate type
+            let stat_value = match acc_info.aggr_type {
+                DynamicFilterAggregateType::Min => {
+                    col_stats.min_value.get_value().cloned()
+                }
+                DynamicFilterAggregateType::Max => {
+                    col_stats.max_value.get_value().cloned()
+                }
+            };
+
+            if let Some(stat_value) = stat_value {
+                let mut bound = acc_info.shared_bound.lock();
+                let new_bound = match acc_info.aggr_type {
+                    DynamicFilterAggregateType::Min => {
+                        no_grouping::scalar_min(&bound, &stat_value)?
+                    }
+                    DynamicFilterAggregateType::Max => {
+                        no_grouping::scalar_max(&bound, &stat_value)?
+                    }
+                };
+                if new_bound != *bound {
+                    *bound = new_bound;
+                    // Mark as NOT from data since this came from file stats
+                    acc_info
+                        .bound_from_data
+                        .store(false, AtomicOrdering::Relaxed);
+                    bounds_changed = true;
+                }
+            }
+        }
+
+        if bounds_changed {
+            let predicate = self.build_predicate()?;
+            self.filter.update(predicate)?;
+        }
+
+        Ok(bounds_changed)
+    }
 }
 
 /// Configuration for limit-based optimizations in aggregation
@@ -1159,16 +1299,27 @@ impl AggregateExec {
                 aggr_dyn_filters.push(PerAccumulatorDynFilter {
                     aggr_type,
                     aggr_index: i,
+                    column: Arc::clone(arg),
                     shared_bound: Arc::new(Mutex::new(ScalarValue::Null)),
+                    bound_from_data: Arc::new(AtomicBool::new(false)),
                 });
             }
         }
 
         if !aggr_dyn_filters.is_empty() {
-            self.dynamic_filter = Some(Arc::new(AggrDynFilter {
-                filter: Arc::new(DynamicFilterPhysicalExpr::new(all_cols, lit(true))),
+            let aggr_dyn_filter = Arc::new(AggrDynFilter {
+                filter: Arc::new(DynamicFilterPhysicalExpr::new(
+                    all_cols,
+                    lit(true),
+                )),
                 supported_accumulators_info: aggr_dyn_filters,
-            }))
+            });
+            // Register the file stats handler so the parquet opener can
+            // update bounds based on file-level min/max statistics.
+            aggr_dyn_filter
+                .filter
+                .set_file_stats_handler(Arc::clone(&aggr_dyn_filter) as _);
+            self.dynamic_filter = Some(aggr_dyn_filter);
         }
     }
 

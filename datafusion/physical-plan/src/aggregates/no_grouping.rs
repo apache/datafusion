@@ -26,11 +26,9 @@ use crate::metrics::{BaselineMetrics, RecordOutput};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{Result, ScalarValue, internal_datafusion_err, internal_err};
+use datafusion_common::{Result, ScalarValue, internal_datafusion_err};
 use datafusion_execution::TaskContext;
-use datafusion_expr::Operator;
 use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_expr::expressions::{BinaryExpr, lit};
 use futures::stream::BoxStream;
 use std::borrow::Cow;
 use std::cmp::Ordering;
@@ -76,92 +74,17 @@ struct AggregateStreamInner {
 }
 
 impl AggregateStreamInner {
-    // TODO: check if we get Null handling correct
-    /// # Examples
-    /// - Example 1
-    ///   Accumulators: min(c1)
-    ///   Current Bounds: min(c1)=10
-    ///   --> dynamic filter PhysicalExpr: c1 < 10
-    ///
-    /// - Example 2
-    ///   Accumulators: min(c1), max(c1), min(c2)
-    ///   Current Bounds: min(c1)=10, max(c1)=100, min(c2)=20
-    ///   --> dynamic filter PhysicalExpr: (c1 < 10) OR (c1>100) OR (c2 < 20)
-    ///
-    /// # Errors
-    /// Returns internal errors if the dynamic filter is not enabled, or other
-    /// invariant check fails.
-    fn build_dynamic_filter_from_accumulator_bounds(
-        &self,
-    ) -> Result<Arc<dyn PhysicalExpr>> {
-        let Some(filter_state) = self.agg_dyn_filter_state.as_ref() else {
-            return internal_err!(
-                "`build_dynamic_filter_from_accumulator_bounds()` is only called when dynamic filter is enabled"
-            );
-        };
-
-        let mut predicates: Vec<Arc<dyn PhysicalExpr>> =
-            Vec::with_capacity(filter_state.supported_accumulators_info.len());
-
-        for acc_info in &filter_state.supported_accumulators_info {
-            // Skip if we don't yet have a meaningful bound
-            let bound = {
-                let guard = acc_info.shared_bound.lock();
-                if (*guard).is_null() {
-                    continue;
-                }
-                guard.clone()
-            };
-
-            let agg_exprs = self
-                .aggregate_expressions
-                .get(acc_info.aggr_index)
-                .ok_or_else(|| {
-                    internal_datafusion_err!(
-                        "Invalid aggregate expression index {} for dynamic filter",
-                        acc_info.aggr_index
-                    )
-                })?;
-            // Only aggregates with a single argument are supported.
-            let column_expr = agg_exprs.first().ok_or_else(|| {
-                internal_datafusion_err!(
-                    "Aggregate expression at index {} expected a single argument",
-                    acc_info.aggr_index
-                )
-            })?;
-
-            let literal = lit(bound);
-            let predicate: Arc<dyn PhysicalExpr> = match acc_info.aggr_type {
-                DynamicFilterAggregateType::Min => Arc::new(BinaryExpr::new(
-                    Arc::clone(column_expr),
-                    Operator::Lt,
-                    literal,
-                )),
-                DynamicFilterAggregateType::Max => Arc::new(BinaryExpr::new(
-                    Arc::clone(column_expr),
-                    Operator::Gt,
-                    literal,
-                )),
-            };
-            predicates.push(predicate);
-        }
-
-        let combined = predicates.into_iter().reduce(|acc, pred| {
-            Arc::new(BinaryExpr::new(acc, Operator::Or, pred)) as Arc<dyn PhysicalExpr>
-        });
-
-        Ok(combined.unwrap_or_else(|| lit(true)))
-    }
-
     // If the dynamic filter is enabled, update it using the current accumulator's
     // values
     fn maybe_update_dyn_filter(&mut self) -> Result<()> {
+        use std::sync::atomic::Ordering as AtomicOrdering;
+
         // Step 1: Update each partition's current bound
         let Some(filter_state) = self.agg_dyn_filter_state.as_ref() else {
             return Ok(());
         };
 
-        let mut bounds_changed = false;
+        let mut needs_update = false;
 
         for acc_info in &filter_state.supported_accumulators_info {
             let acc =
@@ -188,15 +111,45 @@ impl AggregateStreamInner {
                 };
                 if new_bound != *bound {
                     *bound = new_bound;
-                    bounds_changed = true;
+                    // The bound came from actual data, so we can use
+                    // strict comparison for better pruning.
+                    acc_info
+                        .bound_from_data
+                        .store(true, AtomicOrdering::Relaxed);
+                    needs_update = true;
+                }
+            }
+            // Even if the bound value didn't change, the accumulator may have
+            // confirmed a file-stats-derived bound (transitioning from <=/>= to </>).
+            if !acc_info.bound_from_data.load(AtomicOrdering::Relaxed)
+                && !current_bound.is_null()
+            {
+                let shared = acc_info.shared_bound.lock().clone();
+                let confirmed = match acc_info.aggr_type {
+                    DynamicFilterAggregateType::Min => {
+                        // If accumulator min <= shared bound, accumulator has
+                        // confirmed the bound value exists in actual data.
+                        current_bound.partial_cmp(&shared)
+                            != Some(Ordering::Greater)
+                    }
+                    DynamicFilterAggregateType::Max => {
+                        current_bound.partial_cmp(&shared)
+                            != Some(Ordering::Less)
+                    }
+                };
+                if confirmed {
+                    acc_info
+                        .bound_from_data
+                        .store(true, AtomicOrdering::Relaxed);
+                    needs_update = true;
                 }
             }
         }
 
         // Step 2: Sync the dynamic filter physical expression with reader,
-        // but only if any bound actually changed.
-        if bounds_changed {
-            let predicate = self.build_dynamic_filter_from_accumulator_bounds()?;
+        // but only if any bound actually changed or operator switched.
+        if needs_update {
+            let predicate = filter_state.build_predicate()?;
             filter_state.filter.update(predicate)?;
         }
 
@@ -213,7 +166,7 @@ impl AggregateStreamInner {
 ///
 /// # Errors
 /// Returns internal error if v1 and v2 has incompatible types.
-fn scalar_min(v1: &ScalarValue, v2: &ScalarValue) -> Result<ScalarValue> {
+pub(super) fn scalar_min(v1: &ScalarValue, v2: &ScalarValue) -> Result<ScalarValue> {
     if let Some(result) = scalar_cmp_null_short_circuit(v1, v2) {
         return Ok(result);
     }
@@ -236,7 +189,7 @@ fn scalar_min(v1: &ScalarValue, v2: &ScalarValue) -> Result<ScalarValue> {
 ///
 /// # Errors
 /// Returns internal error if v1 and v2 has incompatible types.
-fn scalar_max(v1: &ScalarValue, v2: &ScalarValue) -> Result<ScalarValue> {
+pub(super) fn scalar_max(v1: &ScalarValue, v2: &ScalarValue) -> Result<ScalarValue> {
     if let Some(result) = scalar_cmp_null_short_circuit(v1, v2) {
         return Ok(result);
     }

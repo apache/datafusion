@@ -43,6 +43,7 @@ use datafusion_common::{
 use datafusion_datasource::{PartitionedFile, TableSchema};
 use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
+use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
 use datafusion_physical_expr_common::physical_expr::{
     PhysicalExpr, is_dynamic_physical_expr,
 };
@@ -338,6 +339,28 @@ impl FileOpener for ParquetOpener {
             }
 
             file_metrics.files_ranges_pruned_statistics.add_matched(1);
+
+            // ---------------------------------------------------------------
+            // Step: update dynamic filter bounds from file-level statistics
+            // ---------------------------------------------------------------
+
+            // If the predicate contains a dynamic filter with a file stats
+            // handler (e.g., from an aggregate computing min/max), update its
+            // bounds using this file's statistics. This tightens the filter
+            // earlier, enabling pruning of concurrent and subsequent files.
+            //
+            // The handler uses inclusive operators (<=/>= instead of </>)
+            // for file-stats-derived bounds, ensuring the boundary value
+            // passes through to the accumulator before being confirmed.
+            if let Some(predicate) = &predicate
+                && let Some(statistics) = partitioned_file.statistics.as_deref()
+            {
+                update_dynamic_filter_from_file_stats(
+                    predicate,
+                    statistics,
+                    &logical_file_schema,
+                );
+            }
 
             // --------------------------------------------------------
             // Step: fetch Parquet metadata (and optionally page index)
@@ -755,6 +778,35 @@ fn constant_value_from_stats(
     }
 
     None
+}
+
+/// Walk the predicate tree and update any dynamic filters' bounds
+/// from the given file-level statistics.
+///
+/// This finds [`DynamicFilterPhysicalExpr`] nodes in the predicate and calls
+/// their [`update_from_file_statistics`] method if a handler is registered.
+fn update_dynamic_filter_from_file_stats(
+    predicate: &Arc<dyn PhysicalExpr>,
+    statistics: &Statistics,
+    file_schema: &SchemaRef,
+) {
+    use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+
+    let _ = predicate.apply(|expr: &Arc<dyn PhysicalExpr>| {
+        if let Some(dyn_filter) = expr
+            .as_any()
+            .downcast_ref::<DynamicFilterPhysicalExpr>()
+        {
+            if let Err(e) =
+                dyn_filter.update_from_file_statistics(statistics, file_schema)
+            {
+                debug!(
+                    "Ignoring error updating dynamic filter from file stats: {e}"
+                );
+            }
+        }
+        Ok(TreeNodeRecursion::Continue)
+    });
 }
 
 /// Wraps an inner RecordBatchStream and a [`FilePruner`]
