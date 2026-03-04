@@ -747,6 +747,14 @@ impl FileOpener for ParquetOpener {
                 &predicate_creation_errors,
             );
 
+            // Track whether the predicate contains dynamic filters. Dynamic
+            // filters (e.g. from hash joins or TopK) can tighten during
+            // execution, so morsels that passed row-group pruning during
+            // morselize() may now be prunable with the updated filter values.
+            let has_dynamic_predicate = predicate
+                .as_ref()
+                .is_some_and(|p| is_dynamic_physical_expr(p));
+
             // The page index is not stored inline in the parquet footer so the
             // code above may not have read the page index structures yet. If we
             // need them for reading and they aren't yet loaded, we need to load them now.
@@ -825,7 +833,10 @@ impl FileOpener for ParquetOpener {
                 rg_metadata,
                 file_range.as_ref(),
                 predicate
-                    .filter(|_| enable_row_group_stats_pruning && !is_morsel)
+                    .filter(|_| {
+                        enable_row_group_stats_pruning
+                            && (!is_morsel || has_dynamic_predicate)
+                    })
                     .map(|predicate| RowGroupStatisticsPruningContext {
                         physical_file_schema: &physical_file_schema,
                         parquet_schema: builder.parquet_schema(),
@@ -879,6 +890,14 @@ impl FileOpener for ParquetOpener {
                 file_metrics
                     .row_groups_pruned_bloom_filter
                     .add_matched(n_remaining_row_groups);
+            }
+
+            // If a morsel was fully pruned by re-evaluated row group
+            // statistics (dynamic filters tightened since morselize()),
+            // return an empty stream immediately.
+            if is_morsel && row_groups.is_empty() {
+                file_metrics.row_groups_pruned_statistics.add_pruned(1);
+                return Ok(futures::stream::empty().boxed());
             }
 
             // --------------------------------------------------------

@@ -586,6 +586,7 @@ pub trait FileOpener: Unpin + Send + Sync {
     fn is_leaf_morsel(&self, _file: &PartitionedFile) -> bool {
         false
     }
+
 }
 
 /// Represents the state of the next `FileOpenFuture`. Since we need to poll
