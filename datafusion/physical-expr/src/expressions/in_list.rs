@@ -844,7 +844,11 @@ impl PhysicalExpr for InListExpr {
 
                 // Evaluate first expression directly to avoid a redundant
                 // or_kleene with an all-false accumulator.
-                let mut found = compare_one(&self.list[0])?;
+                let mut found = if let Some(first) = self.list.first() {
+                    compare_one(first)?
+                } else {
+                    BooleanArray::new(BooleanBuffer::new_unset(num_rows), None)
+                };
 
                 for expr in self.list.iter().skip(1) {
                     // Short-circuit: if every non-null row is already true,
