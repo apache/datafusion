@@ -76,6 +76,22 @@ pub(crate) fn try_to_substrait_field_reference(
     }
 }
 
+/// Convert an outer reference column to a Substrait field reference.
+/// Outer reference columns reference columns from an outer query scope in correlated subqueries.
+/// We convert them the same way as regular columns since the subquery plan will be
+/// reconstructed with the proper schema context during consumption.
+pub fn from_outer_reference_column(
+    col: &Column,
+    schema: &DFSchemaRef,
+) -> datafusion::common::Result<Expression> {
+    // OuterReferenceColumn is converted similarly to a regular column reference.
+    // The schema provided should be the schema context in which the outer reference
+    // column appears. During Substrait round-trip, the consumer will reconstruct
+    // the outer reference based on the subquery context.
+    let index = schema.index_of_column(col)?;
+    substrait_field_ref(index)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
