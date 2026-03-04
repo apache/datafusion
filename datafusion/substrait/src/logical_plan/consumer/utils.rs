@@ -541,7 +541,7 @@ pub(crate) fn from_substrait_precision(
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use super::{NameTracker, is_safe_widening, make_renamed_schema};
+    use super::{NameTracker, ensure_field_compatibility, make_renamed_schema};
     use crate::extensions::Extensions;
     use crate::logical_plan::consumer::DefaultSubstraitConsumer;
     use datafusion::arrow::datatypes::{DataType, Field};
@@ -818,48 +818,48 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn safe_widening_signed_integers() {
-        assert!(is_safe_widening(&DataType::Int8, &DataType::Int16));
-        assert!(is_safe_widening(&DataType::Int8, &DataType::Int32));
-        assert!(is_safe_widening(&DataType::Int8, &DataType::Int64));
-        assert!(is_safe_widening(&DataType::Int16, &DataType::Int32));
-        assert!(is_safe_widening(&DataType::Int16, &DataType::Int64));
-        assert!(is_safe_widening(&DataType::Int32, &DataType::Int64));
+    fn field_compatibility_same_type() -> Result<()> {
+        let table_field = Field::new("id", DataType::Int32, true);
+        let substrait_field = Field::new("id", DataType::Int32, true);
+        ensure_field_compatibility(&table_field, &substrait_field)?;
+        Ok(())
     }
 
     #[test]
-    fn safe_widening_unsigned_integers() {
-        assert!(is_safe_widening(&DataType::UInt8, &DataType::UInt16));
-        assert!(is_safe_widening(&DataType::UInt8, &DataType::UInt32));
-        assert!(is_safe_widening(&DataType::UInt8, &DataType::UInt64));
-        assert!(is_safe_widening(&DataType::UInt16, &DataType::UInt32));
-        assert!(is_safe_widening(&DataType::UInt16, &DataType::UInt64));
-        assert!(is_safe_widening(&DataType::UInt32, &DataType::UInt64));
+    fn field_compatibility_accepts_safe_widening() -> Result<()> {
+        let cases = vec![
+            (DataType::Int8, DataType::Int64),
+            (DataType::Int16, DataType::Int64),
+            (DataType::Int32, DataType::Int64),
+            (DataType::UInt16, DataType::UInt64),
+            (DataType::Float32, DataType::Float64),
+        ];
+        for (table_type, substrait_type) in cases {
+            let table_field = Field::new("f", table_type.clone(), true);
+            let substrait_field = Field::new("f", substrait_type.clone(), true);
+            ensure_field_compatibility(&table_field, &substrait_field).unwrap_or_else(
+                |e| panic!("{table_type} -> {substrait_type} should be accepted: {e}"),
+            );
+        }
+        Ok(())
     }
 
     #[test]
-    fn safe_widening_floats() {
-        assert!(is_safe_widening(&DataType::Float16, &DataType::Float32));
-        assert!(is_safe_widening(&DataType::Float16, &DataType::Float64));
-        assert!(is_safe_widening(&DataType::Float32, &DataType::Float64));
-    }
-
-    #[test]
-    fn narrowing_rejected() {
-        assert!(!is_safe_widening(&DataType::Int64, &DataType::Int32));
-        assert!(!is_safe_widening(&DataType::Int32, &DataType::Int16));
-        assert!(!is_safe_widening(&DataType::Int16, &DataType::Int8));
-        assert!(!is_safe_widening(&DataType::Float64, &DataType::Float32));
-        assert!(!is_safe_widening(&DataType::UInt64, &DataType::UInt32));
-    }
-
-    #[test]
-    fn cross_family_rejected() {
-        assert!(!is_safe_widening(&DataType::Int32, &DataType::UInt64));
-        assert!(!is_safe_widening(&DataType::UInt32, &DataType::Int64));
-        assert!(!is_safe_widening(&DataType::Float32, &DataType::Int64));
-        assert!(!is_safe_widening(&DataType::Int32, &DataType::Float64));
-        assert!(!is_safe_widening(&DataType::Int32, &DataType::Utf8));
+    fn field_compatibility_rejects_incompatible() {
+        let cases = vec![
+            (DataType::Utf8, DataType::Int64, "cross-family"),
+            (DataType::Int64, DataType::Int32, "narrowing"),
+            (DataType::Int32, DataType::UInt64, "signed-to-unsigned"),
+            (DataType::Float32, DataType::Int64, "float-to-int"),
+        ];
+        for (table_type, substrait_type, label) in cases {
+            let table_field = Field::new("f", table_type, true);
+            let substrait_field = Field::new("f", substrait_type, true);
+            assert!(
+                ensure_field_compatibility(&table_field, &substrait_field).is_err(),
+                "{label} should be rejected"
+            );
+        }
     }
 
     #[test]

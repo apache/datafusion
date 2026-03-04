@@ -150,5 +150,43 @@ mod tests {
             assert!(res.is_err());
             Ok(())
         }
+
+        /// The plan declares i32 fields but the table has narrower types (Int16).
+        /// Safe widening allows the table schema to be a narrower numeric type
+        /// than what the Substrait plan requests.
+        #[tokio::test]
+        async fn accept_plans_with_safely_widened_field_types() -> Result<()> {
+            let proto_plan =
+                read_json("tests/testdata/test_plans/simple_select.substrait.json");
+
+            let df_schema =
+                vec![("a", DataType::Int16, false), ("b", DataType::Int16, true)];
+            let ctx = generate_context_with_table("DATA", df_schema)?;
+            let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
+
+            assert_snapshot!(
+            plan,
+            @r"
+            Projection: DATA.a, DATA.b
+              TableScan: DATA
+            "
+            );
+            Ok(())
+        }
+
+        /// The plan declares i32 fields but the table has wider types (Int64).
+        /// Narrowing is not safe and should be rejected.
+        #[tokio::test]
+        async fn reject_plans_with_narrowed_field_types() -> Result<()> {
+            let proto_plan =
+                read_json("tests/testdata/test_plans/simple_select.substrait.json");
+
+            let df_schema =
+                vec![("a", DataType::Int64, false), ("b", DataType::Int64, true)];
+            let ctx = generate_context_with_table("DATA", df_schema)?;
+            let res = from_substrait_plan(&ctx.state(), &proto_plan).await;
+            assert!(res.is_err());
+            Ok(())
+        }
     }
 }
