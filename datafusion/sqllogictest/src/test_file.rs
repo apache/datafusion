@@ -107,28 +107,28 @@ impl Ord for TestFile {
 /// $ cargo test --profile=ci --test sqllogictests -- --timing-summary top
 /// ...
 /// Per-file elapsed summary (deterministic):
-/// 1.    5.375s  push_down_filter_regression.slt
-/// 2.    3.174s  aggregate.slt
-/// 3.    3.158s  imdb.slt
-/// 4.    2.793s  joins.slt
-/// 5.    2.505s  array.slt
-/// 6.    2.265s  aggregate_skip_partial.slt
-/// 7.    2.260s  window.slt
-/// 8.    1.677s  group_by.slt
-/// 9.    0.973s  datetime/timestamps.slt
-/// 10.    0.822s  cte.slt
+/// 1.    3.568s  aggregate.slt
+/// 2.    3.464s  joins.slt
+/// 3.    3.336s  imdb.slt
+/// 4.    3.085s  push_down_filter_regression.slt
+/// 5.    2.926s  aggregate_skip_partial.slt
+/// 6.    2.453s  array.slt
+/// 7.    2.399s  window.slt
+/// 8.    2.198s  group_by.slt
+/// 9.    1.281s  clickbench.slt
+/// 10.    1.058s  datetime/timestamps.slt
 /// ```
 const TEST_PRIORITY_ENTRIES: &[&str] = &[
-    "push_down_filter_regression.slt", // longest running, so run first.
-    "aggregate.slt",
+    "aggregate.slt", //  longest-running files go first
     "joins.slt",
     "imdb.slt",
-    "array.slt",
+    "push_down_filter_regression.slt",
     "aggregate_skip_partial.slt",
+    "array.slt",
     "window.slt",
     "group_by.slt",
+    "clickbench.slt",
     "datetime/timestamps.slt",
-    "cte.slt",
 ];
 
 /// Default priority for tests not in the priority map. Tests with lower
