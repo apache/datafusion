@@ -984,7 +984,10 @@ mod tests {
 
     use arrow::datatypes::Int32Type;
     use arrow::{
-        array::{Array, ArrayRef, AsArray, Int32Array, ListArray, create_array},
+        array::{
+            Array, ArrayRef, AsArray, FixedSizeListArray, Int32Array, ListArray,
+            create_array,
+        },
         buffer::OffsetBuffer,
         datatypes::{DataType, Field},
     };
@@ -1164,8 +1167,40 @@ mod tests {
         Ok(())
     }
 
+    /// Invoke a two-argument list UDF with the given arrays and assert the
+    /// boolean output matches `expected`.
+    fn invoke_and_assert(
+        udf: &dyn ScalarUDFImpl,
+        haystack: &ArrayRef,
+        needle: ArrayRef,
+        expected: &[Option<bool>],
+    ) {
+        let num_rows = haystack.len();
+        let list_type = haystack.data_type();
+        let result = udf
+            .invoke_with_args(ScalarFunctionArgs {
+                args: vec![
+                    ColumnarValue::Array(Arc::clone(haystack)),
+                    ColumnarValue::Array(needle),
+                ],
+                arg_fields: vec![
+                    Arc::new(Field::new("haystack", list_type.clone(), false)),
+                    Arc::new(Field::new("needle", list_type.clone(), false)),
+                ],
+                number_rows: num_rows,
+                return_field: Arc::new(Field::new("return", DataType::Boolean, true)),
+                config_options: Arc::new(ConfigOptions::default()),
+            })
+            .unwrap();
+        let output = result.into_array(num_rows).unwrap();
+        assert_eq!(
+            output.as_boolean().iter().collect::<Vec<_>>(),
+            expected,
+        );
+    }
+
     #[test]
-    fn test_sliced_list_offsets() -> Result<(), DataFusionError> {
+    fn test_sliced_list_offsets() {
         // Full rows:
         //   row 0: [1, 2]   (not visible after slicing)
         //   row 1: [11, 12] (visible row 0)
@@ -1175,68 +1210,71 @@ mod tests {
         let full_values = Arc::new(Int32Array::from(vec![1, 2, 11, 12, 21, 22, 31, 32]));
         let full_offsets = OffsetBuffer::new(vec![0, 2, 4, 6, 8].into());
         let full = ListArray::new(Arc::clone(&field), full_offsets, full_values, None);
-
-        // Slice with offset=1 and len=2, so only rows 1 and 2 are visible.
         let sliced_haystack: ArrayRef = Arc::new(full.slice(1, 2));
 
-        let list_type = sliced_haystack.data_type();
-        let haystack_field = Arc::new(Field::new("haystack", list_type.clone(), false));
-        let needle_field = Arc::new(Field::new("needle", list_type.clone(), false));
-        let return_field = Arc::new(Field::new("return", DataType::Boolean, true));
-        let config_options = Arc::new(ConfigOptions::default());
-
-        // array_has_all should be true for both rows.
-        let needle_all_values = Arc::new(Int32Array::from(vec![11, 21]));
-        let needle_all_offsets = OffsetBuffer::new(vec![0, 1, 2].into());
+        // array_has_all: needle row 0 = [11], row 1 = [21]
         let needle_all: ArrayRef = Arc::new(ListArray::new(
             Arc::clone(&field),
-            needle_all_offsets,
-            needle_all_values,
+            OffsetBuffer::new(vec![0, 1, 2].into()),
+            Arc::new(Int32Array::from(vec![11, 21])),
             None,
         ));
-        let all_result = ArrayHasAll::new().invoke_with_args(ScalarFunctionArgs {
-            args: vec![
-                ColumnarValue::Array(Arc::clone(&sliced_haystack)),
-                ColumnarValue::Array(needle_all),
-            ],
-            arg_fields: vec![Arc::clone(&haystack_field), Arc::clone(&needle_field)],
-            number_rows: 2,
-            return_field: Arc::clone(&return_field),
-            config_options: Arc::clone(&config_options),
-        })?;
-
-        let all_output = all_result.into_array(2)?;
-        assert_eq!(
-            all_output.as_boolean().iter().collect::<Vec<_>>(),
-            vec![Some(true), Some(true)],
+        invoke_and_assert(
+            &ArrayHasAll::new(),
+            &sliced_haystack,
+            needle_all,
+            &[Some(true), Some(true)],
         );
 
-        // array_has_any should be true for both rows as well.
-        let needle_any_values = Arc::new(Int32Array::from(vec![99, 11, 99, 21]));
-        let needle_any_offsets = OffsetBuffer::new(vec![0, 2, 4].into());
+        // array_has_any: needle row 0 = [99, 11], row 1 = [99, 21]
         let needle_any: ArrayRef = Arc::new(ListArray::new(
             field,
-            needle_any_offsets,
-            needle_any_values,
+            OffsetBuffer::new(vec![0, 2, 4].into()),
+            Arc::new(Int32Array::from(vec![99, 11, 99, 21])),
             None,
         ));
-        let any_result = ArrayHasAny::new().invoke_with_args(ScalarFunctionArgs {
-            args: vec![
-                ColumnarValue::Array(sliced_haystack),
-                ColumnarValue::Array(needle_any),
-            ],
-            arg_fields: vec![haystack_field, needle_field],
-            number_rows: 2,
-            return_field,
-            config_options,
-        })?;
+        invoke_and_assert(
+            &ArrayHasAny::new(),
+            &sliced_haystack,
+            needle_any,
+            &[Some(true), Some(true)],
+        );
+    }
 
-        let any_output = any_result.into_array(2)?;
-        assert_eq!(
-            any_output.as_boolean().iter().collect::<Vec<_>>(),
-            vec![Some(true), Some(true)],
+    #[test]
+    fn test_sliced_fixed_size_list_offsets() {
+        // Same logical data as test_sliced_list_offsets, but using FixedSizeListArray.
+        let field = Arc::new(Field::new("item", DataType::Int32, false));
+        let full_values = Arc::new(Int32Array::from(vec![1, 2, 11, 12, 21, 22, 31, 32]));
+        let full = FixedSizeListArray::new(Arc::clone(&field), 2, full_values, None);
+        let sliced_haystack: ArrayRef = Arc::new(full.slice(1, 2));
+
+        // array_has_all: needle row 0 = [11, 12], row 1 = [21, 22]
+        let needle_all: ArrayRef = Arc::new(FixedSizeListArray::new(
+            Arc::clone(&field),
+            2,
+            Arc::new(Int32Array::from(vec![11, 12, 21, 22])),
+            None,
+        ));
+        invoke_and_assert(
+            &ArrayHasAll::new(),
+            &sliced_haystack,
+            needle_all,
+            &[Some(true), Some(true)],
         );
 
-        Ok(())
+        // array_has_any: needle row 0 = [99, 12], row 1 = [99, 22]
+        let needle_any: ArrayRef = Arc::new(FixedSizeListArray::new(
+            field,
+            2,
+            Arc::new(Int32Array::from(vec![99, 12, 99, 22])),
+            None,
+        ));
+        invoke_and_assert(
+            &ArrayHasAny::new(),
+            &sliced_haystack,
+            needle_any,
+            &[Some(true), Some(true)],
+        );
     }
 }
