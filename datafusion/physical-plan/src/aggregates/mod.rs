@@ -579,6 +579,10 @@ struct PerAccumulatorDynFilter {
     aggr_index: usize,
     /// The column expression this accumulator operates on (e.g., `col("a")` for `min(a)`).
     column: Arc<dyn PhysicalExpr>,
+    /// The data type the accumulator operates on. This is the type after any
+    /// projections/casts (e.g., Date32 if a view casts UInt16 to Date32).
+    /// Used to validate file statistics types in [`AggrDynFilter::update_from_file_statistics`].
+    data_type: DataType,
     /// The current bound. Shared among all streams.
     shared_bound: Arc<Mutex<ScalarValue>>,
     /// Whether the current bound has been confirmed by actual data processing
@@ -682,6 +686,14 @@ impl DynamicFilterFileStatsHandler for AggrDynFilter {
                 Ok(idx) if idx < statistics.column_statistics.len() => idx,
                 _ => continue,
             };
+
+            // Skip if the file column type doesn't match the accumulator's type.
+            // This can happen when a view applies a CAST (e.g., UInt16 → Date32),
+            // making file statistics incompatible with accumulator bounds.
+            let file_col_type = schema.field(col_idx).data_type();
+            if file_col_type != &acc_info.data_type {
+                continue;
+            }
 
             let col_stats = &statistics.column_statistics[col_idx];
 
@@ -1293,13 +1305,15 @@ impl AggregateExec {
 
             // 2. arg should be only 1 column reference
             if let [arg] = aggr_expr.expressions().as_slice()
-                && arg.as_any().is::<Column>()
+                && let Some(col) = arg.as_any().downcast_ref::<Column>()
             {
+                let col_data_type = self.input_schema.field(col.index()).data_type().clone();
                 all_cols.push(Arc::clone(arg));
                 aggr_dyn_filters.push(PerAccumulatorDynFilter {
                     aggr_type,
                     aggr_index: i,
                     column: Arc::clone(arg),
+                    data_type: col_data_type,
                     shared_bound: Arc::new(Mutex::new(ScalarValue::Null)),
                     bound_from_data: Arc::new(AtomicBool::new(false)),
                 });
