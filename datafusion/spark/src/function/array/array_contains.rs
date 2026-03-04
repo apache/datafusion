@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{Array, AsArray, BooleanArray, BooleanBufferBuilder};
+use arrow::array::{
+    Array, AsArray, BooleanArray, BooleanBufferBuilder, GenericListArray, OffsetSizeTrait,
+};
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
@@ -91,59 +93,15 @@ fn apply_spark_null_semantics(
         ColumnarValue::Scalar(s) => s.to_array_of_size(result.len())?,
     };
 
-    if haystack.data_type() == &DataType::Null {
+    if haystack.data_type() == &DataType::Null || result.false_count() == 0 {
         return Ok(result.clone());
     }
 
-    // If every result is already true or null, nothing to nullify.
-    if result.false_count() == 0 {
-        return Ok(result.clone());
-    }
-
-    // Build a per-row bitmap: true if that row's list contains any null element.
-    // Works directly on the values' null bitmap + offsets, no per-row array allocation.
-    let row_has_nulls = match haystack.data_type() {
-        DataType::List(_) => {
-            let list = haystack.as_list::<i32>();
-            if list.values().null_count() == 0 {
-                return Ok(result.clone());
-            }
-            build_row_has_nulls(
-                list.values().nulls().unwrap().inner(),
-                list.offsets().iter().map(|o| *o as usize),
-                list.len(),
-                list.nulls(),
-            )
-        }
-        DataType::LargeList(_) => {
-            let list = haystack.as_list::<i64>();
-            if list.values().null_count() == 0 {
-                return Ok(result.clone());
-            }
-            build_row_has_nulls(
-                list.values().nulls().unwrap().inner(),
-                list.offsets().iter().map(|o| *o as usize),
-                list.len(),
-                list.nulls(),
-            )
-        }
-        DataType::FixedSizeList(_, _) => {
-            let list = haystack.as_fixed_size_list();
-            if list.values().null_count() == 0 {
-                return Ok(result.clone());
-            }
-            let vl = list.value_length() as usize;
-            build_row_has_nulls(
-                list.values().nulls().unwrap().inner(),
-                (0..=list.len()).map(|i| i * vl),
-                list.len(),
-                list.nulls(),
-            )
-        }
-        _ => return Ok(result.clone()),
+    let row_has_nulls = match compute_row_has_nulls(&haystack) {
+        Some(buf) => buf,
+        None => return Ok(result.clone()),
     };
 
-    // A row should be nullified when: result is false AND row has nulls.
     // nullify_mask = !result_values & row_has_nulls
     // new_validity = old_validity & !nullify_mask
     let nullify_mask = &(!result.values()) & &row_has_nulls;
@@ -159,31 +117,48 @@ fn apply_spark_null_semantics(
     ))
 }
 
-/// Build a BooleanBuffer where bit `i` is set if list row `i` contains
-/// any null element, using the flat values null bitmap and row offsets.
-fn build_row_has_nulls<I>(
-    values_validity: &BooleanBuffer,
-    offsets: I,
-    num_rows: usize,
-    list_nulls: Option<&NullBuffer>,
-) -> BooleanBuffer
-where
-    I: Iterator<Item = usize>,
-{
-    let mut builder = BooleanBufferBuilder::new(num_rows);
-    let mut prev = None;
-    for offset in offsets {
-        if let Some(start) = prev {
-            let len = offset - start;
-            // count_set_bits on the validity bitmap = number of valid (non-null) elements
-            let valid_count = values_validity.slice(start, len).count_set_bits();
-            builder.append(valid_count < len);
+/// Returns a per-row bitmap where bit i is set if row i's list contains any null element.
+/// Returns `None` if no list elements are null (no rows need nullification).
+fn compute_row_has_nulls(haystack: &dyn Array) -> Option<BooleanBuffer> {
+    match haystack.data_type() {
+        DataType::List(_) => generic_list_row_has_nulls(haystack.as_list::<i32>()),
+        DataType::LargeList(_) => generic_list_row_has_nulls(haystack.as_list::<i64>()),
+        DataType::FixedSizeList(_, _) => {
+            let list = haystack.as_fixed_size_list();
+            let validity = list.values().nulls()?.inner();
+            let vl = list.value_length() as usize;
+            let mut builder = BooleanBufferBuilder::new(list.len());
+            for i in 0..list.len() {
+                builder.append(validity.slice(i * vl, vl).count_set_bits() < vl);
+            }
+            let buf = builder.finish();
+            Some(mask_with_list_nulls(buf, list.nulls()))
         }
-        prev = Some(offset);
+        _ => None,
     }
+}
 
+/// Computes per-row null presence for `List` and `LargeList` arrays.
+fn generic_list_row_has_nulls<O: OffsetSizeTrait>(
+    list: &GenericListArray<O>,
+) -> Option<BooleanBuffer> {
+    let validity = list.values().nulls()?.inner();
+    let offsets = list.offsets();
+    let mut builder = BooleanBufferBuilder::new(list.len());
+    for i in 0..list.len() {
+        let s = offsets[i].as_usize();
+        let len = offsets[i + 1].as_usize() - s;
+        builder.append(validity.slice(s, len).count_set_bits() < len);
+    }
     let buf = builder.finish();
-    // Mask out rows where the list itself is null (those shouldn't count as "has nulls").
+    Some(mask_with_list_nulls(buf, list.nulls()))
+}
+
+/// Rows where the list itself is null should not be marked as "has nulls".
+fn mask_with_list_nulls(
+    buf: BooleanBuffer,
+    list_nulls: Option<&NullBuffer>,
+) -> BooleanBuffer {
     match list_nulls {
         Some(n) => &buf & n.inner(),
         None => buf,
