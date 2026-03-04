@@ -816,7 +816,7 @@ WHERE h2o_parquet_20696.time >= '1970-01-01T00:00:00.000000050Z'
 statement ok
 set datafusion.execution.parquet.pushdown_filters = true;
 
-query error Can't compare arrays of different types
+query RRR
 SELECT
   h2o_parquet_20696.temp AS h2o_temp,
   o2_parquet_20696.temp AS o2_temp,
@@ -828,6 +828,9 @@ INNER JOIN o2_parquet_20696
   AND h2o_parquet_20696.city = o2_parquet_20696.city
 WHERE h2o_parquet_20696.time >= '1970-01-01T00:00:00.000000050Z'
   AND h2o_parquet_20696.time <= '1970-01-01T00:00:00.000000300Z';
+----
+72.4 53.4 51
+70.4 50.4 50
 
 # Cleanup
 statement ok
