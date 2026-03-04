@@ -168,7 +168,7 @@ mod tests {
             plan,
             @r"
             Projection: DATA.a, DATA.b
-              TableScan: DATA
+              TableScan: DATA projection=[a, b]
             "
             );
             Ok(())
