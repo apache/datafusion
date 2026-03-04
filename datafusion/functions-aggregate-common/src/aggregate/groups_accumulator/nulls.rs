@@ -206,7 +206,7 @@ pub fn set_nulls_dyn(input: &dyn Array, nulls: Option<NullBuffer>) -> Result<Arr
             }
         }
         _ => {
-            return not_impl_err!("Applying nulls {:?}", input.data_type());
+            return not_impl_err!("Applying nulls {}", input.data_type());
         }
     };
     assert_eq!(input.len(), output.len());
