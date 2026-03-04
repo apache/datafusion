@@ -177,10 +177,21 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Run sqllogictest
+      - name: Install samply
+        run: cargo install samply
+      - name: Build sqllogictest
+        run: cargo test --features backtrace,parquet_encryption --profile profiling --test sqllogictests --no-run
+      - name: Run sqllogictest with samply
         run: |
-          cargo test --features backtrace,parquet_encryption --profile release-nonlto --test sqllogictests -- --include-sqlite
-          cargo clean
+          samply record -o profile.json -- cargo test --features backtrace,parquet_encryption --profile profiling --test sqllogictests -- --include-sqlite
+      - name: Upload samply profile
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: samply-profile
+          path: profile.json
+      - name: Clean up
+        run: cargo clean
 
 
 
