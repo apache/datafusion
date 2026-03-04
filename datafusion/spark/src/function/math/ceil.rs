@@ -29,15 +29,11 @@ use std::any::Any;
 use std::sync::Arc;
 
 /// Spark-compatible `ceil` function.
-///
-/// Returns the smallest integer greater than or equal to the input.
-/// Unlike standard DataFusion ceil, this returns Int64 for float/integer
-/// inputs (matching Spark behavior).
-///
-/// # Supported types
-/// - Float32, Float64: returns Int64
-/// - Int8, Int16, Int32, Int64: returns Int64
-/// - Decimal128(p, s): returns Decimal128(p, s) (preserves precision and scale)
+/// Unlike standard DataFusion ceil, this returns Int64 for float/integer (per Spark spec)
+/// Supported types
+/// Float32, Float64 -> Int64
+/// Int8, Int16, Int32, Int64 -> Int64
+/// Decimal128(p, s): -> Decimal128(p, s) (preserves precision and scale)
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkCeil {
     signature: Signature,
@@ -97,7 +93,6 @@ impl ScalarUDFImpl for SparkCeil {
     }
 }
 
-/// Computes the Spark-compatible ceiling of the input.
 pub fn spark_ceil(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionError> {
     let value = &args[0];
     match value {
@@ -132,7 +127,7 @@ pub fn spark_ceil(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErr
                 if *scale <= 0 {
                     Ok(ColumnarValue::Array(Arc::clone(array)))
                 } else {
-                    let f = decimal_ceil_f(*scale);
+                    let f = decimal_ceil_helper(*scale);
                     let input = array.as_primitive::<Decimal128Type>();
                     let result: Decimal128Array = unary(input, &f);
                     let result =
@@ -167,7 +162,7 @@ pub fn spark_ceil(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErr
                         *v, *precision, *scale,
                     )))
                 } else {
-                    let f = decimal_ceil_f(*scale);
+                    let f = decimal_ceil_helper(*scale);
                     let result = v.map(f);
                     Ok(ColumnarValue::Scalar(ScalarValue::Decimal128(
                         result, *precision, *scale,
@@ -184,9 +179,8 @@ pub fn spark_ceil(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErr
     }
 }
 
-/// Returns a closure that computes ceil for decimal values.
 #[inline]
-fn decimal_ceil_f(scale: i8) -> impl Fn(i128) -> i128 {
+fn decimal_ceil_helper(scale: i8) -> impl Fn(i128) -> i128 {
     let divisor = 10_i128.pow(scale as u32);
     move |x: i128| {
         let quotient = x / divisor;

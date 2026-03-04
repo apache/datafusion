@@ -16,8 +16,8 @@
 // under the License.
 
 pub mod abs;
-pub mod ceil;
 pub mod bin;
+pub mod ceil;
 pub mod expm1;
 pub mod factorial;
 pub mod hex;
@@ -44,7 +44,7 @@ make_udf_function!(width_bucket::SparkWidthBucket, width_bucket);
 make_udf_function!(trigonometry::SparkCsc, csc);
 make_udf_function!(trigonometry::SparkSec, sec);
 make_udf_function!(negative::SparkNegative, negative);
-make_udf_function!(bin::SparkBin, bin, ceil::SparkCeil, ceil);
+make_udf_function!(bin::SparkBin, bin, ceil);
 
 pub mod expr_fn {
     use datafusion_functions::export_functions;
