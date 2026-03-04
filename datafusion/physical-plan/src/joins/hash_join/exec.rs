@@ -1442,19 +1442,53 @@ impl ExecutionPlan for HashJoinExec {
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        if partition.is_some() {
-            return Ok(Statistics::new_unknown(&self.schema()));
-        }
-        // TODO stats: it is not possible in general to know the output size of joins
-        // There are some special cases though, for example:
-        // - `A LEFT JOIN B ON A.col=B.col` with `COUNT_DISTINCT(B.col)=COUNT(B.col)`
-        let stats = estimate_join_statistics(
-            self.left.partition_statistics(None)?,
-            self.right.partition_statistics(None)?,
-            &self.on,
-            &self.join_type,
-            &self.join_schema,
-        )?;
+        let stats = match (partition, self.mode) {
+            // For CollectLeft mode, the left side is collected into a single partition,
+            // so all left partitions are available to each output partition.
+            // For the right side, we need the specific partition statistics.
+            (Some(partition), PartitionMode::CollectLeft) => {
+                let left_stats = self.left.partition_statistics(None)?;
+                let right_stats = self.right.partition_statistics(Some(partition))?;
+
+                estimate_join_statistics(
+                    left_stats,
+                    right_stats,
+                    &self.on,
+                    &self.join_type,
+                    &self.join_schema,
+                )?
+            }
+
+            // For Partitioned mode, both sides are partitioned, so each output partition
+            // only has access to the corresponding partition from both sides.
+            (Some(partition), PartitionMode::Partitioned) => {
+                let left_stats = self.left.partition_statistics(Some(partition))?;
+                let right_stats = self.right.partition_statistics(Some(partition))?;
+
+                estimate_join_statistics(
+                    left_stats,
+                    right_stats,
+                    &self.on,
+                    &self.join_type,
+                    &self.join_schema,
+                )?
+            }
+
+            // For Auto mode or when no specific partition is requested, fall back to
+            // the current behavior of getting all partition statistics.
+            (None, _) | (Some(_), PartitionMode::Auto) => {
+                // TODO stats: it is not possible in general to know the output size of joins
+                // There are some special cases though, for example:
+                // - `A LEFT JOIN B ON A.col=B.col` with `COUNT_DISTINCT(B.col)=COUNT(B.col)`
+                estimate_join_statistics(
+                    self.left.partition_statistics(None)?,
+                    self.right.partition_statistics(None)?,
+                    &self.on,
+                    &self.join_type,
+                    &self.join_schema,
+                )?
+            }
+        };
         // Project statistics if there is a projection
         let stats = stats.project(self.projection.as_ref());
         // Apply fetch limit to statistics
