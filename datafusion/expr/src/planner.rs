@@ -453,7 +453,7 @@ pub trait TypePlanner: Debug + Send + Sync {
         &self,
         sql_type: &sqlparser::ast::DataType,
     ) -> Result<Option<FieldRef>> {
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         Ok(self
             .plan_type(sql_type)?
             .map(|data_type| data_type.into_nullable_field_ref()))
