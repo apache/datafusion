@@ -910,6 +910,7 @@ pub(crate) fn get_final_indices_from_bit_map(
     (left_indices, right_indices)
 }
 
+#[expect(clippy::too_many_arguments)]
 pub(crate) fn apply_join_filter_to_indices(
     build_input_buffer: &RecordBatch,
     probe_batch: &RecordBatch,
@@ -993,6 +994,7 @@ fn new_empty_schema_batch(schema: &Schema, row_count: usize) -> Result<RecordBat
 
 /// Returns a new [RecordBatch] by combining the `left` and `right` according to `indices`.
 /// The resulting batch has [Schema] `schema`.
+#[expect(clippy::too_many_arguments)]
 pub(crate) fn build_batch_from_indices(
     schema: &Schema,
     build_input_buffer: &RecordBatch,
@@ -2907,7 +2909,6 @@ mod tests {
         Ok(())
     }
 
-    #[test]
     #[test]
     fn test_build_batch_empty_build_side_empty_schema() -> Result<()> {
         // When the output schema has no fields (empty projection pushed into
