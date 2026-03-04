@@ -59,6 +59,7 @@ fn empty_statistics() -> Statistics {
         num_rows: Precision::Absent,
         total_byte_size: Precision::Absent,
         column_statistics: vec![ColumnStatistics::new_unknown()],
+        expression_statistics: Default::default(),
     }
 }
 
@@ -78,6 +79,7 @@ fn small_statistics() -> Statistics {
         num_rows: Precision::Inexact(threshold_num_rows / 128),
         total_byte_size: Precision::Inexact(threshold_byte_size / 128),
         column_statistics: vec![ColumnStatistics::new_unknown()],
+        expression_statistics: Default::default(),
     }
 }
 
@@ -88,6 +90,7 @@ fn big_statistics() -> Statistics {
         num_rows: Precision::Inexact(threshold_num_rows * 2),
         total_byte_size: Precision::Inexact(threshold_byte_size * 2),
         column_statistics: vec![ColumnStatistics::new_unknown()],
+        expression_statistics: Default::default(),
     }
 }
 
@@ -98,6 +101,7 @@ fn bigger_statistics() -> Statistics {
         num_rows: Precision::Inexact(threshold_num_rows * 4),
         total_byte_size: Precision::Inexact(threshold_byte_size * 4),
         column_statistics: vec![ColumnStatistics::new_unknown()],
+        expression_statistics: Default::default(),
     }
 }
 
@@ -181,6 +185,7 @@ fn create_nested_with_min_max() -> (
             num_rows: Precision::Inexact(100_000),
             column_statistics: create_column_stats(Some(0), Some(50_000), Some(50_000)),
             total_byte_size: Precision::Absent,
+            expression_statistics: Default::default(),
         },
         Schema::new(vec![Field::new("big_col", DataType::Int32, false)]),
     ));
@@ -190,6 +195,7 @@ fn create_nested_with_min_max() -> (
             num_rows: Precision::Inexact(10_000),
             column_statistics: create_column_stats(Some(1000), Some(5000), Some(1000)),
             total_byte_size: Precision::Absent,
+            expression_statistics: Default::default(),
         },
         Schema::new(vec![Field::new("medium_col", DataType::Int32, false)]),
     ));
@@ -199,6 +205,7 @@ fn create_nested_with_min_max() -> (
             num_rows: Precision::Inexact(1000),
             column_statistics: create_column_stats(Some(0), Some(100_000), Some(1000)),
             total_byte_size: Precision::Absent,
+            expression_statistics: Default::default(),
         },
         Schema::new(vec![Field::new("small_col", DataType::Int32, false)]),
     ));

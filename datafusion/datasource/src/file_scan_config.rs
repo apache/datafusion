@@ -1938,6 +1938,7 @@ mod tests {
                                 .unwrap_or_default()
                         })
                         .collect::<Vec<_>>(),
+                    expression_statistics: Default::default(),
                 });
                 PartitionedFile::new_from_meta(object_meta)
                     .with_partition_values(vec![ScalarValue::from(file.date)])
@@ -2399,6 +2400,7 @@ mod tests {
                     ..ColumnStatistics::new_unknown()
                 },
             ],
+            expression_statistics: Default::default(),
         };
 
         // Create a file group with statistics

@@ -980,6 +980,7 @@ mod tests {
                     sum_value: Precision::Absent,
                     byte_size: Precision::Absent,
                 },],
+                expression_statistics: Default::default(),
             }
         );
 

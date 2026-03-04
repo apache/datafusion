@@ -17,12 +17,25 @@
 
 //! This module provides data structures to represent statistics
 
+use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display};
+use std::sync::Arc;
 
 use crate::{Result, ScalarValue};
 
 use crate::error::_plan_err;
 use arrow::datatypes::{DataType, Schema};
+
+/// Key for looking up statistics. Columns are expressions; so are nested
+/// field accesses like `get_field(col, 'a')`. This enum can be extended to
+/// support other expression types in the future.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum StatisticsKey {
+    /// Schema column by index
+    Column(usize),
+    /// Nested field path, e.g. `["col", "a", "b"]` for `col.a.b`
+    FieldPath(Vec<Arc<str>>),
+}
 
 /// Represents a value with a degree of certainty. `Precision` is used to
 /// propagate information the precision of statistical values.
@@ -296,6 +309,10 @@ pub struct Statistics {
     /// It must contains a [`ColumnStatistics`] for each field in the schema of
     /// the table to which the [`Statistics`] refer.
     pub column_statistics: Vec<ColumnStatistics>,
+    /// Statistics keyed by expression. Extends `column_statistics` with stats
+    /// for expressions that don't correspond to top-level schema columns
+    /// (e.g., struct field paths from Parquet leaf columns).
+    pub expression_statistics: HashMap<StatisticsKey, ColumnStatistics>,
 }
 
 impl Default for Statistics {
@@ -306,6 +323,7 @@ impl Default for Statistics {
             num_rows: Precision::Absent,
             total_byte_size: Precision::Absent,
             column_statistics: vec![],
+            expression_statistics: HashMap::new(),
         }
     }
 }
@@ -318,6 +336,7 @@ impl Statistics {
             num_rows: Precision::Absent,
             total_byte_size: Precision::Absent,
             column_statistics: Statistics::unknown_column(schema),
+            expression_statistics: HashMap::new(),
         }
     }
 
@@ -383,6 +402,11 @@ impl Statistics {
             .into_iter()
             .map(|s| s.to_inexact())
             .collect();
+        self.expression_statistics = self
+            .expression_statistics
+            .into_iter()
+            .map(|(k, v)| (k, v.to_inexact()))
+            .collect();
         self
     }
 
@@ -430,6 +454,14 @@ impl Statistics {
                     .push(self.column_statistics[prev_idx].clone()),
             }
         }
+
+        // Keep expression_statistics for Column keys that are in the projection,
+        // and all FieldPath entries (they are not directly projected)
+        let projection_set: HashSet<usize> = projection.iter().copied().collect();
+        self.expression_statistics.retain(|key, _| match key {
+            StatisticsKey::Column(idx) => projection_set.contains(idx),
+            StatisticsKey::FieldPath(_) => true,
+        });
 
         self
     }
@@ -523,6 +555,20 @@ impl Statistics {
                 cs
             })
             .collect();
+        self.expression_statistics = self
+            .expression_statistics
+            .into_iter()
+            .map(|(k, cs)| {
+                let mut cs = cs.to_inexact();
+                cs.byte_size = match cs.byte_size {
+                    Precision::Exact(n) | Precision::Inexact(n) => {
+                        Precision::Inexact((n as f64 * ratio) as usize)
+                    }
+                    Precision::Absent => Precision::Absent,
+                };
+                (k, cs)
+            })
+            .collect();
 
         // Compute total_byte_size as sum of column byte_size values if all are present,
         // otherwise fall back to scaling the original total_byte_size
@@ -614,6 +660,7 @@ impl Statistics {
             mut num_rows,
             mut total_byte_size,
             mut column_statistics,
+            mut expression_statistics,
         } = self;
 
         // Accumulate statistics for subsequent items
@@ -641,10 +688,24 @@ impl Statistics {
             col_stats.byte_size = col_stats.byte_size.add(&item_col_stats.byte_size);
         }
 
+        // Merge expression_statistics
+        for (key, other_stats) in &other.expression_statistics {
+            let entry = expression_statistics
+                .entry(key.clone())
+                .or_insert_with(ColumnStatistics::new_unknown);
+            entry.null_count = entry.null_count.add(&other_stats.null_count);
+            entry.max_value = entry.max_value.max(&other_stats.max_value);
+            entry.min_value = entry.min_value.min(&other_stats.min_value);
+            entry.sum_value = entry.sum_value.add(&other_stats.sum_value);
+            entry.distinct_count = Precision::Absent;
+            entry.byte_size = entry.byte_size.add(&other_stats.byte_size);
+        }
+
         Ok(Statistics {
             num_rows,
             total_byte_size,
             column_statistics,
+            expression_statistics,
         })
     }
 }
@@ -1103,6 +1164,7 @@ mod tests {
             num_rows: Precision::Exact(42),
             total_byte_size: Precision::Exact(500),
             column_statistics: counts.into_iter().map(col_stats_i64).collect(),
+            expression_statistics: Default::default(),
         }
     }
 
@@ -1147,6 +1209,7 @@ mod tests {
                     byte_size: Precision::Exact(40),
                 },
             ],
+            expression_statistics: Default::default(),
         };
 
         let stats2 = Statistics {
@@ -1170,6 +1233,7 @@ mod tests {
                     byte_size: Precision::Exact(60),
                 },
             ],
+            expression_statistics: Default::default(),
         };
 
         let items = vec![stats1, stats2];
@@ -1233,6 +1297,7 @@ mod tests {
                 distinct_count: Precision::Absent,
                 byte_size: Precision::Exact(40),
             }],
+            expression_statistics: Default::default(),
         };
 
         let stats2 = Statistics {
@@ -1246,6 +1311,7 @@ mod tests {
                 distinct_count: Precision::Absent,
                 byte_size: Precision::Inexact(60),
             }],
+            expression_statistics: Default::default(),
         };
 
         let items = vec![stats1, stats2];
@@ -1385,6 +1451,7 @@ mod tests {
                     byte_size: Precision::Exact(8000),
                 },
             ],
+            expression_statistics: Default::default(),
         };
 
         // Apply fetch of 100 rows (10% of original)
@@ -1459,6 +1526,7 @@ mod tests {
                 distinct_count: Precision::Inexact(50),
                 byte_size: Precision::Inexact(4000),
             }],
+            expression_statistics: Default::default(),
         };
 
         let result = original_stats.clone().with_fetch(Some(500), 0, 1).unwrap();
@@ -1484,6 +1552,7 @@ mod tests {
             num_rows: Precision::Exact(100),
             total_byte_size: Precision::Exact(800),
             column_statistics: vec![col_stats_i64(10)],
+            expression_statistics: Default::default(),
         };
 
         let result = original_stats.clone().with_fetch(Some(50), 100, 1).unwrap();
@@ -1500,6 +1569,7 @@ mod tests {
             num_rows: Precision::Exact(100),
             total_byte_size: Precision::Exact(800),
             column_statistics: vec![col_stats_i64(10)],
+            expression_statistics: Default::default(),
         };
 
         let result = original_stats.clone().with_fetch(None, 0, 1).unwrap();
@@ -1516,6 +1586,7 @@ mod tests {
             num_rows: Precision::Exact(1000),
             total_byte_size: Precision::Exact(8000),
             column_statistics: vec![col_stats_i64(10)],
+            expression_statistics: Default::default(),
         };
 
         // Skip 200, fetch 300, so we get rows 200-500
@@ -1536,6 +1607,7 @@ mod tests {
             num_rows: Precision::Exact(1000), // per partition
             total_byte_size: Precision::Exact(8000),
             column_statistics: vec![col_stats_i64(10)],
+            expression_statistics: Default::default(),
         };
 
         // Fetch 100 per partition, 4 partitions = 400 total
@@ -1560,6 +1632,7 @@ mod tests {
                 distinct_count: Precision::Absent,
                 byte_size: Precision::Absent,
             }],
+            expression_statistics: Default::default(),
         };
 
         let result = original_stats.clone().with_fetch(Some(100), 0, 1).unwrap();
@@ -1578,6 +1651,7 @@ mod tests {
             num_rows: Precision::Exact(100),
             total_byte_size: Precision::Exact(800),
             column_statistics: vec![col_stats_i64(10)],
+            expression_statistics: Default::default(),
         };
 
         // Skip 50, fetch 100, but only 50 rows remain
@@ -1604,6 +1678,7 @@ mod tests {
             num_rows: Precision::Exact(1000),
             total_byte_size: Precision::Exact(8000),
             column_statistics: vec![original_col_stats.clone()],
+            expression_statistics: Default::default(),
         };
 
         let result = original_stats.with_fetch(Some(250), 0, 1).unwrap();
@@ -1651,11 +1726,13 @@ mod tests {
             num_rows: Precision::Exact(50),
             total_byte_size: Precision::Exact(1000),
             column_statistics: vec![col_stats1],
+            expression_statistics: Default::default(),
         };
         let stats2 = Statistics {
             num_rows: Precision::Exact(100),
             total_byte_size: Precision::Exact(2000),
             column_statistics: vec![col_stats2],
+            expression_statistics: Default::default(),
         };
 
         let merged = stats1.try_merge(&stats2).unwrap();
@@ -1711,6 +1788,7 @@ mod tests {
                     byte_size: Precision::Exact(8000),
                 },
             ],
+            expression_statistics: Default::default(),
         };
 
         // Apply fetch of 100 rows (10% of original)
@@ -1754,6 +1832,7 @@ mod tests {
                     byte_size: Precision::Absent, // One column has no byte_size
                 },
             ],
+            expression_statistics: Default::default(),
         };
 
         // Apply fetch of 100 rows (10% of original)

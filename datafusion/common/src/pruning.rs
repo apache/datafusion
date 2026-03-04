@@ -22,7 +22,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::error::DataFusionError;
-use crate::stats::Precision;
+use crate::stats::{Precision, StatisticsKey};
 use crate::{Column, Statistics};
 use crate::{ColumnStatistics, ScalarValue};
 
@@ -356,33 +356,67 @@ impl PrunableStatistics {
             }
         }
     }
-}
 
-impl PruningStatistics for PrunableStatistics {
-    fn min_values(&self, column: &Column) -> Option<ArrayRef> {
-        self.get_exact_column_statistics(column, |stat| &stat.min_value)
+    /// Look up expression_statistics by parsing a dotted column name into a
+    /// [`StatisticsKey::FieldPath`]. For example, column name `"col.a.b"` maps
+    /// to `FieldPath(["col", "a", "b"])`.
+    fn get_expression_statistics(
+        &self,
+        column: &Column,
+        get_stat: impl Fn(&ColumnStatistics) -> &Precision<ScalarValue>,
+    ) -> Option<ArrayRef> {
+        let name = column.name();
+        // Only try dotted-name lookup if the name contains a dot
+        if !name.contains('.') {
+            return None;
+        }
+        let parts: Vec<Arc<str>> = name.split('.').map(Arc::from).collect();
+        let key = StatisticsKey::FieldPath(parts);
+
+        let mut has_value = false;
+        match ScalarValue::iter_to_array(self.statistics.iter().map(|s| {
+            s.expression_statistics
+                .get(&key)
+                .and_then(|stat| {
+                    if let Precision::Exact(val) = get_stat(stat) {
+                        has_value = true;
+                        Some(val.clone())
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(ScalarValue::Null)
+        })) {
+            Ok(array) => has_value.then_some(array),
+            Err(_) => {
+                log::warn!(
+                    "Failed to convert expression statistics to array for column {}",
+                    column.name()
+                );
+                None
+            }
+        }
     }
 
-    fn max_values(&self, column: &Column) -> Option<ArrayRef> {
-        self.get_exact_column_statistics(column, |stat| &stat.max_value)
-    }
+    /// Look up null counts from expression_statistics for a dotted column name.
+    fn get_expression_null_counts(&self, column: &Column) -> Option<ArrayRef> {
+        let name = column.name();
+        if !name.contains('.') {
+            return None;
+        }
+        let parts: Vec<Arc<str>> = name.split('.').map(Arc::from).collect();
+        let key = StatisticsKey::FieldPath(parts);
 
-    fn num_containers(&self) -> usize {
-        self.statistics.len()
-    }
-
-    fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
-        let index = self.schema.index_of(column.name()).ok()?;
         if self.statistics.iter().any(|s| {
-            s.column_statistics
-                .get(index)
+            s.expression_statistics
+                .get(&key)
                 .is_some_and(|stat| stat.null_count.is_exact().unwrap_or(false))
         }) {
             Some(Arc::new(
                 self.statistics
                     .iter()
                     .map(|s| {
-                        s.column_statistics.get(index).and_then(|stat| {
+                        s.expression_statistics.get(&key).and_then(|stat| {
                             if let Precision::Exact(null_count) = &stat.null_count {
                                 u64::try_from(*null_count).ok()
                             } else {
@@ -396,10 +430,55 @@ impl PruningStatistics for PrunableStatistics {
             None
         }
     }
+}
+
+impl PruningStatistics for PrunableStatistics {
+    fn min_values(&self, column: &Column) -> Option<ArrayRef> {
+        self.get_exact_column_statistics(column, |stat| &stat.min_value)
+            .or_else(|| self.get_expression_statistics(column, |stat| &stat.min_value))
+    }
+
+    fn max_values(&self, column: &Column) -> Option<ArrayRef> {
+        self.get_exact_column_statistics(column, |stat| &stat.max_value)
+            .or_else(|| self.get_expression_statistics(column, |stat| &stat.max_value))
+    }
+
+    fn num_containers(&self) -> usize {
+        self.statistics.len()
+    }
+
+    fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
+        let result = self.schema.index_of(column.name()).ok().and_then(|index| {
+            if self.statistics.iter().any(|s| {
+                s.column_statistics
+                    .get(index)
+                    .is_some_and(|stat| stat.null_count.is_exact().unwrap_or(false))
+            }) {
+                Some(Arc::new(
+                    self.statistics
+                        .iter()
+                        .map(|s| {
+                            s.column_statistics.get(index).and_then(|stat| {
+                                if let Precision::Exact(null_count) = &stat.null_count {
+                                    u64::try_from(*null_count).ok()
+                                } else {
+                                    None
+                                }
+                            })
+                        })
+                        .collect::<UInt64Array>(),
+                ) as ArrayRef)
+            } else {
+                None
+            }
+        });
+        result.or_else(|| self.get_expression_null_counts(column))
+    }
 
     fn row_counts(&self, column: &Column) -> Option<ArrayRef> {
-        // If the column does not exist in the schema, return None
-        if self.schema.index_of(column.name()).is_err() {
+        // If the column does not exist in the schema and not in expression stats,
+        // return None
+        if self.schema.index_of(column.name()).is_err() && !column.name().contains('.') {
             return None;
         }
         if self

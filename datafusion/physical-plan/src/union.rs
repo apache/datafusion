@@ -958,6 +958,7 @@ mod tests {
                     byte_size: Precision::Absent,
                 },
             ],
+            expression_statistics: Default::default(),
         };
 
         let right = Statistics {
@@ -989,6 +990,7 @@ mod tests {
                     byte_size: Precision::Absent,
                 },
             ],
+            expression_statistics: Default::default(),
         };
 
         let result = stats_union(left, right);
@@ -1021,6 +1023,7 @@ mod tests {
                     byte_size: Precision::Absent,
                 },
             ],
+            expression_statistics: Default::default(),
         };
 
         assert_eq!(result, expected);

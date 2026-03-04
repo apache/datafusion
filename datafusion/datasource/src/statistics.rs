@@ -395,6 +395,7 @@ pub async fn get_statistics_with_limit(
         num_rows,
         total_byte_size,
         column_statistics: col_stats_set,
+        expression_statistics: Default::default(),
     };
     if all_files.next().await.is_some() {
         // If we still have files in the stream, it means that the limit kicked

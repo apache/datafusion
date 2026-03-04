@@ -345,6 +345,7 @@ impl FilterExec {
             num_rows,
             total_byte_size,
             column_statistics,
+            expression_statistics: Default::default(),
         })
     }
 
@@ -1079,6 +1080,7 @@ mod tests {
                     max_value: Precision::Inexact(ScalarValue::Int32(Some(100))),
                     ..Default::default()
                 }],
+                expression_statistics: Default::default(),
             },
             schema.clone(),
         ));
@@ -1123,6 +1125,7 @@ mod tests {
                     ..Default::default()
                 }],
                 total_byte_size: Precision::Absent,
+                expression_statistics: Default::default(),
             },
             schema.clone(),
         ));
@@ -1180,6 +1183,7 @@ mod tests {
                     },
                 ],
                 total_byte_size: Precision::Absent,
+                expression_statistics: Default::default(),
             },
             schema.clone(),
         ));
@@ -1284,6 +1288,7 @@ mod tests {
                         ..Default::default()
                     },
                 ],
+                expression_statistics: Default::default(),
             },
             schema,
         ));
@@ -1397,6 +1402,7 @@ mod tests {
                         ..Default::default()
                     },
                 ],
+                expression_statistics: Default::default(),
             },
             schema,
         ));
@@ -1452,6 +1458,7 @@ mod tests {
                         ..Default::default()
                     },
                 ],
+                expression_statistics: Default::default(),
             },
             schema,
         ));
@@ -1522,6 +1529,7 @@ mod tests {
                         ..Default::default()
                     },
                 ],
+                expression_statistics: Default::default(),
             },
             schema,
         ));
@@ -1596,6 +1604,7 @@ mod tests {
                 distinct_count: Precision::Absent,
                 byte_size: Precision::Absent,
             }],
+            expression_statistics: Default::default(),
         };
 
         assert_eq!(filter_statistics, expected_filter_statistics);
@@ -1655,6 +1664,7 @@ mod tests {
                 column_statistics: vec![ColumnStatistics {
                     ..Default::default()
                 }],
+                expression_statistics: Default::default(),
             },
             schema,
         ));
@@ -1830,6 +1840,7 @@ mod tests {
                         ..Default::default()
                     },
                 ],
+                expression_statistics: Default::default(),
             },
             schema,
         ));
@@ -1898,6 +1909,7 @@ mod tests {
                         ..Default::default()
                     },
                 ],
+                expression_statistics: Default::default(),
             },
             schema,
         ));

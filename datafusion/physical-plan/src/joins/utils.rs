@@ -456,6 +456,7 @@ pub(crate) fn estimate_join_statistics(
         num_rows,
         total_byte_size: Precision::Absent,
         column_statistics,
+        expression_statistics: Default::default(),
     })
 }
 
@@ -492,11 +493,13 @@ fn estimate_join_cardinality(
                     num_rows: left_stats.num_rows,
                     total_byte_size: Precision::Absent,
                     column_statistics: left_col_stats,
+                    expression_statistics: Default::default(),
                 },
                 Statistics {
                     num_rows: right_stats.num_rows,
                     total_byte_size: Precision::Absent,
                     column_statistics: right_col_stats,
+                    expression_statistics: Default::default(),
                 },
             )?;
 
@@ -2102,6 +2105,7 @@ mod tests {
             .unwrap_or(Absent),
             column_statistics: column_stats,
             total_byte_size: Absent,
+            expression_statistics: Default::default(),
         }
     }
 
@@ -2304,11 +2308,13 @@ mod tests {
                         num_rows: Inexact(left_num_rows),
                         total_byte_size: Absent,
                         column_statistics: left_col_stats.clone(),
+                        expression_statistics: Default::default(),
                     },
                     Statistics {
                         num_rows: Inexact(right_num_rows),
                         total_byte_size: Absent,
                         column_statistics: right_col_stats.clone(),
+                        expression_statistics: Default::default(),
                     },
                 ),
                 expected_cardinality.clone()
@@ -2359,11 +2365,13 @@ mod tests {
                     num_rows: Inexact(400),
                     total_byte_size: Absent,
                     column_statistics: left_col_stats,
+                    expression_statistics: Default::default(),
                 },
                 Statistics {
                     num_rows: Inexact(400),
                     total_byte_size: Absent,
                     column_statistics: right_col_stats,
+                    expression_statistics: Default::default(),
                 },
             ),
             Some(Inexact((400 * 400) / 200))
@@ -2393,11 +2401,13 @@ mod tests {
                     num_rows: Inexact(100),
                     total_byte_size: Absent,
                     column_statistics: left_col_stats,
+                    expression_statistics: Default::default(),
                 },
                 Statistics {
                     num_rows: Inexact(100),
                     total_byte_size: Absent,
                     column_statistics: right_col_stats,
+                    expression_statistics: Default::default(),
                 },
             ),
             Some(Inexact(100))
@@ -2651,11 +2661,13 @@ mod tests {
                     num_rows: Inexact(outer_num_rows),
                     total_byte_size: Absent,
                     column_statistics: outer_col_stats,
+                    expression_statistics: Default::default(),
                 },
                 Statistics {
                     num_rows: Inexact(inner_num_rows),
                     total_byte_size: Absent,
                     column_statistics: inner_col_stats,
+                    expression_statistics: Default::default(),
                 },
                 &join_on,
             )
@@ -2685,11 +2697,13 @@ mod tests {
                 num_rows: Absent,
                 total_byte_size: Absent,
                 column_statistics: dummy_column_stats.clone(),
+                expression_statistics: Default::default(),
             },
             Statistics {
                 num_rows: Exact(10),
                 total_byte_size: Absent,
                 column_statistics: dummy_column_stats.clone(),
+                expression_statistics: Default::default(),
             },
             &join_on,
         );
@@ -2704,11 +2718,13 @@ mod tests {
                 num_rows: Inexact(500),
                     total_byte_size: Absent,
                 column_statistics: dummy_column_stats.clone(),
+                expression_statistics: Default::default(),
             },
             Statistics {
                 num_rows: Absent,
                     total_byte_size: Absent,
                 column_statistics: dummy_column_stats.clone(),
+                expression_statistics: Default::default(),
             },
             &join_on,
         ).expect("Expected non-empty PartialJoinStatistics for SemiJoin with absent inner num_rows");
@@ -2724,11 +2740,13 @@ mod tests {
                 num_rows: Absent,
                 total_byte_size: Absent,
                 column_statistics: dummy_column_stats.clone(),
+                expression_statistics: Default::default(),
             },
             Statistics {
                 num_rows: Absent,
                 total_byte_size: Absent,
                 column_statistics: dummy_column_stats,
+                expression_statistics: Default::default(),
             },
             &join_on,
         );
