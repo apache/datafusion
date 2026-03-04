@@ -17,6 +17,7 @@
 
 pub mod abs;
 pub mod ceil;
+pub mod bin;
 pub mod expm1;
 pub mod factorial;
 pub mod hex;
@@ -43,7 +44,7 @@ make_udf_function!(width_bucket::SparkWidthBucket, width_bucket);
 make_udf_function!(trigonometry::SparkCsc, csc);
 make_udf_function!(trigonometry::SparkSec, sec);
 make_udf_function!(negative::SparkNegative, negative);
-make_udf_function!(ceil::SparkCeil, ceil);
+make_udf_function!(bin::SparkBin, bin, ceil::SparkCeil, ceil);
 
 pub mod expr_fn {
     use datafusion_functions::export_functions;
@@ -73,6 +74,11 @@ pub mod expr_fn {
         arg1
     ));
     export_functions!((ceil, "Returns the ceiling of expr.", arg1));
+    export_functions!((
+        bin,
+        "Returns the string representation of the long value represented in binary.",
+        arg1
+    ));
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
@@ -90,5 +96,6 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         sec(),
         negative(),
         ceil(),
+        bin(),
     ]
 }
