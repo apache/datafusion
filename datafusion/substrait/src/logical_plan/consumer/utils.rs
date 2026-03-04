@@ -326,7 +326,8 @@ fn ensure_field_compatibility(
     if !DFSchema::datatype_is_logically_equal(
         datafusion_field.data_type(),
         substrait_field.data_type(),
-    ) && !is_safe_widening(datafusion_field.data_type(), substrait_field.data_type()) {
+    ) && !is_safe_widening(datafusion_field.data_type(), substrait_field.data_type())
+    {
         return substrait_err!(
             "Field '{}' in Substrait schema has a different type ({}) than the corresponding field in the table schema ({}).",
             substrait_field.name(),
@@ -540,9 +541,7 @@ pub(crate) fn from_substrait_precision(
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use super::{
-        NameTracker, is_safe_widening, make_renamed_schema,
-    };
+    use super::{NameTracker, is_safe_widening, make_renamed_schema};
     use crate::extensions::Extensions;
     use crate::logical_plan::consumer::DefaultSubstraitConsumer;
     use datafusion::arrow::datatypes::{DataType, Field};
