@@ -15,8 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::array::cast::AsArray;
+use arrow::array::types::Decimal128Type;
 use arrow::array::{
-    Float32Array, Float64Array, Int8Array, Int16Array, Int32Array, Int64Array,
+    ArrayRef, Decimal128Array, Float32Array, Float64Array, Int8Array, Int16Array,
+    Int32Array, Int64Array,
 };
 use arrow::compute::kernels::arity::unary;
 use arrow::datatypes::DataType;
@@ -26,7 +29,6 @@ use datafusion_expr::{
 };
 use std::any::Any;
 use std::sync::Arc;
-// spark semantics
 
 macro_rules! downcast_compute_op {
     ($ARRAY:expr, $NAME:expr, $FUNC:ident, $TYPE:ident, $RESULT:ident) => {{
@@ -78,6 +80,10 @@ pub fn spark_ceil(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErr
                 // Optimization: Int64 -> Int64 doesn't need conversion, just return same array
                 Ok(ColumnarValue::Array(Arc::clone(array)))
             }
+            DataType::Decimal128(precision, scale) if *scale > 0 => {
+                let f = decimal_ceil_f(*scale);
+                make_decimal_array(array, *precision, *scale, &f)
+            }
             other => Err(DataFusionError::Internal(format!(
                 "Unsupported data type {other:?} for function ceil",
             ))),
@@ -99,11 +105,45 @@ pub fn spark_ceil(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErr
                 a.map(|x| x as i64),
             ))),
             ScalarValue::Int64(a) => Ok(ColumnarValue::Scalar(ScalarValue::Int64(*a))),
+            ScalarValue::Decimal128(a, precision, scale) if *scale > 0 => {
+                let f = decimal_ceil_f(*scale);
+                let result = a.map(f);
+                Ok(ColumnarValue::Scalar(ScalarValue::Decimal128(
+                    result, *precision, *scale,
+                )))
+            }
             _ => Err(DataFusionError::Internal(format!(
                 "Unsupported data type {:?} for function ceil",
                 value.data_type(),
             ))),
         },
+    }
+}
+
+/// Computes ceil for a Decimal128 array, preserving the scale.
+/// Divides by 10^scale, takes ceiling, then multiplies back.
+#[inline]
+fn make_decimal_array(
+    array: &ArrayRef,
+    precision: u8,
+    scale: i8,
+    f: &dyn Fn(i128) -> i128,
+) -> Result<ColumnarValue, DataFusionError> {
+    let array = array.as_primitive::<Decimal128Type>();
+    let result: Decimal128Array = unary(array, f);
+    let result = result.with_data_type(DataType::Decimal128(precision, scale));
+    Ok(ColumnarValue::Array(Arc::new(result)))
+}
+
+/// Returns a closure that computes ceil for decimal values.
+#[inline]
+fn decimal_ceil_f(scale: i8) -> impl Fn(i128) -> i128 {
+    let div = 10_i128.pow(scale as u32);
+    move |x: i128| {
+        let d = x / div;
+        let r = x % div;
+        // Ceiling: round up for positive remainders
+        (if r > 0 { d + 1 } else { d }) * div
     }
 }
 
@@ -151,5 +191,83 @@ impl ScalarUDFImpl for SparkCiel {
         args: ScalarFunctionArgs,
     ) -> datafusion_common::Result<ColumnarValue> {
         spark_ceil(&args.args)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::Decimal128Array;
+    use datafusion_common::Result;
+    use datafusion_common::cast::as_decimal128_array;
+
+    #[test]
+    fn test_ceil_decimal128_array() -> Result<()> {
+        let array = Decimal128Array::from(vec![
+            Some(12345),  // 123.45
+            Some(12500),  // 125.00
+            Some(-12999), // -129.99
+            None,
+        ])
+        .with_precision_and_scale(5, 2)?;
+        let args = vec![ColumnarValue::Array(Arc::new(array))];
+        let ColumnarValue::Array(result) = spark_ceil(&args)? else {
+            unreachable!()
+        };
+        let expected = Decimal128Array::from(vec![
+            Some(12400),  // 124.00
+            Some(12500),  // 125.00
+            Some(-12900), // -129.00
+            None,
+        ])
+        .with_precision_and_scale(5, 2)?;
+        let actual = as_decimal128_array(&result)?;
+        assert_eq!(actual, &expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_ceil_decimal128_scalar() -> Result<()> {
+        let args = vec![ColumnarValue::Scalar(ScalarValue::Decimal128(
+            Some(567),
+            3,
+            1,
+        ))]; // 56.7
+        let ColumnarValue::Scalar(ScalarValue::Decimal128(Some(result), 3, 1)) =
+            spark_ceil(&args)?
+        else {
+            unreachable!()
+        };
+        assert_eq!(result, 570); // 57.0
+        Ok(())
+    }
+
+    #[test]
+    fn test_ceil_decimal128_negative_scalar() -> Result<()> {
+        // -56.7 should ceil to -56.0
+        let args = vec![ColumnarValue::Scalar(ScalarValue::Decimal128(
+            Some(-567),
+            3,
+            1,
+        ))];
+        let ColumnarValue::Scalar(ScalarValue::Decimal128(Some(result), 3, 1)) =
+            spark_ceil(&args)?
+        else {
+            unreachable!()
+        };
+        assert_eq!(result, -560); // -56.0
+        Ok(())
+    }
+
+    #[test]
+    fn test_ceil_decimal128_null_scalar() -> Result<()> {
+        let args = vec![ColumnarValue::Scalar(ScalarValue::Decimal128(None, 5, 2))];
+        let ColumnarValue::Scalar(ScalarValue::Decimal128(result, 5, 2)) =
+            spark_ceil(&args)?
+        else {
+            unreachable!()
+        };
+        assert_eq!(result, None);
+        Ok(())
     }
 }
