@@ -91,24 +91,24 @@ ahash = { version = "0.8", default-features = false, features = [
     "runtime-rng",
 ] }
 apache-avro = { version = "0.21", default-features = false }
-arrow = { version = "57.3.0", features = [
+arrow = { version = "58.0.0", features = [
     "prettyprint",
     "chrono-tz",
 ] }
-arrow-buffer = { version = "57.2.0", default-features = false }
-arrow-flight = { version = "57.3.0", features = [
+arrow-buffer = { version = "58.0.0", default-features = false }
+arrow-flight = { version = "58.0.0", features = [
     "flight-sql-experimental",
 ] }
-arrow-ipc = { version = "57.2.0", default-features = false, features = [
+arrow-ipc = { version = "58.0.0", default-features = false, features = [
     "lz4",
 ] }
-arrow-ord = { version = "57.2.0", default-features = false }
-arrow-schema = { version = "57.2.0", default-features = false }
+arrow-ord = { version = "58.0.0", default-features = false }
+arrow-schema = { version = "58.0.0", default-features = false }
 async-trait = "0.1.89"
 bigdecimal = "0.4.8"
 bytes = "1.11"
 bzip2 = "0.6.1"
-chrono = { version = "0.4.43", default-features = false }
+chrono = { version = "0.4.44", default-features = false }
 criterion = "0.8"
 ctor = "0.6.3"
 dashmap = "6.0.1"
@@ -161,13 +161,14 @@ hex = { version = "0.4.3" }
 indexmap = "2.13.0"
 insta = { version = "1.46.3", features = ["glob", "filters"] }
 itertools = "0.14"
-liblzma = { version = "0.4.4", features = ["static"] }
+itoa = "1.0"
+liblzma = { version = "0.4.6", features = ["static"] }
 log = "^0.4"
 memchr = "2.8.0"
 num-traits = { version = "0.2" }
-object_store = { version = "0.12.4", default-features = false }
+object_store = { version = "0.13.1", default-features = false }
 parking_lot = "0.12"
-parquet = { version = "57.3.0", default-features = false, features = [
+parquet = { version = "58.0.0", default-features = false, features = [
     "arrow",
     "async",
     "object_store",
@@ -183,16 +184,16 @@ regex = "1.12"
 rstest = "0.26.1"
 serde_json = "1"
 sha2 = "^0.10.9"
-sqlparser = { version = "0.60.0", default-features = false, features = ["std", "visitor"] }
-strum = "0.27.2"
-strum_macros = "0.27.2"
+sqlparser = { version = "0.61.0", default-features = false, features = ["std", "visitor"] }
+strum = "0.28.0"
+strum_macros = "0.28.0"
 tempfile = "3"
-testcontainers-modules = { version = "0.14" }
+testcontainers-modules = { version = "0.15" }
 tokio = { version = "1.48", features = ["macros", "rt", "sync"] }
 tokio-stream = "0.1"
 tokio-util = "0.7"
 url = "2.5.7"
-uuid = "1.20"
+uuid = "1.21"
 zstd = { version = "0.13", default-features = false }
 
 [workspace.lints.clippy]

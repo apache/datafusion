@@ -40,7 +40,7 @@ use datafusion_physical_expr_adapter::{
 };
 use object_store::memory::InMemory;
 use object_store::path::Path;
-use object_store::{ObjectStore, PutPayload};
+use object_store::{ObjectStore, ObjectStoreExt, PutPayload};
 
 // Example showing how to implement custom casting rules to adapt file schemas.
 // This example enforces that casts must be strictly widening: if the file type is Int64 and the table type is Int32, it will error
@@ -49,9 +49,9 @@ use object_store::{ObjectStore, PutPayload};
 pub async fn custom_file_casts() -> Result<()> {
     println!("=== Creating example data ===");
 
-    // Create a logical / table schema with an Int32 column
+    // Create a logical / table schema with an Int32 column (nullable)
     let logical_schema =
-        Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, true)]));
 
     // Create some data that can be cast (Int16 -> Int32 is widening) and some that cannot (Int64 -> Int32 is narrowing)
     let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;

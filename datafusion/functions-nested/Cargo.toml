@@ -57,13 +57,19 @@ datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-aggregate-common = { workspace = true }
 datafusion-macros = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
+hashbrown = { workspace = true }
 itertools = { workspace = true, features = ["use_std"] }
+itoa = { workspace = true }
 log = { workspace = true }
 paste = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true, features = ["async_tokio"] }
 rand = { workspace = true }
+
+[[bench]]
+harness = false
+name = "array_concat"
 
 [[bench]]
 harness = false
@@ -96,3 +102,11 @@ name = "array_repeat"
 [[bench]]
 harness = false
 name = "array_set_ops"
+
+[[bench]]
+harness = false
+name = "array_to_string"
+
+[[bench]]
+harness = false
+name = "array_position"

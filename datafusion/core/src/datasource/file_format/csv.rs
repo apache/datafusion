@@ -65,7 +65,8 @@ mod tests {
     use object_store::path::Path;
     use object_store::{
         Attributes, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload,
-        ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult,
+        ObjectMeta, ObjectStore, ObjectStoreExt, PutMultipartOptions, PutOptions,
+        PutPayload, PutResult,
     };
     use regex::Regex;
     use rstest::*;
@@ -102,10 +103,6 @@ mod tests {
             _opts: PutMultipartOptions,
         ) -> object_store::Result<Box<dyn MultipartUpload>> {
             unimplemented!()
-        }
-
-        async fn get(&self, location: &Path) -> object_store::Result<GetResult> {
-            self.get_opts(location, GetOptions::default()).await
         }
 
         async fn get_opts(
@@ -147,14 +144,6 @@ mod tests {
             unimplemented!()
         }
 
-        async fn head(&self, _location: &Path) -> object_store::Result<ObjectMeta> {
-            unimplemented!()
-        }
-
-        async fn delete(&self, _location: &Path) -> object_store::Result<()> {
-            unimplemented!()
-        }
-
         fn list(
             &self,
             _prefix: Option<&Path>,
@@ -169,15 +158,19 @@ mod tests {
             unimplemented!()
         }
 
-        async fn copy(&self, _from: &Path, _to: &Path) -> object_store::Result<()> {
-            unimplemented!()
-        }
-
-        async fn copy_if_not_exists(
+        async fn copy_opts(
             &self,
             _from: &Path,
             _to: &Path,
+            _options: object_store::CopyOptions,
         ) -> object_store::Result<()> {
+            unimplemented!()
+        }
+
+        fn delete_stream(
+            &self,
+            _locations: BoxStream<'static, object_store::Result<Path>>,
+        ) -> BoxStream<'static, object_store::Result<Path>> {
             unimplemented!()
         }
     }

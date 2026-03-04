@@ -23,6 +23,10 @@ use std::hash::{Hash, Hasher};
 use std::{cmp::Ordering, sync::Arc, sync::atomic};
 
 mod pool;
+
+#[cfg(feature = "arrow_buffer_pool")]
+pub mod arrow;
+
 pub mod proxy {
     pub use datafusion_common::utils::proxy::{HashTableAllocExt, VecAllocExt};
 }
@@ -368,9 +372,9 @@ impl MemoryReservation {
     /// Frees all bytes from this reservation back to the underlying
     /// pool, returning the number of bytes freed.
     pub fn free(&self) -> usize {
-        let size = self.size.load(atomic::Ordering::Relaxed);
+        let size = self.size.swap(0, atomic::Ordering::Relaxed);
         if size != 0 {
-            self.shrink(size)
+            self.registration.pool.shrink(self, size);
         }
         size
     }
@@ -381,26 +385,38 @@ impl MemoryReservation {
     ///
     /// Panics if `capacity` exceeds [`Self::size`]
     pub fn shrink(&self, capacity: usize) {
-        self.size.fetch_sub(capacity, atomic::Ordering::Relaxed);
+        self.size
+            .fetch_update(
+                atomic::Ordering::Relaxed,
+                atomic::Ordering::Relaxed,
+                |prev| prev.checked_sub(capacity),
+            )
+            .unwrap_or_else(|prev| {
+                panic!("Cannot free the capacity {capacity} out of allocated size {prev}")
+            });
         self.registration.pool.shrink(self, capacity);
     }
 
     /// Tries to free `capacity` bytes from this reservation
-    /// if `capacity` does not exceed [`Self::size`]
-    /// Returns new reservation size
-    /// or error if shrinking capacity is more than allocated size
+    /// if `capacity` does not exceed [`Self::size`].
+    /// Returns new reservation size,
+    /// or error if shrinking capacity is more than allocated size.
     pub fn try_shrink(&self, capacity: usize) -> Result<usize> {
-        let updated = self.size.fetch_update(
-            atomic::Ordering::Relaxed,
-            atomic::Ordering::Relaxed,
-            |prev| prev.checked_sub(capacity),
-        );
-        updated.map_err(|_| {
-            let prev = self.size.load(atomic::Ordering::Relaxed);
-            internal_datafusion_err!(
-                "Cannot free the capacity {capacity} out of allocated size {prev}"
+        let prev = self
+            .size
+            .fetch_update(
+                atomic::Ordering::Relaxed,
+                atomic::Ordering::Relaxed,
+                |prev| prev.checked_sub(capacity),
             )
-        })
+            .map_err(|prev| {
+                internal_datafusion_err!(
+                    "Cannot free the capacity {capacity} out of allocated size {prev}"
+                )
+            })?;
+
+        self.registration.pool.shrink(self, capacity);
+        Ok(prev - capacity)
     }
 
     /// Sets the size of this reservation to `capacity`
@@ -418,7 +434,9 @@ impl MemoryReservation {
         let size = self.size.load(atomic::Ordering::Relaxed);
         match capacity.cmp(&size) {
             Ordering::Greater => self.try_grow(capacity - size)?,
-            Ordering::Less => self.shrink(size - capacity),
+            Ordering::Less => {
+                self.try_shrink(size - capacity)?;
+            }
             _ => {}
         };
         Ok(())
@@ -579,5 +597,38 @@ mod tests {
         assert_eq!(r1.size(), 3);
         assert_eq!(r2.size(), 25);
         assert_eq!(pool.reserved(), 28);
+    }
+
+    #[test]
+    fn test_try_shrink() {
+        let pool = Arc::new(GreedyMemoryPool::new(100)) as _;
+        let r1 = MemoryConsumer::new("r1").register(&pool);
+
+        r1.try_grow(50).unwrap();
+        assert_eq!(r1.size(), 50);
+        assert_eq!(pool.reserved(), 50);
+
+        // Successful shrink returns new size and frees pool memory
+        let new_size = r1.try_shrink(30).unwrap();
+        assert_eq!(new_size, 20);
+        assert_eq!(r1.size(), 20);
+        assert_eq!(pool.reserved(), 20);
+
+        // Freed pool memory is now available to other consumers
+        let r2 = MemoryConsumer::new("r2").register(&pool);
+        r2.try_grow(80).unwrap();
+        assert_eq!(pool.reserved(), 100);
+
+        // Shrinking more than allocated fails without changing state
+        let err = r1.try_shrink(25);
+        assert!(err.is_err());
+        assert_eq!(r1.size(), 20);
+        assert_eq!(pool.reserved(), 100);
+
+        // Shrink to exactly zero
+        let new_size = r1.try_shrink(20).unwrap();
+        assert_eq!(new_size, 0);
+        assert_eq!(r1.size(), 0);
+        assert_eq!(pool.reserved(), 80);
     }
 }

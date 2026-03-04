@@ -157,7 +157,7 @@ impl PartitioningSatisfaction {
     }
 
     pub fn is_subset(&self) -> bool {
-        matches!(self, Self::Subset)
+        *self == Self::Subset
     }
 }
 
