@@ -26,7 +26,7 @@ use arrow_schema::SchemaRef;
 use arrow_schema::ffi::FFI_ArrowSchema;
 use async_ffi::{FfiFuture, FutureExt};
 use async_trait::async_trait;
-use datafusion_common::config::{ConfigOptions, TableOptions};
+use datafusion_common::config::{ConfigFileType, ConfigOptions, TableOptions};
 use datafusion_common::{DFSchema, DataFusionError};
 use datafusion_execution::TaskContext;
 use datafusion_execution::config::SessionConfig;
@@ -438,15 +438,66 @@ impl Clone for FFI_SessionRef {
 }
 
 fn table_options_from_rhashmap(options: RHashMap<RString, RString>) -> TableOptions {
-    let options = options
+    let options: HashMap<String, String> = options
         .into_iter()
         .map(|kv_pair| (kv_pair.0.into_string(), kv_pair.1.into_string()))
         .collect();
 
-    TableOptions::from_string_hash_map(&options).unwrap_or_else(|err| {
-        log::warn!("Error parsing default table options: {err}");
-        TableOptions::default()
-    })
+    let mut table_options = TableOptions::default();
+    let formats = [
+        ConfigFileType::CSV,
+        ConfigFileType::JSON,
+        ConfigFileType::PARQUET,
+    ];
+    for format in formats {
+        // It is imperative that if new enum variants are added below that they be
+        // included in the formats list above and in the extension check below.
+        let format_name = match &format {
+            ConfigFileType::CSV => "csv",
+            ConfigFileType::PARQUET => "parquet",
+            ConfigFileType::JSON => "json",
+        };
+        let format_options: HashMap<String, String> = options
+            .iter()
+            .filter_map(|(k, v)| {
+                let (prefix, key) = k.split_once(".")?;
+                if prefix == format_name {
+                    Some((format!("format.{key}"), v.to_owned()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if !format_options.is_empty() {
+            table_options.current_format = Some(format.clone());
+            table_options
+                .alter_with_string_hash_map(&format_options)
+                .unwrap_or_else(|err| log::warn!("Error parsing table options: {err}"));
+        }
+    }
+
+    let extension_options: HashMap<String, String> = options
+        .iter()
+        .filter_map(|(k, v)| {
+            let (prefix, _) = k.split_once(".")?;
+            if !["json", "parquet", "csv"].contains(&prefix) {
+                Some((k.to_owned(), v.to_owned()))
+            } else {
+                None
+            }
+        })
+        .collect();
+    if !extension_options.is_empty() {
+        table_options
+            .alter_with_string_hash_map(&extension_options)
+            .unwrap_or_else(|err| log::warn!("Error parsing table options: {err}"));
+    }
+
+    // TODO(apache/datafusion#20704) We should query the `current_format` set and then pass
+    // this across the FFI barrier and set it here, but that is a breaking change that
+    // would need to go into the next release.
+    table_options.current_format = None;
+    table_options
 }
 
 #[async_trait]
