@@ -168,6 +168,7 @@ impl ScalarUDFImpl for DatePartFunc {
                         if is_epoch(part) {
                             Field::new(self.name(), DataType::Float64, nullable)
                         } else if is_nanosecond(part) {
+                            // See notes on [seconds_ns] for rationale
                             Field::new(self.name(), DataType::Int64, nullable)
                         } else {
                             Field::new(self.name(), DataType::Int32, nullable)
@@ -528,6 +529,10 @@ fn epoch(array: &dyn Array) -> Result<ArrayRef> {
 
 /// Invoke [`date_part`] on an `array` (e.g. Timestamp) and convert the
 /// result to a total number of nanoseconds as an Int64 array.
+///
+/// This returns an Int64 rather than Int32 because  there 1 billion
+/// `nanosecond`s in each second, so representing up to 60 seconds as
+/// nanoseconds can be values up to 60 billion, which does not fit in Int32.
 fn seconds_ns(array: &dyn Array) -> Result<ArrayRef> {
     let secs = date_part(array, DatePart::Second)?;
     // This assumes array is primitive and not a dictionary
