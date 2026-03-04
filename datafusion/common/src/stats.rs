@@ -28,9 +28,22 @@ use arrow::datatypes::{DataType, Schema};
 /// propagate information the precision of statistical values.
 #[derive(Clone, PartialEq, Eq, Default, Copy)]
 pub enum Precision<T: Debug + Clone + PartialEq + Eq + PartialOrd> {
-    /// The exact value is known
+    /// The exact value is known. Used for guaranteeing correctness
+    /// 
+    /// Comes from definitive sources such as:
+    /// - Parquet file metadata (row counts, byte sizes)
+    /// - Known fixed-width types (e.g., INT64 always has 8 bytes per row)
+    /// - Exact arithmetic operations on exact values
     Exact(T),
-    /// The value is not known exactly, but is likely close to this value
+    /// The value is not known exactly, but is likely close to this value.
+    /// Used for cost based optimizations. 
+    /// 
+    /// Some operations that would result in `Inexact(T)` would be:
+    /// - Applying a filter (selectivity is unknown)
+    /// - Mixing exact and inexact values in arithmetic
+    /// - Repartitioning data
+    /// - Using uncompressed Parquet size as a proxy for in-memory Arrow size
+    /// - etc.
     Inexact(T),
     /// Nothing is known about the value
     #[default]
@@ -286,6 +299,7 @@ pub struct Statistics {
     /// The number of rows estimated to be scanned.
     pub num_rows: Precision<usize>,
     /// The total bytes of the output data.
+    /// 
     /// Note that this is not the same as the total bytes that may be scanned,
     /// processed, etc.
     /// E.g. we may read 1GB of data from a Parquet file but the Arrow data
