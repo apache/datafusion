@@ -1368,24 +1368,21 @@ mod tests {
         Ok(())
     }
 
-    /// Regression test for data loss when multiple writer clones are used.
+    /// Verifies that the reader stays alive as long as any writer clone exists.
     ///
     /// `SpillPoolWriter` is `Clone`, and in non-preserve-order repartitioning
-    /// mode all input partition tasks share clones of the same writer. Before
-    /// the fix, `Drop` unconditionally set `writer_dropped = true` even when
-    /// other clones were still alive. This caused the `SpillPoolReader` to
-    /// return EOF prematurely, silently losing every batch written by the
-    /// remaining writers.
+    /// mode multiple input partition tasks share clones of the same writer.
+    /// The reader must not see EOF until **all** clones have been dropped,
+    /// even if the queue is temporarily empty between writes from different
+    /// clones.
     ///
     /// The test sequence is:
     ///
     /// 1. writer1 writes a batch, then is dropped.
-    /// 2. The reader consumes that batch.
-    /// 3. The reader polls again — the queue is now empty.
-    ///    - **Bug**: `writer_dropped` is already true → `Ready(None)` (EOF).
-    ///    - **Fix**: `active_writer_count > 0` → `Pending` (wait for data).
-    /// 4. writer2 (still alive) writes a batch.
-    /// 5. The reader must see that batch — not silently lose it.
+    /// 2. The reader consumes that batch (queue is now empty).
+    /// 3. writer2 (still alive) writes a batch.
+    /// 4. The reader must see that batch.
+    /// 5. EOF is only signalled after writer2 is also dropped.
     #[tokio::test]
     async fn test_clone_drop_does_not_signal_eof_prematurely() -> Result<()> {
         let (writer1, mut reader) = create_spill_channel(1024 * 1024);
@@ -1419,10 +1416,7 @@ mod tests {
         // current task yields (i.e. when reader.next() returns Pending).
         proceed_tx.send(()).unwrap();
 
-        // With the bug the reader returns None here because it already
-        // saw writer_dropped=true on an empty queue. With the fix it
-        // returns Pending, the runtime schedules writer2, and the batch
-        // becomes available.
+        // The reader should wait (Pending) for writer2's data, not EOF.
         let batch2 =
             tokio::time::timeout(std::time::Duration::from_secs(5), reader.next())
                 .await
@@ -1430,8 +1424,7 @@ mod tests {
 
         assert!(
             batch2.is_some(),
-            "Reader returned None prematurely — batch from writer2 was lost \
-             because dropping writer1 incorrectly signaled EOF"
+            "Reader must not return EOF while a writer clone is still alive"
         );
         let batch2 = batch2.unwrap()?;
         assert_eq!(batch2.num_rows(), 10);
