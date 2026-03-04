@@ -34,8 +34,8 @@ use super::{
 };
 use crate::check_if_same_properties;
 use crate::execution_plan::{
-    InvariantLevel, boundedness_from_children, check_default_invariants,
-    emission_type_from_children,
+    CardinalityEffect, InvariantLevel, boundedness_from_children,
+    check_default_invariants, emission_type_from_children,
 };
 use crate::filter::FilterExec;
 use crate::filter_pushdown::{
@@ -358,6 +358,12 @@ impl ExecutionPlan for UnionExec {
                 .reduce(stats_union)
                 .unwrap_or_else(|| Statistics::new_unknown(&self.schema())))
         }
+    }
+
+    fn cardinality_effect(&self) -> CardinalityEffect {
+        // Union combines rows from multiple inputs, so output rows are not tied
+        // to any single input and can only be constrained as greater-or-equal.
+        CardinalityEffect::GreaterEqual
     }
 
     fn supports_limit_pushdown(&self) -> bool {
@@ -1209,5 +1215,26 @@ mod tests {
                 "UnionExec/InterleaveExec requires all inputs to have the same number of fields"
             )
         );
+    }
+
+    #[test]
+    fn test_union_cardinality_effect() -> Result<()> {
+        let schema = create_test_schema()?;
+        let input1: Arc<dyn ExecutionPlan> =
+            Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?);
+        let input2: Arc<dyn ExecutionPlan> =
+            Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?);
+
+        let union = UnionExec::try_new(vec![input1, input2])?;
+        let union = union
+            .as_any()
+            .downcast_ref::<UnionExec>()
+            .expect("expected UnionExec for multiple inputs");
+
+        assert!(matches!(
+            union.cardinality_effect(),
+            CardinalityEffect::GreaterEqual
+        ));
+        Ok(())
     }
 }
