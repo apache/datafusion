@@ -1005,8 +1005,8 @@ pub(crate) fn build_batch_from_indices(
 ) -> Result<RecordBatch> {
     if schema.fields().is_empty() {
         // For RightAnti and RightSemi joins, after `adjust_indices_by_join_type`
-        // the build_indices were untouched so only probe_indices hold the actual 
-        // row count. 
+        // the build_indices were untouched so only probe_indices hold the actual
+        // row count.
         let row_count = match join_type {
             JoinType::RightAnti | JoinType::RightSemi => probe_indices.len(),
             _ => build_indices.len(),
