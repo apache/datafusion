@@ -25,8 +25,11 @@ pub use crate::ordering::InputOrderMode;
 use crate::sort_pushdown::SortOrderPushdownResult;
 pub use crate::stream::EmptyRecordBatchStream;
 
+use arrow_schema::Schema;
 pub use datafusion_common::hash_utils;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
 pub use datafusion_common::utils::project_schema;
 pub use datafusion_common::{ColumnStatistics, Statistics, internal_err};
 pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
@@ -38,7 +41,7 @@ pub use datafusion_physical_expr::{
 
 use std::any::Any;
 use std::fmt::Debug;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::display::DisplayableExecutionPlan;
@@ -128,7 +131,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///
     /// This information is available via methods on [`ExecutionPlanProperties`]
     /// trait, which is implemented for all `ExecutionPlan`s.
-    fn properties(&self) -> &PlanProperties;
+    fn properties(&self) -> &Arc<PlanProperties>;
 
     /// Returns an error if this individual node does not conform to its invariants.
     /// These invariants are typically only checked in debug mode.
@@ -203,6 +206,80 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// a single value for unary nodes, or two values for binary nodes (such as
     /// joins).
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>>;
+
+    /// Apply a closure `f` to each expression (non-recursively) in the current
+    /// physical plan node. This does not include expressions in any children.
+    ///
+    /// The closure `f` is applied to expressions in the order they appear in the plan.
+    /// The closure can return `TreeNodeRecursion::Continue` to continue visiting,
+    /// `TreeNodeRecursion::Stop` to stop visiting immediately, or `TreeNodeRecursion::Jump`
+    /// to skip any remaining expressions (though typically all expressions are visited).
+    ///
+    /// The expressions visited do not necessarily represent or even contribute
+    /// to the output schema of this node. For example, `FilterExec` visits the
+    /// filter predicate even though the output of a Filter has the same columns
+    /// as the input.
+    ///
+    /// # Example Usage
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use datafusion_physical_plan::ExecutionPlan;
+    /// # use datafusion_common::tree_node::TreeNodeRecursion;
+    /// # fn example(plan: Arc<dyn ExecutionPlan>) -> datafusion_common::Result<()> {
+    /// // Count the number of expressions
+    /// let mut count = 0;
+    /// plan.apply_expressions(&mut |_expr| {
+    ///     count += 1;
+    ///     Ok(TreeNodeRecursion::Continue)
+    /// })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Implementation Examples
+    ///
+    /// ## Node with no expressions (e.g., EmptyExec, MemoryExec)
+    /// ```ignore
+    /// fn apply_expressions(
+    ///     &self,
+    ///     _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    /// ) -> Result<TreeNodeRecursion> {
+    ///     Ok(TreeNodeRecursion::Continue)
+    /// }
+    /// ```
+    ///
+    /// ## Node with a single expression (e.g., FilterExec)
+    /// ```ignore
+    /// fn apply_expressions(
+    ///     &self,
+    ///     f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    /// ) -> Result<TreeNodeRecursion> {
+    ///     f(self.predicate.as_ref())
+    /// }
+    /// ```
+    ///
+    /// ## Node with multiple expressions (e.g., ProjectionExec, JoinExec)
+    ///
+    /// Use [`TreeNodeRecursion::visit_sibling`] when iterating over multiple
+    /// expressions. This correctly propagates [`TreeNodeRecursion::Stop`]: if
+    /// `f` returns `Stop` for an earlier expression, `visit_sibling` short-circuits
+    /// and skips the remaining ones.
+    /// ```ignore
+    /// fn apply_expressions(
+    ///     &self,
+    ///     f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    /// ) -> Result<TreeNodeRecursion> {
+    ///     let mut tnr = TreeNodeRecursion::Continue;
+    ///     for expr in &self.expressions {
+    ///         tnr = tnr.visit_sibling(|| f(expr.as_ref()))?;
+    ///     }
+    ///     Ok(tnr)
+    /// }
+    /// ```
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion>;
 
     /// Returns a new `ExecutionPlan` where all existing children were replaced
     /// by the `children`, in order
@@ -1050,12 +1127,17 @@ impl PlanProperties {
         self
     }
 
-    /// Overwrite equivalence properties with its new value.
-    pub fn with_eq_properties(mut self, eq_properties: EquivalenceProperties) -> Self {
+    /// Set equivalence properties having mut reference.
+    pub fn set_eq_properties(&mut self, eq_properties: EquivalenceProperties) {
         // Changing equivalence properties also changes output ordering, so
         // make sure to overwrite it:
         self.output_ordering = eq_properties.output_ordering();
         self.eq_properties = eq_properties;
+    }
+
+    /// Overwrite equivalence properties with its new value.
+    pub fn with_eq_properties(mut self, eq_properties: EquivalenceProperties) -> Self {
+        self.set_eq_properties(eq_properties);
         self
     }
 
@@ -1087,9 +1169,14 @@ impl PlanProperties {
         self
     }
 
+    /// Set constraints having mut reference.
+    pub fn set_constraints(&mut self, constraints: Constraints) {
+        self.eq_properties.set_constraints(constraints);
+    }
+
     /// Overwrite constraints with its new value.
     pub fn with_constraints(mut self, constraints: Constraints) -> Self {
-        self.eq_properties = self.eq_properties.with_constraints(constraints);
+        self.set_constraints(constraints);
         self
     }
 
@@ -1412,6 +1499,41 @@ pub fn reset_plan_states(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn Executi
     .data()
 }
 
+/// Check if the `plan` children has the same properties as passed `children`.
+/// In this case plan can avoid self properties re-computation when its children
+/// replace is requested.
+/// The size of `children` must be equal to the size of `ExecutionPlan::children()`.
+pub fn has_same_children_properties(
+    plan: &Arc<impl ExecutionPlan>,
+    children: &[Arc<dyn ExecutionPlan>],
+) -> Result<bool> {
+    let old_children = plan.children();
+    assert_eq_or_internal_err!(
+        children.len(),
+        old_children.len(),
+        "Wrong number of children"
+    );
+    for (lhs, rhs) in old_children.iter().zip(children.iter()) {
+        if !Arc::ptr_eq(lhs.properties(), rhs.properties()) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Helper macro to avoid properties re-computation if passed children properties
+/// the same as plan already has. Could be used to implement fast-path for method
+/// [`ExecutionPlan::with_new_children`].
+#[macro_export]
+macro_rules! check_if_same_properties {
+    ($plan: expr, $children: expr) => {
+        if $crate::execution_plan::has_same_children_properties(&$plan, &$children)? {
+            let plan = $plan.with_new_children_and_same_properties($children);
+            return Ok(::std::sync::Arc::new(plan));
+        }
+    };
+}
+
 /// Utility function yielding a string representation of the given [`ExecutionPlan`].
 pub fn get_plan_string(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
     let formatted = displayable(plan.as_ref()).indent(true).to_string();
@@ -1431,6 +1553,20 @@ pub enum CardinalityEffect {
     LowerEqual,
     /// The operator may produce more output rows than it receives input rows
     GreaterEqual,
+}
+
+/// Can be used in contexts where properties have not yet been initialized properly.
+pub(crate) fn stub_properties() -> Arc<PlanProperties> {
+    static STUB_PROPERTIES: LazyLock<Arc<PlanProperties>> = LazyLock::new(|| {
+        Arc::new(PlanProperties::new(
+            EquivalenceProperties::new(Arc::new(Schema::empty())),
+            Partitioning::UnknownPartitioning(1),
+            EmissionType::Final,
+            Boundedness::Bounded,
+        ))
+    });
+
+    Arc::clone(&STUB_PROPERTIES)
 }
 
 #[cfg(test)]
@@ -1474,7 +1610,7 @@ mod tests {
             self
         }
 
-        fn properties(&self) -> &PlanProperties {
+        fn properties(&self) -> &Arc<PlanProperties> {
             unimplemented!()
         }
 
@@ -1487,6 +1623,13 @@ mod tests {
             _: Vec<Arc<dyn ExecutionPlan>>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             unimplemented!()
+        }
+
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
         }
 
         fn execute(
@@ -1537,12 +1680,19 @@ mod tests {
             self
         }
 
-        fn properties(&self) -> &PlanProperties {
+        fn properties(&self) -> &Arc<PlanProperties> {
             unimplemented!()
         }
 
         fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
             vec![]
+        }
+
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
         }
 
         fn with_new_children(
@@ -1563,6 +1713,110 @@ mod tests {
         fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
             unimplemented!()
         }
+    }
+
+    /// A test node that holds a fixed list of expressions, used to test
+    /// `apply_expressions` behavior.
+    #[derive(Debug)]
+    struct MultiExprExec {
+        exprs: Vec<Arc<dyn PhysicalExpr>>,
+    }
+
+    impl DisplayAs for MultiExprExec {
+        fn fmt_as(
+            &self,
+            _t: DisplayFormatType,
+            _f: &mut std::fmt::Formatter,
+        ) -> std::fmt::Result {
+            unimplemented!()
+        }
+    }
+
+    impl ExecutionPlan for MultiExprExec {
+        fn name(&self) -> &'static str {
+            "MultiExprExec"
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn properties(&self) -> &std::sync::Arc<PlanProperties> {
+            unimplemented!()
+        }
+
+        fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+            vec![]
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            _: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            unimplemented!()
+        }
+
+        fn apply_expressions(
+            &self,
+            f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            let mut tnr = TreeNodeRecursion::Continue;
+            for expr in &self.exprs {
+                tnr = tnr.visit_sibling(|| f(expr.as_ref()))?;
+            }
+            Ok(tnr)
+        }
+
+        fn execute(
+            &self,
+            _partition: usize,
+            _context: Arc<TaskContext>,
+        ) -> Result<SendableRecordBatchStream> {
+            unimplemented!()
+        }
+
+        fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
+            unimplemented!()
+        }
+    }
+
+    /// Returns a simple literal `Arc<dyn PhysicalExpr>` for use in tests.
+    fn lit_expr(val: i64) -> Arc<dyn PhysicalExpr> {
+        use datafusion_physical_expr::expressions::Literal;
+        Arc::new(Literal::new(datafusion_common::ScalarValue::Int64(Some(
+            val,
+        ))))
+    }
+
+    /// `apply_expressions` visits all expressions when `f` always returns `Continue`.
+    #[test]
+    fn test_apply_expressions_continue_visits_all() -> Result<()> {
+        let plan = MultiExprExec {
+            exprs: vec![lit_expr(1), lit_expr(2), lit_expr(3)],
+        };
+        let mut visited = 0usize;
+        plan.apply_expressions(&mut |_expr| {
+            visited += 1;
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        assert_eq!(visited, 3);
+        Ok(())
+    }
+
+    #[test]
+    fn test_apply_expressions_stop_halts_early() -> Result<()> {
+        let plan = MultiExprExec {
+            exprs: vec![lit_expr(1), lit_expr(2), lit_expr(3)],
+        };
+        let mut visited = 0usize;
+        let tnr = plan.apply_expressions(&mut |_expr| {
+            visited += 1;
+            Ok(TreeNodeRecursion::Stop)
+        })?;
+        // Only the first expression is visited; the rest are skipped.
+        assert_eq!(visited, 1);
+        assert_eq!(tnr, TreeNodeRecursion::Stop);
+        Ok(())
     }
 
     #[test]

@@ -44,7 +44,7 @@ pub fn set_nulls<T: ArrowNumericType + Send>(
 /// The `NullBuffer` is
 /// * `true` (representing valid) for values that were `true` in filter
 /// * `false` (representing null) for values that were `false` or `null` in filter
-fn filter_to_nulls(filter: &BooleanArray) -> Option<NullBuffer> {
+pub fn filter_to_nulls(filter: &BooleanArray) -> Option<NullBuffer> {
     let (filter_bools, filter_nulls) = filter.clone().into_parts();
     let filter_bools = NullBuffer::from(filter_bools);
     NullBuffer::union(Some(&filter_bools), filter_nulls.as_ref())
