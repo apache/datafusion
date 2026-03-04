@@ -361,8 +361,8 @@ fn array_has_dispatch_for_scalar(
         )));
     }
 
-    // Only compare the visible portion of the values buffer, which avoids
-    // wasted work for sliced ListArrays.
+    // For sliced ListArrays, values() returns the full underlying array but
+    // only elements between the first and last offset are visible.
     let offsets: Vec<usize> = haystack.offsets().collect();
     let first_offset = offsets[0];
     let visible_values = haystack
