@@ -144,7 +144,7 @@ SELECT ceil(127::tinyint);
 127
 
 query I
-SELECT ceil(-128::tinyint);
+SELECT ceil(CAST(-128 AS tinyint));
 ----
 -128
 
@@ -170,7 +170,7 @@ SELECT ceil(32767::smallint);
 32767
 
 query I
-SELECT ceil(-32768::smallint);
+SELECT ceil(CAST(-32768 AS smallint));
 ----
 -32768
 
@@ -212,7 +212,7 @@ SELECT ceil(9223372036854775807::bigint);
 9223372036854775807
 
 query I
-SELECT ceil(-9223372036854775808::bigint);
+SELECT ceil(CAST(-9223372036854775808 AS bigint));
 ----
 -9223372036854775808
 
