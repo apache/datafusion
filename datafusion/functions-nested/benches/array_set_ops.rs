@@ -284,7 +284,7 @@ fn bench_array_except(c: &mut Criterion) {
 }
 
 /// Slice a pair of arrays to the middle `NUM_ROWS` rows from a larger array.
-fn slice_pair(arrays: (ArrayRef, ArrayRef)) -> (ArrayRef, ArrayRef) {
+fn slice_pair(arrays: &(ArrayRef, ArrayRef)) -> (ArrayRef, ArrayRef) {
     let a1 = arrays.0.slice(SLICE_PADDING, NUM_ROWS);
     let a2 = arrays.1.slice(SLICE_PADDING, NUM_ROWS);
     (a1, a2)
@@ -295,7 +295,7 @@ fn bench_array_union_sliced(c: &mut Criterion) {
     let udf = ArrayUnion::new();
 
     for &array_size in ARRAY_SIZES {
-        let (a1, a2) = slice_pair(create_arrays_with_overlap(
+        let (a1, a2) = slice_pair(&create_arrays_with_overlap(
             NUM_ROWS + 2 * SLICE_PADDING,
             array_size,
             0.5,
@@ -314,7 +314,7 @@ fn bench_array_intersect_sliced(c: &mut Criterion) {
     let udf = ArrayIntersect::new();
 
     for &array_size in ARRAY_SIZES {
-        let (a1, a2) = slice_pair(create_arrays_with_overlap(
+        let (a1, a2) = slice_pair(&create_arrays_with_overlap(
             NUM_ROWS + 2 * SLICE_PADDING,
             array_size,
             0.5,
@@ -333,7 +333,7 @@ fn bench_array_except_sliced(c: &mut Criterion) {
     let udf = ArrayExcept::new();
 
     for &array_size in ARRAY_SIZES {
-        let (a1, a2) = slice_pair(create_arrays_with_overlap(
+        let (a1, a2) = slice_pair(&create_arrays_with_overlap(
             NUM_ROWS + 2 * SLICE_PADDING,
             array_size,
             0.5,
