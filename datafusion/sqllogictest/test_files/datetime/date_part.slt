@@ -449,6 +449,12 @@ SELECT arrow_typeof(date_part('minute', to_timestamp('2020-09-08T12:12:00+00:00'
 ----
 Int32
 
+# nanosecond can exceed Int32 and returns Int64
+query T
+SELECT arrow_typeof(date_part('nanosecond', to_timestamp('2020-09-08T12:12:00+00:00')))
+----
+Int64
+
 query I
 SELECT EXTRACT(second FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
 ----
@@ -464,6 +470,7 @@ SELECT EXTRACT(microsecond FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
 ----
 12123456
 
+# note the output is more than Int32 can store
 query I
 SELECT EXTRACT(nanosecond FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
 ----
@@ -549,6 +556,26 @@ query I
 SELECT date_part('nanosecond', '2020-09-08T12:00:12.12345678+00:00')
 ----
 12123456780
+
+query I
+SELECT EXTRACT(nanosecond FROM ts)
+FROM (VALUES
+  (timestamp '2020-09-08T12:00:12.12345678+00:00'),
+  (NULL::timestamp)
+) AS t(ts)
+----
+12123456780
+NULL
+
+query I
+SELECT date_part('nanosecond', ts)
+FROM (VALUES
+  (timestamp '2020-09-08T12:00:12.12345678+00:00'),
+  (NULL::timestamp)
+) AS t(ts)
+----
+12123456780
+NULL
 
 # test_date_part_time
 
