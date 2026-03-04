@@ -443,8 +443,11 @@ pub trait TypePlanner: Debug + Send + Sync {
 
     /// Plan SQL [`sqlparser::ast::DataType`] to DataFusion [`FieldRef`]
     ///
-    /// Returns None if not possible. The default implementation falls back
-    /// on plan_type and wraps it in a nullable field reference.
+    /// Returns None if not possible. Unlike [`Self::plan_type`], `plan_type_field()`
+    /// makes it possible to express extension types (e.g., `arrow.uuid`) or otherwise
+    /// insert metadata into the DataFusion type representation. The default implementation
+    /// falls back on [`Self::plan_type`] for backward compatibility and wraps the result
+    /// in a nullable field reference.
     fn plan_type_field(
         &self,
         sql_type: &sqlparser::ast::DataType,
