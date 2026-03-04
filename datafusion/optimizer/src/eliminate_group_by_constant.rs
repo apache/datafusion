@@ -132,7 +132,10 @@ fn is_deterministic_of(
             matches!(
                 e.func.signature().volatility,
                 Volatility::Immutable | Volatility::Stable
-            ) && e.args.iter().all(|arg| is_deterministic_of(arg, known_columns))
+            ) && e
+                .args
+                .iter()
+                .all(|arg| is_deterministic_of(arg, known_columns))
         }
         Expr::Cast(e) => is_deterministic_of(&e.expr, known_columns),
         Expr::TryCast(e) => is_deterministic_of(&e.expr, known_columns),
@@ -325,10 +328,7 @@ mod tests {
         // GROUP BY a, b - 1 should NOT eliminate b - 1 (b is not a group by column)
         let scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(scan)
-            .aggregate(
-                vec![col("a"), col("b") - lit(1u32)],
-                vec![count(col("c"))],
-            )?
+            .aggregate(vec![col("a"), col("b") - lit(1u32)], vec![count(col("c"))])?
             .build()?;
 
         assert_optimized_plan_equal!(plan, @r"
