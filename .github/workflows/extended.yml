@@ -180,7 +180,7 @@ jobs:
       - name: Rust Dependency Cache
         uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5  # v2.8.2
         with:
-          # save-if: ${{ github.ref_name == 'main' }}
+          save-if: ${{ github.ref_name == 'main' }}
           shared-key: "sqllogictest-sqlite"
       - name: Run sqllogictest
         run: |
