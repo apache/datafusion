@@ -3238,7 +3238,6 @@ async fn join_get_stream_and_get_expected(
             None,
             PartitionMode::Partitioned,
             null_equality,
-            false,
         )?;
 
         let stream = oracle.execute(0, Arc::clone(&task_ctx))?;
