@@ -1167,20 +1167,20 @@ impl SessionContext {
         let mut builder = RuntimeEnvBuilder::from_runtime_env(state.runtime_env());
         builder = match key {
             "memory_limit" => {
-                let memory_limit = Self::parse_memory_limit(value)?;
+                let memory_limit = Self::parse_capacity_limit(variable, value)?;
                 builder.with_memory_limit(memory_limit, 1.0)
             }
             "max_temp_directory_size" => {
-                let directory_size = Self::parse_memory_limit(value)?;
+                let directory_size = Self::parse_capacity_limit(variable, value)?;
                 builder.with_max_temp_directory_size(directory_size as u64)
             }
             "temp_directory" => builder.with_temp_file_path(value),
             "metadata_cache_limit" => {
-                let limit = Self::parse_memory_limit(value)?;
+                let limit = Self::parse_capacity_limit(variable, value)?;
                 builder.with_metadata_cache_limit(limit)
             }
             "list_files_cache_limit" => {
-                let limit = Self::parse_memory_limit(value)?;
+                let limit = Self::parse_capacity_limit(variable, value)?;
                 builder.with_object_list_cache_limit(limit)
             }
             "list_files_cache_ttl" => {
@@ -1252,17 +1252,74 @@ impl SessionContext {
     ///     (1.5 * 1024.0 * 1024.0 * 1024.0) as usize
     /// );
     /// ```
+    #[deprecated(
+        since = "53.0.0",
+        note = "please use `parse_capacity_limit` function instead."
+    )]
     pub fn parse_memory_limit(limit: &str) -> Result<usize> {
+        if limit.trim().is_empty() {
+            return Err(plan_datafusion_err!("Empty limit value found!"));
+        }
         let (number, unit) = limit.split_at(limit.len() - 1);
         let number: f64 = number.parse().map_err(|_| {
             plan_datafusion_err!("Failed to parse number from memory limit '{limit}'")
         })?;
+        if number.is_sign_negative() || number.is_infinite() {
+            return Err(plan_datafusion_err!(
+                "Limit value should be positive finite number"
+            ));
+        }
 
         match unit {
             "K" => Ok((number * 1024.0) as usize),
             "M" => Ok((number * 1024.0 * 1024.0) as usize),
             "G" => Ok((number * 1024.0 * 1024.0 * 1024.0) as usize),
             _ => plan_err!("Unsupported unit '{unit}' in memory limit '{limit}'"),
+        }
+    }
+
+    /// Parse capacity limit from string to number of bytes by allowing units: K, M and G.
+    /// Supports formats like '1.5G', '100M', '512K'
+    ///
+    /// # Examples
+    /// ```
+    /// use datafusion::execution::context::SessionContext;
+    ///
+    /// assert_eq!(
+    ///     SessionContext::parse_capacity_limit("datafusion.runtime.memory_limit", "1M").unwrap(),
+    ///     1024 * 1024
+    /// );
+    /// assert_eq!(
+    ///     SessionContext::parse_capacity_limit("datafusion.runtime.memory_limit", "1.5G").unwrap(),
+    ///     (1.5 * 1024.0 * 1024.0 * 1024.0) as usize
+    /// );
+    /// ```
+    pub fn parse_capacity_limit(config_name: &str, limit: &str) -> Result<usize> {
+        if limit.trim().is_empty() {
+            return Err(plan_datafusion_err!(
+                "Empty limit value found for '{config_name}'"
+            ));
+        }
+        let (number, unit) = limit.split_at(limit.len() - 1);
+        let number: f64 = number.parse().map_err(|_| {
+            plan_datafusion_err!(
+                "Failed to parse number from '{config_name}', limit '{limit}'"
+            )
+        })?;
+        if number.is_sign_negative() || number.is_infinite() {
+            return Err(plan_datafusion_err!(
+                "Limit value should be positive finite number for '{config_name}'"
+            ));
+        }
+
+        match unit {
+            "K" => Ok((number * 1024.0) as usize),
+            "M" => Ok((number * 1024.0 * 1024.0) as usize),
+            "G" => Ok((number * 1024.0 * 1024.0 * 1024.0) as usize),
+            _ => plan_err!(
+                "Unsupported unit '{unit}' in '{config_name}', limit '{limit}'. \
+            Unit must be one of: 'K', 'M', 'G'"
+            ),
         }
     }
 
@@ -2757,6 +2814,73 @@ mod tests {
         for duration in ["0s", "0m", "1s0m", "1s1m"] {
             let have = SessionContext::parse_duration(duration);
             assert!(have.is_err());
+        }
+    }
+
+    #[test]
+    fn test_parse_memory_limit() {
+        // Valid memory_limit
+        for (limit, want) in [
+            ("1.5K", (1.5 * 1024.0) as usize),
+            ("2M", (2f64 * 1024.0 * 1024.0) as usize),
+            ("1G", (1f64 * 1024.0 * 1024.0 * 1024.0) as usize),
+        ] {
+            #[expect(deprecated)]
+            let have = SessionContext::parse_memory_limit(limit).unwrap();
+            assert_eq!(want, have);
+        }
+
+        // Invalid memory_limit
+        for limit in [
+            "1B",
+            "1T",
+            "",
+            " ",
+            "XYZG",
+            "-1G",
+            "infG",
+            "-infG",
+            "G",
+            "1024B",
+            "invalid_size",
+        ] {
+            #[expect(deprecated)]
+            let have = SessionContext::parse_memory_limit(limit);
+            assert!(have.is_err());
+        }
+    }
+
+    #[test]
+    fn test_parse_capacity_limit() {
+        const MEMORY_LIMIT: &str = "datafusion.runtime.memory_limit";
+
+        // Valid capacity_limit
+        for (limit, want) in [
+            ("1.5K", (1.5 * 1024.0) as usize),
+            ("2M", (2f64 * 1024.0 * 1024.0) as usize),
+            ("1G", (1f64 * 1024.0 * 1024.0 * 1024.0) as usize),
+        ] {
+            let have = SessionContext::parse_capacity_limit(MEMORY_LIMIT, limit).unwrap();
+            assert_eq!(want, have);
+        }
+
+        // Invalid capacity_limit
+        for limit in [
+            "1B",
+            "1T",
+            "",
+            " ",
+            "XYZG",
+            "-1G",
+            "infG",
+            "-infG",
+            "G",
+            "1024B",
+            "invalid_size",
+        ] {
+            let have = SessionContext::parse_capacity_limit(MEMORY_LIMIT, limit);
+            assert!(have.is_err());
+            assert!(have.unwrap_err().to_string().contains(MEMORY_LIMIT));
         }
     }
 }
