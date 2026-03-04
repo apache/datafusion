@@ -98,7 +98,6 @@ pub struct DynamicFilterPhysicalExpr {
     nullable: Arc<RwLock<Option<bool>>>,
 }
 
-#[derive(Debug)]
 struct Inner {
     /// A counter that gets incremented every time the expression is updated so that we can track changes cheaply.
     /// This is used for [`PhysicalExpr::snapshot_generation`] to have a cheap check for changes.
@@ -111,6 +110,22 @@ struct Inner {
     /// Optional handler for updating bounds from file-level statistics.
     /// This is set by the producer (e.g., `AggregateExec`) that creates the dynamic filter.
     file_stats_handler: Option<Arc<dyn DynamicFilterFileStatsHandler>>,
+}
+
+// Manual Debug to avoid infinite recursion: AggrDynFilter → DynamicFilterPhysicalExpr
+// → Inner → file_stats_handler (= AggrDynFilter) → …
+impl std::fmt::Debug for Inner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Inner")
+            .field("generation", &self.generation)
+            .field("expr", &self.expr)
+            .field("is_complete", &self.is_complete)
+            .field(
+                "file_stats_handler",
+                &self.file_stats_handler.as_ref().map(|_| "..."),
+            )
+            .finish()
+    }
 }
 
 impl Inner {
