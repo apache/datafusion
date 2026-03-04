@@ -1309,14 +1309,30 @@ impl ExecutionPlan for HashJoinExec {
                         .map(|(_, right_expr)| Arc::clone(right_expr))
                         .collect::<Vec<_>>();
                     Some(Arc::clone(df.build_accumulator.get_or_init(|| {
-                        Arc::new(SharedBuildAccumulator::new_from_partition_mode(
+                        let accumulator = Arc::new(SharedBuildAccumulator::new_from_partition_mode(
                             self.mode,
                             self.left.as_ref(),
                             self.right.as_ref(),
                             filter,
                             on_right,
                             repartition_random_state,
-                        ))
+                        ));
+                        // Provide early approximate bounds from build side's
+                        // file-level statistics (e.g., Parquet metadata min/max).
+                        // This allows the probe side to start pruning files/row
+                        // groups before the build side is fully consumed.
+                        // The filter will be refined with exact bounds later
+                        // when report_build_data() is called.
+                        if let Ok(build_stats) = self.left.partition_statistics(None) {
+                            let on_left_keys: Vec<_> = self.on.iter()
+                                .map(|(left_expr, _)| Arc::clone(left_expr))
+                                .collect();
+                            let _ = accumulator.update_from_build_side_statistics(
+                                &build_stats,
+                                &on_left_keys,
+                            );
+                        }
+                        accumulator
                     })))
                 })
             })

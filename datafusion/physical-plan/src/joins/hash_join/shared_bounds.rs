@@ -33,8 +33,10 @@ use crate::joins::hash_join::partitioned_hash_eval::{
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::stats::Precision;
+use datafusion_common::{Result, ScalarValue, Statistics};
 use datafusion_expr::Operator;
+use datafusion_physical_expr::expressions::Column;
 use datafusion_functions::core::r#struct as struct_func;
 use datafusion_physical_expr::expressions::{
     BinaryExpr, CaseExpr, DynamicFilterPhysicalExpr, InListExpr, lit,
@@ -150,7 +152,10 @@ fn create_bounds_predicate(
     let mut column_predicates = Vec::new();
 
     for (col_idx, right_expr) in on_right.iter().enumerate() {
-        if let Some(column_bounds) = bounds.get_column_bounds(col_idx) {
+        if let Some(column_bounds) = bounds.get_column_bounds(col_idx)
+            && !column_bounds.min.is_null()
+            && !column_bounds.max.is_null()
+        {
             // Create predicate: col >= min AND col <= max
             let min_expr = Arc::new(BinaryExpr::new(
                 Arc::clone(right_expr),
@@ -585,10 +590,304 @@ impl SharedBuildAccumulator {
 
         Ok(())
     }
+
+    /// Updates the dynamic filter with initial bounds derived from the build side's
+    /// file-level statistics (e.g., Parquet file metadata min/max).
+    ///
+    /// This provides an early, approximate dynamic filter before the build side is
+    /// fully consumed. The bounds from file statistics are typically wider than the
+    /// actual data bounds, but they are available immediately (without reading data)
+    /// and allow the probe side to start pruning files/row groups earlier.
+    ///
+    /// The filter will be refined later by [`Self::report_build_data`] with exact
+    /// bounds computed from the actual data, which will replace this initial filter.
+    ///
+    /// # Arguments
+    /// * `build_statistics` - Statistics from the build side execution plan
+    /// * `on_left` - Build side join key expressions (used to map to column statistics)
+    pub(crate) fn update_from_build_side_statistics(
+        &self,
+        build_statistics: &Statistics,
+        on_left: &[PhysicalExprRef],
+    ) -> Result<()> {
+        let bounds = compute_bounds_from_statistics(
+            build_statistics,
+            on_left,
+        );
+        let Some(bounds) = bounds else {
+            return Ok(());
+        };
+
+        let bounds_expr = create_bounds_predicate(&self.on_right, &bounds);
+        if let Some(expr) = bounds_expr {
+            self.dynamic_filter.update(expr)?;
+        }
+        Ok(())
+    }
+}
+
+/// Computes [`PartitionBounds`] from execution plan statistics.
+///
+/// For each join key expression that is a simple column reference, extracts the
+/// min/max values from the column statistics. Returns `None` if no usable bounds
+/// can be extracted (e.g., expressions are not simple column references, or
+/// statistics are absent).
+fn compute_bounds_from_statistics(
+    statistics: &Statistics,
+    on_left: &[PhysicalExprRef],
+) -> Option<PartitionBounds> {
+    let column_stats = &statistics.column_statistics;
+    let mut all_bounds = Vec::with_capacity(on_left.len());
+    let mut has_any_bounds = false;
+
+    for expr in on_left {
+        // Try to extract column index from the expression
+        if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+            let idx = col.index();
+            if let Some(col_stat) = column_stats.get(idx) {
+                // Only use Precision::Exact statistics to avoid over-pruning.
+                // Inexact statistics may have wider-than-actual bounds which
+                // could incorrectly prune data that should be included.
+                if let (Precision::Exact(min_val), Precision::Exact(max_val)) =
+                    (&col_stat.min_value, &col_stat.max_value)
+                {
+                    if !min_val.is_null() && !max_val.is_null() {
+                        all_bounds.push(ColumnBounds::new(
+                            min_val.clone(),
+                            max_val.clone(),
+                        ));
+                        has_any_bounds = true;
+                        continue;
+                    }
+                }
+            }
+        }
+        // For non-column expressions or missing statistics, insert a placeholder
+        // with null values. These will be skipped by create_bounds_predicate
+        // since get_column_bounds returns None for indices beyond the vec length,
+        // but we need to maintain index alignment.
+        all_bounds.push(ColumnBounds::new(
+            ScalarValue::Null,
+            ScalarValue::Null,
+        ));
+    }
+
+    if has_any_bounds {
+        Some(PartitionBounds::new(all_bounds))
+    } else {
+        None
+    }
 }
 
 impl fmt::Debug for SharedBuildAccumulator {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "SharedBuildAccumulator")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use datafusion_common::stats::Precision;
+    use datafusion_common::{ColumnStatistics, Statistics};
+    use datafusion_physical_expr::expressions::Column;
+
+    fn make_column_stats(
+        min: ScalarValue,
+        max: ScalarValue,
+    ) -> ColumnStatistics {
+        ColumnStatistics {
+            min_value: Precision::Exact(min),
+            max_value: Precision::Exact(max),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_compute_bounds_from_statistics_single_column() {
+        let stats = Statistics {
+            num_rows: Precision::Exact(100),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![make_column_stats(
+                ScalarValue::Int32(Some(10)),
+                ScalarValue::Int32(Some(500)),
+            )],
+        };
+
+        let on_left: Vec<PhysicalExprRef> =
+            vec![Arc::new(Column::new("a", 0))];
+
+        let bounds = compute_bounds_from_statistics(&stats, &on_left);
+        assert!(bounds.is_some());
+        let bounds = bounds.unwrap();
+        let cb = bounds.get_column_bounds(0).unwrap();
+        assert_eq!(cb.min, ScalarValue::Int32(Some(10)));
+        assert_eq!(cb.max, ScalarValue::Int32(Some(500)));
+    }
+
+    #[test]
+    fn test_compute_bounds_from_statistics_multi_column() {
+        let stats = Statistics {
+            num_rows: Precision::Exact(100),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![
+                make_column_stats(
+                    ScalarValue::Int32(Some(1)),
+                    ScalarValue::Int32(Some(100)),
+                ),
+                make_column_stats(
+                    ScalarValue::Utf8(Some("aaa".to_string())),
+                    ScalarValue::Utf8(Some("zzz".to_string())),
+                ),
+            ],
+        };
+
+        let on_left: Vec<PhysicalExprRef> = vec![
+            Arc::new(Column::new("a", 0)),
+            Arc::new(Column::new("b", 1)),
+        ];
+
+        let bounds = compute_bounds_from_statistics(&stats, &on_left);
+        assert!(bounds.is_some());
+        let bounds = bounds.unwrap();
+
+        let cb0 = bounds.get_column_bounds(0).unwrap();
+        assert_eq!(cb0.min, ScalarValue::Int32(Some(1)));
+        assert_eq!(cb0.max, ScalarValue::Int32(Some(100)));
+
+        let cb1 = bounds.get_column_bounds(1).unwrap();
+        assert_eq!(cb1.min, ScalarValue::Utf8(Some("aaa".to_string())));
+        assert_eq!(cb1.max, ScalarValue::Utf8(Some("zzz".to_string())));
+    }
+
+    #[test]
+    fn test_compute_bounds_from_statistics_absent_stats() {
+        let stats = Statistics {
+            num_rows: Precision::Absent,
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![ColumnStatistics::default()],
+        };
+
+        let on_left: Vec<PhysicalExprRef> =
+            vec![Arc::new(Column::new("a", 0))];
+
+        let bounds = compute_bounds_from_statistics(&stats, &on_left);
+        assert!(bounds.is_none());
+    }
+
+    #[test]
+    fn test_compute_bounds_from_statistics_null_min_max() {
+        let stats = Statistics {
+            num_rows: Precision::Exact(100),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![make_column_stats(
+                ScalarValue::Int32(None),
+                ScalarValue::Int32(None),
+            )],
+        };
+
+        let on_left: Vec<PhysicalExprRef> =
+            vec![Arc::new(Column::new("a", 0))];
+
+        let bounds = compute_bounds_from_statistics(&stats, &on_left);
+        assert!(bounds.is_none());
+    }
+
+    #[test]
+    fn test_compute_bounds_from_statistics_partial_bounds() {
+        // Two columns: first has stats, second doesn't
+        let stats = Statistics {
+            num_rows: Precision::Exact(100),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![
+                make_column_stats(
+                    ScalarValue::Int32(Some(10)),
+                    ScalarValue::Int32(Some(500)),
+                ),
+                ColumnStatistics::default(), // no stats for column 1
+            ],
+        };
+
+        let on_left: Vec<PhysicalExprRef> = vec![
+            Arc::new(Column::new("a", 0)),
+            Arc::new(Column::new("b", 1)),
+        ];
+
+        let bounds = compute_bounds_from_statistics(&stats, &on_left);
+        assert!(bounds.is_some());
+        let bounds = bounds.unwrap();
+
+        // First column should have valid bounds
+        let cb0 = bounds.get_column_bounds(0).unwrap();
+        assert_eq!(cb0.min, ScalarValue::Int32(Some(10)));
+        assert_eq!(cb0.max, ScalarValue::Int32(Some(500)));
+
+        // Second column has null placeholder bounds
+        let cb1 = bounds.get_column_bounds(1).unwrap();
+        assert!(cb1.min.is_null());
+        assert!(cb1.max.is_null());
+    }
+
+    #[test]
+    fn test_create_bounds_predicate_skips_null_bounds() {
+        // Verify that create_bounds_predicate skips entries with null min/max
+        let on_right: Vec<PhysicalExprRef> = vec![
+            Arc::new(Column::new("a", 0)),
+            Arc::new(Column::new("b", 1)),
+        ];
+
+        // Only first column has valid bounds, second has null placeholder
+        let bounds = PartitionBounds::new(vec![
+            ColumnBounds::new(
+                ScalarValue::Int32(Some(10)),
+                ScalarValue::Int32(Some(100)),
+            ),
+            ColumnBounds::new(ScalarValue::Null, ScalarValue::Null),
+        ]);
+
+        let predicate = create_bounds_predicate(&on_right, &bounds);
+        assert!(predicate.is_some());
+
+        // The predicate should only reference column "a", not "b"
+        let pred = predicate.unwrap();
+        let display = format!("{pred}");
+        assert!(display.contains("a@0"), "predicate should reference column a: {display}");
+        // b should not appear in the predicate since its bounds are null
+        assert!(!display.contains("b@1"), "predicate should not reference column b: {display}");
+    }
+
+    #[test]
+    fn test_create_bounds_predicate_all_null_bounds() {
+        let on_right: Vec<PhysicalExprRef> = vec![
+            Arc::new(Column::new("a", 0)),
+        ];
+
+        let bounds = PartitionBounds::new(vec![
+            ColumnBounds::new(ScalarValue::Null, ScalarValue::Null),
+        ]);
+
+        let predicate = create_bounds_predicate(&on_right, &bounds);
+        assert!(predicate.is_none());
+    }
+
+    #[test]
+    fn test_compute_bounds_with_inexact_statistics() {
+        // Inexact statistics should NOT produce bounds, as they may cause
+        // over-pruning (the actual range could be wider than reported).
+        let stats = Statistics {
+            num_rows: Precision::Inexact(100),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![ColumnStatistics {
+                min_value: Precision::Inexact(ScalarValue::Int64(Some(5))),
+                max_value: Precision::Inexact(ScalarValue::Int64(Some(1000))),
+                ..Default::default()
+            }],
+        };
+
+        let on_left: Vec<PhysicalExprRef> =
+            vec![Arc::new(Column::new("a", 0))];
+
+        let bounds = compute_bounds_from_statistics(&stats, &on_left);
+        assert!(bounds.is_none(), "inexact statistics should not produce bounds");
     }
 }
