@@ -118,17 +118,17 @@ impl Ord for TestFile {
 /// 9.    0.973s  datetime/timestamps.slt
 /// 10.    0.822s  cte.slt
 /// ```
-const TEST_PRIORITY_ENTRIES: [(&str, usize); 10] = [
-    ("push_down_filter_regression.slt", 0), // longest running, so run first.
-    ("aggregate.slt", 1),
-    ("joins.slt", 2),
-    ("imdb.slt", 3),
-    ("array.slt", 4),
-    ("aggregate_skip_partial.slt", 5),
-    ("window.slt", 6),
-    ("group_by.slt", 7),
-    ("datetime/timestamps.slt", 8),
-    ("cte.slt", 9),
+const TEST_PRIORITY_ENTRIES: &[&str] = &[
+    "push_down_filter_regression.slt", // longest running, so run first.
+    "aggregate.slt",
+    "joins.slt",
+    "imdb.slt",
+    "array.slt",
+    "aggregate_skip_partial.slt",
+    "window.slt",
+    "group_by.slt",
+    "datetime/timestamps.slt",
+    "cte.slt",
 ];
 
 /// Default priority for tests not in the priority map. Tests with lower
@@ -138,7 +138,8 @@ const DEFAULT_PRIORITY: usize = 100;
 static TEST_PRIORITY: LazyLock<HashMap<PathBuf, usize>> = LazyLock::new(|| {
     TEST_PRIORITY_ENTRIES
         .iter()
-        .map(|(path, priority)| (PathBuf::from(path), *priority))
+        .enumerate()
+        .map(|(priority, path)| (PathBuf::from(path), priority))
         .collect()
 });
 
@@ -149,7 +150,7 @@ mod tests {
     #[test]
     fn prioritized_files_are_first() {
         let mut input = vec!["z_unlisted.slt", "a_unlisted.slt"];
-        input.extend(TEST_PRIORITY_ENTRIES.iter().map(|(path, _)| *path));
+        input.extend(TEST_PRIORITY_ENTRIES.iter());
         input.push("q_unlisted.slt");
 
         let mut sorted = to_test_files(input);
