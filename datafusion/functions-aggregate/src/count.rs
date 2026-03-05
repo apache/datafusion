@@ -17,8 +17,11 @@
 
 use ahash::RandomState;
 use arrow::{
-    array::{Array, ArrayRef, AsArray, BooleanArray, Int64Array, PrimitiveArray},
-    buffer::BooleanBuffer,
+    array::{
+        Array, ArrayRef, AsArray, BooleanArray, Int64Array, ListArray, PrimitiveArray,
+        new_empty_array,
+    },
+    buffer::{BooleanBuffer, OffsetBuffer},
     compute,
     datatypes::{
         DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type, Field,
@@ -28,9 +31,10 @@ use arrow::{
         TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
         UInt8Type, UInt16Type, UInt32Type, UInt64Type,
     },
+    row::{OwnedRow, RowConverter, SortField},
 };
 use datafusion_common::{
-    HashMap, Result, ScalarValue, downcast_value, internal_err, not_impl_err,
+    DataFusionError, HashMap, Result, ScalarValue, downcast_value, internal_err,
     stats::Precision, utils::expr::COUNT_STAR_EXPANSION,
 };
 use datafusion_expr::{
@@ -293,20 +297,39 @@ impl AggregateUDFImpl for Count {
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         if args.is_distinct {
-            let dtype: DataType = match &args.input_fields[0].data_type() {
-                DataType::Dictionary(_, values_type) => (**values_type).clone(),
-                &dtype => dtype.clone(),
-            };
+            if args.input_fields.len() > 1 {
+                Ok(args
+                    .input_fields
+                    .iter()
+                    .enumerate()
+                    .map(|(col_idx, field)| {
+                        Arc::new(Field::new(
+                            format_state_name(args.name, "count distinct"),
+                            DataType::List(Arc::new(Field::new(
+                                format!("item_{col_idx}"),
+                                field.data_type().clone(),
+                                true,
+                            ))),
+                            false,
+                        ))
+                    })
+                    .collect::<Vec<_>>())
+            } else {
+                let dtype: DataType = match &args.input_fields[0].data_type() {
+                    DataType::Dictionary(_, values_type) => (**values_type).clone(),
+                    &dtype => dtype.clone(),
+                };
 
-            Ok(vec![
-                Field::new_list(
-                    format_state_name(args.name, "count distinct"),
-                    // See COMMENTS.md to understand why nullable is set to true
-                    Field::new_list_field(dtype, true),
-                    false,
-                )
-                .into(),
-            ])
+                Ok(vec![
+                    Field::new_list(
+                        format_state_name(args.name, "count distinct"),
+                        // See COMMENTS.md to understand why nullable is set to true
+                        Field::new_list_field(dtype, true),
+                        false,
+                    )
+                    .into(),
+                ])
+            }
         } else {
             Ok(vec![
                 Field::new(
@@ -325,7 +348,14 @@ impl AggregateUDFImpl for Count {
         }
 
         if acc_args.exprs.len() > 1 {
-            return not_impl_err!("COUNT DISTINCT with multiple arguments");
+            let data_types: Vec<DataType> = acc_args
+                .expr_fields
+                .iter()
+                .map(|field| field.data_type().clone())
+                .collect();
+            return Ok(Box::new(MultiColumnDistinctCountAccumulator::try_new(
+                data_types,
+            )?));
         }
 
         let data_type = acc_args.expr_fields[0].data_type();
@@ -408,6 +438,16 @@ impl AggregateUDFImpl for Count {
         args: AccumulatorArgs,
     ) -> Result<Box<dyn Accumulator>> {
         if args.is_distinct {
+            if args.exprs.len() > 1 {
+                let data_types: Vec<DataType> = args
+                    .expr_fields
+                    .iter()
+                    .map(|field| field.data_type().clone())
+                    .collect();
+                return Ok(Box::new(MultiColumnDistinctCountAccumulator::try_new(
+                    data_types,
+                )?));
+            }
             let acc =
                 SlidingDistinctCountAccumulator::try_new(args.return_field.data_type())?;
             Ok(Box::new(acc))
@@ -841,13 +881,168 @@ impl Accumulator for DistinctCountAccumulator {
     }
 }
 
+#[derive(Debug)]
+struct MultiColumnDistinctCountAccumulator {
+    /// Maps each distinct row to its reference count.
+    /// The count is used by `retract_batch` to support sliding windows;
+    /// for non-sliding aggregation the counts are always 1.
+    values: HashMap<OwnedRow, usize, RandomState>,
+    row_converter: RowConverter,
+    state_data_types: Vec<DataType>,
+}
+
+impl MultiColumnDistinctCountAccumulator {
+    fn try_new(state_data_types: Vec<DataType>) -> Result<Self> {
+        let sort_fields: Vec<SortField> = state_data_types
+            .iter()
+            .map(|dt| SortField::new(dt.clone()))
+            .collect();
+        let row_converter = RowConverter::new(sort_fields)?;
+        Ok(Self {
+            values: HashMap::default(),
+            row_converter,
+            state_data_types,
+        })
+    }
+}
+
+impl Accumulator for MultiColumnDistinctCountAccumulator {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        if self.values.is_empty() {
+            return Ok(self
+                .state_data_types
+                .iter()
+                .enumerate()
+                .map(|(col_idx, dt)| {
+                    let field =
+                        Arc::new(Field::new(format!("item_{col_idx}"), dt.clone(), true));
+                    let offsets = OffsetBuffer::from_lengths([0]);
+                    let empty = new_empty_array(dt);
+                    let list_arr = ListArray::new(field, offsets, empty, None);
+                    ScalarValue::List(Arc::new(list_arr))
+                })
+                .collect());
+        }
+
+        let rows_iter = self.values.keys().map(|owned| owned.row());
+        let columns = self.row_converter.convert_rows(rows_iter)?;
+
+        Ok(columns
+            .into_iter()
+            .enumerate()
+            .zip(self.state_data_types.iter())
+            .map(|((col_idx, col), dt)| {
+                let field =
+                    Arc::new(Field::new(format!("item_{col_idx}"), dt.clone(), true));
+                let offsets = OffsetBuffer::from_lengths([col.len()]);
+                let list_arr = ListArray::new(field, offsets, col, None);
+                ScalarValue::List(Arc::new(list_arr))
+            })
+            .collect())
+    }
+
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        if values.is_empty() {
+            return Ok(());
+        }
+
+        let rows = self.row_converter.convert_columns(values)?;
+        for i in 0..rows.num_rows() {
+            if !values.iter().any(|arr| arr.is_null(i)) {
+                *self.values.entry(rows.row(i).owned()).or_default() += 1;
+            }
+        }
+        Ok(())
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        if values.is_empty() {
+            return Ok(());
+        }
+
+        let rows = self.row_converter.convert_columns(values)?;
+        for i in 0..rows.num_rows() {
+            if !values.iter().any(|arr| arr.is_null(i)) {
+                let row = rows.row(i).owned();
+                if let Some(cnt) = self.values.get_mut(&row) {
+                    *cnt -= 1;
+                    if *cnt == 0 {
+                        self.values.remove(&row);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        if states.is_empty() {
+            return Ok(());
+        }
+
+        let arr = &states[0];
+        for index in 0..arr.len() {
+            let col_values: Vec<ArrayRef> = states
+                .iter()
+                .map(|array| {
+                    let list_arr = array.as_list_opt::<i32>().ok_or_else(|| {
+                        DataFusionError::Internal(format!(
+                            "Expected ListArray in merge \
+                                 state, got {:?}",
+                            array.data_type()
+                        ))
+                    })?;
+                    Ok(list_arr.value(index))
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            if col_values[0].is_empty() {
+                continue;
+            }
+
+            // No null filtering needed: state produced by
+            // `update_batch` already excludes rows with nulls.
+            let rows = self.row_converter.convert_columns(&col_values)?;
+            for i in 0..rows.num_rows() {
+                *self.values.entry(rows.row(i).owned()).or_default() += 1;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        Ok(ScalarValue::Int64(Some(self.values.len() as i64)))
+    }
+
+    fn size(&self) -> usize {
+        size_of_val(self)
+            + self.row_converter.size()
+            + self
+                .values
+                .keys()
+                .map(|r| size_of::<OwnedRow>() + r.as_ref().len() + size_of::<usize>())
+                .sum::<usize>()
+            + (size_of::<OwnedRow>() + size_of::<usize>())
+                * self.values.capacity().saturating_sub(self.values.len())
+            + size_of::<DataType>() * self.state_data_types.capacity()
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
     use super::*;
     use arrow::{
-        array::{DictionaryArray, Int32Array, NullArray, StringArray},
-        datatypes::{DataType, Field, Int32Type, Schema},
+        array::{
+            BooleanArray, Date32Array, Decimal128Array, DictionaryArray, Float64Array,
+            Int32Array, NullArray, StringArray, TimestampMicrosecondArray,
+        },
+        datatypes::{DataType, Field, Int32Type, Schema, TimeUnit},
     };
     use datafusion_expr::function::AccumulatorArgs;
     use datafusion_physical_expr::{PhysicalExpr, expressions::Column};
@@ -1036,6 +1231,382 @@ mod tests {
         merged.merge_batch(&state_arr2)?;
         // Expect distinct {1,2,3} → count = 3
         assert_eq!(merged.evaluate()?, ScalarValue::Int64(Some(3)));
+        Ok(())
+    }
+
+    #[test]
+    fn multi_column_accumulator_basic() -> Result<()> {
+        let mut acc = MultiColumnDistinctCountAccumulator::try_new(vec![
+            DataType::Int32,
+            DataType::Utf8,
+        ])?;
+
+        // (1, a), (1, b), (1, a), (2, b), (3, b)
+        let col1 = Arc::new(Int32Array::from(vec![
+            Some(1),
+            Some(1),
+            Some(1),
+            Some(2),
+            Some(3),
+        ]));
+        let col2 = Arc::new(StringArray::from(vec![
+            Some("a"),
+            Some("b"),
+            Some("a"),
+            Some("b"),
+            Some("b"),
+        ])) as ArrayRef;
+
+        acc.update_batch(&[col1, col2])?;
+        // Expected (1, a), (1, b), (2, b), (3, b)
+        assert_eq!(acc.evaluate()?, ScalarValue::Int64(Some(4)));
+        Ok(())
+    }
+
+    #[test]
+    fn multi_column_accumulator_merge() -> Result<()> {
+        let mut acc1 = MultiColumnDistinctCountAccumulator::try_new(vec![
+            DataType::Int32,
+            DataType::Utf8,
+        ])?;
+
+        // (1, a), (1, b)
+        let col1 = Arc::new(Int32Array::from(vec![Some(1), Some(1)]));
+        let col2 = Arc::new(StringArray::from(vec![Some("a"), Some("b")])) as ArrayRef;
+
+        acc1.update_batch(&[col1, col2])?;
+
+        let mut acc2 = MultiColumnDistinctCountAccumulator::try_new(vec![
+            DataType::Int32,
+            DataType::Utf8,
+        ])?;
+
+        // (1, a), (2, b), (3, b)
+        let col1 = Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3)]));
+        let col2 = Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("b")]))
+            as ArrayRef;
+
+        acc2.update_batch(&[col1, col2])?;
+
+        let state_sv1 = acc1.state()?;
+        let state_sv2 = acc2.state()?;
+        let state_arr1: Vec<ArrayRef> = state_sv1
+            .into_iter()
+            .map(|sv| sv.to_array())
+            .collect::<Result<_>>()?;
+        let state_arr2: Vec<ArrayRef> = state_sv2
+            .into_iter()
+            .map(|sv| sv.to_array())
+            .collect::<Result<_>>()?;
+
+        let mut merged = MultiColumnDistinctCountAccumulator::try_new(vec![
+            DataType::Int32,
+            DataType::Utf8,
+        ])?;
+        merged.merge_batch(&state_arr1)?;
+        merged.merge_batch(&state_arr2)?;
+
+        // Expected (1, a), (1, b), (2, b), (3, b)
+        assert_eq!(merged.evaluate()?, ScalarValue::Int64(Some(4)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn multi_column_accumulator_mixed_nulls() -> Result<()> {
+        let mut acc = MultiColumnDistinctCountAccumulator::try_new(vec![
+            DataType::Int32,
+            DataType::Utf8,
+        ])?;
+
+        // Rows with any null column should be excluded entirely.
+        // (1, a), (NULL, b), (2, NULL), (NULL, NULL), (1, a), (3, c)
+        let col1 = Arc::new(Int32Array::from(vec![
+            Some(1),
+            None,
+            Some(2),
+            None,
+            Some(1),
+            Some(3),
+        ]));
+        let col2 = Arc::new(StringArray::from(vec![
+            Some("a"),
+            Some("b"),
+            None,
+            None,
+            Some("a"),
+            Some("c"),
+        ])) as ArrayRef;
+
+        acc.update_batch(&[col1, col2])?;
+        // Only non-null rows: (1, a), (3, c)
+        assert_eq!(acc.evaluate()?, ScalarValue::Int64(Some(2)));
+        Ok(())
+    }
+
+    #[test]
+    fn multi_column_accumulator_different_datatypes() -> Result<()> {
+        let mut acc = MultiColumnDistinctCountAccumulator::try_new(vec![
+            DataType::Int32,
+            DataType::Float64,
+            DataType::Boolean,
+            DataType::Utf8,
+            DataType::Date32,
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            DataType::Decimal128(10, 2),
+        ])?;
+
+        // row 0: (1, 1.0, true,  "a", 19000, 1_000_000, 100)
+        // row 1: (1, 1.0, true,  "a", 19000, 1_000_000, 100)  duplicate of 0
+        // row 2: (1, 1.0, false, "a", 19000, 1_000_000, 100)
+        // row 3: (1, 1.0, true,  "b", 19000, 1_000_000, 100)
+        // row 4: (1, 1.0, true,  "a", 19001, 1_000_000, 100)
+        // row 5: (1, 1.0, true,  "a", 19000, 2_000_000, 100)
+        // row 6: (2, 2.5, true,  "a", 19000, 1_000_000, 100)
+        // row 7: (1, 1.0, true,  "a", 19000, 1_000_000, 200)
+        let c_i32 = Arc::new(Int32Array::from(vec![1, 1, 1, 1, 1, 1, 2, 1]));
+        let c_f64 = Arc::new(Float64Array::from(vec![
+            1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 2.5, 1.0,
+        ]));
+        let c_bool = Arc::new(BooleanArray::from(vec![
+            true, true, false, true, true, true, true, true,
+        ])) as ArrayRef;
+        let c_utf8 = Arc::new(StringArray::from(vec![
+            "a", "a", "a", "b", "a", "a", "a", "a",
+        ])) as ArrayRef;
+        let c_date = Arc::new(Date32Array::from(vec![
+            19000, 19000, 19000, 19000, 19001, 19000, 19000, 19000,
+        ]));
+        let c_ts = Arc::new(TimestampMicrosecondArray::from(vec![
+            1_000_000, 1_000_000, 1_000_000, 1_000_000, 1_000_000, 2_000_000, 1_000_000,
+            1_000_000,
+        ])) as ArrayRef;
+        let c_dec = Arc::new(
+            Decimal128Array::from(vec![100, 100, 100, 100, 100, 100, 100, 200])
+                .with_precision_and_scale(10, 2)?,
+        ) as ArrayRef;
+
+        acc.update_batch(&[c_i32, c_f64, c_bool, c_utf8, c_date, c_ts, c_dec])?;
+        // 7 distinct rows (row 1 is a duplicate of row 0)
+        assert_eq!(acc.evaluate()?, ScalarValue::Int64(Some(7)));
+        Ok(())
+    }
+
+    #[test]
+    fn multi_column_accumulator_column_order() -> Result<()> {
+        let mut acc_ab = MultiColumnDistinctCountAccumulator::try_new(vec![
+            DataType::Int32,
+            DataType::Utf8,
+        ])?;
+        let ints = Arc::new(Int32Array::from(vec![1, 2, 1, 2, 3])) as _;
+        let strs = Arc::new(StringArray::from(vec!["x", "x", "y", "y", "x"])) as _;
+        acc_ab.update_batch(&[Arc::clone(&ints), Arc::clone(&strs)])?;
+        // Tuples (int, str):
+        //   (1,x), (2,x), (1,y), (2,y), (3,x) → 5 distinct
+        assert_eq!(acc_ab.evaluate()?, ScalarValue::Int64(Some(5)));
+
+        // (str, int)
+        let mut acc_ba = MultiColumnDistinctCountAccumulator::try_new(vec![
+            DataType::Utf8,
+            DataType::Int32,
+        ])?;
+        acc_ba.update_batch(&[Arc::clone(&strs), Arc::clone(&ints)])?;
+        // Tuples (str, int):
+        //   (x,1), (x,2), (y,1), (y,2), (x,3) → 5 distinct
+        assert_eq!(acc_ba.evaluate()?, ScalarValue::Int64(Some(5)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn multi_column_accumulator_duplicate_columns() -> Result<()> {
+        // COUNT(DISTINCT a, a).
+        let mut acc = MultiColumnDistinctCountAccumulator::try_new(vec![
+            DataType::Int32,
+            DataType::Int32,
+        ])?;
+
+        // a = [1, NULL, 2, 1, NULL, 3, 2]
+        let col = Arc::new(Int32Array::from(vec![
+            Some(1),
+            None,
+            Some(2),
+            Some(1),
+            None,
+            Some(3),
+            Some(2),
+        ])) as _;
+        acc.update_batch(&[Arc::clone(&col), col])?;
+        // Null rows (NULL,NULL) are skipped.
+        // Non-null: (1,1),(2,2),(1,1),(3,3),(2,2)
+        //   → distinct {(1,1),(2,2),(3,3)} = 3
+        assert_eq!(acc.evaluate()?, ScalarValue::Int64(Some(3)));
+        Ok(())
+    }
+
+    #[test]
+    fn multi_column_accumulator_duplicate_columns_mixed() -> Result<()> {
+        // COUNT(DISTINCT a, a, b, b).
+        let mut acc = MultiColumnDistinctCountAccumulator::try_new(vec![
+            DataType::Int32,
+            DataType::Int32,
+            DataType::Utf8,
+            DataType::Utf8,
+        ])?;
+
+        // a = [1, NULL, 1, 2, 1], b = ["x", "y", "y", "x", NULL]
+        // Null in either column skips the entire row.
+        let a = Arc::new(Int32Array::from(vec![
+            Some(1),
+            None,
+            Some(1),
+            Some(2),
+            Some(1),
+        ])) as _;
+        let b = Arc::new(StringArray::from(vec![
+            Some("x"),
+            Some("y"),
+            Some("y"),
+            Some("x"),
+            None,
+        ])) as ArrayRef;
+
+        acc.update_batch(&[Arc::clone(&a), a, Arc::clone(&b), b])?;
+        // Skipped: row 1 (a=NULL), row 4 (b=NULL)
+        // Non-null: (1,1,x,x), (1,1,y,y), (2,2,x,x) → all distinct = 3
+        assert_eq!(acc.evaluate()?, ScalarValue::Int64(Some(3)));
+        Ok(())
+    }
+
+    #[test]
+    fn multi_column_accumulator_all_nulls() -> Result<()> {
+        let mut acc = MultiColumnDistinctCountAccumulator::try_new(vec![
+            DataType::Int32,
+            DataType::Utf8,
+        ])?;
+
+        let col1 = Arc::new(Int32Array::from(vec![None, None, None]));
+        let col2 =
+            Arc::new(StringArray::from(vec![None::<&str>, None, None])) as ArrayRef;
+
+        acc.update_batch(&[col1, col2])?;
+        // Every row has a null → count = 0
+        assert_eq!(acc.evaluate()?, ScalarValue::Int64(Some(0)));
+        Ok(())
+    }
+
+    #[test]
+    fn multi_column_accumulator_empty_batch() -> Result<()> {
+        let mut acc = MultiColumnDistinctCountAccumulator::try_new(vec![
+            DataType::Int32,
+            DataType::Utf8,
+        ])?;
+
+        // Empty arrays
+        let col1 = Arc::new(Int32Array::from(vec![] as Vec<i32>));
+        let col2 = Arc::new(StringArray::from(vec![] as Vec<&str>)) as ArrayRef;
+
+        acc.update_batch(&[col1, col2])?;
+        assert_eq!(acc.evaluate()?, ScalarValue::Int64(Some(0)));
+
+        // state() on empty accumulator should round-trip through merge
+        let state = acc.state()?;
+        let state_arrs: Vec<ArrayRef> = state
+            .into_iter()
+            .map(|sv| sv.to_array())
+            .collect::<Result<_>>()?;
+
+        let mut merged = MultiColumnDistinctCountAccumulator::try_new(vec![
+            DataType::Int32,
+            DataType::Utf8,
+        ])?;
+        merged.merge_batch(&state_arrs)?;
+        assert_eq!(merged.evaluate()?, ScalarValue::Int64(Some(0)));
+        Ok(())
+    }
+
+    #[test]
+    fn multi_column_accumulator_sliding_window() -> Result<()> {
+        let mut acc = MultiColumnDistinctCountAccumulator::try_new(vec![
+            DataType::Int32,
+            DataType::Utf8,
+        ])?;
+        assert!(acc.supports_retract_batch());
+
+        // Window frame 1: (1,"a"), (1,"b"), (2,"a")
+        let col1 =
+            Arc::new(Int32Array::from(vec![Some(1), Some(1), Some(2)])) as ArrayRef;
+        let col2 = Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("a")]))
+            as ArrayRef;
+        acc.update_batch(&[col1, col2])?;
+        // 3 distinct tuples: (1,a), (1,b), (2,a)
+        assert_eq!(acc.evaluate()?, ScalarValue::Int64(Some(3)));
+
+        // Slide: retract (1,"a"), add (2,"b")
+        let retract_c1 = Arc::new(Int32Array::from(vec![Some(1)])) as ArrayRef;
+        let retract_c2 = Arc::new(StringArray::from(vec![Some("a")])) as ArrayRef;
+        acc.retract_batch(&[retract_c1, retract_c2])?;
+        // (1,a) had count 1, now removed → {(1,b), (2,a)}
+        assert_eq!(acc.evaluate()?, ScalarValue::Int64(Some(2)));
+
+        let add_c1 = Arc::new(Int32Array::from(vec![Some(2)])) as ArrayRef;
+        let add_c2 = Arc::new(StringArray::from(vec![Some("b")])) as ArrayRef;
+        acc.update_batch(&[add_c1, add_c2])?;
+        // {(1,b), (2,a), (2,b)}
+        assert_eq!(acc.evaluate()?, ScalarValue::Int64(Some(3)));
+
+        // Retract a duplicate: add (2,"b") again, then retract once
+        acc.update_batch(&[
+            Arc::new(Int32Array::from(vec![Some(2)])) as ArrayRef,
+            Arc::new(StringArray::from(vec![Some("b")])) as ArrayRef,
+        ])?;
+        // (2,b) count is now 2
+        assert_eq!(acc.evaluate()?, ScalarValue::Int64(Some(3)));
+        acc.retract_batch(&[
+            Arc::new(Int32Array::from(vec![Some(2)])) as ArrayRef,
+            Arc::new(StringArray::from(vec![Some("b")])) as ArrayRef,
+        ])?;
+        // (2,b) count back to 1, still present
+        assert_eq!(acc.evaluate()?, ScalarValue::Int64(Some(3)));
+        acc.retract_batch(&[
+            Arc::new(Int32Array::from(vec![Some(2)])) as ArrayRef,
+            Arc::new(StringArray::from(vec![Some("b")])) as ArrayRef,
+        ])?;
+        // (2,b) count 0, removed → {(1,b), (2,a)}
+        assert_eq!(acc.evaluate()?, ScalarValue::Int64(Some(2)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn multi_column_accumulator_sliding_window_nulls() -> Result<()> {
+        let mut acc = MultiColumnDistinctCountAccumulator::try_new(vec![
+            DataType::Int32,
+            DataType::Utf8,
+        ])?;
+
+        // Rows with nulls should be ignored in both update and retract
+        let col1 = Arc::new(Int32Array::from(vec![Some(1), None, Some(2)])) as ArrayRef;
+        let col2 =
+            Arc::new(StringArray::from(vec![Some("a"), Some("b"), None])) as ArrayRef;
+        acc.update_batch(&[col1, col2])?;
+        // Only (1,"a") is non-null in both columns
+        assert_eq!(acc.evaluate()?, ScalarValue::Int64(Some(1)));
+
+        // Retract a row with null — should be a no-op
+        acc.retract_batch(&[
+            Arc::new(Int32Array::from(vec![None])) as ArrayRef,
+            Arc::new(StringArray::from(vec![Some("b")])) as ArrayRef,
+        ])?;
+        assert_eq!(acc.evaluate()?, ScalarValue::Int64(Some(1)));
+
+        // Retract the only valid row
+        acc.retract_batch(&[
+            Arc::new(Int32Array::from(vec![Some(1)])) as ArrayRef,
+            Arc::new(StringArray::from(vec![Some("a")])) as ArrayRef,
+        ])?;
+        assert_eq!(acc.evaluate()?, ScalarValue::Int64(Some(0)));
+
         Ok(())
     }
 }
