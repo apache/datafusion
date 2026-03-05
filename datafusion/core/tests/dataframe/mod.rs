@@ -2458,9 +2458,8 @@ async fn cache_producer_test() -> Result<()> {
         @r"
     CacheNode
       Projection: aggregate_test_100.c2, aggregate_test_100.c3, CAST(CAST(aggregate_test_100.c2 AS Int64) + CAST(aggregate_test_100.c3 AS Int64) AS Int64) AS sum
-        Projection: aggregate_test_100.c2, aggregate_test_100.c3
-          Limit: skip=0, fetch=1
-            TableScan: aggregate_test_100, fetch=1
+        Limit: skip=0, fetch=1
+          TableScan: aggregate_test_100 projection=[c2, c3], fetch=1
     "
     );
     Ok(())
