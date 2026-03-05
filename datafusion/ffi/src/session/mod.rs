@@ -240,12 +240,30 @@ unsafe extern "C" fn window_functions_fn_wrapper(
         .collect()
 }
 
-fn table_options_to_rhash(options: &TableOptions) -> RHashMap<RString, RString> {
-    options
+fn table_options_to_rhash(mut options: TableOptions) -> RHashMap<RString, RString> {
+    // It is important that we mutate options here and set current format
+    // to None so that when we call `entries()` we get ALL format entries.
+    // We will pass current_format as a special case and strip it on the
+    // other side of the boundary.
+    let current_format = options.current_format.take();
+    let mut options: HashMap<RString, RString> = options
         .entries()
         .into_iter()
         .filter_map(|entry| entry.value.map(|v| (entry.key.into(), v.into())))
-        .collect()
+        .collect();
+    if let Some(current_format) = current_format {
+        options.insert(
+            "datafusion_ffi.table_current_format".into(),
+            match current_format {
+                ConfigFileType::JSON => "json",
+                ConfigFileType::PARQUET => "parquet",
+                ConfigFileType::CSV => "csv",
+            }
+            .into(),
+        );
+    }
+
+    options.into()
 }
 
 unsafe extern "C" fn table_options_fn_wrapper(
@@ -253,7 +271,7 @@ unsafe extern "C" fn table_options_fn_wrapper(
 ) -> RHashMap<RString, RString> {
     let session = session.inner();
     let table_options = session.table_options();
-    table_options_to_rhash(table_options)
+    table_options_to_rhash(table_options.clone())
 }
 
 unsafe extern "C" fn default_table_options_fn_wrapper(
@@ -262,7 +280,7 @@ unsafe extern "C" fn default_table_options_fn_wrapper(
     let session = session.inner();
     let table_options = session.default_table_options();
 
-    table_options_to_rhash(&table_options)
+    table_options_to_rhash(table_options)
 }
 
 unsafe extern "C" fn task_ctx_fn_wrapper(session: &FFI_SessionRef) -> FFI_TaskContext {
@@ -438,10 +456,11 @@ impl Clone for FFI_SessionRef {
 }
 
 fn table_options_from_rhashmap(options: RHashMap<RString, RString>) -> TableOptions {
-    let options: HashMap<String, String> = options
+    let mut options: HashMap<String, String> = options
         .into_iter()
         .map(|kv_pair| (kv_pair.0.into_string(), kv_pair.1.into_string()))
         .collect();
+    let current_format = options.remove("datafusion_ffi.table_current_format");
 
     let mut table_options = TableOptions::default();
     let formats = [
@@ -493,10 +512,13 @@ fn table_options_from_rhashmap(options: RHashMap<RString, RString>) -> TableOpti
             .unwrap_or_else(|err| log::warn!("Error parsing table options: {err}"));
     }
 
-    // TODO(apache/datafusion#20704) We should query the `current_format` set and then pass
-    // this across the FFI barrier and set it here, but that is a breaking change that
-    // would need to go into the next release.
-    table_options.current_format = None;
+    table_options.current_format =
+        current_format.and_then(|format| match format.as_str() {
+            "csv" => Some(ConfigFileType::CSV),
+            "parquet" => Some(ConfigFileType::PARQUET),
+            "json" => Some(ConfigFileType::JSON),
+            _ => None,
+        });
     table_options
 }
 
@@ -622,6 +644,7 @@ mod tests {
         table_options.csv.has_header = Some(true);
         table_options.json.schema_infer_max_rec = Some(10);
         table_options.parquet.global.coerce_int96 = Some("123456789".into());
+        table_options.current_format = Some(ConfigFileType::JSON);
 
         let state = SessionStateBuilder::new_from_existing(ctx.state())
             .with_table_options(table_options)
