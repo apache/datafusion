@@ -2711,10 +2711,7 @@ impl From<&Arc<FileEncryptionProperties>> for ConfigFileEncryptionProperties {
                 },
             );
         }
-        let mut aad_prefix: Vec<u8> = Vec::new();
-        if let Some(prefix) = f.aad_prefix() {
-            aad_prefix = prefix.clone();
-        }
+        let aad_prefix = f.aad_prefix().cloned().unwrap_or_default();
         ConfigFileEncryptionProperties {
             encrypt_footer: f.encrypt_footer(),
             footer_key_as_hex: hex::encode(f.footer_key()),
@@ -2852,10 +2849,7 @@ impl From<&Arc<FileDecryptionProperties>> for ConfigFileDecryptionProperties {
             column_decryption_properties.insert(column_name.clone(), props);
         }
 
-        let mut aad_prefix: Vec<u8> = Vec::new();
-        if let Some(prefix) = f.aad_prefix() {
-            aad_prefix = prefix.clone();
-        }
+        let aad_prefix = f.aad_prefix().cloned().unwrap_or_default();
         ConfigFileDecryptionProperties {
             footer_key_as_hex: hex::encode(
                 f.footer_key(None).unwrap_or_default().as_ref(),

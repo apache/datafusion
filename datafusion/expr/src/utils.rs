@@ -1784,4 +1784,104 @@ mod tests {
             "Expected 'Any, Any' without parameter names, got: {error_msg}"
         );
     }
+
+    #[test]
+    fn test_signature_error_msg_exact() {
+        use insta::assert_snapshot;
+
+        let sig = Signature::one_of(
+            vec![
+                TypeSignature::Exact(vec![DataType::Float64, DataType::Int64]),
+                TypeSignature::Exact(vec![DataType::Float32, DataType::Int64]),
+                TypeSignature::Exact(vec![DataType::Float64]),
+                TypeSignature::Exact(vec![DataType::Float32]),
+            ],
+            Volatility::Immutable,
+        );
+        let msg = generate_signature_error_message(
+            "round",
+            &sig,
+            &[DataType::Float64, DataType::Float64],
+        );
+        assert_snapshot!(msg, @r"
+        No function matches the given name and argument types 'round(Float64, Float64)'. You might need to add explicit type casts.
+        	Candidate functions:
+        	round(Float64, Int64)
+        	round(Float32, Int64)
+        	round(Float64)
+        	round(Float32)
+        ");
+    }
+
+    #[test]
+    fn test_signature_error_msg_coercible() {
+        use datafusion_common::types::NativeType;
+        use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
+        use insta::assert_snapshot;
+
+        let sig = Signature::coercible(
+            vec![
+                Coercion::new_implicit(
+                    TypeSignatureClass::Native(
+                        datafusion_common::types::logical_float64(),
+                    ),
+                    vec![TypeSignatureClass::Numeric],
+                    NativeType::Float64,
+                ),
+                Coercion::new_implicit(
+                    TypeSignatureClass::Native(datafusion_common::types::logical_int64()),
+                    vec![TypeSignatureClass::Integer],
+                    NativeType::Int64,
+                ),
+            ],
+            Volatility::Immutable,
+        );
+        let msg = generate_signature_error_message(
+            "round",
+            &sig,
+            &[DataType::Utf8, DataType::Utf8],
+        );
+        assert_snapshot!(msg, @r"
+        No function matches the given name and argument types 'round(Utf8, Utf8)'. You might need to add explicit type casts.
+        	Candidate functions:
+        	round(Float64, Int64)
+        ");
+    }
+
+    #[test]
+    fn test_signature_error_msg_with_names_coercible() {
+        use datafusion_common::types::NativeType;
+        use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
+        use insta::assert_snapshot;
+
+        let sig = Signature::coercible(
+            vec![
+                Coercion::new_exact(TypeSignatureClass::Native(
+                    datafusion_common::types::logical_string(),
+                )),
+                Coercion::new_exact(TypeSignatureClass::Native(
+                    datafusion_common::types::logical_int64(),
+                )),
+                Coercion::new_implicit(
+                    TypeSignatureClass::Native(datafusion_common::types::logical_int64()),
+                    vec![TypeSignatureClass::Integer],
+                    NativeType::Int64,
+                ),
+            ],
+            Volatility::Immutable,
+        )
+        .with_parameter_names(vec![
+            "string".to_string(),
+            "start_pos".to_string(),
+            "length".to_string(),
+        ])
+        .expect("valid parameter names");
+
+        let msg = generate_signature_error_message("substr", &sig, &[DataType::Int32]);
+        assert_snapshot!(msg, @r"
+        No function matches the given name and argument types 'substr(Int32)'. You might need to add explicit type casts.
+        	Candidate functions:
+        	substr(string: String, start_pos: Int64, length: Int64)
+        ");
+    }
 }

@@ -19,6 +19,7 @@ use clap::{ColorChoice, Parser, ValueEnum};
 use datafusion::common::instant::Instant;
 use datafusion::common::utils::get_available_parallelism;
 use datafusion::common::{DataFusionError, Result, exec_datafusion_err, exec_err};
+use datafusion_sqllogictest::TestFile;
 use datafusion_sqllogictest::{
     CurrentlyExecutingSqlTracker, DataFusion, DataFusionSubstraitRoundTrip, Filter,
     TestContext, df_value_validator, read_dir_recursive, setup_scratch_dir,
@@ -42,7 +43,6 @@ use crate::postgres_container::{
 };
 use datafusion::common::runtime::SpawnedTask;
 use futures::FutureExt;
-use std::ffi::OsStr;
 use std::fs;
 use std::io::{IsTerminal, stderr, stdout};
 use std::path::{Path, PathBuf};
@@ -57,6 +57,7 @@ mod postgres_container;
 const TEST_DIRECTORY: &str = "test_files/";
 const DATAFUSION_TESTING_TEST_DIRECTORY: &str = "../../datafusion-testing/data/";
 const PG_COMPAT_FILE_PREFIX: &str = "pg_compat_";
+const TPCH_PREFIX: &str = "tpch";
 const SQLITE_PREFIX: &str = "sqlite";
 const ERRS_PER_FILE_LIMIT: usize = 10;
 const TIMING_DEBUG_SLOW_FILES_ENV: &str = "SLT_TIMING_DEBUG_SLOW_FILES";
@@ -781,76 +782,34 @@ async fn run_complete_file_with_postgres(
     plan_err!("Can not run with postgres as postgres feature is not enabled")
 }
 
-/// Represents a parsed test file
-#[derive(Debug)]
-struct TestFile {
-    /// The absolute path to the file
-    pub path: PathBuf,
-    /// The relative path of the file (used for display)
-    pub relative_path: PathBuf,
-}
-
-impl TestFile {
-    fn new(path: PathBuf) -> Self {
-        let p = path.to_string_lossy();
-        let relative_path = PathBuf::from(if p.starts_with(TEST_DIRECTORY) {
-            p.strip_prefix(TEST_DIRECTORY).unwrap()
-        } else if p.starts_with(DATAFUSION_TESTING_TEST_DIRECTORY) {
-            p.strip_prefix(DATAFUSION_TESTING_TEST_DIRECTORY).unwrap()
-        } else {
-            ""
-        });
-
-        Self {
-            path,
-            relative_path,
-        }
-    }
-
-    fn is_slt_file(&self) -> bool {
-        self.path.extension() == Some(OsStr::new("slt"))
-    }
-
-    fn check_sqlite(&self, options: &Options) -> bool {
-        if !self.relative_path.starts_with(SQLITE_PREFIX) {
-            return true;
-        }
-
-        options.include_sqlite
-    }
-
-    fn check_tpch(&self, options: &Options) -> bool {
-        if !self.relative_path.starts_with("tpch") {
-            return true;
-        }
-
-        options.include_tpch
-    }
-}
-
 fn read_test_files(options: &Options) -> Result<Vec<TestFile>> {
-    let mut paths = read_dir_recursive(TEST_DIRECTORY)?
+    let prefixes: &[&str] = if options.include_sqlite {
+        &[TEST_DIRECTORY, DATAFUSION_TESTING_TEST_DIRECTORY]
+    } else {
+        &[TEST_DIRECTORY]
+    };
+
+    let directories = prefixes
+        .iter()
+        .map(|prefix| {
+            read_dir_recursive(prefix).map_err(|e| {
+                exec_datafusion_err!("Error reading test directory {prefix}: {e}")
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut paths = directories
         .into_iter()
-        .map(TestFile::new)
+        .flatten()
+        .map(|p| TestFile::new(p, prefixes))
         .filter(|f| options.check_test_file(&f.path))
         .filter(|f| f.is_slt_file())
-        .filter(|f| f.check_tpch(options))
-        .filter(|f| f.check_sqlite(options))
+        .filter(|f| !f.relative_path_starts_with(TPCH_PREFIX) || options.include_tpch)
+        .filter(|f| !f.relative_path_starts_with(SQLITE_PREFIX) || options.include_sqlite)
         .filter(|f| options.check_pg_compat_file(f.path.as_path()))
         .collect::<Vec<_>>();
-    if options.include_sqlite {
-        let mut sqlite_paths = read_dir_recursive(DATAFUSION_TESTING_TEST_DIRECTORY)?
-            .into_iter()
-            .map(TestFile::new)
-            .filter(|f| options.check_test_file(&f.path))
-            .filter(|f| f.is_slt_file())
-            .filter(|f| f.check_sqlite(options))
-            .filter(|f| options.check_pg_compat_file(f.path.as_path()))
-            .collect::<Vec<_>>();
 
-        paths.append(&mut sqlite_paths)
-    }
-
+    paths.sort_unstable();
     Ok(paths)
 }
 
