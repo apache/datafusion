@@ -27,6 +27,7 @@ use std::{fmt, vec};
 
 use arrow::array::RecordBatch;
 use arrow::datatypes::{Fields, Schema, SchemaRef, TimeUnit};
+use datafusion_common::parquet_config::PARQUET_FIELD_ID_META_KEY;
 use datafusion_datasource::TableSchema;
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
@@ -286,6 +287,11 @@ impl ParquetFormat {
         self.options.global.coerce_int96 = time_unit;
         self
     }
+
+    /// Get whether field ID is enabled from options
+    pub fn field_id_enabled(&self) -> bool {
+        self.options.global.field_id_enabled
+    }
 }
 
 /// Clears all metadata (Schema level and field level) on an iterator
@@ -390,6 +396,7 @@ impl FileFormat for ParquetFormat {
                     .with_decryption_properties(file_decryption_properties)
                     .with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)))
                     .with_coerce_int96(coerce_int96)
+                    .with_enable_field_ids(self.field_id_enabled())
                     .fetch_schema_with_location()
                     .await?;
                 Ok::<_, DataFusionError>(result)
@@ -629,6 +636,8 @@ impl ParquetFormat {
 /// # Arguments
 /// * `table_schema` - The table schema containing the desired types
 /// * `file_schema` - The file schema to be transformed
+/// * `enable_field_ids` - If true, matches columns by field ID first, then falls back to name.
+///   If false, matches columns by name only
 ///
 /// # Returns
 /// * `Some(Schema)` - If any transformations were applied, returns the transformed schema
@@ -636,6 +645,7 @@ impl ParquetFormat {
 pub fn apply_file_schema_type_coercions(
     table_schema: &Schema,
     file_schema: &Schema,
+    enable_field_ids: bool,
 ) -> Option<Schema> {
     let mut needs_view_transform = false;
     let mut needs_string_transform = false;
@@ -663,6 +673,22 @@ pub fn apply_file_schema_type_coercions(
         })
         .collect();
 
+    // Build field ID to field mapping if field IDs are enabled
+    let table_field_by_id: HashMap<i32, &Arc<Field>> = if enable_field_ids {
+        table_schema
+            .fields()
+            .iter()
+            .filter_map(|f| {
+                f.metadata()
+                    .get(PARQUET_FIELD_ID_META_KEY)
+                    .and_then(|id_str| id_str.parse::<i32>().ok())
+                    .map(|id| (id, f))
+            })
+            .collect()
+    } else {
+        HashMap::new()
+    };
+
     // Early return if no transformation needed
     if !needs_view_transform && !needs_string_transform {
         return None;
@@ -675,8 +701,23 @@ pub fn apply_file_schema_type_coercions(
             let field_name = field.name();
             let field_type = field.data_type();
 
+            // Try to find matching table field by field ID or name
+            let table_type = if enable_field_ids {
+                // Try field ID matching first
+                field
+                    .metadata()
+                    .get(PARQUET_FIELD_ID_META_KEY)
+                    .and_then(|id_str| id_str.parse::<i32>().ok())
+                    .and_then(|id| table_field_by_id.get(&id))
+                    .map(|f| f.data_type())
+                    .or_else(|| table_fields.get(field_name).copied())
+            } else {
+                // Name-based matching only
+                table_fields.get(field_name).copied()
+            };
+
             // Look up the corresponding field type in the table schema
-            if let Some(table_type) = table_fields.get(field_name) {
+            if let Some(table_type) = table_type {
                 match (table_type, field_type) {
                     // table schema uses string type, coerce the file schema to use string type
                     (

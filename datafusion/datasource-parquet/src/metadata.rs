@@ -29,7 +29,7 @@ use arrow::datatypes::{DataType, Schema, SchemaRef, TimeUnit};
 use datafusion_common::encryption::FileDecryptionProperties;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    ColumnStatistics, DataFusionError, Result, ScalarValue, Statistics,
+    ColumnStatistics, DataFusionError, Result, ScalarValue, Statistics, not_impl_err,
 };
 use datafusion_execution::cache::cache_manager::{
     CachedFileMetadataEntry, FileMetadata, FileMetadataCache,
@@ -68,6 +68,72 @@ pub struct DFParquetMetadata<'a> {
     file_metadata_cache: Option<Arc<dyn FileMetadataCache>>,
     /// timeunit to coerce INT96 timestamps to
     pub coerce_int96: Option<TimeUnit>,
+    /// Whether to extract and use Parquet field IDs for column resolution
+    pub enable_field_ids: bool,
+}
+
+/// Extracts Parquet field IDs and stores them in Arrow field metadata
+/// under the key `\[PARQUET_FIELD_ID_META_KEY`\]
+///
+/// # Limitations
+///
+/// Currently only supports flat schemas (top-level primitive fields).
+/// Returns an error if the schema contains nested types (structs, lists, maps).
+///
+/// # Errors
+///
+/// Returns an error if `arrow_schema` contains any complex/nested types when field IDs
+/// are enabled, as these are not yet supported.
+/// Nested type support see (<https://github.com/apache/datafusion/issues/20475>)
+fn add_field_ids_to_arrow_schema(
+    arrow_schema: &Schema,
+    parquet_schema: &SchemaDescriptor,
+) -> Result<Schema> {
+    use arrow::datatypes::Field;
+    use datafusion_common::parquet_config::PARQUET_FIELD_ID_META_KEY;
+
+    // Validate that schema is flat (no nested types)
+    // This prevents incorrect field ID assignment for complex types
+    for (idx, field) in arrow_schema.fields().iter().enumerate() {
+        if field.data_type().is_nested() {
+            return not_impl_err!(
+                "Field ID reading is not yet supported for nested/complex types. \
+                 Field '{}' at index {} has type {:?}.",
+                field.name(),
+                idx,
+                field.data_type()
+            );
+        }
+    }
+
+    let fields_with_ids: Vec<Arc<Field>> = arrow_schema
+        .fields()
+        .iter()
+        .enumerate()
+        .map(|(idx, field)| {
+            // Get the corresponding Parquet column descriptor
+            let col_desc = parquet_schema.column(idx);
+
+            // Extract field ID from the schema type
+            // Field IDs are optional in Parquet. Valid field IDs are positive integers(> 0).
+            // if not set, skip adding to metadata
+            let basic_info = col_desc.self_type().get_basic_info();
+            if basic_info.has_id() && basic_info.id() > 0 {
+                let field_id = basic_info.id();
+                let mut metadata = field.metadata().clone();
+                metadata
+                    .insert(PARQUET_FIELD_ID_META_KEY.to_string(), field_id.to_string());
+                Arc::new(field.as_ref().clone().with_metadata(metadata))
+            } else {
+                Arc::clone(field)
+            }
+        })
+        .collect();
+
+    Ok(Schema::new_with_metadata(
+        fields_with_ids,
+        arrow_schema.metadata().clone(),
+    ))
 }
 
 impl<'a> DFParquetMetadata<'a> {
@@ -79,6 +145,7 @@ impl<'a> DFParquetMetadata<'a> {
             decryption_properties: None,
             file_metadata_cache: None,
             coerce_int96: None,
+            enable_field_ids: false,
         }
     }
 
@@ -112,6 +179,12 @@ impl<'a> DFParquetMetadata<'a> {
         self
     }
 
+    /// Set whether to extract and use Parquet field IDs for column resolution
+    pub fn with_enable_field_ids(mut self, enable: bool) -> Self {
+        self.enable_field_ids = enable;
+        self
+    }
+
     /// Fetch parquet metadata from the remote object store
     pub async fn fetch_metadata(&self) -> Result<Arc<ParquetMetaData>> {
         let Self {
@@ -121,6 +194,7 @@ impl<'a> DFParquetMetadata<'a> {
             decryption_properties,
             file_metadata_cache,
             coerce_int96: _,
+            enable_field_ids: _,
         } = self;
 
         let fetch = ObjectStoreFetch::new(*store, object_meta);
@@ -180,10 +254,17 @@ impl<'a> DFParquetMetadata<'a> {
         let metadata = self.fetch_metadata().await?;
 
         let file_metadata = metadata.file_metadata();
-        let schema = parquet_to_arrow_schema(
+        let mut schema = parquet_to_arrow_schema(
             file_metadata.schema_descr(),
             file_metadata.key_value_metadata(),
         )?;
+
+        // Add field IDs if requested
+        if self.enable_field_ids {
+            schema =
+                add_field_ids_to_arrow_schema(&schema, file_metadata.schema_descr())?;
+        }
+
         let schema = self
             .coerce_int96
             .as_ref()
@@ -279,9 +360,12 @@ impl<'a> DFParquetMetadata<'a> {
             file_metadata.key_value_metadata(),
         )?;
 
-        if let Some(merged) =
-            apply_file_schema_type_coercions(logical_file_schema, &physical_file_schema)
-        {
+        // Apply type coercions without field ID matching (statistics use name-based matching)
+        if let Some(merged) = apply_file_schema_type_coercions(
+            logical_file_schema,
+            &physical_file_schema,
+            false,
+        ) {
             physical_file_schema = merged;
         }
 
