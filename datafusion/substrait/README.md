@@ -24,6 +24,32 @@
 This crate is a submodule of DataFusion that provides a [Substrait] producer and consumer for DataFusion
 plans. See [API Docs] for details and examples.
 
+## Table function scans
+
+When a logical `TableScan` originates from built-in table functions such as `generate_series` or `range`,
+the Substrait producer populates `ReadRel.advanced_extension` with an [`Any`](https://protobuf.dev/reference/protobuf/google.protobuf/#any) payload
+whose `type_url` is `type.googleapis.com/datafusion.substrait.TableFunctionReadRel`. The embedded
+`TableFunctionReadRel` message stores the function name and the evaluated argument literals (after defaults
+and type coercions). Integer table functions, for example, always emit a three-element argument list
+representing `start`, `end`, and `step`, even when the user omitted optional parameters. If a consumer does
+not recognize the extension, it can still fall back to the accompanying `NamedTable` reference.
+
+Table functions must expose their evaluated arguments via the [`TableProvider::table_function_details`] hook.
+This allows custom and built-in table providers to be serialized by the Substrait producer without requiring
+downcasting to concrete types. For example, `GenerateSeriesTable` implements this hook and returns
+the function name and a slice of evaluated `ScalarValue`s.
+
+### Current Limitations
+
+- **Literal arguments only**: Table function arguments must be fully evaluated to literal `ScalarValue`s
+  at planning time. Dynamic or column-referencing expressions in table function arguments are not yet
+  supported for Substrait serialization. For example, `generate_series(1, 10)` works, but
+  `generate_series(column_a, column_b)` would fail during serialization.
+
+- **Function registration**: The consumer must have the table function registered in its catalog
+  with the same name that was used during production. Custom table functions need to be registered
+  on both the producer and consumer side for successful round-trip conversion.
+
 [apache arrow]: https://arrow.apache.org/
 [apache datafusion]: https://datafusion.apache.org/
 [substrait]: https://substrait.io
