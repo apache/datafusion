@@ -192,22 +192,25 @@ impl OrderingEquivalenceClass {
     /// same number of columns, and fields at the same index have the same type
     /// in both schemas.
     pub fn with_new_schema(mut self, schema: &SchemaRef) -> Result<Self> {
-        self.orderings = self
-            .orderings
-            .into_iter()
-            .map(|ordering| {
-                ordering
-                    .into_iter()
-                    .map(|mut sort_expr| {
-                        sort_expr.expr = with_new_schema(sort_expr.expr, schema)?;
-                        Ok(sort_expr)
-                    })
-                    .collect::<Result<Vec<_>>>()
-                    // The following `unwrap` is safe because the vector will always
-                    // be non-empty.
-                    .map(|v| LexOrdering::new(v).unwrap())
-            })
-            .collect::<Result<_>>()?;
+        let mut new_orderings = vec![];
+        for ordering in self.orderings {
+            let mut new_ordering = vec![];
+            for mut sort_expr in ordering {
+                // Keep the component if it still exists in the new schema
+                if let Ok(new_expr) = with_new_schema(sort_expr.expr, schema) {
+                    sort_expr.expr = new_expr;
+                    new_ordering.push(sort_expr);
+                } else {
+                    // Stop if the column is missing
+                    break;
+                }
+            }
+            // Add the new ordering if it's not empty
+            if let Some(o) = LexOrdering::new(new_ordering) {
+                new_orderings.push(o);
+            }
+        }
+        self.orderings = new_orderings;
         Ok(self)
     }
 
@@ -950,6 +953,41 @@ mod tests {
                 assert!(expected.contains(&elem), "{}", err_msg);
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_with_new_schema_unaligned() -> Result<()> {
+        let col_a = Arc::new(Column::new("a", 0));
+        let col_b = Arc::new(Column::new("b", 1));
+        let options = SortOptions::default();
+
+        let oeq = OrderingEquivalenceClass::new(vec![vec![
+            PhysicalSortExpr {
+                expr: Arc::clone(&col_a) as _,
+                options,
+            },
+            PhysicalSortExpr {
+                expr: Arc::clone(&col_b) as _,
+                options,
+            },
+        ]]);
+
+        // New schema only has "a"
+        let schema2 = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        let oeq_new = oeq.with_new_schema(&schema2)?;
+
+        assert_eq!(oeq_new.len(), 1);
+        assert_eq!(oeq_new[0].len(), 1);
+        assert_eq!(
+            oeq_new[0][0]
+                .expr
+                .as_any()
+                .downcast_ref::<Column>()
+                .unwrap()
+                .name(),
+            "a"
+        );
 
         Ok(())
     }
