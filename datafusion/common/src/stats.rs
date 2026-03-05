@@ -33,10 +33,6 @@ pub enum Precision<T: Debug + Clone + PartialEq + Eq + PartialOrd> {
     /// Comes from definitive sources such as:
     /// - Parquet file metadata (row counts, byte sizes)
     /// - In-memory RecordBatch data (actual row counts, byte sizes, null counts)
-    /// - Known fixed-width types (e.g., INT64 always has 8 bytes per row)
-    /// - Logical deductions (e.g., empty relations have 0 rows, scalar
-    ///   aggregates produce exactly 1 row)
-    /// - Exact arithmetic operations on exact values
     /// - and more...
     Exact(T),
     /// The value is not known exactly, but is likely close to this value.
@@ -45,10 +41,6 @@ pub enum Precision<T: Debug + Clone + PartialEq + Eq + PartialOrd> {
     /// Some operations that would result in `Inexact(T)` would be:
     /// - Applying a filter (selectivity is unknown)
     /// - Mixing exact and inexact values in arithmetic
-    /// - Repartitioning data
-    /// - Join cardinality estimation
-    /// - Aggregation output row estimation (grouped aggregates)
-    /// - Using uncompressed Parquet size as a proxy for in-memory Arrow size
     /// - and more...
     Inexact(T),
     /// Nothing is known about the value. This is the default state.
