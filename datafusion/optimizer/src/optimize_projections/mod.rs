@@ -30,8 +30,8 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::Alias;
 use datafusion_expr::{
-    Aggregate, Distinct, EmptyRelation, Expr, Projection, TableScan, Unnest, Window,
-    logical_plan::LogicalPlan,
+    Aggregate, Distinct, EmptyRelation, Expr, Extension, Projection, TableScan, Unnest,
+    Window, logical_plan::LogicalPlan,
 };
 
 use crate::optimize_projections::required_indices::RequiredIndices;
@@ -199,39 +199,20 @@ fn optimize_projections(
             // mismatch.
             // TODO: For some subquery variants (e.g. a subquery arising from an
             //       EXISTS expression), we may not need to require all indices.
-            plan.inputs()
-                .into_iter()
-                .map(|input| {
-                    let required = RequiredIndices::new_for_all_exprs(input);
-                    Ok(required.with_plan_volatile(volatile_in_plan))
-                })
-                .collect::<Result<_>>()?
+            build_all_expr_input_requirements(&plan, volatile_in_plan, true)?
         }
         LogicalPlan::Extension(extension) => {
-            let Some(necessary_children_indices) =
-                extension.node.necessary_children_exprs(indices.indices())
+            let Some(child_requirements) = build_extension_input_requirements(
+                &plan,
+                extension,
+                &indices,
+                volatile_in_plan,
+            )?
             else {
                 // Requirements from parent cannot be routed down to user defined logical plan safely
                 return Ok(Transformed::no(plan));
             };
-            let children = extension.node.inputs();
-            assert_eq_or_internal_err!(
-                children.len(),
-                necessary_children_indices.len(),
-                "Inconsistent length between children and necessary children indices. \
-                Make sure `.necessary_children_exprs` implementation of the \
-                `UserDefinedLogicalNode` is consistent with actual children length \
-                for the node."
-            );
-            children
-                .into_iter()
-                .zip(necessary_children_indices)
-                .map(|(child, necessary_indices)| {
-                    let required = RequiredIndices::new_from_indices(necessary_indices)
-                        .with_plan_exprs(&plan, child.schema())?;
-                    Ok(required.with_plan_volatile(volatile_in_plan))
-                })
-                .collect::<Result<Vec<_>>>()?
+            child_requirements
         }
         LogicalPlan::EmptyRelation(_)
         | LogicalPlan::Values(_)
@@ -255,36 +236,17 @@ fn optimize_projections(
 
             build_plan_input_requirements(&plan, &indices, volatile_in_plan, true)?
         }
-        LogicalPlan::Join(join) => {
-            let left_len = join.left.schema().fields().len();
-            let (left_req_indices, right_req_indices) =
-                split_join_requirements(left_len, indices, &join.join_type);
-            let left_indices =
-                left_req_indices.with_plan_exprs(&plan, join.left.schema())?;
-            let right_indices =
-                right_req_indices.with_plan_exprs(&plan, join.right.schema())?;
-            let left_indices = left_indices
-                .for_multiplicity_sensitive_child()
-                .with_plan_volatile(volatile_in_plan);
-            let right_indices = right_indices
-                .for_multiplicity_sensitive_child()
-                .with_plan_volatile(volatile_in_plan);
-            // Joins benefit from "small" input tables (lower memory usage).
-            // Therefore, each child benefits from projection:
-            vec![
-                left_indices.with_projection_beneficial(),
-                right_indices.with_projection_beneficial(),
-            ]
+        LogicalPlan::Join(join) => build_join_input_requirements(
+            &plan,
+            join.left.schema(),
+            join.right.schema(),
+            &join.join_type,
+            indices,
+            volatile_in_plan,
+        )?,
+        LogicalPlan::Distinct(Distinct::All(_)) => {
+            build_all_expr_input_requirements(&plan, volatile_in_plan, false)?
         }
-        LogicalPlan::Distinct(Distinct::All(_)) => plan
-            .inputs()
-            .into_iter()
-            .map(|input| {
-                let required = RequiredIndices::new_for_all_exprs(input)
-                    .for_multiplicity_insensitive_child();
-                Ok(required.with_plan_volatile(volatile_in_plan))
-            })
-            .collect::<Result<_>>()?,
         // these nodes are explicitly rewritten in the match statement above
         LogicalPlan::Projection(_)
         | LogicalPlan::Aggregate(_)
@@ -305,22 +267,7 @@ fn optimize_projections(
                 )?;
                 return Ok(Transformed::yes(transformed_input.data));
             }
-            // at least provide the indices for the exec-columns as a starting point
-            let mut required_indices =
-                RequiredIndices::new().with_plan_exprs(&plan, unnest.input.schema())?;
-            required_indices = required_indices
-                .for_multiplicity_sensitive_child()
-                .with_volatile_ancestor_if(indices.has_volatile_ancestor())
-                .with_plan_volatile(volatile_in_plan);
-
-            // Add additional required indices from the parent
-            let mut additional_necessary_child_indices = Vec::new();
-            indices.indices().iter().for_each(|idx| {
-                if let Some(index) = unnest.dependency_indices.get(*idx) {
-                    additional_necessary_child_indices.push(*index);
-                }
-            });
-            vec![required_indices.append(&additional_necessary_child_indices)]
+            build_unnest_fallback_requirements(&plan, unnest, &indices, volatile_in_plan)?
         }
     };
 
@@ -483,6 +430,107 @@ fn build_plan_input_requirements(
             Ok(required.with_plan_volatile(volatile_in_plan))
         })
         .collect::<Result<_>>()
+}
+
+fn build_all_expr_input_requirements(
+    plan: &LogicalPlan,
+    volatile_in_plan: bool,
+    multiplicity_sensitive: bool,
+) -> Result<Vec<RequiredIndices>> {
+    plan.inputs()
+        .into_iter()
+        .map(|input| {
+            let mut required = RequiredIndices::new_for_all_exprs(input);
+            if !multiplicity_sensitive {
+                required = required.for_multiplicity_insensitive_child();
+            }
+            Ok(required.with_plan_volatile(volatile_in_plan))
+        })
+        .collect::<Result<_>>()
+}
+
+fn build_extension_input_requirements(
+    plan: &LogicalPlan,
+    extension: &Extension,
+    indices: &RequiredIndices,
+    volatile_in_plan: bool,
+) -> Result<Option<Vec<RequiredIndices>>> {
+    let Some(necessary_children_indices) =
+        extension.node.necessary_children_exprs(indices.indices())
+    else {
+        return Ok(None);
+    };
+
+    let children = extension.node.inputs();
+    assert_eq_or_internal_err!(
+        children.len(),
+        necessary_children_indices.len(),
+        "Inconsistent length between children and necessary children indices. \
+        Make sure `.necessary_children_exprs` implementation of the \
+        `UserDefinedLogicalNode` is consistent with actual children length \
+        for the node."
+    );
+
+    children
+        .into_iter()
+        .zip(necessary_children_indices)
+        .map(|(child, necessary_indices)| {
+            let required = RequiredIndices::new_from_indices(necessary_indices)
+                .with_plan_exprs(plan, child.schema())?;
+            Ok(required.with_plan_volatile(volatile_in_plan))
+        })
+        .collect::<Result<Vec<_>>>()
+        .map(Some)
+}
+
+fn build_unnest_fallback_requirements(
+    plan: &LogicalPlan,
+    unnest: &Unnest,
+    indices: &RequiredIndices,
+    volatile_in_plan: bool,
+) -> Result<Vec<RequiredIndices>> {
+    let mut required_indices =
+        RequiredIndices::new().with_plan_exprs(plan, unnest.input.schema())?;
+    required_indices = required_indices
+        .for_multiplicity_sensitive_child()
+        .with_volatile_ancestor_if(indices.has_volatile_ancestor())
+        .with_plan_volatile(volatile_in_plan);
+
+    let additional_necessary_child_indices = indices
+        .indices()
+        .iter()
+        .filter_map(|idx| unnest.dependency_indices.get(*idx).copied())
+        .collect::<Vec<_>>();
+
+    Ok(vec![
+        required_indices.append(&additional_necessary_child_indices),
+    ])
+}
+
+fn build_join_input_requirements(
+    plan: &LogicalPlan,
+    left_schema: &datafusion_common::DFSchemaRef,
+    right_schema: &datafusion_common::DFSchemaRef,
+    join_type: &JoinType,
+    indices: RequiredIndices,
+    volatile_in_plan: bool,
+) -> Result<Vec<RequiredIndices>> {
+    let left_len = left_schema.fields().len();
+    let (left_req_indices, right_req_indices) =
+        split_join_requirements(left_len, indices, join_type);
+    let left_indices = left_req_indices.with_plan_exprs(plan, left_schema)?;
+    let right_indices = right_req_indices.with_plan_exprs(plan, right_schema)?;
+    let left_indices = left_indices
+        .for_multiplicity_sensitive_child()
+        .with_plan_volatile(volatile_in_plan);
+    let right_indices = right_indices
+        .for_multiplicity_sensitive_child()
+        .with_plan_volatile(volatile_in_plan);
+
+    Ok(vec![
+        left_indices.with_projection_beneficial(),
+        right_indices.with_projection_beneficial(),
+    ])
 }
 
 fn rewrite_plan_children(
