@@ -711,7 +711,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                     .iter()
                                     .filter_map(|p| p.as_ident())
                                     .map(|id| self.ident_normalizer.normalize(id.clone()))
-                                    .last()?;
+                                    .next_back()?;
                                 Some((table_name, span))
                             }
                             _ => None,
@@ -745,17 +745,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     let right = self.plan_table_with_joins(input, planner_context)?;
 
                     left = left.cross_join(right).map_err(|e| {
-                        if let Some((ref name, ref current_span)) = current_name {
-                            if let Some(prior_span) =
+                        if let Some((ref name, ref current_span)) = current_name
+                            && let Some(prior_span) =
                                 alias_spans.get(name).copied().flatten()
-                            {
-                                let diagnostic = Diagnostic::new_error(
-                                    "duplicate table alias in FROM clause",
-                                    *current_span,
-                                )
-                                .with_note("first defined here", Some(prior_span));
-                                return e.with_diagnostic(diagnostic);
-                            }
+                        {
+                            let diagnostic = Diagnostic::new_error(
+                                "duplicate table alias in FROM clause",
+                                *current_span,
+                            )
+                            .with_note("first defined here", Some(prior_span));
+                            return e.with_diagnostic(diagnostic);
                         }
                         e
                     })?;
