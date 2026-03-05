@@ -959,6 +959,7 @@ pub(crate) fn build_side_determined_results(
             &probe_indices,
             column_indices,
             build_hash_joiner.build_side,
+            join_type,
         )
         .map(|batch| (batch.num_rows() > 0).then_some(batch))
     } else {
@@ -1022,6 +1023,7 @@ pub(crate) fn join_with_probe_batch(
             filter,
             build_hash_joiner.build_side,
             None,
+            join_type,
         )?
     } else {
         (build_indices, probe_indices)
@@ -1060,6 +1062,7 @@ pub(crate) fn join_with_probe_batch(
             &probe_indices,
             column_indices,
             build_hash_joiner.build_side,
+            join_type,
         )
         .map(|batch| (batch.num_rows() > 0).then_some(batch))
     }

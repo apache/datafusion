@@ -426,9 +426,7 @@ fn flatten_struct_cols(
                     Ok(struct_arr.columns().to_vec())
                 }
                 data_type => internal_err!(
-                    "expecting column {} from input plan to be a struct, got {:?}",
-                    idx,
-                    data_type
+                    "expecting column {idx} from input plan to be a struct, got {data_type}"
                 ),
             },
             None => Ok(vec![Arc::clone(column_data)]),
