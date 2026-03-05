@@ -230,26 +230,36 @@ fn array_position_scalar<O: OffsetSizeTrait>(
         "array_position",
         &[list_array.values(), element_array],
     )?;
-    let element_datum = Scalar::new(Arc::clone(element_array));
-
-    let offsets = list_array.offsets();
-    let validity = list_array.nulls();
 
     if list_array.len() == 0 {
         return Ok(Arc::new(UInt64Array::new_null(0)));
     }
 
+    let element_datum = Scalar::new(Arc::clone(element_array));
+    let validity = list_array.nulls();
+
+    // Only compare the visible portion of the values buffer, which avoids
+    // wasted work for sliced ListArrays.
+    let offsets = list_array.offsets();
+    let first_offset = offsets[0].as_usize();
+    let last_offset = offsets[list_array.len()].as_usize();
+    let visible_values = list_array
+        .values()
+        .slice(first_offset, last_offset - first_offset);
+
     // `not_distinct` treats NULL=NULL as true, matching the semantics of
     // `array_position`
-    let eq_array = arrow_ord::cmp::not_distinct(list_array.values(), &element_datum)?;
+    let eq_array = arrow_ord::cmp::not_distinct(&visible_values, &element_datum)?;
     let eq_bits = eq_array.values();
 
     let mut result: Vec<Option<u64>> = Vec::with_capacity(list_array.len());
     let mut matches = eq_bits.set_indices().peekable();
 
+    // Match positions are relative to visible_values (0-based), so
+    // subtract first_offset from each offset when comparing.
     for i in 0..list_array.len() {
-        let start = offsets[i].as_usize();
-        let end = offsets[i + 1].as_usize();
+        let start = offsets[i].as_usize() - first_offset;
+        let end = offsets[i + 1].as_usize() - first_offset;
 
         if validity.is_some_and(|v| v.is_null(i)) {
             // Null row -> null output; advance past matches in range
@@ -473,4 +483,61 @@ fn general_positions<OffsetSize: OffsetSizeTrait>(
     Ok(Arc::new(
         ListArray::from_iter_primitive::<UInt64Type, _, _>(data),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::AsArray;
+    use arrow::datatypes::Int32Type;
+    use datafusion_common::config::ConfigOptions;
+    use datafusion_expr::ScalarFunctionArgs;
+
+    #[test]
+    fn test_array_position_sliced_list() -> Result<()> {
+        // [[10, 20], [30, 40], [50, 60], [70, 80]]  →  slice(1,2)  →  [[30, 40], [50, 60]]
+        let list = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(10), Some(20)]),
+            Some(vec![Some(30), Some(40)]),
+            Some(vec![Some(50), Some(60)]),
+            Some(vec![Some(70), Some(80)]),
+        ]);
+        let sliced = list.slice(1, 2);
+        let haystack_field =
+            Arc::new(Field::new("haystack", sliced.data_type().clone(), true));
+        let needle_field = Arc::new(Field::new("needle", DataType::Int32, true));
+        let return_field = Arc::new(Field::new("return", UInt64, true));
+
+        // Search for elements that exist only in sliced-away rows:
+        // 10 is in the prefix row, 70 is in the suffix row.
+        let invoke = |needle: i32| -> Result<ArrayRef> {
+            ArrayPosition::new()
+                .invoke_with_args(ScalarFunctionArgs {
+                    args: vec![
+                        ColumnarValue::Array(Arc::new(sliced.clone())),
+                        ColumnarValue::Scalar(ScalarValue::Int32(Some(needle))),
+                    ],
+                    arg_fields: vec![
+                        Arc::clone(&haystack_field),
+                        Arc::clone(&needle_field),
+                    ],
+                    number_rows: 2,
+                    return_field: Arc::clone(&return_field),
+                    config_options: Arc::new(ConfigOptions::default()),
+                })?
+                .into_array(2)
+        };
+
+        let output = invoke(10)?;
+        let output = output.as_primitive::<UInt64Type>();
+        assert!(output.is_null(0));
+        assert!(output.is_null(1));
+
+        let output = invoke(70)?;
+        let output = output.as_primitive::<UInt64Type>();
+        assert!(output.is_null(0));
+        assert!(output.is_null(1));
+
+        Ok(())
+    }
 }

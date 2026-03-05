@@ -447,3 +447,6 @@ datafusion.runtime.max_temp_directory_size
 datafusion.runtime.memory_limit
 datafusion.runtime.metadata_cache_limit
 datafusion.runtime.temp_directory
+
+statement error DataFusion error: Error during planning: Unsupported value Null
+SET datafusion.runtime.memory_limit = NULL

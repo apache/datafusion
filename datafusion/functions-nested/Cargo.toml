@@ -69,6 +69,10 @@ rand = { workspace = true }
 
 [[bench]]
 harness = false
+name = "array_concat"
+
+[[bench]]
+harness = false
 name = "array_expression"
 
 [[bench]]

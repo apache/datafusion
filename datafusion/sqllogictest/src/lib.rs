@@ -27,6 +27,7 @@
 //! DataFusion sqllogictest driver
 
 mod engines;
+mod test_file;
 
 pub use engines::CurrentlyExecutingSqlTracker;
 pub use engines::DFColumnType;
@@ -46,4 +47,5 @@ mod util;
 
 pub use filters::*;
 pub use test_context::TestContext;
+pub use test_file::TestFile;
 pub use util::*;

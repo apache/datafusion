@@ -27,7 +27,7 @@ use crate::variation_const::{
     TIME_32_TYPE_VARIATION_REF, TIME_64_TYPE_VARIATION_REF,
     UNSIGNED_INTEGER_TYPE_VARIATION_REF, VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
-use datafusion::arrow::datatypes::{DataType, IntervalUnit};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, IntervalUnit};
 use datafusion::common::{DFSchemaRef, not_impl_err, plan_err};
 use substrait::proto::{NamedStruct, r#type};
 
@@ -36,12 +36,19 @@ pub(crate) fn to_substrait_type(
     dt: &DataType,
     nullable: bool,
 ) -> datafusion::common::Result<substrait::proto::Type> {
-    let nullability = if nullable {
+    to_substrait_type_from_field(producer, &Field::new("", dt.clone(), nullable).into())
+}
+
+pub(crate) fn to_substrait_type_from_field(
+    producer: &mut impl SubstraitProducer,
+    field: &FieldRef,
+) -> datafusion::common::Result<substrait::proto::Type> {
+    let nullability = if field.is_nullable() {
         r#type::Nullability::Nullable as i32
     } else {
         r#type::Nullability::Required as i32
     };
-    match dt {
+    match field.data_type() {
         DataType::Null => {
             let type_anchor = producer.register_type(NULL_TYPE_NAME.to_string());
             Ok(substrait::proto::Type {
@@ -288,16 +295,9 @@ pub(crate) fn to_substrait_type(
         }
         DataType::Map(inner, _) => match inner.data_type() {
             DataType::Struct(key_and_value) if key_and_value.len() == 2 => {
-                let key_type = to_substrait_type(
-                    producer,
-                    key_and_value[0].data_type(),
-                    key_and_value[0].is_nullable(),
-                )?;
-                let value_type = to_substrait_type(
-                    producer,
-                    key_and_value[1].data_type(),
-                    key_and_value[1].is_nullable(),
-                )?;
+                let key_type = to_substrait_type_from_field(producer, &key_and_value[0])?;
+                let value_type =
+                    to_substrait_type_from_field(producer, &key_and_value[1])?;
                 Ok(substrait::proto::Type {
                     kind: Some(r#type::Kind::Map(Box::new(r#type::Map {
                         key: Some(Box::new(key_type)),
@@ -310,8 +310,14 @@ pub(crate) fn to_substrait_type(
             _ => plan_err!("Map fields must contain a Struct with exactly 2 fields"),
         },
         DataType::Dictionary(key_type, value_type) => {
-            let key_type = to_substrait_type(producer, key_type, nullable)?;
-            let value_type = to_substrait_type(producer, value_type, nullable)?;
+            let key_type = to_substrait_type_from_field(
+                producer,
+                &Field::new("", key_type.as_ref().clone(), field.is_nullable()).into(),
+            )?;
+            let value_type = to_substrait_type_from_field(
+                producer,
+                &Field::new("", value_type.as_ref().clone(), field.is_nullable()).into(),
+            )?;
             Ok(substrait::proto::Type {
                 kind: Some(r#type::Kind::Map(Box::new(r#type::Map {
                     key: Some(Box::new(key_type)),
@@ -324,9 +330,7 @@ pub(crate) fn to_substrait_type(
         DataType::Struct(fields) => {
             let field_types = fields
                 .iter()
-                .map(|field| {
-                    to_substrait_type(producer, field.data_type(), field.is_nullable())
-                })
+                .map(|field| to_substrait_type_from_field(producer, field))
                 .collect::<datafusion::common::Result<Vec<_>>>()?;
             Ok(substrait::proto::Type {
                 kind: Some(r#type::Kind::Struct(r#type::Struct {
@@ -352,7 +356,7 @@ pub(crate) fn to_substrait_type(
                 precision: *p as i32,
             })),
         }),
-        _ => not_impl_err!("Unsupported cast type: {dt}"),
+        _ => not_impl_err!("Unsupported cast type: {field}"),
     }
 }
 
@@ -369,7 +373,7 @@ pub(crate) fn to_substrait_named_struct(
         types: schema
             .fields()
             .iter()
-            .map(|f| to_substrait_type(producer, f.data_type(), f.is_nullable()))
+            .map(|f| to_substrait_type_from_field(producer, f))
             .collect::<datafusion::common::Result<_>>()?,
         type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
         nullability: r#type::Nullability::Required as i32,

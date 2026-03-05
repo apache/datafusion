@@ -22,7 +22,7 @@ use sqlparser::ast::BinaryOperator;
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(crate) fn parse_sql_binary_op(&self, op: &BinaryOperator) -> Result<Operator> {
-        match *op {
+        match op {
             BinaryOperator::Gt => Ok(Operator::Gt),
             BinaryOperator::GtEq => Ok(Operator::GtEq),
             BinaryOperator::Lt => Ok(Operator::Lt),
@@ -68,6 +68,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             BinaryOperator::Question => Ok(Operator::Question),
             BinaryOperator::QuestionAnd => Ok(Operator::QuestionAnd),
             BinaryOperator::QuestionPipe => Ok(Operator::QuestionPipe),
+            BinaryOperator::Custom(s) if s == ":" => Ok(Operator::Colon),
             _ => not_impl_err!("Unsupported binary operator: {:?}", op),
         }
     }
