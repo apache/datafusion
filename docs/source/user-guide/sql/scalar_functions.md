@@ -3183,6 +3183,7 @@ _Alias of [current_date](#current_date)._
 - [array_to_string](#array_to_string)
 - [array_union](#array_union)
 - [arrays_overlap](#arrays_overlap)
+- [arrays_zip](#arrays_zip)
 - [cardinality](#cardinality)
 - [empty](#empty)
 - [flatten](#flatten)
@@ -3228,6 +3229,7 @@ _Alias of [current_date](#current_date)._
 - [list_sort](#list_sort)
 - [list_to_string](#list_to_string)
 - [list_union](#list_union)
+- [list_zip](#list_zip)
 - [make_array](#make_array)
 - [make_list](#make_list)
 - [range](#range)
@@ -3543,16 +3545,16 @@ array_has_all(array, sub-array)
 
 ### `array_has_any`
 
-Returns true if any elements exist in both arrays.
+Returns true if the arrays have any elements in common.
 
 ```sql
-array_has_any(array, sub-array)
+array_has_any(array1, array2)
 ```
 
 #### Arguments
 
-- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
-- **sub-array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **array1**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **array2**: Array expression. Can be a constant, column, or function, and any combination of array operators.
 
 #### Example
 
@@ -3774,7 +3776,7 @@ array_pop_front(array)
 
 ### `array_position`
 
-Returns the position of the first occurrence of the specified element in the array, or NULL if not found.
+Returns the position of the first occurrence of the specified element in the array, or NULL if not found. Comparisons are done using `IS DISTINCT FROM` semantics, so NULL is considered to match NULL.
 
 ```sql
 array_position(array, element)
@@ -3784,7 +3786,7 @@ array_position(array, element, index)
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
-- **element**: Element to search for position in the array.
+- **element**: Element to search for in the array.
 - **index**: Index at which to start searching (1-indexed).
 
 #### Example
@@ -4210,7 +4212,7 @@ array_to_string(array, delimiter[, null_string])
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
 - **delimiter**: Array element separator.
-- **null_string**: Optional. String to replace null values in the array. If not provided, nulls will be handled by default behavior.
+- **null_string**: Optional. String to use for null values in the output. If not provided, nulls will be omitted.
 
 #### Example
 
@@ -4266,6 +4268,41 @@ array_union(array1, array2)
 ### `arrays_overlap`
 
 _Alias of [array_has_any](#array_has_any)._
+
+### `arrays_zip`
+
+Returns an array of structs created by combining the elements of each input array at the same index. If the arrays have different lengths, shorter arrays are padded with NULLs.
+
+```sql
+arrays_zip(array1, array2[, ..., array_n])
+```
+
+#### Arguments
+
+- **array1**: First array expression.
+- **array2**: Second array expression.
+- **array_n**: Subsequent array expressions.
+
+#### Example
+
+```sql
+> select arrays_zip([1, 2, 3], ['a', 'b', 'c']);
++---------------------------------------------------+
+| arrays_zip([1, 2, 3], ['a', 'b', 'c'])             |
++---------------------------------------------------+
+| [{c0: 1, c1: a}, {c0: 2, c1: b}, {c0: 3, c1: c}] |
++---------------------------------------------------+
+> select arrays_zip([1, 2], [3, 4, 5]);
++---------------------------------------------------+
+| arrays_zip([1, 2], [3, 4, 5])                       |
++---------------------------------------------------+
+| [{c0: 1, c1: 3}, {c0: 2, c1: 4}, {c0: , c1: 5}]  |
++---------------------------------------------------+
+```
+
+#### Aliases
+
+- list_zip
 
 ### `cardinality`
 
@@ -4535,6 +4572,10 @@ _Alias of [array_to_string](#array_to_string)._
 ### `list_union`
 
 _Alias of [array_union](#array_union)._
+
+### `list_zip`
+
+_Alias of [arrays_zip](#arrays_zip)._
 
 ### `make_array`
 

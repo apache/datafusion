@@ -468,7 +468,10 @@ impl DefaultPhysicalExprAdapterRewriter {
         column: Column,
         logical_field: &Field,
     ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
-        let actual_physical_field = self.physical_file_schema.field(column.index());
+        // Look up the column index in the physical schema by name to ensure correctness.
+        let physical_column_index = self.physical_file_schema.index_of(column.name())?;
+        let actual_physical_field =
+            self.physical_file_schema.field(physical_column_index);
 
         // For struct types, use validate_struct_compatibility which handles:
         // - Missing fields in source (filled with nulls)
@@ -545,7 +548,7 @@ impl DefaultPhysicalExprAdapterRewriter {
 /// let factory = BatchAdapterFactory::new(Arc::clone(&target_schema));
 ///
 /// // Create adapter for this specific source schema
-/// let adapter = factory.make_adapter(Arc::clone(&source_schema)).unwrap();
+/// let adapter = factory.make_adapter(&source_schema).unwrap();
 ///
 /// // Create a source batch
 /// let source_batch = RecordBatch::try_new(
@@ -600,10 +603,10 @@ impl BatchAdapterFactory {
     ///
     /// Batches fed into this [`BatchAdapter`] *must* conform to the source schema,
     /// no validation is performed at runtime to minimize overheads.
-    pub fn make_adapter(&self, source_schema: SchemaRef) -> Result<BatchAdapter> {
+    pub fn make_adapter(&self, source_schema: &SchemaRef) -> Result<BatchAdapter> {
         let expr_adapter = self
             .expr_adapter_factory
-            .create(Arc::clone(&self.target_schema), Arc::clone(&source_schema))?;
+            .create(Arc::clone(&self.target_schema), Arc::clone(source_schema))?;
 
         let simplifier = PhysicalExprSimplifier::new(&self.target_schema);
 
@@ -614,7 +617,7 @@ impl BatchAdapterFactory {
 
         let adapted = projection
             .try_map_exprs(|e| simplifier.simplify(expr_adapter.rewrite(e)?))?;
-        let projector = adapted.make_projector(&source_schema)?;
+        let projector = adapted.make_projector(source_schema)?;
 
         Ok(BatchAdapter { projector })
     }
@@ -704,7 +707,7 @@ mod tests {
         let expr = expressions::BinaryExpr::new(
             Arc::clone(&column_a),
             Operator::Plus,
-            Arc::new(expressions::Literal::new(ScalarValue::Int64(Some(5)))),
+            Arc::new(Literal::new(ScalarValue::Int64(Some(5)))),
         );
         let expr = expressions::BinaryExpr::new(
             Arc::new(expr),
@@ -712,7 +715,7 @@ mod tests {
             Arc::new(expressions::BinaryExpr::new(
                 Arc::clone(&column_c),
                 Operator::Gt,
-                Arc::new(expressions::Literal::new(ScalarValue::Float64(Some(0.0)))),
+                Arc::new(Literal::new(ScalarValue::Float64(Some(0.0)))),
             )),
         );
 
@@ -727,7 +730,7 @@ mod tests {
                 None,
             )),
             Operator::Plus,
-            Arc::new(expressions::Literal::new(ScalarValue::Int64(Some(5)))),
+            Arc::new(Literal::new(ScalarValue::Int64(Some(5)))),
         );
         let expected = Arc::new(expressions::BinaryExpr::new(
             Arc::new(expected),
@@ -735,7 +738,7 @@ mod tests {
             Arc::new(expressions::BinaryExpr::new(
                 lit(ScalarValue::Float64(None)), // c is missing, so it becomes null
                 Operator::Gt,
-                Arc::new(expressions::Literal::new(ScalarValue::Float64(Some(0.0)))),
+                Arc::new(Literal::new(ScalarValue::Float64(Some(0.0)))),
             )),
         )) as Arc<dyn PhysicalExpr>;
 
@@ -853,7 +856,7 @@ mod tests {
         let result = adapter.rewrite(column_expr)?;
 
         // Should be replaced with a literal null
-        if let Some(literal) = result.as_any().downcast_ref::<expressions::Literal>() {
+        if let Some(literal) = result.as_any().downcast_ref::<Literal>() {
             assert_eq!(*literal.value(), ScalarValue::Float64(None));
         } else {
             panic!("Expected literal expression");
@@ -914,7 +917,7 @@ mod tests {
         // Should be replaced with the partition value
         let literal = result
             .as_any()
-            .downcast_ref::<expressions::Literal>()
+            .downcast_ref::<Literal>()
             .expect("Expected literal expression");
         assert_eq!(*literal.value(), partition_value);
 
@@ -1072,7 +1075,7 @@ mod tests {
         assert_eq!(
             res.column(0)
                 .as_any()
-                .downcast_ref::<arrow::array::StringArray>()
+                .downcast_ref::<StringArray>()
                 .unwrap()
                 .iter()
                 .collect_vec(),
@@ -1081,7 +1084,7 @@ mod tests {
         assert_eq!(
             res.column(1)
                 .as_any()
-                .downcast_ref::<arrow::array::Int64Array>()
+                .downcast_ref::<Int64Array>()
                 .unwrap()
                 .iter()
                 .collect_vec(),
@@ -1259,7 +1262,7 @@ mod tests {
         ]));
 
         let factory = BatchAdapterFactory::new(Arc::clone(&target_schema));
-        let adapter = factory.make_adapter(Arc::clone(&source_schema)).unwrap();
+        let adapter = factory.make_adapter(&source_schema).unwrap();
 
         // Create source batch
         let source_batch = RecordBatch::try_new(
@@ -1314,7 +1317,7 @@ mod tests {
         ]));
 
         let factory = BatchAdapterFactory::new(Arc::clone(&target_schema));
-        let adapter = factory.make_adapter(Arc::clone(&source_schema)).unwrap();
+        let adapter = factory.make_adapter(&source_schema).unwrap();
 
         let source_batch = RecordBatch::try_new(
             Arc::clone(&source_schema),
@@ -1377,7 +1380,7 @@ mod tests {
         .unwrap();
 
         let factory = BatchAdapterFactory::new(Arc::clone(&target_schema));
-        let adapter = factory.make_adapter(source_schema).unwrap();
+        let adapter = factory.make_adapter(&source_schema).unwrap();
         let adapted = adapter.adapt_batch(&source_batch).unwrap();
 
         let result_struct = adapted
@@ -1402,7 +1405,7 @@ mod tests {
         ]));
 
         let factory = BatchAdapterFactory::new(Arc::clone(&schema));
-        let adapter = factory.make_adapter(Arc::clone(&schema)).unwrap();
+        let adapter = factory.make_adapter(&schema).unwrap();
 
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
@@ -1435,18 +1438,18 @@ mod tests {
             Field::new("x", DataType::Int32, false),
             Field::new("y", DataType::Utf8, true),
         ]));
-        let adapter1 = factory.make_adapter(source1).unwrap();
+        let adapter1 = factory.make_adapter(&source1).unwrap();
 
         // Second source schema (different order)
         let source2 = Arc::new(Schema::new(vec![
             Field::new("y", DataType::Utf8, true),
             Field::new("x", DataType::Int64, false),
         ]));
-        let adapter2 = factory.make_adapter(source2).unwrap();
+        let adapter2 = factory.make_adapter(&source2).unwrap();
 
         // Both should work correctly
-        assert!(format!("{:?}", adapter1).contains("BatchAdapter"));
-        assert!(format!("{:?}", adapter2).contains("BatchAdapter"));
+        assert!(format!("{adapter1:?}").contains("BatchAdapter"));
+        assert!(format!("{adapter2:?}").contains("BatchAdapter"));
     }
 
     #[test]
@@ -1491,5 +1494,43 @@ mod tests {
             cast_expr.data_type(&Schema::empty()).unwrap(),
             DataType::Int64
         );
+    }
+
+    #[test]
+    fn test_create_cast_column_expr_uses_name_lookup_not_column_index() {
+        // Physical schema has column `a` at index 1; index 0 is an incompatible type.
+        let physical_schema = Arc::new(Schema::new(vec![
+            Field::new("b", DataType::Binary, true),
+            Field::new("a", DataType::Int32, false),
+        ]));
+
+        let logical_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Binary, true),
+        ]));
+
+        let rewriter = DefaultPhysicalExprAdapterRewriter {
+            logical_file_schema: Arc::clone(&logical_schema),
+            physical_file_schema: Arc::clone(&physical_schema),
+        };
+
+        // Deliberately provide the wrong index for column `a`.
+        // Regression: this must still resolve against physical field `a` by name.
+        let transformed = rewriter
+            .create_cast_column_expr(
+                Column::new("a", 0),
+                logical_schema.field_with_name("a").unwrap(),
+            )
+            .unwrap();
+
+        let cast_expr = transformed
+            .data
+            .as_any()
+            .downcast_ref::<CastColumnExpr>()
+            .expect("Expected CastColumnExpr");
+
+        assert_eq!(cast_expr.input_field().name(), "a");
+        assert_eq!(cast_expr.input_field().data_type(), &DataType::Int32);
+        assert_eq!(cast_expr.target_field().data_type(), &DataType::Int64);
     }
 }

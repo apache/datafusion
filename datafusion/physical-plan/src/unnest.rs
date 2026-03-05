@@ -28,7 +28,7 @@ use super::metrics::{
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
 use crate::{
     DisplayFormatType, Distribution, ExecutionPlan, RecordBatchStream,
-    SendableRecordBatchStream,
+    SendableRecordBatchStream, check_if_same_properties,
 };
 
 use arrow::array::{
@@ -42,6 +42,7 @@ use arrow::datatypes::{DataType, Int64Type, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_ord::cmp::lt;
 use async_trait::async_trait;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     Constraints, HashMap, HashSet, Result, UnnestOptions, exec_datafusion_err, exec_err,
     internal_err,
@@ -74,7 +75,7 @@ pub struct UnnestExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl UnnestExec {
@@ -100,7 +101,7 @@ impl UnnestExec {
             struct_column_indices,
             options,
             metrics: Default::default(),
-            cache,
+            cache: Arc::new(cache),
         })
     }
 
@@ -193,6 +194,17 @@ impl UnnestExec {
     pub fn options(&self) -> &UnnestOptions {
         &self.options
     }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(self)
+        }
+    }
 }
 
 impl DisplayAs for UnnestExec {
@@ -221,7 +233,7 @@ impl ExecutionPlan for UnnestExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -229,12 +241,20 @@ impl ExecutionPlan for UnnestExec {
         vec![&self.input]
     }
 
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
-        children: Vec<Arc<dyn ExecutionPlan>>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        check_if_same_properties!(self, children);
         Ok(Arc::new(UnnestExec::new(
-            Arc::clone(&children[0]),
+            children.swap_remove(0),
             self.list_column_indices.clone(),
             self.struct_column_indices.clone(),
             Arc::clone(&self.schema),
@@ -406,9 +426,7 @@ fn flatten_struct_cols(
                     Ok(struct_arr.columns().to_vec())
                 }
                 data_type => internal_err!(
-                    "expecting column {} from input plan to be a struct, got {:?}",
-                    idx,
-                    data_type
+                    "expecting column {idx} from input plan to be a struct, got {data_type}"
                 ),
             },
             None => Ok(vec![Arc::clone(column_data)]),

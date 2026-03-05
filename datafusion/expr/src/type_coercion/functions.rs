@@ -221,12 +221,12 @@ pub fn data_types(
         } else if type_signature.used_to_support_zero_arguments() {
             // Special error to help during upgrade: https://github.com/apache/datafusion/issues/13763
             return plan_err!(
-                "function '{}' has signature {type_signature:?} which does not support zero arguments. Use TypeSignature::Nullary for zero arguments",
+                "function '{}' has signature {type_signature} which does not support zero arguments. Use TypeSignature::Nullary for zero arguments",
                 function_name.as_ref()
             );
         } else {
             return plan_err!(
-                "Function '{}' has signature {type_signature:?} which does not support zero arguments",
+                "Function '{}' has signature {type_signature} which does not support zero arguments",
                 function_name.as_ref()
             );
         }
@@ -302,7 +302,7 @@ fn try_coerce_types(
 
     // none possible -> Error
     plan_err!(
-        "Failed to coerce arguments to satisfy a call to '{function_name}' function: coercion from {} to the signature {type_signature:?} failed",
+        "Failed to coerce arguments to satisfy a call to '{function_name}' function: coercion from {} to the signature {type_signature} failed",
         current_types.iter().join(", ")
     )
 }
@@ -317,7 +317,7 @@ fn get_valid_types_with_udf<F: UDFCoercionExt>(
             Ok(coerced_types) => vec![coerced_types],
             Err(e) => {
                 return exec_err!(
-                    "Function '{}' user-defined coercion failed with {:?}",
+                    "Function '{}' user-defined coercion failed with: {}",
                     func.name(),
                     e.strip_backtrace()
                 );
@@ -502,7 +502,7 @@ fn get_valid_types(
                     new_types.push(DataType::Utf8);
                 } else {
                     return plan_err!(
-                        "Function '{function_name}' expects NativeType::String but NativeType::received NativeType::{logical_data_type}"
+                        "Function '{function_name}' expects String but received {logical_data_type}"
                     );
                 }
             }
@@ -562,7 +562,7 @@ fn get_valid_types(
 
                 if !logical_data_type.is_numeric() {
                     return plan_err!(
-                        "Function '{function_name}' expects NativeType::Numeric but received NativeType::{logical_data_type}"
+                        "Function '{function_name}' expects Numeric but received {logical_data_type}"
                     );
                 }
 
@@ -583,7 +583,7 @@ fn get_valid_types(
                 valid_type = DataType::Float64;
             } else if !logical_data_type.is_numeric() {
                 return plan_err!(
-                    "Function '{function_name}' expects NativeType::Numeric but received NativeType::{logical_data_type}"
+                    "Function '{function_name}' expects Numeric but received {logical_data_type}"
                 );
             }
 
@@ -883,7 +883,7 @@ fn coerced_from<'a>(
             Timestamp(TimeUnit::Nanosecond, None),
             Null | Timestamp(_, None) | Date32 | Utf8 | LargeUtf8,
         ) => Some(type_into.clone()),
-        (Interval(_), Utf8 | LargeUtf8) => Some(type_into.clone()),
+        (Interval(_), Null | Utf8 | LargeUtf8) => Some(type_into.clone()),
         // We can go into a Utf8View from a Utf8 or LargeUtf8
         (Utf8View, Utf8 | LargeUtf8 | Null) => Some(type_into.clone()),
         // Any type can be coerced into strings
@@ -1056,7 +1056,7 @@ mod tests {
         .unwrap_err();
         assert_contains!(
             got.to_string(),
-            "Function 'test' expects NativeType::Numeric but received NativeType::String"
+            "Function 'test' expects Numeric but received String"
         );
 
         // Fallbacks to float64 if the arg is of type null.
@@ -1076,7 +1076,7 @@ mod tests {
         .unwrap_err();
         assert_contains!(
             got.to_string(),
-            "Function 'test' expects NativeType::Numeric but received NativeType::Timestamp(s)"
+            "Function 'test' expects Numeric but received Timestamp(s)"
         );
 
         Ok(())

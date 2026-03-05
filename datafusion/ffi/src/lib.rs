@@ -28,6 +28,7 @@
 pub mod arrow_wrappers;
 pub mod catalog_provider;
 pub mod catalog_provider_list;
+pub mod config;
 pub mod execution;
 pub mod execution_plan;
 pub mod expr;
@@ -39,6 +40,7 @@ pub mod record_batch_stream;
 pub mod schema_provider;
 pub mod session;
 pub mod table_provider;
+pub mod table_provider_factory;
 pub mod table_source;
 pub mod udaf;
 pub mod udf;

@@ -526,7 +526,7 @@ impl From<&DataType> for TypeCategory {
                     return TypeCategory::Numeric;
                 }
 
-                if matches!(data_type, DataType::Boolean) {
+                if *data_type == DataType::Boolean {
                     return TypeCategory::Boolean;
                 }
 
@@ -753,15 +753,15 @@ fn type_union_resolution_coercion(
 
 /// Handle type union resolution including struct type and others.
 pub fn try_type_union_resolution(data_types: &[DataType]) -> Result<Vec<DataType>> {
-    let err = match try_type_union_resolution_with_struct(data_types) {
+    let struct_err = match try_type_union_resolution_with_struct(data_types) {
         Ok(struct_types) => return Ok(struct_types),
-        Err(e) => Some(e),
+        Err(e) => e,
     };
 
     if let Some(new_type) = type_union_resolution(data_types) {
         Ok(vec![new_type; data_types.len()])
     } else {
-        exec_err!("Fail to find the coerced type, errors: {:?}", err)
+        exec_err!("Fail to find the coerced type, errors: {struct_err}")
     }
 }
 
