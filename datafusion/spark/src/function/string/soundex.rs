@@ -108,14 +108,11 @@ fn compute_soundex(s: &str) -> String {
             break;
         }
         let current = classify_char(c);
-        if let Some(digit) = current {
-            if current != last_code {
-                result.push(digit);
-            }
+        if let Some(digit) = current && current != last_code {
+            result.push(digit);
         }
         last_code = current;
     }
-
     while result.len() < 4 {
         result.push('0');
     }
