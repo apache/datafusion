@@ -87,12 +87,14 @@ fn supports_collect_by_thresholds(
     threshold_byte_size: usize,
     threshold_num_rows: usize,
 ) -> bool {
-    // `partition_statitics` will return None for Absent, thus we do not need to guard
-    // against 0 values.
     let Ok(stats) = plan.partition_statistics(None) else {
         return false;
     };
 
+    // Stats use `Precision<T>` to represent stats, where `Absent` means unknown. 
+    // `Exact(0)` and `Inexact(0)` are both valid stats, and we should not treat 
+    // them as unknown, `Absent` will return false (this is in regards to why 
+    // `!=0` is not checked)
     if let Some(byte_size) = stats.total_byte_size.get_value() {
         *byte_size < threshold_byte_size
     } else if let Some(num_rows) = stats.num_rows.get_value() {
