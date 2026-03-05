@@ -21,11 +21,12 @@ mod required_indices;
 
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
+use arrow::array::Array;
 use std::collections::HashSet;
 use std::sync::Arc;
 
 use datafusion_common::{
-    Column, DFSchema, HashMap, JoinType, Result, assert_eq_or_internal_err,
+    Column, DFSchema, HashMap, JoinType, Result, ScalarValue, assert_eq_or_internal_err,
     get_required_group_by_exprs_indices, internal_datafusion_err, internal_err,
 };
 use datafusion_expr::expr::Alias;
@@ -1028,8 +1029,8 @@ fn can_eliminate_unnest(unnest: &Unnest, indices: &RequiredIndices) -> bool {
     }
 
     // List unnest can drop rows for empty lists even when preserve_nulls=true.
-    // Without proving non-empty cardinality, keep UNNEST conservatively.
-    if !unnest.list_type_columns.is_empty() {
+    // Allow elimination only when list inputs are provably non-empty.
+    if !list_unnest_rows_are_preserved(unnest) {
         return false;
     }
 
@@ -1040,6 +1041,60 @@ fn can_eliminate_unnest(unnest: &Unnest, indices: &RequiredIndices) -> bool {
         .indices()
         .iter()
         .all(|&output_idx| unnest_output_is_passthrough(unnest, output_idx))
+}
+
+fn list_unnest_rows_are_preserved(unnest: &Unnest) -> bool {
+    if unnest.list_type_columns.is_empty() {
+        return true;
+    }
+
+    // To preserve row cardinality we need strict evidence that every unnested
+    // list input yields at least one element per row.
+    let LogicalPlan::Projection(input_projection) = unnest.input.as_ref() else {
+        return false;
+    };
+
+    unnest
+        .list_type_columns
+        .iter()
+        .all(|(input_idx, list_column)| {
+            list_column.depth == 1
+                && input_projection
+                    .expr
+                    .get(*input_idx)
+                    .is_some_and(expr_is_provably_non_empty_list)
+        })
+}
+
+fn expr_is_provably_non_empty_list(expr: &Expr) -> bool {
+    let expr = strip_alias(expr);
+    if expr.is_volatile() {
+        return false;
+    }
+
+    match expr {
+        Expr::ScalarFunction(func) => {
+            func.name() == "make_array" && !func.args.is_empty()
+        }
+        Expr::Literal(scalar, _) => scalar_value_is_non_empty_list(scalar),
+        _ => false,
+    }
+}
+
+fn strip_alias(expr: &Expr) -> &Expr {
+    match expr {
+        Expr::Alias(alias) => strip_alias(alias.expr.as_ref()),
+        _ => expr,
+    }
+}
+
+fn scalar_value_is_non_empty_list(scalar: &ScalarValue) -> bool {
+    match scalar {
+        ScalarValue::List(arr) => !arr.is_null(0) && arr.value_length(0) > 0,
+        ScalarValue::LargeList(arr) => !arr.is_null(0) && arr.value_length(0) > 0,
+        ScalarValue::FixedSizeList(arr) => !arr.is_null(0) && arr.value_length() > 0,
+        _ => false,
+    }
 }
 
 fn unnest_output_is_passthrough(unnest: &Unnest, output_idx: usize) -> bool {

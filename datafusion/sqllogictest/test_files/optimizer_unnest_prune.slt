@@ -54,6 +54,22 @@ logical_plan
 03)----Projection: unnest_prune_struct_t.column1 AS id
 04)------TableScan: unnest_prune_struct_t projection=[column1]
 
+# Safe case: deterministic non-empty make_array unnest is cardinality-preserving.
+# Unnest should be removed.
+query TT
+EXPLAIN SELECT id
+FROM (
+  SELECT column1 AS id, unnest(make_array(1, 2, 3)) AS elem
+  FROM unnest_prune_t
+) q
+GROUP BY id;
+----
+logical_plan
+01)Aggregate: groupBy=[[q.id]], aggr=[[]]
+02)--SubqueryAlias: q
+03)----Projection: unnest_prune_t.column1 AS id
+04)------TableScan: unnest_prune_t projection=[column1]
+
 # Empty-list/null semantics are cardinality-sensitive even if unnested column is dead.
 # Unnest must remain.
 query TT
