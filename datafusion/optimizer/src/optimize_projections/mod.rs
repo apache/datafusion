@@ -143,171 +143,23 @@ fn optimize_projections(
             });
         }
         LogicalPlan::Aggregate(aggregate) => {
-            let has_volatile_ancestor = indices.has_volatile_ancestor();
-            // Split parent requirements to GROUP BY and aggregate sections:
-            let n_group_exprs = aggregate.group_expr_len()?;
-            // Offset aggregate indices so that they point to valid indices at
-            // `aggregate.aggr_expr`:
-            let (group_by_reqs, aggregate_reqs) = indices.split_off(n_group_exprs);
-
-            // Get absolutely necessary GROUP BY fields:
-            let group_by_expr_existing = aggregate
-                .group_expr
-                .iter()
-                .map(|group_by_expr| group_by_expr.schema_name().to_string())
-                .collect::<Vec<_>>();
-
-            let new_group_bys = if let Some(simplest_groupby_indices) =
-                get_required_group_by_exprs_indices(
-                    aggregate.input.schema(),
-                    &group_by_expr_existing,
-                ) {
-                // Some of the fields in the GROUP BY may be required by the
-                // parent even if these fields are unnecessary in terms of
-                // functional dependency.
-                group_by_reqs
-                    .append(&simplest_groupby_indices)
-                    .get_at_indices(&aggregate.group_expr)
-            } else {
-                aggregate.group_expr
-            };
-
-            // Only use the absolutely necessary aggregate expressions required
-            // by the parent:
-            let new_aggr_expr = aggregate_reqs.get_at_indices(&aggregate.aggr_expr);
-
-            if new_group_bys.is_empty() && new_aggr_expr.is_empty() {
-                // Global aggregation with no aggregate functions always produces 1 row and no columns.
-                return Ok(Transformed::yes(LogicalPlan::EmptyRelation(
-                    EmptyRelation {
-                        produce_one_row: true,
-                        schema: Arc::new(DFSchema::empty()),
-                    },
-                )));
-            }
-
-            let all_exprs_iter = new_group_bys.iter().chain(new_aggr_expr.iter());
-            let schema = aggregate.input.schema();
-            let necessary_indices =
-                RequiredIndices::new().with_exprs(schema, all_exprs_iter);
-            let necessary_exprs = necessary_indices.get_required_exprs(schema);
-            let mut necessary_indices = if new_aggr_expr.is_empty() {
-                // no aggregate functions – the aggregation is just a GROUP BY.
-                // In that case the output row count is always
-                // ≤1 per input group, and nothing upstream can tell how many input
-                // rows we had, so the child is *multiplicity‑insensitive*.
-                necessary_indices.for_multiplicity_insensitive_child()
-            } else {
-                // there is at least one aggregate function (COUNT, SUM, …).
-                // those functions generally depend on how many input rows hit each
-                // group, so the child must be treated as *multiplicity‑sensitive*.
-                necessary_indices.for_multiplicity_sensitive_child()
-            };
-            necessary_indices = necessary_indices
-                .with_volatile_ancestor_if(has_volatile_ancestor)
-                .with_plan_volatile(volatile_in_plan);
-
-            return optimize_projections(
-                Arc::unwrap_or_clone(aggregate.input),
+            return optimize_aggregate_projections(
+                aggregate,
                 config,
-                necessary_indices,
-            )?
-            .transform_data(|aggregate_input| {
-                // Simplify the input of the aggregation by adding a projection so
-                // that its input only contains absolutely necessary columns for
-                // the aggregate expressions. Note that necessary_indices refer to
-                // fields in `aggregate.input.schema()`.
-                add_projection_on_top_if_helpful(aggregate_input, necessary_exprs)
-            })?
-            .map_data(|aggregate_input| {
-                // Create a new aggregate plan with the updated input and only the
-                // absolutely necessary fields:
-                Aggregate::try_new(
-                    Arc::new(aggregate_input),
-                    new_group_bys,
-                    new_aggr_expr,
-                )
-                .map(LogicalPlan::Aggregate)
-            });
+                indices,
+                volatile_in_plan,
+            );
         }
         LogicalPlan::Window(window) => {
-            let has_volatile_ancestor = indices.has_volatile_ancestor();
-            let input_schema = Arc::clone(window.input.schema());
-            // Split parent requirements to child and window expression sections:
-            let n_input_fields = input_schema.fields().len();
-            // Offset window expression indices so that they point to valid
-            // indices at `window.window_expr`:
-            let (child_reqs, window_reqs) = indices.split_off(n_input_fields);
-
-            // Only use window expressions that are absolutely necessary according
-            // to parent requirements:
-            let new_window_expr = window_reqs.get_at_indices(&window.window_expr);
-
-            // Get all the required column indices at the input, either by the
-            // parent or window expression requirements.
-            let required_indices = child_reqs.with_exprs(&input_schema, &new_window_expr);
-            let mut required_indices = if new_window_expr.is_empty() {
-                // There are no window functions that the parent cares about.
-                // A window operator without any window expressions doesn’t change the
-                // number of rows coming from its child – the output is just the input.
-                // Hence the child is multiplicity‑insensitive: upstream nodes can’t
-                // observe how many rows the child produced.
-                required_indices.for_multiplicity_insensitive_child()
-            } else {
-                // At least one window expression remains; e.g. `row_number()` or
-                // `lag()` etc.  These depend on the ordering of rows coming from the
-                // child, so the number of input rows matters.  Treat the child as
-                // multiplicity‑sensitive.
-                required_indices.for_multiplicity_sensitive_child()
-            };
-            required_indices = required_indices
-                .with_volatile_ancestor_if(has_volatile_ancestor)
-                .with_plan_volatile(volatile_in_plan);
-
-            return optimize_projections(
-                Arc::unwrap_or_clone(window.input),
+            return optimize_window_projections(
+                window,
                 config,
-                required_indices.clone(),
-            )?
-            .transform_data(|window_child| {
-                if new_window_expr.is_empty() {
-                    // When no window expression is necessary, use the input directly:
-                    Ok(Transformed::no(window_child))
-                } else {
-                    // Calculate required expressions at the input of the window.
-                    // Please note that we use `input_schema`, because `required_indices`
-                    // refers to that schema
-                    let required_exprs =
-                        required_indices.get_required_exprs(&input_schema);
-                    let window_child =
-                        add_projection_on_top_if_helpful(window_child, required_exprs)?
-                            .data;
-                    Window::try_new(new_window_expr, Arc::new(window_child))
-                        .map(LogicalPlan::Window)
-                        .map(Transformed::yes)
-                }
-            });
+                indices,
+                volatile_in_plan,
+            );
         }
         LogicalPlan::TableScan(table_scan) => {
-            let TableScan {
-                table_name,
-                source,
-                projection,
-                filters,
-                fetch,
-                projected_schema: _,
-            } = table_scan;
-
-            // Get indices referred to in the original (schema with all fields)
-            // given projected indices.
-            let projection = match &projection {
-                Some(projection) => indices.into_mapped_indices(|idx| projection[idx]),
-                None => indices.into_inner(),
-            };
-            let new_scan =
-                TableScan::try_new(table_name, source, Some(projection), filters, fetch)?;
-
-            return Ok(Transformed::yes(LogicalPlan::TableScan(new_scan)));
+            return optimize_table_scan_projections(table_scan, indices);
         }
         // Other node types are handled below
         _ => {}
@@ -315,7 +167,7 @@ fn optimize_projections(
 
     // For other plan node types, calculate indices for columns they use and
     // try to rewrite their children
-    let mut child_required_indices: Vec<RequiredIndices> = match &plan {
+    let child_required_indices: Vec<RequiredIndices> = match &plan {
         LogicalPlan::Sort(_)
         | LogicalPlan::Filter(_)
         | LogicalPlan::Repartition(_)
@@ -326,30 +178,14 @@ fn optimize_projections(
             // that appear in this plan's expressions to its child. All these
             // operators benefit from "small" inputs, so the projection_beneficial
             // flag is `true`.
-            plan.inputs()
-                .into_iter()
-                .map(|input| {
-                    let required = indices
-                        .clone()
-                        .with_projection_beneficial()
-                        .with_plan_exprs(&plan, input.schema())?;
-                    Ok(required.with_plan_volatile(volatile_in_plan))
-                })
-                .collect::<Result<_>>()?
+            build_plan_input_requirements(&plan, &indices, volatile_in_plan, true)?
         }
         LogicalPlan::Limit(_) => {
             // Pass index requirements from the parent as well as column indices
             // that appear in this plan's expressions to its child. These operators
             // do not benefit from "small" inputs, so the projection_beneficial
             // flag is `false`.
-            plan.inputs()
-                .into_iter()
-                .map(|input| {
-                    let required =
-                        indices.clone().with_plan_exprs(&plan, input.schema())?;
-                    Ok(required.with_plan_volatile(volatile_in_plan))
-                })
-                .collect::<Result<_>>()?
+            build_plan_input_requirements(&plan, &indices, volatile_in_plan, false)?
         }
         LogicalPlan::Copy(_)
         | LogicalPlan::Ddl(_)
@@ -417,16 +253,7 @@ fn optimize_projections(
                 return Ok(Transformed::no(plan));
             }
 
-            plan.inputs()
-                .into_iter()
-                .map(|input| {
-                    let required = indices
-                        .clone()
-                        .with_projection_beneficial()
-                        .with_plan_exprs(&plan, input.schema())?;
-                    Ok(required.with_plan_volatile(volatile_in_plan))
-                })
-                .collect::<Result<Vec<_>>>()?
+            build_plan_input_requirements(&plan, &indices, volatile_in_plan, true)?
         }
         LogicalPlan::Join(join) => {
             let left_len = join.left.schema().fields().len();
@@ -497,8 +324,172 @@ fn optimize_projections(
         }
     };
 
-    // Required indices are currently ordered (child0, child1, ...)
-    // but the loop pops off the last element, so we need to reverse the order
+    let transformed_plan = rewrite_plan_children(plan, config, child_required_indices)?;
+
+    // If any of the children are transformed, we need to potentially update the plan's schema
+    if transformed_plan.transformed {
+        transformed_plan.map_data(|plan| plan.recompute_schema())
+    } else {
+        Ok(transformed_plan)
+    }
+}
+
+fn optimize_aggregate_projections(
+    aggregate: Aggregate,
+    config: &dyn OptimizerConfig,
+    indices: RequiredIndices,
+    volatile_in_plan: bool,
+) -> Result<Transformed<LogicalPlan>> {
+    let has_volatile_ancestor = indices.has_volatile_ancestor();
+    let n_group_exprs = aggregate.group_expr_len()?;
+    let (group_by_reqs, aggregate_reqs) = indices.split_off(n_group_exprs);
+
+    let group_by_expr_existing = aggregate
+        .group_expr
+        .iter()
+        .map(|group_by_expr| group_by_expr.schema_name().to_string())
+        .collect::<Vec<_>>();
+
+    let new_group_bys = if let Some(simplest_groupby_indices) =
+        get_required_group_by_exprs_indices(
+            aggregate.input.schema(),
+            &group_by_expr_existing,
+        ) {
+        group_by_reqs
+            .append(&simplest_groupby_indices)
+            .get_at_indices(&aggregate.group_expr)
+    } else {
+        aggregate.group_expr
+    };
+
+    let new_aggr_expr = aggregate_reqs.get_at_indices(&aggregate.aggr_expr);
+
+    if new_group_bys.is_empty() && new_aggr_expr.is_empty() {
+        return Ok(Transformed::yes(LogicalPlan::EmptyRelation(
+            EmptyRelation {
+                produce_one_row: true,
+                schema: Arc::new(DFSchema::empty()),
+            },
+        )));
+    }
+
+    let all_exprs_iter = new_group_bys.iter().chain(new_aggr_expr.iter());
+    let schema = aggregate.input.schema();
+    let necessary_indices = RequiredIndices::new().with_exprs(schema, all_exprs_iter);
+    let necessary_exprs = necessary_indices.get_required_exprs(schema);
+    let mut necessary_indices = if new_aggr_expr.is_empty() {
+        necessary_indices.for_multiplicity_insensitive_child()
+    } else {
+        necessary_indices.for_multiplicity_sensitive_child()
+    };
+    necessary_indices = necessary_indices
+        .with_volatile_ancestor_if(has_volatile_ancestor)
+        .with_plan_volatile(volatile_in_plan);
+
+    optimize_projections(
+        Arc::unwrap_or_clone(aggregate.input),
+        config,
+        necessary_indices,
+    )?
+    .transform_data(|aggregate_input| {
+        add_projection_on_top_if_helpful(aggregate_input, necessary_exprs)
+    })?
+    .map_data(|aggregate_input| {
+        Aggregate::try_new(Arc::new(aggregate_input), new_group_bys, new_aggr_expr)
+            .map(LogicalPlan::Aggregate)
+    })
+}
+
+fn optimize_window_projections(
+    window: Window,
+    config: &dyn OptimizerConfig,
+    indices: RequiredIndices,
+    volatile_in_plan: bool,
+) -> Result<Transformed<LogicalPlan>> {
+    let has_volatile_ancestor = indices.has_volatile_ancestor();
+    let input_schema = Arc::clone(window.input.schema());
+    let n_input_fields = input_schema.fields().len();
+    let (child_reqs, window_reqs) = indices.split_off(n_input_fields);
+
+    let new_window_expr = window_reqs.get_at_indices(&window.window_expr);
+
+    let required_indices = child_reqs.with_exprs(&input_schema, &new_window_expr);
+    let mut required_indices = if new_window_expr.is_empty() {
+        required_indices.for_multiplicity_insensitive_child()
+    } else {
+        required_indices.for_multiplicity_sensitive_child()
+    };
+    required_indices = required_indices
+        .with_volatile_ancestor_if(has_volatile_ancestor)
+        .with_plan_volatile(volatile_in_plan);
+
+    optimize_projections(
+        Arc::unwrap_or_clone(window.input),
+        config,
+        required_indices.clone(),
+    )?
+    .transform_data(|window_child| {
+        if new_window_expr.is_empty() {
+            Ok(Transformed::no(window_child))
+        } else {
+            let required_exprs = required_indices.get_required_exprs(&input_schema);
+            let window_child =
+                add_projection_on_top_if_helpful(window_child, required_exprs)?.data;
+            Window::try_new(new_window_expr, Arc::new(window_child))
+                .map(LogicalPlan::Window)
+                .map(Transformed::yes)
+        }
+    })
+}
+
+fn optimize_table_scan_projections(
+    table_scan: TableScan,
+    indices: RequiredIndices,
+) -> Result<Transformed<LogicalPlan>> {
+    let TableScan {
+        table_name,
+        source,
+        projection,
+        filters,
+        fetch,
+        projected_schema: _,
+    } = table_scan;
+
+    let projection = match &projection {
+        Some(projection) => indices.into_mapped_indices(|idx| projection[idx]),
+        None => indices.into_inner(),
+    };
+    let new_scan =
+        TableScan::try_new(table_name, source, Some(projection), filters, fetch)?;
+
+    Ok(Transformed::yes(LogicalPlan::TableScan(new_scan)))
+}
+
+fn build_plan_input_requirements(
+    plan: &LogicalPlan,
+    indices: &RequiredIndices,
+    volatile_in_plan: bool,
+    projection_beneficial: bool,
+) -> Result<Vec<RequiredIndices>> {
+    plan.inputs()
+        .into_iter()
+        .map(|input| {
+            let required = if projection_beneficial {
+                indices.clone().with_projection_beneficial()
+            } else {
+                indices.clone()
+            };
+            let required = required.with_plan_exprs(plan, input.schema())?;
+            Ok(required.with_plan_volatile(volatile_in_plan))
+        })
+        .collect::<Result<_>>()
+}
+
+fn rewrite_plan_children(
+    plan: LogicalPlan,
+    config: &dyn OptimizerConfig,
+    mut child_required_indices: Vec<RequiredIndices>,
+) -> Result<Transformed<LogicalPlan>> {
     child_required_indices.reverse();
     assert_eq_or_internal_err!(
         child_required_indices.len(),
@@ -506,8 +497,7 @@ fn optimize_projections(
         "OptimizeProjection: child_required_indices length mismatch with plan inputs"
     );
 
-    // Rewrite children of the plan
-    let transformed_plan = plan.map_children(|child| {
+    plan.map_children(|child| {
         let required_indices = child_required_indices.pop().ok_or_else(|| {
             internal_datafusion_err!(
                 "Unexpected number of required_indices in OptimizeProjections rule"
@@ -526,14 +516,7 @@ fn optimize_projections(
                 }
             },
         )
-    })?;
-
-    // If any of the children are transformed, we need to potentially update the plan's schema
-    if transformed_plan.transformed {
-        transformed_plan.map_data(|plan| plan.recompute_schema())
-    } else {
-        Ok(transformed_plan)
-    }
+    })
 }
 
 /// Merges consecutive projections.
