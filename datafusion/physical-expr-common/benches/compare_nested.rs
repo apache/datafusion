@@ -17,7 +17,7 @@
 
 use arrow::array::{ArrayRef, Int32Array, Scalar, StringArray, StructArray};
 use arrow::datatypes::{DataType, Field, Fields};
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr_common::datum::compare_op_for_nested;
 use rand::rngs::StdRng;
@@ -31,8 +31,9 @@ fn make_struct_array(num_rows: usize, rng: &mut StdRng) -> ArrayRef {
 
     let strings: StringArray = (0..num_rows)
         .map(|_| {
-            let s: String =
-                (0..12).map(|_| rng.random_range(b'a'..=b'z') as char).collect();
+            let s: String = (0..12)
+                .map(|_| rng.random_range(b'a'..=b'z') as char)
+                .collect();
             Some(s)
         })
         .collect();
@@ -58,17 +59,13 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     c.bench_function("compare_nested array_array", |b| {
         b.iter(|| {
-            black_box(
-                compare_op_for_nested(Operator::Eq, &lhs, &rhs_array).unwrap(),
-            )
+            black_box(compare_op_for_nested(Operator::Eq, &lhs, &rhs_array).unwrap())
         })
     });
 
     c.bench_function("compare_nested array_scalar", |b| {
         b.iter(|| {
-            black_box(
-                compare_op_for_nested(Operator::Eq, &lhs, &rhs_scalar).unwrap(),
-            )
+            black_box(compare_op_for_nested(Operator::Eq, &lhs, &rhs_scalar).unwrap())
         })
     });
 }
