@@ -314,16 +314,22 @@ impl PartialEq for CorrelatedColumnInfo {
     }
 }
 
+/// A wrapper around any arbitrary logical plan which is repetitive
+/// inside a larger logical plan. The execution of this operator
+/// optimally happen once and the later execution/scan will happen
+/// onto a cache layer.
+/// 
 #[derive(Debug, Clone, Eq)]
 pub struct DelimGet {
     // TODO: is it necessary to alias?
     // pub delim_scan_name: TableReference,
     pub delim_scan_node: Arc<LogicalPlan>,
     pub delim_scan_node_id: usize,
+    // All the correlated columns to do projection and "delim" 
+    // (remove duplicate rows) on
     pub columns: Vec<Column>,
-    /// The schema description of the output
+    // Precomputed output schema of this logical plan
     pub projected_schema: DFSchemaRef,
-    // TODO: add more variables as needed.
 }
 
 impl DelimGet {

@@ -530,9 +530,10 @@ impl DependentJoinRewriter {
                         provider_node_id,
                     });
                     is_table_provider = true;
-                    return true;
+                    // the access is resolved, remove from the list
+                    return false;
                 }
-                return false;
+                return true;
             });
             // if all the accesses are resolved, remove the column from the map
             if accesses.len() == 0 {

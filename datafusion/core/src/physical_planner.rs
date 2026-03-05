@@ -338,8 +338,7 @@ impl DefaultPhysicalPlanner {
         // Can never spawn more tasks than leaves in the tree, as these tasks must
         // all converge down to the root node, which can only be processed by a
         // single task.
-        let max_concurrency = 1;
-        // planning_concurrency.min(flat_tree_leaf_indices.len());
+        let max_concurrency = planning_concurrency.min(flat_tree_leaf_indices.len());
 
         // Spawning tasks which will traverse leaf up to the root.
         let tasks = flat_tree_leaf_indices
@@ -1674,12 +1673,14 @@ impl DefaultPhysicalPlanner {
             LogicalPlan::DelimGet(DelimGet {
                 // delim_scan_name,
                 delim_scan_node,
+                columns,
                 projected_schema,
                 ..
             }) => {
                 // self.create_project_physical_exec(session_state, input_exec, delim_scan_node, expr);
                 let delim_scan =
                     LogicalPlanBuilder::new(delim_scan_node.as_ref().clone())
+                        .project(columns.iter().map(|c| SelectExpr::Expression(Expr::Column(c.clone()))))?
                         .build()?;
                 let group_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = (0
                     ..projected_schema.fields().len())

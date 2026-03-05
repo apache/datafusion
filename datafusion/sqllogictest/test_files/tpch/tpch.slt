@@ -18,8 +18,8 @@
 # under the License.
 
 include ./create_tables.slt.part
-include ./plans/q22.slt.part
-include ./answers/q22.slt.part
+include ./plans/q*.slt.part
+include ./answers/q*.slt.part
 
 # test answers with sort merge join
 #statement ok

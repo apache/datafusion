@@ -507,8 +507,7 @@ impl DependentJoinDecorrelator {
                 ),
             )?;
 
-            let delim_scan_name =
-                format!("dscan_{}", self.delim_scan_id);
+            let delim_scan_name = format!("dscan_{}", self.delim_scan_id);
 
             let mut projection_exprs = vec![];
             table_domains.iter().for_each(|c| {
