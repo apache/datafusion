@@ -87,16 +87,16 @@ fn supports_collect_by_thresholds(
     threshold_byte_size: usize,
     threshold_num_rows: usize,
 ) -> bool {
-    // Currently we do not trust the 0 value from stats, due to stats collection might have bug
-    // TODO check the logic in datasource::get_statistics_with_limit()
+    // `partition_statitics` will return None for Absent, thus we do not need to guard
+    // against 0 values.
     let Ok(stats) = plan.partition_statistics(None) else {
         return false;
     };
 
     if let Some(byte_size) = stats.total_byte_size.get_value() {
-        *byte_size != 0 && *byte_size < threshold_byte_size
+        *byte_size < threshold_byte_size
     } else if let Some(num_rows) = stats.num_rows.get_value() {
-        *num_rows != 0 && *num_rows < threshold_num_rows
+        *num_rows < threshold_num_rows
     } else {
         false
     }
