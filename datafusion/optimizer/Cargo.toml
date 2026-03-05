@@ -71,3 +71,7 @@ insta = { workspace = true }
 [[bench]]
 name = "projection_unnecessary"
 harness = false
+
+[[bench]]
+name = "required_indices"
+harness = false
