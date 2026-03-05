@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::utils::{make_renamed_schema, rename_expressions};
+use super::utils::{alias_expressions, make_renamed_schema, rename_expressions};
 use super::{DefaultSubstraitConsumer, SubstraitConsumer};
 use crate::extensions::Extensions;
-use datafusion::common::{not_impl_err, plan_err};
+use datafusion::common::{DFSchema, not_impl_err, plan_err};
 use datafusion::execution::SessionState;
 use datafusion::logical_expr::{Aggregate, LogicalPlan, Projection, col};
 use std::sync::Arc;
@@ -53,7 +53,6 @@ pub async fn from_substrait_plan_with_consumer(
                         let plan =
                             consumer.consume_rel(root.input.as_ref().unwrap()).await?;
                         if root.names.is_empty() {
-                            // Backwards compatibility for plans missing names
                             return Ok(plan);
                         }
                         let renamed_schema =
@@ -62,55 +61,9 @@ pub async fn from_substrait_plan_with_consumer(
                             .has_equivalent_names_and_types(plan.schema())
                             .is_ok()
                         {
-                            // Nothing to do if the schema is already equivalent
                             return Ok(plan);
                         }
-                        match plan {
-                            // If the last node of the plan produces expressions, bake the renames into those expressions.
-                            // This isn't necessary for correctness, but helps with roundtrip tests.
-                            LogicalPlan::Projection(p) => {
-                                Ok(LogicalPlan::Projection(Projection::try_new(
-                                    rename_expressions(
-                                        p.expr,
-                                        p.input.schema(),
-                                        renamed_schema.fields(),
-                                    )?,
-                                    p.input,
-                                )?))
-                            }
-                            LogicalPlan::Aggregate(a) => {
-                                let (group_fields, expr_fields) =
-                                    renamed_schema.fields().split_at(a.group_expr.len());
-                                let new_group_exprs = rename_expressions(
-                                    a.group_expr,
-                                    a.input.schema(),
-                                    group_fields,
-                                )?;
-                                let new_aggr_exprs = rename_expressions(
-                                    a.aggr_expr,
-                                    a.input.schema(),
-                                    expr_fields,
-                                )?;
-                                Ok(LogicalPlan::Aggregate(Aggregate::try_new(
-                                    a.input,
-                                    new_group_exprs,
-                                    new_aggr_exprs,
-                                )?))
-                            }
-                            // There are probably more plans where we could bake things in, can add them later as needed.
-                            // Otherwise, add a new Project to handle the renaming.
-                            _ => Ok(LogicalPlan::Projection(Projection::try_new(
-                                rename_expressions(
-                                    plan.schema()
-                                        .columns()
-                                        .iter()
-                                        .map(|c| col(c.to_owned())),
-                                    plan.schema(),
-                                    renamed_schema.fields(),
-                                )?,
-                                Arc::new(plan),
-                            )?)),
-                        }
+                        apply_renames(plan, &renamed_schema)
                     }
                 },
                 None => plan_err!("Cannot parse plan relation: None"),
@@ -120,5 +73,73 @@ pub async fn from_substrait_plan_with_consumer(
             "Substrait plan with more than 1 relation trees not supported. Number of relation trees: {:?}",
             plan.relations.len()
         ),
+    }
+}
+
+/// Apply the root-level schema renames to the given plan.
+///
+/// The strategy depends on the plan type:
+/// - **Projection**: renames (aliases + casts) are baked directly into the
+///   projection expressions.
+/// - **Aggregate**: only safe aliases are applied to the aggregate's
+///   expressions. If struct-field casts are also needed, a wrapping Projection
+///   is added on top (the physical planner rejects Cast-wrapped aggregates).
+/// - **Other nodes**: a new Projection is added on top to carry the renames.
+fn apply_renames(
+    plan: LogicalPlan,
+    renamed_schema: &DFSchema,
+) -> datafusion::common::Result<LogicalPlan> {
+    match plan {
+        LogicalPlan::Projection(p) => {
+            Ok(LogicalPlan::Projection(Projection::try_new(
+                rename_expressions(
+                    p.expr,
+                    p.input.schema(),
+                    renamed_schema.fields(),
+                )?,
+                p.input,
+            )?))
+        }
+        LogicalPlan::Aggregate(a) => {
+            let (group_fields, expr_fields) =
+                renamed_schema.fields().split_at(a.group_expr.len());
+            let agg = LogicalPlan::Aggregate(Aggregate::try_new(
+                a.input,
+                alias_expressions(a.group_expr, group_fields)?,
+                alias_expressions(a.aggr_expr, expr_fields)?,
+            )?);
+            // If aliasing alone didn't satisfy the target schema
+            // (e.g. nested struct field renames require casts), wrap
+            // in a Projection that can safely carry those casts.
+            if renamed_schema
+                .has_equivalent_names_and_types(agg.schema())
+                .is_ok()
+            {
+                Ok(agg)
+            } else {
+                Ok(LogicalPlan::Projection(Projection::try_new(
+                    rename_expressions(
+                        agg.schema()
+                            .columns()
+                            .iter()
+                            .map(|c| col(c.to_owned())),
+                        agg.schema(),
+                        renamed_schema.fields(),
+                    )?,
+                    Arc::new(agg),
+                )?))
+            }
+        }
+        _ => Ok(LogicalPlan::Projection(Projection::try_new(
+            rename_expressions(
+                plan.schema()
+                    .columns()
+                    .iter()
+                    .map(|c| col(c.to_owned())),
+                plan.schema(),
+                renamed_schema.fields(),
+            )?,
+            Arc::new(plan),
+        )?)),
     }
 }
