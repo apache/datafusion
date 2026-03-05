@@ -100,9 +100,9 @@ impl ScalarUDFImpl for SparkMakeValidUtf8 {
 }
 
 fn spark_make_valid_utf8_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let array = args[0].clone();
+    let array = &args[0];
     match &array.data_type() {
-        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => Ok(array),
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => Ok(array.to_owned()),
         DataType::Binary => Ok(Arc::new(
             as_binary_array(&array)?
                 .iter()
