@@ -661,8 +661,13 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// direction.
     ///
     /// DataFusion already simplifies arguments and performs constant folding
-    /// (for example, `my_add(1, 2) -> 3`), so there is usually no need to
-    /// implement those optimizations manually for specific UDFs.
+    /// (for example, `my_add(1, 2) -> 3`). For nested expressions, the optimizer
+    /// runs simplification in multiple passes, so arguments are typically
+    /// simplified before this hook is invoked. As a result, UDF implementations
+    /// usually do not need to handle argument simplification themselves.
+    ///
+    /// See configuration `datafusion.optimizer.max_passes` for details on how many
+    /// optimization passes may be applied.
     ///
     /// # Returns
     ///
