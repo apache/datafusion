@@ -324,11 +324,10 @@ fn optimize_aggregate_projections(
     let schema = aggregate.input.schema();
     let necessary_indices = RequiredIndices::new().with_exprs(schema, all_exprs_iter);
     let necessary_exprs = necessary_indices.get_required_exprs(schema);
-    let mut necessary_indices = if new_aggr_expr.is_empty() {
-        necessary_indices.for_multiplicity_insensitive_child()
-    } else {
-        necessary_indices.for_multiplicity_sensitive_child()
-    };
+    let mut necessary_indices = with_child_multiplicity(
+        necessary_indices,
+        !new_aggr_expr.is_empty(),
+    );
     necessary_indices = necessary_indices
         .with_volatile_ancestor_if(has_volatile_ancestor)
         .with_plan_volatile(volatile_in_plan);
@@ -361,11 +360,8 @@ fn optimize_window_projections(
     let new_window_expr = window_reqs.get_at_indices(&window.window_expr);
 
     let required_indices = child_reqs.with_exprs(&input_schema, &new_window_expr);
-    let mut required_indices = if new_window_expr.is_empty() {
-        required_indices.for_multiplicity_insensitive_child()
-    } else {
-        required_indices.for_multiplicity_sensitive_child()
-    };
+    let mut required_indices =
+        with_child_multiplicity(required_indices, !new_window_expr.is_empty());
     required_indices = required_indices
         .with_volatile_ancestor_if(has_volatile_ancestor)
         .with_plan_volatile(volatile_in_plan);
@@ -410,6 +406,17 @@ fn optimize_table_scan_projections(
         TableScan::try_new(table_name, source, Some(projection), filters, fetch)?;
 
     Ok(Transformed::yes(LogicalPlan::TableScan(new_scan)))
+}
+
+fn with_child_multiplicity(
+    required_indices: RequiredIndices,
+    multiplicity_sensitive: bool,
+) -> RequiredIndices {
+    if multiplicity_sensitive {
+        required_indices.for_multiplicity_sensitive_child()
+    } else {
+        required_indices.for_multiplicity_insensitive_child()
+    }
 }
 
 fn build_plan_input_requirements(
