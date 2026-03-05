@@ -42,9 +42,13 @@ use datafusion_datasource_csv::source::CsvSource;
 use datafusion_datasource_json::file_format::JsonSink;
 use datafusion_datasource_json::source::JsonSource;
 #[cfg(feature = "parquet")]
+use datafusion_datasource_parquet::CachedParquetFileReaderFactory;
+#[cfg(feature = "parquet")]
 use datafusion_datasource_parquet::file_format::ParquetSink;
 #[cfg(feature = "parquet")]
 use datafusion_datasource_parquet::source::ParquetSource;
+#[cfg(feature = "parquet")]
+use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{FunctionRegistry, TaskContext};
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 use datafusion_functions_table::generate_series::{
@@ -847,9 +851,19 @@ impl protobuf::PhysicalPlanNode {
 
             // Parse table schema with partition columns
             let table_schema = parse_table_schema_from_proto(base_conf)?;
+            let object_store_url = match base_conf.object_store_url.is_empty() {
+                false => ObjectStoreUrl::parse(&base_conf.object_store_url)?,
+                true => ObjectStoreUrl::local_filesystem(),
+            };
+            let store = ctx.runtime_env().object_store(object_store_url)?;
+            let metadata_cache =
+                ctx.runtime_env().cache_manager.get_file_metadata_cache();
+            let reader_factory =
+                Arc::new(CachedParquetFileReaderFactory::new(store, metadata_cache));
 
-            let mut source =
-                ParquetSource::new(table_schema).with_table_parquet_options(options);
+            let mut source = ParquetSource::new(table_schema)
+                .with_parquet_file_reader_factory(reader_factory)
+                .with_table_parquet_options(options);
 
             if let Some(predicate) = predicate {
                 source = source.with_predicate(predicate);
