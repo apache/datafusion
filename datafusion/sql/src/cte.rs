@@ -40,21 +40,17 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             let cte_name_span =
                 Span::try_from_sqlparser_span(cte.alias.name.span);
             if planner_context.contains_cte(&cte_name) {
-                let first_span = planner_context.get_cte_span(&cte_name);
-                let mut diagnostic = Diagnostic::new_error(
-                    format!(
-                        "WITH query name {cte_name:?} specified more than once"
-                    ),
-                    cte_name_span,
+                let msg = format!(
+                    "WITH query name {cte_name:?} specified more than once"
                 );
-                if let Some(first_span) = first_span {
+                let mut diagnostic =
+                    Diagnostic::new_error(&msg, cte_name_span);
+                if let Some(first_span) = planner_context.get_cte_span(&cte_name) {
                     diagnostic =
                         diagnostic.with_note("previously defined here", Some(first_span));
                 }
-                return plan_err!(
-                    "WITH query name {cte_name:?} specified more than once"
-                )
-                .map_err(|e| e.with_diagnostic(diagnostic));
+                return plan_err!("{msg}")
+                    .map_err(|e| e.with_diagnostic(diagnostic));
             }
 
             // Create a logical plan for the CTE

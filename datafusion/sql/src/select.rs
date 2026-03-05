@@ -738,27 +738,25 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     planner_context.set_outer_from_schema(left_schema)
                 };
                 for input in from {
-                    let current_span =
-                        Span::try_from_sqlparser_span(input.relation.span());
                     let current_name = extract_table_name(&input);
 
-                    if let Some((ref name, _)) = current_name {
-                        alias_spans.entry(name.clone()).or_insert(current_span);
+                    if let Some((ref name, ref span)) = current_name {
+                        alias_spans.entry(name.clone()).or_insert(*span);
                     }
 
                     let right =
                         self.plan_table_with_joins(input, planner_context)?;
 
                     left = left.cross_join(right).map_err(|e| {
-                        if let Some((ref name, _)) = current_name {
+                        if let Some((ref name, ref current_span)) = current_name {
                             if let Some(prior_span) =
                                 alias_spans.get(name).copied().flatten()
                             {
-                                let mut diagnostic = Diagnostic::new_error(
+                                let diagnostic = Diagnostic::new_error(
                                     "duplicate table alias in FROM clause",
-                                    current_span,
-                                );
-                                diagnostic = diagnostic.with_note(
+                                    *current_span,
+                                )
+                                .with_note(
                                     "first defined here",
                                     Some(prior_span),
                                 );
