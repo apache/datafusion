@@ -853,7 +853,7 @@ impl PhysicalExpr for InListExpr {
                 for expr in self.list.iter().skip(1) {
                     // Short-circuit: if every non-null row is already true,
                     // no further list items can change the result.
-                    if found.true_count() == num_rows {
+                    if found.null_count() == 0 && found.true_count() == num_rows {
                         break;
                     }
                     found = or_kleene(&found, &compare_one(expr)?)?;
