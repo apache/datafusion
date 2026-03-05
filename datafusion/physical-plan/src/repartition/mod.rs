@@ -44,7 +44,7 @@ use crate::{
     check_if_same_properties,
 };
 
-use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions};
+use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions, StringViewArray};
 use arrow::compute::take_arrays;
 use arrow::datatypes::{SchemaRef, UInt32Type};
 use datafusion_common::config::ConfigOptions;
@@ -612,11 +612,24 @@ impl BatchPartitioner {
                             let columns =
                                 take_arrays(batch.columns(), &indices_array, None)?;
 
+                            let new_columns = columns
+                                .into_iter()
+                                .map(|col| {
+                                    if let Some(sv) =
+                                        col.as_any().downcast_ref::<StringViewArray>()
+                                    {
+                                        Arc::new(sv.gc())
+                                    } else {
+                                        col
+                                    }
+                                })
+                                .collect();
+
                             let mut options = RecordBatchOptions::new();
                             options = options.with_row_count(Some(indices_array.len()));
                             let batch = RecordBatch::try_new_with_options(
                                 batch.schema(),
-                                columns,
+                                new_columns,
                                 &options,
                             )
                             .unwrap();
@@ -1771,7 +1784,7 @@ mod tests {
         {collect, expressions::col},
     };
 
-    use arrow::array::{ArrayRef, StringArray, UInt32Array};
+    use arrow::array::{ArrayRef, StringArray, StringViewArray, UInt32Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::cast::as_string_array;
     use datafusion_common::exec_err;
@@ -2545,6 +2558,33 @@ mod tests {
             .collect()
     }
 
+    fn test_schema_string_view() -> Arc<Schema> {
+        Arc::new(Schema::new(vec![
+            Field::new("key", DataType::UInt32, false),
+            Field::new("val", DataType::Utf8View, false),
+        ]))
+    }
+
+    /// Create a batch with StringViewArray data for compaction tests.
+    /// Strings are >12 bytes to force out-of-line storage in the buffer
+    /// (strings <=12 bytes are inlined in the view and don't reference the buffer).
+    fn create_string_view_batch(num_rows: usize, num_partitions: usize) -> RecordBatch {
+        let schema = test_schema_string_view();
+        let keys: Vec<u32> = (0..num_rows).map(|i| (i % num_partitions) as u32).collect();
+        let vals: Vec<String> = (0..num_rows)
+            .map(|i| format!("string_value_{i:0>20}"))
+            .collect();
+        let val_refs: Vec<&str> = vals.iter().map(|s| s.as_str()).collect();
+        RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(UInt32Array::from(keys)) as ArrayRef,
+                Arc::new(StringViewArray::from(val_refs)) as ArrayRef,
+            ],
+        )
+        .unwrap()
+    }
+
     #[tokio::test]
     async fn test_repartition_ordering_with_spilling() -> Result<()> {
         // Test that repartition preserves ordering when spilling occurs
@@ -2615,6 +2655,31 @@ mod tests {
                 }
             }
         }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn hash_repartition_string_view_compaction() -> Result<()> {
+        let schema = test_schema_string_view();
+        let num_partitions = 8;
+        let batch = create_string_view_batch(800, num_partitions);
+        let partitions = vec![vec![batch]];
+
+        let output_partitions = repartition(
+            &schema,
+            partitions,
+            Partitioning::Hash(vec![col("key", &schema)?], num_partitions),
+        )
+        .await?;
+
+        assert_eq!(num_partitions, output_partitions.len());
+
+        let total_rows: usize = output_partitions
+            .iter()
+            .map(|x| x.iter().map(|x| x.num_rows()).sum::<usize>())
+            .sum();
+        assert_eq!(total_rows, 800);
 
         Ok(())
     }
