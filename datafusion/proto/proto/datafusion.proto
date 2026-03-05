@@ -594,11 +594,15 @@ message WhenThen {
 message CastNode {
   LogicalExprNode expr = 1;
   datafusion_common.ArrowType arrow_type = 2;
+  map<string, string> metadata = 3;
+  optional bool nullable = 4;
 }
 
 message TryCastNode {
   LogicalExprNode expr = 1;
   datafusion_common.ArrowType arrow_type = 2;
+  map<string, string> metadata = 3;
+  optional bool nullable = 4;
 }
 
 message SortExprNode {

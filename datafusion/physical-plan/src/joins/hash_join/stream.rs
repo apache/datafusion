@@ -713,6 +713,7 @@ impl HashJoinStream {
                 filter,
                 JoinSide::Left,
                 None,
+                self.join_type,
             )?
         } else {
             (left_indices, right_indices)
@@ -781,6 +782,7 @@ impl HashJoinStream {
             &right_indices,
             &self.column_indices,
             join_side,
+            self.join_type,
         )?;
 
         let push_status = self.output_buffer.push_batch(batch)?;
@@ -899,6 +901,7 @@ impl HashJoinStream {
                 &right_side,
                 &self.column_indices,
                 JoinSide::Left,
+                self.join_type,
             )?;
             let push_status = self.output_buffer.push_batch(batch)?;
 
