@@ -309,9 +309,9 @@ fn optimize_aggregate_projections(
         aggregate.group_expr
     };
 
-    let new_aggr_expr = aggregate_reqs.get_at_indices(&aggregate.aggr_expr);
+    let new_aggr_exprs = aggregate_reqs.get_at_indices(&aggregate.aggr_expr);
 
-    if new_group_bys.is_empty() && new_aggr_expr.is_empty() {
+    if new_group_bys.is_empty() && new_aggr_exprs.is_empty() {
         return Ok(Transformed::yes(LogicalPlan::EmptyRelation(
             EmptyRelation {
                 produce_one_row: true,
@@ -320,15 +320,16 @@ fn optimize_aggregate_projections(
         )));
     }
 
-    let all_exprs_iter = new_group_bys.iter().chain(new_aggr_expr.iter());
+    let all_exprs_iter = new_group_bys.iter().chain(new_aggr_exprs.iter());
     let schema = aggregate.input.schema();
     let necessary_indices = RequiredIndices::new().with_exprs(schema, all_exprs_iter);
     let necessary_exprs = necessary_indices.get_required_exprs(schema);
-    let mut necessary_indices =
-        with_child_multiplicity(necessary_indices, !new_aggr_expr.is_empty());
-    necessary_indices = necessary_indices
-        .with_volatile_ancestor_if(has_volatile_ancestor)
-        .with_plan_volatile(volatile_in_plan);
+    let necessary_indices = finalize_child_requirements(
+        necessary_indices,
+        !new_aggr_exprs.is_empty(),
+        has_volatile_ancestor,
+        volatile_in_plan,
+    );
 
     optimize_projections(
         Arc::unwrap_or_clone(aggregate.input),
@@ -339,7 +340,7 @@ fn optimize_aggregate_projections(
         add_projection_on_top_if_helpful(aggregate_input, necessary_exprs)
     })?
     .map_data(|aggregate_input| {
-        Aggregate::try_new(Arc::new(aggregate_input), new_group_bys, new_aggr_expr)
+        Aggregate::try_new(Arc::new(aggregate_input), new_group_bys, new_aggr_exprs)
             .map(LogicalPlan::Aggregate)
     })
 }
@@ -355,14 +356,15 @@ fn optimize_window_projections(
     let n_input_fields = input_schema.fields().len();
     let (child_reqs, window_reqs) = indices.split_off(n_input_fields);
 
-    let new_window_expr = window_reqs.get_at_indices(&window.window_expr);
+    let new_window_exprs = window_reqs.get_at_indices(&window.window_expr);
 
-    let required_indices = child_reqs.with_exprs(&input_schema, &new_window_expr);
-    let mut required_indices =
-        with_child_multiplicity(required_indices, !new_window_expr.is_empty());
-    required_indices = required_indices
-        .with_volatile_ancestor_if(has_volatile_ancestor)
-        .with_plan_volatile(volatile_in_plan);
+    let required_indices = child_reqs.with_exprs(&input_schema, &new_window_exprs);
+    let required_indices = finalize_child_requirements(
+        required_indices,
+        !new_window_exprs.is_empty(),
+        has_volatile_ancestor,
+        volatile_in_plan,
+    );
 
     optimize_projections(
         Arc::unwrap_or_clone(window.input),
@@ -370,13 +372,13 @@ fn optimize_window_projections(
         required_indices.clone(),
     )?
     .transform_data(|window_child| {
-        if new_window_expr.is_empty() {
+        if new_window_exprs.is_empty() {
             Ok(Transformed::no(window_child))
         } else {
             let required_exprs = required_indices.get_required_exprs(&input_schema);
             let window_child =
                 add_projection_on_top_if_helpful(window_child, required_exprs)?.data;
-            Window::try_new(new_window_expr, Arc::new(window_child))
+            Window::try_new(new_window_exprs, Arc::new(window_child))
                 .map(LogicalPlan::Window)
                 .map(Transformed::yes)
         }
@@ -418,6 +420,17 @@ fn with_child_multiplicity(
     } else {
         required_indices.for_multiplicity_insensitive_child()
     }
+}
+
+fn finalize_child_requirements(
+    required_indices: RequiredIndices,
+    multiplicity_sensitive: bool,
+    has_volatile_ancestor: bool,
+    volatile_in_plan: bool,
+) -> RequiredIndices {
+    with_child_multiplicity(required_indices, multiplicity_sensitive)
+        .with_volatile_ancestor_if(has_volatile_ancestor)
+        .with_plan_volatile(volatile_in_plan)
 }
 
 fn build_plan_input_requirements(
