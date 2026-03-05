@@ -737,3 +737,155 @@ DROP TABLE t_union_mem;
 
 statement ok
 DROP TABLE t_union_parquet;
+
+# Cleanup settings
+statement ok
+set datafusion.optimizer.max_passes = 3;
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = false;
+
+
+# Regression test for https://github.com/apache/datafusion/issues/20696
+# Multi-column INNER JOIN with dictionary fails
+# when parquet pushdown filters are enabled.
+
+
+statement ok
+COPY (
+  SELECT
+    to_timestamp_nanos(time_ns) AS time,
+    arrow_cast(state, 'Dictionary(Int32, Utf8)') AS state,
+    arrow_cast(city, 'Dictionary(Int32, Utf8)') AS city,
+    temp
+  FROM (
+    VALUES
+      (200, 'CA', 'LA', 90.0),
+      (250, 'MA', 'Boston', 72.4),
+      (100, 'MA', 'Boston', 70.4),
+      (350, 'CA', 'LA', 90.0)
+  ) AS t(time_ns, state, city, temp)
+)
+TO 'test_files/scratch/parquet_filter_pushdown/issue_20696/h2o/data.parquet';
+
+statement ok
+COPY (
+  SELECT
+    to_timestamp_nanos(time_ns) AS time,
+    arrow_cast(state, 'Dictionary(Int32, Utf8)') AS state,
+    arrow_cast(city, 'Dictionary(Int32, Utf8)') AS city,
+    temp,
+    reading
+  FROM (
+    VALUES
+      (250, 'MA', 'Boston', 53.4, 51.0),
+      (100, 'MA', 'Boston', 50.4, 50.0)
+  ) AS t(time_ns, state, city, temp, reading)
+)
+TO 'test_files/scratch/parquet_filter_pushdown/issue_20696/o2/data.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE h2o_parquet_20696 STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_filter_pushdown/issue_20696/h2o/';
+
+statement ok
+CREATE EXTERNAL TABLE o2_parquet_20696 STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_filter_pushdown/issue_20696/o2/';
+
+# Query should work both with and without filters
+statement ok
+set datafusion.execution.parquet.pushdown_filters = false;
+
+query RRR
+SELECT
+  h2o_parquet_20696.temp AS h2o_temp,
+  o2_parquet_20696.temp AS o2_temp,
+  o2_parquet_20696.reading
+FROM h2o_parquet_20696
+INNER JOIN o2_parquet_20696
+  ON h2o_parquet_20696.time = o2_parquet_20696.time
+  AND h2o_parquet_20696.state = o2_parquet_20696.state
+  AND h2o_parquet_20696.city = o2_parquet_20696.city
+WHERE h2o_parquet_20696.time >= '1970-01-01T00:00:00.000000050Z'
+  AND h2o_parquet_20696.time <= '1970-01-01T00:00:00.000000300Z';
+----
+72.4 53.4 51
+70.4 50.4 50
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = true;
+
+query RRR
+SELECT
+  h2o_parquet_20696.temp AS h2o_temp,
+  o2_parquet_20696.temp AS o2_temp,
+  o2_parquet_20696.reading
+FROM h2o_parquet_20696
+INNER JOIN o2_parquet_20696
+  ON h2o_parquet_20696.time = o2_parquet_20696.time
+  AND h2o_parquet_20696.state = o2_parquet_20696.state
+  AND h2o_parquet_20696.city = o2_parquet_20696.city
+WHERE h2o_parquet_20696.time >= '1970-01-01T00:00:00.000000050Z'
+  AND h2o_parquet_20696.time <= '1970-01-01T00:00:00.000000300Z';
+----
+72.4 53.4 51
+70.4 50.4 50
+
+# Cleanup
+statement ok
+DROP TABLE h2o_parquet_20696;
+
+statement ok
+DROP TABLE o2_parquet_20696;
+
+# Cleanup settings
+statement ok
+set datafusion.execution.parquet.pushdown_filters = false;
+
+##########
+# Regression test: filter pushdown with Struct columns in schema
+#
+# When a schema has Struct columns, Arrow field indices diverge from Parquet
+# leaf indices (Struct children become separate leaves). A filter on a
+# primitive column *after* a Struct must use the correct Parquet leaf index.
+#
+# Schema:
+#   Arrow:   col_a=0  struct_col=1              col_b=2
+#   Parquet: col_a=0  struct_col.x=1  struct_col.y=2  col_b=3
+##########
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = true;
+
+statement ok
+COPY (
+  SELECT
+    column1 as col_a,
+    column2 as struct_col,
+    column3 as col_b
+  FROM VALUES
+    (1, {x: 10, y: 100}, 'aaa'),
+    (2, {x: 20, y: 200}, 'target'),
+    (3, {x: 30, y: 300}, 'zzz')
+) TO 'test_files/scratch/parquet_filter_pushdown/struct_filter.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE t_struct_filter
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_filter_pushdown/struct_filter.parquet';
+
+# Filter on col_b (the primitive column after the struct).
+# Before the fix, this returned 0 rows because the filter read struct_col.y
+# (Parquet leaf 2) instead of col_b (Parquet leaf 3).
+query IT
+SELECT col_a, col_b FROM t_struct_filter WHERE col_b = 'target';
+----
+2 target
+
+# Clean up
+statement ok
+set datafusion.execution.parquet.pushdown_filters = false;
+
+statement ok
+DROP TABLE t_struct_filter;
