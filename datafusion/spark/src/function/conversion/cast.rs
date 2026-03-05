@@ -17,31 +17,92 @@
 
 use arrow::array::{Array, ArrayRef, AsArray, TimestampMicrosecondBuilder};
 use arrow::datatypes::{
-    ArrowPrimitiveType, DataType, Int8Type, Int16Type, Int32Type, Int64Type, TimeUnit,
+    ArrowPrimitiveType, DataType, Field, FieldRef, Int8Type, Int16Type, Int32Type,
+    Int64Type, TimeUnit,
 };
-use datafusion_common::{Result as DataFusionResult, ScalarValue, exec_err};
+use datafusion_common::utils::take_function_args;
+use datafusion_common::{
+    Result as DataFusionResult, ScalarValue, exec_err, internal_err,
+};
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignature, Volatility,
 };
 use std::any::Any;
 use std::sync::Arc;
+
 const MICROS_PER_SECOND: i64 = 1_000_000;
 
+/// Spark-compatible `cast` function for type conversions.
+///
+/// This implements Spark's CAST expression with a target type parameter.
+///
+/// # Usage
+/// ```sql
+/// SELECT spark_cast(value, 'timestamp')
+/// ```
+///
+/// # Currently supported conversions
+/// - Int8/Int16/Int32/Int64 -> Timestamp (target_type = 'timestamp')
+///
+/// The integer value is interpreted as seconds since the Unix epoch (1970-01-01 00:00:00 UTC)
+/// and converted to a timestamp with microsecond precision.
+///
+/// # Overflow behavior
+/// Uses saturating multiplication to handle overflow - values that would overflow
+/// i64 when multiplied by 1,000,000 are clamped to i64::MAX or i64::MIN.
+///
+/// # References
+/// - <https://spark.apache.org/docs/latest/api/sql/index.html#cast>
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct Cast {
+pub struct SparkCast {
     signature: Signature,
 }
-impl Default for Cast {
+
+impl Default for SparkCast {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Cast {
+impl SparkCast {
     pub fn new() -> Self {
         Self {
-            signature: Signature::any(1, Volatility::Immutable),
+            // First arg: value to cast (only ints for now with potential to add further support later)
+            // Second arg: target datatype as Utf8 string literal (ex : 'timestamp')
+            signature: Signature::one_of(
+                vec![TypeSignature::Any(2)],
+                Volatility::Immutable,
+            ),
         }
+    }
+}
+
+/// Parse target type string into a DataType
+fn parse_target_type(type_str: &str) -> DataFusionResult<DataType> {
+    match type_str.to_lowercase().as_str() {
+        // could add further data type support in future
+        "timestamp" => Ok(DataType::Timestamp(TimeUnit::Microsecond, None)),
+        other => exec_err!(
+            "Unsupported spark_cast target type '{}'. Supported types: timestamp",
+            other
+        ),
+    }
+}
+
+/// Extract target type string from scalar arguments
+fn get_target_type_from_scalar_args(
+    scalar_args: &[Option<&ScalarValue>],
+) -> DataFusionResult<DataType> {
+    let [_, type_arg] = take_function_args("spark_cast", scalar_args)?;
+
+    match type_arg {
+        Some(ScalarValue::Utf8(Some(s))) | Some(ScalarValue::LargeUtf8(Some(s))) => {
+            parse_target_type(s)
+        }
+        _ => exec_err!(
+            "spark_cast requires second argument to be a string of target data type ex: timestamp"
+        ),
     }
 }
 
@@ -58,6 +119,7 @@ where
         if arr.is_null(i) {
             builder.append_null();
         } else {
+            // spark saturates to i64 min/max
             let micros = (arr.value(i).into()).saturating_mul(MICROS_PER_SECOND);
             builder.append_value(micros);
         }
@@ -66,7 +128,7 @@ where
     Ok(Arc::new(builder.finish()))
 }
 
-impl ScalarUDFImpl for Cast {
+impl ScalarUDFImpl for SparkCast {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -79,84 +141,79 @@ impl ScalarUDFImpl for Cast {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> DataFusionResult<DataType> {
-        // for now we will be supporting int -> timestamp and keep adding more spark-compatible spark
-        match &arg_types[0] {
-            DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 => {
-                Ok(DataType::Timestamp(TimeUnit::Microsecond, None))
-            }
-            _ => exec_err!("Unsupported cast from {:?}", arg_types[0]),
-        }
+    fn return_type(&self, _arg_types: &[DataType]) -> DataFusionResult<DataType> {
+        internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(
+        &self,
+        args: ReturnFieldArgs,
+    ) -> DataFusionResult<FieldRef> {
+        let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
+        let target_type = get_target_type_from_scalar_args(args.scalar_arguments)?;
+        Ok(Arc::new(Field::new(self.name(), target_type, nullable)))
     }
 
     fn invoke_with_args(
         &self,
         args: ScalarFunctionArgs,
     ) -> DataFusionResult<ColumnarValue> {
-        let input = &args.args[0];
-        match input {
-            ColumnarValue::Array(array) => match array.data_type() {
-                DataType::Int8 => {
-                    let result = cast_int_to_timestamp::<Int8Type>(array)?;
-                    Ok(ColumnarValue::Array(result))
-                }
-                DataType::Int16 => {
-                    let result = cast_int_to_timestamp::<Int16Type>(array)?;
-                    Ok(ColumnarValue::Array(result))
-                }
-                DataType::Int32 => {
-                    let result = cast_int_to_timestamp::<Int32Type>(array)?;
-                    Ok(ColumnarValue::Array(result))
-                }
-                DataType::Int64 => {
-                    let result = cast_int_to_timestamp::<Int64Type>(array)?;
-                    Ok(ColumnarValue::Array(result))
-                }
-                _ => exec_err!(
-                    "Unsupported cast from {:?} to timestamp",
-                    array.data_type()
-                ),
-            },
-            ColumnarValue::Scalar(scalar) => {
-                // Handle scalar conversions
-                match scalar {
-                    ScalarValue::Int8(None)
-                    | ScalarValue::Int16(None)
-                    | ScalarValue::Int32(None)
-                    | ScalarValue::Int64(None) => Ok(ColumnarValue::Scalar(
-                        ScalarValue::TimestampMicrosecond(None, None),
-                    )),
-                    ScalarValue::Int8(Some(v)) => {
-                        let micros = (*v as i64).saturating_mul(MICROS_PER_SECOND);
-                        Ok(ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
-                            Some(micros),
-                            None,
-                        )))
-                    }
-                    ScalarValue::Int16(Some(v)) => {
-                        let micros = (*v as i64).saturating_mul(MICROS_PER_SECOND);
-                        Ok(ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
-                            Some(micros),
-                            None,
-                        )))
-                    }
-                    ScalarValue::Int32(Some(v)) => {
-                        let micros = (*v as i64).saturating_mul(MICROS_PER_SECOND);
-                        Ok(ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
-                            Some(micros),
-                            None,
-                        )))
-                    }
-                    ScalarValue::Int64(Some(v)) => {
-                        let micros = (*v).saturating_mul(MICROS_PER_SECOND);
-                        Ok(ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
-                            Some(micros),
-                            None,
-                        )))
-                    }
-                    _ => exec_err!("Unsupported cast from {:?} to timestamp", scalar),
-                }
+        let target_type = args.return_field.data_type();
+
+        match target_type {
+            DataType::Timestamp(TimeUnit::Microsecond, None) => {
+                cast_to_timestamp(&args.args[0])
             }
+            other => exec_err!("Unsupported spark_cast target type: {:?}", other),
+        }
+    }
+}
+
+/// Cast value to timestamp
+fn cast_to_timestamp(input: &ColumnarValue) -> DataFusionResult<ColumnarValue> {
+    match input {
+        ColumnarValue::Array(array) => match array.data_type() {
+            DataType::Null => Ok(ColumnarValue::Array(Arc::new(
+                arrow::array::TimestampMicrosecondArray::new_null(array.len()),
+            ))),
+            DataType::Int8 => Ok(ColumnarValue::Array(
+                cast_int_to_timestamp::<Int8Type>(array)?,
+            )),
+            DataType::Int16 => Ok(ColumnarValue::Array(cast_int_to_timestamp::<
+                Int16Type,
+            >(array)?)),
+            DataType::Int32 => Ok(ColumnarValue::Array(cast_int_to_timestamp::<
+                Int32Type,
+            >(array)?)),
+            DataType::Int64 => Ok(ColumnarValue::Array(cast_int_to_timestamp::<
+                Int64Type,
+            >(array)?)),
+            other => exec_err!("Unsupported cast from {:?} to timestamp", other),
+        },
+        ColumnarValue::Scalar(scalar) => {
+            let micros = match scalar {
+                ScalarValue::Null
+                | ScalarValue::Int8(None)
+                | ScalarValue::Int16(None)
+                | ScalarValue::Int32(None)
+                | ScalarValue::Int64(None) => None,
+                ScalarValue::Int8(Some(v)) => {
+                    Some((*v as i64).saturating_mul(MICROS_PER_SECOND))
+                }
+                ScalarValue::Int16(Some(v)) => {
+                    Some((*v as i64).saturating_mul(MICROS_PER_SECOND))
+                }
+                ScalarValue::Int32(Some(v)) => {
+                    Some((*v as i64).saturating_mul(MICROS_PER_SECOND))
+                }
+                ScalarValue::Int64(Some(v)) => Some(v.saturating_mul(MICROS_PER_SECOND)),
+                other => {
+                    return exec_err!("Unsupported cast from {:?} to timestamp", other);
+                }
+            };
+            Ok(ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
+                micros, None,
+            )))
         }
     }
 }
@@ -165,17 +222,19 @@ impl ScalarUDFImpl for Cast {
 mod tests {
     use super::*;
     use arrow::array::{Int8Array, Int16Array, Int32Array, Int64Array};
-    use arrow::datatypes::{Field, TimestampMicrosecondType};
-    use datafusion_expr::ScalarFunctionArgs;
+    use arrow::datatypes::TimestampMicrosecondType;
 
-    fn make_args(input: ColumnarValue) -> ScalarFunctionArgs {
+    fn make_args(input: ColumnarValue, target_type: &str) -> ScalarFunctionArgs {
         let return_field = Arc::new(Field::new(
             "result",
             DataType::Timestamp(TimeUnit::Microsecond, None),
             true,
         ));
         ScalarFunctionArgs {
-            args: vec![input],
+            args: vec![
+                input,
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(target_type.to_string()))),
+            ],
             arg_fields: vec![],
             number_rows: 0,
             return_field,
@@ -210,8 +269,8 @@ mod tests {
             None,
         ]));
 
-        let cast = Cast::new();
-        let args = make_args(ColumnarValue::Array(array));
+        let cast = SparkCast::new();
+        let args = make_args(ColumnarValue::Array(array), "timestamp");
         let result = cast.invoke_with_args(args).unwrap();
 
         match result {
@@ -237,8 +296,8 @@ mod tests {
             None,
         ]));
 
-        let cast = Cast::new();
-        let args = make_args(ColumnarValue::Array(array));
+        let cast = SparkCast::new();
+        let args = make_args(ColumnarValue::Array(array), "timestamp");
         let result = cast.invoke_with_args(args).unwrap();
 
         match result {
@@ -258,8 +317,8 @@ mod tests {
         let array: ArrayRef =
             Arc::new(Int32Array::from(vec![Some(0), Some(1704067200), None]));
 
-        let cast = Cast::new();
-        let args = make_args(ColumnarValue::Array(array));
+        let cast = SparkCast::new();
+        let args = make_args(ColumnarValue::Array(array), "timestamp");
         let result = cast.invoke_with_args(args).unwrap();
 
         match result {
@@ -278,13 +337,14 @@ mod tests {
         let array: ArrayRef =
             Arc::new(Int64Array::from(vec![Some(i64::MAX), Some(i64::MIN)]));
 
-        let cast = Cast::new();
-        let args = make_args(ColumnarValue::Array(array));
+        let cast = SparkCast::new();
+        let args = make_args(ColumnarValue::Array(array), "timestamp");
         let result = cast.invoke_with_args(args).unwrap();
 
         match result {
             ColumnarValue::Array(result_array) => {
                 let ts_array = result_array.as_primitive::<TimestampMicrosecondType>();
+                // saturating_mul clamps to i64::MAX/MIN
                 assert_eq!(ts_array.value(0), i64::MAX);
                 assert_eq!(ts_array.value(1), i64::MIN);
             }
@@ -293,43 +353,137 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_int64_array_to_timestamp() {
+        let array: ArrayRef = Arc::new(Int64Array::from(vec![
+            Some(0),
+            Some(1704067200),
+            Some(-86400),
+            None,
+        ]));
+
+        let cast = SparkCast::new();
+        let args = make_args(ColumnarValue::Array(array), "timestamp");
+        let result = cast.invoke_with_args(args).unwrap();
+
+        match result {
+            ColumnarValue::Array(result_array) => {
+                let ts_array = result_array.as_primitive::<TimestampMicrosecondType>();
+                assert_eq!(ts_array.value(0), 0);
+                assert_eq!(ts_array.value(1), 1_704_067_200_000_000);
+                assert_eq!(ts_array.value(2), -86_400_000_000); // -1 day
+                assert!(ts_array.is_null(3));
+            }
+            _ => panic!("Expected array result"),
+        }
+    }
+
+    #[test]
     fn test_cast_scalar_int8() {
-        let cast = Cast::new();
-        let args = make_args(ColumnarValue::Scalar(ScalarValue::Int8(Some(100))));
+        let cast = SparkCast::new();
+        let args = make_args(
+            ColumnarValue::Scalar(ScalarValue::Int8(Some(100))),
+            "timestamp",
+        );
+        let result = cast.invoke_with_args(args).unwrap();
+        assert_scalar_timestamp(result, 100_000_000);
+    }
+
+    #[test]
+    fn test_cast_scalar_int16() {
+        let cast = SparkCast::new();
+        let args = make_args(
+            ColumnarValue::Scalar(ScalarValue::Int16(Some(100))),
+            "timestamp",
+        );
         let result = cast.invoke_with_args(args).unwrap();
         assert_scalar_timestamp(result, 100_000_000);
     }
 
     #[test]
     fn test_cast_scalar_int32() {
-        let cast = Cast::new();
-        let args = make_args(ColumnarValue::Scalar(ScalarValue::Int32(Some(1704067200))));
+        let cast = SparkCast::new();
+        let args = make_args(
+            ColumnarValue::Scalar(ScalarValue::Int32(Some(1704067200))),
+            "timestamp",
+        );
         let result = cast.invoke_with_args(args).unwrap();
         assert_scalar_timestamp(result, 1_704_067_200_000_000);
     }
 
     #[test]
+    fn test_cast_scalar_int64() {
+        let cast = SparkCast::new();
+        let args = make_args(
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(1704067200))),
+            "timestamp",
+        );
+        let result = cast.invoke_with_args(args).unwrap();
+        assert_scalar_timestamp(result, 1_704_067_200_000_000);
+    }
+
+    #[test]
+    fn test_cast_scalar_negative() {
+        let cast = SparkCast::new();
+        let args = make_args(
+            ColumnarValue::Scalar(ScalarValue::Int32(Some(-86400))),
+            "timestamp",
+        );
+        let result = cast.invoke_with_args(args).unwrap();
+        // -86400 seconds = -1 day before epoch
+        assert_scalar_timestamp(result, -86_400_000_000);
+    }
+
+    #[test]
     fn test_cast_scalar_null() {
-        let cast = Cast::new();
-        let args = make_args(ColumnarValue::Scalar(ScalarValue::Int64(None)));
+        let cast = SparkCast::new();
+        let args =
+            make_args(ColumnarValue::Scalar(ScalarValue::Int64(None)), "timestamp");
         let result = cast.invoke_with_args(args).unwrap();
         assert_scalar_null(result);
     }
 
     #[test]
     fn test_cast_scalar_int64_overflow() {
-        let cast = Cast::new();
-        let args = make_args(ColumnarValue::Scalar(ScalarValue::Int64(Some(i64::MAX))));
+        let cast = SparkCast::new();
+        let args = make_args(
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(i64::MAX))),
+            "timestamp",
+        );
         let result = cast.invoke_with_args(args).unwrap();
+        // saturating_mul clamps to i64::MAX
         assert_scalar_timestamp(result, i64::MAX);
     }
 
     #[test]
-    fn test_unsupported_scalar_type() {
-        let cast = Cast::new();
-        let args = make_args(ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-            "2024-01-01".to_string(),
-        ))));
+    fn test_unsupported_target_type() {
+        let cast = SparkCast::new();
+        // invoke_with_args uses return_field which would be set correctly by planning
+        // For this test, we need to check return_field_from_args
+        let arg_fields: Vec<FieldRef> =
+            vec![Arc::new(Field::new("a", DataType::Int64, true))];
+        let target_type = ScalarValue::Utf8(Some("string".to_string()));
+        let scalar_arguments: Vec<Option<&ScalarValue>> = vec![None, Some(&target_type)];
+        let return_field_args = ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &scalar_arguments,
+        };
+        let result = cast.return_field_from_args(return_field_args);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Unsupported spark_cast target type")
+        );
+    }
+
+    #[test]
+    fn test_unsupported_source_type() {
+        let cast = SparkCast::new();
+        let args = make_args(
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some("2024-01-01".to_string()))),
+            "timestamp",
+        );
         let result = cast.invoke_with_args(args);
         assert!(result.is_err());
         assert!(
@@ -341,18 +495,30 @@ mod tests {
     }
 
     #[test]
-    fn test_unsupported_array_type() {
-        let cast = Cast::new();
-        let array: ArrayRef =
-            Arc::new(arrow::array::Float32Array::from(vec![1.0, 2.0, 3.0]));
-        let args = make_args(ColumnarValue::Array(array));
-        let result = cast.invoke_with_args(args);
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Unsupported cast from")
-        );
+    fn test_cast_null_to_timestamp() {
+        let cast = SparkCast::new();
+        let args = make_args(ColumnarValue::Scalar(ScalarValue::Null), "timestamp");
+        let result = cast.invoke_with_args(args).unwrap();
+        assert_scalar_null(result);
+    }
+
+    #[test]
+    fn test_cast_null_array_to_timestamp() {
+        let array: ArrayRef = Arc::new(arrow::array::NullArray::new(3));
+
+        let cast = SparkCast::new();
+        let args = make_args(ColumnarValue::Array(array), "timestamp");
+        let result = cast.invoke_with_args(args).unwrap();
+
+        match result {
+            ColumnarValue::Array(result_array) => {
+                let ts_array = result_array.as_primitive::<TimestampMicrosecondType>();
+                assert_eq!(ts_array.len(), 3);
+                assert!(ts_array.is_null(0));
+                assert!(ts_array.is_null(1));
+                assert!(ts_array.is_null(2));
+            }
+            _ => panic!("Expected array result"),
+        }
     }
 }

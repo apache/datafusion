@@ -17,70 +17,112 @@
 
 # Test spark_cast from int8 to timestamp
 query P
-SELECT spark_cast(arrow_cast(0, 'Int8'));
+SELECT spark_cast(arrow_cast(0, 'Int8'), 'timestamp');
 ----
 1970-01-01T00:00:00
 
 query P
-SELECT spark_cast(arrow_cast(1, 'Int8'));
+SELECT spark_cast(arrow_cast(1, 'Int8'), 'timestamp');
 ----
 1970-01-01T00:00:01
 
 query P
-SELECT spark_cast(arrow_cast(-1, 'Int8'));
+SELECT spark_cast(arrow_cast(-1, 'Int8'), 'timestamp');
 ----
 1969-12-31T23:59:59
 
 # Test spark_cast from int16 to timestamp
 query P
-SELECT spark_cast(arrow_cast(0, 'Int16'));
+SELECT spark_cast(arrow_cast(0, 'Int16'), 'timestamp');
 ----
 1970-01-01T00:00:00
 
 query P
-SELECT spark_cast(arrow_cast(3600, 'Int16'));
+SELECT spark_cast(arrow_cast(3600, 'Int16'), 'timestamp');
 ----
 1970-01-01T01:00:00
 
 # Test spark_cast from int32 to timestamp
 query P
-SELECT spark_cast(arrow_cast(0, 'Int32'));
+SELECT spark_cast(arrow_cast(0, 'Int32'), 'timestamp');
 ----
 1970-01-01T00:00:00
 
 query P
-SELECT spark_cast(arrow_cast(1704067200, 'Int32'));
+SELECT spark_cast(arrow_cast(1704067200, 'Int32'), 'timestamp');
 ----
 2024-01-01T00:00:00
 
 # Test spark_cast from int64 to timestamp
 query P
-SELECT spark_cast(0::bigint);
+SELECT spark_cast(0::bigint, 'timestamp');
 ----
 1970-01-01T00:00:00
 
 query P
-SELECT spark_cast(1704067200::bigint);
+SELECT spark_cast(1704067200::bigint, 'timestamp');
 ----
 2024-01-01T00:00:00
 
 # Test NULL handling
 query P
-SELECT spark_cast(arrow_cast(NULL, 'Int8'));
+SELECT spark_cast(arrow_cast(NULL, 'Int8'), 'timestamp');
 ----
 NULL
 
 query P
-SELECT spark_cast(arrow_cast(NULL, 'Int16'));
+SELECT spark_cast(arrow_cast(NULL, 'Int16'), 'timestamp');
 ----
 NULL
 
 query P
-SELECT spark_cast(arrow_cast(NULL, 'Int32'));
+SELECT spark_cast(arrow_cast(NULL, 'Int32'), 'timestamp');
 ----
 NULL
 
 query P
-SELECT spark_cast(NULL::bigint);
+SELECT spark_cast(NULL::bigint, 'timestamp');
 ----
 NULL
+
+# Test untyped NULL
+query P
+SELECT spark_cast(NULL, 'timestamp');
+----
+NULL
+
+# Test Int8 boundary values
+query P
+SELECT spark_cast(arrow_cast(127, 'Int8'), 'timestamp');
+----
+1970-01-01T00:02:07
+
+query P
+SELECT spark_cast(arrow_cast(-128, 'Int8'), 'timestamp');
+----
+1969-12-31T23:57:52
+
+# Test Int16 boundary values
+query P
+SELECT spark_cast(arrow_cast(32767, 'Int16'), 'timestamp');
+----
+1970-01-01T09:06:07
+
+query P
+SELECT spark_cast(arrow_cast(-32768, 'Int16'), 'timestamp');
+----
+1969-12-31T14:53:52
+
+# Test Int64 negative value
+query P
+SELECT spark_cast(-86400::bigint, 'timestamp');
+----
+1969-12-31T00:00:00
+
+# Test unsupported source type - should error
+statement error
+SELECT spark_cast('2024-01-01', 'timestamp');
+
+# Test unsupported target type - should error
+statement error
+SELECT spark_cast(100, 'string');

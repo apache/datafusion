@@ -17,12 +17,22 @@
 
 mod cast;
 
-use cast::Cast;
 use datafusion_expr::ScalarUDF;
+use datafusion_functions::make_udf_function;
 use std::sync::Arc;
 
-pub mod expr_fn {}
+make_udf_function!(cast::SparkCast, spark_cast);
+
+pub mod expr_fn {
+    use datafusion_functions::export_functions;
+
+    export_functions!((
+        spark_cast,
+        "Casts given value to the specified type following Spark-compatible semantics",
+        arg1 arg2
+    ));
+}
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
-    vec![Arc::new(ScalarUDF::from(Cast::new()))]
+    vec![spark_cast()]
 }
