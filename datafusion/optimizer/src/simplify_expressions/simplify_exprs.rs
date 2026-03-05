@@ -20,7 +20,7 @@
 use std::sync::Arc;
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue};
+use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result};
 use datafusion_expr::Expr;
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::simplify::SimplifyContext;
@@ -155,6 +155,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use chrono::{DateTime, Utc};
 
+    use datafusion_common::ScalarValue;
     use datafusion_expr::logical_plan::builder::table_scan_with_filters;
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::*;

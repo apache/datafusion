@@ -17,7 +17,7 @@
 
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_expr::{BinaryExpr, Case, Expr, Like, Operator, lit};
+use datafusion_expr::{BinaryExpr, Expr, Like, Operator, lit};
 use regex_syntax::hir::{Capture, Hir, HirKind, Literal, Look};
 
 use crate::simplify_expressions::expr_simplifier::StringScalar;
