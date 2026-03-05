@@ -80,7 +80,13 @@ fn rewrite_in_terms_of_projection(
         // search for unnormalized names first such as "c1" (such as aliases)
         if let Some(found) = proj_exprs.iter().find(|a| (**a) == expr) {
             let (qualifier, field_name) = found.qualified_name();
-            let col = Expr::Column(Column::new(qualifier, field_name));
+            // Use `Column::from_qualified_name` to preserve any implicit qualifiers
+            // that might be encoded in the field name itself (e.g. "min(t.c2)").
+            let column = match qualifier {
+                Some(qualifier) => Column::new(Some(qualifier), field_name),
+                None => Column::from_qualified_name(field_name),
+            };
+            let col = Expr::Column(column);
             return Ok(Transformed::yes(col));
         }
 
@@ -233,20 +239,20 @@ mod test {
                 expected: sort(col("c1")),
             },
             TestCase {
-                desc: r#"min(c2) --> "min(c2)" -- (column *named* "min(t.c2)"!)"#,
+                desc: r#"min(c2) --> "min(t.c2)" -- (column *named* "min(t.c2)"!)"#,
                 input: sort(min(col("c2"))),
-                expected: sort(col("min(t.c2)")),
+                expected: sort(derived_col("min(t.c2)")),
             },
             TestCase {
-                desc: r#"c1 + min(c2) --> "c1 + min(c2)" -- (column *named* "min(t.c2)"!)"#,
+                desc: r#"c1 + min(c2) --> "c1 + min(t.c2)" -- (column *named* "min(t.c2)"!)"#,
                 input: sort(col("c1") + min(col("c2"))),
                 // should be "c1" not t.c1
-                expected: sort(col("c1") + col("min(t.c2)")),
+                expected: sort(col("c1") + derived_col("min(t.c2)")),
             },
             TestCase {
                 desc: r#"avg(c3) --> "avg(t.c3)" as average (column *named* "avg(t.c3)", aliased)"#,
                 input: sort(avg(col("c3"))),
-                expected: sort(col("avg(t.c3)").alias("average")),
+                expected: sort(derived_col("avg(t.c3)").alias("average")),
             },
         ];
 
@@ -332,5 +338,9 @@ mod test {
         let asc = true;
         let nulls_first = true;
         expr.sort(asc, nulls_first)
+    }
+
+    fn derived_col(name: &str) -> Expr {
+        Expr::Column(Column::new_unqualified(name))
     }
 }
