@@ -19,18 +19,23 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, AsArray};
+use arrow::compute::{DecimalCast, rescale_decimal};
 use arrow::datatypes::{
-    DataType, Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, Float32Type,
-    Float64Type,
+    ArrowNativeTypeOp, DataType, Decimal32Type, Decimal64Type, Decimal128Type,
+    Decimal256Type, DecimalType, Float32Type, Float64Type,
 };
+use datafusion_common::rounding::{FloatBits, next_up};
 use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::interval_arithmetic::Interval;
+use datafusion_expr::preimage::PreimageResult;
+use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    TypeSignature, TypeSignatureClass, Volatility,
+    Coercion, ColumnarValue, Documentation, Expr, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, TypeSignature, TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
+use num_traits::{CheckedAdd, Float, One};
 
 use super::decimal::{apply_decimal_op, ceil_decimal_value};
 
@@ -72,6 +77,42 @@ impl CeilFunc {
             ),
         }
     }
+}
+
+// ============ Macro for preimage bounds ============
+/// Generates the code to call the appropriate bounds function and wrap results.
+macro_rules! preimage_bounds {
+    // Float types: call float_preimage_bounds and wrap in ScalarValue
+    (float: $variant:ident, $value:expr) => {
+        float_preimage_bounds($value).map(|(lo, hi)| {
+            (
+                ScalarValue::$variant(Some(lo)),
+                ScalarValue::$variant(Some(hi)),
+            )
+        })
+    };
+
+    // Integer types: call int_preimage_bounds and wrap in ScalarValue
+    (int: $variant:ident, $value:expr) => {
+        int_preimage_bounds($value).map(|(lo, hi)| {
+            (
+                ScalarValue::$variant(Some(lo)),
+                ScalarValue::$variant(Some(hi)),
+            )
+        })
+    };
+
+    // Decimal types: call decimal_preimage_bounds with precision/scale and wrap in ScalarValue
+    (decimal: $variant:ident, $decimal_type:ty, $value:expr, $precision:expr, $scale:expr) => {
+        decimal_preimage_bounds::<$decimal_type>($value, $precision, $scale).map(
+            |(lo, hi)| {
+                (
+                    ScalarValue::$variant(Some(lo), $precision, $scale),
+                    ScalarValue::$variant(Some(hi), $precision, $scale),
+                )
+            },
+        )
+    };
 }
 
 impl ScalarUDFImpl for CeilFunc {
@@ -200,7 +241,390 @@ impl ScalarUDFImpl for CeilFunc {
         Interval::make_unbounded(&data_type)
     }
 
+    /// Compute the preimage for ceil function.
+    ///
+    /// For `ceil(x) = N`, the preimage is `x > N - 1 AND x <= N`
+    /// because ceil(x) = N for all x in (N-1, N].
+    fn preimage(
+        &self,
+        args: &[Expr],
+        lit_expr: &Expr,
+        _info: &SimplifyContext,
+    ) -> Result<PreimageResult> {
+        debug_assert!(args.len() == 1, "ceil() takes exactly one argument");
+
+        let arg = args[0].clone();
+
+        // Extract the literal value being compared to
+        let Expr::Literal(lit_value, _) = lit_expr else {
+            return Ok(PreimageResult::None);
+        };
+
+        // Compute lower bound (next representable above N-1) and upper bound (next representable above N)
+        let Some((lower, upper)) = (match lit_value {
+            // Floating-point types
+            ScalarValue::Float64(Some(n)) => preimage_bounds!(float: Float64, *n),
+            ScalarValue::Float32(Some(n)) => preimage_bounds!(float: Float32, *n),
+
+            // Integer types (not reachable from SQL/SLT: ceil() only accepts Float64/Float32/Decimal,
+            // so the RHS literal is always coerced to one of those before preimage runs; kept for
+            // programmatic use and unit tests)
+            ScalarValue::Int8(Some(n)) => preimage_bounds!(int: Int8, *n),
+            ScalarValue::Int16(Some(n)) => preimage_bounds!(int: Int16, *n),
+            ScalarValue::Int32(Some(n)) => preimage_bounds!(int: Int32, *n),
+            ScalarValue::Int64(Some(n)) => preimage_bounds!(int: Int64, *n),
+
+            // Decimal types
+            // DECIMAL(precision, scale) where precision <= 38 -> Decimal128(precision, scale)
+            // DECIMAL(precision, scale) where precision > 38 -> Decimal256(precision, scale)
+            // Decimal32 and Decimal64 are unreachable from SQL/SLT.
+            ScalarValue::Decimal32(Some(n), precision, scale) => {
+                preimage_bounds!(decimal: Decimal32, Decimal32Type, *n, *precision, *scale)
+            }
+            ScalarValue::Decimal64(Some(n), precision, scale) => {
+                preimage_bounds!(decimal: Decimal64, Decimal64Type, *n, *precision, *scale)
+            }
+            ScalarValue::Decimal128(Some(n), precision, scale) => {
+                preimage_bounds!(decimal: Decimal128, Decimal128Type, *n, *precision, *scale)
+            }
+            ScalarValue::Decimal256(Some(n), precision, scale) => {
+                preimage_bounds!(decimal: Decimal256, Decimal256Type, *n, *precision, *scale)
+            }
+
+            // Unsupported types
+            _ => None,
+        }) else {
+            return Ok(PreimageResult::None);
+        };
+
+        Ok(PreimageResult::Range {
+            expr: arg,
+            interval: Box::new(Interval::try_new(lower, upper)?),
+        })
+    }
+
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+}
+
+// ============ Helper functions for preimage bounds ============
+
+/// Compute preimage bounds for ceil function on floating-point types.
+/// For ceil(x) = n, the preimage is (n-1, n] which maps to
+/// [next_up(n-1), next_up(n)).
+/// Returns None if:
+/// - The value is non-finite (infinity, NaN)
+/// - The value is not an integer (ceil always returns integers, so ceil(x) = 1.3 has no solution)
+/// - Subtracting 1 would lose precision at extreme values
+fn float_preimage_bounds<F: Float + FloatBits + Copy>(n: F) -> Option<(F, F)> {
+    let one = F::one();
+    if !n.is_finite() {
+        return None;
+    }
+    if n.fract() != F::zero() {
+        return None;
+    }
+
+    let lower_candidate = n - one;
+    if lower_candidate >= n {
+        return None;
+    }
+
+    let lower = next_up(lower_candidate);
+    let upper = next_up(n);
+    if lower >= upper {
+        return None;
+    }
+
+    Some((lower, upper))
+}
+
+/// Compute preimage bounds for ceil function on integer types.
+/// For ceil(x) = n, the preimage is [n, n+1).
+/// Returns None if adding 1 would overflow.
+fn int_preimage_bounds<I: CheckedAdd + One + Copy>(n: I) -> Option<(I, I)> {
+    let upper = n.checked_add(&I::one())?;
+    Some((n, upper))
+}
+
+/// Compute preimage bounds for ceil function on decimal types.
+/// For ceil(x) = n, the preimage is (n-1, n] which maps to
+/// [n-1 + step, n + step) where step is the decimal unit at the target scale.
+/// Returns None if:
+/// - The value has a fractional part (ceil always returns integers)
+/// - Adding or subtracting would overflow
+fn decimal_preimage_bounds<D: DecimalType>(
+    value: D::Native,
+    precision: u8,
+    scale: i8,
+) -> Option<(D::Native, D::Native)>
+where
+    D::Native: DecimalCast + ArrowNativeTypeOp + std::ops::Rem<Output = D::Native>,
+{
+    let one_scaled: D::Native =
+        rescale_decimal::<D, D>(D::Native::ONE, 1, 0, precision, scale)?;
+
+    if scale > 0 && value % one_scaled != D::Native::ZERO {
+        return None;
+    }
+
+    let lower = if scale == 0 {
+        value
+    } else {
+        let lower_base = value.sub_checked(one_scaled).ok()?;
+        lower_base.add_checked(D::Native::ONE).ok()?
+    };
+
+    let upper = value.add_checked(D::Native::ONE).ok()?;
+
+    Some((lower, upper))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow_buffer::i256;
+    use datafusion_expr::col;
+
+    /// Helper to test valid preimage cases that should return a Range
+    fn assert_preimage_range(
+        input: ScalarValue,
+        expected_lower: ScalarValue,
+        expected_upper: ScalarValue,
+    ) {
+        let ceil_func = CeilFunc::new();
+        let args = vec![col("x")];
+        let lit_expr = Expr::Literal(input.clone(), None);
+        let info = SimplifyContext::default();
+
+        let result = ceil_func.preimage(&args, &lit_expr, &info).unwrap();
+
+        match result {
+            PreimageResult::Range { expr, interval } => {
+                assert_eq!(expr, col("x"));
+                assert_eq!(interval.lower().clone(), expected_lower);
+                assert_eq!(interval.upper().clone(), expected_upper);
+            }
+            PreimageResult::None => {
+                panic!("Expected Range, got None for input {input:?}")
+            }
+        }
+    }
+
+    /// Helper to test cases that should return None
+    fn assert_preimage_none(input: ScalarValue) {
+        let ceil_func = CeilFunc::new();
+        let args = vec![col("x")];
+        let lit_expr = Expr::Literal(input.clone(), None);
+        let info = SimplifyContext::default();
+
+        let result = ceil_func.preimage(&args, &lit_expr, &info).unwrap();
+        assert!(
+            matches!(result, PreimageResult::None),
+            "Expected None for input {input:?}"
+        );
+    }
+
+    #[test]
+    fn test_ceil_preimage_valid_cases() {
+        // For ceil(x) = N, preimage is (N-1, N] mathematically
+        // For floats: use next_up() to get [next_up(N-1), next_up(N)) as a half-open interval
+        // For integers: the interval is simply [N, N+1)
+
+        // ceil(x) = 100.0: preimage is (99, 100] → [next_up(99), next_up(100))
+        assert_preimage_range(
+            ScalarValue::Float64(Some(100.0)),
+            ScalarValue::Float64(Some(next_up(99.0))),
+            ScalarValue::Float64(Some(next_up(100.0))),
+        );
+        // ceil(x) = 50.0: preimage is (49, 50] → [next_up(49), next_up(50))
+        assert_preimage_range(
+            ScalarValue::Float32(Some(50.0)),
+            ScalarValue::Float32(Some(next_up(49.0))),
+            ScalarValue::Float32(Some(next_up(50.0))),
+        );
+        // ceil(x) = 42: preimage is (41, 42] → [42, 43) for integers
+        assert_preimage_range(
+            ScalarValue::Int64(Some(42)),
+            ScalarValue::Int64(Some(42)),
+            ScalarValue::Int64(Some(43)),
+        );
+        // ceil(x) = 100: preimage is (99, 100] → [100, 101) for integers
+        assert_preimage_range(
+            ScalarValue::Int32(Some(100)),
+            ScalarValue::Int32(Some(100)),
+            ScalarValue::Int32(Some(101)),
+        );
+        // ceil(x) = -5.0: preimage is (-6, -5] → [next_up(-6), next_up(-5))
+        assert_preimage_range(
+            ScalarValue::Float64(Some(-5.0)),
+            ScalarValue::Float64(Some(next_up(-6.0))),
+            ScalarValue::Float64(Some(next_up(-5.0))),
+        );
+        // ceil(x) = 0.0: preimage is (-1, 0] → [next_up(-1), next_up(0))
+        assert_preimage_range(
+            ScalarValue::Float64(Some(0.0)),
+            ScalarValue::Float64(Some(next_up(-1.0))),
+            ScalarValue::Float64(Some(next_up(0.0))),
+        );
+    }
+
+    #[test]
+    fn test_ceil_preimage_non_integer_float() {
+        assert_preimage_none(ScalarValue::Float64(Some(1.3)));
+        assert_preimage_none(ScalarValue::Float64(Some(-2.5)));
+        assert_preimage_none(ScalarValue::Float32(Some(3.7)));
+    }
+
+    #[test]
+    fn test_ceil_preimage_integer_overflow() {
+        assert_preimage_none(ScalarValue::Int64(Some(i64::MAX)));
+        assert_preimage_none(ScalarValue::Int32(Some(i32::MAX)));
+        assert_preimage_none(ScalarValue::Int16(Some(i16::MAX)));
+        assert_preimage_none(ScalarValue::Int8(Some(i8::MAX)));
+    }
+
+    #[test]
+    fn test_ceil_preimage_float_edge_cases() {
+        assert_preimage_none(ScalarValue::Float64(Some(f64::INFINITY)));
+        assert_preimage_none(ScalarValue::Float64(Some(f64::NEG_INFINITY)));
+        assert_preimage_none(ScalarValue::Float64(Some(f64::NAN)));
+        assert_preimage_none(ScalarValue::Float64(Some(f64::MAX)));
+
+        assert_preimage_none(ScalarValue::Float32(Some(f32::INFINITY)));
+        assert_preimage_none(ScalarValue::Float32(Some(f32::NEG_INFINITY)));
+        assert_preimage_none(ScalarValue::Float32(Some(f32::NAN)));
+        assert_preimage_none(ScalarValue::Float32(Some(f32::MAX)));
+    }
+
+    #[test]
+    fn test_ceil_preimage_float_precision_boundaries() {
+        // Float64: 2^53 is exactly representable, and so is 2^53 - 1, so preimage rewrite is valid.
+        assert_preimage_range(
+            ScalarValue::Float64(Some(9_007_199_254_740_992.0)),
+            ScalarValue::Float64(Some(9_007_199_254_740_992.0)),
+            ScalarValue::Float64(Some(9_007_199_254_740_994.0)),
+        );
+
+        // Above 2^53, adjacent integer spacing changes and `n - 1` can collapse to `n`.
+        // In that case we conservatively skip preimage rewrite.
+        assert_preimage_none(ScalarValue::Float64(Some(9_007_199_254_740_996.0)));
+
+        // Float32: 2^24 is exactly representable, and so is 2^24 - 1, so preimage rewrite is valid.
+        assert_preimage_range(
+            ScalarValue::Float32(Some(16_777_216.0)),
+            ScalarValue::Float32(Some(next_up(16_777_215.0_f32))),
+            ScalarValue::Float32(Some(next_up(16_777_216.0_f32))),
+        );
+
+        // Above 2^24, adjacent integer spacing changes and `n - 1` can collapse to `n`.
+        // In that case we conservatively skip preimage rewrite.
+        assert_preimage_none(ScalarValue::Float32(Some(16_777_220.0)));
+    }
+
+    #[test]
+    fn test_ceil_preimage_null_values() {
+        assert_preimage_none(ScalarValue::Float64(None));
+        assert_preimage_none(ScalarValue::Float32(None));
+        assert_preimage_none(ScalarValue::Int64(None));
+    }
+
+    #[test]
+    fn test_ceil_preimage_decimal_valid_cases() {
+        // Decimal format: raw_value / 10^scale
+        // For ceil(x) = N, preimage is (N-1, N] → [N-1+step, N+step) where step = 10^(-scale)
+
+        // ceil(x) = 100.00: preimage is (99, 100] → [99.01, 100.01)
+        assert_preimage_range(
+            ScalarValue::Decimal32(Some(10000), 9, 2), // 100.00
+            ScalarValue::Decimal32(Some(9901), 9, 2),  // 99.01
+            ScalarValue::Decimal32(Some(10001), 9, 2), // 100.01
+        );
+        // ceil(x) = -5.00: preimage is (-6, -5] → [-5.99, -4.99)
+        assert_preimage_range(
+            ScalarValue::Decimal32(Some(-500), 9, 2), // -5.00
+            ScalarValue::Decimal32(Some(-599), 9, 2), // -5.99
+            ScalarValue::Decimal32(Some(-499), 9, 2), // -4.99
+        );
+        // ceil(x) = 0.00: preimage is (-1, 0] → [-0.99, 0.01)
+        assert_preimage_range(
+            ScalarValue::Decimal32(Some(0), 9, 2),   // 0.00
+            ScalarValue::Decimal32(Some(-99), 9, 2), // -0.99
+            ScalarValue::Decimal32(Some(1), 9, 2),   // 0.01
+        );
+        // ceil(x) = 42 (scale 0 means integer): preimage is (41, 42] → [42, 43)
+        assert_preimage_range(
+            ScalarValue::Decimal32(Some(42), 9, 0), // 42
+            ScalarValue::Decimal32(Some(42), 9, 0), // 42
+            ScalarValue::Decimal32(Some(43), 9, 0), // 43
+        );
+
+        // Decimal64 tests: same logic with wider precision
+        assert_preimage_range(
+            ScalarValue::Decimal64(Some(10000), 18, 2), // 100.00
+            ScalarValue::Decimal64(Some(9901), 18, 2),  // 99.01
+            ScalarValue::Decimal64(Some(10001), 18, 2), // 100.01
+        );
+        assert_preimage_range(
+            ScalarValue::Decimal64(Some(-500), 18, 2), // -5.00
+            ScalarValue::Decimal64(Some(-599), 18, 2), // -5.99
+            ScalarValue::Decimal64(Some(-499), 18, 2), // -4.99
+        );
+
+        // Decimal128 tests: same logic with even wider precision
+        assert_preimage_range(
+            ScalarValue::Decimal128(Some(10000), 38, 2), // 100.00
+            ScalarValue::Decimal128(Some(9901), 38, 2),  // 99.01
+            ScalarValue::Decimal128(Some(10001), 38, 2), // 100.01
+        );
+        assert_preimage_range(
+            ScalarValue::Decimal128(Some(-500), 38, 2), // -5.00
+            ScalarValue::Decimal128(Some(-599), 38, 2), // -5.99
+            ScalarValue::Decimal128(Some(-499), 38, 2), // -4.99
+        );
+
+        // Decimal256 tests: same logic with widest precision
+        assert_preimage_range(
+            ScalarValue::Decimal256(Some(i256::from(10000)), 76, 2), // 100.00
+            ScalarValue::Decimal256(Some(i256::from(9901)), 76, 2),  // 99.01
+            ScalarValue::Decimal256(Some(i256::from(10001)), 76, 2), // 100.01
+        );
+        assert_preimage_range(
+            ScalarValue::Decimal256(Some(i256::from(-500)), 76, 2), // -5.00
+            ScalarValue::Decimal256(Some(i256::from(-599)), 76, 2), // -5.99
+            ScalarValue::Decimal256(Some(i256::from(-499)), 76, 2), // -4.99
+        );
+    }
+
+    #[test]
+    fn test_ceil_preimage_decimal_non_integer() {
+        assert_preimage_none(ScalarValue::Decimal32(Some(130), 9, 2));
+        assert_preimage_none(ScalarValue::Decimal32(Some(-250), 9, 2));
+        assert_preimage_none(ScalarValue::Decimal32(Some(370), 9, 2));
+        assert_preimage_none(ScalarValue::Decimal32(Some(1), 9, 2));
+
+        assert_preimage_none(ScalarValue::Decimal64(Some(130), 18, 2));
+        assert_preimage_none(ScalarValue::Decimal64(Some(-250), 18, 2));
+
+        assert_preimage_none(ScalarValue::Decimal128(Some(130), 38, 2));
+        assert_preimage_none(ScalarValue::Decimal128(Some(-250), 38, 2));
+
+        assert_preimage_none(ScalarValue::Decimal256(Some(i256::from(130)), 76, 2));
+        assert_preimage_none(ScalarValue::Decimal256(Some(i256::from(-250)), 76, 2));
+    }
+
+    #[test]
+    fn test_ceil_preimage_decimal_overflow() {
+        assert_preimage_none(ScalarValue::Decimal32(Some(i32::MAX), 10, 0));
+        assert_preimage_none(ScalarValue::Decimal64(Some(i64::MAX), 19, 0));
+    }
+
+    #[test]
+    fn test_ceil_preimage_decimal_null() {
+        assert_preimage_none(ScalarValue::Decimal32(None, 9, 2));
+        assert_preimage_none(ScalarValue::Decimal64(None, 18, 2));
+        assert_preimage_none(ScalarValue::Decimal128(None, 38, 2));
+        assert_preimage_none(ScalarValue::Decimal256(None, 76, 2));
     }
 }
