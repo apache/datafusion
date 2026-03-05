@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::new_null_array;
+use arrow::array::{Scalar, new_null_array};
 use arrow::compute::kernels::numeric::add;
 use arrow::compute::kernels::{
     cmp::{eq, lt},
@@ -42,16 +42,13 @@ fn try_rem(
         Ok(result) => Ok(result),
         Err(arrow::error::ArrowError::DivideByZero) if !enable_ansi_mode => {
             // Integer rem fails when ANY divisor element is zero.
-            // Handle per-element: replace zeros with 1, compute rem, then null out zero positions.
-            let zero = ScalarValue::new_zero(right.data_type())?
-                .to_array_of_size(right.len())?;
+            // Handle per-element: null out zero divisors
+            let zero = ScalarValue::new_zero(right.data_type())?.to_array()?;
+            let zero = Scalar::new(zero);
+            let null = Scalar::new(new_null_array(right.data_type(), 1));
             let is_zero = eq(right, &zero)?;
-            let one =
-                ScalarValue::new_one(right.data_type())?.to_array_of_size(right.len())?;
-            let safe_right = zip(&is_zero, &one, right)?;
-            let result = rem(left, &safe_right)?;
-            let null_array = new_null_array(result.data_type(), result.len());
-            Ok(zip(&is_zero, &null_array, &result)?)
+            let safe_right = zip(&is_zero, &null, right)?;
+            Ok(rem(left, &safe_right)?)
         }
         Err(e) => Err(e.into()),
     }
