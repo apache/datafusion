@@ -2431,12 +2431,14 @@ dependencies = [
  "ahash",
  "arrow",
  "chrono",
+ "criterion",
  "datafusion-common",
  "datafusion-expr-common",
  "hashbrown 0.16.1",
  "indexmap 2.13.0",
  "itertools 0.14.0",
  "parking_lot",
+ "rand 0.9.2",
 ]
 
 [[package]]
