@@ -33,9 +33,14 @@ use std::sync::Arc;
 
 const MICROS_PER_SECOND: i64 = 1_000_000;
 
-/// Spark-compatible `cast` function for type conversions.
+/// Convert seconds to microseconds with saturating overflow behavior
+fn secs_to_micros(secs: impl Into<i64>) -> i64 {
+    secs.into().saturating_mul(MICROS_PER_SECOND)
+}
+
+/// Spark-compatible `cast` function for type conversions
 ///
-/// This implements Spark's CAST expression with a target type parameter.
+/// This implements Spark's CAST expression with a target type parameter
 ///
 /// # Usage
 /// ```sql
@@ -46,11 +51,11 @@ const MICROS_PER_SECOND: i64 = 1_000_000;
 /// - Int8/Int16/Int32/Int64 -> Timestamp (target_type = 'timestamp')
 ///
 /// The integer value is interpreted as seconds since the Unix epoch (1970-01-01 00:00:00 UTC)
-/// and converted to a timestamp with microsecond precision.
+/// and converted to a timestamp with microsecond precision (matches spark's spec)
 ///
 /// # Overflow behavior
 /// Uses saturating multiplication to handle overflow - values that would overflow
-/// i64 when multiplied by 1,000,000 are clamped to i64::MAX or i64::MIN.
+/// i64 when multiplied by 1,000,000 are clamped to i64::MAX or i64::MIN
 ///
 /// # References
 /// - <https://spark.apache.org/docs/latest/api/sql/index.html#cast>
@@ -81,7 +86,7 @@ impl SparkCast {
 /// Parse target type string into a DataType
 fn parse_target_type(type_str: &str) -> DataFusionResult<DataType> {
     match type_str.to_lowercase().as_str() {
-        // could add further data type support in future
+        // further data type support in future
         "timestamp" => Ok(DataType::Timestamp(TimeUnit::Microsecond, None)),
         other => exec_err!(
             "Unsupported spark_cast target type '{}'. Supported types: timestamp",
@@ -108,6 +113,7 @@ fn get_target_type_from_scalar_args(
 
 fn cast_int_to_timestamp<T: ArrowPrimitiveType>(
     array: &ArrayRef,
+    timezone: Option<Arc<str>>,
 ) -> DataFusionResult<ArrayRef>
 where
     T::Native: Into<i64>,
@@ -120,12 +126,12 @@ where
             builder.append_null();
         } else {
             // spark saturates to i64 min/max
-            let micros = (arr.value(i).into()).saturating_mul(MICROS_PER_SECOND);
+            let micros = secs_to_micros(arr.value(i).into());
             builder.append_value(micros);
         }
     }
 
-    Ok(Arc::new(builder.finish()))
+    Ok(Arc::new(builder.finish().with_timezone_opt(timezone)))
 }
 
 impl ScalarUDFImpl for SparkCast {
@@ -159,35 +165,47 @@ impl ScalarUDFImpl for SparkCast {
         args: ScalarFunctionArgs,
     ) -> DataFusionResult<ColumnarValue> {
         let target_type = args.return_field.data_type();
+        // Use session timezone, fallback to UTC if not set
+        let session_tz: Arc<str> = args
+            .config_options
+            .execution
+            .time_zone
+            .clone()
+            .map(|s| Arc::from(s.as_str()))
+            .unwrap_or_else(|| Arc::from("UTC"));
 
         match target_type {
             DataType::Timestamp(TimeUnit::Microsecond, None) => {
-                cast_to_timestamp(&args.args[0])
+                cast_to_timestamp(&args.args[0], Some(session_tz))
             }
             other => exec_err!("Unsupported spark_cast target type: {:?}", other),
         }
     }
 }
 
-/// Cast value to timestamp
-fn cast_to_timestamp(input: &ColumnarValue) -> DataFusionResult<ColumnarValue> {
+/// Cast value to timestamp internal function
+fn cast_to_timestamp(
+    input: &ColumnarValue,
+    timezone: Option<Arc<str>>,
+) -> DataFusionResult<ColumnarValue> {
     match input {
         ColumnarValue::Array(array) => match array.data_type() {
             DataType::Null => Ok(ColumnarValue::Array(Arc::new(
-                arrow::array::TimestampMicrosecondArray::new_null(array.len()),
+                arrow::array::TimestampMicrosecondArray::new_null(array.len())
+                    .with_timezone_opt(timezone),
             ))),
             DataType::Int8 => Ok(ColumnarValue::Array(
-                cast_int_to_timestamp::<Int8Type>(array)?,
+                cast_int_to_timestamp::<Int8Type>(array, timezone)?,
             )),
             DataType::Int16 => Ok(ColumnarValue::Array(cast_int_to_timestamp::<
                 Int16Type,
-            >(array)?)),
+            >(array, timezone)?)),
             DataType::Int32 => Ok(ColumnarValue::Array(cast_int_to_timestamp::<
                 Int32Type,
-            >(array)?)),
+            >(array, timezone)?)),
             DataType::Int64 => Ok(ColumnarValue::Array(cast_int_to_timestamp::<
                 Int64Type,
-            >(array)?)),
+            >(array, timezone)?)),
             other => exec_err!("Unsupported cast from {:?} to timestamp", other),
         },
         ColumnarValue::Scalar(scalar) => {
@@ -197,22 +215,16 @@ fn cast_to_timestamp(input: &ColumnarValue) -> DataFusionResult<ColumnarValue> {
                 | ScalarValue::Int16(None)
                 | ScalarValue::Int32(None)
                 | ScalarValue::Int64(None) => None,
-                ScalarValue::Int8(Some(v)) => {
-                    Some((*v as i64).saturating_mul(MICROS_PER_SECOND))
-                }
-                ScalarValue::Int16(Some(v)) => {
-                    Some((*v as i64).saturating_mul(MICROS_PER_SECOND))
-                }
-                ScalarValue::Int32(Some(v)) => {
-                    Some((*v as i64).saturating_mul(MICROS_PER_SECOND))
-                }
-                ScalarValue::Int64(Some(v)) => Some(v.saturating_mul(MICROS_PER_SECOND)),
+                ScalarValue::Int8(Some(v)) => Some(secs_to_micros(*v)),
+                ScalarValue::Int16(Some(v)) => Some(secs_to_micros(*v)),
+                ScalarValue::Int32(Some(v)) => Some(secs_to_micros(*v)),
+                ScalarValue::Int64(Some(v)) => Some(secs_to_micros(*v)),
                 other => {
                     return exec_err!("Unsupported cast from {:?} to timestamp", other);
                 }
             };
             Ok(ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
-                micros, None,
+                micros, timezone,
             )))
         }
     }
@@ -224,12 +236,25 @@ mod tests {
     use arrow::array::{Int8Array, Int16Array, Int32Array, Int64Array};
     use arrow::datatypes::TimestampMicrosecondType;
 
+    // helpers to make testing easier
     fn make_args(input: ColumnarValue, target_type: &str) -> ScalarFunctionArgs {
+        make_args_with_timezone(input, target_type, None)
+    }
+
+    fn make_args_with_timezone(
+        input: ColumnarValue,
+        target_type: &str,
+        timezone: Option<&str>,
+    ) -> ScalarFunctionArgs {
         let return_field = Arc::new(Field::new(
             "result",
             DataType::Timestamp(TimeUnit::Microsecond, None),
             true,
         ));
+        let mut config = datafusion_common::config::ConfigOptions::default();
+        if let Some(tz) = timezone {
+            config.execution.time_zone = Some(tz.to_string());
+        }
         ScalarFunctionArgs {
             args: vec![
                 input,
@@ -238,24 +263,46 @@ mod tests {
             arg_fields: vec![],
             number_rows: 0,
             return_field,
-            config_options: Arc::new(Default::default()),
+            config_options: Arc::new(config),
         }
     }
 
     fn assert_scalar_timestamp(result: ColumnarValue, expected: i64) {
+        assert_scalar_timestamp_with_tz(result, expected, "UTC");
+    }
+
+    fn assert_scalar_timestamp_with_tz(
+        result: ColumnarValue,
+        expected: i64,
+        expected_tz: &str,
+    ) {
         match result {
-            ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(Some(val), None)) => {
+            ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
+                Some(val),
+                Some(tz),
+            )) => {
                 assert_eq!(val, expected);
+                assert_eq!(tz.as_ref(), expected_tz);
             }
-            _ => panic!("Expected scalar timestamp with value {expected}"),
+            _ => {
+                panic!(
+                    "Expected scalar timestamp with value {expected} and {expected_tz} timezone"
+                )
+            }
         }
     }
 
     fn assert_scalar_null(result: ColumnarValue) {
-        assert!(matches!(
-            result,
-            ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(None, None))
-        ));
+        assert_scalar_null_with_tz(result, "UTC");
+    }
+
+    fn assert_scalar_null_with_tz(result: ColumnarValue, expected_tz: &str) {
+        match result {
+            ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(None, Some(tz))) => {
+                assert_eq!(tz.as_ref(), expected_tz);
+            }
+            _ => panic!("Expected null scalar timestamp with {expected_tz} timezone"),
+        }
     }
 
     #[test]
@@ -520,5 +567,66 @@ mod tests {
             }
             _ => panic!("Expected array result"),
         }
+    }
+
+    #[test]
+    fn test_cast_int_to_timestamp_with_timezones() {
+        // Test with various timezones like Comet does
+        let timezones = [
+            "UTC",
+            "America/New_York",
+            "America/Los_Angeles",
+            "Europe/London",
+            "Asia/Tokyo",
+            "Australia/Sydney",
+        ];
+
+        let cast = SparkCast::new();
+        let test_value: i64 = 1704067200; // 2024-01-01 00:00:00 UTC
+        let expected_micros = test_value * MICROS_PER_SECOND;
+
+        for tz in timezones {
+            // scalar
+            let args = make_args_with_timezone(
+                ColumnarValue::Scalar(ScalarValue::Int64(Some(test_value))),
+                "timestamp",
+                Some(tz),
+            );
+            let result = cast.invoke_with_args(args).unwrap();
+            assert_scalar_timestamp_with_tz(result, expected_micros, tz);
+
+            // array input
+            let array: ArrayRef =
+                Arc::new(Int64Array::from(vec![Some(test_value), None]));
+            let args = make_args_with_timezone(
+                ColumnarValue::Array(array),
+                "timestamp",
+                Some(tz),
+            );
+            let result = cast.invoke_with_args(args).unwrap();
+
+            match result {
+                ColumnarValue::Array(result_array) => {
+                    let ts_array =
+                        result_array.as_primitive::<TimestampMicrosecondType>();
+                    assert_eq!(ts_array.value(0), expected_micros);
+                    assert!(ts_array.is_null(1));
+                    assert_eq!(ts_array.timezone(), Some(tz));
+                }
+                _ => panic!("Expected array result for timezone {tz}"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_cast_int_to_timestamp_default_timezone() {
+        let cast = SparkCast::new();
+        let args = make_args(
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(0))),
+            "timestamp",
+        );
+        let result = cast.invoke_with_args(args).unwrap();
+        // Defaults to UTC
+        assert_scalar_timestamp_with_tz(result, 0, "UTC");
     }
 }
