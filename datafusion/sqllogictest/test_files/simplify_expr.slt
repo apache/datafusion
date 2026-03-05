@@ -43,8 +43,12 @@ physical_plan
 query TT
 explain select b from t where b !~ '.*'
 ----
-logical_plan EmptyRelation: rows=0
-physical_plan EmptyExec
+logical_plan
+01)Filter: t.b IS NOT NULL AND Boolean(NULL)
+02)--TableScan: t projection=[b]
+physical_plan
+01)FilterExec: b@0 IS NOT NULL AND NULL
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 query T
 select b from t where b ~ '.*'

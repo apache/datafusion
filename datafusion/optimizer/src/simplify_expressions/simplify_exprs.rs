@@ -883,7 +883,7 @@ mod tests {
         "
         )?;
 
-        // Test `!~ ".*"` transforms to false
+        // Test `!~ ".*"` transforms to CASE WHEN col IS NOT NULL THEN FALSE ELSE NULL END
         let plan = LogicalPlanBuilder::from(table_scan.clone())
             .filter(binary_expr(col("a"), Operator::RegexNotMatch, lit(".*")))?
             .build()?;
@@ -891,7 +891,7 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Filter: Boolean(false)
+        Filter: test.a IS NOT NULL AND Boolean(NULL)
           TableScan: test
         "
         )?;
@@ -919,7 +919,7 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Filter: Boolean(false)
+        Filter: test.a IS NOT NULL AND Boolean(NULL)
           TableScan: test
         "
         )
