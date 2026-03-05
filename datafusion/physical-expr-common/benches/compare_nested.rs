@@ -26,80 +26,51 @@ use std::hint::black_box;
 use std::sync::Arc;
 
 /// Build a StructArray with fields {x: Int32, y: Utf8}.
-fn make_struct_array(num_rows: usize, null_fraction: f64, rng: &mut StdRng) -> ArrayRef {
-    let ints: Int32Array = (0..num_rows)
-        .map(|_| {
-            if null_fraction > 0.0 && rng.random::<f64>() < null_fraction {
-                None
-            } else {
-                Some(rng.random::<i32>())
-            }
-        })
-        .collect();
+fn make_struct_array(num_rows: usize, rng: &mut StdRng) -> ArrayRef {
+    let ints: Int32Array = (0..num_rows).map(|_| Some(rng.random::<i32>())).collect();
 
     let strings: StringArray = (0..num_rows)
         .map(|_| {
-            if null_fraction > 0.0 && rng.random::<f64>() < null_fraction {
-                None
-            } else {
-                let s: String = (0..12).map(|_| rng.random_range(b'a'..=b'z') as char).collect();
-                Some(s)
-            }
+            let s: String =
+                (0..12).map(|_| rng.random_range(b'a'..=b'z') as char).collect();
+            Some(s)
         })
         .collect();
 
     let fields = Fields::from(vec![
-        Field::new("x", DataType::Int32, true),
-        Field::new("y", DataType::Utf8, true),
+        Field::new("x", DataType::Int32, false),
+        Field::new("y", DataType::Utf8, false),
     ]);
 
-    Arc::new(StructArray::try_new(fields, vec![Arc::new(ints), Arc::new(strings)], None).unwrap())
+    Arc::new(
+        StructArray::try_new(fields, vec![Arc::new(ints), Arc::new(strings)], None)
+            .unwrap(),
+    )
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    for num_rows in [4096, 8192] {
-        for null_pct in [0, 10] {
-            let null_fraction = null_pct as f64 / 100.0;
-            let mut rng = StdRng::seed_from_u64(42);
+    let num_rows = 8192;
+    let mut rng = StdRng::seed_from_u64(42);
 
-            let lhs = make_struct_array(num_rows, null_fraction, &mut rng);
-            let rhs_array = make_struct_array(num_rows, null_fraction, &mut rng);
-            let rhs_scalar_array = make_struct_array(1, 0.0, &mut rng);
-            let rhs_scalar = Scalar::new(rhs_scalar_array);
+    let lhs = make_struct_array(num_rows, &mut rng);
+    let rhs_array = make_struct_array(num_rows, &mut rng);
+    let rhs_scalar = Scalar::new(make_struct_array(1, &mut rng));
 
-            c.bench_function(
-                &format!("compare_nested array_array rows={num_rows} nulls={null_pct}%"),
-                |b| {
-                    b.iter(|| {
-                        black_box(
-                            compare_op_for_nested(
-                                Operator::Eq,
-                                &lhs,
-                                &rhs_array,
-                            )
-                            .unwrap(),
-                        )
-                    })
-                },
-            );
+    c.bench_function("compare_nested array_array", |b| {
+        b.iter(|| {
+            black_box(
+                compare_op_for_nested(Operator::Eq, &lhs, &rhs_array).unwrap(),
+            )
+        })
+    });
 
-            c.bench_function(
-                &format!("compare_nested array_scalar rows={num_rows} nulls={null_pct}%"),
-                |b| {
-                    b.iter(|| {
-                        black_box(
-                            compare_op_for_nested(
-                                Operator::Eq,
-                                &lhs,
-                                &rhs_scalar,
-                            )
-                            .unwrap(),
-                        )
-                    })
-                },
-            );
-        }
-    }
+    c.bench_function("compare_nested array_scalar", |b| {
+        b.iter(|| {
+            black_box(
+                compare_op_for_nested(Operator::Eq, &lhs, &rhs_scalar).unwrap(),
+            )
+        })
+    });
 }
 
 criterion_group!(benches, criterion_benchmark);
