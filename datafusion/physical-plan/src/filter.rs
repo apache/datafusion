@@ -740,7 +740,7 @@ impl EmbeddedProjection for FilterExec {
 }
 
 /// Converts an interval bound to a [`Precision`] value. NULL bounds (which
-/// represent "unbounded" in the [`Interval`] type) map to [`Precision::Absent`].
+/// represent "unbounded" in the interval type) map to [`Precision::Absent`].
 fn interval_bound_to_precision(
     bound: ScalarValue,
     is_exact: bool,
