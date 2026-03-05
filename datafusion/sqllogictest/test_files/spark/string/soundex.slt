@@ -16,7 +16,7 @@
 # under the License.
 
 query T
-SELECT soundex('Miller'::string);
+SELECT soundex('Miller');
 ----
 M460
 
@@ -26,21 +26,21 @@ SELECT soundex(NULL);
 NULL
 
 query T
-SELECT soundex(''::string);
+SELECT soundex('');
 ----
 (empty)
 
 query T
-SELECT soundex('Apache Spark'::string);
+SELECT soundex('Apache Spark');
 ----
 A122
 
 query T
-SELECT soundex('123'::string);
+SELECT soundex('123');
 ----
 123
 
 query T
-SELECT soundex('Datafusion'::string);
+SELECT soundex('Datafusion');
 ----
 D312

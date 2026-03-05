@@ -72,7 +72,7 @@ impl ScalarUDFImpl for SparkSoundex {
 fn spark_soundex_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
     let [array] = take_function_args("soundex", arg)?;
     match &array.data_type() {
-        DataType::Utf8 | DataType::Utf8View => soundex::<i32>(array),
+        DataType::Utf8 => soundex::<i32>(array),
         DataType::LargeUtf8 => soundex::<i64>(array),
         other => {
             exec_err!("unsupported data type {other:?} for function `soundex`")
@@ -108,7 +108,9 @@ fn compute_soundex(s: &str) -> String {
             break;
         }
         let current = classify_char(c);
-        if let Some(digit) = current && current != last_code {
+        if let Some(digit) = current
+            && current != last_code
+        {
             result.push(digit);
         }
         last_code = current;
