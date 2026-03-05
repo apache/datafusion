@@ -1083,7 +1083,7 @@ impl AggregateExec {
                     column_statistics[idx].max_value = child_col_stats.max_value.clone();
                     column_statistics[idx].min_value = child_col_stats.min_value.clone();
                     column_statistics[idx].distinct_count =
-                        child_col_stats.distinct_count.clone();
+                        child_col_stats.distinct_count;
                 }
             }
 
