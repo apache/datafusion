@@ -20,7 +20,6 @@
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, StructArray};
-use arrow::compute::cast;
 use arrow::datatypes::{Field, FieldRef, Fields};
 use arrow_schema::DataType;
 use datafusion_common::Result;
@@ -31,19 +30,6 @@ pub(super) fn build_struct_fields(data_types: &[DataType]) -> Result<Fields> {
         .enumerate()
         .map(|(i, dt)| Ok(Field::new(format!("c{i}"), dt.clone(), true)))
         .collect()
-}
-
-/// Casts dictionary-encoded arrays to their underlying value type, preserving row count.
-/// Non-dictionary arrays are returned as-is.
-fn flatten_dictionary_array(array: &ArrayRef) -> Result<ArrayRef> {
-    match array.data_type() {
-        DataType::Dictionary(_, value_type) => {
-            let casted = cast(array, value_type)?;
-            // Recursively flatten in case of nested dictionaries
-            flatten_dictionary_array(&casted)
-        }
-        _ => Ok(Arc::clone(array)),
-    }
 }
 
 /// Builds InList values from join key column arrays.
@@ -65,20 +51,14 @@ fn flatten_dictionary_array(array: &ArrayRef) -> Result<ArrayRef> {
 pub(super) fn build_struct_inlist_values(
     join_key_arrays: &[ArrayRef],
 ) -> Result<Option<ArrayRef>> {
-    // Flatten any dictionary-encoded arrays
-    let flattened_arrays: Vec<ArrayRef> = join_key_arrays
-        .iter()
-        .map(flatten_dictionary_array)
-        .collect::<Result<Vec<_>>>()?;
-
     // Build the source array/struct
-    let source_array: ArrayRef = if flattened_arrays.len() == 1 {
+    let source_array: ArrayRef = if join_key_arrays.len() == 1 {
         // Single column: use directly
-        Arc::clone(&flattened_arrays[0])
+        Arc::clone(&join_key_arrays[0])
     } else {
         // Multi-column: build StructArray once from all columns
         let fields = build_struct_fields(
-            &flattened_arrays
+            &join_key_arrays
                 .iter()
                 .map(|arr| arr.data_type().clone())
                 .collect::<Vec<_>>(),
@@ -88,7 +68,7 @@ pub(super) fn build_struct_inlist_values(
         let arrays_with_fields: Vec<(FieldRef, ArrayRef)> = fields
             .iter()
             .cloned()
-            .zip(flattened_arrays.iter().cloned())
+            .zip(join_key_arrays.iter().cloned())
             .collect();
 
         Arc::new(StructArray::from(arrays_with_fields))
@@ -152,7 +132,14 @@ mod tests {
         assert_eq!(
             *result.data_type(),
             DataType::Struct(
-                build_struct_fields(&[DataType::Utf8, DataType::Int32]).unwrap()
+                build_struct_fields(&[
+                    DataType::Dictionary(
+                        Box::new(DataType::Int8),
+                        Box::new(DataType::Utf8)
+                    ),
+                    DataType::Int32
+                ])
+                .unwrap()
             )
         );
     }
@@ -168,6 +155,6 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.len(), 3);
-        assert_eq!(*result.data_type(), DataType::Utf8);
+        assert_eq!(result.data_type(), dict_array.data_type());
     }
 }
