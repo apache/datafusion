@@ -324,12 +324,10 @@ fn optimize_aggregate_projections(
     let schema = aggregate.input.schema();
     let necessary_indices = RequiredIndices::new().with_exprs(schema, all_exprs_iter);
     let necessary_exprs = necessary_indices.get_required_exprs(schema);
-    let necessary_indices = finalize_child_requirements(
-        necessary_indices,
-        !new_aggr_exprs.is_empty(),
-        has_volatile_ancestor,
-        volatile_in_plan,
-    );
+    let necessary_indices =
+        with_child_multiplicity(necessary_indices, !new_aggr_exprs.is_empty())
+            .with_volatile_ancestor_if(has_volatile_ancestor)
+            .with_plan_volatile(volatile_in_plan);
 
     optimize_projections(
         Arc::unwrap_or_clone(aggregate.input),
@@ -359,12 +357,10 @@ fn optimize_window_projections(
     let new_window_exprs = window_reqs.get_at_indices(&window.window_expr);
 
     let required_indices = child_reqs.with_exprs(&input_schema, &new_window_exprs);
-    let required_indices = finalize_child_requirements(
-        required_indices,
-        !new_window_exprs.is_empty(),
-        has_volatile_ancestor,
-        volatile_in_plan,
-    );
+    let required_indices =
+        with_child_multiplicity(required_indices, !new_window_exprs.is_empty())
+            .with_volatile_ancestor_if(has_volatile_ancestor)
+            .with_plan_volatile(volatile_in_plan);
 
     optimize_projections(
         Arc::unwrap_or_clone(window.input),
@@ -420,17 +416,6 @@ fn with_child_multiplicity(
     } else {
         required_indices.for_multiplicity_insensitive_child()
     }
-}
-
-fn finalize_child_requirements(
-    required_indices: RequiredIndices,
-    multiplicity_sensitive: bool,
-    has_volatile_ancestor: bool,
-    volatile_in_plan: bool,
-) -> RequiredIndices {
-    with_child_multiplicity(required_indices, multiplicity_sensitive)
-        .with_volatile_ancestor_if(has_volatile_ancestor)
-        .with_plan_volatile(volatile_in_plan)
 }
 
 fn build_plan_input_requirements(
