@@ -34,6 +34,10 @@ pub struct UnboundedMemoryPool {
 }
 
 impl MemoryPool for UnboundedMemoryPool {
+    fn name(&self) -> &str {
+        "unbounded"
+    }
+
     fn grow(&self, _reservation: &MemoryReservation, additional: usize) {
         self.used.fetch_add(additional, Ordering::Relaxed);
     }
@@ -79,6 +83,10 @@ impl GreedyMemoryPool {
 }
 
 impl MemoryPool for GreedyMemoryPool {
+    fn name(&self) -> &str {
+        "greedy"
+    }
+
     fn grow(&self, _reservation: &MemoryReservation, additional: usize) {
         self.used.fetch_add(additional, Ordering::Relaxed);
     }
@@ -98,6 +106,7 @@ impl MemoryPool for GreedyMemoryPool {
                     reservation,
                     additional,
                     self.pool_size.saturating_sub(used),
+                    self.name(),
                 )
             })?;
         Ok(())
@@ -170,6 +179,10 @@ impl FairSpillPool {
 }
 
 impl MemoryPool for FairSpillPool {
+    fn name(&self) -> &str {
+        "fair"
+    }
+
     fn register(&self, consumer: &MemoryConsumer) {
         if consumer.can_spill {
             self.state.lock().num_spill += 1;
@@ -217,6 +230,7 @@ impl MemoryPool for FairSpillPool {
                         reservation,
                         additional,
                         available,
+                        self.name(),
                     ));
                 }
                 state.spillable += additional;
@@ -231,6 +245,7 @@ impl MemoryPool for FairSpillPool {
                         reservation,
                         additional,
                         available,
+                        self.name(),
                     ));
                 }
                 state.unspillable += additional;
@@ -259,13 +274,15 @@ fn insufficient_capacity_err(
     reservation: &MemoryReservation,
     additional: usize,
     available: usize,
+    memory_pool_name: &str,
 ) -> DataFusionError {
     resources_datafusion_err!(
-        "Failed to allocate additional {} for {} with {} already allocated for this reservation - {} remain available for the total pool",
+        "Failed to allocate additional {} for {} with {} already allocated for this reservation - {} remain available for the total '{}' pool",
         human_readable_size(additional),
         reservation.registration.consumer.name,
         human_readable_size(reservation.size()),
-        human_readable_size(available)
+        human_readable_size(available),
+        memory_pool_name
     )
 }
 
@@ -417,6 +434,10 @@ impl<I: MemoryPool> TrackConsumersPool<I> {
 }
 
 impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
+    fn name(&self) -> &str {
+        "track_consumers"
+    }
+
     fn register(&self, consumer: &MemoryConsumer) {
         self.inner.register(consumer);
 
@@ -473,6 +494,7 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
                             &reservation.consumer().name,
                             &e,
                             &self.report_top(self.top.into()),
+                            self.inner.name(),
                         ),
                     )
                 }
@@ -501,9 +523,10 @@ fn provide_top_memory_consumers_to_error_msg(
     consumer_name: &str,
     error_msg: &str,
     top_consumers: &str,
+    memory_pool_name: &str,
 ) -> String {
     format!(
-        "Additional allocation failed for {consumer_name} with top memory consumers (across reservations) as:\n{top_consumers}\nError: {error_msg}"
+        "Additional allocation failed for {consumer_name} with top memory consumers (across reservations) using '{memory_pool_name}' pool as:\n{top_consumers}\nError: {error_msg}"
     )
 }
 
@@ -540,10 +563,10 @@ mod tests {
         assert_eq!(pool.reserved(), 4000);
 
         let err = r2.try_grow(1).unwrap_err().strip_backtrace();
-        assert_snapshot!(err, @"Resources exhausted: Failed to allocate additional 1.0 B for r2 with 2000.0 B already allocated for this reservation - 0.0 B remain available for the total pool");
+        assert_snapshot!(err, @"Resources exhausted: Failed to allocate additional 1.0 B for r2 with 2000.0 B already allocated for this reservation - 0.0 B remain available for the total 'fair' pool");
 
         let err = r2.try_grow(1).unwrap_err().strip_backtrace();
-        assert_snapshot!(err, @"Resources exhausted: Failed to allocate additional 1.0 B for r2 with 2000.0 B already allocated for this reservation - 0.0 B remain available for the total pool");
+        assert_snapshot!(err, @"Resources exhausted: Failed to allocate additional 1.0 B for r2 with 2000.0 B already allocated for this reservation - 0.0 B remain available for the total 'fair' pool");
 
         r1.shrink(1990);
         r2.shrink(2000);
@@ -568,12 +591,12 @@ mod tests {
             .register(&pool);
 
         let err = r3.try_grow(70).unwrap_err().strip_backtrace();
-        assert_snapshot!(err, @"Resources exhausted: Failed to allocate additional 70.0 B for r3 with 0.0 B already allocated for this reservation - 40.0 B remain available for the total pool");
+        assert_snapshot!(err, @"Resources exhausted: Failed to allocate additional 70.0 B for r3 with 0.0 B already allocated for this reservation - 40.0 B remain available for the total 'fair' pool");
 
         //Shrinking r2 to zero doesn't allow a3 to allocate more than 45
         r2.free();
         let err = r3.try_grow(70).unwrap_err().strip_backtrace();
-        assert_snapshot!(err, @"Resources exhausted: Failed to allocate additional 70.0 B for r3 with 0.0 B already allocated for this reservation - 40.0 B remain available for the total pool");
+        assert_snapshot!(err, @"Resources exhausted: Failed to allocate additional 70.0 B for r3 with 0.0 B already allocated for this reservation - 40.0 B remain available for the total 'fair' pool");
 
         // But dropping r2 does
         drop(r2);
@@ -586,7 +609,7 @@ mod tests {
 
         let r4 = MemoryConsumer::new("s4").register(&pool);
         let err = r4.try_grow(30).unwrap_err().strip_backtrace();
-        assert_snapshot!(err, @"Resources exhausted: Failed to allocate additional 30.0 B for s4 with 0.0 B already allocated for this reservation - 20.0 B remain available for the total pool");
+        assert_snapshot!(err, @"Resources exhausted: Failed to allocate additional 30.0 B for s4 with 0.0 B already allocated for this reservation - 20.0 B remain available for the total 'fair' pool");
     }
 
     #[test]
@@ -629,12 +652,13 @@ mod tests {
         let res = r5.try_grow(150);
         assert!(res.is_err());
         let error = res.unwrap_err().strip_backtrace();
-        assert_snapshot!(error, @r"
-        Resources exhausted: Additional allocation failed for r5 with top memory consumers (across reservations) as:
+
+        assert_snapshot!(error, @"
+        Resources exhausted: Additional allocation failed for r5 with top memory consumers (across reservations) using 'greedy' pool as:
           r1#[ID](can spill: false) consumed 50.0 B, peak 70.0 B,
           r3#[ID](can spill: false) consumed 20.0 B, peak 25.0 B,
           r2#[ID](can spill: false) consumed 15.0 B, peak 15.0 B.
-        Error: Failed to allocate additional 150.0 B for r5 with 0.0 B already allocated for this reservation - 5.0 B remain available for the total pool
+        Error: Failed to allocate additional 150.0 B for r5 with 0.0 B already allocated for this reservation - 5.0 B remain available for the total 'greedy' pool
         ");
     }
 
@@ -654,10 +678,10 @@ mod tests {
         let res = r0.try_grow(150);
         assert!(res.is_err());
         let error = res.unwrap_err().strip_backtrace();
-        assert_snapshot!(error, @r"
-        Resources exhausted: Additional allocation failed for foo with top memory consumers (across reservations) as:
+        assert_snapshot!(error, @"
+        Resources exhausted: Additional allocation failed for foo with top memory consumers (across reservations) using 'greedy' pool as:
           foo#[ID](can spill: false) consumed 0.0 B, peak 0.0 B.
-        Error: Failed to allocate additional 150.0 B for foo with 0.0 B already allocated for this reservation - 100.0 B remain available for the total pool
+        Error: Failed to allocate additional 150.0 B for foo with 0.0 B already allocated for this reservation - 100.0 B remain available for the total 'greedy' pool
         ");
 
         // API: multiple registrations using the same hashed consumer,
@@ -672,10 +696,10 @@ mod tests {
         assert!(res.is_err());
         let error = res.unwrap_err().strip_backtrace();
         assert_snapshot!(error, @r"
-        Resources exhausted: Additional allocation failed for foo with top memory consumers (across reservations) as:
+        Resources exhausted: Additional allocation failed for foo with top memory consumers (across reservations) using 'greedy' pool as:
           foo#[ID](can spill: false) consumed 10.0 B, peak 10.0 B,
           foo#[ID](can spill: false) consumed 0.0 B, peak 0.0 B.
-        Error: Failed to allocate additional 150.0 B for foo with 0.0 B already allocated for this reservation - 90.0 B remain available for the total pool
+        Error: Failed to allocate additional 150.0 B for foo with 0.0 B already allocated for this reservation - 90.0 B remain available for the total 'greedy' pool
         ");
 
         // Test: will accumulate size changes per consumer, not per reservation
@@ -685,10 +709,10 @@ mod tests {
         assert!(res.is_err());
         let error = res.unwrap_err().strip_backtrace();
         assert_snapshot!(error, @r"
-        Resources exhausted: Additional allocation failed for foo with top memory consumers (across reservations) as:
+        Resources exhausted: Additional allocation failed for foo with top memory consumers (across reservations) using 'greedy' pool as:
           foo#[ID](can spill: false) consumed 20.0 B, peak 20.0 B,
           foo#[ID](can spill: false) consumed 10.0 B, peak 10.0 B.
-        Error: Failed to allocate additional 150.0 B for foo with 20.0 B already allocated for this reservation - 70.0 B remain available for the total pool
+        Error: Failed to allocate additional 150.0 B for foo with 20.0 B already allocated for this reservation - 70.0 B remain available for the total 'greedy' pool
         ");
 
         // Test: different hashed consumer, (even with the same name),
@@ -700,11 +724,11 @@ mod tests {
         assert!(res.is_err());
         let error = res.unwrap_err().strip_backtrace();
         assert_snapshot!(error, @r"
-        Resources exhausted: Additional allocation failed for foo with top memory consumers (across reservations) as:
+        Resources exhausted: Additional allocation failed for foo with top memory consumers (across reservations) using 'greedy' pool as:
           foo#[ID](can spill: false) consumed 20.0 B, peak 20.0 B,
           foo#[ID](can spill: false) consumed 10.0 B, peak 10.0 B,
           foo#[ID](can spill: true) consumed 0.0 B, peak 0.0 B.
-        Error: Failed to allocate additional 150.0 B for foo with 0.0 B already allocated for this reservation - 70.0 B remain available for the total pool
+        Error: Failed to allocate additional 150.0 B for foo with 0.0 B already allocated for this reservation - 70.0 B remain available for the total 'greedy' pool
         ");
     }
 
@@ -724,10 +748,10 @@ mod tests {
             assert!(res.is_err());
             let error = res.unwrap_err().strip_backtrace();
             allow_duplicates!(assert_snapshot!(error, @r"
-            Resources exhausted: Additional allocation failed for r0 with top memory consumers (across reservations) as:
+            Resources exhausted: Additional allocation failed for r0 with top memory consumers (across reservations) using 'greedy' pool as:
               r1#[ID](can spill: false) consumed 20.0 B, peak 20.0 B,
               r0#[ID](can spill: false) consumed 10.0 B, peak 10.0 B.
-            Error: Failed to allocate additional 150.0 B for r0 with 10.0 B already allocated for this reservation - 70.0 B remain available for the total pool
+            Error: Failed to allocate additional 150.0 B for r0 with 10.0 B already allocated for this reservation - 70.0 B remain available for the total 'greedy' pool
             "));
 
             // Test: unregister one
@@ -737,9 +761,9 @@ mod tests {
             assert!(res.is_err());
             let error = res.unwrap_err().strip_backtrace();
             allow_duplicates!(assert_snapshot!(error, @r"
-            Resources exhausted: Additional allocation failed for r0 with top memory consumers (across reservations) as:
+            Resources exhausted: Additional allocation failed for r0 with top memory consumers (across reservations) using 'greedy' pool as:
               r0#[ID](can spill: false) consumed 10.0 B, peak 10.0 B.
-            Error: Failed to allocate additional 150.0 B for r0 with 10.0 B already allocated for this reservation - 90.0 B remain available for the total pool
+            Error: Failed to allocate additional 150.0 B for r0 with 10.0 B already allocated for this reservation - 90.0 B remain available for the total 'greedy' pool
             "));
 
             // Test: actual message we see is the `available is 70`. When it should be `available is 90`.
@@ -748,9 +772,9 @@ mod tests {
             assert!(res.is_err());
             let error = res.unwrap_err().strip_backtrace();
             allow_duplicates!(assert_snapshot!(error, @r"
-            Resources exhausted: Additional allocation failed for r0 with top memory consumers (across reservations) as:
+            Resources exhausted: Additional allocation failed for r0 with top memory consumers (across reservations) using 'greedy' pool as:
               r0#[ID](can spill: false) consumed 10.0 B, peak 10.0 B.
-            Error: Failed to allocate additional 150.0 B for r0 with 10.0 B already allocated for this reservation - 90.0 B remain available for the total pool
+            Error: Failed to allocate additional 150.0 B for r0 with 10.0 B already allocated for this reservation - 90.0 B remain available for the total 'greedy' pool
             "));
 
             // Test: the registration needs to free itself (or be dropped),
@@ -759,9 +783,9 @@ mod tests {
             assert!(res.is_err());
             let error = res.unwrap_err().strip_backtrace();
             allow_duplicates!(assert_snapshot!(error, @r"
-            Resources exhausted: Additional allocation failed for r0 with top memory consumers (across reservations) as:
+            Resources exhausted: Additional allocation failed for r0 with top memory consumers (across reservations) using 'greedy' pool as:
               r0#[ID](can spill: false) consumed 10.0 B, peak 10.0 B.
-            Error: Failed to allocate additional 150.0 B for r0 with 10.0 B already allocated for this reservation - 90.0 B remain available for the total pool
+            Error: Failed to allocate additional 150.0 B for r0 with 10.0 B already allocated for this reservation - 90.0 B remain available for the total 'greedy' pool
             "));
         }
 
