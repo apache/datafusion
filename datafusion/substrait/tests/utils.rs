@@ -172,7 +172,8 @@ pub mod test {
                     match read_type {
                         // Virtual Tables do not contribute to the schema
                         ReadType::VirtualTable(_) => (),
-                        ReadType::LocalFiles(_) => todo!(),
+                        // LocalFiles are resolved by the consumer, not pre-registered
+                        ReadType::LocalFiles(_) => (),
                         ReadType::NamedTable(nt) => self.collect_named_table(r, nt)?,
                         ReadType::ExtensionTable(_) => todo!(),
                         ReadType::IcebergTable(_) => todo!(),
