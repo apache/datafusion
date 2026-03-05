@@ -192,8 +192,8 @@ fn optimize_projections(
                 RequiredIndices::new().with_exprs(schema, all_exprs_iter);
             let necessary_exprs = necessary_indices.get_required_exprs(schema);
             let mut necessary_indices = if new_aggr_expr.is_empty() {
-                // no aggregate functions – the aggregation is just a GROUP BY
-                // (possibly global).  In that case the output row count is always
+                // no aggregate functions – the aggregation is just a GROUP BY.
+                // In that case the output row count is always
                 // ≤1 per input group, and nothing upstream can tell how many input
                 // rows we had, so the child is *multiplicity‑insensitive*.
                 necessary_indices.for_multiplicity_insensitive_child()
@@ -247,8 +247,17 @@ fn optimize_projections(
             // parent or window expression requirements.
             let required_indices = child_reqs.with_exprs(&input_schema, &new_window_expr);
             let mut required_indices = if new_window_expr.is_empty() {
+                // There are no window functions that the parent cares about.
+                // A window operator without any window expressions doesn’t change the
+                // number of rows coming from its child – the output is just the input.
+                // Hence the child is multiplicity‑insensitive: upstream nodes can’t
+                // observe how many rows the child produced.
                 required_indices.for_multiplicity_insensitive_child()
             } else {
+                // At least one window expression remains; e.g. `row_number()` or
+                // `lag()` etc.  These depend on the ordering of rows coming from the
+                // child, so the number of input rows matters.  Treat the child as
+                // multiplicity‑sensitive.
                 required_indices.for_multiplicity_sensitive_child()
             };
             required_indices = required_indices
