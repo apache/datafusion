@@ -27,7 +27,7 @@ use arrow::csv::reader::Format;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::catalog::{Session, TableFunctionImpl};
+use datafusion::catalog::{Session, TableFunctionArgs, TableFunctionImpl};
 use datafusion::common::{ScalarValue, plan_err};
 use datafusion::datasource::TableProvider;
 use datafusion::datasource::memory::MemorySourceConfig;
@@ -135,7 +135,8 @@ impl TableProvider for LocalCsvTable {
 struct LocalCsvTableFunc {}
 
 impl TableFunctionImpl for LocalCsvTableFunc {
-    fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+    fn call_with_args(&self, args: TableFunctionArgs) -> Result<Arc<dyn TableProvider>> {
+        let exprs = args.args;
         let Some(Expr::Literal(ScalarValue::Utf8(Some(path)), _)) = exprs.first() else {
             return plan_err!("read_csv requires at least one string argument");
         };

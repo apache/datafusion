@@ -1829,6 +1829,8 @@ impl ContextProvider for SessionContextProvider<'_> {
         name: &str,
         args: Vec<Expr>,
     ) -> datafusion_common::Result<Arc<dyn TableSource>> {
+        use datafusion_catalog::TableFunctionArgs;
+
         let tbl_func = self
             .state
             .table_functions
@@ -1850,7 +1852,10 @@ impl ContextProvider for SessionContextProvider<'_> {
                     .and_then(|e| simplifier.simplify(e))
             })
             .collect::<datafusion_common::Result<Vec<_>>>()?;
-        let provider = tbl_func.create_table_provider(&args)?;
+        let provider = tbl_func.create_table_provider_with_args(TableFunctionArgs {
+            args: &args,
+            session: self.state,
+        })?;
 
         Ok(provider_as_source(provider))
     }

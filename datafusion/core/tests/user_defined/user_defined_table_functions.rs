@@ -33,8 +33,8 @@ use datafusion::error::Result;
 use datafusion::execution::TaskContext;
 use datafusion::physical_plan::{ExecutionPlan, collect};
 use datafusion::prelude::SessionContext;
-use datafusion_catalog::Session;
 use datafusion_catalog::TableFunctionImpl;
+use datafusion_catalog::{Session, TableFunctionArgs};
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::{EmptyRelation, Expr, LogicalPlan, Projection, TableType};
 
@@ -200,7 +200,8 @@ impl SimpleCsvTable {
 struct SimpleCsvTableFunc {}
 
 impl TableFunctionImpl for SimpleCsvTableFunc {
-    fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+    fn call_with_args(&self, args: TableFunctionArgs) -> Result<Arc<dyn TableProvider>> {
+        let exprs = args.args;
         let mut new_exprs = vec![];
         let mut filepath = String::new();
         for expr in exprs {
@@ -231,7 +232,7 @@ async fn test_udtf_type_coercion() -> Result<()> {
     struct NoOpTableFunc;
 
     impl TableFunctionImpl for NoOpTableFunc {
-        fn call(&self, _: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+        fn call_with_args(&self, _: TableFunctionArgs) -> Result<Arc<dyn TableProvider>> {
             let schema = Arc::new(arrow::datatypes::Schema::empty());
             Ok(Arc::new(MemTable::try_new(schema, vec![vec![]])?))
         }

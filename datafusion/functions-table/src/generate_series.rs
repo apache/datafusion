@@ -23,9 +23,9 @@ use arrow::datatypes::{
 };
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
-use datafusion_catalog::Session;
 use datafusion_catalog::TableFunctionImpl;
 use datafusion_catalog::TableProvider;
+use datafusion_catalog::{Session, TableFunctionArgs};
 use datafusion_common::{Result, ScalarValue, plan_err};
 use datafusion_expr::{Expr, TableType};
 use datafusion_physical_plan::ExecutionPlan;
@@ -479,7 +479,8 @@ struct GenerateSeriesFuncImpl {
 }
 
 impl TableFunctionImpl for GenerateSeriesFuncImpl {
-    fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+    fn call_with_args(&self, args: TableFunctionArgs) -> Result<Arc<dyn TableProvider>> {
+        let exprs = args.args;
         if exprs.is_empty() || exprs.len() > 3 {
             return plan_err!("{} function requires 1 to 3 arguments", self.name);
         }
@@ -737,12 +738,12 @@ impl GenerateSeriesFuncImpl {
 pub struct GenerateSeriesFunc {}
 
 impl TableFunctionImpl for GenerateSeriesFunc {
-    fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+    fn call_with_args(&self, args: TableFunctionArgs) -> Result<Arc<dyn TableProvider>> {
         let impl_func = GenerateSeriesFuncImpl {
             name: "generate_series",
             include_end: true,
         };
-        impl_func.call(exprs)
+        impl_func.call_with_args(args)
     }
 }
 
@@ -750,12 +751,12 @@ impl TableFunctionImpl for GenerateSeriesFunc {
 pub struct RangeFunc {}
 
 impl TableFunctionImpl for RangeFunc {
-    fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+    fn call_with_args(&self, args: TableFunctionArgs) -> Result<Arc<dyn TableProvider>> {
         let impl_func = GenerateSeriesFuncImpl {
             name: "range",
             include_end: false,
         };
-        impl_func.call(exprs)
+        impl_func.call_with_args(args)
     }
 }
 

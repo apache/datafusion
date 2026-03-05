@@ -21,7 +21,7 @@
 //!
 //! ## Usage
 //! ```bash
-//! cargo run --example udf -- [all|adv_udaf|adv_udf|adv_udwf|async_udf|udaf|udf|udtf|udwf]
+//! cargo run --example udf -- [all|adv_udaf|adv_udf|adv_udwf|async_udf|udaf|udf|udtf|udwf|table_list_udtf]
 //! ```
 //!
 //! Each subcommand runs a corresponding example:
@@ -50,6 +50,9 @@
 //!
 //! - `udwf`
 //!   (file: simple_udwf.rs, desc: Simple UDWF example)
+//!
+//! - `table_list_udtf`
+//!   (file: table_list_udtf.rs, desc: Session-aware UDTF table list example)
 
 mod advanced_udaf;
 mod advanced_udf;
@@ -59,6 +62,7 @@ mod simple_udaf;
 mod simple_udf;
 mod simple_udtf;
 mod simple_udwf;
+mod table_list_udtf;
 
 use datafusion::error::{DataFusionError, Result};
 use strum::{IntoEnumIterator, VariantNames};
@@ -76,6 +80,7 @@ enum ExampleKind {
     Udaf,
     Udwf,
     Udtf,
+    TableListUdtf,
 }
 
 impl ExampleKind {
@@ -101,6 +106,7 @@ impl ExampleKind {
             ExampleKind::Udf => simple_udf::simple_udf().await?,
             ExampleKind::Udtf => simple_udtf::simple_udtf().await?,
             ExampleKind::Udwf => simple_udwf::simple_udwf().await?,
+            ExampleKind::TableListUdtf => table_list_udtf::table_list_udtf().await?,
         }
 
         Ok(())
