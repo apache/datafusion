@@ -466,18 +466,12 @@ impl PruningPredicate {
         // In particular this unravels any `DynamicFilterPhysicalExpr`s by snapshotting them
         // so that PruningPredicate can work with a static expression.
         let tf = snapshot_physical_expr_opt(expr)?;
-        if tf.transformed {
-            // If we had an expression such as Dynamic(part_col < 5 and col < 10)
-            // (this could come from something like `select * from t order by part_col, col, limit 10`)
-            // after snapshotting and because `DynamicFilterPhysicalExpr` applies child replacements to its
-            // children after snapshotting and previously `replace_columns_with_literals` may have been called with partition values
-            // the expression we have now is `8 < 5 and col < 10`.
-            // Thus we need as simplifier pass to get `false and col < 10` => `false` here.
-            let simplifier = PhysicalExprSimplifier::new(&schema);
-            expr = simplifier.simplify(tf.data)?;
-        } else {
-            expr = tf.data;
-        }
+        // Always simplify the expression to handle cases like IS NULL/IS NOT NULL on literals,
+        // constant expressions, and expressions that may have been transformed during snapshotting
+        // (e.g., DynamicFilterPhysicalExpr with partition value replacements like `8 < 5` => `false`).
+        // The simplifier is efficient and returns early if nothing can be simplified.
+        let simplifier = PhysicalExprSimplifier::new(&schema);
+        expr = simplifier.simplify(tf.data)?;
         let unhandled_hook = Arc::new(ConstantUnhandledPredicateHook::default()) as _;
 
         // build predicate expression once
@@ -5440,5 +5434,44 @@ mod tests {
         let expected =
             "c1_null_count@2 != row_count@3 AND c1_min@0 <= a AND a <= c1_max@1";
         assert_eq!(res.to_string(), expected);
+    }
+
+    /// Test that pruning works correctly when IS NOT NULL(NULL literal) is simplified.
+    ///
+    /// This test verifies the fix for the bug where expressions like
+    /// `NULL IS NOT NULL OR a = 24` (from schema evolution scenarios) were not
+    /// being simplified before pruning, causing incorrect pruning behavior.
+    ///
+    /// The expression should simplify to `false OR a = 24` → `a = 24`, allowing
+    /// proper pruning based on the `a = 24` condition.
+    #[test]
+    fn test_pruning_with_is_not_null_null_literal() {
+        use datafusion_expr::is_not_null;
+
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let schema_ref = Arc::new(schema.clone());
+
+        // Create statistics: column a has min=20, max=30, so a=24 can match
+        let statistics = TestStatistics::new().with(
+            "a",
+            ContainerStats::new_i32(
+                vec![Some(20), Some(25), Some(30)], // min values for 3 containers
+                vec![Some(30), Some(30), Some(30)], // max values for 3 containers
+            ),
+        );
+
+        // Expression: NULL IS NOT NULL OR a = 24
+        // After simplification: false OR a = 24 → a = 24
+        let null_literal = lit(ScalarValue::Int32(None));
+        let is_not_null_null = is_not_null(null_literal);
+        let expr = or(is_not_null_null, col("a").eq(lit(24)));
+
+        // Expected: containers where a=24 could match
+        // Container 0: a in [20, 30] → 24 is in range → keep (true)
+        // Container 1: a in [25, 30] → 24 < 25, not in range → prune (false)
+        // Container 2: a in [30, 30] → 24 < 30, not in range → prune (false)
+        let expected = &[true, false, false];
+
+        prune_with_expr(expr, &schema_ref, &statistics, expected);
     }
 }
