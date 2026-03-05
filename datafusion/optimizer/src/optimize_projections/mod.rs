@@ -192,8 +192,15 @@ fn optimize_projections(
                 RequiredIndices::new().with_exprs(schema, all_exprs_iter);
             let necessary_exprs = necessary_indices.get_required_exprs(schema);
             let mut necessary_indices = if new_aggr_expr.is_empty() {
+                // no aggregate functions – the aggregation is just a GROUP BY
+                // (possibly global).  In that case the output row count is always
+                // ≤1 per input group, and nothing upstream can tell how many input
+                // rows we had, so the child is *multiplicity‑insensitive*.
                 necessary_indices.for_multiplicity_insensitive_child()
             } else {
+                // there is at least one aggregate function (COUNT, SUM, …).
+                // those functions generally depend on how many input rows hit each
+                // group, so the child must be treated as *multiplicity‑sensitive*.
                 necessary_indices.for_multiplicity_sensitive_child()
             };
             necessary_indices = necessary_indices
