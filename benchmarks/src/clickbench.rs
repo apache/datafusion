@@ -58,7 +58,6 @@ pub struct RunOpt {
     ///
     /// Specifically, it enables:
     /// * `pushdown_filters = true`
-    /// * `reorder_filters = true`
     #[arg(long = "pushdown")]
     pushdown: bool,
 
@@ -196,14 +195,12 @@ impl RunOpt {
             // Turn on Parquet filter pushdown if requested
             if self.pushdown {
                 parquet_options.pushdown_filters = true;
-                parquet_options.reorder_filters = true;
             }
 
             if self.sorted_by.is_some() {
                 // We should compare the dynamic topk optimization when data is sorted, so we make the
                 // assumption that filter pushdown is also enabled in this case.
                 parquet_options.pushdown_filters = true;
-                parquet_options.reorder_filters = true;
             }
         }
 

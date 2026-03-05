@@ -379,7 +379,7 @@ mod parquet {
                     parquet_options::MetadataSizeHintOpt::MetadataSizeHint(size as u64)
                 }),
                 pushdown_filters: global_options.global.pushdown_filters,
-                reorder_filters: global_options.global.reorder_filters,
+
                 force_filter_selections: global_options.global.force_filter_selections,
                 data_pagesize_limit: global_options.global.data_pagesize_limit as u64,
                 write_batch_size: global_options.global.write_batch_size as u64,
@@ -426,6 +426,9 @@ mod parquet {
                 max_predicate_cache_size_opt: global_options.global.max_predicate_cache_size.map(|size| {
                     parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(size as u64)
                 }),
+                filter_pushdown_min_bytes_per_sec_opt: Some(parquet_options::FilterPushdownMinBytesPerSecOpt::FilterPushdownMinBytesPerSec(global_options.global.filter_pushdown_min_bytes_per_sec)),
+                filter_collecting_byte_ratio_threshold_opt: Some(parquet_options::FilterCollectingByteRatioThresholdOpt::FilterCollectingByteRatioThreshold(global_options.global.filter_collecting_byte_ratio_threshold)),
+                filter_confidence_z_opt: Some(parquet_options::FilterConfidenceZOpt::FilterConfidenceZ(global_options.global.filter_confidence_z)),
             }),
             column_specific_options: column_specific_options.into_iter().map(|(column_name, options)| {
                 ParquetColumnSpecificOptions {
@@ -475,7 +478,7 @@ mod parquet {
                 parquet_options::MetadataSizeHintOpt::MetadataSizeHint(size) => *size as usize,
             }),
             pushdown_filters: proto.pushdown_filters,
-            reorder_filters: proto.reorder_filters,
+
             force_filter_selections: proto.force_filter_selections,
             data_pagesize_limit: proto.data_pagesize_limit as usize,
             write_batch_size: proto.write_batch_size as usize,
@@ -525,6 +528,15 @@ mod parquet {
             max_predicate_cache_size: proto.max_predicate_cache_size_opt.as_ref().map(|opt| match opt {
                 parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(size) => *size as usize,
             }),
+            filter_pushdown_min_bytes_per_sec: proto.filter_pushdown_min_bytes_per_sec_opt.as_ref().map(|opt| match opt {
+                parquet_options::FilterPushdownMinBytesPerSecOpt::FilterPushdownMinBytesPerSec(v) => *v,
+            }).unwrap_or(f64::INFINITY),
+            filter_collecting_byte_ratio_threshold: proto.filter_collecting_byte_ratio_threshold_opt.as_ref().map(|opt| match opt {
+                parquet_options::FilterCollectingByteRatioThresholdOpt::FilterCollectingByteRatioThreshold(v) => *v,
+            }).unwrap_or(0.2),
+            filter_confidence_z: proto.filter_confidence_z_opt.as_ref().map(|opt| match opt {
+                parquet_options::FilterConfidenceZOpt::FilterConfidenceZ(v) => *v,
+            }).unwrap_or(2.0),
         }
         }
     }

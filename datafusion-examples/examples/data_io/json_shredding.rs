@@ -91,7 +91,10 @@ pub async fn json_shredding() -> Result<()> {
     store.put(&path, payload).await?;
 
     // Set up query execution
-    let mut cfg = SessionConfig::new();
+    let mut cfg = SessionConfig::default().set(
+        "datafusion.execution.parquet.filter_pushdown_min_bytes_per_sec",
+        &ScalarValue::Float64(Some(0.0)),
+    );
     cfg.options_mut().execution.parquet.pushdown_filters = true;
     let ctx = SessionContext::new_with_config(cfg);
     ctx.runtime_env().register_object_store(
