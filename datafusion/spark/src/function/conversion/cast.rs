@@ -34,8 +34,9 @@ use std::sync::Arc;
 const MICROS_PER_SECOND: i64 = 1_000_000;
 
 /// Convert seconds to microseconds with saturating overflow behavior
-fn secs_to_micros(secs: impl Into<i64>) -> i64 {
-    secs.into().saturating_mul(MICROS_PER_SECOND)
+#[inline]
+fn secs_to_micros(secs: i64) -> i64 {
+    secs.saturating_mul(MICROS_PER_SECOND)
 }
 
 /// Spark-compatible `cast` function for type conversions
@@ -215,9 +216,9 @@ fn cast_to_timestamp(
                 | ScalarValue::Int16(None)
                 | ScalarValue::Int32(None)
                 | ScalarValue::Int64(None) => None,
-                ScalarValue::Int8(Some(v)) => Some(secs_to_micros(*v)),
-                ScalarValue::Int16(Some(v)) => Some(secs_to_micros(*v)),
-                ScalarValue::Int32(Some(v)) => Some(secs_to_micros(*v)),
+                ScalarValue::Int8(Some(v)) => Some(secs_to_micros((*v).into())),
+                ScalarValue::Int16(Some(v)) => Some(secs_to_micros((*v).into())),
+                ScalarValue::Int32(Some(v)) => Some(secs_to_micros((*v).into())),
                 ScalarValue::Int64(Some(v)) => Some(secs_to_micros(*v)),
                 other => {
                     return exec_err!("Unsupported cast from {:?} to timestamp", other);
