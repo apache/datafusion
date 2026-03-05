@@ -184,6 +184,16 @@ pub enum NativeType {
     Map(LogicalFieldRef),
 }
 
+/// Format a [`LogicalField`] for display, matching [`arrow::datatypes::DataType`]'s
+/// Display convention of showing a `"non-null "` prefix for non-nullable fields.
+fn format_logical_field(
+    f: &mut std::fmt::Formatter<'_>,
+    field: &LogicalField,
+) -> std::fmt::Result {
+    let non_null = if field.nullable { "" } else { "non-null " };
+    write!(f, "{:?}: {non_null}{}", field.name, field.logical_type)
+}
+
 impl Display for NativeType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Match the format used by arrow::datatypes::DataType's Display impl
@@ -210,9 +220,17 @@ impl Display for NativeType {
             Self::Binary => write!(f, "Binary"),
             Self::FixedSizeBinary(size) => write!(f, "FixedSizeBinary({size})"),
             Self::String => write!(f, "String"),
-            Self::List(field) => write!(f, "List({})", field.logical_type),
+            Self::List(field) => {
+                let non_null = if field.nullable { "" } else { "non-null " };
+                write!(f, "List({non_null}{})", field.logical_type)
+            }
             Self::FixedSizeList(field, size) => {
-                write!(f, "FixedSizeList({size} x {})", field.logical_type)
+                let non_null = if field.nullable { "" } else { "non-null " };
+                write!(
+                    f,
+                    "FixedSizeList({size} x {non_null}{})",
+                    field.logical_type
+                )
             }
             Self::Struct(fields) => {
                 write!(f, "Struct(")?;
@@ -220,7 +238,7 @@ impl Display for NativeType {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    write!(f, "{:?}: {}", field.name, field.logical_type)?;
+                    format_logical_field(f, field)?;
                 }
                 write!(f, ")")
             }
@@ -230,12 +248,17 @@ impl Display for NativeType {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    write!(f, "{type_id}: ({:?}: {})", field.name, field.logical_type)?;
+                    write!(f, "{type_id}: (")?;
+                    format_logical_field(f, field)?;
+                    write!(f, ")")?;
                 }
                 write!(f, ")")
             }
             Self::Decimal(precision, scale) => write!(f, "Decimal({precision}, {scale})"),
-            Self::Map(field) => write!(f, "Map({})", field.logical_type),
+            Self::Map(field) => {
+                let non_null = if field.nullable { "" } else { "non-null " };
+                write!(f, "Map({non_null}{})", field.logical_type)
+            }
         }
     }
 }
@@ -535,5 +558,92 @@ impl NativeType {
     #[inline]
     pub fn is_float(&self) -> bool {
         matches!(self, Self::Float16 | Self::Float32 | Self::Float64)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::LogicalField;
+    use arrow::datatypes::Field;
+    use insta::assert_snapshot;
+
+    #[test]
+    fn test_native_type_display() {
+        assert_snapshot!(NativeType::Null, @"Null");
+        assert_snapshot!(NativeType::Boolean, @"Boolean");
+        assert_snapshot!(NativeType::Int8, @"Int8");
+        assert_snapshot!(NativeType::Int16, @"Int16");
+        assert_snapshot!(NativeType::Int32, @"Int32");
+        assert_snapshot!(NativeType::Int64, @"Int64");
+        assert_snapshot!(NativeType::UInt8, @"UInt8");
+        assert_snapshot!(NativeType::UInt16, @"UInt16");
+        assert_snapshot!(NativeType::UInt32, @"UInt32");
+        assert_snapshot!(NativeType::UInt64, @"UInt64");
+        assert_snapshot!(NativeType::Float16, @"Float16");
+        assert_snapshot!(NativeType::Float32, @"Float32");
+        assert_snapshot!(NativeType::Float64, @"Float64");
+        assert_snapshot!(NativeType::Date, @"Date");
+        assert_snapshot!(NativeType::Binary, @"Binary");
+        assert_snapshot!(NativeType::String, @"String");
+        assert_snapshot!(NativeType::FixedSizeBinary(16), @"FixedSizeBinary(16)");
+        assert_snapshot!(NativeType::Decimal(10, 2), @"Decimal(10, 2)");
+    }
+
+    #[test]
+    fn test_native_type_display_timestamp() {
+        assert_snapshot!(
+            NativeType::Timestamp(TimeUnit::Second, None),
+            @"Timestamp(s)"
+        );
+        assert_snapshot!(
+            NativeType::Timestamp(TimeUnit::Millisecond, None),
+            @"Timestamp(ms)"
+        );
+        assert_snapshot!(
+            NativeType::Timestamp(TimeUnit::Nanosecond, Some(Arc::from("UTC"))),
+            @r#"Timestamp(ns, "UTC")"#
+        );
+    }
+
+    #[test]
+    fn test_native_type_display_time_duration_interval() {
+        assert_snapshot!(NativeType::Time(TimeUnit::Microsecond), @"Time(µs)");
+        assert_snapshot!(NativeType::Duration(TimeUnit::Nanosecond), @"Duration(ns)");
+        assert_snapshot!(NativeType::Interval(IntervalUnit::YearMonth), @"Interval(YearMonth)");
+        assert_snapshot!(NativeType::Interval(IntervalUnit::MonthDayNano), @"Interval(MonthDayNano)");
+    }
+
+    #[test]
+    fn test_native_type_display_nested() {
+        let list = NativeType::List(Arc::new(LogicalField::from(&Field::new(
+            "item",
+            DataType::Int32,
+            true,
+        ))));
+        assert_snapshot!(list, @"List(Int32)");
+
+        let fixed_list = NativeType::FixedSizeList(
+            Arc::new(LogicalField::from(&Field::new(
+                "item",
+                DataType::Float64,
+                false,
+            ))),
+            3,
+        );
+        assert_snapshot!(fixed_list, @"FixedSizeList(3 x non-null Float64)");
+
+        let struct_type = NativeType::Struct(LogicalFields::from(&Fields::from(vec![
+            Field::new("name", DataType::Utf8, false),
+            Field::new("age", DataType::Int32, true),
+        ])));
+        assert_snapshot!(struct_type, @r#"Struct("name": non-null String, "age": Int32)"#);
+
+        let map = NativeType::Map(Arc::new(LogicalField::from(&Field::new(
+            "entries",
+            DataType::Utf8,
+            false,
+        ))));
+        assert_snapshot!(map, @"Map(non-null String)");
     }
 }

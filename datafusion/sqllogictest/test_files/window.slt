@@ -2580,7 +2580,7 @@ statement ok
 set datafusion.optimizer.skip_failed_rules = true
 
 # Error is returned from the physical plan.
-query error Cannot cast Utf8\("1 DAY"\) to Int8
+query error Cannot cast 1 DAY to Int8
 SELECT
   COUNT(c1) OVER (ORDER BY c2 RANGE BETWEEN '1 DAY' PRECEDING AND '2 DAY' FOLLOWING)
   FROM aggregate_test_100;
@@ -2589,7 +2589,7 @@ statement ok
 set datafusion.optimizer.skip_failed_rules = false
 
 # Error is returned from the logical plan.
-query error Cannot cast Utf8\("1 DAY"\) to Int8
+query error Cannot cast 1 DAY to Int8
 SELECT
   COUNT(c1) OVER (ORDER BY c2 RANGE BETWEEN '1 DAY' PRECEDING AND '2 DAY' FOLLOWING)
   FROM aggregate_test_100;
