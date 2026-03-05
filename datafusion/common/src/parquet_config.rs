@@ -106,3 +106,88 @@ impl From<parquet::file::properties::WriterVersion> for DFParquetWriterVersion {
         }
     }
 }
+
+/// Time unit options for Parquet INT96 timestamp coercion.
+///
+/// This enum validates time unit values at configuration time,
+/// ensuring only supported units ("ns", "us", "ms", "s") can be set
+/// via `SET` commands or proto deserialization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DFTimeUnit {
+    #[default]
+    Nanosecond,
+    Microsecond,
+    Millisecond,
+    Second,
+}
+
+impl FromStr for DFTimeUnit {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self> {
+        match s.to_lowercase().as_str() {
+            "ns" => Ok(DFTimeUnit::Nanosecond),
+            "us" => Ok(DFTimeUnit::Microsecond),
+            "ms" => Ok(DFTimeUnit::Millisecond),
+            "s" => Ok(DFTimeUnit::Second),
+            other => Err(DataFusionError::Configuration(format!(
+                "Invalid parquet coerce_int96: {other}. Expected one of: ns, us, ms, s"
+            ))),
+        }
+    }
+}
+
+impl Display for DFTimeUnit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            DFTimeUnit::Nanosecond => "ns",
+            DFTimeUnit::Microsecond => "us",
+            DFTimeUnit::Millisecond => "ms",
+            DFTimeUnit::Second => "s",
+        };
+        write!(f, "{s}")
+    }
+}
+
+impl ConfigField for DFTimeUnit {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, _: &str, value: &str) -> Result<()> {
+        *self = DFTimeUnit::from_str(value)?;
+        Ok(())
+    }
+}
+
+/// Convert `DFTimeUnit` to parquet crate's `arrow::datatypes::TimeUnit`
+///
+/// This conversion is infallible since `DFTimeUnit` only contains
+/// valid values that have been validated at configuration time.
+#[cfg(feature = "parquet")]
+impl From<DFTimeUnit> for arrow::datatypes::TimeUnit {
+    fn from(value: DFTimeUnit) -> Self {
+        match value {
+            DFTimeUnit::Nanosecond => arrow::datatypes::TimeUnit::Nanosecond,
+            DFTimeUnit::Microsecond => arrow::datatypes::TimeUnit::Microsecond,
+            DFTimeUnit::Millisecond => arrow::datatypes::TimeUnit::Millisecond,
+            DFTimeUnit::Second => arrow::datatypes::TimeUnit::Second,
+        }
+    }
+}
+
+/// Convert parquet crate's `arrow::datatypes::TimeUnit` to `DFTimeUnit`
+///
+/// This is used when converting from existing parquet TimeUnit,
+/// such as when reading from proto or test code.
+#[cfg(feature = "parquet")]
+impl From<arrow::datatypes::TimeUnit> for DFTimeUnit {
+    fn from(value: arrow::datatypes::TimeUnit) -> Self {
+        match value {
+            arrow::datatypes::TimeUnit::Nanosecond => DFTimeUnit::Nanosecond,
+            arrow::datatypes::TimeUnit::Microsecond => DFTimeUnit::Microsecond,
+            arrow::datatypes::TimeUnit::Millisecond => DFTimeUnit::Millisecond,
+            arrow::datatypes::TimeUnit::Second => DFTimeUnit::Second,
+        }
+    }
+}
