@@ -910,6 +910,7 @@ pub(crate) fn get_final_indices_from_bit_map(
     (left_indices, right_indices)
 }
 
+#[expect(clippy::too_many_arguments)]
 pub(crate) fn apply_join_filter_to_indices(
     build_input_buffer: &RecordBatch,
     probe_batch: &RecordBatch,
@@ -918,6 +919,7 @@ pub(crate) fn apply_join_filter_to_indices(
     filter: &JoinFilter,
     build_side: JoinSide,
     max_intermediate_size: Option<usize>,
+    join_type: JoinType,
 ) -> Result<(UInt64Array, UInt32Array)> {
     if build_indices.is_empty() && probe_indices.is_empty() {
         return Ok((build_indices, probe_indices));
@@ -938,6 +940,7 @@ pub(crate) fn apply_join_filter_to_indices(
                 &probe_indices.slice(i, len),
                 filter.column_indices(),
                 build_side,
+                join_type,
             )?;
             let filter_result = filter
                 .expression()
@@ -959,6 +962,7 @@ pub(crate) fn apply_join_filter_to_indices(
             &probe_indices,
             filter.column_indices(),
             build_side,
+            join_type,
         )?;
 
         filter
@@ -979,6 +983,7 @@ pub(crate) fn apply_join_filter_to_indices(
 
 /// Returns a new [RecordBatch] by combining the `left` and `right` according to `indices`.
 /// The resulting batch has [Schema] `schema`.
+#[expect(clippy::too_many_arguments)]
 pub(crate) fn build_batch_from_indices(
     schema: &Schema,
     build_input_buffer: &RecordBatch,
@@ -987,11 +992,19 @@ pub(crate) fn build_batch_from_indices(
     probe_indices: &UInt32Array,
     column_indices: &[ColumnIndex],
     build_side: JoinSide,
+    join_type: JoinType,
 ) -> Result<RecordBatch> {
     if schema.fields().is_empty() {
+        // For RightAnti and RightSemi joins, after `adjust_indices_by_join_type`
+        // the build_indices were untouched so only probe_indices hold the actual
+        // row count.
+        let row_count = match join_type {
+            JoinType::RightAnti | JoinType::RightSemi => probe_indices.len(),
+            _ => build_indices.len(),
+        };
         let options = RecordBatchOptions::new()
             .with_match_field_names(true)
-            .with_row_count(Some(build_indices.len()));
+            .with_row_count(Some(row_count));
 
         return Ok(RecordBatch::try_new_with_options(
             Arc::new(schema.clone()),
