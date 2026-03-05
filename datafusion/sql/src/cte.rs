@@ -37,20 +37,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         for cte in with.cte_tables {
             // A `WITH` block can't use the same name more than once
             let cte_name = self.ident_normalizer.normalize(cte.alias.name.clone());
-            let cte_name_span =
-                Span::try_from_sqlparser_span(cte.alias.name.span);
+            let cte_name_span = Span::try_from_sqlparser_span(cte.alias.name.span);
             if planner_context.contains_cte(&cte_name) {
-                let msg = format!(
-                    "WITH query name {cte_name:?} specified more than once"
-                );
-                let mut diagnostic =
-                    Diagnostic::new_error(&msg, cte_name_span);
+                let msg =
+                    format!("WITH query name {cte_name:?} specified more than once");
+                let mut diagnostic = Diagnostic::new_error(&msg, cte_name_span);
                 if let Some(first_span) = planner_context.get_cte_span(&cte_name) {
                     diagnostic =
                         diagnostic.with_note("previously defined here", Some(first_span));
                 }
-                return plan_err!("{msg}")
-                    .map_err(|e| e.with_diagnostic(diagnostic));
+                return plan_err!("{msg}").map_err(|e| e.with_diagnostic(diagnostic));
             }
 
             // Create a logical plan for the CTE

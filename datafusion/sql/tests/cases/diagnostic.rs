@@ -393,8 +393,7 @@ fn test_syntax_error() -> Result<()> {
 
 #[test]
 fn test_duplicate_cte_name() -> Result<()> {
-    let query =
-        "WITH /*a*/cte/*a*/ AS (SELECT 1 AS col), /*b*/cte/*b*/ AS (SELECT 2 AS col) SELECT 1";
+    let query = "WITH /*a*/cte/*a*/ AS (SELECT 1 AS col), /*b*/cte/*b*/ AS (SELECT 2 AS col) SELECT 1";
     let spans = get_spans(query);
     let diag = do_query(query);
     assert_snapshot!(diag.message, @r#"WITH query name "cte" specified more than once"#);
@@ -420,8 +419,7 @@ fn test_duplicate_table_alias() -> Result<()> {
 
 #[test]
 fn test_duplicate_table_alias_not_first() -> Result<()> {
-    let query =
-        "SELECT * FROM person a, /*b*/test_decimal b/*b*/, /*c*/person b/*c*/";
+    let query = "SELECT * FROM person a, /*b*/test_decimal b/*b*/, /*c*/person b/*c*/";
     let spans = get_spans(query);
     let diag = do_query(query);
     assert_snapshot!(diag.message, @"duplicate table alias in FROM clause");

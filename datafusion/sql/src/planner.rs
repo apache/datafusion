@@ -27,7 +27,9 @@ use datafusion_common::TableReference;
 use datafusion_common::config::SqlParserOptions;
 use datafusion_common::datatype::{DataTypeExt, FieldExt};
 use datafusion_common::error::add_possible_columns_to_diag;
-use datafusion_common::{DFSchema, DataFusionError, Result, Span, not_impl_err, plan_err};
+use datafusion_common::{
+    DFSchema, DataFusionError, Result, Span, not_impl_err, plan_err,
+};
 use datafusion_common::{
     DFSchemaRef, Diagnostic, SchemaError, field_not_found, internal_err,
     plan_datafusion_err,

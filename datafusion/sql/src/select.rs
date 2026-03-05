@@ -29,7 +29,9 @@ use crate::utils::{
 
 use datafusion_common::error::DataFusionErrorBuilder;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{Column, DFSchema, Diagnostic, Result, Span, not_impl_err, plan_err};
+use datafusion_common::{
+    Column, DFSchema, Diagnostic, Result, Span, not_impl_err, plan_err,
+};
 use datafusion_common::{RecursionUnnestOption, UnnestOptions};
 use datafusion_expr::expr::{Alias, PlannedReplaceSelectItem, WildcardOptions};
 use datafusion_expr::expr_rewriter::{
@@ -694,24 +696,21 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             _ => {
                 let extract_table_name =
                     |t: &TableWithJoins| -> Option<(String, Option<Span>)> {
-                        let span =
-                            Span::try_from_sqlparser_span(t.relation.span());
+                        let span = Span::try_from_sqlparser_span(t.relation.span());
                         match &t.relation {
                             TableFactor::Table { alias: Some(a), .. } => {
-                                let name = self
-                                    .ident_normalizer
-                                    .normalize(a.name.clone());
+                                let name =
+                                    self.ident_normalizer.normalize(a.name.clone());
                                 Some((name, span))
                             }
-                            TableFactor::Table { name, alias: None, .. } => {
+                            TableFactor::Table {
+                                name, alias: None, ..
+                            } => {
                                 let table_name = name
                                     .0
                                     .iter()
                                     .filter_map(|p| p.as_ident())
-                                    .map(|id| {
-                                        self.ident_normalizer
-                                            .normalize(id.clone())
-                                    })
+                                    .map(|id| self.ident_normalizer.normalize(id.clone()))
                                     .last()?;
                                 Some((table_name, span))
                             }
@@ -719,8 +718,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         }
                     };
 
-                let mut alias_spans: HashMap<String, Option<Span>> =
-                    HashMap::new();
+                let mut alias_spans: HashMap<String, Option<Span>> = HashMap::new();
 
                 let mut from = from.into_iter();
                 let first = from.next().unwrap();
@@ -744,8 +742,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         alias_spans.entry(name.clone()).or_insert(*span);
                     }
 
-                    let right =
-                        self.plan_table_with_joins(input, planner_context)?;
+                    let right = self.plan_table_with_joins(input, planner_context)?;
 
                     left = left.cross_join(right).map_err(|e| {
                         if let Some((ref name, ref current_span)) = current_name {
@@ -756,10 +753,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                     "duplicate table alias in FROM clause",
                                     *current_span,
                                 )
-                                .with_note(
-                                    "first defined here",
-                                    Some(prior_span),
-                                );
+                                .with_note("first defined here", Some(prior_span));
                                 return e.with_diagnostic(diagnostic);
                             }
                         }
