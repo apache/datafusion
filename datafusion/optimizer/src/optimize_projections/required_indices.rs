@@ -42,6 +42,11 @@ pub(super) struct RequiredIndices {
     /// Defaults to false.
     projection_beneficial: bool,
     /// Whether ancestors can observe row multiplicity changes.
+    ///
+    /// "Multiplicity" means how many rows a child produces, including duplicate
+    /// rows. If this is `true`, rewrites must preserve row counts exactly because
+    /// upstream expressions (for example, `COUNT` or window functions) may depend
+    /// on them.
     multiplicity_sensitive: bool,
     /// Whether any ancestor expression is volatile.
     has_volatile_ancestor: bool,
