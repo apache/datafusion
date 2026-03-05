@@ -17,7 +17,7 @@
 
 use arrow::array::BooleanArray;
 use arrow::array::{ArrayRef, Datum, make_comparator};
-use arrow::buffer::NullBuffer;
+use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::compute::kernels::cmp::{
     distinct, eq, gt, gt_eq, lt, lt_eq, neq, not_distinct,
 };
@@ -171,9 +171,9 @@ pub fn compare_op_for_nested(
     };
 
     let values = match (is_l_scalar, is_r_scalar) {
-        (false, false) => (0..len).map(|i| cmp_with_op(i, i)).collect(),
-        (true, false) => (0..len).map(|i| cmp_with_op(0, i)).collect(),
-        (false, true) => (0..len).map(|i| cmp_with_op(i, 0)).collect(),
+        (false, false) => BooleanBuffer::collect_bool(len, |i| cmp_with_op(i, i)),
+        (true, false) => BooleanBuffer::collect_bool(len, |i| cmp_with_op(0, i)),
+        (false, true) => BooleanBuffer::collect_bool(len, |i| cmp_with_op(i, 0)),
         (true, true) => std::iter::once(cmp_with_op(0, 0)).collect(),
     };
 
