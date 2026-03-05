@@ -93,7 +93,7 @@ fn supports_collect_by_thresholds(
 
     // Stats use `Precision<T>` to represent stats, where `Absent` means unknown.
     // `Exact(0)` and `Inexact(0)` are both valid stats, and we should not treat
-    // them as unknown, `Absent` will return false (this is in regards to why
+    // them as unknown, `Absent` will return None (this is in regards to why
     // `!=0` is not checked)
     if let Some(byte_size) = stats.total_byte_size.get_value() {
         *byte_size < threshold_byte_size
