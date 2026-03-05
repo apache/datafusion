@@ -23,10 +23,64 @@
 
 ## Original Query: SELECT levenshtein('kitten', 'sitting');
 ## PySpark 3.5.5 Result: {'levenshtein(kitten, sitting)': 3, 'typeof(levenshtein(kitten, sitting))': 'int', 'typeof(kitten)': 'string', 'typeof(sitting)': 'string'}
-#query
-#SELECT levenshtein('kitten'::string, 'sitting'::string);
+query I
+SELECT levenshtein('kitten'::string, 'sitting'::string);
+----
+3
 
 ## Original Query: SELECT levenshtein('kitten', 'sitting', 2);
 ## PySpark 3.5.5 Result: {'levenshtein(kitten, sitting, 2)': -1, 'typeof(levenshtein(kitten, sitting, 2))': 'int', 'typeof(kitten)': 'string', 'typeof(sitting)': 'string', 'typeof(2)': 'int'}
-#query
-#SELECT levenshtein('kitten'::string, 'sitting'::string, 2::int);
+query I
+SELECT levenshtein('kitten'::string, 'sitting'::string, 2::int);
+----
+-1
+
+# threshold equal to distance returns the distance
+query I
+SELECT levenshtein('kitten', 'sitting', 3);
+----
+3
+
+# threshold greater than distance returns the distance
+query I
+SELECT levenshtein('kitten', 'sitting', 5);
+----
+3
+
+# threshold = 0 with identical strings
+query I
+SELECT levenshtein('same', 'same', 0);
+----
+0
+
+# empty strings
+query I
+SELECT levenshtein('', '', 0);
+----
+0
+
+query I
+SELECT levenshtein('', 'abc', 5);
+----
+3
+
+query I
+SELECT levenshtein('', 'abc', 2);
+----
+-1
+
+# null inputs
+query I
+SELECT levenshtein('kitten', NULL, 2);
+----
+NULL
+
+query I
+SELECT levenshtein(NULL, 'sitting', 2);
+----
+NULL
+
+query I
+SELECT levenshtein('kitten', 'sitting', NULL);
+----
+NULL
