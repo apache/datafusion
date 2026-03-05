@@ -24,3 +24,23 @@ query T
 SELECT soundex(NULL);
 ----
 NULL
+
+query T
+SELECT soundex(''::string);
+----
+(empty)
+
+query T
+SELECT soundex('Apache Spark'::string);
+----
+A122
+
+query T
+SELECT soundex('123'::string);
+----
+123
+
+query T
+SELECT soundex('Datafusion'::string);
+----
+D312
