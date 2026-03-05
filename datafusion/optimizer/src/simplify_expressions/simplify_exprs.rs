@@ -20,7 +20,7 @@
 use std::sync::Arc;
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result};
+use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Expr;
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::simplify::SimplifyContext;
@@ -911,6 +911,23 @@ mod tests {
         "
         )?;
 
+        // Test NULL `!~ ".*"` transforms to Boolean(NULL)
+        let plan = LogicalPlanBuilder::from(table_scan.clone())
+            .filter(binary_expr(
+                lit(ScalarValue::Utf8(None)),
+                Operator::RegexNotMatch,
+                lit(".*"),
+            ))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Filter: Boolean(NULL)
+          TableScan: test
+        "
+        )?;
+
         // Test `!~* ".*"` (case-insensitive) transforms to false
         let plan = LogicalPlanBuilder::from(table_scan.clone())
             .filter(binary_expr(col("a"), Operator::RegexNotIMatch, lit(".*")))?
@@ -920,6 +937,23 @@ mod tests {
             plan,
             @ r"
         Filter: test.a IS NOT NULL AND Boolean(NULL)
+          TableScan: test
+        "
+        )?;
+
+        // Test NULL `!~* ".*"` transforms to Boolean(NULL)
+        let plan = LogicalPlanBuilder::from(table_scan.clone())
+            .filter(binary_expr(
+                lit(ScalarValue::Utf8(None)),
+                Operator::RegexNotIMatch,
+                lit(".*"),
+            ))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Filter: Boolean(NULL)
           TableScan: test
         "
         )
