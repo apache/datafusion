@@ -5644,6 +5644,9 @@ impl serde::Serialize for ParquetOptions {
         if self.pushdown_filters {
             len += 1;
         }
+        if self.dynamic_filter_pushdown {
+            len += 1;
+        }
         if self.reorder_filters {
             len += 1;
         }
@@ -5740,6 +5743,9 @@ impl serde::Serialize for ParquetOptions {
         }
         if self.pushdown_filters {
             struct_ser.serialize_field("pushdownFilters", &self.pushdown_filters)?;
+        }
+        if self.dynamic_filter_pushdown {
+            struct_ser.serialize_field("dynamicFilterPushdown", &self.dynamic_filter_pushdown)?;
         }
         if self.reorder_filters {
             struct_ser.serialize_field("reorderFilters", &self.reorder_filters)?;
@@ -5910,6 +5916,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             "skipMetadata",
             "pushdown_filters",
             "pushdownFilters",
+            "dynamic_filter_pushdown",
+            "dynamicFilterPushdown",
             "reorder_filters",
             "reorderFilters",
             "force_filter_selections",
@@ -5972,6 +5980,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             Pruning,
             SkipMetadata,
             PushdownFilters,
+            DynamicFilterPushdown,
             ReorderFilters,
             ForceFilterSelections,
             DataPagesizeLimit,
@@ -6025,6 +6034,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             "pruning" => Ok(GeneratedField::Pruning),
                             "skipMetadata" | "skip_metadata" => Ok(GeneratedField::SkipMetadata),
                             "pushdownFilters" | "pushdown_filters" => Ok(GeneratedField::PushdownFilters),
+                            "dynamicFilterPushdown" | "dynamic_filter_pushdown" => Ok(GeneratedField::DynamicFilterPushdown),
                             "reorderFilters" | "reorder_filters" => Ok(GeneratedField::ReorderFilters),
                             "forceFilterSelections" | "force_filter_selections" => Ok(GeneratedField::ForceFilterSelections),
                             "dataPagesizeLimit" | "data_pagesize_limit" => Ok(GeneratedField::DataPagesizeLimit),
@@ -6076,6 +6086,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                 let mut pruning__ = None;
                 let mut skip_metadata__ = None;
                 let mut pushdown_filters__ = None;
+                let mut dynamic_filter_pushdown__ = None;
                 let mut reorder_filters__ = None;
                 let mut force_filter_selections__ = None;
                 let mut data_pagesize_limit__ = None;
@@ -6129,6 +6140,12 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                                 return Err(serde::de::Error::duplicate_field("pushdownFilters"));
                             }
                             pushdown_filters__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::DynamicFilterPushdown => {
+                            if dynamic_filter_pushdown__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("dynamicFilterPushdown"));
+                            }
+                            dynamic_filter_pushdown__ = Some(map_.next_value()?);
                         }
                         GeneratedField::ReorderFilters => {
                             if reorder_filters__.is_some() {
@@ -6319,6 +6336,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     pruning: pruning__.unwrap_or_default(),
                     skip_metadata: skip_metadata__.unwrap_or_default(),
                     pushdown_filters: pushdown_filters__.unwrap_or_default(),
+                    dynamic_filter_pushdown: dynamic_filter_pushdown__.unwrap_or_default(),
                     reorder_filters: reorder_filters__.unwrap_or_default(),
                     force_filter_selections: force_filter_selections__.unwrap_or_default(),
                     data_pagesize_limit: data_pagesize_limit__.unwrap_or_default(),

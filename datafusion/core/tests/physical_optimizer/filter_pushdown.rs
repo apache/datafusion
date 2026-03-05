@@ -1948,6 +1948,7 @@ async fn test_topk_dynamic_filter_pushdown_integration() {
     let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
     let mut cfg = SessionConfig::new();
     cfg.options_mut().execution.parquet.pushdown_filters = true;
+    cfg.options_mut().execution.parquet.dynamic_filter_pushdown = true;
     cfg.options_mut().execution.parquet.max_row_group_size = 128;
     let ctx = SessionContext::new_with_config(cfg);
     ctx.register_object_store(

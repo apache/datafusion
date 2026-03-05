@@ -535,6 +535,7 @@ message ParquetOptions {
   bool pruning = 2; // default = true
   bool skip_metadata = 3; // default = true
   bool pushdown_filters = 5; // default = false
+  bool dynamic_filter_pushdown = 35; // default = false
   bool reorder_filters = 6; // default = false
   bool force_filter_selections = 34; // default = false
   uint64 data_pagesize_limit = 7; // default = 1024 * 1024
