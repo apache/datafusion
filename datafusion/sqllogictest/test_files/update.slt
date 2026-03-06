@@ -79,10 +79,9 @@ logical_plan
 04)------Cross Join:
 05)--------TableScan: t1
 06)--------TableScan: t2
-physical_plan_error
-01)UPDATE operation on table 't1'
-02)caused by
-03)Schema error: No field named t2.b. Did you mean 'b'?.
+physical_plan
+01)CooperativeExec
+02)--DmlResultExec: rows_affected=0
 
 # update from (FROM before SET syntax)
 # UPDATE ... FROM is currently unsupported
@@ -97,10 +96,9 @@ logical_plan
 04)------Cross Join:
 05)--------TableScan: t1
 06)--------TableScan: t2
-physical_plan_error
-01)UPDATE operation on table 't1'
-02)caused by
-03)Schema error: No field named t2.b. Did you mean 'b'?.
+physical_plan
+01)CooperativeExec
+02)--DmlResultExec: rows_affected=0
 
 # update from with explicit aliases and joined assignment expressions
 # UPDATE ... FROM is currently unsupported
@@ -117,10 +115,9 @@ logical_plan
 06)----------TableScan: t1
 07)--------SubqueryAlias: src
 08)----------TableScan: t2
-physical_plan_error
-01)UPDATE operation on table 't1'
-02)caused by
-03)Schema error: No field named src.b. Did you mean 'b'?.
+physical_plan
+01)CooperativeExec
+02)--DmlResultExec: rows_affected=0
 
 # test update from other table with actual data
 statement ok
@@ -129,15 +126,9 @@ insert into t1 values (1, 'zoo', 2.0, 10), (2, 'qux', 3.0, 20), (3, 'bar', 4.0, 
 statement ok
 insert into t2 values (1, 'updated_b', 5.0, 40), (2, 'updated_b2', 2.5, 50), (4, 'updated_b3', 1.5, 60);
 
-# UPDATE ... FROM is currently unsupported - qualifier stripping breaks source column references
-# causing assignments like 'b = t2.b' to resolve to target table's 'b' instead of source table's 'b'
-# TODO fix https://github.com/apache/datafusion/issues/19950
-statement error
+# UPDATE ... FROM assignment binding now resolves source-table references
+statement ok
 update t1 set b = t2.b, c = t2.a, d = 1 from t2 where t1.a = t2.a and t1.b > 'foo' and t2.c > 1.0;
-----
-DataFusion error: UPDATE operation on table 't1'
-caused by
-Schema error: No field named t2.b. Did you mean 'b'?.
 
 
 # set from multiple tables, DataFusion only supports from one table
@@ -158,10 +149,9 @@ logical_plan
 05)--------SubqueryAlias: t
 06)----------TableScan: t1
 07)--------TableScan: t2
-physical_plan_error
-01)UPDATE operation on table 't1'
-02)caused by
-03)Schema error: No field named t2.b. Did you mean 'b'?.
+physical_plan
+01)CooperativeExec
+02)--DmlResultExec: rows_affected=2
 
 # test update with table alias with actual data
 statement ok
@@ -176,14 +166,9 @@ insert into t1 values (1, 'zebra', 1.5, 5), (2, 'wolf', 2.0, 10), (3, 'apple', 3
 statement ok
 insert into t2 values (1, 'new_val', 2.0, 100), (2, 'new_val2', 1.5, 200);
 
-# UPDATE ... FROM is currently unsupported
-# TODO fix https://github.com/apache/datafusion/issues/19950
-statement error
+# UPDATE ... FROM with target alias resolves and executes
+statement ok
 update t1 as T set b = t2.b, c = t.a, d = 1 from t2 where t.a = t2.a and t.b > 'foo' and t2.c > 1.0;
-----
-DataFusion error: UPDATE operation on table 't1'
-caused by
-Schema error: No field named t2.b. Did you mean 'b'?.
 
 
 # test source alias permutations with joined assignments
@@ -194,4 +179,4 @@ update t1 as dst set b = src.b, c = src.a + dst.a, d = src.d from t2 as src wher
 ----
 DataFusion error: UPDATE operation on table 't1'
 caused by
-Schema error: No field named src.b. Did you mean 'b'?.
+Error during planning: UPDATE ... FROM produced 2 replacement rows but target filters matched 3 rows

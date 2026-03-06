@@ -25,10 +25,11 @@ use std::sync::Arc;
 use crate::TableProvider;
 
 use arrow::array::{
-    Array, ArrayRef, BooleanArray, RecordBatch as ArrowRecordBatch, UInt64Array,
+    Array, ArrayRef, BooleanArray, MutableArrayData, RecordBatch as ArrowRecordBatch,
+    UInt64Array, make_array,
 };
 use arrow::compute::kernels::zip::zip;
-use arrow::compute::{and, filter_record_batch};
+use arrow::compute::{and, concat_batches, filter_record_batch};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::error::Result;
@@ -47,7 +48,7 @@ use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
-    PhysicalExpr, PlanProperties, common,
+    PhysicalExpr, PlanProperties, collect, common,
 };
 use datafusion_session::Session;
 
@@ -500,6 +501,155 @@ impl TableProvider for MemTable {
 
         Ok(Arc::new(DmlResultExec::new(total_updated)))
     }
+
+    async fn update_from(
+        &self,
+        state: &dyn Session,
+        input: Arc<dyn ExecutionPlan>,
+        filters: Vec<Expr>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        if self.batches.is_empty() {
+            return Ok(Arc::new(DmlResultExec::new(0)));
+        }
+
+        self.schema()
+            .logically_equivalent_names_and_types(&input.schema())?;
+
+        let replacement_batches = collect(input, state.task_ctx()).await?;
+        let replacement_row_count = replacement_batches
+            .iter()
+            .map(ArrowRecordBatch::num_rows)
+            .sum::<usize>();
+
+        *self.sort_order.lock() = vec![];
+
+        let replacement_batch = if replacement_row_count == 0 {
+            ArrowRecordBatch::new_empty(Arc::clone(&self.schema))
+        } else {
+            concat_batches(&self.schema, &replacement_batches)?
+        };
+
+        let df_schema = DFSchema::try_from(Arc::clone(&self.schema))?;
+        let mut expected_updates = 0usize;
+
+        for partition_data in &self.batches {
+            let partition = partition_data.read().await;
+            for batch in partition.iter() {
+                let filter_mask = evaluate_filters_to_mask(
+                    &filters,
+                    batch,
+                    &df_schema,
+                    state.execution_props(),
+                )?;
+                let update_count = match filter_mask {
+                    Some(mask) => mask.iter().filter(|v| v == &Some(true)).count(),
+                    None => batch.num_rows(),
+                };
+                expected_updates += update_count;
+            }
+        }
+
+        if expected_updates != replacement_row_count {
+            return plan_err!(
+                "UPDATE ... FROM produced {replacement_row_count} replacement rows but target filters matched {expected_updates} rows"
+            );
+        }
+
+        let mut replace_cursor = 0usize;
+
+        for partition_data in &self.batches {
+            let mut partition = partition_data.write().await;
+            let mut new_batches = Vec::with_capacity(partition.len());
+
+            for batch in partition.iter() {
+                if batch.num_rows() == 0 {
+                    continue;
+                }
+
+                let filter_mask = evaluate_filters_to_mask(
+                    &filters,
+                    batch,
+                    &df_schema,
+                    state.execution_props(),
+                )?;
+
+                let (update_count, update_mask) = match filter_mask {
+                    Some(mask) => {
+                        let count = mask.iter().filter(|v| v == &Some(true)).count();
+                        let normalized: BooleanArray =
+                            mask.iter().map(|v| Some(v == Some(true))).collect();
+                        (count, normalized)
+                    }
+                    None => (
+                        batch.num_rows(),
+                        BooleanArray::from(vec![true; batch.num_rows()]),
+                    ),
+                };
+
+                if update_count == 0 {
+                    new_batches.push(batch.clone());
+                    continue;
+                }
+
+                let mut new_columns = Vec::with_capacity(batch.num_columns());
+                for column_idx in 0..batch.num_columns() {
+                    let original_column = batch.column(column_idx);
+                    let replacement_segment = replacement_batch
+                        .column(column_idx)
+                        .slice(replace_cursor, update_count);
+                    let merged = merge_with_update_mask(
+                        original_column,
+                        replacement_segment.as_ref(),
+                        &update_mask,
+                    )?;
+                    new_columns.push(merged);
+                }
+
+                replace_cursor += update_count;
+                let updated_batch =
+                    ArrowRecordBatch::try_new(Arc::clone(&self.schema), new_columns)?;
+                new_batches.push(updated_batch);
+            }
+
+            *partition = new_batches;
+        }
+
+        Ok(Arc::new(DmlResultExec::new(expected_updates as u64)))
+    }
+}
+
+fn merge_with_update_mask(
+    original: &ArrayRef,
+    replacement_rows: &dyn Array,
+    update_mask: &BooleanArray,
+) -> Result<ArrayRef> {
+    let original_data = original.to_data();
+    let replacement_data = replacement_rows.to_data();
+    let mut mutable = MutableArrayData::new(
+        vec![&original_data, &replacement_data],
+        false,
+        update_mask.len(),
+    );
+    let mut replacement_idx = 0usize;
+
+    for row_idx in 0..update_mask.len() {
+        if update_mask.value(row_idx) {
+            mutable.extend(1, replacement_idx, replacement_idx + 1);
+            replacement_idx += 1;
+        } else {
+            mutable.extend(0, row_idx, row_idx + 1);
+        }
+    }
+
+    if replacement_idx != replacement_rows.len() {
+        return plan_err!(
+            "Invalid UPDATE ... FROM replacement rows: expected {}, consumed {}",
+            replacement_rows.len(),
+            replacement_idx
+        );
+    }
+
+    Ok(make_array(mutable.freeze()))
 }
 
 /// Evaluate filter expressions against a batch and return a combined boolean mask.

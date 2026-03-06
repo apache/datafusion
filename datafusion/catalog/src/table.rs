@@ -357,6 +357,24 @@ pub trait TableProvider: Debug + Sync + Send {
         not_impl_err!("UPDATE not supported for {} table", self.table_type())
     }
 
+    /// Update rows using precomputed row values from a physical input plan.
+    ///
+    /// This is used for multi-table `UPDATE ... FROM` statements where
+    /// assignment expressions may reference external tables.
+    ///
+    /// Returns an [`ExecutionPlan`] producing a single row with `count` (UInt64).
+    async fn update_from(
+        &self,
+        _state: &dyn Session,
+        _input: Arc<dyn ExecutionPlan>,
+        _filters: Vec<Expr>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        not_impl_err!(
+            "UPDATE ... FROM not supported for {} table",
+            self.table_type()
+        )
+    }
+
     /// Remove all rows from the table.
     ///
     /// Should return an [ExecutionPlan] producing a single row with count (UInt64),

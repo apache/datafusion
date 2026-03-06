@@ -781,18 +781,33 @@ impl DefaultPhysicalPlanner {
                 if let Some(provider) =
                     target.as_any().downcast_ref::<DefaultTableSource>()
                 {
-                    // For UPDATE, the assignments are encoded in the projection of input
-                    // We pass the filters and let the provider handle the projection
                     let filters = extract_dml_filters(input, table_name)?;
-                    // Extract assignments from the projection in input plan
-                    let assignments = extract_update_assignments(input, table_name)?;
-                    provider
-                        .table_provider
-                        .update(session_state, assignments, filters)
-                        .await
-                        .map_err(|e| {
-                            e.context(format!("UPDATE operation on table '{table_name}'"))
-                        })?
+                    if plan_contains_join(input)? {
+                        let input_exec = children.one()?;
+                        provider
+                            .table_provider
+                            .update_from(session_state, input_exec, filters)
+                            .await
+                            .map_err(|e| {
+                                e.context(format!(
+                                    "UPDATE operation on table '{table_name}'"
+                                ))
+                            })?
+                    } else {
+                        // For single-table UPDATE, assignments are encoded in the
+                        // projection of input and can be evaluated using only target
+                        // columns.
+                        let assignments = extract_update_assignments(input, table_name)?;
+                        provider
+                            .table_provider
+                            .update(session_state, assignments, filters)
+                            .await
+                            .map_err(|e| {
+                                e.context(format!(
+                                    "UPDATE operation on table '{table_name}'"
+                                ))
+                            })?
+                    }
                 } else {
                     return exec_err!(
                         "Table source can't be downcasted to DefaultTableSource"
