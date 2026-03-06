@@ -1233,3 +1233,99 @@ physical_plan
 # cleanup
 statement ok
 drop table t;
+
+########################################
+# Unnest ListView / LargeListView Tests #
+########################################
+
+## Basic unnest ListView in select list
+query I
+select unnest(arrow_cast([1,2,3], 'ListView(Int64)'));
+----
+1
+2
+3
+
+## Basic unnest ListView in from clause
+query I
+select * from unnest(arrow_cast([1,2,3], 'ListView(Int64)'));
+----
+1
+2
+3
+
+## Basic unnest LargeListView in select list
+query I
+select unnest(arrow_cast([1,2,3], 'LargeListView(Int64)'));
+----
+1
+2
+3
+
+## Basic unnest LargeListView in from clause
+query I
+select * from unnest(arrow_cast([1,2,3], 'LargeListView(Int64)'));
+----
+1
+2
+3
+
+## Unnest ListView with range
+query I
+select unnest(arrow_cast(range(1, 3), 'ListView(Int64)'));
+----
+1
+2
+
+## Unnest LargeListView with range
+query I
+select * from unnest(arrow_cast(range(1, 3), 'LargeListView(Int64)'));
+----
+1
+2
+
+## Multiple unnest with ListView columns from a table
+query III
+select
+    unnest(column1),
+    unnest(arrow_cast(column2, 'ListView(Int64)')),
+    unnest(arrow_cast(column4, 'LargeListView(Int64)'))
+from unnest_table where column4 is not null;
+----
+1 7 13
+2 NULL 14
+3 NULL NULL
+4 8 15
+5 9 16
+NULL 10 NULL
+NULL NULL 17
+NULL NULL 18
+
+## Unnest ListView with null elements
+query I
+select unnest(arrow_cast([1, null, 3], 'ListView(Int64)'));
+----
+1
+NULL
+3
+
+## Unnest empty ListView
+query I
+select unnest(arrow_cast([], 'ListView(Int64)'));
+----
+
+## Unnest ListView of strings
+query T
+select unnest(arrow_cast(['a','b','c'], 'ListView(Utf8)'));
+----
+a
+b
+c
+
+## Unnest LargeListView of strings
+query T
+select unnest(arrow_cast(['a','b','c'], 'LargeListView(Utf8)'));
+----
+a
+b
+c
