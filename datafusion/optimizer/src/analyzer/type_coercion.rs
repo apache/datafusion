@@ -41,11 +41,14 @@ use datafusion_expr::expr::{
 use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
 use datafusion_expr::expr_schema::cast_subquery;
 use datafusion_expr::logical_plan::Subquery;
-use datafusion_expr::type_coercion::binary::{comparison_coercion, like_coercion};
+use datafusion_expr::type_coercion::binary::{
+    comparison_coercion, like_coercion, type_union_coercion,
+};
 use datafusion_expr::type_coercion::functions::{UDFCoercionExt, fields_with_udf};
 use datafusion_expr::type_coercion::is_datetime;
 use datafusion_expr::type_coercion::other::{
-    get_coerce_type_for_case_expression, get_coerce_type_for_list,
+    get_coerce_type_for_case_expression, get_coerce_type_for_case_when,
+    get_coerce_type_for_list,
 };
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
@@ -1028,8 +1031,7 @@ fn coerce_case_expression(case: Case, schema: &DFSchema) -> Result<Case> {
                 .iter()
                 .map(|(when, _then)| when.get_type(schema))
                 .collect::<Result<Vec<_>>>()?;
-            let coerced_type =
-                get_coerce_type_for_case_expression(&when_types, Some(case_type));
+            let coerced_type = get_coerce_type_for_case_when(&when_types, case_type);
             coerced_type.ok_or_else(|| {
                 plan_datafusion_err!(
                     "Failed to coerce case ({case_type}) and when ({}) \
@@ -1107,7 +1109,7 @@ fn coerce_case_expression(case: Case, schema: &DFSchema) -> Result<Case> {
 /// **Field-level metadata merging**: Later fields take precedence for duplicate metadata keys.
 ///
 /// **Type coercion precedence**: The coerced type is determined by iteratively applying
-/// `comparison_coercion()` between the accumulated type and each new input's type. The
+/// `type_union_coercion()` between the accumulated type and each new input's type. The
 /// result depends on type coercion rules, not input order.
 ///
 /// **Nullability merging**: Nullability is accumulated using logical OR (`||`).
@@ -1130,7 +1132,7 @@ fn coerce_case_expression(case: Case, schema: &DFSchema) -> Result<Case> {
 /// ```
 ///
 /// **Precedence Summary**:
-/// - **Datatypes**: Determined by `comparison_coercion()` rules, not input order
+/// - **Datatypes**: Determined by `type_union_coercion()` rules, not input order
 /// - **Nullability**: Later inputs can add nullability but cannot remove it (logical OR)
 /// - **Metadata**: Later inputs take precedence for same keys (HashMap::extend semantics)
 pub fn coerce_union_schema(inputs: &[Arc<LogicalPlan>]) -> Result<DFSchema> {
@@ -1180,7 +1182,7 @@ fn coerce_union_schema_with_schema(
             plan_schema.fields().iter()
         ) {
             let coerced_type =
-                comparison_coercion(union_datatype, plan_field.data_type()).ok_or_else(
+                type_union_coercion(union_datatype, plan_field.data_type()).ok_or_else(
                     || {
                         plan_datafusion_err!(
                             "Incompatible inputs for Union: Previous inputs were \
@@ -2345,6 +2347,9 @@ mod test {
         let actual = coerce_case_expression(case, &schema)?;
         assert_eq!(expected, actual);
 
+        // CASE string WHEN float/integer/string: comparison coercion
+        // prefers numeric, so the common type for the CASE expr and
+        // WHEN values is Float32.
         let case = Case {
             expr: Some(Box::new(col("string"))),
             when_then_expr: vec![
@@ -2354,7 +2359,7 @@ mod test {
             ],
             else_expr: Some(Box::new(col("string"))),
         };
-        let case_when_common_type = Utf8;
+        let case_when_common_type = DataType::Float32;
         let then_else_common_type = Utf8;
         let expected = cast_helper(
             case.clone(),

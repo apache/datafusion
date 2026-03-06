@@ -30,15 +30,15 @@ fn test_ree_type_coercion() {
         Arc::new(Field::new("values", Int16, false)),
     );
     assert_eq!(
-        ree_comparison_coercion(&lhs_type, &rhs_type, true),
+        ree_coercion(&lhs_type, &rhs_type, true, comparison_coercion),
         Some(Int32)
     );
     assert_eq!(
-        ree_comparison_coercion(&lhs_type, &rhs_type, false),
+        ree_coercion(&lhs_type, &rhs_type, false, comparison_coercion),
         Some(Int32)
     );
 
-    // Since we can coerce values of Int16 to Utf8 can support this: Coercion of Int16 to Utf8
+    // In comparison context, numeric is preferred over string
     let lhs_type = RunEndEncoded(
         Arc::new(Field::new("run_ends", Int8, false)),
         Arc::new(Field::new("values", Utf8, false)),
@@ -48,8 +48,8 @@ fn test_ree_type_coercion() {
         Arc::new(Field::new("values", Int16, false)),
     );
     assert_eq!(
-        ree_comparison_coercion(&lhs_type, &rhs_type, true),
-        Some(Utf8)
+        ree_coercion(&lhs_type, &rhs_type, true, comparison_coercion),
+        Some(Int16)
     );
 
     // Since we can coerce values of Utf8 to Binary can support this
@@ -62,7 +62,7 @@ fn test_ree_type_coercion() {
         Arc::new(Field::new("values", Binary, false)),
     );
     assert_eq!(
-        ree_comparison_coercion(&lhs_type, &rhs_type, true),
+        ree_coercion(&lhs_type, &rhs_type, true, comparison_coercion),
         Some(Binary)
     );
     let lhs_type = RunEndEncoded(
@@ -72,12 +72,12 @@ fn test_ree_type_coercion() {
     let rhs_type = Utf8;
     // Don't preserve REE
     assert_eq!(
-        ree_comparison_coercion(&lhs_type, &rhs_type, false),
+        ree_coercion(&lhs_type, &rhs_type, false, comparison_coercion),
         Some(Utf8)
     );
     // Preserve REE
     assert_eq!(
-        ree_comparison_coercion(&lhs_type, &rhs_type, true),
+        ree_coercion(&lhs_type, &rhs_type, true, comparison_coercion),
         Some(lhs_type.clone())
     );
 
@@ -88,12 +88,12 @@ fn test_ree_type_coercion() {
     );
     // Don't preserve REE
     assert_eq!(
-        ree_comparison_coercion(&lhs_type, &rhs_type, false),
+        ree_coercion(&lhs_type, &rhs_type, false, comparison_coercion),
         Some(Utf8)
     );
     // Preserve REE
     assert_eq!(
-        ree_comparison_coercion(&lhs_type, &rhs_type, true),
+        ree_coercion(&lhs_type, &rhs_type, true, comparison_coercion),
         Some(rhs_type.clone())
     );
 }
