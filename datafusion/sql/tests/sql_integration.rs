@@ -4730,56 +4730,35 @@ fn test_custom_type_plan() -> Result<()> {
     Ok(())
 }
 
-fn error_message_test(sql: &str, err_msg_starts_with: &str) {
+fn error_message(sql: &str) -> String {
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert!(
-        err.strip_backtrace().starts_with(err_msg_starts_with),
-        "Expected error to start with '{}', but got: '{}'",
-        err_msg_starts_with,
-        err.strip_backtrace(),
-    );
+    err.strip_backtrace()
 }
 
 #[test]
 fn test_error_message_invalid_scalar_function_signature() {
-    error_message_test(
-        "select sqrt()",
-        "Error during planning: 'sqrt' does not support zero arguments",
+    assert!(
+        error_message("select sqrt()").starts_with(
+            r"Error during planning: 'sqrt' does not support zero arguments"
+        )
     );
-    error_message_test(
-        "select sqrt(1, 2)",
-        "Error during planning: Failed to coerce arguments",
-    );
+    assert!(error_message("select sqrt(1, 2)").starts_with(r"Error during planning: Failed to coerce arguments to satisfy a call to 'sqrt' function: coercion from Int64, Int64 to the signature Exact(Int64) failed"));
 }
 
 #[test]
 fn test_error_message_invalid_aggregate_function_signature() {
-    error_message_test(
-        "select sum()",
-        "Error during planning: Execution error: Function 'sum' user-defined coercion failed with \"Execution error: sum function requires 1 argument, got 0\"",
-    );
-    // We keep two different prefixes because they clarify each other.
-    // It might be incorrect, and we should consider keeping only one.
-    error_message_test(
-        "select max(9, 3)",
-        "Error during planning: Execution error: Function 'max' user-defined coercion failed",
-    );
+    assert!(error_message("select sum()").starts_with(r"Error during planning: Execution error: Function 'sum' user-defined coercion failed with: Execution error: sum function requires 1 argument, got 0"));
+    assert!(error_message("select max(9, 3)").starts_with(r"Error during planning: Execution error: Function 'max' user-defined coercion failed with: Execution error: min/max was called with 2 arguments. It requires only 1"));
 }
 
 #[test]
 fn test_error_message_invalid_window_function_signature() {
-    error_message_test(
-        "select rank(1) over()",
-        "Error during planning: The function 'rank' expected zero argument but received 1",
-    );
+    assert!(error_message("select rank(1) over()").starts_with(r"Error during planning: The function 'rank' expected zero argument but received 1"));
 }
 
 #[test]
 fn test_error_message_invalid_window_aggregate_function_signature() {
-    error_message_test(
-        "select sum() over()",
-        "Error during planning: Execution error: Function 'sum' user-defined coercion failed with \"Execution error: sum function requires 1 argument, got 0\"",
-    );
+    assert!(error_message("select sum() over()").starts_with(r"Error during planning: Execution error: Function 'sum' user-defined coercion failed with: Execution error: sum function requires 1 argument, got 0"));
 }
 
 // Test issue: https://github.com/apache/datafusion/issues/14058
