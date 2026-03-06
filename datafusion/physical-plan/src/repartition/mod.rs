@@ -30,7 +30,7 @@ use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use super::{
     DisplayAs, ExecutionPlanProperties, RecordBatchStream, SendableRecordBatchStream,
 };
-use crate::coalesce::LimitedBatchCoalescer;
+use crate::coalesce::{LimitedBatchCoalescer, PushBatchStatus};
 use crate::execution_plan::{CardinalityEffect, EvaluationType, SchedulingType};
 use crate::hash_utils::create_hashes;
 use crate::metrics::{BaselineMetrics, SpillMetrics};
@@ -272,6 +272,7 @@ impl RepartitionExecState {
         name: &str,
         context: &Arc<TaskContext>,
         spill_manager: SpillManager,
+        fetch: Option<usize>,
     ) -> Result<&mut ConsumingInputStreamsState> {
         let streams_and_metrics = match self {
             RepartitionExecState::NotInitialized => {
@@ -398,6 +399,7 @@ impl RepartitionExecState {
                 if preserve_order { 0 } else { i },
                 num_input_partitions,
                 target_batch_size,
+                fetch,
             ));
 
             // In a separate task, wait for each input to be done
@@ -760,6 +762,8 @@ pub struct RepartitionExec {
     /// Boolean flag to decide whether to preserve ordering. If true means
     /// `SortPreservingRepartitionExec`, false means `RepartitionExec`.
     preserve_order: bool,
+    /// Optional fetch limit (maximum number of rows per output partition)
+    fetch: Option<usize>,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: Arc<PlanProperties>,
 }
@@ -870,6 +874,9 @@ impl DisplayAs for RepartitionExec {
                 if let Some(sort_exprs) = self.sort_exprs() {
                     write!(f, ", sort_exprs={}", sort_exprs.clone())?;
                 }
+                if let Some(fetch) = self.fetch {
+                    write!(f, ", fetch={fetch}")?;
+                }
                 Ok(())
             }
             DisplayFormatType::TreeRender => {
@@ -936,6 +943,7 @@ impl ExecutionPlan for RepartitionExec {
         if self.preserve_order {
             repartition = repartition.with_preserve_order();
         }
+        repartition.fetch = self.fetch;
         Ok(Arc::new(repartition))
     }
 
@@ -988,6 +996,7 @@ impl ExecutionPlan for RepartitionExec {
         }
 
         let num_input_partitions = input.output_partitioning().partition_count();
+        let fetch = self.fetch;
 
         let stream = futures::stream::once(async move {
             // lock scope
@@ -1002,6 +1011,7 @@ impl ExecutionPlan for RepartitionExec {
                     &name,
                     &context,
                     spill_manager.clone(),
+                    fetch,
                 )?;
 
                 // now return stream for the specified *output* partition which will
@@ -1136,7 +1146,26 @@ impl ExecutionPlan for RepartitionExec {
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {
-        CardinalityEffect::Equal
+        if self.fetch.is_some() {
+            CardinalityEffect::LowerEqual
+        } else {
+            CardinalityEffect::Equal
+        }
+    }
+
+    fn fetch(&self) -> Option<usize> {
+        self.fetch
+    }
+
+    fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
+        Some(Arc::new(RepartitionExec {
+            input: Arc::clone(&self.input),
+            state: Arc::clone(&self.state),
+            metrics: self.metrics.clone(),
+            preserve_order: self.preserve_order,
+            fetch: limit,
+            cache: Arc::clone(&self.cache),
+        }))
     }
 
     fn try_swapping_with_projection(
@@ -1235,6 +1264,7 @@ impl ExecutionPlan for RepartitionExec {
             state: Arc::clone(&self.state),
             metrics: self.metrics.clone(),
             preserve_order: self.preserve_order,
+            fetch: self.fetch,
             cache: new_properties.into(),
         })))
     }
@@ -1255,6 +1285,7 @@ impl RepartitionExec {
             state: Default::default(),
             metrics: ExecutionPlanMetricsSet::new(),
             preserve_order,
+            fetch: None,
             cache: Arc::new(cache),
         })
     }
@@ -1385,6 +1416,7 @@ impl RepartitionExec {
         input_partition: usize,
         num_input_partitions: usize,
         target_batch_size: usize,
+        fetch: Option<usize>,
     ) -> Result<()> {
         let mut partitioner = match &partitioning {
             Partitioning::Hash(exprs, num_partitions) => {
@@ -1422,7 +1454,7 @@ impl RepartitionExec {
                         LimitedBatchCoalescer::new(
                             Arc::clone(&schema),
                             target_batch_size,
-                            None,
+                            fetch,
                         ),
                     )
                 })
@@ -1452,7 +1484,7 @@ impl RepartitionExec {
             for res in partitioner.partition_iter(batch)? {
                 let (partition, batch) = res?;
                 if let Some(coalescer) = coalescers.get_mut(&partition) {
-                    coalescer.push_batch(batch)?;
+                    let status = coalescer.push_batch(batch)?;
                     while let Some(completed) = coalescer.next_completed_batch() {
                         Self::send_batch(
                             completed,
@@ -1461,6 +1493,21 @@ impl RepartitionExec {
                             &metrics,
                         )
                         .await;
+                    }
+                    if status == PushBatchStatus::LimitReached {
+                        // Flush remaining and remove this partition's coalescer
+                        if let Some(mut coalescer) = coalescers.remove(&partition) {
+                            coalescer.finish()?;
+                            while let Some(batch) = coalescer.next_completed_batch() {
+                                Self::send_batch(
+                                    batch,
+                                    partition,
+                                    &mut output_channels,
+                                    &metrics,
+                                )
+                                .await;
+                            }
+                        }
                     }
                 } else {
                     Self::send_batch(batch, partition, &mut output_channels, &metrics)
