@@ -45,7 +45,7 @@ use crate::{
 };
 
 use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions};
-use arrow::compute::{take_arrays, BatchCoalescer};
+use arrow::compute::{BatchCoalescer, take_arrays};
 use arrow::datatypes::{SchemaRef, UInt32Type};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
@@ -666,8 +666,7 @@ impl BatchPartitioner {
             } => {
                 let timer = self.timer.timer();
 
-                let arrays =
-                    evaluate_expressions_to_arrays(exprs.as_slice(), batch)?;
+                let arrays = evaluate_expressions_to_arrays(exprs.as_slice(), batch)?;
 
                 hash_buffer.clear();
                 hash_buffer.resize(batch.num_rows(), 0);
@@ -681,8 +680,7 @@ impl BatchPartitioner {
                 indices.iter_mut().for_each(|v| v.clear());
 
                 for (index, hash) in hash_buffer.iter().enumerate() {
-                    indices[(*hash % *partitions as u64) as usize]
-                        .push(index as u32);
+                    indices[(*hash % *partitions as u64) as usize].push(index as u32);
                 }
 
                 timer.done();
@@ -700,9 +698,7 @@ impl BatchPartitioner {
                 Ok(result)
             }
             _ => {
-                internal_err!(
-                    "hash_partition_indices called on non-hash partitioner"
-                )
+                internal_err!("hash_partition_indices called on non-hash partitioner")
             }
         }
     }
@@ -1146,11 +1142,12 @@ impl ExecutionPlan for RepartitionExec {
                 // For hash repartitioning, sender-side coalesces batches,
                 // so no need for receiver-side coalescing.
                 // For round-robin, receiver must coalesce small batches.
-                let receiver_batch_size = if matches!(partitioning, Partitioning::Hash(..)) {
-                    None
-                } else {
-                    Some(context.session_config().batch_size())
-                };
+                let receiver_batch_size =
+                    if matches!(partitioning, Partitioning::Hash(..)) {
+                        None
+                    } else {
+                        Some(context.session_config().batch_size())
+                    };
 
                 Ok(Box::pin(PerPartitionStream::new(
                     schema_captured,
@@ -1441,12 +1438,7 @@ impl RepartitionExec {
             (RepartitionBatch::Spilled, false)
         };
 
-        if channel
-            .sender
-            .send(Some(Ok(batch_to_send)))
-            .await
-            .is_err()
-        {
+        if channel.sender.send(Some(Ok(batch_to_send))).await.is_err() {
             if is_memory_batch {
                 channel.reservation.lock().shrink(size);
             }
@@ -1503,7 +1495,12 @@ impl RepartitionExec {
         let mut coalescers: HashMap<usize, BatchCoalescer> = if use_coalescers {
             output_channels
                 .keys()
-                .map(|&p| (p, BatchCoalescer::new(Arc::clone(&schema), target_batch_size)))
+                .map(|&p| {
+                    (
+                        p,
+                        BatchCoalescer::new(Arc::clone(&schema), target_batch_size),
+                    )
+                })
                 .collect()
         } else {
             HashMap::new()
@@ -1531,19 +1528,12 @@ impl RepartitionExec {
             if use_coalescers {
                 // Hash partitioning with coalescing: compute indices and
                 // push into per-partition coalescers
-                for (partition, indices) in
-                    partitioner.hash_partition_indices(&batch)?
-                {
+                for (partition, indices) in partitioner.hash_partition_indices(&batch)? {
                     if let Some(coalescer) = coalescers.get_mut(&partition) {
-                        coalescer.push_batch_with_indices(
-                            batch.clone(),
-                            &indices,
-                        )?;
+                        coalescer.push_batch_with_indices(batch.clone(), &indices)?;
 
                         // Send any completed batches
-                        while let Some(completed) =
-                            coalescer.next_completed_batch()
-                        {
+                        while let Some(completed) = coalescer.next_completed_batch() {
                             Self::send_batch(
                                 completed,
                                 partition,
@@ -1558,13 +1548,8 @@ impl RepartitionExec {
                 // Round-robin or fallback: send batches directly
                 for res in partitioner.partition_iter(batch)? {
                     let (partition, batch) = res?;
-                    Self::send_batch(
-                        batch,
-                        partition,
-                        &mut output_channels,
-                        &metrics,
-                    )
-                    .await;
+                    Self::send_batch(batch, partition, &mut output_channels, &metrics)
+                        .await;
                 }
             }
 
@@ -1596,13 +1581,7 @@ impl RepartitionExec {
         for (partition, coalescer) in &mut coalescers {
             coalescer.finish_buffered_batch()?;
             while let Some(batch) = coalescer.next_completed_batch() {
-                Self::send_batch(
-                    batch,
-                    *partition,
-                    &mut output_channels,
-                    &metrics,
-                )
-                .await;
+                Self::send_batch(batch, *partition, &mut output_channels, &metrics).await;
             }
         }
 
