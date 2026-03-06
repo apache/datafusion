@@ -173,10 +173,19 @@ fn strpos(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Find `needle` in `haystack` using `memchr` to quickly skip to positions
 /// where the first byte matches, then verify the remaining bytes. Returns
-/// the 0-based byte offset of the match, or `None` if not found. Works on
-/// arbitrary byte sequences (including valid UTF-8).
+/// the 0-based byte offset of the match, or `None` if not found. An empty
+/// `needle` matches at offset 0.
 fn find_substring_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     let needle_len = needle.len();
+    let haystack_len = haystack.len();
+
+    if needle_len == 0 {
+        return Some(0);
+    }
+    if needle_len > haystack_len {
+        return None;
+    }
+
     let first_byte = needle[0];
     let mut offset = 0;
 
@@ -195,30 +204,26 @@ fn find_substring_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 }
 
 /// Fallback strpos implementation for when both haystack and needle are arrays.
-/// Building a fresh `memmem::Finder` for every row is too expensive; it is
-/// faster to use `memchr::memchr`.
+/// Building a new `memmem::Finder` for every row is too expensive; it is faster
+/// to use `memchr::memchr`.
 fn strpos_general<'a, V1, V2, T: ArrowPrimitiveType>(
-    string_array: V1,
-    substring_array: V2,
+    haystack_array: V1,
+    needle_array: V2,
 ) -> Result<ArrayRef>
 where
     V1: StringArrayType<'a, Item = &'a str> + Copy,
     V2: StringArrayType<'a, Item = &'a str> + Copy,
 {
-    let ascii_only = substring_array.is_ascii() && string_array.is_ascii();
-    let string_iter = string_array.iter();
-    let substring_iter = substring_array.iter();
+    let ascii_only = needle_array.is_ascii() && haystack_array.is_ascii();
+    let haystack_iter = haystack_array.iter();
+    let needle_iter = needle_array.iter();
 
-    let result = string_iter
-        .zip(substring_iter)
-        .map(|(string, substring)| match (string, substring) {
-            (Some(string), Some(substring)) => {
-                if substring.is_empty() {
-                    return T::Native::from_usize(1);
-                }
-
-                let haystack_bytes = string.as_bytes();
-                let needle_bytes = substring.as_bytes();
+    let result = haystack_iter
+        .zip(needle_iter)
+        .map(|(haystack, needle)| match (haystack, needle) {
+            (Some(haystack), Some(needle)) => {
+                let haystack_bytes = haystack.as_bytes();
+                let needle_bytes = needle.as_bytes();
 
                 match find_substring_bytes(haystack_bytes, needle_bytes) {
                     None => T::Native::from_usize(0),
