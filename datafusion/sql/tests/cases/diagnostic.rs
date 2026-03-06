@@ -21,8 +21,8 @@ use std::{collections::HashMap, sync::Arc};
 
 use datafusion_common::{Diagnostic, Location, Result, Span};
 use datafusion_sql::{
-    parser::{DFParser, DFParserBuilder},
-    planner::{ParserOptions, SqlToRel},
+    parser::{DFParser, DFParserBuilder, Statement as DFStatement},
+    planner::{ParserOptions, PlannerContext, SqlToRel},
 };
 use regex::Regex;
 
@@ -49,6 +49,33 @@ fn do_query(sql: &'static str) -> Diagnostic {
             None => panic!("expected diagnostic"),
         },
     }
+}
+
+/// Plan a query that is expected to **succeed** and return any non-fatal
+/// [`Diagnostic`] warnings that were collected during planning.
+fn do_query_warnings(sql: &'static str) -> Vec<Diagnostic> {
+    let statement = DFParserBuilder::new(sql)
+        .build()
+        .expect("unable to create parser")
+        .parse_statement()
+        .expect("unable to parse query");
+    let options = ParserOptions {
+        collect_spans: true,
+        ..ParserOptions::default()
+    };
+    let state = MockSessionState::default();
+    let context = MockContextProvider { state };
+    let sql_to_rel = SqlToRel::new_with_options(&context, options);
+    let mut planner_context = PlannerContext::new();
+    match statement {
+        DFStatement::Statement(s) => {
+            sql_to_rel
+                .sql_statement_to_plan_with_context(*s, &mut planner_context)
+                .expect("expected planning to succeed");
+        }
+        _ => panic!("expected a SQL statement"),
+    }
+    planner_context.take_warnings()
 }
 
 /// Given a query that contains tag delimited spans, returns a mapping from the
@@ -389,4 +416,82 @@ fn test_syntax_error() -> Result<()> {
             }
         },
     }
+}
+
+// ── = NULL warning tests ──────────────────────────────────────────────────────
+
+#[test]
+fn test_eq_null_warning_in_where() -> Result<()> {
+    let query = "SELECT * FROM person WHERE /*col*/first_name/*col*/ = NULL";
+    let spans = get_spans(query);
+    let warnings = do_query_warnings(query);
+    assert_eq!(warnings.len(), 1);
+    let w = &warnings[0];
+    assert_snapshot!(
+        w.message,
+        @"'= NULL' will always be NULL (null comparisons never return true or false)"
+    );
+    assert_eq!(w.span, Some(spans["col"]));
+    assert_snapshot!(w.helps[0].message, @"use 'IS NULL' instead");
+    Ok(())
+}
+
+#[test]
+fn test_null_eq_warning_in_where() -> Result<()> {
+    // NULL on the left side
+    let query = "SELECT * FROM person WHERE NULL = /*col*/first_name/*col*/";
+    let spans = get_spans(query);
+    let warnings = do_query_warnings(query);
+    assert_eq!(warnings.len(), 1);
+    let w = &warnings[0];
+    assert_snapshot!(
+        w.message,
+        @"'= NULL' will always be NULL (null comparisons never return true or false)"
+    );
+    assert_eq!(w.span, Some(spans["col"]));
+    assert_snapshot!(w.helps[0].message, @"use 'IS NULL' instead");
+    Ok(())
+}
+
+#[test]
+fn test_neq_null_warning_in_where() -> Result<()> {
+    // <> NULL also warrants a warning
+    let query = "SELECT * FROM person WHERE /*col*/first_name/*col*/ <> NULL";
+    let spans = get_spans(query);
+    let warnings = do_query_warnings(query);
+    assert_eq!(warnings.len(), 1);
+    let w = &warnings[0];
+    assert_snapshot!(
+        w.message,
+        @"'<> NULL' will always be NULL (null comparisons never return true or false)"
+    );
+    assert_eq!(w.span, Some(spans["col"]));
+    assert_snapshot!(w.helps[0].message, @"use 'IS NOT NULL' instead");
+    Ok(())
+}
+
+#[test]
+fn test_is_null_no_warning() -> Result<()> {
+    // IS NULL is the correct form – no warning expected
+    let query = "SELECT * FROM person WHERE first_name IS NULL";
+    let warnings = do_query_warnings(query);
+    assert!(
+        warnings.is_empty(),
+        "expected no warnings for IS NULL, got: {warnings:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn test_multiple_eq_null_warnings() -> Result<()> {
+    // Multiple = NULL comparisons in the same query each produce a warning
+    let query =
+        "SELECT * FROM person WHERE first_name = NULL AND last_name = NULL";
+    let warnings = do_query_warnings(query);
+    assert_eq!(warnings.len(), 2);
+    let expected =
+        "'= NULL' will always be NULL (null comparisons never return true or false)";
+    assert_eq!(warnings[0].message, expected);
+    assert_eq!(warnings[1].message, expected);
+    Ok(())
 }

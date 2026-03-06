@@ -27,8 +27,8 @@ use sqlparser::ast::{
 };
 
 use datafusion_common::{
-    DFSchema, Result, ScalarValue, internal_datafusion_err, internal_err, not_impl_err,
-    plan_err,
+    DFSchema, Diagnostic, Result, ScalarValue, internal_datafusion_err, internal_err,
+    not_impl_err, plan_err,
 };
 
 use datafusion_expr::expr::ScalarFunction;
@@ -108,6 +108,44 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 StackEntry::Operator(op) => {
                     let right = eval_stack.pop().unwrap();
                     let left = eval_stack.pop().unwrap();
+                    // Warn when `expr = NULL` or `NULL = expr` is used.
+                    // Such comparisons always evaluate to NULL (never TRUE or
+                    // FALSE), so the user almost certainly meant `IS NULL` /
+                    // `IS NOT NULL` instead.
+                    if matches!(op, BinaryOperator::Eq | BinaryOperator::NotEq) {
+                        let right_is_null =
+                            matches!(right, Expr::Literal(ScalarValue::Null, _));
+                        let left_is_null =
+                            matches!(left, Expr::Literal(ScalarValue::Null, _));
+                        if right_is_null || left_is_null {
+                            // Point the span at the non-null operand (the
+                            // column or expression being compared), because
+                            // the NULL literal itself carries no span.
+                            let span = if right_is_null {
+                                left.spans().and_then(|s| s.first())
+                            } else {
+                                right.spans().and_then(|s| s.first())
+                            };
+                            let (op_str, suggestion) =
+                                if matches!(op, BinaryOperator::Eq) {
+                                    ("=", "IS NULL")
+                                } else {
+                                    ("<>", "IS NOT NULL")
+                                };
+                            let mut warning = Diagnostic::new_warning(
+                                format!(
+                                    "'{op_str} NULL' will always be NULL \
+                                     (null comparisons never return true or false)"
+                                ),
+                                span,
+                            );
+                            warning.add_help(
+                                format!("use '{suggestion}' instead"),
+                                None,
+                            );
+                            planner_context.add_warning(warning);
+                        }
+                    }
                     let expr = self.build_logical_expr(op, left, right, schema)?;
                     eval_stack.push(expr);
                 }

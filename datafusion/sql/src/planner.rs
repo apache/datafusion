@@ -18,7 +18,7 @@
 //! [`SqlToRel`]: SQL Query Planner (produces [`LogicalPlan`] from SQL AST)
 use std::collections::HashMap;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::vec;
 
 use crate::utils::make_decimal_type;
@@ -253,6 +253,11 @@ impl IdentNormalizer {
 /// This helps resolve scoping issues of CTEs.
 /// By using cloning, a subquery can inherit CTEs from the outer query
 /// and can also define its own private CTEs without affecting the outer query.
+///
+/// Warnings (non-fatal [`Diagnostic`]s) are shared across all clones via
+/// [`Arc`], so warnings collected in subquery contexts are visible from the
+/// top-level context. Use [`PlannerContext::take_warnings`] after planning to
+/// retrieve them.
 #[derive(Debug, Clone)]
 pub struct PlannerContext {
     /// Data types for numbered parameters ($1, $2, etc), if supplied
@@ -270,6 +275,9 @@ pub struct PlannerContext {
     outer_from_schema: Option<DFSchemaRef>,
     /// The query schema defined by the table
     create_table_schema: Option<DFSchemaRef>,
+    /// Non-fatal warnings collected during planning. Shared across clones (e.g.
+    /// for subqueries) so that all warnings surface to the top-level caller.
+    warnings: Arc<Mutex<Vec<Diagnostic>>>,
 }
 
 impl Default for PlannerContext {
@@ -287,7 +295,32 @@ impl PlannerContext {
             outer_queries_schemas_stack: vec![],
             outer_from_schema: None,
             create_table_schema: None,
+            warnings: Arc::new(Mutex::new(vec![])),
         }
+    }
+
+    /// Add a non-fatal warning [`Diagnostic`] collected during planning.
+    ///
+    /// Warnings do not halt query execution. Call [`Self::take_warnings`] after
+    /// planning to retrieve them.
+    pub fn add_warning(&self, warning: Diagnostic) {
+        self.warnings
+            .lock()
+            .expect("warnings lock poisoned")
+            .push(warning);
+    }
+
+    /// Drain and return all non-fatal [`Diagnostic`] warnings collected during
+    /// planning. This is shared across cloned contexts (e.g. subqueries), so
+    /// calling this on the top-level context returns warnings from the entire
+    /// query.
+    pub fn take_warnings(&self) -> Vec<Diagnostic> {
+        std::mem::take(
+            &mut self
+                .warnings
+                .lock()
+                .expect("warnings lock poisoned"),
+        )
     }
 
     /// Update the PlannerContext with provided prepare_param_data_types
