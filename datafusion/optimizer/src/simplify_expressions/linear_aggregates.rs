@@ -29,6 +29,8 @@ use datafusion_expr_common::operator::Operator;
 /// [`AggregateUDFImpl::simplify_expr_op_literal`] actually results in more
 /// aggregates (2) for each original aggregate. It is important that CSE then
 /// eliminate them.
+///
+/// [`AggregateUDFImpl::simplify_expr_op_literal`]: datafusion_expr::AggregateUDFImpl::simplify_expr_op_literal
 const DUPLICATE_THRESHOLD: usize = 2;
 
 /// Rewrites multiple aggregate expressions that have a common linear component
