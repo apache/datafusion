@@ -92,16 +92,16 @@ fn soundex<T: OffsetSizeTrait>(array: &ArrayRef) -> Result<ArrayRef> {
 }
 
 fn compute_soundex(s: &str) -> String {
+    if s.chars().next().map_or(false, |c| c.is_ascii_digit()) {
+        return s.to_string()
+    }
+
     let mut chars = s.chars().filter(|c| c.is_ascii_alphabetic());
 
     let first_ch = match chars.next() {
         Some(c) => c.to_ascii_uppercase(),
         None => return "".to_string(),
     };
-
-    if first_ch.is_ascii_digit() {
-        return s.to_string()
-    }
 
     let mut result = String::with_capacity(4);
     result.push(first_ch);
