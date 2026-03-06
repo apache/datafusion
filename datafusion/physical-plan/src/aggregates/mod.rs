@@ -660,6 +660,12 @@ pub struct AggregateExec {
     /// it remains `Some(..)` to enable dynamic filtering during aggregate execution;
     /// otherwise, it is cleared to `None`.
     dynamic_filter: Option<Arc<AggrDynFilter>>,
+
+    /// Number of internal hash table partitions for partial aggregation.
+    /// When > 1, input rows are hashed by group keys and routed to separate
+    /// smaller hash tables for better cache locality. Only used when mode is
+    /// Partial and input is unordered. Defaults to 1 (single hash table).
+    pub(crate) num_agg_partitions: usize,
 }
 
 impl AggregateExec {
@@ -685,6 +691,7 @@ impl AggregateExec {
             schema: Arc::clone(&self.schema),
             input_schema: Arc::clone(&self.input_schema),
             dynamic_filter: self.dynamic_filter.clone(),
+            num_agg_partitions: self.num_agg_partitions,
         }
     }
 
@@ -705,6 +712,7 @@ impl AggregateExec {
             schema: Arc::clone(&self.schema),
             input_schema: Arc::clone(&self.input_schema),
             dynamic_filter: self.dynamic_filter.clone(),
+            num_agg_partitions: self.num_agg_partitions,
         }
     }
 
@@ -839,6 +847,7 @@ impl AggregateExec {
             input_order_mode,
             cache: Arc::new(cache),
             dynamic_filter: None,
+            num_agg_partitions: 1,
         };
 
         exec.init_dynamic_filter();
@@ -849,6 +858,12 @@ impl AggregateExec {
     /// Aggregation mode (full, partial)
     pub fn mode(&self) -> &AggregateMode {
         &self.mode
+    }
+
+    /// Set the number of internal hash table partitions for partial aggregation.
+    pub fn with_num_agg_partitions(mut self, n: usize) -> Self {
+        self.num_agg_partitions = n;
+        self
     }
 
     /// Set the limit options for this AggExec
