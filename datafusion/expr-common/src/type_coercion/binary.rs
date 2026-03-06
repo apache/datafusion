@@ -1622,10 +1622,7 @@ pub fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataT
 
 /// Coerce two list element fields to a common type via
 /// [`type_union_resolution`].
-fn coerce_list_children(
-    lhs_field: &FieldRef,
-    rhs_field: &FieldRef,
-) -> Option<FieldRef> {
+fn coerce_list_children(lhs_field: &FieldRef, rhs_field: &FieldRef) -> Option<FieldRef> {
     let data_types = vec![lhs_field.data_type().clone(), rhs_field.data_type().clone()];
     Some(Arc::new(
         (**lhs_field)
