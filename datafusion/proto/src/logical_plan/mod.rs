@@ -269,7 +269,11 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
         } else {
             #[cfg(feature = "parquet")]
             {
-                if node.as_any().downcast_ref::<ParquetFormatFactory>().is_some() {
+                if node
+                    .as_any()
+                    .downcast_ref::<ParquetFormatFactory>()
+                    .is_some()
+                {
                     file_formats::ParquetLogicalExtensionCodec.try_encode_file_format(
                         &mut encoded_file_format,
                         Arc::clone(&node),
