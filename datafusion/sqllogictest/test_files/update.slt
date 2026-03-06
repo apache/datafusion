@@ -72,6 +72,18 @@ physical_plan_error This feature is not implemented: Physical plan does not supp
 query error DataFusion error: This feature is not implemented: UPDATE ... FROM is not supported
 explain update t1 set b = t2.b, c = t2.a, d = 1 from t2 where t1.a = t2.a and t1.b > 'foo' and t2.c > 1.0;
 
+# update from (FROM before SET syntax)
+# UPDATE ... FROM is currently unsupported
+# TODO fix https://github.com/apache/datafusion/issues/19950
+query error DataFusion error: This feature is not implemented: UPDATE ... FROM is not supported
+explain update t1 from t2 set b = t2.b, c = t1.a + t2.a where t1.a = t2.a;
+
+# update from with explicit aliases and joined assignment expressions
+# UPDATE ... FROM is currently unsupported
+# TODO fix https://github.com/apache/datafusion/issues/19950
+query error DataFusion error: This feature is not implemented: UPDATE ... FROM is not supported
+explain update t1 as dst set b = src.b, c = src.a + dst.a, d = dst.d + src.d from t2 as src where dst.a = src.a and src.c > dst.c;
+
 # test update from other table with actual data
 statement ok
 insert into t1 values (1, 'zoo', 2.0, 10), (2, 'qux', 3.0, 20), (3, 'bar', 4.0, 30);
@@ -112,3 +124,9 @@ insert into t2 values (1, 'new_val', 2.0, 100), (2, 'new_val2', 1.5, 200);
 # TODO fix https://github.com/apache/datafusion/issues/19950
 statement error DataFusion error: This feature is not implemented: UPDATE ... FROM is not supported
 update t1 as T set b = t2.b, c = t.a, d = 1 from t2 where t.a = t2.a and t.b > 'foo' and t2.c > 1.0;
+
+# test source alias permutations with joined assignments
+# UPDATE ... FROM is currently unsupported
+# TODO fix https://github.com/apache/datafusion/issues/19950
+statement error DataFusion error: This feature is not implemented: UPDATE ... FROM is not supported
+update t1 as dst set b = src.b, c = src.a + dst.a, d = src.d from t2 as src where dst.a = src.a and src.c > 1.0;
