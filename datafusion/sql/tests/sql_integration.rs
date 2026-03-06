@@ -3600,6 +3600,54 @@ fn select_groupby_orderby_aggregate_on_non_selected_column_original_issue() {
     );
 }
 
+#[test]
+fn plan_merge_into_canonicalizes_target_alias() {
+    // The target alias `t` must be rewritten to the real table name `j1` in the
+    // stored plan, while the source alias `s` is preserved. This keeps the plan
+    // independent of the SQL alias so analyzer passes and proto deserialization
+    // can rebuild the target schema from the table name alone.
+    let sql = "MERGE INTO j1 AS t USING j2 AS s ON t.j1_id = s.j2_id \
+               WHEN MATCHED THEN UPDATE SET j1_string = s.j2_string \
+               WHEN NOT MATCHED THEN INSERT (j1_id, j1_string) VALUES (s.j2_id, s.j2_string)";
+    let plan = logical_plan(sql).unwrap();
+    let LogicalPlan::Dml(dml) = &plan else {
+        panic!("expected Dml, got {plan:?}");
+    };
+    let datafusion_expr::WriteOp::MergeInto(merge_op) = &dml.op else {
+        panic!("expected MergeInto, got {:?}", dml.op);
+    };
+    // `t.j1_id` -> `j1.j1_id`, `s.j2_id` left untouched.
+    assert_eq!(merge_op.on.to_string(), "j1.j1_id = s.j2_id");
+    // Source-side column references remain qualified with the source alias.
+    let exprs: Vec<String> = merge_op.exprs().iter().map(|e| e.to_string()).collect();
+    assert_eq!(
+        exprs,
+        vec![
+            "j1.j1_id = s.j2_id".to_string(),
+            "s.j2_string".to_string(),
+            "s.j2_id".to_string(),
+            "s.j2_string".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn plan_merge_into_rejects_source_alias_colliding_with_target_name() {
+    // Aliasing the source to the target table's real name (`USING j2 AS j1`,
+    // where `j1` is the target) would make canonicalizing the target alias
+    // `t` to `j1` collide with the source qualifier, silently collapsing the
+    // two namespaces. The planner must reject this rather than misresolve.
+    let sql = "MERGE INTO j1 AS t USING j2 AS j1 ON t.j1_id = j1.j2_id \
+               WHEN MATCHED THEN DELETE";
+    let err = logical_plan(sql).unwrap_err();
+    assert!(
+        err.strip_backtrace().contains(
+            "MERGE source may not use the target table name 'j1' as a qualifier"
+        ),
+        "unexpected error: {err}"
+    );
+}
+
 fn logical_plan(sql: &str) -> Result<LogicalPlan> {
     logical_plan_with_options(sql, ParserOptions::default())
 }

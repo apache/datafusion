@@ -57,9 +57,10 @@ use datafusion_expr::type_coercion::{
 };
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
-    Cast, Expr, ExprSchemable, Join, Limit, LogicalPlan, Operator, Projection, Union,
-    ValueOrLambda, WindowFrame, WindowFrameBound, WindowFrameUnits, is_false,
-    is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, lit, not,
+    Cast, DmlStatement, Expr, ExprSchemable, Join, Limit, LogicalPlan, Operator,
+    Projection, Union, ValueOrLambda, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    WriteOp, is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown,
+    lit, not,
 };
 
 /// Performs type coercion by determining the schema
@@ -126,6 +127,21 @@ fn analyze_internal(
             &ts.source.schema(),
         )?;
         schema.merge(&source_schema);
+    }
+
+    // MERGE expressions (ON / WHEN clauses) reference the target table, which
+    // is not one of `plan.inputs()`. Rebuild the target schema from the DML's
+    // `table_name` and `target` so those columns resolve during coercion.
+    if let LogicalPlan::Dml(DmlStatement {
+        op: WriteOp::MergeInto(_),
+        table_name,
+        target,
+        ..
+    }) = &plan
+    {
+        let target_schema =
+            DFSchema::try_from_qualified_schema(table_name.clone(), &target.schema())?;
+        schema.merge(&target_schema);
     }
 
     // merge the outer schema for correlated subqueries
@@ -1531,6 +1547,61 @@ mod test {
             Projection: CAST(datafusion.test.foo.a AS Int64) AS a
               EmptyRelation: rows=0
             EmptyRelation: rows=0
+        "
+        )
+    }
+
+    #[test]
+    fn merge_into_resolves_and_coerces_target_and_source_columns() -> Result<()> {
+        use datafusion_expr::dml::{
+            MergeIntoAction, MergeIntoClause, MergeIntoClauseKind, MergeIntoOp,
+        };
+        use datafusion_expr::logical_plan::table_scan;
+        use datafusion_expr::{DmlStatement, WriteOp};
+
+        // Target table `target(id: UInt32)`.
+        let target_table_name = TableReference::bare("target");
+        let target_arrow_schema =
+            Schema::new(vec![Field::new("id", DataType::UInt32, false)]);
+        let target_plan =
+            table_scan(Some(target_table_name.clone()), &target_arrow_schema, None)?
+                .build()?;
+        let target_source = match &target_plan {
+            LogicalPlan::TableScan(ts) => Arc::clone(&ts.source),
+            _ => unreachable!("table_scan() always builds a TableScan"),
+        };
+
+        // Source plan `source(id: Int64)` — deliberately a different numeric
+        // type than `target.id` so the `ON` comparison needs a CAST.
+        let source_arrow_schema =
+            Schema::new(vec![Field::new("id", DataType::Int64, false)]);
+        let source_plan =
+            table_scan(Some("source"), &source_arrow_schema, None)?.build()?;
+
+        // `ON target.id = source.id`. Resolving `target.id` requires the
+        // target schema to be visible to the analyzer, which only sees
+        // `plan.inputs()` (the source plan) by default.
+        let on = col("target.id").eq(col("source.id"));
+        let merge_op = MergeIntoOp {
+            on,
+            clauses: vec![MergeIntoClause {
+                kind: MergeIntoClauseKind::Matched,
+                predicate: None,
+                action: MergeIntoAction::Delete,
+            }],
+        };
+        let plan = LogicalPlan::Dml(DmlStatement::new(
+            target_table_name,
+            target_source,
+            WriteOp::MergeInto(Box::new(merge_op)),
+            Arc::new(source_plan),
+        ));
+
+        assert_analyzed_plan_eq!(
+            plan,
+            @r"
+        Dml: op=[MergeInto] table=[target]
+          TableScan: source
         "
         )
     }

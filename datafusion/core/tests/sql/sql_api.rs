@@ -209,6 +209,37 @@ async fn ddl_can_not_be_planned_by_session_state() {
 }
 
 #[tokio::test]
+async fn merge_into_rejects_source_alias_colliding_with_target_name() {
+    // Regression test: `MERGE INTO target AS t USING source AS target ...`
+    // aliases the source to the target table's real name. Both `id` columns
+    // are identically named. Before the fix, canonicalizing the aliased target
+    // reference `t.id` to `target.id` collapsed it onto the source's
+    // `target.id`, so `t.id = target.id` silently became `target.id = target.id`
+    // (a comparison of the source column with itself). The planner must reject
+    // this collision instead of changing the meaning of the condition.
+    let ctx = SessionContext::new();
+    ctx.sql("CREATE TABLE target (id INT, val INT)")
+        .await
+        .unwrap();
+    ctx.sql("CREATE TABLE source (id INT, val INT)")
+        .await
+        .unwrap();
+
+    let err = ctx
+        .sql(
+            "MERGE INTO target AS t USING source AS target ON t.id = target.id \
+             WHEN MATCHED THEN DELETE",
+        )
+        .await
+        .unwrap_err();
+
+    assert_contains!(
+        err.strip_backtrace(),
+        "MERGE source may not use the target table name 'target' as a qualifier"
+    );
+}
+
+#[tokio::test]
 async fn invalid_wrapped_negation_fails_during_planning() {
     let ctx = SessionContext::new();
     let err = ctx
