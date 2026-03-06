@@ -25,9 +25,12 @@ use async_trait::async_trait;
 use datafusion::datasource::{TableProvider, TableType};
 use datafusion::error::Result;
 use datafusion::execution::context::{SessionConfig, SessionContext};
-use datafusion::logical_expr::Expr;
+use datafusion::logical_expr::{
+    Expr, LogicalPlan, TableProviderFilterPushDown, TableScan,
+};
 use datafusion_catalog::Session;
 use datafusion_common::ScalarValue;
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::empty::EmptyExec;
 
@@ -35,6 +38,8 @@ use datafusion_physical_plan::empty::EmptyExec;
 struct CaptureDeleteProvider {
     schema: SchemaRef,
     received_filters: Arc<Mutex<Option<Vec<Expr>>>>,
+    filter_pushdown: TableProviderFilterPushDown,
+    per_filter_pushdown: Option<Vec<TableProviderFilterPushDown>>,
 }
 
 impl CaptureDeleteProvider {
@@ -42,6 +47,32 @@ impl CaptureDeleteProvider {
         Self {
             schema,
             received_filters: Arc::new(Mutex::new(None)),
+            filter_pushdown: TableProviderFilterPushDown::Unsupported,
+            per_filter_pushdown: None,
+        }
+    }
+
+    fn new_with_filter_pushdown(
+        schema: SchemaRef,
+        filter_pushdown: TableProviderFilterPushDown,
+    ) -> Self {
+        Self {
+            schema,
+            received_filters: Arc::new(Mutex::new(None)),
+            filter_pushdown,
+            per_filter_pushdown: None,
+        }
+    }
+
+    fn new_with_per_filter_pushdown(
+        schema: SchemaRef,
+        per_filter_pushdown: Vec<TableProviderFilterPushDown>,
+    ) -> Self {
+        Self {
+            schema,
+            received_filters: Arc::new(Mutex::new(None)),
+            filter_pushdown: TableProviderFilterPushDown::Unsupported,
+            per_filter_pushdown: Some(per_filter_pushdown),
         }
     }
 
@@ -92,6 +123,19 @@ impl TableProvider for CaptureDeleteProvider {
             Field::new("count", DataType::UInt64, false),
         ])))))
     }
+
+    fn supports_filters_pushdown(
+        &self,
+        filters: &[&Expr],
+    ) -> Result<Vec<TableProviderFilterPushDown>> {
+        if let Some(per_filter) = &self.per_filter_pushdown
+            && per_filter.len() == filters.len()
+        {
+            return Ok(per_filter.clone());
+        }
+
+        Ok(vec![self.filter_pushdown.clone(); filters.len()])
+    }
 }
 
 /// A TableProvider that captures filters and assignments passed to update().
@@ -100,6 +144,8 @@ struct CaptureUpdateProvider {
     schema: SchemaRef,
     received_filters: Arc<Mutex<Option<Vec<Expr>>>>,
     received_assignments: Arc<Mutex<Option<Vec<(String, Expr)>>>>,
+    filter_pushdown: TableProviderFilterPushDown,
+    per_filter_pushdown: Option<Vec<TableProviderFilterPushDown>>,
 }
 
 impl CaptureUpdateProvider {
@@ -108,6 +154,21 @@ impl CaptureUpdateProvider {
             schema,
             received_filters: Arc::new(Mutex::new(None)),
             received_assignments: Arc::new(Mutex::new(None)),
+            filter_pushdown: TableProviderFilterPushDown::Unsupported,
+            per_filter_pushdown: None,
+        }
+    }
+
+    fn new_with_filter_pushdown(
+        schema: SchemaRef,
+        filter_pushdown: TableProviderFilterPushDown,
+    ) -> Self {
+        Self {
+            schema,
+            received_filters: Arc::new(Mutex::new(None)),
+            received_assignments: Arc::new(Mutex::new(None)),
+            filter_pushdown,
+            per_filter_pushdown: None,
         }
     }
 
@@ -163,6 +224,19 @@ impl TableProvider for CaptureUpdateProvider {
         Ok(Arc::new(EmptyExec::new(Arc::new(Schema::new(vec![
             Field::new("count", DataType::UInt64, false),
         ])))))
+    }
+
+    fn supports_filters_pushdown(
+        &self,
+        filters: &[&Expr],
+    ) -> Result<Vec<TableProviderFilterPushDown>> {
+        if let Some(per_filter) = &self.per_filter_pushdown
+            && per_filter.len() == filters.len()
+        {
+            return Ok(per_filter.clone());
+        }
+
+        Ok(vec![self.filter_pushdown.clone(); filters.len()])
     }
 }
 
@@ -308,6 +382,168 @@ async fn test_delete_complex_expr() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_delete_filter_pushdown_extracts_table_scan_filters() -> Result<()> {
+    let provider = Arc::new(CaptureDeleteProvider::new_with_filter_pushdown(
+        test_schema(),
+        TableProviderFilterPushDown::Exact,
+    ));
+    let ctx = SessionContext::new();
+    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)?;
+
+    let df = ctx.sql("DELETE FROM t WHERE id = 1").await?;
+    let optimized_plan = df.clone().into_optimized_plan()?;
+
+    let mut scan_filters = Vec::new();
+    optimized_plan.apply(|node| {
+        if let LogicalPlan::TableScan(TableScan { filters, .. }) = node {
+            scan_filters.extend(filters.clone());
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+
+    assert_eq!(scan_filters.len(), 1);
+    assert!(scan_filters[0].to_string().contains("id"));
+
+    df.collect().await?;
+
+    let filters = provider
+        .captured_filters()
+        .expect("filters should be captured");
+    assert_eq!(filters.len(), 1);
+    assert!(filters[0].to_string().contains("id"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_delete_compound_filters_with_pushdown() -> Result<()> {
+    let provider = Arc::new(CaptureDeleteProvider::new_with_filter_pushdown(
+        test_schema(),
+        TableProviderFilterPushDown::Exact,
+    ));
+    let ctx = SessionContext::new();
+    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)?;
+
+    ctx.sql("DELETE FROM t WHERE id = 1 AND status = 'active'")
+        .await?
+        .collect()
+        .await?;
+
+    let filters = provider
+        .captured_filters()
+        .expect("filters should be captured");
+    // Should receive both filters, not deduplicate valid separate predicates
+    assert_eq!(
+        filters.len(),
+        2,
+        "compound filters should not be over-suppressed"
+    );
+
+    let filter_strs: Vec<String> = filters.iter().map(|f| f.to_string()).collect();
+    assert!(
+        filter_strs.iter().any(|s| s.contains("id")),
+        "should contain id filter"
+    );
+    assert!(
+        filter_strs.iter().any(|s| s.contains("status")),
+        "should contain status filter"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_delete_mixed_filter_locations() -> Result<()> {
+    // Test mixed-location filters: some in Filter node, some in TableScan.filters
+    // This happens when provider uses TableProviderFilterPushDown::Inexact,
+    // meaning it can push down some predicates but not others.
+    let provider = Arc::new(CaptureDeleteProvider::new_with_filter_pushdown(
+        test_schema(),
+        TableProviderFilterPushDown::Inexact,
+    ));
+    let ctx = SessionContext::new();
+    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)?;
+
+    // Execute DELETE with compound WHERE clause
+    ctx.sql("DELETE FROM t WHERE id = 1 AND status = 'active'")
+        .await?
+        .collect()
+        .await?;
+
+    // Verify that both predicates are extracted and passed to delete_from(),
+    // even though they may be split between Filter node and TableScan.filters
+    let filters = provider
+        .captured_filters()
+        .expect("filters should be captured");
+    assert_eq!(
+        filters.len(),
+        2,
+        "should extract both predicates (union of Filter and TableScan.filters)"
+    );
+
+    let filter_strs: Vec<String> = filters.iter().map(|f| f.to_string()).collect();
+    assert!(
+        filter_strs.iter().any(|s| s.contains("id")),
+        "should contain id filter"
+    );
+    assert!(
+        filter_strs.iter().any(|s| s.contains("status")),
+        "should contain status filter"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_delete_per_filter_pushdown_mixed_locations() -> Result<()> {
+    // Force per-filter pushdown decisions to exercise mixed locations in one query.
+    // First predicate is pushed down (Exact), second stays as residual (Unsupported).
+    let provider = Arc::new(CaptureDeleteProvider::new_with_per_filter_pushdown(
+        test_schema(),
+        vec![
+            TableProviderFilterPushDown::Exact,
+            TableProviderFilterPushDown::Unsupported,
+        ],
+    ));
+
+    let ctx = SessionContext::new();
+    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)?;
+
+    let df = ctx
+        .sql("DELETE FROM t WHERE id = 1 AND status = 'active'")
+        .await?;
+    let optimized_plan = df.clone().into_optimized_plan()?;
+
+    // Only the first predicate should be pushed to TableScan.filters.
+    let mut scan_filters = Vec::new();
+    optimized_plan.apply(|node| {
+        if let LogicalPlan::TableScan(TableScan { filters, .. }) = node {
+            scan_filters.extend(filters.clone());
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    assert_eq!(scan_filters.len(), 1);
+    assert!(scan_filters[0].to_string().contains("id"));
+
+    // Both predicates should still reach the provider (union + dedup behavior).
+    df.collect().await?;
+
+    let filters = provider
+        .captured_filters()
+        .expect("filters should be captured");
+    assert_eq!(filters.len(), 2);
+
+    let filter_strs: Vec<String> = filters.iter().map(|f| f.to_string()).collect();
+    assert!(
+        filter_strs.iter().any(|s| s.contains("id")),
+        "should contain pushed-down id filter"
+    );
+    assert!(
+        filter_strs.iter().any(|s| s.contains("status")),
+        "should contain residual status filter"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_update_assignments() -> Result<()> {
     let provider = Arc::new(CaptureUpdateProvider::new(test_schema()));
     let ctx = SessionContext::new();
@@ -327,6 +563,80 @@ async fn test_update_assignments() -> Result<()> {
         .captured_filters()
         .expect("filters should be captured");
     assert!(!filters.is_empty(), "should have filter for WHERE clause");
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_update_filter_pushdown_extracts_table_scan_filters() -> Result<()> {
+    let provider = Arc::new(CaptureUpdateProvider::new_with_filter_pushdown(
+        test_schema(),
+        TableProviderFilterPushDown::Exact,
+    ));
+    let ctx = SessionContext::new();
+    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)?;
+
+    let df = ctx.sql("UPDATE t SET value = 100 WHERE id = 1").await?;
+    let optimized_plan = df.clone().into_optimized_plan()?;
+
+    // Verify that the optimizer pushed down the filter into TableScan
+    let mut scan_filters = Vec::new();
+    optimized_plan.apply(|node| {
+        if let LogicalPlan::TableScan(TableScan { filters, .. }) = node {
+            scan_filters.extend(filters.clone());
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+
+    assert_eq!(scan_filters.len(), 1);
+    assert!(scan_filters[0].to_string().contains("id"));
+
+    // Execute the UPDATE and verify filters were extracted and passed to update()
+    df.collect().await?;
+
+    let filters = provider
+        .captured_filters()
+        .expect("filters should be captured");
+    assert_eq!(filters.len(), 1);
+    assert!(filters[0].to_string().contains("id"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_update_filter_pushdown_passes_table_scan_filters() -> Result<()> {
+    let provider = Arc::new(CaptureUpdateProvider::new_with_filter_pushdown(
+        test_schema(),
+        TableProviderFilterPushDown::Exact,
+    ));
+    let ctx = SessionContext::new();
+    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)?;
+
+    let df = ctx
+        .sql("UPDATE t SET value = 42 WHERE status = 'ready'")
+        .await?;
+    let optimized_plan = df.clone().into_optimized_plan()?;
+
+    let mut scan_filters = Vec::new();
+    optimized_plan.apply(|node| {
+        if let LogicalPlan::TableScan(TableScan { filters, .. }) = node {
+            scan_filters.extend(filters.clone());
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+
+    assert!(
+        !scan_filters.is_empty(),
+        "expected filter pushdown to populate TableScan filters"
+    );
+
+    df.collect().await?;
+
+    let filters = provider
+        .captured_filters()
+        .expect("filters should be captured");
+    assert!(
+        !filters.is_empty(),
+        "expected filters extracted from TableScan during UPDATE"
+    );
     Ok(())
 }
 
@@ -376,6 +686,120 @@ async fn test_unsupported_table_update() -> Result<()> {
     let result = ctx.sql("UPDATE empty_t SET value = 1 WHERE id = 1").await;
 
     assert!(result.is_err() || result.unwrap().collect().await.is_err());
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_delete_target_table_scoping() -> Result<()> {
+    // Test that DELETE only extracts filters from the target table,
+    // not from other tables (important for DELETE...FROM safety)
+    let target_provider = Arc::new(CaptureDeleteProvider::new_with_filter_pushdown(
+        test_schema(),
+        TableProviderFilterPushDown::Exact,
+    ));
+    let ctx = SessionContext::new();
+    ctx.register_table(
+        "target_t",
+        Arc::clone(&target_provider) as Arc<dyn TableProvider>,
+    )?;
+
+    // For now, we test single-table DELETE
+    // and validate that the scoping logic is correct
+    let df = ctx.sql("DELETE FROM target_t WHERE id > 5").await?;
+    df.collect().await?;
+
+    let filters = target_provider
+        .captured_filters()
+        .expect("filters should be captured");
+    assert_eq!(filters.len(), 1);
+    assert!(
+        filters[0].to_string().contains("id"),
+        "Filter should be for id column"
+    );
+    assert!(
+        filters[0].to_string().contains("5"),
+        "Filter should contain the value 5"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_update_from_drops_non_target_predicates() -> Result<()> {
+    // UPDATE ... FROM is currently not working
+    // TODO fix https://github.com/apache/datafusion/issues/19950
+    let target_provider = Arc::new(CaptureUpdateProvider::new_with_filter_pushdown(
+        test_schema(),
+        TableProviderFilterPushDown::Exact,
+    ));
+    let ctx = SessionContext::new();
+    ctx.register_table("t1", Arc::clone(&target_provider) as Arc<dyn TableProvider>)?;
+
+    let source_schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("status", DataType::Utf8, true),
+        // t2-only column to avoid false negatives after qualifier stripping
+        Field::new("src_only", DataType::Utf8, true),
+    ]));
+    let source_table = datafusion::datasource::empty::EmptyTable::new(source_schema);
+    ctx.register_table("t2", Arc::new(source_table))?;
+
+    let result = ctx
+        .sql(
+            "UPDATE t1 SET value = 1 FROM t2 \
+             WHERE t1.id = t2.id AND t2.src_only = 'active' AND t1.value > 10",
+        )
+        .await;
+
+    // Verify UPDATE ... FROM is rejected with appropriate error
+    // TODO fix https://github.com/apache/datafusion/issues/19950
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(
+        err.to_string().contains("UPDATE ... FROM is not supported"),
+        "Expected 'UPDATE ... FROM is not supported' error, got: {err}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_delete_qualifier_stripping_and_validation() -> Result<()> {
+    // Test that filter qualifiers are properly stripped and validated
+    // Unqualified predicates should work fine
+    let provider = Arc::new(CaptureDeleteProvider::new_with_filter_pushdown(
+        test_schema(),
+        TableProviderFilterPushDown::Exact,
+    ));
+    let ctx = SessionContext::new();
+    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)?;
+
+    // Execute DELETE with unqualified column reference
+    // (After parsing, the planner adds qualifiers, but our validation should accept them)
+    let df = ctx.sql("DELETE FROM t WHERE id = 1").await?;
+    df.collect().await?;
+
+    let filters = provider
+        .captured_filters()
+        .expect("filters should be captured");
+    assert!(!filters.is_empty(), "Should have extracted filter");
+
+    // Verify qualifiers are stripped: check that Column expressions have no qualifier
+    let has_qualified_column = filters[0]
+        .exists(|expr| Ok(matches!(expr, Expr::Column(col) if col.relation.is_some())))?;
+    assert!(
+        !has_qualified_column,
+        "Filter should have unqualified columns after stripping"
+    );
+
+    // Also verify the string representation doesn't contain table qualifiers
+    let filter_str = filters[0].to_string();
+    assert!(
+        !filter_str.contains("t.id"),
+        "Filter should not contain qualified column reference, got: {filter_str}"
+    );
+    assert!(
+        filter_str.contains("id") || filter_str.contains("1"),
+        "Filter should reference id column or the value 1, got: {filter_str}"
+    );
     Ok(())
 }
 

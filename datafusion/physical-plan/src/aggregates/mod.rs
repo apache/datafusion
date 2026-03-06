@@ -1576,7 +1576,6 @@ impl ExecutionPlan for AggregateExec {
             Arc::clone(&self.schema),
         )?;
         me.limit_options = self.limit_options;
-        me.dynamic_filter = self.dynamic_filter.clone();
         me.num_agg_partitions = self.num_agg_partitions;
         if self.num_agg_partitions > 1 {
             let group_exprs = me.output_group_expr();
@@ -1584,6 +1583,7 @@ impl ExecutionPlan for AggregateExec {
             cache.partitioning = Partitioning::Hash(group_exprs, self.num_agg_partitions);
             me.cache = Arc::new(cache);
         }
+        me.dynamic_filter.clone_from(&self.dynamic_filter);
 
         Ok(Arc::new(me))
     }

@@ -208,6 +208,7 @@ inefficient_to_string = "warn"
 needless_pass_by_value = "warn"
 # https://github.com/apache/datafusion/issues/18881
 allow_attributes = "warn"
+assigning_clones = "warn"
 
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = [
