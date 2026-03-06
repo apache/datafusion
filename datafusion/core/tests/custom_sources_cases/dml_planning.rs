@@ -238,6 +238,21 @@ impl TableProvider for CaptureUpdateProvider {
 
         Ok(vec![self.filter_pushdown.clone(); filters.len()])
     }
+
+    async fn update_from(
+        &self,
+        _state: &dyn Session,
+        _input: Arc<dyn ExecutionPlan>,
+        filters: Vec<Expr>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        *self.received_filters.lock().unwrap() = Some(filters);
+        // Multi-table update_from uses projected input rows and does not pass
+        // assignment expressions directly.
+        *self.received_assignments.lock().unwrap() = Some(vec![]);
+        Ok(Arc::new(EmptyExec::new(Arc::new(Schema::new(vec![
+            Field::new("count", DataType::UInt64, false),
+        ])))))
+    }
 }
 
 /// A TableProvider that captures whether truncate() was called.
