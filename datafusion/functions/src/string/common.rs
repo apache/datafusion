@@ -20,7 +20,6 @@
 use std::sync::Arc;
 
 use crate::strings::make_and_append_view;
-use crate::utils::utf8_to_str_type;
 use arrow::array::{
     Array, ArrayRef, GenericStringArray, GenericStringBuilder, NullBufferBuilder,
     OffsetSizeTrait, StringViewArray, StringViewBuilder, new_null_array,
@@ -329,19 +328,6 @@ fn string_trim<T: OffsetSizeTrait, Tr: Trimmer>(args: &[ArrayRef]) -> Result<Arr
                 "Function TRIM was called with {other} arguments. It requires at least 1 and at most 2."
             )
         }
-    }
-}
-
-pub(crate) fn case_conversion_return_type(
-    arg_type: &DataType,
-    name: &str,
-) -> Result<DataType> {
-    match arg_type {
-        DataType::Utf8View => Ok(DataType::Utf8View),
-        DataType::Dictionary(_, value_type) if **value_type == DataType::Utf8View => {
-            Ok(DataType::Utf8View)
-        }
-        _ => utf8_to_str_type(arg_type, name),
     }
 }
 

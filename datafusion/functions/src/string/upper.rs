@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::string::common::{case_conversion_return_type, to_upper};
+use crate::string::common::to_upper;
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
 use datafusion_common::types::logical_string;
@@ -80,7 +80,7 @@ impl ScalarUDFImpl for UpperFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        case_conversion_return_type(&arg_types[0], "upper")
+        Ok(arg_types[0].clone())
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -210,15 +210,5 @@ mod tests {
         ])) as ArrayRef;
 
         to_upper(input, expected)
-    }
-
-    #[test]
-    fn upper_return_type_dictionary_utf8view() -> Result<()> {
-        let return_type = UpperFunc::new().return_type(&[DataType::Dictionary(
-            Box::new(DataType::Int32),
-            Box::new(DataType::Utf8View),
-        )])?;
-        assert_eq!(return_type, DataType::Utf8View);
-        Ok(())
     }
 }
