@@ -43,14 +43,19 @@ use itertools::Itertools;
 pub struct DependentJoinRewriter {
     // each logical plan traversal will assign it a integer id
     current_id: usize,
+
     subquery_depth: usize,
     // each newly visted `LogicalPlan` is inserted inside this map for tracking
     nodes: IndexMap<usize, Node>,
     // all the node ids from root to the current node
-    // this is mutated duri traversal
-    stack: Vec<StackItem>,
-    // track for each column, the nodes/logical plan that reference to its within the tree
-    all_outer_ref_columns: IndexMap<Column, Vec<ColumnAccess>>,
+    // this is mutated duriing traversal
+    stack: Vec<usize>,
+    // track for each column, the nodes/logical plan that reference to its within the tree,
+    // but not yet resolved
+    // during the tree traversal these entries will be resolved
+    // by matching the column provider and accessor
+    unresolved_outer_ref_columns: IndexMap<Column, Vec<ColumnAccess>>,
+    // used to generate unique alias for subqueries appearing in the logical plan
     alias_generator: Arc<AliasGenerator>,
     // this is used to decorrelation optimizor later
     // to construct delim scan node.
@@ -58,16 +63,9 @@ pub struct DependentJoinRewriter {
 }
 
 #[derive(Debug, Hash, PartialEq, PartialOrd, Eq, Clone)]
-struct StackItem {
-    node_id: usize,
-    // is set if the node is an alias node
-    // TODO: remove me
-    alias: Option<SubqueryAlias>,
-}
-#[derive(Debug, Hash, PartialEq, PartialOrd, Eq, Clone)]
 struct ColumnAccess {
     // node ids from root to the node that is referencing the column
-    stack: Vec<StackItem>,
+    stack: Vec<usize>,
     // the node referencing the column
     node_id: usize,
     col: Column,
@@ -463,8 +461,8 @@ impl DependentJoinRewriter {
     that invalidate the providing function of n9, and thus return None
          */
     fn dependent_join_and_subquery_node_ids(
-        stack_with_table_provider: &[StackItem],
-        stack_with_subquery: &[StackItem],
+        stack_with_table_provider: &[usize],
+        stack_with_subquery: &[usize],
     ) -> Option<(usize, usize)> {
         let mut lowest_common_ancestor = 0;
         let mut subquery_node_id = 0;
@@ -478,10 +476,10 @@ impl DependentJoinRewriter {
             let right_node = &stack_with_subquery[i];
             let left_node = &stack_with_table_provider[i];
 
-            if right_node.node_id == left_node.node_id {
+            if right_node == left_node {
                 // common parent
-                lowest_common_ancestor = right_node.node_id;
-                subquery_node_id = stack_with_subquery[i + 1].node_id;
+                lowest_common_ancestor = *right_node;
+                subquery_node_id = stack_with_subquery[i + 1];
             } else {
                 break;
             }
@@ -491,9 +489,6 @@ impl DependentJoinRewriter {
         for i in cursor + 1..stack_with_table_provider.len() {
             let node = &stack_with_table_provider[i];
             // This table provider cannot provide the given column
-            if let Some(_) = node.alias {
-                return None;
-            }
         }
 
         Some((lowest_common_ancestor, subquery_node_id))
@@ -508,7 +503,7 @@ impl DependentJoinRewriter {
         provider_node_id: usize,
     ) -> Result<bool> {
         let mut is_table_provider = false;
-        if let Some(accesses) = self.all_outer_ref_columns.get_mut(col) {
+        if let Some(accesses) = self.unresolved_outer_ref_columns.get_mut(col) {
             accesses.retain(|access| {
                 let cur_stack = self.stack.clone();
 
@@ -539,7 +534,7 @@ impl DependentJoinRewriter {
             });
             // if all the accesses are resolved, remove the column from the map
             if accesses.len() == 0 {
-                self.all_outer_ref_columns.swap_remove(col);
+                self.unresolved_outer_ref_columns.swap_remove(col);
             }
         }
         Ok(is_table_provider)
@@ -553,7 +548,7 @@ impl DependentJoinRewriter {
     ) {
         // the goal is to mark the dependent node
         // the current child's access
-        self.all_outer_ref_columns
+        self.unresolved_outer_ref_columns
             .entry(col.clone())
             .or_default()
             .push(ColumnAccess {
@@ -581,7 +576,7 @@ impl DependentJoinRewriter {
             current_id: 0,
             nodes: IndexMap::new(),
             stack: vec![],
-            all_outer_ref_columns: IndexMap::new(),
+            unresolved_outer_ref_columns: IndexMap::new(),
             subquery_depth: 0,
             domain_columns_provider_nodes: IndexMap::new(),
         }
@@ -784,8 +779,8 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                     "subquery node cannot be at the beginning of the query plan"
                 ))?;
 
-                let parent_node = self.nodes.get_mut(&parent.node_id).ok_or(
-                    internal_datafusion_err!("node {} not found", parent.node_id),
+                let parent_node = self.nodes.get_mut(parent).ok_or(
+                    internal_datafusion_err!("node {} not found", parent),
                 )?;
                 // the inserting sequence matter here
                 // when a parent has multiple children subquery at the same time
@@ -850,10 +845,7 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                         }
                     }
                     self.subquery_depth += 1;
-                    self.stack.push(StackItem {
-                        node_id: new_id,
-                        alias: None,
-                    });
+                    self.stack.push(new_id);
                     self.nodes.insert(
                         new_id,
                         Node {
@@ -929,13 +921,7 @@ impl TreeNodeRewriter for DependentJoinRewriter {
         if is_dependent_join_node {
             self.subquery_depth += 1
         }
-        self.stack.push(StackItem {
-            node_id: new_id,
-            alias: match &node {
-                LogicalPlan::SubqueryAlias(alias) => Some(alias.clone()),
-                _ => None,
-            },
-        });
+        self.stack.push(new_id);
         self.nodes.insert(
             new_id,
             Node {
@@ -966,7 +952,7 @@ impl TreeNodeRewriter for DependentJoinRewriter {
             "stack cannot be empty during upward traversal"
         ))?;
         let is_top_node = self.stack.len() == 0;
-        let node_info = if let Entry::Occupied(e) = self.nodes.entry(current_node.node_id)
+        let node_info = if let Entry::Occupied(e) = self.nodes.entry(current_node)
         {
             let node_info = e.get();
             if !node_info.is_dependent_join_node {
