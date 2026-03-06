@@ -1294,18 +1294,17 @@ impl Unparser<'_> {
                 Ok(ast::Expr::value(ast::Value::Number(ui.to_string(), false)))
             }
             ScalarValue::UInt64(None) => Ok(ast::Expr::value(ast::Value::Null)),
-            ScalarValue::Utf8(Some(str)) => {
+            ScalarValue::Utf8(Some(str))
+            | ScalarValue::Utf8View(Some(str))
+            | ScalarValue::LargeUtf8(Some(str)) => {
+                if let Some(expr) = self.dialect.custom_string_literal_override(str) {
+                    return Ok(expr);
+                }
                 Ok(ast::Expr::value(SingleQuotedString(str.to_string())))
             }
-            ScalarValue::Utf8(None) => Ok(ast::Expr::value(ast::Value::Null)),
-            ScalarValue::Utf8View(Some(str)) => {
-                Ok(ast::Expr::value(SingleQuotedString(str.to_string())))
-            }
-            ScalarValue::Utf8View(None) => Ok(ast::Expr::value(ast::Value::Null)),
-            ScalarValue::LargeUtf8(Some(str)) => {
-                Ok(ast::Expr::value(SingleQuotedString(str.to_string())))
-            }
-            ScalarValue::LargeUtf8(None) => Ok(ast::Expr::value(ast::Value::Null)),
+            ScalarValue::Utf8(None)
+            | ScalarValue::Utf8View(None)
+            | ScalarValue::LargeUtf8(None) => Ok(ast::Expr::value(ast::Value::Null)),
             ScalarValue::Binary(Some(_)) => not_impl_err!("Unsupported scalar: {v:?}"),
             ScalarValue::Binary(None) => Ok(ast::Expr::value(ast::Value::Null)),
             ScalarValue::BinaryView(Some(_)) => {
@@ -2397,7 +2396,6 @@ mod tests {
 
         let expected = r#"('a' > 4)"#;
         assert_eq!(actual, expected);
-
         Ok(())
     }
 
@@ -2957,6 +2955,57 @@ mod tests {
 
             assert_eq!(actual, expected);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_mssql_dialect_national_literal() -> Result<()> {
+        struct MsSqlDialect;
+
+        impl Dialect for MsSqlDialect {
+            fn identifier_quote_style(&self, _identifier: &str) -> Option<char> {
+                Some('[')
+            }
+
+            fn custom_string_literal_override(&self, s: &str) -> Option<ast::Expr> {
+                if !s.is_ascii() {
+                    Some(ast::Expr::value(ast::Value::NationalStringLiteral(
+                        s.to_string(),
+                    )))
+                } else {
+                    None
+                }
+            }
+        }
+
+        let dialect = MsSqlDialect;
+        let unparser = Unparser::new(&dialect);
+
+        let expr =
+            Expr::Literal(ScalarValue::Utf8(Some("national string".to_string())), None);
+        let ast = unparser.expr_to_sql(&expr)?;
+        // no unicode characters, so no prefixed with N
+        assert_eq!(ast.to_string(), "'national string'");
+
+        let expr = Expr::Literal(
+            ScalarValue::Utf8(Some("datafusion資料融合".to_string())),
+            None,
+        );
+
+        let ast = unparser.expr_to_sql(&expr)?;
+        // contain unicode characters, so prefixed with N
+        assert_eq!(ast.to_string(), "N'datafusion資料融合'");
+
+        let dialect = DefaultDialect {};
+        let unparser = Unparser::new(&dialect);
+
+        let expr = Expr::Literal(
+            ScalarValue::Utf8(Some("datafusion資料融合".to_string())),
+            None,
+        );
+        let ast = unparser.expr_to_sql(&expr)?;
+        // no N prefix in default dialect
+        assert_eq!(ast.to_string(), "'datafusion資料融合'");
         Ok(())
     }
 
