@@ -67,8 +67,7 @@ logical_plan
 physical_plan_error This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 
 # set from other table
-# UPDATE ... FROM is currently unsupported
-# TODO fix https://github.com/apache/datafusion/issues/19950
+# UPDATE ... FROM (single source table) is supported
 query TT
 explain update t1 set b = t2.b, c = t2.a, d = 1 from t2 where t1.a = t2.a and t1.b > 'foo' and t2.c > 1.0;
 ----
@@ -84,8 +83,7 @@ physical_plan
 02)--DmlResultExec: rows_affected=0
 
 # update from (FROM before SET syntax)
-# UPDATE ... FROM is currently unsupported
-# TODO fix https://github.com/apache/datafusion/issues/19950
+# UPDATE ... FROM supports both FROM-before-SET and FROM-after-SET syntax
 query TT
 explain update t1 from t2 set b = t2.b, c = t1.a + t2.a where t1.a = t2.a;
 ----
@@ -101,8 +99,7 @@ physical_plan
 02)--DmlResultExec: rows_affected=0
 
 # update from with explicit aliases and joined assignment expressions
-# UPDATE ... FROM is currently unsupported
-# TODO fix https://github.com/apache/datafusion/issues/19950
+# UPDATE ... FROM supports source/target aliases in assignment and filter expressions
 query TT
 explain update t1 as dst set b = src.b, c = src.a + dst.a, d = dst.d + src.d from t2 as src where dst.a = src.a and src.c > dst.c;
 ----
@@ -143,8 +140,7 @@ statement error DataFusion error: This feature is not implemented: Multiple tabl
 explain update t1 set b = t2.b, c = t3.a, d = 1 from t2, t3 where t1.a = t2.a and t1.a = t3.a;
 
 # test table alias
-# UPDATE ... FROM is currently unsupported
-# TODO fix https://github.com/apache/datafusion/issues/19950
+# UPDATE ... FROM with target alias in assignments and predicates
 query TT
 explain update t1 as T set b = t2.b, c = t.a, d = 1 from t2 where t.a = t2.a and t.b > 'foo' and t2.c > 1.0;
 ----
@@ -186,8 +182,7 @@ select * from t1 order by a;
 
 
 # test source alias permutations with joined assignments
-# UPDATE ... FROM is currently unsupported
-# TODO fix https://github.com/apache/datafusion/issues/19950
+# UPDATE ... FROM can still fail when replacement rows and matched target rows differ
 statement error
 update t1 as dst set b = src.b, c = src.a + dst.a, d = src.d from t2 as src where dst.a = src.a and src.c > 1.0;
 ----
