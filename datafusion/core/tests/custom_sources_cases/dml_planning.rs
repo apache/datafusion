@@ -323,6 +323,29 @@ fn test_schema() -> SchemaRef {
     ]))
 }
 
+/// Construct a simple schema containing columns `a`, `b`, `c` and `d`.
+///
+/// Many of the DML tests use this four‑column layout.  Callers can
+/// provide additional fields that will be appended to the base set –
+/// for example the `src_only` column used in some `UPDATE ... FROM`
+/// queries.  Returns an `Arc<Schema>` for convenience in tests.
+fn abcd_schema(extra: &[Field]) -> SchemaRef {
+    let mut fields = vec![
+        Field::new("a", DataType::Int32, false),
+        Field::new("b", DataType::Utf8, true),
+        Field::new("c", DataType::Float64, true),
+        Field::new("d", DataType::Int32, true),
+    ];
+    fields.extend_from_slice(extra);
+    Arc::new(Schema::new(fields))
+}
+
+/// Convenience wrapper for the common case where no extra columns are
+/// needed.
+fn abcd_schema_no_extra() -> SchemaRef {
+    abcd_schema(&[])
+}
+
 #[tokio::test]
 async fn test_delete_single_filter() -> Result<()> {
     let provider = Arc::new(CaptureDeleteProvider::new(test_schema()));
@@ -740,12 +763,7 @@ async fn test_delete_target_table_scoping() -> Result<()> {
 
 #[tokio::test]
 async fn test_update_from_drops_non_target_predicates() -> Result<()> {
-    let target_schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Int32, false),
-        Field::new("b", DataType::Utf8, true),
-        Field::new("c", DataType::Float64, true),
-        Field::new("d", DataType::Int32, true),
-    ]));
+    let target_schema = abcd_schema_no_extra();
     let target_provider = Arc::new(CaptureUpdateProvider::new_with_filter_pushdown(
         Arc::clone(&target_schema),
         TableProviderFilterPushDown::Exact,
@@ -753,13 +771,7 @@ async fn test_update_from_drops_non_target_predicates() -> Result<()> {
     let ctx = SessionContext::new();
     ctx.register_table("t1", Arc::clone(&target_provider) as Arc<dyn TableProvider>)?;
 
-    let source_schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Int32, false),
-        Field::new("b", DataType::Utf8, true),
-        Field::new("c", DataType::Float64, true),
-        Field::new("d", DataType::Int32, true),
-        Field::new("src_only", DataType::Utf8, true),
-    ]));
+    let source_schema = abcd_schema(&[Field::new("src_only", DataType::Utf8, true)]);
     let source_table = datafusion::datasource::empty::EmptyTable::new(source_schema);
     ctx.register_table("t2", Arc::new(source_table))?;
 
@@ -790,12 +802,7 @@ async fn test_update_from_drops_non_target_predicates() -> Result<()> {
 
 #[tokio::test]
 async fn test_update_from_alias_variants_are_accepted() -> Result<()> {
-    let target_schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Int32, false),
-        Field::new("b", DataType::Utf8, true),
-        Field::new("c", DataType::Float64, true),
-        Field::new("d", DataType::Int32, true),
-    ]));
+    let target_schema = abcd_schema_no_extra();
     let target_provider = Arc::new(CaptureUpdateProvider::new_with_filter_pushdown(
         Arc::clone(&target_schema),
         TableProviderFilterPushDown::Exact,
@@ -803,12 +810,7 @@ async fn test_update_from_alias_variants_are_accepted() -> Result<()> {
     let ctx = SessionContext::new();
     ctx.register_table("t1", Arc::clone(&target_provider) as Arc<dyn TableProvider>)?;
 
-    let source_schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Int32, false),
-        Field::new("b", DataType::Utf8, true),
-        Field::new("c", DataType::Float64, true),
-        Field::new("d", DataType::Int32, true),
-    ]));
+    let source_schema = abcd_schema_no_extra();
     let source_table = datafusion::datasource::empty::EmptyTable::new(source_schema);
     ctx.register_table("t2", Arc::new(source_table))?;
 
@@ -832,23 +834,13 @@ async fn test_update_from_alias_variants_are_accepted() -> Result<()> {
 
 #[tokio::test]
 async fn test_update_from_joined_assignments_plan_success() -> Result<()> {
-    let target_schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Int32, false),
-        Field::new("b", DataType::Utf8, true),
-        Field::new("c", DataType::Float64, true),
-        Field::new("d", DataType::Int32, true),
-    ]));
+    let target_schema = abcd_schema_no_extra();
     let target_provider =
         Arc::new(CaptureUpdateProvider::new(Arc::clone(&target_schema)));
     let ctx = SessionContext::new();
     ctx.register_table("t1", Arc::clone(&target_provider) as Arc<dyn TableProvider>)?;
 
-    let source_schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Int32, false),
-        Field::new("b", DataType::Utf8, true),
-        Field::new("c", DataType::Float64, true),
-        Field::new("d", DataType::Int32, true),
-    ]));
+    let source_schema = abcd_schema_no_extra();
     let source_table = datafusion::datasource::empty::EmptyTable::new(source_schema);
     ctx.register_table("t2", Arc::new(source_table))?;
 
