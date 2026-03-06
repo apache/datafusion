@@ -61,8 +61,8 @@ use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal, lit};
 use datafusion_physical_expr::intervals::utils::check_support;
 use datafusion_physical_expr::utils::{collect_columns, reassign_expr_columns};
 use datafusion_physical_expr::{
-    AcrossPartitions, AnalysisContext, ConstExpr, ExprBoundaries, PhysicalExpr, analyze,
-    conjunction, split_conjunction,
+    AcrossPartitions, AnalysisContext, ConstExpr, EquivalenceProperties, ExprBoundaries,
+    PhysicalExpr, analyze, conjunction, split_conjunction,
 };
 
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
@@ -347,6 +347,20 @@ impl FilterExec {
         })
     }
 
+    /// Returns the `AcrossPartitions` value for `expr` if it is constant:
+    /// either already known constant in `input_eqs`, or a `Literal`
+    /// (which is inherently constant across all partitions).
+    fn expr_constant_or_literal(
+        expr: &Arc<dyn PhysicalExpr>,
+        input_eqs: &EquivalenceProperties,
+    ) -> Option<AcrossPartitions> {
+        input_eqs.is_expr_constant(expr).or_else(|| {
+            expr.as_any()
+                .downcast_ref::<Literal>()
+                .map(|l| AcrossPartitions::Uniform(Some(l.value().clone())))
+        })
+    }
+
     fn extend_constants(
         input: &Arc<dyn ExecutionPlan>,
         predicate: &Arc<dyn PhysicalExpr>,
@@ -362,22 +376,9 @@ impl FilterExec {
                 // Check if either side is constant — either already known
                 // constant from the input equivalence properties, or a literal
                 // value (which is inherently constant across all partitions).
-                let left_const =
-                    input_eqs.is_expr_constant(binary.left()).or_else(|| {
-                        binary
-                            .left()
-                            .as_any()
-                            .downcast_ref::<Literal>()
-                            .map(|l| AcrossPartitions::Uniform(Some(l.value().clone())))
-                    });
+                let left_const = Self::expr_constant_or_literal(binary.left(), input_eqs);
                 let right_const =
-                    input_eqs.is_expr_constant(binary.right()).or_else(|| {
-                        binary
-                            .right()
-                            .as_any()
-                            .downcast_ref::<Literal>()
-                            .map(|l| AcrossPartitions::Uniform(Some(l.value().clone())))
-                    });
+                    Self::expr_constant_or_literal(binary.right(), input_eqs);
 
                 if let Some(left_across) = left_const {
                     // LEFT is constant, so RIGHT must also be constant.
@@ -1005,9 +1006,10 @@ fn collect_columns_from_predicate_inner(
             // replace those occurrences with the complex expression, corrupting
             // sort orderings. Constant propagation for such pairs is handled
             // separately by `extend_constants`.
-            let has_column = binary.left().as_any().downcast_ref::<Column>().is_some()
-                || binary.right().as_any().downcast_ref::<Column>().is_some();
-            if !has_column {
+            let has_direct_column_operand =
+                binary.left().as_any().downcast_ref::<Column>().is_some()
+                    || binary.right().as_any().downcast_ref::<Column>().is_some();
+            if !has_direct_column_operand {
                 return;
             }
             match binary.op() {
@@ -2105,8 +2107,8 @@ mod tests {
     /// `complex_expr = literal` must not create equivalence classes because
     /// `normalize_expr`'s deep traversal would replace the literal inside
     /// unrelated expressions (e.g. sort keys) with the complex expression.
-    #[tokio::test]
-    async fn test_collect_columns_skips_non_column_pairs() -> Result<()> {
+    #[test]
+    fn test_collect_columns_skips_non_column_pairs() -> Result<()> {
         let schema = test::aggr_test_schema();
 
         // Simulate: nvl(c2, 0) = 0  →  (c2 IS DISTINCT FROM 0) = 0
