@@ -45,7 +45,7 @@ use crate::{
 };
 
 use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions};
-use arrow::compute::take_arrays;
+use arrow::compute::{take_arrays, BatchCoalescer};
 use arrow::datatypes::{SchemaRef, UInt32Type};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
@@ -388,6 +388,7 @@ impl RepartitionExecState {
                 .map(|(partition, channel)| (*partition, channel.sender.clone()))
                 .collect();
 
+            let target_batch_size = context.session_config().batch_size();
             let input_task = SpawnedTask::spawn(RepartitionExec::pull_from_input(
                 stream,
                 txs,
@@ -396,6 +397,7 @@ impl RepartitionExecState {
                 // preserve_order depends on partition index to start from 0
                 if preserve_order { 0 } else { i },
                 num_input_partitions,
+                target_batch_size,
             ));
 
             // In a separate task, wait for each input to be done
@@ -641,6 +643,68 @@ impl BatchPartitioner {
             };
 
         Ok(it)
+    }
+
+    /// Compute hash partition indices without materializing sub-batches.
+    ///
+    /// Returns an iterator of `(partition_index, UInt32Array)` pairs where each
+    /// `UInt32Array` contains the row indices from the input batch that belong
+    /// to that partition. Only non-empty partitions are returned.
+    ///
+    /// This is used with `BatchCoalescer::push_batch_with_indices` to avoid
+    /// creating intermediate sub-batches during hash repartitioning.
+    fn hash_partition_indices(
+        &mut self,
+        batch: &RecordBatch,
+    ) -> Result<Vec<(usize, PrimitiveArray<UInt32Type>)>> {
+        match &mut self.state {
+            BatchPartitionerState::Hash {
+                exprs,
+                num_partitions: partitions,
+                hash_buffer,
+                indices,
+            } => {
+                let timer = self.timer.timer();
+
+                let arrays =
+                    evaluate_expressions_to_arrays(exprs.as_slice(), batch)?;
+
+                hash_buffer.clear();
+                hash_buffer.resize(batch.num_rows(), 0);
+
+                create_hashes(
+                    &arrays,
+                    REPARTITION_RANDOM_STATE.random_state(),
+                    hash_buffer,
+                )?;
+
+                indices.iter_mut().for_each(|v| v.clear());
+
+                for (index, hash) in hash_buffer.iter().enumerate() {
+                    indices[(*hash % *partitions as u64) as usize]
+                        .push(index as u32);
+                }
+
+                timer.done();
+
+                let mut result = Vec::new();
+                for (partition, p_indices) in indices.iter_mut().enumerate() {
+                    if !p_indices.is_empty() {
+                        let taken_indices = std::mem::take(p_indices);
+                        let indices_array: PrimitiveArray<UInt32Type> =
+                            taken_indices.into();
+                        result.push((partition, indices_array));
+                    }
+                }
+
+                Ok(result)
+            }
+            _ => {
+                internal_err!(
+                    "hash_partition_indices called on non-hash partitioner"
+                )
+            }
+        }
     }
 
     // return the number of output partitions
@@ -1050,7 +1114,7 @@ impl ExecutionPlan for RepartitionExec {
                             spill_stream,
                             1, // Each receiver handles one input partition
                             BaselineMetrics::new(&metrics, partition),
-                            None, // subsequent merge sort already does batching https://github.com/apache/datafusion/blob/e4dcf0c85611ad0bd291f03a8e03fe56d773eb16/datafusion/physical-plan/src/sorts/merge.rs#L286
+                            None, // merge sort already coalesces
                         )) as SendableRecordBatchStream
                     })
                     .collect::<Vec<_>>();
@@ -1079,6 +1143,15 @@ impl ExecutionPlan for RepartitionExec {
                     .next()
                     .expect("at least one spill reader should exist");
 
+                // For hash repartitioning, sender-side coalesces batches,
+                // so no need for receiver-side coalescing.
+                // For round-robin, receiver must coalesce small batches.
+                let receiver_batch_size = if matches!(partitioning, Partitioning::Hash(..)) {
+                    None
+                } else {
+                    Some(context.session_config().batch_size())
+                };
+
                 Ok(Box::pin(PerPartitionStream::new(
                     schema_captured,
                     rx.into_iter()
@@ -1089,7 +1162,7 @@ impl ExecutionPlan for RepartitionExec {
                     spill_stream,
                     num_input_partitions,
                     BaselineMetrics::new(&metrics, partition),
-                    Some(context.session_config().batch_size()),
+                    receiver_batch_size,
                 )) as SendableRecordBatchStream)
             }
         })
@@ -1337,6 +1410,55 @@ impl RepartitionExec {
         }
     }
 
+    /// Send a completed batch through the output channel, handling memory
+    /// reservation and spilling.
+    ///
+    /// Returns `true` if the channel is still open, `false` if the receiver
+    /// has hung up (e.g. LIMIT).
+    async fn send_batch(
+        batch: RecordBatch,
+        partition: usize,
+        output_channels: &mut HashMap<usize, OutputChannel>,
+        metrics: &RepartitionMetrics,
+    ) -> bool {
+        let Some(channel) = output_channels.get_mut(&partition) else {
+            return false;
+        };
+
+        let size = batch.get_array_memory_size();
+        let timer = metrics.send_time[partition].timer();
+
+        let can_grow = channel.reservation.lock().try_grow(size).is_ok();
+        let (batch_to_send, is_memory_batch) = if can_grow {
+            (RepartitionBatch::Memory(batch), true)
+        } else {
+            if let Err(e) = channel.spill_writer.push_batch(&batch) {
+                let _ = channel.sender.send(Some(Err(e.into()))).await;
+                timer.done();
+                output_channels.remove(&partition);
+                return false;
+            }
+            (RepartitionBatch::Spilled, false)
+        };
+
+        if channel
+            .sender
+            .send(Some(Ok(batch_to_send)))
+            .await
+            .is_err()
+        {
+            if is_memory_batch {
+                channel.reservation.lock().shrink(size);
+            }
+            timer.done();
+            output_channels.remove(&partition);
+            return false;
+        }
+
+        timer.done();
+        true
+    }
+
     /// Pulls data from the specified input plan, feeding it to the
     /// output partitions based on the desired partitioning
     ///
@@ -1348,6 +1470,7 @@ impl RepartitionExec {
         metrics: RepartitionMetrics,
         input_partition: usize,
         num_input_partitions: usize,
+        target_batch_size: usize,
     ) -> Result<()> {
         let mut partitioner = match &partitioning {
             Partitioning::Hash(exprs, num_partitions) => {
@@ -1370,6 +1493,22 @@ impl RepartitionExec {
             }
         };
 
+        let schema = stream.schema();
+        // Use coalescers for hash partitioning to accumulate rows per
+        // output partition and only send when target_batch_size is reached.
+        // This avoids sending many small sub-batches through the channel.
+        // Skip coalescing for 0-column schemas as BatchCoalescer can't handle them.
+        let use_coalescers = matches!(&partitioning, Partitioning::Hash(..))
+            && !schema.fields().is_empty();
+        let mut coalescers: HashMap<usize, BatchCoalescer> = if use_coalescers {
+            output_channels
+                .keys()
+                .map(|&p| (p, BatchCoalescer::new(Arc::clone(&schema), target_batch_size)))
+                .collect()
+        } else {
+            HashMap::new()
+        };
+
         // While there are still outputs to send to, keep pulling inputs
         let mut batches_until_yield = partitioner.num_partitions();
         while !output_channels.is_empty() {
@@ -1389,38 +1528,44 @@ impl RepartitionExec {
                 continue;
             }
 
-            for res in partitioner.partition_iter(batch)? {
-                let (partition, batch) = res?;
-                let size = batch.get_array_memory_size();
+            if use_coalescers {
+                // Hash partitioning with coalescing: compute indices and
+                // push into per-partition coalescers
+                for (partition, indices) in
+                    partitioner.hash_partition_indices(&batch)?
+                {
+                    if let Some(coalescer) = coalescers.get_mut(&partition) {
+                        coalescer.push_batch_with_indices(
+                            batch.clone(),
+                            &indices,
+                        )?;
 
-                let timer = metrics.send_time[partition].timer();
-                // if there is still a receiver, send to it
-                if let Some(channel) = output_channels.get_mut(&partition) {
-                    let (batch_to_send, is_memory_batch) =
-                        match channel.reservation.lock().try_grow(size) {
-                            Ok(_) => {
-                                // Memory available - send in-memory batch
-                                (RepartitionBatch::Memory(batch), true)
-                            }
-                            Err(_) => {
-                                // We're memory limited - spill to SpillPool
-                                // SpillPool handles file handle reuse and rotation
-                                channel.spill_writer.push_batch(&batch)?;
-                                // Send marker indicating batch was spilled
-                                (RepartitionBatch::Spilled, false)
-                            }
-                        };
-
-                    if channel.sender.send(Some(Ok(batch_to_send))).await.is_err() {
-                        // If the other end has hung up, it was an early shutdown (e.g. LIMIT)
-                        // Only shrink memory if it was a memory batch
-                        if is_memory_batch {
-                            channel.reservation.lock().shrink(size);
+                        // Send any completed batches
+                        while let Some(completed) =
+                            coalescer.next_completed_batch()
+                        {
+                            Self::send_batch(
+                                completed,
+                                partition,
+                                &mut output_channels,
+                                &metrics,
+                            )
+                            .await;
                         }
-                        output_channels.remove(&partition);
                     }
                 }
-                timer.done();
+            } else {
+                // Round-robin or fallback: send batches directly
+                for res in partitioner.partition_iter(batch)? {
+                    let (partition, batch) = res?;
+                    Self::send_batch(
+                        batch,
+                        partition,
+                        &mut output_channels,
+                        &metrics,
+                    )
+                    .await;
+                }
             }
 
             // If the input stream is endless, we may spin forever and
@@ -1444,6 +1589,20 @@ impl RepartitionExec {
                 batches_until_yield = partitioner.num_partitions();
             } else {
                 batches_until_yield -= 1;
+            }
+        }
+
+        // Flush remaining buffered batches from coalescers
+        for (partition, coalescer) in &mut coalescers {
+            coalescer.finish_buffered_batch()?;
+            while let Some(batch) = coalescer.next_completed_batch() {
+                Self::send_batch(
+                    batch,
+                    *partition,
+                    &mut output_channels,
+                    &metrics,
+                )
+                .await;
             }
         }
 
@@ -1579,12 +1738,13 @@ struct PerPartitionStream {
     /// Execution metrics
     baseline_metrics: BaselineMetrics,
 
-    /// None for sort preserving variant (merge sort already does coalescing)
+    /// Coalescer for combining small batches (used for round-robin repartitioning).
+    /// None for hash repartitioning (sender-side coalesces) and preserve-order
+    /// (merge sort already coalesces).
     batch_coalescer: Option<LimitedBatchCoalescer>,
 }
 
 impl PerPartitionStream {
-    #[expect(clippy::too_many_arguments)]
     fn new(
         schema: SchemaRef,
         receiver: DistributionReceiver<MaybeBatch>,
