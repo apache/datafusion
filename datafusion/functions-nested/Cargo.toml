@@ -110,3 +110,7 @@ name = "array_to_string"
 [[bench]]
 harness = false
 name = "array_position"
+
+[[bench]]
+harness = false
+name = "array_resize"
