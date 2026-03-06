@@ -254,23 +254,22 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
     ) -> Result<()> {
         let mut encoded_file_format = Vec::new();
 
-        let any = node.as_any();
-        let kind = if any.downcast_ref::<CsvFormatFactory>().is_some() {
+        let kind = if node.as_any().downcast_ref::<CsvFormatFactory>().is_some() {
             file_formats::CsvLogicalExtensionCodec
                 .try_encode_file_format(&mut encoded_file_format, Arc::clone(&node))?;
             protobuf::FileFormatKind::Csv
-        } else if any.downcast_ref::<JsonFormatFactory>().is_some() {
+        } else if node.as_any().downcast_ref::<JsonFormatFactory>().is_some() {
             file_formats::JsonLogicalExtensionCodec
                 .try_encode_file_format(&mut encoded_file_format, Arc::clone(&node))?;
             protobuf::FileFormatKind::Json
-        } else if any.downcast_ref::<ArrowFormatFactory>().is_some() {
+        } else if node.as_any().downcast_ref::<ArrowFormatFactory>().is_some() {
             file_formats::ArrowLogicalExtensionCodec
                 .try_encode_file_format(&mut encoded_file_format, Arc::clone(&node))?;
             protobuf::FileFormatKind::Arrow
         } else {
             #[cfg(feature = "parquet")]
             {
-                if any.downcast_ref::<ParquetFormatFactory>().is_some() {
+                if node.as_any().downcast_ref::<ParquetFormatFactory>().is_some() {
                     file_formats::ParquetLogicalExtensionCodec.try_encode_file_format(
                         &mut encoded_file_format,
                         Arc::clone(&node),
