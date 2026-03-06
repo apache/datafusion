@@ -60,16 +60,24 @@ use parking_lot::Mutex;
 /// Per-channel backpressure capacity.
 ///
 /// Each channel can buffer up to this many items before blocking senders.
-/// A value of 2 allows sender and receiver to overlap operations for better
+/// A value of 8 allows sender and receiver to overlap operations for better
 /// throughput while still providing meaningful backpressure.
-const CHANNEL_CAPACITY: usize = 2;
+const CHANNEL_CAPACITY: usize = 8;
 
 /// Create `n` empty channels with per-channel backpressure.
 pub fn channels<T>(
     n: usize,
 ) -> (Vec<DistributionSender<T>>, Vec<DistributionReceiver<T>>) {
+    channels_with_capacity(n, CHANNEL_CAPACITY)
+}
+
+/// Create `n` empty channels with a specific capacity per channel.
+fn channels_with_capacity<T>(
+    n: usize,
+    capacity: usize,
+) -> (Vec<DistributionSender<T>>, Vec<DistributionReceiver<T>>) {
     let channels = (0..n)
-        .map(|_| Arc::new(Channel::new_with_one_sender(CHANNEL_CAPACITY)))
+        .map(|_| Arc::new(Channel::new_with_one_sender(capacity)))
         .collect::<Vec<_>>();
     let senders = channels
         .iter()
@@ -402,9 +410,14 @@ mod tests {
 
     use super::*;
 
+    /// Test helper: create channels with capacity 2 (matching original test assumptions).
+    fn test_channels<T>(n: usize) -> (Vec<DistributionSender<T>>, Vec<DistributionReceiver<T>>) {
+        channels_with_capacity(n, 2)
+    }
+
     #[test]
     fn test_single_channel_send_recv() {
-        let (txs, mut rxs) = channels(1);
+        let (txs, mut rxs) = test_channels(1);
 
         let mut recv_fut = rxs[0].recv();
         let waker = poll_pending(&mut recv_fut);
@@ -432,7 +445,7 @@ mod tests {
 
     #[test]
     fn test_multi_sender() {
-        let (txs, mut rxs) = channels(2);
+        let (txs, mut rxs) = test_channels(2);
 
         let tx_clone = txs[0].clone();
 
@@ -445,7 +458,7 @@ mod tests {
 
     #[test]
     fn test_per_channel_backpressure() {
-        let (txs, mut rxs) = channels(2);
+        let (txs, mut rxs) = test_channels(2);
 
         // Activate receivers by sending and receiving one item each.
         // Backpressure only applies once a receiver has actively consumed data.
@@ -486,7 +499,7 @@ mod tests {
 
     #[test]
     fn test_close_channel_by_dropping_tx() {
-        let (mut txs, mut rxs) = channels::<&str>(2);
+        let (mut txs, mut rxs) = test_channels::<&str>(2);
 
         let tx0 = txs.remove(0);
         let _tx1 = txs.remove(0);
@@ -523,7 +536,7 @@ mod tests {
 
     #[test]
     fn test_close_channel_by_dropping_rx() {
-        let (txs, mut rxs) = channels(2);
+        let (txs, mut rxs) = test_channels(2);
 
         let rx0 = rxs.remove(0);
         let _rx1 = rxs.remove(0);
@@ -536,7 +549,7 @@ mod tests {
 
     #[test]
     fn test_close_channel_by_dropping_rx_wakes_blocked_senders() {
-        let (txs, mut rxs) = channels(1);
+        let (txs, mut rxs) = test_channels(1);
 
         // Activate receiver by consuming one item
         poll_ready(&mut txs[0].send("warmup")).unwrap();
@@ -561,7 +574,7 @@ mod tests {
 
     #[test]
     fn test_drop_rx_three_channels() {
-        let (mut txs, mut rxs) = channels(3);
+        let (mut txs, mut rxs) = test_channels(3);
 
         let tx0 = txs.remove(0);
         let tx1 = txs.remove(0);
@@ -590,7 +603,7 @@ mod tests {
 
     #[test]
     fn test_close_channel_by_dropping_rx_clears_data() {
-        let (txs, rxs) = channels(1);
+        let (txs, rxs) = test_channels(1);
 
         let obj = Arc::new(());
         let counter = Arc::downgrade(&obj);
@@ -609,7 +622,7 @@ mod tests {
     /// Ensure that polling "pending" futures work even when you poll them too often (which happens under some circumstances).
     #[test]
     fn test_poll_empty_channel_twice() {
-        let (txs, mut rxs) = channels(1);
+        let (txs, mut rxs) = test_channels(1);
 
         let mut recv_fut = rxs[0].recv();
         let waker_1a = poll_pending(&mut recv_fut);
@@ -654,7 +667,7 @@ mod tests {
 
     #[test]
     fn test_poll_send_blocked_twice() {
-        let (txs, mut rxs) = channels(1);
+        let (txs, mut rxs) = test_channels(1);
 
         // Activate receiver
         poll_ready(&mut txs[0].send("warmup")).unwrap();
@@ -681,7 +694,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "polled ready future")]
     fn test_panic_poll_send_future_after_ready_ok() {
-        let (txs, _rxs) = channels(1);
+        let (txs, _rxs) = test_channels(1);
         let mut fut = txs[0].send("foo");
         poll_ready(&mut fut).unwrap();
         poll_ready(&mut fut).ok();
@@ -690,7 +703,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "polled ready future")]
     fn test_panic_poll_send_future_after_ready_err() {
-        let (txs, rxs) = channels(1);
+        let (txs, rxs) = test_channels(1);
 
         drop(rxs);
 
@@ -702,7 +715,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "polled ready future")]
     fn test_panic_poll_recv_future_after_ready_some() {
-        let (txs, mut rxs) = channels(1);
+        let (txs, mut rxs) = test_channels(1);
 
         poll_ready(&mut txs[0].send("foo")).unwrap();
 
@@ -714,7 +727,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "polled ready future")]
     fn test_panic_poll_recv_future_after_ready_none() {
-        let (txs, mut rxs) = channels::<u8>(1);
+        let (txs, mut rxs) = test_channels::<u8>(1);
 
         drop(txs);
 
