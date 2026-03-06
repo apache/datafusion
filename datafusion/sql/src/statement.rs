@@ -1496,7 +1496,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     &table_schema,
                     planner_context,
                     false,
-                    None,
                 )?;
                 Ok(LogicalPlan::Ddl(DdlStatement::CreateIndex(
                     PlanCreateIndex {
@@ -1689,7 +1688,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         for expr in order_exprs {
             // Convert each OrderByExpr to a SortExpr:
             let expr_vec =
-                self.order_by_to_sort_expr(expr, schema, planner_context, true, None)?;
+                self.order_by_to_sort_expr(expr, schema, planner_context, true)?;
             // Verify that columns of all SortExprs exist in the schema:
             for sort in expr_vec.iter() {
                 for column in sort.expr.column_refs().iter() {

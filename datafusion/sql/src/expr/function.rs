@@ -395,7 +395,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 planner_context,
                 // Numeric literals in window function ORDER BY are treated as constants
                 false,
-                None,
             )?;
 
             let func_deps = schema.functional_dependencies();
@@ -568,13 +567,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     } else {
                         within_group
                     };
-                    self.order_by_to_sort_expr(
-                        order_by,
-                        schema,
-                        planner_context,
-                        true,
-                        None,
-                    )?
+                    self.order_by_to_sort_expr(order_by, schema, planner_context, true)?
                 };
 
                 let filter: Option<Box<Expr>> = filter
@@ -875,13 +868,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<WithinGroupExtraction> {
-        let within_group = self.order_by_to_sort_expr(
-            within_group,
-            schema,
-            planner_context,
-            false,
-            None,
-        )?;
+        let within_group =
+            self.order_by_to_sort_expr(within_group, schema, planner_context, false)?;
 
         if !within_group.is_empty() {
             let within_group_count = within_group.len();

@@ -92,7 +92,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     plan.schema(),
                     planner_context,
                     true,
-                    None,
                 )?;
                 let plan = self.order_by(plan, order_by_rex)?;
                 self.limit(plan, limit_clause, planner_context)
@@ -132,7 +131,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     plan.schema(),
                     planner_context,
                     true,
-                    None,
                 )?;
                 self.order_by(plan, sort_exprs)
             }
