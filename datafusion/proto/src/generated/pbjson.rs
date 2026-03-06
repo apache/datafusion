@@ -6914,8 +6914,7 @@ impl serde::Serialize for FilterExecNode {
             struct_ser.serialize_field("batchSize", &self.batch_size)?;
         }
         if let Some(v) = self.fetch.as_ref() {
-            #[allow(clippy::needless_borrow)]
-            struct_ser.serialize_field("fetch", ToString::to_string(&v).as_str())?;
+            struct_ser.serialize_field("fetch", v)?;
         }
         struct_ser.end()
     }
@@ -7015,7 +7014,7 @@ impl<'de> serde::Deserialize<'de> for FilterExecNode {
                             if default_filter_selectivity__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("defaultFilterSelectivity"));
                             }
-                            default_filter_selectivity__ =
+                            default_filter_selectivity__ = 
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -7023,7 +7022,7 @@ impl<'de> serde::Deserialize<'de> for FilterExecNode {
                             if projection__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("projection"));
                             }
-                            projection__ =
+                            projection__ = 
                                 Some(map_.next_value::<Vec<::pbjson::private::NumberDeserialize<_>>>()?
                                     .into_iter().map(|x| x.0).collect())
                             ;
@@ -7032,7 +7031,7 @@ impl<'de> serde::Deserialize<'de> for FilterExecNode {
                             if batch_size__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("batchSize"));
                             }
-                            batch_size__ =
+                            batch_size__ = 
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -7040,7 +7039,7 @@ impl<'de> serde::Deserialize<'de> for FilterExecNode {
                             if fetch__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("fetch"));
                             }
-                            fetch__ =
+                            fetch__ = 
                                 map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
