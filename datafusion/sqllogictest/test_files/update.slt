@@ -130,6 +130,13 @@ insert into t2 values (1, 'updated_b', 5.0, 40), (2, 'updated_b2', 2.5, 50), (4,
 statement ok
 update t1 set b = t2.b, c = t2.a, d = 1 from t2 where t1.a = t2.a and t1.b > 'foo' and t2.c > 1.0;
 
+query ITRI
+select * from t1 order by a;
+----
+1 updated_b 1 1
+2 updated_b2 2 1
+3 bar 4 30
+
 
 # set from multiple tables, DataFusion only supports from one table
 statement error DataFusion error: This feature is not implemented: Multiple tables in UPDATE SET FROM not yet supported
@@ -169,6 +176,13 @@ insert into t2 values (1, 'new_val', 2.0, 100), (2, 'new_val2', 1.5, 200);
 # UPDATE ... FROM with target alias resolves and executes
 statement ok
 update t1 as T set b = t2.b, c = t.a, d = 1 from t2 where t.a = t2.a and t.b > 'foo' and t2.c > 1.0;
+
+query ITRI
+select * from t1 order by a;
+----
+1 new_val 1 1
+2 new_val2 2 1
+3 apple 3.5 15
 
 
 # test source alias permutations with joined assignments
