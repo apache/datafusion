@@ -99,6 +99,10 @@ fn compute_soundex(s: &str) -> String {
         None => return "".to_string(),
     };
 
+    if first_ch.is_ascii_digit() {
+        return s.to_string()
+    }
+
     let mut result = String::with_capacity(4);
     result.push(first_ch);
     let mut last_code = classify_char(first_ch);

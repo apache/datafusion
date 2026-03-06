@@ -41,6 +41,11 @@ SELECT soundex('123');
 123
 
 query T
+SELECT soundex('a123');
+----
+A000
+
+query T
 SELECT soundex('Datafusion');
 ----
 D312
