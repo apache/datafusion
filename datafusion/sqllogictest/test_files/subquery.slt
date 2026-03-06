@@ -403,26 +403,34 @@ query TT
 explain SELECT t1_id, t1_name, t1_int FROM t1 WHERE t1_id IN(SELECT t1_int FROM t1 WHERE t1.t1_id > t1.t1_int)
 ----
 logical_plan
-01)LeftSemi Join: t1.t1_id = __correlated_sq_1.t1_int
-02)--TableScan: t1 projection=[t1_id, t1_name, t1_int]
-03)--SubqueryAlias: __correlated_sq_1
-04)----Projection: t1.t1_int
-05)------Filter: t1.t1_int < t1.t1_id
-06)--------TableScan: t1 projection=[t1_id, t1_int]
+01)Projection: t1.t1_id, t1.t1_name, t1.t1_int
+02)--Filter: t1.mark
+03)----LeftMark Join(ComparisonJoin): t1.t1_id = t1.t1_int
+04)------TableScan: t1 projection=[t1_id, t1_name, t1_int]
+05)------Projection: t1.t1_int
+06)--------Filter: t1.t1_int < t1.t1_id
+07)----------TableScan: t1 projection=[t1_id, t1_int]
 
 #in_subquery_nested_exist_subquery
 query TT
 explain SELECT t1_id, t1_name, t1_int FROM t1 WHERE t1_id IN(SELECT t2_id FROM t2 WHERE EXISTS(select * from t1 WHERE t1.t1_int > t2.t2_int))
 ----
 logical_plan
-01)LeftSemi Join: t1.t1_id = __correlated_sq_2.t2_id
-02)--TableScan: t1 projection=[t1_id, t1_name, t1_int]
-03)--SubqueryAlias: __correlated_sq_2
-04)----Projection: t2.t2_id
-05)------LeftSemi Join:  Filter: __correlated_sq_1.t1_int > t2.t2_int
-06)--------TableScan: t2 projection=[t2_id, t2_int]
-07)--------SubqueryAlias: __correlated_sq_1
-08)----------TableScan: t1 projection=[t1_int]
+01)Projection: t1.t1_id, t1.t1_name, t1.t1_int
+02)--Filter: t2.mark
+03)----LeftMark Join(ComparisonJoin): t1.t1_id = t2.t2_id
+04)------TableScan: t1 projection=[t1_id, t1_name, t1_int]
+05)------Projection: t2.t2_id
+06)--------Filter: mark
+07)----------Projection: t2.t2_id, mark
+08)------------LeftMark Join(ComparisonJoin): t2.t2_int = dscan_1.t2_t2_int Null=Null
+09)--------------TableScan: t2 projection=[t2_id, t2_int]
+10)--------------Projection: t1.t1_id, dscan_1.t2_t2_int
+11)----------------Inner Join(DelimJoin):  Filter: t1.t1_int > dscan_1.t2_t2_int
+12)------------------Filter: Boolean(true)
+13)--------------------TableScan: t1 projection=[t1_id, t1_int]
+14)------------------Projection: t2.t2_int AS dscan_1.t2_t2_int
+15)--------------------DelimGet: scan_id:[9] columns:[t2.t2_int]
 
 #invalid_scalar_subquery
 statement error DataFusion error: Error during planning: Too many columns! The subquery should only return one column: t2.t2_id, t2.t2_name
@@ -430,11 +438,7 @@ SELECT t1_id, t1_name, t1_int, (select t2_id, t2_name FROM t2 WHERE t2.t2_id = t
 
 #subquery_not_allowed
 #In/Exist Subquery is not allowed in ORDER BY clause.
-<<<<<<< HEAD
 statement error DataFusion error: Invalid \(non-executable\) plan after Analyzer\ncaused by\nError during planning: In/Exist subquery can only be used in Projection, Filter, TableScan, Window functions, Aggregate, Join and Dependent Join plan nodes, but was used in \[Sort: t1.t1_int IN \(<subquery>\) ASC NULLS LAST\]
-=======
-statement error DataFusion error: Invalid \(non-executable\) plan after Analyzer\ncaused by\nError during planning: In/Exist/SetComparison subquery can only be used in Projection, Filter, TableScan, Window functions, Aggregate and Join plan nodes, but was used in \[Sort: t1.t1_int IN \(<subquery>\) ASC NULLS LAST\]
->>>>>>> 234730694392553bb5fa244e7b3782b9ccf3ebd3
 SELECT t1_id, t1_name, t1_int FROM t1 order by t1_int in (SELECT t2_int FROM t2 WHERE t1.t1_id > t1.t1_int)
 
 #non_aggregated_correlated_scalar_subquery
@@ -464,13 +468,17 @@ query TT
 explain SELECT t1_id, (SELECT t2_int FROM t2 WHERE t2.t2_int = t1.t1_int limit 1) as t2_int from t1
 ----
 logical_plan
-01)Projection: t1.t1_id, (<subquery>) AS t2_int
-02)--Subquery:
-03)----Projection: t2.t2_int
-04)------Limit: skip=0, fetch=1
-05)--------Filter: t2.t2_int = outer_ref(t1.t1_int)
-06)----------TableScan: t2
-07)--TableScan: t1 projection=[t1_id, t1_int]
+01)Projection: t1.t1_id, t2.t2_int AS t2_int
+02)--LeftSingle Join(ComparisonJoin): t1.t1_int = dscan_1.t1_t1_int Null=Null
+03)----TableScan: t1 projection=[t1_id, t1_int]
+04)----Projection: t2.t2_int, dscan_1.t1_t1_int
+05)------Filter: row_number <= UInt64(1)
+06)--------WindowAggr: windowExpr=[[row_number() PARTITION BY [dscan_1.t1_t1_int] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS row_number]]
+07)----------Inner Join(DelimJoin): t2.t2_int = dscan_1.t1_t1_int
+08)------------Filter: Boolean(true)
+09)--------------TableScan: t2 projection=[t2_int]
+10)------------Projection: t1.t1_int AS dscan_1.t1_t1_int
+11)--------------DelimGet: scan_id:[6] columns:[t1.t1_int]
 
 query TT
 explain SELECT t1_id from t1 where t1_int = (SELECT t2_int FROM t2 WHERE t2.t2_int = t1.t1_int limit 1)
@@ -510,13 +518,20 @@ query TT
 explain SELECT t1_id, (SELECT sum(t2_int) FROM t2 WHERE t2.t2_id < t1.t1_id) as t2_sum from t1
 ----
 logical_plan
-01)Projection: t1.t1_id, (<subquery>) AS t2_sum
-02)--Subquery:
-03)----Projection: sum(t2.t2_int)
-04)------Aggregate: groupBy=[[]], aggr=[[sum(CAST(t2.t2_int AS Int64))]]
-05)--------Filter: t2.t2_id < outer_ref(t1.t1_id)
-06)----------TableScan: t2
-07)--TableScan: t1 projection=[t1_id]
+01)Projection: t1.t1_id, sum(t2.t2_int) AS t2_sum
+02)--LeftSingle Join(ComparisonJoin): t1.t1_id = dscan_2.t1_t1_id Null=Null
+03)----TableScan: t1 projection=[t1_id]
+04)----Projection: sum(t2.t2_int), dscan_2.t1_t1_id
+05)------Inner Join(DelimJoin): dscan_2.t1_t1_id = dscan_1.t1_t1_id Null=Null
+06)--------Projection: t1.t1_id AS dscan_2.t1_t1_id
+07)----------DelimGet: scan_id:[6] columns:[t1.t1_id]
+08)--------Aggregate: groupBy=[[dscan_1.t1_t1_id]], aggr=[[sum(CAST(t2.t2_int AS Int64))]]
+09)----------Projection: t2.t2_int, dscan_1.t1_t1_id
+10)------------Inner Join(DelimJoin):  Filter: t2.t2_id < dscan_1.t1_t1_id
+11)--------------Filter: Boolean(true)
+12)----------------TableScan: t2 projection=[t2_id, t2_int]
+13)--------------Projection: t1.t1_id AS dscan_1.t1_t1_id
+14)----------------DelimGet: scan_id:[6] columns:[t1.t1_id]
 
 #aggregated_correlated_scalar_subquery_with_extra_group_by_columns
 statement error DataFusion error: Invalid \(non-executable\) plan after Analyzer\ncaused by\nError during planning: A GROUP BY clause in a scalar correlated subquery cannot contain non-correlated columns
@@ -528,13 +543,21 @@ explain SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT sum(t1.t1_int + t2.t2
 ----
 logical_plan
 01)Projection: t1.t1_id, t1.t1_name
-02)--Filter: EXISTS (<subquery>)
-03)----Subquery:
-04)------Projection: sum(outer_ref(t1.t1_int) + t2.t2_id)
-05)--------Aggregate: groupBy=[[]], aggr=[[sum(CAST(outer_ref(t1.t1_int) + t2.t2_id AS Int64))]]
-06)----------Filter: outer_ref(t1.t1_name) = t2.t2_name
-07)------------TableScan: t2
-08)----TableScan: t1 projection=[t1_id, t1_name, t1_int]
+02)--Filter: dscan_2.mark
+03)----Projection: t1.t1_id, t1.t1_name, dscan_2.mark
+04)------LeftMark Join(ComparisonJoin): t1.t1_name = dscan_2.t1_t1_name, t1.t1_int = dscan_2.t1_t1_int Null=Null
+05)--------TableScan: t1 projection=[t1_id, t1_name, t1_int]
+06)--------Projection: sum(outer_ref(t1.t1_int) + t2.t2_id), dscan_2.t1_t1_name, dscan_2.t1_t1_int
+07)----------Left Join(DelimJoin): dscan_2.t1_t1_name = dscan_1.t1_t1_name, dscan_2.t1_t1_int = dscan_1.t1_t1_int Null=Null
+08)------------Projection: t1.t1_name AS dscan_2.t1_t1_name, t1.t1_int AS dscan_2.t1_t1_int
+09)--------------DelimGet: scan_id:[7] columns:[t1.t1_name, t1.t1_int]
+10)------------Aggregate: groupBy=[[dscan_1.t1_t1_name, dscan_1.t1_t1_int]], aggr=[[sum(CAST(dscan_1.t1_t1_int + t2.t2_id AS Int64)) AS sum(outer_ref(t1.t1_int) + t2.t2_id)]]
+11)--------------Projection: t2.t2_id, dscan_1.t1_t1_name, dscan_1.t1_t1_int
+12)----------------Inner Join(DelimJoin): t2.t2_name = dscan_1.t1_t1_name
+13)------------------Filter: Boolean(true)
+14)--------------------TableScan: t2 projection=[t2_id, t2_name]
+15)------------------Projection: t1.t1_name AS dscan_1.t1_t1_name, t1.t1_int AS dscan_1.t1_t1_int
+16)--------------------DelimGet: scan_id:[7] columns:[t1.t1_name, t1.t1_int]
 
 #support_agg_correlated_columns2
 query TT
@@ -542,79 +565,114 @@ explain SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT count(*) FROM t2 WHER
 ----
 logical_plan
 01)Projection: t1.t1_id, t1.t1_name
-02)--Filter: EXISTS (<subquery>)
-03)----Subquery:
-04)------Projection: count(Int64(1)) AS count(*)
-05)--------Filter: sum(outer_ref(t1.t1_int) + t2.t2_id) > Int64(0)
-06)----------Aggregate: groupBy=[[]], aggr=[[count(Int64(1)), sum(CAST(outer_ref(t1.t1_int) + t2.t2_id AS Int64))]]
-07)------------Filter: outer_ref(t1.t1_name) = t2.t2_name
-08)--------------TableScan: t2
-09)----TableScan: t1 projection=[t1_id, t1_name, t1_int]
+02)--Filter: dscan_2.mark
+03)----Projection: t1.t1_id, t1.t1_name, dscan_2.mark
+04)------LeftMark Join(ComparisonJoin): t1.t1_name = dscan_2.t1_t1_name, t1.t1_int = dscan_2.t1_t1_int Null=Null
+05)--------TableScan: t1 projection=[t1_id, t1_name, t1_int]
+06)--------Projection: CASE WHEN count(Int64(1)) IS NULL THEN CAST(Int32(0) AS Int64) ELSE count(Int64(1)) END AS count(*), dscan_2.t1_t1_name, dscan_2.t1_t1_int
+07)----------Inner Join(DelimJoin): dscan_2.t1_t1_name = dscan_1.t1_t1_name, dscan_2.t1_t1_int = dscan_1.t1_t1_int Null=Null
+08)------------Projection: t1.t1_name AS dscan_2.t1_t1_name, t1.t1_int AS dscan_2.t1_t1_int
+09)--------------DelimGet: scan_id:[8] columns:[t1.t1_name, t1.t1_int]
+10)------------Projection: dscan_1.t1_t1_name, dscan_1.t1_t1_int, count(Int64(1))
+11)--------------Filter: sum(outer_ref(t1.t1_int) + t2.t2_id) > Int64(0)
+12)----------------Aggregate: groupBy=[[dscan_1.t1_t1_name, dscan_1.t1_t1_int]], aggr=[[count(Int64(1)), sum(CAST(dscan_1.t1_t1_int + t2.t2_id AS Int64)) AS sum(outer_ref(t1.t1_int) + t2.t2_id)]]
+13)------------------Projection: t2.t2_id, dscan_1.t1_t1_name, dscan_1.t1_t1_int
+14)--------------------Inner Join(DelimJoin): t2.t2_name = dscan_1.t1_t1_name
+15)----------------------Filter: Boolean(true)
+16)------------------------TableScan: t2 projection=[t2_id, t2_name]
+17)----------------------Projection: t1.t1_name AS dscan_1.t1_t1_name, t1.t1_int AS dscan_1.t1_t1_int
+18)------------------------DelimGet: scan_id:[8] columns:[t1.t1_name, t1.t1_int]
 
 #support_join_correlated_columns
 query TT
 explain SELECT t0_id, t0_name FROM t0 WHERE EXISTS (SELECT 1 FROM t1 INNER JOIN t2 ON(t1.t1_id = t2.t2_id and t1.t1_name = t0.t0_name))
 ----
 logical_plan
-01)LeftSemi Join: t0.t0_name = __correlated_sq_2.t1_name
-02)--TableScan: t0 projection=[t0_id, t0_name]
-03)--SubqueryAlias: __correlated_sq_2
-04)----Projection: t1.t1_name
-05)------Inner Join: t1.t1_id = t2.t2_id
-06)--------TableScan: t1 projection=[t1_id, t1_name]
-07)--------TableScan: t2 projection=[t2_id]
+01)Projection: t0.t0_id, t0.t0_name
+02)--Filter: dscan_1.mark
+03)----LeftMark Join(ComparisonJoin): t0.t0_name = dscan_1.t0_t0_name Null=Null
+04)------TableScan: t0 projection=[t0_id, t0_name]
+05)------Projection: Int64(1), dscan_1.t0_t0_name
+06)--------Inner Join(ComparisonJoin): t1.t1_id = t2.t2_id
+07)----------Projection: t1.t1_id, dscan_1.t0_t0_name
+08)------------Inner Join(DelimJoin): t1.t1_name = dscan_1.t0_t0_name
+09)--------------Filter: Boolean(true)
+10)----------------TableScan: t1 projection=[t1_id, t1_name]
+11)--------------Projection: t0.t0_name AS dscan_1.t0_t0_name
+12)----------------DelimGet: scan_id:[7] columns:[t0.t0_name]
+13)----------TableScan: t2 projection=[t2_id]
 
 #subquery_contains_join_contains_correlated_columns
 query TT
 explain SELECT t0_id, t0_name FROM t0 WHERE EXISTS (SELECT 1 FROM t1 INNER JOIN (select * from t2 where t2.t2_name = t0.t0_name) as t2 ON(t1.t1_id = t2.t2_id ))
 ----
 logical_plan
-01)LeftSemi Join: t0.t0_name = __correlated_sq_1.t2_name
-02)--TableScan: t0 projection=[t0_id, t0_name]
-03)--SubqueryAlias: __correlated_sq_1
-04)----Projection: t2.t2_name
-05)------Inner Join: t1.t1_id = t2.t2_id
-06)--------TableScan: t1 projection=[t1_id]
-07)--------SubqueryAlias: t2
-08)----------TableScan: t2 projection=[t2_id, t2_name]
+01)Projection: t0.t0_id, t0.t0_name
+02)--Filter: dscan_1.mark
+03)----LeftMark Join(ComparisonJoin): t0.t0_name = dscan_1.t0_t0_name Null=Null
+04)------TableScan: t0 projection=[t0_id, t0_name]
+05)------Projection: Int64(1), dscan_1.t0_t0_name
+06)--------Inner Join(ComparisonJoin): t1.t1_id = t2.t2_id
+07)----------TableScan: t1 projection=[t1_id]
+08)----------Projection: t2.t2_id, dscan_1.t0_t0_name
+09)------------Inner Join(DelimJoin): t2.t2_name = dscan_1.t0_t0_name
+10)--------------Filter: Boolean(true)
+11)----------------TableScan: t2 projection=[t2_id, t2_name]
+12)--------------Projection: t0.t0_name AS dscan_1.t0_t0_name
+13)----------------DelimGet: scan_id:[10] columns:[t0.t0_name]
 
 #subquery_contains_join_contains_sub_query_alias_correlated_columns
 query TT
 explain SELECT t0_id, t0_name FROM t0 WHERE EXISTS (select 1 from (SELECT * FROM t1 where t1.t1_id = t0.t0_id) as x INNER JOIN (select * from t2 where t2.t2_name = t0.t0_name) as y ON(x.t1_id = y.t2_id))
 ----
 logical_plan
-01)LeftSemi Join: t0.t0_id = __correlated_sq_1.t1_id, t0.t0_name = __correlated_sq_1.t2_name
-02)--TableScan: t0 projection=[t0_id, t0_name]
-03)--SubqueryAlias: __correlated_sq_1
-04)----Projection: x.t1_id, y.t2_name
-05)------Inner Join: x.t1_id = y.t2_id
-06)--------SubqueryAlias: x
-07)----------TableScan: t1 projection=[t1_id]
-08)--------SubqueryAlias: y
-09)----------TableScan: t2 projection=[t2_id, t2_name]
+01)Projection: t0.t0_id, t0.t0_name
+02)--Filter: dscan_2.mark
+03)----LeftMark Join(ComparisonJoin): t0.t0_id = dscan_2.t0_t0_id, t0.t0_name = dscan_2.t0_t0_name Null=Null
+04)------TableScan: t0 projection=[t0_id, t0_name]
+05)------Projection: Int64(1), dscan_2.t0_t0_id, dscan_2.t0_t0_name
+06)--------Inner Join(ComparisonJoin): dscan_1.t0_t0_id = dscan_2.t0_t0_id, dscan_1.t0_t0_name = dscan_2.t0_t0_name Filter: x.t1_id = y.t2_id Null=Null
+07)----------Projection: dscan_1.t0_t0_id, dscan_1.t0_t0_name
+08)------------Inner Join(DelimJoin): t1.t1_id = dscan_1.t0_t0_id
+09)--------------Filter: Boolean(true)
+10)----------------TableScan: t1 projection=[t1_id]
+11)--------------Projection: t0.t0_id AS dscan_1.t0_t0_id, t0.t0_name AS dscan_1.t0_t0_name
+12)----------------DelimGet: scan_id:[13] columns:[t0.t0_id, t0.t0_name]
+13)----------Projection: dscan_2.t0_t0_id, dscan_2.t0_t0_name
+14)------------Inner Join(DelimJoin): t2.t2_name = dscan_2.t0_t0_name
+15)--------------Filter: Boolean(true)
+16)----------------TableScan: t2 projection=[t2_name]
+17)--------------Projection: t0.t0_id AS dscan_2.t0_t0_id, t0.t0_name AS dscan_2.t0_t0_name
+18)----------------DelimGet: scan_id:[13] columns:[t0.t0_id, t0.t0_name]
 
 #support_order_by_correlated_columns
 query TT
 explain SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT * FROM t2 WHERE t2_id >= t1_id order by t1_id)
 ----
 logical_plan
-01)Filter: EXISTS (<subquery>)
-02)--Subquery:
-03)----Sort: outer_ref(t1.t1_id) ASC NULLS LAST
-04)------Projection: t2.t2_id, t2.t2_name, t2.t2_int
-05)--------Filter: t2.t2_id >= outer_ref(t1.t1_id)
-06)----------TableScan: t2
-07)--TableScan: t1 projection=[t1_id, t1_name]
+01)Projection: t1.t1_id, t1.t1_name
+02)--Filter: mark
+03)----LeftMark Join(ComparisonJoin): t1.t1_id = dscan_1.t1_t1_id Null=Null
+04)------TableScan: t1 projection=[t1_id, t1_name]
+05)------Sort: outer_ref(t1.t1_id) ASC NULLS LAST
+06)--------Inner Join(DelimJoin):  Filter: t2.t2_id >= dscan_1.t1_t1_id
+07)----------Filter: Boolean(true)
+08)------------TableScan: t2 projection=[t2_id]
+09)----------Projection: t1.t1_id AS dscan_1.t1_t1_id
+10)------------DelimGet: scan_id:[7] columns:[t1.t1_id]
 
 #exists_subquery_with_select_null
 query TT
 explain SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT NULL)
 ----
 logical_plan
-01)LeftSemi Join: 
-02)--TableScan: t1 projection=[t1_id, t1_name]
-03)--SubqueryAlias: __correlated_sq_1
-04)----EmptyRelation: rows=1
+01)Projection: t1.t1_id, t1.t1_name
+02)--Filter: mark
+03)----LeftMark Join(ComparisonJoin):
+04)------TableScan: t1 projection=[t1_id, t1_name]
+05)------Projection: NULL
+06)--------Filter: Boolean(true)
+07)----------EmptyRelation: rows=1
 
 #exists_subquery_with_limit
 #de-correlated, limit is removed
@@ -1474,7 +1532,6 @@ logical_plan
 statement count 0
 drop table person;
 
-<<<<<<< HEAD
 # correlated_recursive_scalar_subquery_with_level_3_scalar_subquery_referencing_level1_relation
 query TT
 explain select c_custkey from customer
@@ -1503,7 +1560,7 @@ logical_plan
 13)----------------------Filter: lineitem.l_orderkey = outer_ref(orders.o_orderkey) AND lineitem.l_extendedprice < outer_ref(customer.c_acctbal)
 14)------------------------TableScan: lineitem, partial_filters=[lineitem.l_orderkey = outer_ref(orders.o_orderkey), lineitem.l_extendedprice < outer_ref(customer.c_acctbal)]
 15)----------------TableScan: orders projection=[o_orderkey, o_custkey, o_totalprice]
-=======
+
 # Set comparison subqueries (ANY/ALL)
 statement ok
 create table set_cmp_t(v int) as values (1), (6), (10);
@@ -1562,7 +1619,6 @@ logical_plan
 20)--------SubqueryAlias: set_cmp_s
 21)----------Projection: column1 AS v
 22)------------Values: (Int64(5)), (Int64(NULL))
->>>>>>> 234730694392553bb5fa244e7b3782b9ccf3ebd3
 
 # correlated_recursive_scalar_subquery_with_level_3_exists_subquery_referencing_level1_relation
 query TT
@@ -1615,9 +1671,7 @@ logical_plan
 10)----------------TableScan: orders projection=[o_orderkey, o_custkey, o_totalprice]
 11)----------------SubqueryAlias: __correlated_sq_1
 12)------------------Projection: lineitem.l_extendedprice AS price, lineitem.l_extendedprice, lineitem.l_orderkey
-<<<<<<< HEAD
 13)--------------------TableScan: lineitem projection=[l_orderkey, l_extendedprice]
-=======
 13)--------------------TableScan: lineitem projection=[l_orderkey, l_extendedprice]
 
 # Setup tables for recursive correlation tests
@@ -1702,4 +1756,3 @@ drop table employees;
 
 statement count 0
 drop table project_assignments;
->>>>>>> 234730694392553bb5fa244e7b3782b9ccf3ebd3

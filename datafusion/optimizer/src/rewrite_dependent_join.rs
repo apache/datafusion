@@ -194,6 +194,7 @@ impl DependentJoinRewriter {
         // Extract NOT from negated subqueries before processing.
         let normalized_predicate = normalize_negated_subqueries(&filter.predicate)?;
 
+
         let (transformed_plan, transformed_exprs) =
             Self::rewrite_exprs_into_dependent_join_plan(
                 vec![vec![&normalized_predicate]],
@@ -291,6 +292,7 @@ impl DependentJoinRewriter {
             .iter()
             .map(normalize_negated_subqueries)
             .collect::<Result<Vec<Expr>>>()?;
+
 
         let (transformed_plan, transformed_exprs) =
             Self::rewrite_exprs_into_dependent_join_plan(

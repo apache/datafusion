@@ -33,9 +33,7 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::utils::conjunction;
 use datafusion_expr::{
-    Aggregate, CorrelatedColumnInfo, DependentJoin, Expr, FetchType, GroupingSet, Join,
-    JoinType, LogicalPlan, LogicalPlanBuilder, Operator, SkipType, WindowFrame,
-    WindowFunctionDefinition, binary_expr, col, lit, not, when,
+    Aggregate, CorrelatedColumnInfo, DependentJoin, Expr, FetchType, GroupingSet, Join, JoinType, LogicalPlan, LogicalPlanBuilder, Operator, SkipType, SubqueryAlias, WindowFrame, WindowFunctionDefinition, binary_expr, col, lit, not, when
 };
 
 use datafusion_functions_window::row_number::row_number_udwf;
@@ -412,6 +410,8 @@ impl DependentJoinDecorrelator {
         ))
     }
 
+
+
     fn rewrite_current_plan_outer_ref_columns(
         plan: LogicalPlan,
         correlated_map: &IndexMap<Column, Column>,
@@ -427,7 +427,7 @@ impl DependentJoinDecorrelator {
 
         new_plan
             .map_expressions(|e| {
-                e.transform(|e| {
+                let transformed = e.clone().transform(|e| {
                     if let Expr::OuterReferenceColumn(_, outer_col) = &e {
                         if let Some(delim_col) = correlated_map.get(outer_col) {
                             return Ok(Transformed::yes(Expr::Column(delim_col.clone())));
@@ -436,7 +436,17 @@ impl DependentJoinDecorrelator {
                         }
                     }
                     Ok(Transformed::no(e))
-                })
+                })?;
+                let original_expr_name = e.schema_name().to_string();
+
+                // if the expr after rewritten has a different name, then we need to alias it to the original name
+                // so the original schema of rewritten logical plan is preserved.
+                // we may revisit this on whether/how to allow logical plan to have different schema.
+                if transformed.data.schema_name().to_string() != original_expr_name {
+                    Ok(Transformed::yes(transformed.data.alias(original_expr_name)))
+                }else{
+                    Ok(transformed)
+                }
             })?
             .data
             .recompute_schema()
@@ -1323,6 +1333,17 @@ impl DependentJoinDecorrelator {
                     false,
                 )
             }
+            LogicalPlan::SubqueryAlias(SubqueryAlias { input, alias, .. }) => {
+                let new_input = self.push_down_dependent_join_internal(
+                    &input,
+                    parent_propagate_nulls,
+                    lateral_depth,
+                )?;
+                // let new_alias = alias.clone();
+                // let new_subquery_alias = SubqueryAlias::try_new(
+                //     Arc::new(new_input), new_alias)?;
+                Ok(new_input)
+            }
             plan_ => Err(not_impl_datafusion_err!(
                 "implement pushdown dependent join for node {plan_}"
             ))?,
@@ -1371,7 +1392,7 @@ impl DependentJoinDecorrelator {
             join.join_type,
             join.join_constraint,
             join.null_equality,
-            true,
+            false,
         )?);
 
         Self::rewrite_outer_ref_columns(new_join, &self.correlated_map, false)
@@ -1520,7 +1541,7 @@ impl OptimizerRule for DecorrelateDependentJoin {
             DependentJoinRewriter::new(Arc::clone(config.alias_generator()));
         let rewrite_result =
             match transformer.rewrite_subqueries_into_dependent_joins(plan.clone()) {
-                Err(e) => Transformed::no(plan),
+                Err(_) => Transformed::no(plan),
                 Ok(transformed) => transformed,
             };
 

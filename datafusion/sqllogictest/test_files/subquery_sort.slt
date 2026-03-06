@@ -61,8 +61,9 @@ logical_plan
 01)Projection: t2.c1, t2.c2
 02)--Sort: t2.c1 ASC NULLS LAST, t2.c3 ASC NULLS LAST, t2.c9 ASC NULLS LAST
 03)----SubqueryAlias: t2
-04)------Sort: sink_table.c1 DESC NULLS FIRST, sink_table.c3 ASC NULLS LAST, fetch=2
-05)--------TableScan: sink_table projection=[c1, c2, c3, c9]
+04)------Limit: skip=0, fetch=2
+05)--------Sort: sink_table.c1 DESC NULLS FIRST, sink_table.c3 ASC NULLS LAST, fetch=2
+06)----------TableScan: sink_table projection=[c1, c2, c3, c9]
 physical_plan
 01)ProjectionExec: expr=[c1@0 as c1, c2@1 as c2]
 02)--SortExec: expr=[c1@0 ASC NULLS LAST, c3@2 ASC NULLS LAST, c9@3 ASC NULLS LAST], preserve_partitioning=[false]
@@ -92,10 +93,11 @@ logical_plan
 01)Projection: t2.c1, t2.r
 02)--Sort: t2.c1 ASC NULLS LAST, t2.c3 ASC NULLS LAST, t2.c9 ASC NULLS LAST
 03)----SubqueryAlias: t2
-04)------Sort: sink_table.c1 ASC NULLS LAST, sink_table.c3 ASC NULLS LAST, fetch=2
-05)--------Projection: sink_table.c1, rank() ORDER BY [sink_table.c1 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS r, sink_table.c3, sink_table.c9
-06)----------WindowAggr: windowExpr=[[rank() ORDER BY [sink_table.c1 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
-07)------------TableScan: sink_table projection=[c1, c3, c9]
+04)------Limit: skip=0, fetch=2
+05)--------Sort: sink_table.c1 ASC NULLS LAST, sink_table.c3 ASC NULLS LAST, fetch=2
+06)----------Projection: sink_table.c1, rank() ORDER BY [sink_table.c1 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS r, sink_table.c3, sink_table.c9
+07)------------WindowAggr: windowExpr=[[rank() ORDER BY [sink_table.c1 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+08)--------------TableScan: sink_table projection=[c1, c3, c9]
 physical_plan
 01)ProjectionExec: expr=[c1@0 as c1, r@1 as r]
 02)--SortExec: TopK(fetch=2), expr=[c1@0 ASC NULLS LAST, c3@2 ASC NULLS LAST, c9@3 ASC NULLS LAST], preserve_partitioning=[false]
@@ -118,10 +120,11 @@ logical_plan
 01)Projection: t2.c1, t2.r
 02)--Sort: t2.c1 ASC NULLS LAST, t2.c3 ASC NULLS LAST, t2.c9 ASC NULLS LAST
 03)----SubqueryAlias: t2
-04)------Sort: sink_table_with_utf8view.c1 ASC NULLS LAST, sink_table_with_utf8view.c3 ASC NULLS LAST, fetch=2
-05)--------Projection: sink_table_with_utf8view.c1, rank() ORDER BY [sink_table_with_utf8view.c1 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS r, sink_table_with_utf8view.c3, sink_table_with_utf8view.c9
-06)----------WindowAggr: windowExpr=[[rank() ORDER BY [sink_table_with_utf8view.c1 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
-07)------------TableScan: sink_table_with_utf8view projection=[c1, c3, c9]
+04)------Limit: skip=0, fetch=2
+05)--------Sort: sink_table_with_utf8view.c1 ASC NULLS LAST, sink_table_with_utf8view.c3 ASC NULLS LAST, fetch=2
+06)----------Projection: sink_table_with_utf8view.c1, rank() ORDER BY [sink_table_with_utf8view.c1 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS r, sink_table_with_utf8view.c3, sink_table_with_utf8view.c9
+07)------------WindowAggr: windowExpr=[[rank() ORDER BY [sink_table_with_utf8view.c1 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+08)--------------TableScan: sink_table_with_utf8view projection=[c1, c3, c9]
 physical_plan
 01)ProjectionExec: expr=[c1@0 as c1, r@1 as r]
 02)--SortExec: TopK(fetch=2), expr=[c1@0 ASC NULLS LAST, c3@2 ASC NULLS LAST, c9@3 ASC NULLS LAST], preserve_partitioning=[false]
@@ -140,7 +143,7 @@ logical_plan
 01)Projection: t2.c1, t2.c2
 02)--Sort: t2.c1 ASC NULLS LAST, t2.c3 DESC NULLS FIRST, t2.c9 ASC NULLS LAST
 03)----SubqueryAlias: t2
-04)------Projection: first_value(sink_table.c1) ORDER BY [sink_table.c1 ASC NULLS LAST, sink_table.c3 DESC NULLS FIRST, sink_table.c9 ASC NULLS LAST] AS c1, first_value(sink_table.c2) ORDER BY [sink_table.c1 ASC NULLS LAST, sink_table.c3 DESC NULLS FIRST, sink_table.c9 ASC NULLS LAST] AS c2, first_value(sink_table.c3) ORDER BY [sink_table.c1 ASC NULLS LAST, sink_table.c3 DESC NULLS FIRST, sink_table.c9 ASC NULLS LAST] AS c3, first_value(sink_table.c9) ORDER BY [sink_table.c1 ASC NULLS LAST, sink_table.c3 DESC NULLS FIRST, sink_table.c9 ASC NULLS LAST] AS c9
+04)------Projection: first_value(sink_table.c1) ORDER BY [sink_table.c1 ASC NULLS LAST, sink_table.c3 DESC NULLS FIRST, sink_table.c9 ASC NULLS LAST] AS sink_table.c1, first_value(sink_table.c2) ORDER BY [sink_table.c1 ASC NULLS LAST, sink_table.c3 DESC NULLS FIRST, sink_table.c9 ASC NULLS LAST] AS sink_table.c2, first_value(sink_table.c3) ORDER BY [sink_table.c1 ASC NULLS LAST, sink_table.c3 DESC NULLS FIRST, sink_table.c9 ASC NULLS LAST] AS sink_table.c3, first_value(sink_table.c9) ORDER BY [sink_table.c1 ASC NULLS LAST, sink_table.c3 DESC NULLS FIRST, sink_table.c9 ASC NULLS LAST] AS sink_table.c9
 05)--------Sort: sink_table.c1 ASC NULLS LAST
 06)----------Aggregate: groupBy=[[sink_table.c1]], aggr=[[first_value(sink_table.c1) ORDER BY [sink_table.c1 ASC NULLS LAST, sink_table.c3 DESC NULLS FIRST, sink_table.c9 ASC NULLS LAST], first_value(sink_table.c2) ORDER BY [sink_table.c1 ASC NULLS LAST, sink_table.c3 DESC NULLS FIRST, sink_table.c9 ASC NULLS LAST], first_value(sink_table.c3) ORDER BY [sink_table.c1 ASC NULLS LAST, sink_table.c3 DESC NULLS FIRST, sink_table.c9 ASC NULLS LAST], first_value(sink_table.c9) ORDER BY [sink_table.c1 ASC NULLS LAST, sink_table.c3 DESC NULLS FIRST, sink_table.c9 ASC NULLS LAST]]]
 07)------------TableScan: sink_table projection=[c1, c2, c3, c9]
